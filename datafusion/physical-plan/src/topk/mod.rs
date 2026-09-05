@@ -823,7 +823,7 @@ impl TopK {
                     batch = batch.slice(batch_size, remaining_length);
                 }
             }
-        };
+        }
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             schema,
             futures::stream::iter(batches),
@@ -1758,9 +1758,9 @@ impl PartitionedTopKRank {
                 match classification {
                     Some(Ordering::Equal) => {
                         equal_indices.push(sub_idx as u32);
-                        continue;
                     }
-                    Some(Ordering::Greater) => continue,
+                    // Strictly worse than the current boundary: drop the row.
+                    Some(Ordering::Greater) => {}
                     Some(Ordering::Less) | None => {
                         // Heap path: heap not yet full, or row strictly
                         // better than the current boundary.

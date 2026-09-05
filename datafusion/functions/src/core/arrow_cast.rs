@@ -27,8 +27,8 @@ use datafusion_common::{
 
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
-    ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, Documentation, Expr, ExprSchemable, ReturnFieldArgs,
+    ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -161,9 +161,27 @@ impl ScalarUDFImpl for ArrowCastFunc {
         let [source_arg, type_arg] = take_function_args(self.name(), args)?;
         let target_type = data_type_from_type_arg(self.name(), &type_arg)?;
         let source_type = info.get_data_type(&source_arg)?;
+
+        // We can skip the cast only if:
+        // 1. The source and target types are the same
+        // 2. The source has no extension metadata that needs to be stripped
         let new_expr = if source_type == target_type {
-            // the argument's data type is already the correct type
-            source_arg
+            // Check if source has extension metadata
+            let source_field = source_arg.to_field(info.schema())?;
+            let has_extension_metadata = source_field
+                .1
+                .metadata()
+                .contains_key("ARROW:extension:name");
+            if has_extension_metadata {
+                // Need to create a cast to strip extension metadata
+                Expr::Cast(datafusion_expr::Cast {
+                    expr: Box::new(source_arg),
+                    field: target_type.into_nullable_field_ref(),
+                })
+            } else {
+                // the argument's data type is already the correct type
+                source_arg
+            }
         } else {
             // Use an actual cast to get the correct type
             Expr::Cast(datafusion_expr::Cast {

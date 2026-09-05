@@ -414,7 +414,7 @@ fn large_string_in_list_preserves_rows_with_untrusted_page_order() {
             },
             "order={order:?}",
         );
-        assert_eq!(file.matching_rows(&physical, pages), 1, "order={order:?}",);
+        assert_eq!(file.matching_rows(&physical, pages), 1, "order={order:?}");
         assert_eq!(
             file_metrics.page_index_rows_pruned.pruned(),
             if order == StatisticsOrder::Modern {

@@ -1240,6 +1240,7 @@ pub(crate) fn build_side_determined_results(
             column_indices,
             build_hash_joiner.build_side,
             join_type,
+            None,
         )
         .map(|batch| (batch.num_rows() > 0).then_some(batch))
     } else {
@@ -1343,6 +1344,7 @@ pub(crate) fn join_with_probe_batch(
             column_indices,
             build_hash_joiner.build_side,
             join_type,
+            None,
         )
         .map(|batch| (batch.num_rows() > 0).then_some(batch))
     }
@@ -1470,18 +1472,20 @@ pub struct OneSideHashJoiner {
 }
 
 impl OneSideHashJoiner {
+    /// Returns the joiner descriptor, directly owned container allocations, and input arrays.
+    ///
+    /// Allocations referenced by `on` are shared plan expressions and are excluded.
     pub fn size(&self) -> usize {
-        let mut size = 0;
-        size += size_of_val(self);
-        size += size_of_val(&self.build_side);
-        size += self.input_buffer.get_array_memory_size();
-        size += size_of_val(&self.on);
-        size += self.hashmap.size();
-        size += self.hashes_buffer.capacity() * size_of::<u64>();
-        size += self.visited_rows.capacity() * size_of::<usize>();
-        size += size_of_val(&self.offset);
-        size += size_of_val(&self.deleted_offset);
-        size
+        // `allocation_size` uses the hashbrown 0.17 layout, including control bytes.
+        size_of_val(self)
+            + self.input_buffer.get_array_memory_size()
+            + self.on.capacity() * size_of::<PhysicalExprRef>()
+            // `PruningJoinHashMap::size()` includes its descriptor, which is
+            // already included by `size_of_val(self)`.
+            + self.hashmap.size()
+            - size_of_val(&self.hashmap)
+            + self.hashes_buffer.capacity() * size_of::<u64>()
+            + self.visited_rows.allocation_size()
     }
 
     fn size_without_input_buffer(&self) -> usize {
@@ -2201,6 +2205,64 @@ mod tests {
             state: SHJStreamState::PullRight,
             batch_transformer,
         }
+    }
+
+    fn expected_one_side_hash_joiner_size(joiner: &OneSideHashJoiner) -> usize {
+        size_of_val(joiner)
+            + joiner.input_buffer.get_array_memory_size()
+            + joiner.on.capacity() * size_of::<PhysicalExprRef>()
+            // `PruningJoinHashMap::size()` includes its inline descriptor.
+            + joiner.hashmap.size()
+            - size_of_val(&joiner.hashmap)
+            + joiner.hashes_buffer.capacity() * size_of::<u64>()
+            + joiner.visited_rows.allocation_size()
+    }
+
+    #[test]
+    fn one_side_hash_joiner_size_counts_descriptor_and_hash_set_allocation_once() {
+        let schema = Arc::new(Schema::empty());
+        let mut joiner = OneSideHashJoiner::new(JoinSide::Left, vec![], schema);
+
+        let empty_size = joiner.size();
+        assert_eq!(empty_size, expected_one_side_hash_joiner_size(&joiner));
+        assert_eq!(joiner.visited_rows.allocation_size(), 0);
+
+        joiner.visited_rows.extend(0..3);
+        let initial_capacity = joiner.visited_rows.capacity();
+        let initial_allocation = joiner.visited_rows.allocation_size();
+        assert!(initial_capacity > 0);
+        assert_eq!(joiner.size(), expected_one_side_hash_joiner_size(&joiner));
+        assert_eq!(joiner.size() - empty_size, initial_allocation);
+
+        joiner.visited_rows.extend(3..initial_capacity * 2);
+        let grown_allocation = joiner.visited_rows.allocation_size();
+        assert!(joiner.visited_rows.capacity() > initial_capacity);
+        assert_eq!(joiner.size(), expected_one_side_hash_joiner_size(&joiner));
+        assert_eq!(joiner.size() - empty_size, grown_allocation);
+        assert!(grown_allocation > initial_allocation);
+
+        let size_with_visited_rows = joiner.size();
+        let initial_hashmap_allocation =
+            joiner.hashmap.size() - size_of_val(&joiner.hashmap);
+        joiner.on = vec![Arc::new(Column::new("a", 0))];
+        joiner.hashmap = PruningJoinHashMap::with_capacity(3);
+        joiner.hashes_buffer.try_reserve(3).unwrap();
+        assert!(joiner.on.capacity() > 0);
+        assert!(joiner.hashmap.map.capacity() > 0);
+        assert!(joiner.hashes_buffer.capacity() > 0);
+
+        let owned_container_allocation_delta = joiner.on.capacity()
+            * size_of::<PhysicalExprRef>()
+            + (joiner.hashmap.size()
+                - size_of_val(&joiner.hashmap)
+                - initial_hashmap_allocation)
+            + joiner.hashes_buffer.capacity() * size_of::<u64>();
+        assert!(owned_container_allocation_delta > 0);
+        assert_eq!(joiner.size(), expected_one_side_hash_joiner_size(&joiner));
+        assert_eq!(
+            joiner.size() - size_with_visited_rows,
+            owned_container_allocation_delta
+        );
     }
 
     fn assert_stream_accounts_for_transformer<T: BatchTransformer>(batch_transformer: T) {

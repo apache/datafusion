@@ -346,9 +346,11 @@ select
 ----
 2 -1 123 -123
 
-# ceil overflow with limited precision
-query error Decimal overflow while applying ceil
+# ceil doesn't overflow, but rescales
+query R
 select ceil(arrow_cast(9.23,'Decimal128(3,2)'));
+----
+10
 
 # ceil with decimal32 argument (ensure decimal output)
 query TTTTTTTT
@@ -362,7 +364,7 @@ select
   arrow_typeof(ceil(arrow_cast(-0.99,'Decimal32(7,2)'))),
   arrow_cast(ceil(arrow_cast(-0.99,'Decimal32(7,2)')), 'Utf8');
 ----
-Decimal32(7, 2) 10.00 Decimal32(7, 2) -9.00 Decimal32(7, 2) 10.00 Decimal32(7, 2) 0.00
+Decimal32(6, 0) 10 Decimal32(6, 0) -9 Decimal32(6, 0) 10 Decimal32(6, 0) 0
 
 # ceil with decimal64 zero scale
 query TTTT
@@ -382,7 +384,7 @@ select
   arrow_typeof(ceil(arrow_cast('-9999999999999999999999999999999999.01','Decimal256(38,2)'))),
   arrow_cast(ceil(arrow_cast('-9999999999999999999999999999999999.01','Decimal256(38,2)')), 'Utf8');
 ----
-Decimal256(38, 2) 10000000000000000000000000000000000.00 Decimal256(38, 2) -9999999999999999999999999999999999.00
+Decimal256(37, 0) 10000000000000000000000000000000000 Decimal256(37, 0) -9999999999999999999999999999999999
 
 ## degrees
 
@@ -541,9 +543,11 @@ select
 ----
 1 -2 123 -123
 
-# floor overflow with limited precision
-query error Decimal overflow while applying floor
+# floor doesn't overflow, but rescales
+query R
 select floor(arrow_cast(-9.23,'Decimal128(3,2)'));
+----
+-10
 
 # floor with decimal32 argument (ensure decimal output)
 query TTTTTTTT
@@ -557,7 +561,7 @@ select
   arrow_typeof(floor(arrow_cast(-0.01,'Decimal32(7,2)'))),
   arrow_cast(floor(arrow_cast(-0.01,'Decimal32(7,2)')), 'Utf8');
 ----
-Decimal32(7, 2) 9.00 Decimal32(7, 2) -10.00 Decimal32(7, 2) 10.00 Decimal32(7, 2) -1.00
+Decimal32(6, 0) 9 Decimal32(6, 0) -10 Decimal32(6, 0) 10 Decimal32(6, 0) -1
 
 # floor with decimal64 zero scale
 query TTTT
@@ -577,7 +581,27 @@ select
   arrow_typeof(floor(arrow_cast('-9999999999999999999999999999999999.99','Decimal256(38,2)'))),
   arrow_cast(floor(arrow_cast('-9999999999999999999999999999999999.99','Decimal256(38,2)')), 'Utf8');
 ----
-Decimal256(38, 2) 9999999999999999999999999999999999.00 Decimal256(38, 2) -10000000000000000000000000000000000.00
+Decimal256(37, 0) 9999999999999999999999999999999999 Decimal256(37, 0) -10000000000000000000000000000000000
+
+query RT
+select floor('-999.9'::DECIMAL(4,1)), arrow_typeof(floor('-999.9'::DECIMAL(4,1)));
+----
+-1000 Decimal128(4, 0)
+
+query RT
+select floor('-999.9'::DECIMAL(6,2)), arrow_typeof(floor('-899.9'::DECIMAL(6,2)))
+----
+-1000 Decimal128(5, 0)
+
+query RT
+select ceil(9.9::DECIMAL(50,3)), arrow_typeof(floor(9.9::DECIMAL(50,3)))
+----
+10 Decimal256(48, 0)
+
+query RT
+select ceil(9.9::DECIMAL(40,1)), arrow_typeof(floor(9.9::DECIMAL(40,1)))
+----
+10 Decimal256(40, 0)
 
 ## ln
 

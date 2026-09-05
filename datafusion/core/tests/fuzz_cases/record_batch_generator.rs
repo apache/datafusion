@@ -61,10 +61,13 @@ pub fn get_supported_types_columns(rng_seed: u64) -> Vec<ColumnDescr> {
         ColumnDescr::new("time32_ms", DataType::Time32(TimeUnit::Millisecond)),
         ColumnDescr::new("time64_us", DataType::Time64(TimeUnit::Microsecond)),
         ColumnDescr::new("time64_ns", DataType::Time64(TimeUnit::Nanosecond)),
-        ColumnDescr::new("timestamp_s", DataType::Timestamp(TimeUnit::Second, None)),
+        ColumnDescr::new(
+            "timestamp_s",
+            DataType::Timestamp(TimeUnit::Second, Some(Arc::from("UTC"))),
+        ),
         ColumnDescr::new(
             "timestamp_ms",
-            DataType::Timestamp(TimeUnit::Millisecond, None),
+            DataType::Timestamp(TimeUnit::Millisecond, Some(Arc::from("+05:30"))),
         ),
         ColumnDescr::new(
             "timestamp_us",
@@ -142,6 +145,9 @@ pub fn get_supported_types_columns(rng_seed: u64) -> Vec<ColumnDescr> {
         ColumnDescr::new("binary", DataType::Binary),
         ColumnDescr::new("large_binary", DataType::LargeBinary),
         ColumnDescr::new("binaryview", DataType::BinaryView),
+        ColumnDescr::new("fixed_binary_1", DataType::FixedSizeBinary(1)),
+        ColumnDescr::new("fixed_binary_8", DataType::FixedSizeBinary(8)),
+        ColumnDescr::new("fixed_binary_32", DataType::FixedSizeBinary(32)),
         ColumnDescr::new(
             "dictionary_utf8_low",
             DataType::Dictionary(Box::new(DataType::UInt64), Box::new(DataType::Utf8)),
@@ -246,6 +252,27 @@ macro_rules! generate_primitive_array {
         };
 
         generator.gen_data::<$ARROW_TYPE>()
+    }};
+}
+
+macro_rules! generate_timestamp_array {
+    ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT:expr, $NULL_PCT:ident, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $ARROW_TYPE:ident, $TIMEZONE:ident) => {{
+        let array = generate_primitive_array!(
+            $SELF,
+            $NUM_ROWS,
+            $MAX_NUM_DISTINCT,
+            $NULL_PCT,
+            $BATCH_GEN_RNG,
+            $ARRAY_GEN_RNG,
+            $ARROW_TYPE
+        );
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<$ARROW_TYPE>>()
+            .unwrap()
+            .clone()
+            .with_timezone_opt($TIMEZONE.clone());
+        Arc::new(array) as ArrayRef
     }};
 }
 
@@ -617,48 +644,52 @@ impl RecordBatchGenerator {
                     DurationNanosecondType
                 )
             }
-            DataType::Timestamp(TimeUnit::Second, None) => {
-                generate_primitive_array!(
+            DataType::Timestamp(TimeUnit::Second, ref timezone) => {
+                generate_timestamp_array!(
                     self,
                     num_rows,
                     max_num_distinct,
                     null_pct,
                     batch_gen_rng,
                     array_gen_rng,
-                    TimestampSecondType
+                    TimestampSecondType,
+                    timezone
                 )
             }
-            DataType::Timestamp(TimeUnit::Millisecond, None) => {
-                generate_primitive_array!(
+            DataType::Timestamp(TimeUnit::Millisecond, ref timezone) => {
+                generate_timestamp_array!(
                     self,
                     num_rows,
                     max_num_distinct,
                     null_pct,
                     batch_gen_rng,
                     array_gen_rng,
-                    TimestampMillisecondType
+                    TimestampMillisecondType,
+                    timezone
                 )
             }
-            DataType::Timestamp(TimeUnit::Microsecond, None) => {
-                generate_primitive_array!(
+            DataType::Timestamp(TimeUnit::Microsecond, ref timezone) => {
+                generate_timestamp_array!(
                     self,
                     num_rows,
                     max_num_distinct,
                     null_pct,
                     batch_gen_rng,
                     array_gen_rng,
-                    TimestampMicrosecondType
+                    TimestampMicrosecondType,
+                    timezone
                 )
             }
-            DataType::Timestamp(TimeUnit::Nanosecond, None) => {
-                generate_primitive_array!(
+            DataType::Timestamp(TimeUnit::Nanosecond, ref timezone) => {
+                generate_timestamp_array!(
                     self,
                     num_rows,
                     max_num_distinct,
                     null_pct,
                     batch_gen_rng,
                     array_gen_rng,
-                    TimestampNanosecondType
+                    TimestampNanosecondType,
+                    timezone
                 )
             }
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
@@ -696,6 +727,17 @@ impl RecordBatchGenerator {
                     DataType::BinaryView => generator.gen_binary_view(),
                     _ => unreachable!(),
                 }
+            }
+            DataType::FixedSizeBinary(width) => {
+                let mut generator = BinaryArrayGenerator {
+                    max_len: usize::try_from(width)
+                        .expect("fixed-size binary width must be nonnegative"),
+                    num_binaries: num_rows,
+                    num_distinct_binaries: max_num_distinct,
+                    null_pct,
+                    rng: array_gen_rng,
+                };
+                generator.gen_fixed_size_binary()
             }
             DataType::Decimal32(precision, scale) => {
                 generate_decimal_array!(

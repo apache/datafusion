@@ -182,10 +182,10 @@ impl FFI_SessionRef {
         unsafe { (*private_data).session }
     }
 
-    unsafe fn runtime(&self) -> &Option<Handle> {
+    unsafe fn runtime(&self) -> Option<&Handle> {
         unsafe {
             let private_data = self.private_data as *const SessionPrivateData;
-            &(*private_data).runtime
+            (*private_data).runtime.as_ref()
         }
     }
 }
@@ -205,7 +205,7 @@ unsafe extern "C" fn catalog_list_fn_wrapper(
 ) -> FFI_CatalogProviderList {
     FFI_CatalogProviderList::new_with_ffi_codec(
         session.inner().catalog_list(),
-        unsafe { session.runtime() }.clone(),
+        unsafe { session.runtime() }.cloned(),
         session.logical_codec.clone(),
     )
 }
@@ -361,7 +361,7 @@ unsafe extern "C" fn task_ctx_fn_wrapper(session: &FFI_SessionRef) -> FFI_TaskCo
 unsafe extern "C" fn physical_optimizers_fn_wrapper(
     session: &FFI_SessionRef,
 ) -> SVec<FFI_PhysicalOptimizerRule> {
-    let runtime = unsafe { session.runtime().clone() };
+    let runtime = unsafe { session.runtime().cloned() };
     session
         .inner()
         .physical_optimizers()
@@ -373,7 +373,7 @@ unsafe extern "C" fn physical_optimizers_fn_wrapper(
 unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_SessionRef) {
     unsafe {
         let private_data =
-            Box::from_raw(provider.private_data as *mut SessionPrivateData);
+            Box::from_raw(provider.private_data.cast::<SessionPrivateData>());
         drop(private_data);
     }
 }
@@ -385,7 +385,8 @@ unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_SessionRef) -> FFI_SessionR
         let private_data = Box::into_raw(Box::new(SessionPrivateData {
             session: (*old_private_data).session,
             runtime: (*old_private_data).runtime.clone(),
-        })) as *mut c_void;
+        }))
+        .cast::<c_void>();
 
         FFI_SessionRef {
             session_id: session_id_fn_wrapper,
@@ -500,7 +501,7 @@ impl FFI_SessionRef {
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: super::version,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
         }
     }
@@ -645,7 +646,7 @@ fn table_options_from_rhashmap(options: SVec<(SString, SString)>) -> TableOption
         let format_options: HashMap<String, String> = options
             .iter()
             .filter_map(|(k, v)| {
-                let (prefix, key) = k.split_once(".")?;
+                let (prefix, key) = k.split_once('.')?;
                 if prefix == format_name {
                     Some((format!("format.{key}"), v.to_owned()))
                 } else {
@@ -663,7 +664,7 @@ fn table_options_from_rhashmap(options: SVec<(SString, SString)>) -> TableOption
     let extension_options: HashMap<String, String> = options
         .iter()
         .filter_map(|(k, v)| {
-            let (prefix, _) = k.split_once(".")?;
+            let (prefix, _) = k.split_once('.')?;
             if !["json", "parquet", "csv"].contains(&prefix) {
                 Some((k.to_owned(), v.to_owned()))
             } else {

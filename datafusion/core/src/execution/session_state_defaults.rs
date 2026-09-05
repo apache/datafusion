@@ -234,7 +234,7 @@ impl SessionStateDefaults {
         for format in formats {
             if let Err(e) = state.register_file_format(format, false) {
                 log::info!("Unable to register default file format: {e}")
-            };
+            }
         }
     }
 }

@@ -184,6 +184,56 @@ EXPLAIN ANALYZE SELECT * FROM generate_series(100);
 Plan with Metrics LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=0, end=100, batch_size=8192], metrics=[output_rows=101, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>]
 ```
 
+## Cookbook: Sweeping config with `configMatrix`
+
+Runs the same `.slt` once per combination of config values. Each directive is a comment:
+
+```text
+# configMatrix: <key>=<v1>,<v2>[,...]
+```
+
+- Repeat the directive to nest keys. Values are the cartesian product.
+- Whitespace-trimmed and deduped; repeated keys merge value lists.
+- Unknown key or invalid value fails fast, naming the file, key, and value.
+- Each override is applied like `SET <key> = <value>`, so `datafusion.runtime.*`
+  keys (e.g. `datafusion.runtime.memory_limit`) and config-dependent UDFs behave
+  exactly as they would for an in-file `SET`.
+- Supported by the default runner and by `--substrait-round-trip`. `--complete`
+  rejects a file that declares directives, since it would overwrite the file
+  with the output of a single combination. The Postgres runner ignores them.
+- Every combination runs even if an earlier one fails. Each failure is prefixed
+  with the combination that produced it, and a file with more than one failing
+  combination reports all of them.
+
+Nested example (2 × 2 = 4 runs):
+
+```text
+# configMatrix: datafusion.execution.parquet.coerce_int96=ms,us
+# configMatrix: datafusion.execution.parquet.coerce_int96_tz=UTC,America/New_York
+
+statement ok
+CREATE EXTERNAL TABLE int96_from_spark
+STORED AS PARQUET
+LOCATION '../../parquet-testing/data/int96_from_spark.parquet';
+
+query I
+select count(*) from int96_from_spark
+----
+6
+```
+
+Failure output:
+
+```text
+[configMatrix: datafusion.execution.parquet.coerce_int96=ms, datafusion.execution.parquet.coerce_int96_tz=UTC]
+caused by
+External error: 1 errors in file .../parquet_int96_matrix.slt
+```
+
+When more than one combination fails, all of them are reported together under a
+`N configMatrix combinations failed:` header, each still prefixed with its own
+combination.
+
 # Reference
 
 ## Running tests: Validation Mode
@@ -299,7 +349,7 @@ export RUST_MIN_STACK=30485760;
 PG_COMPAT=true INCLUDE_SQLITE=true cargo test --features=postgres --test sqllogictests
 ```
 
-To update the sqllite expected answers use the `datafusion/sqllogictest/regenerate_sqlite_files.sh` script.
+To update the sqlite expected answers use the `datafusion/sqllogictest/regenerate_sqlite_files.sh` script.
 
 Note this must be run with an empty postgres instance. For example
 
