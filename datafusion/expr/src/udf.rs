@@ -995,7 +995,7 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// A Vec the same length as `arg_types`. DataFusion will `CAST` the function call
     /// arguments to these specific types.
     fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        not_impl_err!("Function {} does not implement coerce_types", self.name())
+        coerce_types_not_implemented(self.name())
     }
 
     /// For struct-producing functions, return how output fields map to input
@@ -1040,6 +1040,11 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     }
 }
 
+/// Default implementation of [`ScalarUDFImpl::coerce_types`].
+/// Extracted to a free-standing function to reduce binary size by avoiding instantiating code per ScalarUDFImpl impl.
+fn coerce_types_not_implemented(name: &str) -> Result<Vec<DataType>> {
+    not_impl_err!("Function {name} does not implement coerce_types")
+}
 impl dyn ScalarUDFImpl {
     /// Returns `true` if the implementation is of type `T`.
     ///
