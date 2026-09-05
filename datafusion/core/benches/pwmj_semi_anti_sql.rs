@@ -77,19 +77,23 @@
 //! falls back to `NestedLoopJoinExec`, same as every other case here before its dependency
 //! landed.
 //!
-//! `RightMark` has no SQL surface at all: no keyword parses to it, and no optimizer rule
-//! constructs it (`decorrelate_predicate_subquery.rs` only ever builds `LeftMark`), so
-//! `ctx.sql(...)` can never plan one. `bench_pwmj_right_mark_hand_built`, in a separate
-//! benchmark group below, builds `PiecewiseMergeJoinExec` and `NestedLoopJoinExec` directly
-//! instead -- the one place in this file that deviates from planning through SQL, forced by
-//! there being no SQL to plan. That also means it has no planner fallback to lean on if the
-//! build does not support `RightMark` yet, so it probes `try_new` up front and skips the
-//! whole group with a note instead of panicking, the hand-built equivalent of what the
-//! planner does automatically for every SQL-planned case in this file.
+//! `RightMark` has no *direct* SQL surface: no keyword parses to it, and no logical rule
+//! constructs it (`decorrelate_predicate_subquery.rs` only ever builds `LeftMark`). The
+//! physical optimizer can still land on one indirectly -- `JoinSelection` may call
+//! `NestedLoopJoinExec::swap_inputs`, which swaps `LeftMark` to `RightMark` via
+//! `JoinType::swap` -- but there is no query text or table layout in this file that drives
+//! that swap for a `LeftMark` plan, so `ctx.sql(...)` still never plans a `RightMark` here in
+//! practice. `bench_pwmj_right_mark_hand_built`, in a separate benchmark group below, builds
+//! `PiecewiseMergeJoinExec` and `NestedLoopJoinExec` directly instead -- a deliberate
+//! direct-operator microbenchmark, not a stand-in for a SQL plan, and the one place in this
+//! file that deviates from planning through SQL. That also means it has no planner fallback
+//! to lean on if the build does not support `RightMark` yet, so it probes `try_new` up front
+//! and skips the whole group with a note instead of panicking, the hand-built equivalent of
+//! what the planner does automatically for every SQL-planned case in this file.
 
 use std::sync::Arc;
 
-use arrow::array::{Int32Array, RecordBatch};
+use arrow::array::{Array, Int32Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use criterion::measurement::WallTime;
 use criterion::{
@@ -104,7 +108,7 @@ use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::{NestedLoopJoinExec, PiecewiseMergeJoinExec};
 use datafusion::physical_plan::{ExecutionPlan, collect, displayable};
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_common::JoinSide;
+use datafusion_common::{DataFusionError, JoinSide};
 use tokio::runtime::Runtime;
 
 const LEFT_ROWS: usize = 20_000;
@@ -381,6 +385,48 @@ fn run(plan: Arc<dyn ExecutionPlan>, ctx: &SessionContext, rt: &Runtime) -> usiz
     })
 }
 
+/// Counts of the `mark` column's values across every output batch: `(true, false, null)`.
+///
+/// A row count alone cannot tell a correct mark join from a broken one: `RightMark` keeps
+/// every streamed row regardless of whether it matched, so a buggy `PiecewiseMergeJoinExec`
+/// that always marks `true` (or always `false`, or emits `lhs`'s row count under a different
+/// column) would still pass a row-count-only check, since `LEFT_ROWS == RIGHT_ROWS` and every
+/// regime here returns exactly `RIGHT_ROWS` rows either way. Reading the actual booleans back
+/// is what catches that.
+fn mark_counts(
+    plan: Arc<dyn ExecutionPlan>,
+    ctx: &SessionContext,
+    rt: &Runtime,
+) -> (usize, usize, usize) {
+    rt.block_on(async {
+        let batches = collect(plan, ctx.task_ctx()).await.unwrap();
+        let mut true_count = 0;
+        let mut false_count = 0;
+        let mut null_count = 0;
+        for batch in &batches {
+            let mark_idx = batch
+                .schema()
+                .index_of("mark")
+                .expect("mark join output is expected to carry a `mark` column");
+            let mark = batch
+                .column(mark_idx)
+                .as_any()
+                .downcast_ref::<arrow::array::BooleanArray>()
+                .expect("`mark` column is expected to be boolean");
+            for i in 0..mark.len() {
+                if mark.is_null(i) {
+                    null_count += 1;
+                } else if mark.value(i) {
+                    true_count += 1;
+                } else {
+                    false_count += 1;
+                }
+            }
+        }
+        (true_count, false_count, null_count)
+    })
+}
+
 /// One point in a sweep: which join, over what data, and what it must emit.
 struct Case<'a> {
     kind: Kind,
@@ -542,8 +588,8 @@ fn key_lt_key_filter(s: &SchemaRef) -> JoinFilter {
     JoinFilter::new(expr, column_indices, Arc::new(intermediate_schema))
 }
 
-/// `RightMark` has no SQL surface (see the module doc's "Mark joins" section), so both arms
-/// are hand-built here instead of planned from SQL text: `PiecewiseMergeJoinExec` and
+/// `RightMark` has no direct SQL surface (see the module doc's "Mark joins" section), so both
+/// arms are hand-built here instead of planned from SQL text: `PiecewiseMergeJoinExec` and
 /// `NestedLoopJoinExec`, over the same data, the same `lhs.key < rhs.key` relation, and the
 /// same join type -- with no risk of comparing an operator against itself, since which
 /// operator each arm uses is fixed by construction rather than read back off a plan.
@@ -562,7 +608,12 @@ fn bench_pwmj_right_mark_hand_built(c: &mut Criterion) {
     // `try_new` directly and skip the whole group rather than panic, so this benchmark stays
     // runnable (as a no-op) against a build that has not merged `RightMark` support yet, and
     // starts measuring on its own once that support lands.
-    if let Err(err) = PiecewiseMergeJoinExec::try_new(
+    //
+    // Only the specific `NotImplemented` this build's `try_new` returns for an unsupported
+    // join type is treated as "not landed yet"; any other error (a schema mistake here, or a
+    // real regression in `try_new`) is a bug in this benchmark or in PWMJ and must panic
+    // rather than be swallowed as a skip.
+    match PiecewiseMergeJoinExec::try_new(
         Arc::new(EmptyExec::new(Arc::clone(&s))),
         Arc::new(EmptyExec::new(Arc::clone(&s))),
         (
@@ -573,17 +624,24 @@ fn bench_pwmj_right_mark_hand_built(c: &mut Criterion) {
         JoinType::RightMark,
         1,
     ) {
-        println!(
-            "note: pwmj_vs_nlj_right_mark_hand_built skipped -- this build's \
-             PiecewiseMergeJoinExec does not support RightMark yet: {err}"
-        );
-        return;
+        Ok(_) => {}
+        Err(err @ DataFusionError::NotImplemented(_)) => {
+            println!(
+                "note: pwmj_vs_nlj_right_mark_hand_built skipped -- this build's \
+                 PiecewiseMergeJoinExec does not support RightMark yet: {err}"
+            );
+            return;
+        }
+        Err(err) => panic!(
+            "pwmj_vs_nlj_right_mark_hand_built: unexpected error probing RightMark \
+             support, not the NotImplemented this benchmark skips on: {err}"
+        ),
     }
 
     let mut group = c.benchmark_group("pwmj_vs_nlj_right_mark_hand_built");
     group.sample_size(10);
 
-    for (regime, right_offset, _fraction) in REGIMES {
+    for (regime, right_offset, fraction) in REGIMES {
         let lhs_batches = build_batches(LEFT_ROWS, 0, &s);
         let rhs_batches = build_batches(RIGHT_ROWS, right_offset, &s);
 
@@ -648,11 +706,12 @@ fn bench_pwmj_right_mark_hand_built(c: &mut Criterion) {
             }
         };
 
-        // `RightMark` keeps every streamed row, matched or not, so both arms must return
-        // exactly `RIGHT_ROWS` regardless of the regime -- unlike `RightSemi`/`RightAnti`,
-        // where the regime changes the row count. The regime still matters to what is timed
-        // below: it changes how much of the comparison work each arm actually does (`mark`
-        // true vs false), even though the row count it returns cannot show that.
+        // `RightMark` keeps every streamed row, matched or not, so a row count alone cannot
+        // tell a correct implementation from a broken one -- both arms return exactly
+        // `RIGHT_ROWS` regardless of the regime, unlike `RightSemi`/`RightAnti`, where the
+        // regime changes the row count. What the regime actually changes here is which rows
+        // get marked `true` vs `false`, so that is what gets checked: the `mark` column's own
+        // value distribution, from both arms, against what the regime claims.
         let pwmj_rows = run(pwmj_plan(), &ctx, &rt);
         let nlj_rows = run(nlj_plan(), &ctx, &rt);
         assert_eq!(
@@ -663,6 +722,33 @@ fn bench_pwmj_right_mark_hand_built(c: &mut Criterion) {
             pwmj_rows, RIGHT_ROWS,
             "right_mark_{regime}: RightMark must keep every streamed row"
         );
+
+        let (pwmj_true, pwmj_false, pwmj_null) = mark_counts(pwmj_plan(), &ctx, &rt);
+        let (nlj_true, nlj_false, nlj_null) = mark_counts(nlj_plan(), &ctx, &rt);
+        assert_eq!(
+            (pwmj_true, pwmj_false, pwmj_null),
+            (nlj_true, nlj_false, nlj_null),
+            "right_mark_{regime}: pwmj and nlj disagree on mark values \
+             (true/false/null): pwmj={pwmj_true}/{pwmj_false}/{pwmj_null}, \
+             nlj={nlj_true}/{nlj_false}/{nlj_null}"
+        );
+        assert_eq!(
+            pwmj_null, 0,
+            "right_mark_{regime}: RightMark's mark column must never be null"
+        );
+        match fraction.expected_matched_rows(RIGHT_ROWS) {
+            Some(expected_true) => assert_eq!(
+                pwmj_true, expected_true,
+                "right_mark_{regime}: expected {expected_true} marked true, got {pwmj_true} \
+                 (a uniformly true/false mark column would be caught here)"
+            ),
+            None => assert!(
+                pwmj_true > 0 && pwmj_true < RIGHT_ROWS,
+                "right_mark_{regime}: {pwmj_true} rows marked true is all-or-nothing, \
+                 adjust the data shape (a uniformly true/false mark column would be caught \
+                 here)"
+            ),
+        }
 
         group.bench_function(
             BenchmarkId::new("pwmj", format!("{regime}_{RIGHT_ROWS}")),
