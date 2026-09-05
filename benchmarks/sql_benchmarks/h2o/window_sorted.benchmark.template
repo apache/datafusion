@@ -1,0 +1,99 @@
+# Shared template for the h2o `window_sorted` subgroup: WindowTopN over an
+# input that *declares* the ordering the window requires.
+#
+# Parameters set by each qNN.benchmark:
+#   QPAD     zero-padded query id
+#   FN       window function            (ROW_NUMBER, RANK, DENSE_RANK)
+#   PK_MOD   partition count            (100, 1000, 10000, 100000)
+#   OB_EXPR  ORDER BY value expression  (`v2` distinct, integer-cast for ties)
+#   OB_BOUND SQL predicate pinning ob's cardinality, asserted below
+#   NAME     display name
+#
+# Why this subgroup exists: the `window` subgroup registers `x` with no declared
+# ordering, so `output_ordering()` is None and the planner cannot know the input
+# is sorted. Any operator that requires a declared ordering is therefore
+# unreachable from those queries, however the data happens to be laid out on
+# disk. This subgroup republishes the same sweep over a `WITH ORDER` table so
+# the ordering-dependent plans are reachable.
+#
+# The first `load` is the existing unsorted loader, which creates `x`; the
+# second reads `x` and writes the sorted `x_sorted`. Reusing the existing loader
+# keeps both the `--size` and `--format` axes working with no duplication.
+
+load sql_benchmarks/h2o/init/load_window_${H2O_BENCH_SIZE:-small}_${H2O_FILE_TYPE:-csv}.sql
+
+load sql_benchmarks/h2o/init/load_window_sorted.sql
+
+init sql_benchmarks/h2o/init/window_sorted_settings.sql
+
+name ${NAME}
+group h2o
+
+echo Loading ${H2O_BENCH_SIZE:-small} window ${H2O_FILE_TYPE:-csv} h2o data, sorted by (pk, ob DESC) over ${PK_MOD} partitions
+
+# Guard against a silent config no-op: with the rewrite off the plan is a plain
+# window plus filter, and the subgroup would measure something other than what
+# its name claims.
+assert I
+SELECT value = 'true' FROM information_schema.df_settings WHERE name = 'datafusion.optimizer.enable_window_topn';
+----
+true
+
+# Same guard for the setting that decides an ordering-requiring operator gets an
+# order-preserving repartition instead of a redundant SortExec.
+assert I
+SELECT value = 'true' FROM information_schema.df_settings WHERE name = 'datafusion.optimizer.prefer_existing_sort';
+----
+true
+
+# The sorted copy must hold every non-null-v2 row of the source. This catches a
+# COPY that silently wrote a partial file, which would otherwise show up only as
+# a suspiciously fast run.
+assert I
+SELECT count(*) = (SELECT count(*) FROM x WHERE v2 IS NOT NULL) FROM x_sorted;
+----
+true
+
+# The ORDER BY column really has the cardinality this query's name claims. A
+# tie-shape query whose `ob` turns out near-unique measures the no-ties case
+# under a heavy-ties name, and nothing else in the run would show it: the timings
+# stay plausible and only the output row count quietly collapses to K per
+# partition. `v2` is Float64, so this is a live trap — `v2 % 10` is float modulo
+# and yields no ties at all.
+assert I
+SELECT ${OB_BOUND} FROM x_sorted;
+----
+true
+
+# The per-partition top-K operator has to be in the plan, otherwise the
+# declared ordering was not picked up and this is just a window-plus-filter
+# measurement wearing the subgroup's name.
+#
+# `PartitionedTopKExec` is deliberately the string asserted rather than a
+# fully-qualified operator name: it is also a substring of the streaming
+# variant's name, so this same check holds on a branch where a streaming
+# operator replaces the heap one for declared-sorted input. That is the point of
+# the subgroup — the comparison is this file's numbers across two branches, so
+# the assertion must not be the thing that differs between them.
+expect_plan PartitionedTopKExec
+
+# `PartitionedTopKExec` alone only proves the plan has an operator that
+# distributes by the partition key; that operator requires no input ordering,
+# so it appears whether or not the scan below it declares one. Assert the
+# scan's own declared ordering too, so a `WITH ORDER` that silently stops
+# reaching `DataSourceExec` (e.g. a rewrite that drops it, or a future change
+# to `load_window_sorted.sql`) fails loudly here instead of just being absent
+# from a plan that still "passes" the check above.
+expect_plan output_ordering=[pk@0 ASC NULLS LAST, ob@1 DESC]
+
+run
+-- Top-2 per partition by ${FN} over the declared-sorted input.
+SELECT pk, ob FROM (
+    SELECT pk, ob,
+           ${FN}() OVER (PARTITION BY pk ORDER BY ob DESC) AS rnk
+    FROM x_sorted
+) sub_query WHERE rnk <= 2;
+
+result sql_benchmarks/h2o/results/window_sorted/${H2O_BENCH_SIZE:-small}/q${QPAD}.csv
+
+cleanup sql_benchmarks/h2o/init/window_sorted_cleanup.sql

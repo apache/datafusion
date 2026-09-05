@@ -1,0 +1,201 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Mark-join correctness across a config matrix. A mark join adds a boolean `mark`
+# per left row and comes from EXISTS/IN/NOT EXISTS/NOT IN inside a disjunction
+# (`WHERE <pred> OR EXISTS(..)`; see mark_join in decorrelate_predicate_subquery.rs).
+# For an equijoin mark, prefer_hash_join toggles the operator: false ->
+# SortMergeJoinExec LeftMark, true -> HashJoinExec RightMark (inputs swapped), so
+# sweeping {true,false} x batch_size {1,2,100,8192} cross-checks both directions
+# and must agree row-for-row. Range mark joins run on NestedLoopJoin regardless
+# (Part 2, batch_size only). SMJ needs target_partitions>1 and repartition_joins,
+# set below (not swept). Matrix rules: no EXPLAIN, no in-file SET of a swept knob,
+# rowsort every multi-row query.
+
+# configMatrix: datafusion.optimizer.prefer_hash_join=true,false
+# configMatrix: datafusion.execution.batch_size=1,2,100,8192
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+set datafusion.optimizer.repartition_joins = true;
+
+# ------------------------------------------------------------------
+# Fixtures: duplicate and NULL keys on the subquery side, a NULL key and an
+# unmatched key on the outer side.
+# ------------------------------------------------------------------
+statement ok
+CREATE TABLE mk_l(k INT, v INT) AS VALUES
+  (1, 10), (2, 20), (3, 30), (4, 40), (NULL, 50);
+
+statement ok
+CREATE TABLE mk_r(k INT) AS VALUES (1), (2), (2), (NULL);
+
+# mk_r without the NULL, for NOT IN cases that would otherwise be swallowed by
+# three-valued logic.
+statement ok
+CREATE TABLE mk_r_nn(k INT) AS VALUES (1), (2), (2);
+
+statement ok
+CREATE TABLE mk_empty(k INT);
+
+# ==================================================================
+# Part 1: Equijoin mark joins (LeftMark on SMJ vs RightMark on HashJoin)
+# ==================================================================
+
+# EXISTS in a disjunction with a sometimes-true predicate. mark(EXISTS k in
+# {1,2}) is true for k=1,2; the predicate v>35 is true for k=4 and k=NULL.
+query II rowsort
+SELECT l.k, l.v FROM mk_l l
+WHERE l.v > 35 OR EXISTS (SELECT 1 FROM mk_r r WHERE l.k = r.k);
+----
+1 10
+2 20
+4 40
+NULL 50
+
+# NOT EXISTS in a disjunction: mark is negated, true for k not in {1,2}.
+query II rowsort
+SELECT l.k, l.v FROM mk_l l
+WHERE l.v > 35 OR NOT EXISTS (SELECT 1 FROM mk_r r WHERE l.k = r.k);
+----
+3 30
+4 40
+NULL 50
+
+# Predicate never true (no negative k), so the result isolates the mark: the
+# EXISTS rows k in {1,2}. Exercises the mark column with the OR contributing
+# nothing.
+query II rowsort
+SELECT l.k, l.v FROM mk_l l
+WHERE l.k < 0 OR EXISTS (SELECT 1 FROM mk_r r WHERE l.k = r.k);
+----
+1 10
+2 20
+
+# Same, negated: isolates NOT EXISTS. The NULL-keyed left row never matches, so
+# it is kept.
+query II rowsort
+SELECT l.k, l.v FROM mk_l l
+WHERE l.k < 0 OR NOT EXISTS (SELECT 1 FROM mk_r r WHERE l.k = r.k);
+----
+3 30
+4 40
+NULL 50
+
+# IN in a disjunction: same matches as EXISTS here; the NULL in the subquery adds
+# no true values.
+query II rowsort
+SELECT l.k, l.v FROM mk_l l
+WHERE l.v > 35 OR l.k IN (SELECT r.k FROM mk_r r);
+----
+1 10
+2 20
+4 40
+NULL 50
+
+# NOT IN over a NULL-free subquery: mark(NOT IN) is true for k not in {1,2}.
+query II rowsort
+SELECT l.k, l.v FROM mk_l l
+WHERE l.v > 35 OR l.k NOT IN (SELECT r.k FROM mk_r_nn r);
+----
+3 30
+4 40
+NULL 50
+
+query II rowsort
+SELECT l.k, l.v FROM mk_l l
+WHERE l.v > 35 OR l.k NOT IN (SELECT r.k FROM mk_r r);
+----
+4 40
+NULL 50
+
+# Empty subquery: EXISTS is always false, so the result is just the predicate.
+query II rowsort
+SELECT l.k, l.v FROM mk_l l
+WHERE l.v > 35 OR EXISTS (SELECT 1 FROM mk_empty r WHERE l.k = r.k);
+----
+4 40
+NULL 50
+
+# Empty subquery, negated: NOT EXISTS is always true, so every row survives.
+query II rowsort
+SELECT l.k, l.v FROM mk_l l
+WHERE l.k < 0 OR NOT EXISTS (SELECT 1 FROM mk_empty r WHERE l.k = r.k);
+----
+1 10
+2 20
+3 30
+4 40
+NULL 50
+
+# Multiple equi keys in the mark correlation.
+statement ok
+CREATE TABLE mk2_l(k1 INT, k2 INT, v INT) AS VALUES
+  (1, 1, 10), (1, 2, 20), (2, 2, 30), (3, 3, 40);
+
+statement ok
+CREATE TABLE mk2_r(k1 INT, k2 INT) AS VALUES (1, 1), (2, 2), (1, 9);
+
+query III rowsort
+SELECT l.k1, l.k2, l.v FROM mk2_l l
+WHERE l.v > 35 OR EXISTS (SELECT 1 FROM mk2_r r WHERE l.k1 = r.k1 AND l.k2 = r.k2);
+----
+1 1 10
+2 2 30
+3 3 40
+
+# Cross-table filter in the correlation (regression #21197): unmatched mark rows
+# produce null right indices that must not corrupt non-nullable left columns.
+# EXISTS holds for the k=2 rows (partner (2,99) differs in d); k=1's partner
+# equals its d, so false.
+statement ok
+CREATE TABLE mkf_l(k INT, d INT) AS VALUES (1, 10), (2, 20), (2, 25), (3, 30);
+
+statement ok
+CREATE TABLE mkf_r(k INT, d INT) AS VALUES (1, 10), (2, 20), (2, 99);
+
+query II rowsort
+SELECT l.k, l.d FROM mkf_l l
+WHERE l.d < 0 OR EXISTS (SELECT 1 FROM mkf_r r WHERE l.k = r.k AND r.d <> l.d);
+----
+2 20
+2 25
+
+# ==================================================================
+# Part 2: Range mark joins (RightMark on NestedLoopJoin)
+# ==================================================================
+# No equi key, so these run on NestedLoopJoin in both combinations; only
+# batch_size varies. mk_r non-null keys = {1,2,2}.
+
+# EXISTS l.k > r.k is true for k>1, i.e. k in {2,3,4}. Predicate never true.
+query II rowsort
+SELECT l.k, l.v FROM mk_l l
+WHERE l.v > 100 OR EXISTS (SELECT 1 FROM mk_r r WHERE l.k > r.k);
+----
+2 20
+3 30
+4 40
+
+# NOT EXISTS of the same range: true for k=1 (no smaller r) and the NULL key.
+query II rowsort
+SELECT l.k, l.v FROM mk_l l
+WHERE l.k < 0 OR NOT EXISTS (SELECT 1 FROM mk_r r WHERE l.k > r.k);
+----
+1 10
+NULL 50

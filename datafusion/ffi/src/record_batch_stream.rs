@@ -71,7 +71,8 @@ impl FFI_RecordBatchStream {
         let private_data = Box::into_raw(Box::new(RecordBatchStreamPrivateData {
             rbs: stream,
             runtime,
-        })) as *mut c_void;
+        }))
+        .cast::<c_void>();
         FFI_RecordBatchStream {
             poll_next: poll_next_fn_wrapper,
             schema: schema_fn_wrapper,
@@ -96,7 +97,7 @@ unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_RecordBatchStream) {
     unsafe {
         debug_assert!(!provider.private_data.is_null());
         let private_data =
-            Box::from_raw(provider.private_data as *mut RecordBatchStreamPrivateData);
+            Box::from_raw(provider.private_data.cast::<RecordBatchStreamPrivateData>());
         drop(private_data);
         provider.private_data = std::ptr::null_mut();
     }
@@ -131,7 +132,7 @@ unsafe extern "C" fn poll_next_fn_wrapper(
     cx: &mut FfiContext,
 ) -> FfiPoll<FFI_Option<FFI_Result<WrappedArray>>> {
     unsafe {
-        let private_data = stream.private_data as *mut RecordBatchStreamPrivateData;
+        let private_data = stream.private_data.cast::<RecordBatchStreamPrivateData>();
         let stream = &mut (*private_data).rbs;
 
         let _guard = (*private_data).runtime.as_ref().map(|rt| rt.enter());

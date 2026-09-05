@@ -118,7 +118,7 @@ unsafe extern "C" fn release_fn_wrapper(props: &mut FFI_PlanProperties) {
     unsafe {
         debug_assert!(!props.private_data.is_null());
         let private_data =
-            Box::from_raw(props.private_data as *mut PlanPropertiesPrivateData);
+            Box::from_raw(props.private_data.cast::<PlanPropertiesPrivateData>());
         drop(private_data);
         props.private_data = std::ptr::null_mut();
     }
@@ -143,7 +143,7 @@ impl From<&PlanProperties> for FFI_PlanProperties {
             output_ordering: output_ordering_fn_wrapper,
             schema: schema_fn_wrapper,
             release: release_fn_wrapper,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
         }
     }

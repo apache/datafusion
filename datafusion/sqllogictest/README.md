@@ -349,7 +349,7 @@ export RUST_MIN_STACK=30485760;
 PG_COMPAT=true INCLUDE_SQLITE=true cargo test --features=postgres --test sqllogictests
 ```
 
-To update the sqllite expected answers use the `datafusion/sqllogictest/regenerate_sqlite_files.sh` script.
+To update the sqlite expected answers use the `datafusion/sqllogictest/regenerate_sqlite_files.sh` script.
 
 Note this must be run with an empty postgres instance. For example
 

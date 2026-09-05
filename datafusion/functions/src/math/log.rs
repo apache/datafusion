@@ -352,7 +352,7 @@ impl ScalarUDFImpl for LogFunc {
                 return Ok(ExprSimplifyResult::Original(args));
             }
             _ => (),
-        };
+        }
 
         let number = args.pop().unwrap();
         let number_datatype = arg_types.pop().unwrap();

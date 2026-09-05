@@ -213,7 +213,7 @@ fn print_docs(
                 let _ = writeln!(docs, "#### Aliases");
 
                 for alias in f.get_aliases() {
-                    let _ = writeln!(docs, "- {}", alias.replace("_", r#"\_"#));
+                    let _ = writeln!(docs, "- {}", alias.replace('_', r#"\_"#));
                 }
             }
 

@@ -1486,7 +1486,7 @@ fn multi_hash_joins() -> Result<()> {
                                     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
                                 ");
                             },
-                };
+                }
 
 
                 let plan_sort = test_config.to_plan(top_join, &SORT_DISTRIB_DISTRIB);
@@ -1555,7 +1555,7 @@ fn multi_hash_joins() -> Result<()> {
                             ");
 
                             },
-                };
+                }
 
 
                 let plan_sort = test_config.to_plan(top_join, &SORT_DISTRIB_DISTRIB);

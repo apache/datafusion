@@ -135,7 +135,7 @@ impl TryFrom<ast::WindowFrame> for WindowFrame {
             && val.is_null()
         {
             plan_err!("Invalid window frame: end bound cannot be UNBOUNDED PRECEDING")?
-        };
+        }
 
         let units = value.units.into();
         Ok(Self::new_bounds(units, start_bound, end_bound))

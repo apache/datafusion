@@ -88,6 +88,9 @@ jobs:
       - name: Run tests (excluding doctests)
         env:
           RUST_BACKTRACE: 1
+          # Run more random scenarios of the spill pool fuzzer than the
+          # default suite does (about a minute).
+          DATAFUSION_SPILL_POOL_FUZZ_ITERATIONS: 1000
         run: |
           cargo test \
             --profile ci \

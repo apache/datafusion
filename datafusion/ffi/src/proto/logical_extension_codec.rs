@@ -134,9 +134,9 @@ impl FFI_LogicalExtensionCodec {
         unsafe { &(*private_data).codec }
     }
 
-    fn runtime(&self) -> &Option<Handle> {
+    fn runtime(&self) -> Option<&Handle> {
         let private_data = self.private_data as *const LogicalExtensionCodecPrivateData;
-        unsafe { &(*private_data).runtime }
+        unsafe { (*private_data).runtime.as_ref() }
     }
 
     fn task_ctx(&self) -> Result<Arc<TaskContext>> {
@@ -151,7 +151,7 @@ unsafe extern "C" fn try_decode_table_provider_fn_wrapper(
     schema: WrappedSchema,
 ) -> FFI_Result<FFI_TableProvider> {
     let ctx = sresult_return!(codec.task_ctx());
-    let runtime = codec.runtime().clone();
+    let runtime = codec.runtime().cloned();
     let codec_inner = codec.inner();
     let table_ref = TableReference::from(table_ref.as_str());
     let schema: SchemaRef = schema.into();
@@ -271,8 +271,11 @@ unsafe extern "C" fn try_encode_udwf_fn_wrapper(
 
 unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_LogicalExtensionCodec) {
     unsafe {
-        let private_data =
-            Box::from_raw(provider.private_data as *mut LogicalExtensionCodecPrivateData);
+        let private_data = Box::from_raw(
+            provider
+                .private_data
+                .cast::<LogicalExtensionCodecPrivateData>(),
+        );
         drop(private_data);
     }
 }
@@ -281,7 +284,7 @@ unsafe extern "C" fn clone_fn_wrapper(
     codec: &FFI_LogicalExtensionCodec,
 ) -> FFI_LogicalExtensionCodec {
     let old_codec = Arc::clone(codec.inner());
-    let runtime = codec.runtime().clone();
+    let runtime = codec.runtime().cloned();
 
     FFI_LogicalExtensionCodec::new(old_codec, runtime, codec.task_ctx_provider.clone())
 }
@@ -333,7 +336,7 @@ impl FFI_LogicalExtensionCodec {
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: crate::version,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
         }
     }
@@ -579,7 +582,7 @@ mod tests {
 
             if !node.is::<MemTable>() {
                 return exec_err!("TestExtensionCodec only expects MemTable");
-            };
+            }
 
             if node.schema() != create_test_table().schema() {
                 return exec_err!("Unexpected schema for encoding.");

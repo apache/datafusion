@@ -28,7 +28,7 @@ use std::task::{Context, Poll};
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{Result, internal_err, resources_err};
-use datafusion_execution::memory_pool::MemoryReservation;
+use datafusion_execution::memory_pool::{MemoryReservation, MergeMemoryPool};
 
 use crate::sorts::builder::try_grow_reservation_to_at_least;
 use crate::sorts::sort::get_reserved_bytes_for_record_batch_size;
@@ -153,6 +153,8 @@ pub(crate) struct MultiLevelMergeBuilder {
     metrics: BaselineMetrics,
     batch_size: usize,
     reservation: MemoryReservation,
+    /// Workspace retained across retries and intermediate spill passes.
+    merge_pool: Option<Arc<MergeMemoryPool>>,
     fetch: Option<usize>,
     enable_round_robin_tie_breaker: bool,
 }
@@ -191,9 +193,15 @@ impl MultiLevelMergeBuilder {
             metrics,
             batch_size,
             reservation,
+            merge_pool: None,
             enable_round_robin_tie_breaker,
             fetch,
         }
+    }
+
+    pub(super) fn with_merge_pool(mut self, pool: Option<Arc<MergeMemoryPool>>) -> Self {
+        self.merge_pool = pool;
+        self
     }
 
     pub(crate) fn create_spillable_merge_stream(self) -> SendableRecordBatchStream {
@@ -232,6 +240,12 @@ impl MultiLevelMergeBuilder {
                     self.sorted_streams.is_empty(),
                     "We should not have any sorted streams left"
                 );
+
+                // The final pass has its buffer budget and needs no future spill
+                // workspace. Keep live reservations, but release the idle floor.
+                if let Some(pool) = &self.merge_pool {
+                    pool.release_unused();
+                }
 
                 return Ok(stream);
             }
@@ -844,6 +858,103 @@ mod tests {
     /// Two sorted runs whose largest batches are too big to both
     /// be seated in the merge budget at once are re-spilled (halved) until they
     /// fit, and the merge then completes with fully sorted, complete output.
+    #[tokio::test]
+    async fn skewed_runs_reuse_retained_workspace_across_retries() -> Result<()> {
+        // These budgets require one and two re-spills, respectively.
+        for (budget_halves, expected_splits) in [(7, 1), (5, 2)] {
+            let capacity = 1024 * 1024;
+            let parent: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(capacity));
+            let env = RuntimeEnvBuilder::new()
+                .with_memory_pool(Arc::clone(&parent))
+                .build_arc()?;
+            let schema = test_schema();
+            let spill_manager = build_spill_manager(&env, &schema);
+            let spill_count = spill_manager.metrics.spill_file_count.clone();
+            let n: i64 = 16384;
+            let f0 = make_sorted_spill_file(&spill_manager, &schema, (0..n).collect());
+            let f1 = make_sorted_spill_file(&spill_manager, &schema, (0..n).collect());
+            let m = f0.max_record_batch_memory.max(f1.max_record_batch_memory);
+            let workspace = m * budget_halves / 2;
+            assert!(workspace < capacity);
+            let merge_pool = Arc::new(MergeMemoryPool::new(
+                Arc::clone(&parent),
+                MemoryConsumer::new("merge workspace"),
+            ));
+            let pool: Arc<dyn MemoryPool> =
+                Arc::clone(&merge_pool) as Arc<dyn MemoryPool>;
+            let batch_size = 8192;
+            let mut builder = build_merge_builder(
+                spill_manager,
+                Arc::clone(&schema),
+                vec![f0, f1],
+                &pool,
+                batch_size,
+            )
+            .with_merge_pool(Some(Arc::clone(&merge_pool)));
+            builder.reservation.try_grow(workspace)?;
+            merge_pool.retain(workspace);
+            let contender = MemoryConsumer::new("contender").register(&parent);
+            contender.try_grow(capacity - workspace)?;
+
+            // Drive each retry so its freed child reservation cannot silently
+            // release the workspace and reacquire it from the parent pool.
+            for _ in 0..expected_splits {
+                let MergeStep::SplitThenRetry(index) =
+                    builder.merge_sorted_runs_within_mem_limit()?
+                else {
+                    panic!("the merge must re-spill a skewed run");
+                };
+                assert_eq!(parent.reserved(), capacity);
+                assert!(contender.try_grow(1).is_err());
+                builder.split_spill_file_in_half(index).await?;
+                assert_eq!(parent.reserved(), capacity);
+                assert!(contender.try_grow(1).is_err());
+            }
+
+            let final_bytes: usize = builder
+                .sorted_spill_files
+                .iter()
+                .map(|(file, _)| {
+                    get_reserved_bytes_for_record_batch_size(
+                        file.max_record_batch_memory,
+                        file.max_record_batch_memory,
+                    )
+                })
+                .sum();
+            assert!(final_bytes < workspace && workspace < 2 * final_bytes);
+
+            let mut stream = builder.create_spillable_merge_stream();
+            let first = stream.try_next().await?.expect("nonempty merge");
+            assert_eq!(spill_count.value(), 2 + expected_splits);
+            assert_eq!(merge_pool.reserved(), final_bytes);
+            assert_eq!(parent.reserved(), contender.size() + final_bytes);
+
+            let mut batches = vec![first];
+            while let Some(batch) = stream.try_next().await? {
+                batches.push(batch);
+            }
+            assert_eq!(
+                batches.iter().map(|batch| batch.num_rows()).max(),
+                Some(batch_size / 2),
+                "splitting both runs must halve, not quarter, the output batch size"
+            );
+            let merged = concat_batches(&schema, &batches)?;
+            let expected =
+                Int64Array::from_iter_values((0..n).flat_map(|value| [value, value]));
+            assert_eq!(merged.column(0).as_primitive::<Int64Type>(), &expected);
+
+            // The pool stays alive: EOF must release live bytes and the idle floor.
+            assert_eq!(merge_pool.reserved(), 0);
+            assert_eq!(parent.reserved(), contender.size());
+            drop(stream);
+            assert_eq!(env.disk_manager.spilling_progress().active_files_count, 0);
+            assert_eq!(env.disk_manager.used_disk_space(), 0);
+            drop(contender);
+            assert_eq!(parent.reserved(), 0);
+        }
+        Ok(())
+    }
+
     #[tokio::test]
     async fn skewed_runs_are_respilled_so_the_merge_fits() -> Result<()> {
         let env = Arc::new(RuntimeEnv::default());

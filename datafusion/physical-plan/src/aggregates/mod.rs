@@ -187,7 +187,6 @@ use datafusion_common::{
     assert_eq_or_internal_err, internal_err, not_impl_err,
 };
 use datafusion_execution::TaskContext;
-use datafusion_execution::memory_pool::MemoryLimit;
 use datafusion_expr::{Accumulator, Aggregate};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
@@ -716,7 +715,7 @@ impl From<StreamType> for SendableRecordBatchStream {
             StreamType::AggregateStream(stream) => Box::pin(stream),
             StreamType::PartialHash(stream) => Box::pin(stream),
             StreamType::PartialReduceHash(stream) => Box::pin(stream),
-            StreamType::FinalHash(stream) => Box::pin(stream),
+            StreamType::FinalHash(stream) => stream.into_stream(),
             StreamType::SingleHash(stream) => Box::pin(stream),
             StreamType::OrderedPartialAggregate(stream) => stream.into_stream(),
             StreamType::OrderedFinalAggregate(stream) => Box::pin(stream),
@@ -1279,11 +1278,20 @@ impl AggregateExec {
         )?))
     }
 
+    // # Grouping sets
+    //
+    // `GROUPING SETS`, `CUBE` and `ROLLUP` are expanded by the raw-input stages
+    // (partial and single aggregation), which evaluate every grouping set of
+    // each input batch into the same hash table. They are always planned with
+    // `InputOrderMode::Linear` (see `try_new_with_schema`), so they only reach
+    // the unordered hash streams. State-input stages (final and partial-reduce
+    // aggregation) must receive the expanded keys as a plain group by (see
+    // `PhysicalGroupBy::as_final`), which their predicates check explicitly.
+
     fn should_use_partial_hash_stream(&self, _context: &TaskContext) -> bool {
         self.mode == AggregateMode::Partial
             && self.input_order_mode == InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
-            && self.group_by.is_single()
             && self.limit_options_supported_by_hash_stream()
     }
 
@@ -1294,7 +1302,6 @@ impl AggregateExec {
         self.mode == AggregateMode::Partial
             && self.input_order_mode != InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
-            && self.group_by.is_single()
             && self.limit_options_supported_by_hash_stream()
     }
 
@@ -1308,12 +1315,7 @@ impl AggregateExec {
             && self.group_by.is_single()
     }
 
-    fn should_use_partial_reduce_hash_stream(&self, context: &TaskContext) -> bool {
-        // TODO: implement memory-limited path and remove this limitation
-        if matches!(context.memory_pool().memory_limit(), MemoryLimit::Finite(_)) {
-            return false;
-        }
-
+    fn should_use_partial_reduce_hash_stream(&self, _context: &TaskContext) -> bool {
         self.mode == AggregateMode::PartialReduce
             && self.limit_options.is_none()
             && self.input_order_mode == InputOrderMode::Linear
@@ -1328,7 +1330,6 @@ impl AggregateExec {
         ) && self.limit_options.is_none()
             && self.input_order_mode == InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
-            && self.group_by.is_single()
     }
 
     fn should_use_ordered_single_aggregate_stream(&self, _context: &TaskContext) -> bool {
@@ -1338,7 +1339,6 @@ impl AggregateExec {
         ) && self.limit_options.is_none()
             && self.input_order_mode != InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
-            && self.group_by.is_single()
     }
 
     fn should_use_ordered_final_aggregate_stream(&self, _context: &TaskContext) -> bool {
@@ -2836,7 +2836,7 @@ pub fn concat_slices<T: Clone>(lhs: &[T], rhs: &[T]) -> Vec<T> {
 // Returns `None` if they are incomparable, `Some(true)` if there is no current
 // ordering or candidate ordering is finer, and `Some(false)` otherwise.
 fn determine_finer(
-    current: &Option<LexOrdering>,
+    current: Option<&LexOrdering>,
     candidate: &LexOrdering,
 ) -> Option<bool> {
     if let Some(ordering) = current {
@@ -2894,7 +2894,7 @@ pub fn get_finer_aggregate_exprs_requirement(
             // we can skip this expression. If the latter is finer than the former,
             // adopt it if it is satisfied by the equivalence properties. Otherwise,
             // defer the analysis to the reverse expression.
-            let forward_finer = determine_finer(&requirement, &aggr_req);
+            let forward_finer = determine_finer(requirement.as_ref(), &aggr_req);
             if let Some(finer) = forward_finer {
                 if !finer {
                     continue;
@@ -2921,7 +2921,8 @@ pub fn get_finer_aggregate_exprs_requirement(
                 // expression. If the latter is finer than the former, adopt it if
                 // it is satisfied by the equivalence properties. Otherwise, adopt
                 // the forward expression.
-                if let Some(finer) = determine_finer(&requirement, &rev_aggr_req) {
+                if let Some(finer) = determine_finer(requirement.as_ref(), &rev_aggr_req)
+                {
                     if !finer {
                         *aggr_expr = Arc::new(reverse_aggr_expr);
                     } else if eq_properties.ordering_satisfy(rev_aggr_req.clone())? {
@@ -3240,7 +3241,7 @@ mod tests {
 
     use arrow::array::{
         BooleanArray, DictionaryArray, Float32Array, Float64Array, Int32Array,
-        Int64Array, StructArray, UInt32Array, UInt64Array,
+        Int64Array, NullArray, StructArray, UInt32Array, UInt64Array,
     };
     use arrow::compute::{SortOptions, concat_batches};
     use arrow::datatypes::Int32Type;
@@ -3524,12 +3525,14 @@ mod tests {
             | 2 | 1.0 | 0             | 1               |
             | 3 |     | 1             | 1               |
             | 3 |     | 1             | 2               |
-            | 3 | 2.0 | 0             | 2               |
+            | 3 | 2.0 | 0             | 1               |
+            | 3 | 2.0 | 0             | 1               |
             | 3 | 3.0 | 0             | 1               |
             | 4 |     | 1             | 1               |
             | 4 |     | 1             | 2               |
             | 4 | 3.0 | 0             | 1               |
-            | 4 | 4.0 | 0             | 2               |
+            | 4 | 4.0 | 0             | 1               |
+            | 4 | 4.0 | 0             | 1               |
             +---+-----+---------------+-----------------+
             "
             );
@@ -3557,7 +3560,7 @@ mod tests {
             "
             );
             }
-        };
+        }
 
         let merge = Arc::new(CoalescePartitionsExec::new(partial_aggregate));
 
@@ -3678,7 +3681,7 @@ mod tests {
             +---+---------------+-------------+
             ");
             }
-        };
+        }
 
         let merge = Arc::new(CoalescePartitionsExec::new(partial_aggregate));
 
@@ -4585,6 +4588,15 @@ mod tests {
     }
 
     fn partial_reduce_test_aggregate() -> Result<AggregateExec> {
+        partial_reduce_test_aggregate_with_batches(1)
+    }
+
+    /// Partial-reduce aggregate over `num_input_batches` identical input batches
+    /// of partial states, each reducing to groups `1, 2, 3` with sums
+    /// `50, 20, 30`.
+    fn partial_reduce_test_aggregate_with_batches(
+        num_input_batches: usize,
+    ) -> Result<AggregateExec> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::UInt32, false),
             Field::new("b", DataType::Float64, false),
@@ -4617,7 +4629,7 @@ mod tests {
             ],
         )?;
         let partial_reduce_input = TestMemoryExec::try_new_exec(
-            &[vec![partial_state_batch]],
+            &[vec![partial_state_batch; num_input_batches]],
             Arc::clone(&partial_schema),
             None,
         )?;
@@ -4653,26 +4665,162 @@ mod tests {
         Ok(())
     }
 
-    /// Spilling behavior is not implemented for partial-reduce stream yet, so fall
-    /// back to the existing `GroupedHashAggregateStream`
+    /// Partial-reduce hash aggregation emits its accumulated partial states early
+    /// under memory pressure instead of failing, and the early-emitted states
+    /// still merge into the correct result.
     #[tokio::test]
-    async fn partial_reduce_aggregate_with_memory_limit_planning() -> Result<()> {
-        let partial_reduce = partial_reduce_test_aggregate()?;
+    async fn partial_reduce_aggregate_with_memory_limit_emits_early() -> Result<()> {
+        let num_input_batches = 3;
+        let partial_reduce =
+            partial_reduce_test_aggregate_with_batches(num_input_batches)?;
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(1, 1.0)
             .build_arc()?;
-        let task_ctx =
-            Arc::new(
-                TaskContext::default()
-                    .with_session_config(SessionConfig::new().set_bool(
-                        "datafusion.execution.enable_migration_aggregate",
-                        true,
-                    ))
-                    .with_runtime(runtime),
-            );
+        // A batch size smaller than the number of flushed groups also covers
+        // splitting one flush across several output batches.
+        let batch_size = 2;
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(migrated_hash_session_config(batch_size))
+                .with_runtime(runtime),
+        );
 
         let stream = partial_reduce.execute_typed(0, &task_ctx)?;
-        assert!(matches!(stream, StreamType::GroupedHash(_)));
+        assert!(matches!(stream, StreamType::PartialReduceHash(_)));
+        let stream: SendableRecordBatchStream = stream.into();
+        let output = collect(stream).await?;
+
+        // The table is flushed after every input batch, so each of the three
+        // groups is emitted once per input batch instead of being merged into a
+        // single row. Each flush is sliced into batches of 2 and 1 rows.
+        assert_eq!(output.len(), 2 * num_input_batches);
+        assert_snapshot!(batches_to_string(&output), @r"
+        +---+-------------+
+        | a | SUM(b)[sum] |
+        +---+-------------+
+        | 1 | 50.0        |
+        | 2 | 20.0        |
+        | 3 | 30.0        |
+        | 1 | 50.0        |
+        | 2 | 20.0        |
+        | 3 | 30.0        |
+        | 1 | 50.0        |
+        | 2 | 20.0        |
+        | 3 | 30.0        |
+        +---+-------------+
+        ");
+
+        Ok(())
+    }
+
+    /// Same shape as [`partial_reduce_test_aggregate_with_batches`], but with multiple
+    /// group keys.
+    fn partial_reduce_test_aggregate_rows_multi_group_keys(
+        num_input_batches: usize,
+    ) -> Result<AggregateExec> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("n", DataType::Null, true),
+            Field::new("b", DataType::Float64, false),
+        ]));
+        let group_by = PhysicalGroupBy::new_single(vec![
+            (col("a", &schema)?, "a".to_string()),
+            (col("n", &schema)?, "n".to_string()),
+        ]);
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
+            AggregateExprBuilder::new(sum_udaf(), vec![col("b", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("SUM(b)")
+                .build()?,
+        )];
+
+        let empty_input =
+            TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(&schema), None)?;
+        let partial = AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by.clone(),
+            aggregates.clone(),
+            vec![None],
+            empty_input,
+            Arc::clone(&schema),
+        )?;
+        let partial_schema = partial.schema();
+        let partial_state_batch = RecordBatch::try_new(
+            Arc::clone(&partial_schema),
+            vec![
+                Arc::new(UInt32Array::from(vec![1, 2, 1, 3])),
+                Arc::new(NullArray::new(4)),
+                Arc::new(Float64Array::from(vec![10.0, 20.0, 40.0, 30.0])),
+            ],
+        )?;
+        let partial_reduce_input = TestMemoryExec::try_new_exec(
+            &[vec![partial_state_batch; num_input_batches]],
+            Arc::clone(&partial_schema),
+            None,
+        )?;
+
+        AggregateExec::try_new(
+            AggregateMode::PartialReduce,
+            group_by,
+            aggregates,
+            vec![None],
+            partial_reduce_input,
+            partial_schema,
+        )
+    }
+
+    #[tokio::test]
+    async fn partial_reduce_aggregate_with_memory_limit_emits_early_multi_group_keys()
+    -> Result<()> {
+        let num_input_batches = 3;
+        let partial_reduce =
+            partial_reduce_test_aggregate_rows_multi_group_keys(num_input_batches)?;
+
+        // Pin the representation: this is exactly the condition
+        // `new_group_values` uses to pick `GroupValuesRows` over
+        // `GroupValuesColumn`. If a `Null` `GroupColumn` is ever added, this
+        // assertion fires and the test stops covering the row-encoded path.
+        let group_schema = partial_reduce
+            .group_by
+            .group_schema(&partial_reduce.schema())?;
+        assert!(
+            !group_values::multi_group_by::supported_schema(&group_schema),
+            "expected the Null group column to force the GroupValuesRows fallback"
+        );
+
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(1, 1.0)
+            .build_arc()?;
+        let batch_size = 2;
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(migrated_hash_session_config(batch_size))
+                .with_runtime(runtime),
+        );
+
+        let stream = partial_reduce.execute_typed(0, &task_ctx)?;
+        assert!(matches!(stream, StreamType::PartialReduceHash(_)));
+        let stream: SendableRecordBatchStream = stream.into();
+        let output = collect(stream).await?;
+
+        // Same flush cadence as the column-backed test: one flush per input
+        // batch, each sliced into batches of 2 and 1 rows.
+        assert_eq!(output.len(), 2 * num_input_batches);
+        assert_snapshot!(batches_to_string(&output), @r"
+        +---+---+-------------+
+        | a | n | SUM(b)[sum] |
+        +---+---+-------------+
+        | 1 |   | 50.0        |
+        | 2 |   | 20.0        |
+        | 3 |   | 30.0        |
+        | 1 |   | 50.0        |
+        | 2 |   | 20.0        |
+        | 3 |   | 30.0        |
+        | 1 |   | 50.0        |
+        | 2 |   | 20.0        |
+        | 3 |   | 30.0        |
+        +---+---+-------------+
+        ");
 
         Ok(())
     }
@@ -5274,7 +5422,7 @@ mod tests {
             +---+-------------------------------------------+
             ");
             }
-        };
+        }
         Ok(())
     }
 

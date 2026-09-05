@@ -735,11 +735,9 @@ impl AggregateUDFImpl for ApproxDistinct {
                 )
                 .into(),
             ]),
-            DataType::Boolean
-            | DataType::UInt8
-            | DataType::Int8
-            | DataType::UInt16
-            | DataType::Int16 => get_fixed_domain_state_field(args.name, data_type),
+            _ if is_fixed_domain_type(data_type) => {
+                get_fixed_domain_state_field(args.name, data_type)
+            }
             _ => Ok(vec![
                 Field::new(
                     format_state_name(args.name, "hll_registers"),
@@ -756,11 +754,7 @@ impl AggregateUDFImpl for ApproxDistinct {
 
         // For primitive types, use specialized accumulators for better performance.
         let accumulator: Box<dyn Accumulator> = match data_type {
-            DataType::Boolean
-            | DataType::UInt8
-            | DataType::Int8
-            | DataType::UInt16
-            | DataType::Int16 => {
+            _ if is_fixed_domain_type(data_type) => {
                 return get_fixed_domain_approx_accumulator(data_type);
             }
             DataType::UInt32 => Box::new(NumericHLLAccumulator::<UInt32Type>::new()),
@@ -841,6 +835,9 @@ impl AggregateUDFImpl for ApproxDistinct {
             | DataType::Struct(_)
             | DataType::Union(_, _)
             | DataType::LargeBinary => Box::new(HLLAccumulator::new()),
+            DataType::Dictionary(_, _) if is_supported_type(data_type) => {
+                Box::new(HLLAccumulator::new())
+            }
             DataType::Null => {
                 Box::new(NoopAccumulator::new(ScalarValue::UInt64(Some(0))))
             }
@@ -876,10 +873,40 @@ impl AggregateUDFImpl for ApproxDistinct {
     }
 }
 
+fn is_fixed_domain_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Boolean
+            | DataType::UInt8
+            | DataType::Int8
+            | DataType::UInt16
+            | DataType::Int16
+    )
+}
+
+fn is_supported_type(data_type: &DataType) -> bool {
+    let value_type = dictionary_value_type(data_type);
+    matches!(value_type, DataType::Null)
+        || is_fixed_domain_type(value_type)
+        || is_hll_groups_type(value_type)
+}
+
+fn dictionary_value_type(data_type: &DataType) -> &DataType {
+    let mut value_type = data_type;
+    while let DataType::Dictionary(_, inner) = value_type {
+        value_type = inner;
+    }
+    value_type
+}
+
 /// Returns true for the data types backed by the HyperLogLog
 /// [`HllGroupsAccumulator`]. The fixed-domain types (booleans / small ints) and
 /// `Null` fall back to the per-group [`Accumulator`] path.
 fn is_hll_groups_type(data_type: &DataType) -> bool {
+    if matches!(data_type, DataType::Dictionary(_, _)) {
+        return is_supported_type(data_type);
+    }
+
     matches!(
         data_type,
         DataType::UInt32
@@ -926,6 +953,52 @@ fn is_hll_groups_type(data_type: &DataType) -> bool {
 mod tests {
     use super::*;
     use std::hash::BuildHasher;
+
+    #[test]
+    fn dictionary_support() {
+        for value_type in [
+            DataType::Boolean,
+            DataType::UInt8,
+            DataType::Int8,
+            DataType::UInt16,
+            DataType::Int16,
+            DataType::Int64,
+            DataType::Null,
+            DataType::Utf8,
+            DataType::Binary,
+        ] {
+            let dict_type = DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(value_type.clone()),
+            );
+            assert!(is_hll_groups_type(&dict_type));
+        }
+
+        // Nested dictionaries resolve to the innermost value
+        assert!(is_hll_groups_type(&DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Utf8)
+            ))
+        )));
+
+        // Unsupported value types are rejected
+        for value_type in [DataType::Float16, DataType::Float32, DataType::Float64] {
+            let dict_type = DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(value_type.clone()),
+            );
+            let nested_dict_type = DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(dict_type.clone()),
+            );
+            assert!(!is_hll_groups_type(&value_type));
+            assert!(!is_supported_type(&dict_type));
+            assert!(!is_hll_groups_type(&dict_type));
+            assert!(!is_hll_groups_type(&nested_dict_type));
+        }
+    }
 
     #[cfg(not(feature = "force_hash_collisions"))]
     mod real_hash_test {

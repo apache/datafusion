@@ -263,6 +263,13 @@ pub trait ExprPlanner: Debug + Send + Sync {
         )
     }
 
+    /// Plans scalar functions, such as `ABS(<expr>)`
+    ///
+    /// Returns the original scalar function if not possible
+    fn plan_scalar(&self, expr: RawScalarExpr) -> Result<PlannerResult<RawScalarExpr>> {
+        Ok(PlannerResult::Original(expr))
+    }
+
     /// Plans aggregate functions, such as `COUNT(<expr>)`
     ///
     /// Returns original expression arguments if not possible
@@ -316,6 +323,13 @@ pub struct RawFieldAccessExpr {
 pub struct RawDictionaryExpr {
     pub keys: Vec<Expr>,
     pub values: Vec<Expr>,
+}
+
+/// A scalar function to plan with [`ExprPlanner`].
+#[derive(Debug, Clone)]
+pub struct RawScalarExpr {
+    pub func: Arc<ScalarUDF>,
+    pub args: Vec<Expr>,
 }
 
 /// This structure is used by `AggregateFunctionPlanner` to plan operators with

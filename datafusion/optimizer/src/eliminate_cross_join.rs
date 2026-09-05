@@ -300,7 +300,7 @@ fn flatten_join_inputs(
         _ => {
             all_inputs.push(plan);
         }
-    };
+    }
     Ok(())
 }
 
@@ -313,7 +313,7 @@ fn can_flatten_join_inputs(plan: &LogicalPlan) -> bool {
     match plan {
         LogicalPlan::Join(join) if join.join_type == JoinType::Inner => {}
         _ => return false,
-    };
+    }
 
     for child in plan.inputs() {
         if let LogicalPlan::Join(Join {
@@ -435,7 +435,7 @@ fn extract_possible_join_keys(expr: &Expr, join_keys: &mut JoinKeySet) {
                 join_keys.insert_intersection(&left_join_keys, &right_join_keys)
             }
             _ => (),
-        };
+        }
     }
 }
 
