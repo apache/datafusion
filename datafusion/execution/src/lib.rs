@@ -49,6 +49,6 @@ pub mod registry {
 pub use async_stream::{Emitter, TryEmitter, async_stream, async_try_stream};
 pub use disk_manager::DiskManager;
 pub use registry::FunctionRegistry;
-pub use spill_file::{SpillFile, SpillWriter, TempFileFactory};
+pub use spill_file::{AsyncSpillWriter, SpillFile, SpillWriter, TempFileFactory};
 pub use stream::{RecordBatchStream, SendableRecordBatchStream};
 pub use task::{TaskContext, TaskContextProvider};

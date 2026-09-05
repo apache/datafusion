@@ -421,7 +421,7 @@ impl ExternalSorter {
 
     /// Appending globally sorted batches to the in-progress spill file, and clears
     /// the `globally_sorted_batches` (also its memory reservation) afterwards.
-    fn consume_and_spill_append(
+    async fn consume_and_spill_append(
         &mut self,
         globally_sorted_batches: &mut Vec<RecordBatch>,
     ) -> Result<()> {
@@ -438,7 +438,9 @@ impl ExternalSorter {
         debug!("Spilling sort data of ExternalSorter to disk whilst inserting");
 
         let batches_to_spill = std::mem::take(globally_sorted_batches);
-        self.reservation.free();
+        // Keep the reservation alive while the batches remain in memory across
+        // asynchronous writes. It is released on success or error via RAII.
+        let _spill_reservation = self.reservation.take();
 
         let (in_progress_file, max_record_batch_size) =
             self.in_progress_spill_file.as_mut().ok_or_else(|| {
@@ -446,7 +448,7 @@ impl ExternalSorter {
             })?;
 
         for batch in batches_to_spill {
-            let gc_sliced_size = in_progress_file.append_batch(&batch)?;
+            let gc_sliced_size = in_progress_file.append_batch_async(&batch).await?;
 
             *max_record_batch_size = (*max_record_batch_size).max(gc_sliced_size);
         }
@@ -460,12 +462,12 @@ impl ExternalSorter {
     }
 
     /// Finishes the in-progress spill file and moves it to the finished spill files.
-    fn spill_finish(&mut self) -> Result<()> {
+    async fn spill_finish(&mut self) -> Result<()> {
         let (mut in_progress_file, max_record_batch_memory) =
             self.in_progress_spill_file.take().ok_or_else(|| {
                 internal_datafusion_err!("Should be called after `spill_append`")
             })?;
-        let spill_file = in_progress_file.finish()?;
+        let spill_file = in_progress_file.finish_async().await?;
 
         if let Some(spill_file) = spill_file {
             self.finished_spill_files.push(SortedSpillFile {
@@ -477,9 +479,26 @@ impl ExternalSorter {
         Ok(())
     }
 
+    async fn abort_in_progress_spill(&mut self) {
+        if let Some((in_progress_file, _)) = &mut self.in_progress_spill_file
+            && let Err(error) = in_progress_file.abort_async().await
+        {
+            debug!("Failed to abort in-progress sort spill: {error}");
+        }
+        self.in_progress_spill_file.take();
+    }
+
     /// Sorts the in-memory batches and merges them into a single sorted run, then writes
     /// the result to spill files.
     async fn sort_and_spill_in_mem_batches(&mut self) -> Result<()> {
+        let result = self.try_sort_and_spill_in_mem_batches().await;
+        if result.is_err() {
+            self.abort_in_progress_spill().await;
+        }
+        result
+    }
+
+    async fn try_sort_and_spill_in_mem_batches(&mut self) -> Result<()> {
         assert_or_internal_err!(
             !self.in_mem_batches.is_empty(),
             "in_mem_batches must not be empty when attempting to sort and spill"
@@ -509,13 +528,22 @@ impl ExternalSorter {
         while let Some(batch) = sorted_stream.next().await {
             let batch = batch?;
             let sorted_size = get_reserved_bytes_for_record_batch(&batch)?;
-            let reservation_failed = self.reservation.try_grow(sorted_size).is_err();
+            let reservation_failed = match self.reservation.try_grow(sorted_size) {
+                Ok(()) => false,
+                Err(_) => {
+                    // The batch is already materialized, so account for it while
+                    // spilling even if this temporarily exceeds the pool limit.
+                    self.reservation.grow(sorted_size);
+                    true
+                }
+            };
             // Even if the reservation is not enough, the batch is already in
             // memory, so it's okay to combine it with previously sorted
             // batches, and spill together.
             globally_sorted_batches.push(batch);
             if reservation_failed {
-                self.consume_and_spill_append(&mut globally_sorted_batches)?; // reservation is freed in spill()
+                self.consume_and_spill_append(&mut globally_sorted_batches)
+                    .await?; // reservation is released when the spill completes
             }
         }
 
@@ -523,8 +551,9 @@ impl ExternalSorter {
         // upcoming `self.reserve_memory_for_merge()` may fail due to insufficient memory.
         drop(sorted_stream);
 
-        self.consume_and_spill_append(&mut globally_sorted_batches)?;
-        self.spill_finish()?;
+        self.consume_and_spill_append(&mut globally_sorted_batches)
+            .await?;
+        self.spill_finish().await?;
 
         // Sanity check after spilling
         let buffers_cleared_property =
@@ -1490,8 +1519,17 @@ impl ExecutionPlan for SortExec {
                     self.schema(),
                     futures::stream::once(async move {
                         while let Some(batch) = input.next().await {
-                            let batch = batch?;
-                            sorter.insert_batch(batch).await?;
+                            let batch = match batch {
+                                Ok(batch) => batch,
+                                Err(error) => {
+                                    sorter.abort_in_progress_spill().await;
+                                    return Err(error);
+                                }
+                            };
+                            if let Err(error) = sorter.insert_batch(batch).await {
+                                sorter.abort_in_progress_spill().await;
+                                return Err(error);
+                            }
                         }
                         drop(input);
                         sorter.sort().await
@@ -2115,7 +2153,9 @@ mod proto_tests {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::path::Path;
     use std::pin::Pin;
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
     use std::task::{Context, Poll};
 
     use super::*;
@@ -2133,22 +2173,106 @@ mod tests {
     use arrow::array::*;
     use arrow::compute::SortOptions;
     use arrow::datatypes::*;
+    use async_trait::async_trait;
+    use bytes::Bytes;
     use datafusion_common::ScalarValue;
     use datafusion_common::cast::as_primitive_array;
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::test_util::batches_to_string;
     use datafusion_execution::RecordBatchStream;
     use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::disk_manager::DiskManagerBuilder;
     use datafusion_execution::memory_pool::{
         GreedyMemoryPool, MemoryConsumer, MemoryPool,
     };
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    use datafusion_execution::{
+        AsyncSpillWriter, SpillFile, SpillWriter, TempFileFactory,
+    };
     use datafusion_physical_expr::expressions::{Column, Literal};
     use datafusion_physical_expr::{DynamicFilterTracking, EquivalenceProperties};
 
     use datafusion_physical_expr_common::metrics::MetricValue;
     use futures::{FutureExt, Stream, TryStreamExt};
     use insta::assert_snapshot;
+    use tokio::sync::Notify;
+
+    struct PendingWriteTempFileFactory {
+        write_started: Arc<Notify>,
+        aborted: Arc<Notify>,
+        abort_count: Arc<AtomicUsize>,
+    }
+
+    impl TempFileFactory for PendingWriteTempFileFactory {
+        fn create_temp_file(&self, _description: &str) -> Result<Arc<dyn SpillFile>> {
+            Ok(Arc::new(PendingWriteSpillFile {
+                write_started: Arc::clone(&self.write_started),
+                aborted: Arc::clone(&self.aborted),
+                abort_count: Arc::clone(&self.abort_count),
+            }))
+        }
+    }
+
+    struct PendingWriteSpillFile {
+        write_started: Arc<Notify>,
+        aborted: Arc<Notify>,
+        abort_count: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl SpillFile for PendingWriteSpillFile {
+        fn path(&self) -> Option<&Path> {
+            None
+        }
+
+        fn size(&self) -> Option<u64> {
+            Some(0)
+        }
+
+        fn read_stream(
+            &self,
+        ) -> Result<Pin<Box<dyn Stream<Item = Result<Bytes>> + Send>>> {
+            Ok(Box::pin(futures::stream::empty()))
+        }
+
+        fn open_writer(&self) -> Result<Box<dyn SpillWriter>> {
+            datafusion_common::not_impl_err!(
+                "test backend only supports asynchronous writes"
+            )
+        }
+
+        async fn open_async_writer(&self) -> Result<Box<dyn AsyncSpillWriter>> {
+            Ok(Box::new(PendingWriteWriter {
+                write_started: Arc::clone(&self.write_started),
+                aborted: Arc::clone(&self.aborted),
+                abort_count: Arc::clone(&self.abort_count),
+            }))
+        }
+    }
+
+    struct PendingWriteWriter {
+        write_started: Arc<Notify>,
+        aborted: Arc<Notify>,
+        abort_count: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl AsyncSpillWriter for PendingWriteWriter {
+        async fn write_all(&mut self, _data: Bytes) -> Result<()> {
+            self.write_started.notify_one();
+            std::future::pending().await
+        }
+
+        async fn finish(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn abort(&mut self) -> Result<()> {
+            self.abort_count.fetch_add(1, AtomicOrdering::Relaxed);
+            self.aborted.notify_one();
+            Ok(())
+        }
+    }
 
     #[derive(Debug, Clone)]
     pub struct SortedUnboundedExec {
@@ -3828,6 +3952,75 @@ mod tests {
             lit(true),
         ));
         assert!(sort.set_dynamic_filter(df).is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_spill_reservation_held_during_async_write() -> Result<()> {
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(0));
+        let write_started = Arc::new(Notify::new());
+        let aborted = Arc::new(Notify::new());
+        let abort_count = Arc::new(AtomicUsize::new(0));
+        let disk_manager_builder = DiskManagerBuilder::default().with_temp_file_factory(
+            Arc::new(PendingWriteTempFileFactory {
+                write_started: Arc::clone(&write_started),
+                aborted: Arc::clone(&aborted),
+                abort_count: Arc::clone(&abort_count),
+            }),
+        );
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::clone(&pool))
+            .with_disk_manager_builder(disk_manager_builder)
+            .build_arc()?;
+        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, false)]));
+        let metrics = ExecutionPlanMetricsSet::new();
+        let mut sorter = ExternalSorter::new(
+            0,
+            Arc::clone(&schema),
+            [PhysicalSortExpr::new_default(Arc::new(Column::new("x", 0)))].into(),
+            128,
+            0,
+            usize::MAX,
+            SpillCompression::Uncompressed,
+            &metrics,
+            runtime,
+        )?;
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int32Array::from(vec![3, 2, 1]))],
+        )?;
+        let reserved_bytes = get_reserved_bytes_for_record_batch(&batch)?;
+        sorter.reservation.grow(reserved_bytes);
+        sorter.in_mem_batches.push(batch);
+
+        #[expect(clippy::disallowed_methods)] // spawn allowed only in tests
+        let task =
+            tokio::spawn(async move { sorter.sort_and_spill_in_mem_batches().await });
+
+        if tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            write_started.notified(),
+        )
+        .await
+        .is_err()
+        {
+            task.abort();
+            let _ = task.await;
+            panic!("spill write did not start before the timeout");
+        }
+        assert_eq!(
+            pool.reserved(),
+            reserved_bytes,
+            "resident batches must remain accounted for while an async spill is pending"
+        );
+
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        tokio::time::timeout(std::time::Duration::from_secs(1), aborted.notified())
+            .await
+            .expect("cancelling the spill should abort its writer");
+        assert_eq!(abort_count.load(AtomicOrdering::Relaxed), 1);
+        assert_eq!(pool.reserved(), 0);
         Ok(())
     }
 
