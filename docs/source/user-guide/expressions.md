@@ -151,16 +151,14 @@ but these operators always return a `bool` which makes them not work with the ex
 | trunc(x)              | truncate toward zero                              |
 
 :::{note}
-Unlike to some databases the math functions in Datafusion works the same way as Rust math functions, avoiding failing on corner cases e.g.
+Most math functions in DataFusion follow Rust / IEEE 754 semantics for
+corner cases. For example `log(-1)` returns `NaN`. Some domain errors
+match PostgreSQL instead and fail the query:
 
-```sql
-select log(-1), log(0), sqrt(-1);
-+----------------+---------------+-----------------+
-| log(Int64(-1)) | log(Int64(0)) | sqrt(Int64(-1)) |
-+----------------+---------------+-----------------+
-| NaN            | -inf          | NaN             |
-+----------------+---------------+-----------------+
-```
+- `log(0)` / `log(0.0::float8)` — cannot take logarithm of zero
+- `sqrt` of a negative number
+- `power(0, negative)`
+- `factorial` of a negative number
 
 :::
 

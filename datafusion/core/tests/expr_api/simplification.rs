@@ -611,20 +611,26 @@ fn test_simplify_log() {
         let expr = log(col("c3_non_null"), lit(1));
         test_simplify(expr, lit(0i64));
     }
-    // Log(c3, c3) ===> 1
+    // Log(c3, c3) is not rewritten: c3 is a column, so the logged
+    // value is not known to be a valid (strictly positive) log
+    // argument. Folding to 1 would hide log(0, 0).
     {
         let expr = log(col("c3_non_null"), col("c3_non_null"));
-        let expected = lit(1i64);
-        test_simplify(expr, expected);
+        test_simplify(expr.clone(), expr);
     }
-    // Log(c3, Power(c3, c4)) ===> c4
+    // Log(2, 2) ===> 1 (literal known to be a valid log argument)
+    {
+        let expr = log(lit(2i64), lit(2i64));
+        test_simplify(expr, lit(1i64));
+    }
+    // Log(c3, Power(c3, c4)) is not rewritten for the same reason:
+    // power of two columns is not known to be strictly positive.
     {
         let expr = log(
             col("c3_non_null"),
             power(col("c3_non_null"), col("c4_non_null")),
         );
-        let expected = col("c4_non_null");
-        test_simplify(expr, expected);
+        test_simplify(expr.clone(), expr);
     }
     // Log(c3, c4) ===> Log(c3, c4)
     {
