@@ -708,10 +708,13 @@ provides utilities for planning:</p>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">plan(relation)</span></code></p></td>
 <td><p>Recursively plan a nested relation</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">sql_to_expr(expr,</span> <span class="pre">schema)</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">get_cte(name)</span></code></p></td>
+<td><p>Look up a CTE visible in the current query scope</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">sql_to_expr(expr,</span> <span class="pre">schema)</span></code></p></td>
 <td><p>Convert SQL expression to DataFusion Expr</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">context_provider()</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">context_provider()</span></code></p></td>
 <td><p>Access session configuration, tables, functions</p></td>
 </tr>
 </tbody>
@@ -719,6 +722,26 @@ provides utilities for planning:</p>
 </div>
 <p>See the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/planner/trait.RelationPlanner.html">RelationPlanner API documentation</a> for additional methods like
 <code class="docutils literal notranslate"><span class="pre">normalize_ident()</span></code> and <code class="docutils literal notranslate"><span class="pre">object_name_to_table_reference()</span></code>.</p>
+<p>Relation planners are called before DataFusion’s built-in CTE and catalog lookup.
+If your planner recognizes ordinary relations by name, check <code class="docutils literal notranslate"><span class="pre">get_cte()</span></code> after
+determining the relation is an ordinary name that your planner would otherwise
+handle. Deliberately reserved names and custom syntax can keep their existing
+precedence. Return <code class="docutils literal notranslate"><span class="pre">RelationPlanning::Original</span></code> when a CTE is visible so the
+next planner can handle the relation. When every ordinary name-based planner in
+the chain performs this check, planning reaches DataFusion’s built-in CTE
+resolution. Normalize the parsed name first so the lookup follows DataFusion’s
+existing name matching. Only do this for a table without function arguments: a
+CTE named <code class="docutils literal notranslate"><span class="pre">numbers</span></code> shadows <code class="docutils literal notranslate"><span class="pre">numbers</span></code>, but it does not shadow a call such as
+<code class="docutils literal notranslate"><span class="pre">numbers(10)</span></code>.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Run this after recognizing `relation` as an ordinary name handled here.</span>
+<span class="k">if</span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="n">TableFactor</span><span class="p">::</span><span class="n">Table</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">name</span><span class="p">,</span><span class="w"> </span><span class="n">args</span><span class="p">:</span><span class="w"> </span><span class="nb">None</span><span class="p">,</span><span class="w"> </span><span class="o">..</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;</span><span class="n">relation</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">table_ref</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">object_name_to_table_reference</span><span class="p">(</span><span class="n">name</span><span class="p">.</span><span class="n">clone</span><span class="p">())</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">get_cte</span><span class="p">(</span><span class="o">&amp;</span><span class="n">table_ref</span><span class="p">).</span><span class="n">is_some</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nb">Ok</span><span class="p">(</span><span class="n">RelationPlanning</span><span class="p">::</span><span class="n">Original</span><span class="p">(</span><span class="nb">Box</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">relation</span><span class="p">)));</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
 </section>
 <section id="implementation-strategies">
 <h4>Implementation Strategies<a class="headerlink" href="#implementation-strategies" title="Link to this heading">#</a></h4>
