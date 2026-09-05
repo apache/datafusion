@@ -366,11 +366,15 @@ impl Display for RangePartitioning {
         let split_points = format_range_split_points(&self.split_points);
         write!(
             f,
-            "Range([{}], [{}], {})",
+            "Range([{}], [{}], {}",
             self.ordering,
             split_points,
             self.partition_count()
-        )
+        )?;
+        if self.max_partition_count() != self.partition_count() {
+            write!(f, ", max {}", self.max_partition_count())?;
+        }
+        write!(f, ")")
     }
 }
 
@@ -1266,12 +1270,16 @@ mod tests {
                 int_split_point([70]),
             ]
         );
-        assert_eq!(range.to_string(), "Range([a@0 ASC], [(30), (50), (70)], 4)");
+        assert_eq!(
+            range.to_string(),
+            "Range([a@0 ASC], [(30), (50), (70)], 4, max 10)"
+        );
 
         let single = range.scale(1)?;
         assert_eq!(single.partition_count(), 1);
         assert!(single.split_points().is_empty());
         assert_eq!(single.max_partition_count(), 10);
+        assert_eq!(single.to_string(), "Range([a@0 ASC], [], 1, max 10)");
 
         let restored = single.scale(single.max_partition_count())?;
         assert_eq!(restored.split_points(), samples);
@@ -1397,7 +1405,7 @@ mod tests {
             range_partitioning.project(&keep_b_mapping, &fixture.eq_properties);
         assert_eq!(
             projected.to_string(),
-            "Range([b@0 DESC NULLS LAST], [(20)], 2)"
+            "Range([b@0 DESC NULLS LAST], [(20)], 2, max 4)"
         );
         let Partitioning::Range(projected_range) = &projected else {
             panic!("expected range partitioning, got {projected:?}");
