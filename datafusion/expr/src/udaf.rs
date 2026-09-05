@@ -253,6 +253,16 @@ impl AggregateUDF {
         self.inner.groups_accumulator_supported(args)
     }
 
+    /// See [`AggregateUDFImpl::groups_accumulator_supported_for_types`] for more details.
+    pub fn groups_accumulator_supported_for_types(
+        &self,
+        arg_types: &[DataType],
+        is_distinct: bool,
+    ) -> Option<bool> {
+        self.inner
+            .groups_accumulator_supported_for_types(arg_types, is_distinct)
+    }
+
     /// See [`AggregateUDFImpl::create_groups_accumulator`] for more details.
     pub fn create_groups_accumulator(
         &self,
@@ -615,6 +625,38 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// query.
     fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
         false
+    }
+
+    /// The same question as [`Self::groups_accumulator_supported`], asked with
+    /// only the information a logical plan carries.
+    ///
+    /// Physical planning has an [`AccumulatorArgs`] to ask with; an optimizer
+    /// rule does not, and cannot fabricate one, so this is how a logical
+    /// caller learns whether a call would get a specialized
+    /// [`GroupsAccumulator`] or fall back to one boxed [`Accumulator`] per
+    /// group in `GroupsAccumulatorAdapter`. That distinction is worth a rule
+    /// changing its mind over: the adapter's per-group state can be orders of
+    /// magnitude larger.
+    ///
+    /// The default is `None`, which means the implementation does not answer
+    /// this question. An implementation that overrides
+    /// [`Self::groups_accumulator_supported`], and whose answer is decided by
+    /// the argument types and `DISTINCT` alone, should override this one too,
+    /// and have the physical method call it so the two cannot disagree. An
+    /// implementation whose answer needs more than the argument types should
+    /// leave this at `None`.
+    ///
+    /// `None` is not a third answer to the question. A caller must not read it
+    /// as either `Some(true)` or `Some(false)`, because both readings are
+    /// wrong for some implementation that returns it. A caller that has to act
+    /// on an unanswered question must take the action that is safe when either
+    /// answer turns out to be the true one.
+    fn groups_accumulator_supported_for_types(
+        &self,
+        _arg_types: &[DataType],
+        _is_distinct: bool,
+    ) -> Option<bool> {
+        None
     }
 
     /// Return a specialized [`GroupsAccumulator`] that manages state
@@ -1550,6 +1592,15 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         self.inner.groups_accumulator_supported(args)
+    }
+
+    fn groups_accumulator_supported_for_types(
+        &self,
+        arg_types: &[DataType],
+        is_distinct: bool,
+    ) -> Option<bool> {
+        self.inner
+            .groups_accumulator_supported_for_types(arg_types, is_distinct)
     }
 
     fn create_groups_accumulator(
