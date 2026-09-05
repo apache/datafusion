@@ -932,20 +932,7 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
         if !self.preserves_lex_ordering(inputs)? {
             return Ok(SortProperties::Unordered);
         }
-
-        let Some(first_order) = inputs.first().map(|p| &p.sort_properties) else {
-            return Ok(SortProperties::Singleton);
-        };
-
-        if inputs
-            .iter()
-            .skip(1)
-            .all(|input| &input.sort_properties == first_order)
-        {
-            Ok(*first_order)
-        } else {
-            Ok(SortProperties::Unordered)
-        }
+        Ok(common_sort_properties(inputs))
     }
 
     /// Returns true if the function preserves lexicographical ordering based on
@@ -1053,6 +1040,27 @@ fn udf_default_schema_name(name: &str, args: &[Expr]) -> Result<String> {
 fn arg_fields_to_data_types(arg_fields: &[FieldRef]) -> Vec<DataType> {
     arg_fields.iter().map(|f| f.data_type().clone()).collect()
 }
+
+/// Returns the [`SortProperties`] shared by all `inputs`, or
+/// [`SortProperties::Unordered`] if they differ. Used by the default
+/// implementation of [`ScalarUDFImpl::output_ordering`].
+/// Extracted to a free-standing function to reduce binary size by avoiding instantiating code per ScalarUDFImpl impl.
+fn common_sort_properties(inputs: &[ExprProperties]) -> SortProperties {
+    let Some(first_order) = inputs.first().map(|p| &p.sort_properties) else {
+        return SortProperties::Singleton;
+    };
+
+    if inputs
+        .iter()
+        .skip(1)
+        .all(|input| &input.sort_properties == first_order)
+    {
+        *first_order
+    } else {
+        SortProperties::Unordered
+    }
+}
+
 impl dyn ScalarUDFImpl {
     /// Returns `true` if the implementation is of type `T`.
     ///
