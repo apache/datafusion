@@ -1663,7 +1663,7 @@ trim(LEADING trim_str FROM str)
 
 ### `octet_length`
 
-Returns the length of a string in bytes.
+Returns the length of a string or binary in bytes.
 
 ```sql
 octet_length(str)
@@ -1671,7 +1671,7 @@ octet_length(str)
 
 #### Arguments
 
-- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **str**: String or binary expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 #### Example
 

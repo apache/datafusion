@@ -918,6 +918,71 @@ ORDER BY id
 2 2 Dictionary(Int32, Int32) Dictionary(Int32, Dictionary(UInt32, Int32))
 NULL NULL Dictionary(Int32, Int32) Dictionary(Int32, Dictionary(UInt32, Int32))
 
+# octet_length over binary types: byte semantics, no string coercion
+query I
+SELECT octet_length(arrow_cast('foo', 'Binary'))
+----
+3
+
+query IT
+SELECT octet_length(arrow_cast('josé', 'Binary')),
+       arrow_typeof(octet_length(arrow_cast('josé', 'Binary')))
+----
+5 Int32
+
+query IT
+SELECT octet_length(arrow_cast('foo', 'BinaryView')),
+       arrow_typeof(octet_length(arrow_cast('foo', 'BinaryView')))
+----
+3 Int32
+
+# LargeBinary widens the return type to Int64, mirroring LargeUtf8
+query IT
+SELECT octet_length(arrow_cast('foo', 'LargeBinary')),
+       arrow_typeof(octet_length(arrow_cast('foo', 'LargeBinary')))
+----
+3 Int64
+
+query I
+SELECT octet_length(arrow_cast(NULL, 'Binary'))
+----
+NULL
+
+# A bare NULL coerces through the string branch and keeps a typed Int32 result
+query IT
+SELECT octet_length(NULL), arrow_typeof(octet_length(NULL))
+----
+NULL Int32
+
+# A dictionary over Null coerces to a string dictionary rather than reaching
+# the arrow length kernel, which rejects Null values
+query ?T
+SELECT octet_length(arrow_cast(NULL, 'Dictionary(Int32, Null)')),
+       arrow_typeof(octet_length(arrow_cast(NULL, 'Dictionary(Int32, Null)')))
+----
+NULL Dictionary(Int32, Int32)
+
+# Dictionary encoding is preserved over binary values too
+query ?T
+SELECT octet_length(arrow_cast(arrow_cast('foo', 'Binary'), 'Dictionary(Int32, Binary)')),
+       arrow_typeof(octet_length(arrow_cast(arrow_cast('foo', 'Binary'), 'Dictionary(Int32, Binary)')))
+----
+3 Dictionary(Int32, Int32)
+
+# FixedSizeBinary reports its fixed width
+query IT
+SELECT octet_length(arrow_cast(arrow_cast('foo', 'Binary'), 'FixedSizeBinary(3)')),
+       arrow_typeof(octet_length(arrow_cast(arrow_cast('foo', 'Binary'), 'FixedSizeBinary(3)')))
+----
+3 Int32
+
+# Dictionary encoding is preserved over FixedSizeBinary as well
+query ?T
+SELECT octet_length(arrow_cast(arrow_cast(arrow_cast('foo', 'Binary'), 'FixedSizeBinary(3)'), 'Dictionary(Int32, FixedSizeBinary(3))')),
+       arrow_typeof(octet_length(arrow_cast(arrow_cast(arrow_cast('foo', 'Binary'), 'FixedSizeBinary(3)'), 'Dictionary(Int32, FixedSizeBinary(3))')))
+----
+3 Dictionary(Int32, Int32)
+
 query ??TT
 SELECT character_length(dict_col), character_length(nested_dict_col),
        arrow_typeof(character_length(dict_col)),
