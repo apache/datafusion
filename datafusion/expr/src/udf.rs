@@ -656,12 +656,7 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// logical input even if the input is simplified (e.g. it must return the same
     /// value for `('foo' | 'bar')` as it does for ('foobar').
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let data_types = args
-            .arg_fields
-            .iter()
-            .map(|f| f.data_type())
-            .cloned()
-            .collect::<Vec<_>>();
+        let data_types = arg_fields_to_data_types(args.arg_fields);
         let return_type = self.return_type(&data_types)?;
         Ok(Arc::new(Field::new(self.name(), return_type, true)))
     }
@@ -1051,6 +1046,12 @@ fn udf_default_schema_name(name: &str, args: &[Expr]) -> Result<String> {
         name,
         schema_name_from_exprs_comma_separated_without_space(args)?
     ))
+}
+
+/// Collects the [`DataType`] of each field
+/// Extracted to a free-standing function to reduce binary size by avoiding instantiating code per ScalarUDFImpl impl.
+fn arg_fields_to_data_types(arg_fields: &[FieldRef]) -> Vec<DataType> {
+    arg_fields.iter().map(|f| f.data_type().clone()).collect()
 }
 impl dyn ScalarUDFImpl {
     /// Returns `true` if the implementation is of type `T`.
