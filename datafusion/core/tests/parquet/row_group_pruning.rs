@@ -807,14 +807,16 @@ async fn prune_uint32_eq_large_in_list() {
 
 #[tokio::test]
 async fn prune_f64_lt() {
+    // Parquet floating bounds omit possible NaNs, so all row groups reach the
+    // Bloom filter stage, which cannot prune these range predicates.
     RowGroupPruningTest::new()
         .with_scenario(Scenario::Float64)
         .with_query("SELECT * FROM t where f < 1")
         .with_expected_errors(Some(0))
-        .with_matched_by_stats(Some(3))
-        .with_pruned_by_stats(Some(1))
+        .with_matched_by_stats(Some(4))
+        .with_pruned_by_stats(Some(0))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(3))
+        .with_matched_by_bloom_filter(Some(4))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(11)
         .test_row_group_prune()
@@ -823,10 +825,10 @@ async fn prune_f64_lt() {
         .with_scenario(Scenario::Float64)
         .with_query("SELECT * FROM t where -f > -1")
         .with_expected_errors(Some(0))
-        .with_matched_by_stats(Some(3))
-        .with_pruned_by_stats(Some(1))
+        .with_matched_by_stats(Some(4))
+        .with_pruned_by_stats(Some(0))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(3))
+        .with_matched_by_bloom_filter(Some(4))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(11)
         .test_row_group_prune()
@@ -835,16 +837,16 @@ async fn prune_f64_lt() {
 
 #[tokio::test]
 async fn prune_f64_scalar_fun_and_gt() {
-    // result of sql "SELECT * FROM t where abs(f - 1) <= 0.000001  and f >= 0.1"
-    // only use "f >= 0" to prune
+    // The scalar function is unsupported for pruning, and the floating bounds
+    // for f >= 0.1 omit possible NaNs. Neither condition can prune row groups.
     RowGroupPruningTest::new()
         .with_scenario(Scenario::Float64)
         .with_query("SELECT * FROM t where abs(f - 1) <= 0.000001  and f >= 0.1")
         .with_expected_errors(Some(0))
-        .with_matched_by_stats(Some(2))
-        .with_pruned_by_stats(Some(2))
+        .with_matched_by_stats(Some(4))
+        .with_pruned_by_stats(Some(0))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(2))
+        .with_matched_by_bloom_filter(Some(4))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(1)
         .test_row_group_prune()

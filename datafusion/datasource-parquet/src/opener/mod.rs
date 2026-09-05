@@ -2823,9 +2823,10 @@ mod test {
     async fn test_prune_on_statistics() {
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
 
+        // Integer bounds remain usable; Parquet floating bounds exclude possible NaNs.
         let batch = record_batch!(
             ("a", Int32, vec![Some(1), Some(2), Some(2)]),
-            ("b", Float32, vec![Some(1.0), Some(2.0), None])
+            ("b", Int32, vec![Some(1), Some(2), None])
         )
         .unwrap();
 
@@ -2842,8 +2843,8 @@ mod test {
                 .add_column_statistics(ColumnStatistics::new_unknown())
                 .add_column_statistics(
                     ColumnStatistics::new_unknown()
-                        .with_min_value(Precision::Exact(ScalarValue::Float32(Some(1.0))))
-                        .with_max_value(Precision::Exact(ScalarValue::Float32(Some(2.0))))
+                        .with_min_value(Precision::Exact(ScalarValue::Int32(Some(1))))
+                        .with_max_value(Precision::Exact(ScalarValue::Int32(Some(2))))
                         .with_null_count(Precision::Exact(1)),
                 ),
         ));
@@ -2867,8 +2868,8 @@ mod test {
         assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 3);
 
-        // A filter on `b = 5.0` should exclude all rows
-        let expr = col("b").eq(lit(ScalarValue::Float32(Some(5.0))));
+        // A filter on `b = 5` should exclude all rows
+        let expr = col("b").eq(lit(ScalarValue::Int32(Some(5))));
         let predicate = logical2physical(&expr, &schema);
         let opener = make_opener(predicate);
         let stream = open_file(&opener, file).await.unwrap();
@@ -2943,7 +2944,7 @@ mod test {
 
         let batch = record_batch!(
             ("a", Int32, vec![Some(1), Some(2), Some(3)]),
-            ("b", Float64, vec![Some(1.0), Some(2.0), None])
+            ("b", Int64, vec![Some(1), Some(2), None])
         )
         .unwrap();
         let data_size =
@@ -2959,15 +2960,15 @@ mod test {
                 .add_column_statistics(ColumnStatistics::new_unknown())
                 .add_column_statistics(
                     ColumnStatistics::new_unknown()
-                        .with_min_value(Precision::Exact(ScalarValue::Float64(Some(1.0))))
-                        .with_max_value(Precision::Exact(ScalarValue::Float64(Some(2.0))))
+                        .with_min_value(Precision::Exact(ScalarValue::Int64(Some(1))))
+                        .with_max_value(Precision::Exact(ScalarValue::Int64(Some(2))))
                         .with_null_count(Precision::Exact(1)),
                 ),
         ));
         let table_schema = Arc::new(Schema::new(vec![
             Field::new("part", DataType::Int32, false),
             Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Float32, true),
+            Field::new("b", DataType::Int32, true),
         ]));
         let table_schema_for_opener = TableSchemaBuilder::from(&file_schema)
             .with_table_partition_cols(vec![Arc::new(Field::new(
@@ -2987,7 +2988,7 @@ mod test {
         };
 
         // Filter should match the partition value and file statistics
-        let expr = col("part").eq(lit(1)).and(col("b").eq(lit(1.0)));
+        let expr = col("part").eq(lit(1)).and(col("b").eq(lit(1i64)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
         let stream = open_file(&opener, file.clone()).await.unwrap();
@@ -2996,7 +2997,7 @@ mod test {
         assert_eq!(num_rows, 3);
 
         // Should prune based on partition value but not file statistics
-        let expr = col("part").eq(lit(2)).and(col("b").eq(lit(1.0)));
+        let expr = col("part").eq(lit(2)).and(col("b").eq(lit(1i64)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
         let stream = open_file(&opener, file.clone()).await.unwrap();
@@ -3005,7 +3006,7 @@ mod test {
         assert_eq!(num_rows, 0);
 
         // Should prune based on file statistics but not partition value
-        let expr = col("part").eq(lit(1)).and(col("b").eq(lit(7.0)));
+        let expr = col("part").eq(lit(1)).and(col("b").eq(lit(7i64)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
         let stream = open_file(&opener, file.clone()).await.unwrap();
@@ -3014,7 +3015,7 @@ mod test {
         assert_eq!(num_rows, 0);
 
         // Should prune based on both partition value and file statistics
-        let expr = col("part").eq(lit(2)).and(col("b").eq(lit(7.0)));
+        let expr = col("part").eq(lit(2)).and(col("b").eq(lit(7i64)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
         let stream = open_file(&opener, file).await.unwrap();
