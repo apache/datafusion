@@ -38,13 +38,15 @@ use crate::logical_plan::{
 };
 use crate::select_expr::SelectExpr;
 use crate::utils::{
-    can_hash, columnize_expr, compare_sort_expr, expand_qualified_wildcard,
-    expand_wildcard, expr_to_columns, find_valid_equijoin_key_pair,
-    group_window_expr_by_sort_keys,
+    can_hash, check_all_columns_from_schema, columnize_expr, compare_sort_expr,
+    expand_qualified_wildcard, expand_wildcard, expr_to_columns,
+    find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
+    split_conjunction_owned,
 };
 use crate::{
-    DmlStatement, ExplainOption, Expr, ExprSchemable, Operator, RecursiveQuery,
-    Statement, TableProviderFilterPushDown, TableSource, WriteOp, and, binary_expr, lit,
+    BinaryExpr, DmlStatement, ExplainOption, Expr, ExprSchemable, Operator,
+    RecursiveQuery, Statement, TableProviderFilterPushDown, TableSource, WriteOp, and,
+    binary_expr, lit,
 };
 
 use super::dml::InsertOp;
@@ -1007,8 +1009,12 @@ impl LogicalPlanBuilder {
         )
     }
 
-    /// Apply a left-preserving ASOF join using equality expressions and one
-    /// ordered match condition.
+    /// Apply a left-preserving ASOF join using pre-separated equality
+    /// expressions and a structured ordered match condition.
+    ///
+    /// This is a low-level API. Most callers should use
+    /// [`asof_join_on`](Self::asof_join_on), which validates and separates
+    /// ordinary predicate expressions.
     pub fn asof_join(
         self,
         right: LogicalPlan,
@@ -1016,6 +1022,48 @@ impl LogicalPlanBuilder {
         match_condition: AsOfMatch,
     ) -> Result<Self> {
         self.asof_join_with_constraint(right, on, match_condition, JoinConstraint::On)
+    }
+
+    /// Apply a left-preserving ASOF join using ordinary `ON` and
+    /// `MATCH_CONDITION` expressions.
+    ///
+    /// Equality predicates may be combined with `AND`. This method validates
+    /// and separates their left and right operands before constructing the
+    /// structured ASOF logical plan.
+    pub fn asof_join_on(
+        self,
+        right: LogicalPlan,
+        on_exprs: impl IntoIterator<Item = Expr>,
+        match_condition: Expr,
+    ) -> Result<Self> {
+        let on = on_exprs
+            .into_iter()
+            .flat_map(split_conjunction_owned)
+            .map(|predicate| {
+                let Expr::BinaryExpr(BinaryExpr {
+                    left,
+                    op: Operator::Eq,
+                    right: right_expr,
+                }) = predicate
+                else {
+                    return plan_err!(
+                        "ASOF ON accepts only equality conditions combined with AND"
+                    );
+                };
+                find_valid_equijoin_key_pair(
+                    &left,
+                    &right_expr,
+                    self.plan.schema(),
+                    right.schema(),
+                )?
+                .ok_or_else(|| {
+                    plan_datafusion_err!(
+                        "Each ASOF equality condition must compare one left expression with one right expression"
+                    )
+                })
+            })
+            .collect::<Result<_>>()?;
+        self.asof_join(right, on, AsOfMatch::try_from(match_condition)?)
     }
 
     /// Apply a left-preserving ASOF join using `USING` equality keys.
@@ -1043,6 +1091,17 @@ impl LogicalPlanBuilder {
         match_condition: AsOfMatch,
         join_constraint: JoinConstraint,
     ) -> Result<Self> {
+        let left_columns = match_condition.left.column_refs();
+        let right_columns = match_condition.right.column_refs();
+        if left_columns.is_empty()
+            || right_columns.is_empty()
+            || !check_all_columns_from_schema(&left_columns, self.plan.schema())?
+            || !check_all_columns_from_schema(&right_columns, right.schema())?
+        {
+            return plan_err!(
+                "ASOF MATCH_CONDITION left operand must reference only the left input and right operand only the right input"
+            );
+        }
         let normalize = |expr, schema: &DFSchema| {
             normalize_col_with_schemas_and_ambiguity_check(expr, &[&[schema]], &[])
         };
@@ -2910,6 +2969,68 @@ mod tests {
             SubqueryAlias: right
               Values: (Int32(1))
         ");
+
+        Ok(())
+    }
+
+    #[test]
+    fn asof_join_on_extracts_and_validates_conditions() -> Result<()> {
+        let values = vec![vec![lit(1), lit(2)]];
+        let left = LogicalPlanBuilder::values(values.clone())?
+            .alias("l")?
+            .build()?;
+        let right = LogicalPlanBuilder::values(values)?.alias("r")?.build()?;
+
+        let plan = LogicalPlanBuilder::from(left.clone())
+            .asof_join_on(
+                right.clone(),
+                [col("r.column1")
+                    .eq(col("l.column1"))
+                    .and(col("l.column2").eq(col("r.column2")))],
+                col("l.column2").gt_eq(col("r.column2")),
+            )?
+            .build()?;
+        let LogicalPlan::AsOfJoin(join) = plan else {
+            panic!("expected ASOF join")
+        };
+        assert_eq!(
+            join.on,
+            vec![
+                (col("l.column1"), col("r.column1")),
+                (col("l.column2"), col("r.column2")),
+            ]
+        );
+        assert_eq!(
+            join.match_condition.as_ref(),
+            &AsOfMatch::new(col("l.column2"), Operator::GtEq, col("r.column2"))
+        );
+
+        let invalid_on = LogicalPlanBuilder::from(left.clone())
+            .asof_join_on(
+                right.clone(),
+                [col("l.column1").gt(col("r.column1"))],
+                col("l.column2").gt_eq(col("r.column2")),
+            )
+            .expect_err("non-equality ASOF ON should fail");
+        assert_snapshot!(invalid_on.strip_backtrace(), @r#"Error during planning: ASOF ON accepts only equality conditions combined with AND"#);
+
+        let invalid_match = LogicalPlanBuilder::from(left.clone())
+            .asof_join_on(
+                right.clone(),
+                [col("l.column1").eq(col("r.column1"))],
+                col("l.column2").eq(col("r.column2")),
+            )
+            .expect_err("equality ASOF MATCH_CONDITION should fail");
+        assert_snapshot!(invalid_match.strip_backtrace(), @r#"Error during planning: ASOF MATCH_CONDITION requires <, <=, >, or >=, found ="#);
+
+        let reversed_match = LogicalPlanBuilder::from(left)
+            .asof_join_on(
+                right,
+                [col("l.column1").eq(col("r.column1"))],
+                col("r.column2").gt_eq(col("l.column2")),
+            )
+            .expect_err("reversed ASOF MATCH_CONDITION should fail");
+        assert_snapshot!(reversed_match.strip_backtrace(), @r#"Error during planning: ASOF MATCH_CONDITION left operand must reference only the left input and right operand only the right input"#);
 
         Ok(())
     }

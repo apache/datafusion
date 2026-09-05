@@ -17,7 +17,7 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{Column, Result, not_impl_err, plan_datafusion_err};
-use datafusion_expr::{JoinType, LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::{AsOfMatch, JoinType, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{
     Join, JoinConstraint, JoinOperator, ObjectName, TableFactor, TableWithJoins,
 };
@@ -98,7 +98,74 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             JoinOperator::CrossJoin(JoinConstraint::None) => {
                 self.parse_cross_join(left, right)
             }
+            JoinOperator::AsOf {
+                match_condition,
+                constraint,
+            } => self.parse_asof_join(
+                left,
+                right,
+                match_condition,
+                constraint,
+                planner_context,
+            ),
             other => not_impl_err!("Unsupported JOIN operator {other:?}"),
+        }
+    }
+
+    fn parse_asof_join(
+        &self,
+        left: LogicalPlan,
+        right: LogicalPlan,
+        sql_match_condition: sqlparser::ast::Expr,
+        constraint: JoinConstraint,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
+        let join_schema = left.schema().join(right.schema())?;
+        let match_condition =
+            self.sql_to_expr(sql_match_condition, &join_schema, planner_context)?;
+
+        match constraint {
+            JoinConstraint::On(sql_on) => {
+                let on = self.sql_to_expr(sql_on, &join_schema, planner_context)?;
+                LogicalPlanBuilder::from(left)
+                    .asof_join_on(right, [on], match_condition)?
+                    .build()
+            }
+            JoinConstraint::Using(object_names) => {
+                let keys = object_names
+                    .into_iter()
+                    .map(|object_name| {
+                        let ObjectName(mut object_names) = object_name;
+                        if object_names.len() != 1 {
+                            return not_impl_err!(
+                                "Invalid identifier in ASOF USING clause. Expected single identifier, got {}",
+                                ObjectName(object_names)
+                            );
+                        }
+                        let id = object_names.swap_remove(0);
+                        id.as_ident()
+                            .ok_or_else(|| {
+                                plan_datafusion_err!(
+                                    "Expected identifier in ASOF USING clause"
+                                )
+                            })
+                            .map(|ident| {
+                                Column::from_name(
+                                    self.ident_normalizer.normalize(ident.clone()),
+                                )
+                            })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                LogicalPlanBuilder::from(left)
+                    .asof_join_using(right, keys, AsOfMatch::try_from(match_condition)?)?
+                    .build()
+            }
+            JoinConstraint::None => LogicalPlanBuilder::from(left)
+                .asof_join_on(right, [], match_condition)?
+                .build(),
+            JoinConstraint::Natural => {
+                not_impl_err!("NATURAL ASOF JOIN is not supported")
+            }
         }
     }
 
