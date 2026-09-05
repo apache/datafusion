@@ -354,8 +354,23 @@ impl ScalarUDF {
 
     /// Calculates the [`SortProperties`] of this function based on its
     /// children's properties.
+    ///
+    /// [`SortProperties::Grouped`] is retained only when the implementation
+    /// also reports that the transformation is strictly order-preserving. A
+    /// many-to-one function can otherwise make an output value occur in
+    /// multiple non-adjacent runs.
     pub fn output_ordering(&self, inputs: &[ExprProperties]) -> Result<SortProperties> {
-        self.inner.output_ordering(inputs)
+        let sort_properties = self.inner.output_ordering(inputs)?;
+        if sort_properties == SortProperties::Grouped
+            && !self.inner.strictly_order_preserving(inputs)?
+        {
+            // A merely monotone function may collapse non-adjacent input
+            // groups to the same output value. Preserve `Grouped` only for a
+            // one-to-one transformation.
+            Ok(SortProperties::Unordered)
+        } else {
+            Ok(sort_properties)
+        }
     }
 
     pub fn preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
@@ -919,7 +934,12 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
         Ok(Some(vec![]))
     }
 
-    /// Calculates the [`SortProperties`] of this function based on its children's properties.
+    /// Calculates the [`SortProperties`] of this function based on its children's
+    /// properties.
+    ///
+    /// The [`ScalarUDF`] wrapper retains a [`SortProperties::Grouped`] result
+    /// only when [`Self::strictly_order_preserving`] also returns `true` for
+    /// the same inputs.
     fn output_ordering(&self, inputs: &[ExprProperties]) -> Result<SortProperties> {
         if !self.preserves_lex_ordering(inputs)? {
             return Ok(SortProperties::Unordered);

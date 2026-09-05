@@ -2080,8 +2080,10 @@ impl RepartitionExec {
             eq_properties.clear_orderings();
         }
         // When there are more than one input partitions, they will be fused at the output.
-        // Therefore, remove per partition constants.
+        // Therefore, remove per-partition properties that may not hold after
+        // rows from different inputs are combined.
         if input.output_partitioning().partition_count() > 1 {
+            eq_properties.clear_groupings();
             eq_properties.clear_per_partition_constants();
         }
         eq_properties
@@ -2513,6 +2515,39 @@ mod tests {
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_physical_expr::{PhysicalSortExpr, RangePartitioning, SplitPoint};
     use insta::assert_snapshot;
+
+    #[test]
+    fn grouping_is_cleared_only_when_input_partitions_are_merged() -> Result<()> {
+        let input = crate::test::mem_exec(2);
+        let grouping = col("i", &input.schema())?;
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(input.try_with_grouping_information(vec![vec![grouping]])?);
+        let repartition =
+            RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(2))?;
+        assert!(
+            repartition
+                .properties()
+                .equivalence_properties()
+                .geq_class()
+                .is_empty()
+        );
+
+        let input = crate::test::mem_exec(1);
+        let grouping = col("i", &input.schema())?;
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(input.try_with_grouping_information(vec![vec![grouping]])?);
+        let repartition =
+            RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(2))?;
+        assert_eq!(
+            repartition
+                .properties()
+                .equivalence_properties()
+                .geq_class()
+                .len(),
+            1
+        );
+        Ok(())
+    }
 
     #[derive(Debug)]
     struct UnboundedTestPartition {

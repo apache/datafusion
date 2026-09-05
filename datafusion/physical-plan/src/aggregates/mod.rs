@@ -202,6 +202,7 @@ use datafusion_physical_expr_common::sort_expr::{
 use datafusion_expr::utils::AggregateOrderSensitivity;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use itertools::Itertools;
+use order::GroupCompletionMode;
 use topk::hash_table::is_supported_hash_key_type;
 use topk::heap::is_supported_heap_type;
 
@@ -874,8 +875,14 @@ pub struct AggregateExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     required_input_ordering: Option<OrderingRequirements>,
-    /// Describes how the input is ordered relative to the group by columns
+    /// Describes how the input is ordered relative to the group by columns.
     input_order_mode: InputOrderMode,
+    /// Describes when the executor can determine that groups are complete.
+    ///
+    /// Input ordering describes a subset of the cases in which groups can be
+    /// safely emitted before the input ends. Full group completion requires only
+    /// that rows for each complete grouping tuple are contiguous.
+    group_completion_mode: GroupCompletionMode,
     cache: Arc<PlanProperties>,
     /// During initialization, if the plan supports dynamic filtering (see [`AggrDynFilter`]),
     /// it is set to `Some(..)` regardless of whether it can be pushed down to a child node.
@@ -900,6 +907,7 @@ impl AggregateExec {
             required_input_ordering: self.required_input_ordering.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
             input_order_mode: self.input_order_mode.clone(),
+            group_completion_mode: self.group_completion_mode.clone(),
             cache: Arc::clone(&self.cache),
             mode: self.mode,
             group_by: Arc::clone(&self.group_by),
@@ -920,6 +928,7 @@ impl AggregateExec {
             required_input_ordering: self.required_input_ordering.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
             input_order_mode: self.input_order_mode.clone(),
+            group_completion_mode: self.group_completion_mode.clone(),
             cache: Arc::clone(&self.cache),
             mode: self.mode,
             group_by: Arc::clone(&self.group_by),
@@ -1042,6 +1051,15 @@ impl AggregateExec {
             input_order_mode = InputOrderMode::Linear;
         }
 
+        let group_completion_mode = if !group_by.has_grouping_set()
+            && !groupby_exprs.is_empty()
+            && input_eq_properties.grouping_satisfy(groupby_exprs.iter().cloned())?
+        {
+            GroupCompletionMode::Full
+        } else {
+            GroupCompletionMode::from(&input_order_mode)
+        };
+
         // construct a map from the input expression to the output expression of the Aggregation group by
         let group_expr_mapping =
             ProjectionMapping::try_new(group_by.expr.clone(), &input.schema())?;
@@ -1059,6 +1077,16 @@ impl AggregateExec {
                 aggr_expr.as_ref(),
             )?
         };
+        // `compute_properties` derives emission from the public input-order
+        // mode. Override it only for the new case where unsorted input still
+        // has a group-completion guarantee.
+        let cache = if input_order_mode == InputOrderMode::Linear
+            && group_completion_mode != GroupCompletionMode::None
+        {
+            cache.with_emission_type(input.pipeline_behavior())
+        } else {
+            cache
+        };
 
         let mut exec = AggregateExec {
             mode,
@@ -1072,6 +1100,7 @@ impl AggregateExec {
             required_input_ordering,
             limit_options: None,
             input_order_mode,
+            group_completion_mode,
             cache: Arc::new(cache),
             dynamic_filter: None,
         };
@@ -1290,7 +1319,7 @@ impl AggregateExec {
 
     fn should_use_partial_hash_stream(&self, _context: &TaskContext) -> bool {
         self.mode == AggregateMode::Partial
-            && self.input_order_mode == InputOrderMode::Linear
+            && self.group_completion_mode == GroupCompletionMode::None
             && !self.group_by.is_true_no_grouping()
             && self.limit_options_supported_by_hash_stream()
     }
@@ -1300,7 +1329,7 @@ impl AggregateExec {
         _context: &TaskContext,
     ) -> bool {
         self.mode == AggregateMode::Partial
-            && self.input_order_mode != InputOrderMode::Linear
+            && self.group_completion_mode != GroupCompletionMode::None
             && !self.group_by.is_true_no_grouping()
             && self.limit_options_supported_by_hash_stream()
     }
@@ -1310,7 +1339,7 @@ impl AggregateExec {
             self.mode,
             AggregateMode::Final | AggregateMode::FinalPartitioned
         ) && self.limit_options_supported_by_hash_stream()
-            && self.input_order_mode == InputOrderMode::Linear
+            && self.group_completion_mode == GroupCompletionMode::None
             && !self.group_by.is_true_no_grouping()
             && self.group_by.is_single()
     }
@@ -1318,7 +1347,7 @@ impl AggregateExec {
     fn should_use_partial_reduce_hash_stream(&self, _context: &TaskContext) -> bool {
         self.mode == AggregateMode::PartialReduce
             && self.limit_options.is_none()
-            && self.input_order_mode == InputOrderMode::Linear
+            && self.group_completion_mode == GroupCompletionMode::None
             && !self.group_by.is_true_no_grouping()
             && self.group_by.is_single()
     }
@@ -1328,7 +1357,7 @@ impl AggregateExec {
             self.mode,
             AggregateMode::Single | AggregateMode::SinglePartitioned
         ) && self.limit_options.is_none()
-            && self.input_order_mode == InputOrderMode::Linear
+            && self.group_completion_mode == GroupCompletionMode::None
             && !self.group_by.is_true_no_grouping()
     }
 
@@ -1337,7 +1366,7 @@ impl AggregateExec {
             self.mode,
             AggregateMode::Single | AggregateMode::SinglePartitioned
         ) && self.limit_options.is_none()
-            && self.input_order_mode != InputOrderMode::Linear
+            && self.group_completion_mode != GroupCompletionMode::None
             && !self.group_by.is_true_no_grouping()
     }
 
@@ -1346,7 +1375,7 @@ impl AggregateExec {
             self.mode,
             AggregateMode::Final | AggregateMode::FinalPartitioned
         ) && self.limit_options_supported_by_hash_stream()
-            && self.input_order_mode != InputOrderMode::Linear
+            && self.group_completion_mode != GroupCompletionMode::None
             && !self.group_by.is_true_no_grouping()
             && self.group_by.is_single()
     }
@@ -1416,6 +1445,10 @@ impl AggregateExec {
         let mut eq_properties = input
             .equivalence_properties()
             .project(group_expr_mapping, schema);
+        // Grouping information is consumed by this aggregate. The aggregate
+        // output may have a different row layout, so do not pass explicit
+        // input grouping assertions to another aggregate.
+        eq_properties.clear_groupings();
 
         // True no-group aggregates produce only one row in each output
         // partition, so aggregate outputs are constants within the partition.
@@ -2354,6 +2387,8 @@ impl ExecutionPlan for AggregateExec {
             required_input_ordering: _,
             // Derived at construction from the input ordering and `group_by`.
             input_order_mode: _,
+            // Derived at construction from the input properties and `group_by`.
+            group_completion_mode: _,
             // Derived at construction by `Self::compute_properties`.
             cache: _,
             dynamic_filter,
@@ -3244,7 +3279,7 @@ mod tests {
         Int64Array, NullArray, StructArray, UInt32Array, UInt64Array,
     };
     use arrow::compute::{SortOptions, concat_batches};
-    use arrow::datatypes::Int32Type;
+    use arrow::datatypes::{Int32Type, TimeUnit};
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{DataFusionError, internal_err};
     use datafusion_execution::config::SessionConfig;
@@ -3255,6 +3290,7 @@ mod tests {
         Accumulator, AggregateUDF, AggregateUDFImpl, EmitTo, GroupsAccumulator,
         Signature, Volatility,
     };
+    use datafusion_functions::datetime::date_bin;
     use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
     use datafusion_functions_aggregate::array_agg::array_agg_udaf;
     use datafusion_functions_aggregate::average::avg_udaf;
@@ -3263,10 +3299,9 @@ mod tests {
     use datafusion_functions_aggregate::median::median_udaf;
     use datafusion_functions_aggregate::min_max::min_udaf;
     use datafusion_functions_aggregate::sum::sum_udaf;
-    use datafusion_physical_expr::Partitioning;
-    use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::{Literal, NotExpr};
+    use datafusion_physical_expr::{Partitioning, PhysicalSortExpr, ScalarFunctionExpr};
 
     use crate::projection::ProjectionExec;
     use crate::repartition::RepartitionExec;
@@ -4563,6 +4598,10 @@ mod tests {
             aggregate.input_order_mode(),
             InputOrderMode::PartiallySorted(_)
         ));
+        assert_eq!(
+            aggregate.group_completion_mode,
+            GroupCompletionMode::Partial(vec![0])
+        );
 
         let task_ctx = new_migrated_hash_ctx(2);
         let stream = aggregate.execute_typed(0, &task_ctx)?;
@@ -4825,6 +4864,151 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn unsorted_contiguous_groups_use_incremental_emission() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("time_bin", DataType::Int64, false),
+            Field::new("value", DataType::Int64, false),
+        ]));
+        // Two sorted logical runs are emitted as batches in one DataFusion
+        // partition. Every distinct grouping tuple occupies one contiguous range,
+        // but tuple order resets at the batch boundary, so (key, time_bin) is not
+        // globally sorted.
+        let input_batches = vec![
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![1, 1, 2, 2])),
+                    Arc::new(Int64Array::from(vec![20, 20, 20, 20])),
+                    Arc::new(Int64Array::from(vec![10, 20, 30, 40])),
+                ],
+            )?,
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![1, 1, 2, 2])),
+                    Arc::new(Int64Array::from(vec![0, 0, 0, 0])),
+                    Arc::new(Int64Array::from(vec![50, 60, 70, 80])),
+                ],
+            )?,
+        ];
+        let key = col("key", &schema)?;
+        let time_bin = col("time_bin", &schema)?;
+        let group_by = PhysicalGroupBy::new_single(vec![
+            (Arc::clone(&key), "key".to_string()),
+            (Arc::clone(&time_bin), "time_bin".to_string()),
+        ]);
+        let aggr_expr = Arc::new(
+            AggregateExprBuilder::new(sum_udaf(), vec![col("value", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("SUM(value)")
+                .build()?,
+        );
+        let input = TestMemoryExec::try_new(&[input_batches], Arc::clone(&schema), None)?
+            .try_with_grouping_information(vec![vec![key, time_bin]])?;
+        let input: Arc<dyn ExecutionPlan> = Arc::new(input);
+        assert_eq!(input.output_partitioning().partition_count(), 1);
+
+        let aggregate = AggregateExec::try_new(
+            AggregateMode::Single,
+            group_by,
+            vec![aggr_expr],
+            vec![None],
+            input,
+            schema,
+        )?;
+
+        assert_eq!(aggregate.input_order_mode(), &InputOrderMode::Linear);
+        assert_eq!(aggregate.group_completion_mode, GroupCompletionMode::Full);
+        assert_eq!(aggregate.cache().emission_type, EmissionType::Incremental);
+        assert!(
+            aggregate
+                .cache()
+                .equivalence_properties()
+                .geq_class()
+                .is_empty()
+        );
+        assert!(aggregate.cache().output_ordering().is_none());
+
+        let task_ctx = new_migrated_hash_ctx(1024);
+        let stream = aggregate.execute_typed(0, &task_ctx)?;
+        assert!(matches!(stream, StreamType::OrderedSingleAggregate(_)));
+        let stream: SendableRecordBatchStream = stream.into();
+        let output = collect(stream).await?;
+        assert_snapshot!(batches_to_sort_string(&output), @r"
++-----+----------+------------+
+| key | time_bin | SUM(value) |
++-----+----------+------------+
+| 1   | 0        | 110        |
+| 1   | 20       | 30         |
+| 2   | 0        | 150        |
+| 2   | 20       | 70         |
++-----+----------+------------+
+");
+
+        Ok(())
+    }
+
+    #[test]
+    fn grouped_date_bin_projects_to_aggregate() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("time", DataType::Timestamp(TimeUnit::Second, None), false),
+        ]));
+        let time_bin_expr = || -> Result<Arc<dyn PhysicalExpr>> {
+            Ok(Arc::new(ScalarFunctionExpr::try_new(
+                date_bin(),
+                vec![
+                    lit(ScalarValue::new_interval_dt(0, 10_000)),
+                    col("time", &schema)?,
+                ],
+                &schema,
+                Arc::new(ConfigOptions::default()),
+            )?))
+        };
+        let input = TestMemoryExec::try_new(&[vec![]], Arc::clone(&schema), None)?
+            .try_with_grouping_information(vec![vec![
+                col("key", &schema)?,
+                time_bin_expr()?,
+            ]])?;
+        let projection = ProjectionExec::try_new(
+            [
+                ProjectionExpr::new(col("key", &schema)?, "key"),
+                // Build this expression independently from the source
+                // assertion so the test exercises semantic expression matching.
+                ProjectionExpr::new(time_bin_expr()?, "time_bin"),
+            ],
+            Arc::new(input),
+        )?;
+
+        let projected_schema = projection.schema();
+        let key = col("key", &projected_schema)?;
+        let time_bin = col("time_bin", &projected_schema)?;
+        assert!(
+            projection
+                .properties()
+                .equivalence_properties()
+                .grouping_satisfy([Arc::clone(&key), Arc::clone(&time_bin)])?
+        );
+        let aggregate = AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::new_single(vec![
+                (key, "key".to_string()),
+                (time_bin, "time_bin".to_string()),
+            ]),
+            vec![],
+            vec![],
+            Arc::new(projection),
+            projected_schema,
+        )?;
+
+        assert_eq!(aggregate.input_order_mode, InputOrderMode::Linear);
+        assert_eq!(aggregate.group_completion_mode, GroupCompletionMode::Full);
+        assert_eq!(aggregate.cache().emission_type, EmissionType::Incremental);
+        Ok(())
+    }
+
     /// Ensures for ordered input, `OrderedPartialAggregateStream` is used.
     #[tokio::test]
     async fn ordered_partial_aggregate_planning() -> Result<()> {
@@ -4961,6 +5145,10 @@ mod tests {
             Arc::clone(&schema),
         )?;
         assert_eq!(final_aggregate.input_order_mode(), &InputOrderMode::Sorted);
+        assert_eq!(
+            final_aggregate.group_completion_mode,
+            GroupCompletionMode::Full
+        );
 
         let task_ctx = new_migrated_hash_ctx(2);
         let stream = final_aggregate.execute_typed(0, &task_ctx)?;

@@ -59,7 +59,7 @@ impl OrderedAggregateTable<SingleMarker> {
             output_schema,
             state_schema,
             batch_size,
-            &agg.input_order_mode,
+            &agg.group_completion_mode,
             &agg.mode,
             agg.filter_expr.iter().cloned().collect(),
             metrics,

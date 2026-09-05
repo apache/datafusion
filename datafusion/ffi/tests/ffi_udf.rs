@@ -27,7 +27,7 @@ mod tests {
     use datafusion::prelude::{SessionContext, col};
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::lit;
-    use datafusion_expr::sort_properties::ExprProperties;
+    use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
     use datafusion_ffi::tests::create_record_batch;
     use datafusion_ffi::tests::utils::get_module;
     use std::sync::Arc;
@@ -118,6 +118,9 @@ mod tests {
 
         assert!(foreign_func.preserves_lex_ordering(std::slice::from_ref(&preserves))?);
         assert!(!foreign_func.preserves_lex_ordering(&[preserves, does_not_preserve])?);
+
+        let grouped = ExprProperties::new_unknown().with_order(SortProperties::Grouped);
+        assert!(foreign_func.preserves_lex_ordering(&[grouped])?);
 
         Ok(())
     }
