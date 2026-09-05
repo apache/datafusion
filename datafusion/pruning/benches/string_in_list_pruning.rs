@@ -26,9 +26,10 @@
 //! Small domain sizes make representation threshold changes measurable, and the
 //! evaluation matrix varies the number of statistics containers. The main cases
 //! alternate intervals pinned to a domain member with intervals that span a
-//! sparse gap. Supplemental `NOT IN` cases measure uniform singleton containers,
-//! long bounds, and long literals that share bounds' prefixes. Bloom filters are
-//! not involved.
+//! sparse gap. NULL-containing variants cover the optimized
+//! filter-semantics paths, including the constant-false `NOT IN` rewrite.
+//! Supplemental `NOT IN` cases measure uniform singleton containers, long bounds,
+//! and long literals that share bounds' prefixes. Bloom filters are not involved.
 //!
 //! Run with `cargo bench -p datafusion-pruning --bench string_in_list_pruning`.
 //! Construction is independent of the statistics batch size, so it varies only
@@ -46,7 +47,9 @@ use datafusion_common::{Column, ScalarValue};
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr::expressions::{BinaryExpr, col, in_list, lit};
-use datafusion_pruning::{PruningPredicate, PruningPredicateBuilder, PruningStatistics};
+use datafusion_pruning::{
+    MAX_IN_LIST_SIZE, PruningPredicate, PruningPredicateBuilder, PruningStatistics,
+};
 
 const DOMAIN_SIZES: [usize; 9] = [1, 2, 4, 8, 16, 20, 21, 256, 1024];
 const CONTAINER_COUNTS: [usize; 3] = [16, 256, 4096];
@@ -54,6 +57,35 @@ const BASELINE_CONTAINER_COUNT: usize = 4096;
 
 fn value(index: usize) -> String {
     format!("key{index:08}")
+}
+
+/// Maps an interval pair to an evenly distributed position in the full domain.
+///
+/// When there are more pairs than domain values, the full distribution repeats.
+fn sampled_domain_index(
+    pair_index: usize,
+    pair_count: usize,
+    domain_size: usize,
+) -> usize {
+    let sampled_positions = pair_count.min(domain_size);
+    let position = pair_index % sampled_positions;
+    if sampled_positions == 1 {
+        0
+    } else {
+        position * (domain_size - 1) / (sampled_positions - 1)
+    }
+}
+
+fn validate_sampling_distribution() {
+    assert_eq!(
+        (0..8)
+            .map(|pair| sampled_domain_index(pair, 8, 1024))
+            .collect::<Vec<_>>(),
+        vec![0, 146, 292, 438, 584, 730, 876, 1023]
+    );
+    assert_eq!(sampled_domain_index(0, 8, 1), 0);
+    assert_eq!(sampled_domain_index(1024, 2048, 1024), 0);
+    assert_eq!(sampled_domain_index(2047, 2048, 1024), 1023);
 }
 
 fn balanced(expressions: &[PhysicalExprRef], op: Operator) -> PhysicalExprRef {
@@ -106,12 +138,13 @@ struct IntervalStatistics {
 
 impl IntervalStatistics {
     fn new(domain_size: usize, container_count: usize) -> Self {
+        let pair_count = container_count.div_ceil(2);
         let min = StringViewArray::from_iter_values((0..container_count).map(|index| {
-            let start = (index / 2 % domain_size) * 10;
+            let start = sampled_domain_index(index / 2, pair_count, domain_size) * 10;
             value(start + if index % 2 == 0 { 0 } else { 3 })
         }));
         let max = StringViewArray::from_iter_values((0..container_count).map(|index| {
-            let start = (index / 2 % domain_size) * 10;
+            let start = sampled_domain_index(index / 2, pair_count, domain_size) * 10;
             value(start + if index % 2 == 0 { 0 } else { 7 })
         }));
         Self {
@@ -194,12 +227,16 @@ struct BenchmarkCase {
     size: usize,
     schema: SchemaRef,
     in_list: PhysicalExprRef,
+    in_list_with_null: PhysicalExprRef,
     expanded_or: PhysicalExprRef,
     not_in_list: PhysicalExprRef,
+    not_in_list_with_null: PhysicalExprRef,
     expanded_and: PhysicalExprRef,
     in_list_predicate: PruningPredicate,
+    in_list_with_null_predicate: PruningPredicate,
     expanded_or_predicate: PruningPredicate,
     not_in_list_predicate: PruningPredicate,
+    not_in_list_with_null_predicate: PruningPredicate,
     expanded_and_predicate: PruningPredicate,
 }
 
@@ -214,15 +251,30 @@ impl BenchmarkCase {
         let values = (0..size)
             .map(|index| lit(ScalarValue::new_utf8view(value(index * 10))))
             .collect::<Vec<_>>();
+        let mut values_with_null = values.clone();
+        values_with_null.push(lit(ScalarValue::Utf8View(None)));
         let not_in_list =
             in_list(Arc::clone(&column), values.clone(), &true, &schema).unwrap();
+        let not_in_list_with_null = in_list(
+            Arc::clone(&column),
+            values_with_null.clone(),
+            &true,
+            &schema,
+        )
+        .unwrap();
+        let in_list_with_null =
+            in_list(Arc::clone(&column), values_with_null, &false, &schema).unwrap();
         let in_list =
             in_list(Arc::clone(&column), values.clone(), &false, &schema).unwrap();
         let expanded_or = expanded(&column, &values, Operator::Eq, Operator::Or);
         let expanded_and = expanded(&column, &values, Operator::NotEq, Operator::And);
         let in_list_predicate = build_predicate(&in_list, &schema, size);
+        let in_list_with_null_predicate =
+            build_predicate(&in_list_with_null, &schema, size + 1);
         let expanded_or_predicate = build_predicate(&expanded_or, &schema, size);
         let not_in_list_predicate = build_predicate(&not_in_list, &schema, size);
+        let not_in_list_with_null_predicate =
+            build_predicate(&not_in_list_with_null, &schema, size + 1);
         let expanded_and_predicate = build_predicate(&expanded_and, &schema, size);
         eprintln!(
             "string_in_list_pruning: {size} values, compact in={}, compact not in={}",
@@ -239,12 +291,16 @@ impl BenchmarkCase {
             size,
             schema,
             in_list,
+            in_list_with_null,
             expanded_or,
             not_in_list,
+            not_in_list_with_null,
             expanded_and,
             in_list_predicate,
+            in_list_with_null_predicate,
             expanded_or_predicate,
             not_in_list_predicate,
+            not_in_list_with_null_predicate,
             expanded_and_predicate,
         }
     }
@@ -270,6 +326,23 @@ fn assert_equivalent_results(case: &BenchmarkCase, statistics: &IntervalStatisti
         case.expanded_and_predicate.prune(statistics).unwrap(),
         negated_expected
     );
+
+    let in_with_null = case.in_list_with_null_predicate.prune(statistics).unwrap();
+    let not_in_with_null = case
+        .not_in_list_with_null_predicate
+        .prune(statistics)
+        .unwrap();
+    if case.size + 1 > MAX_IN_LIST_SIZE {
+        // Compact pruning applies filter semantics: NULL does not change which
+        // rows can satisfy IN, while NOT IN (..., NULL) can never be true.
+        assert_eq!(in_with_null, expected);
+        assert!(not_in_with_null.iter().all(|keep| !keep));
+    } else {
+        // The legacy per-value rewrite keeps UNKNOWN IN results and drops the
+        // NULL term from NOT IN statistics pruning.
+        assert!(in_with_null.iter().all(|keep| *keep));
+        assert_eq!(not_in_with_null, negated_expected);
+    }
 }
 
 fn evaluation_group_name(container_count: usize) -> String {
@@ -283,25 +356,32 @@ fn evaluation_group_name(container_count: usize) -> String {
 }
 
 fn criterion_benchmark(criterion: &mut Criterion) {
+    validate_sampling_distribution();
     let cases = DOMAIN_SIZES.map(BenchmarkCase::new);
     let mut construction = criterion.benchmark_group("string_in_list_pruning/construct");
     for case in &cases {
-        construction.throughput(Throughput::Elements(case.size as u64));
-        for (name, expression) in [
-            ("in_list", &case.in_list),
-            ("expanded_or", &case.expanded_or),
-            ("not_in_list", &case.not_in_list),
-            ("expanded_and", &case.expanded_and),
+        for (name, expression, max_in_list_size) in [
+            ("in_list", &case.in_list, case.size),
+            ("in_list_with_null", &case.in_list_with_null, case.size + 1),
+            ("expanded_or", &case.expanded_or, case.size),
+            ("not_in_list", &case.not_in_list, case.size),
+            (
+                "not_in_list_with_null_constant_false",
+                &case.not_in_list_with_null,
+                case.size + 1,
+            ),
+            ("expanded_and", &case.expanded_and, case.size),
         ] {
+            construction.throughput(Throughput::Elements(max_in_list_size as u64));
             construction.bench_with_input(
-                BenchmarkId::new(name, case.size),
+                BenchmarkId::new(name, max_in_list_size),
                 expression,
                 |bencher, expression| {
                     bencher.iter(|| {
                         black_box(build_predicate(
                             black_box(expression),
                             &case.schema,
-                            case.size,
+                            max_in_list_size,
                         ))
                     });
                 },
@@ -321,14 +401,24 @@ fn criterion_benchmark(criterion: &mut Criterion) {
             // the same useful work rather than measuring an always-true fallback.
             assert_equivalent_results(case, &statistics);
 
-            for (name, predicate) in [
-                ("in_list", &case.in_list_predicate),
-                ("expanded_or", &case.expanded_or_predicate),
-                ("not_in_list", &case.not_in_list_predicate),
-                ("expanded_and", &case.expanded_and_predicate),
+            for (name, predicate, list_size) in [
+                ("in_list", &case.in_list_predicate, case.size),
+                (
+                    "in_list_with_null",
+                    &case.in_list_with_null_predicate,
+                    case.size + 1,
+                ),
+                ("expanded_or", &case.expanded_or_predicate, case.size),
+                ("not_in_list", &case.not_in_list_predicate, case.size),
+                (
+                    "not_in_list_with_null_constant_false",
+                    &case.not_in_list_with_null_predicate,
+                    case.size + 1,
+                ),
+                ("expanded_and", &case.expanded_and_predicate, case.size),
             ] {
                 evaluation.bench_with_input(
-                    BenchmarkId::new(name, case.size),
+                    BenchmarkId::new(name, list_size),
                     predicate,
                     |bencher, predicate| {
                         bencher.iter(|| {
