@@ -24,10 +24,12 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Result, ScalarValue, internal_datafusion_err};
+use datafusion_expr::{Operator, simplify::REGEX_PLANNING_SIZE_LIMIT_BYTES};
 use datafusion_expr_common::columnar_value::ColumnarValue;
+use regex::{Error as RegexError, RegexBuilder};
 
-use crate::PhysicalExpr;
-use crate::expressions::{Column, Literal};
+use crate::expressions::{BinaryExpr, Column, Literal};
+use crate::{PhysicalExpr, ScalarFunctionExpr};
 
 /// Simplify expressions that consist only of literals by evaluating them.
 ///
@@ -48,7 +50,10 @@ pub fn simplify_const_expr(
 ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
     let batch = create_dummy_batch()?;
     // If expr is already a const literal or can't be evaluated into one.
-    if expr.is::<Literal>() || (!can_evaluate_as_constant(&expr)) {
+    if expr.is::<Literal>()
+        || (!can_evaluate_as_constant(&expr))
+        || (!should_evaluate_const_expr(&expr))
+    {
         return Ok(Transformed::no(expr));
     }
 
@@ -122,6 +127,10 @@ pub(crate) fn simplify_const_expr_immediate(
         return Ok(Transformed::no(expr));
     }
 
+    if !should_evaluate_const_expr(&expr) {
+        return Ok(Transformed::no(expr));
+    }
+
     // Evaluate the expression
     match expr.evaluate(batch) {
         Ok(ColumnarValue::Scalar(scalar)) => {
@@ -185,6 +194,49 @@ fn can_evaluate_as_constant(expr: &Arc<dyn PhysicalExpr>) -> bool {
     .expect("apply should not fail");
 
     can_evaluate
+}
+
+fn should_evaluate_const_expr(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    if let Some(function) = expr.downcast_ref::<ScalarFunctionExpr>() {
+        let Some(args) = function
+            .args()
+            .iter()
+            .map(|arg| arg.downcast_ref::<Literal>().map(Literal::value))
+            .collect::<Option<Vec<_>>>()
+        else {
+            return true;
+        };
+        return function.fun().should_evaluate_const(&args);
+    }
+
+    let Some(binary) = expr.downcast_ref::<BinaryExpr>() else {
+        return true;
+    };
+    if !matches!(
+        binary.op(),
+        Operator::RegexMatch
+            | Operator::RegexNotMatch
+            | Operator::RegexIMatch
+            | Operator::RegexNotIMatch
+    ) {
+        return true;
+    }
+    let Some(pattern) = binary.right().downcast_ref::<Literal>() else {
+        return true;
+    };
+    let Some(pattern) = pattern.value().try_as_str().flatten() else {
+        return true;
+    };
+
+    let mut builder = RegexBuilder::new(pattern);
+    builder.size_limit(REGEX_PLANNING_SIZE_LIMIT_BYTES);
+    if matches!(
+        binary.op(),
+        Operator::RegexIMatch | Operator::RegexNotIMatch
+    ) {
+        builder.case_insensitive(true);
+    }
+    !matches!(builder.build(), Err(RegexError::CompiledTooBig(_)))
 }
 
 /// Check if this expression has any column references.

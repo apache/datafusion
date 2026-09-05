@@ -189,6 +189,11 @@ pub enum ExprSimplifyResult {
     Original(Vec<Expr>),
 }
 
+/// Maximum compiled regex size allowed during constant evaluation in the
+/// planner. Larger regexes are deferred to execution so that planning cannot
+/// spend the runtime regex engine's substantially larger compilation budget.
+pub const REGEX_PLANNING_SIZE_LIMIT_BYTES: usize = 256 * 1024;
+
 #[cfg(test)]
 mod tests {
     use super::*;

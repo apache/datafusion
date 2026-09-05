@@ -45,7 +45,10 @@ use datafusion_expr::{
     BinaryExpr, Case, ColumnarValue, Expr, ExprSchemable, Like, Operator, Volatility,
     and, binary::BinaryTypeCoercer, lit, or, preimage::PreimageResult,
 };
-use datafusion_expr::{Cast, TryCast, simplify::ExprSimplifyResult};
+use datafusion_expr::{
+    Cast, TryCast,
+    simplify::{ExprSimplifyResult, REGEX_PLANNING_SIZE_LIMIT_BYTES},
+};
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_expr::{
     expr::{InList, InSubquery},
@@ -69,7 +72,7 @@ use crate::{
 use datafusion_expr::expr_rewriter::rewrite_with_guarantees_map;
 use datafusion_expr_common::casts::try_cast_literal_to_type;
 use indexmap::IndexSet;
-use regex::Regex;
+use regex::{Error as RegexError, Regex, RegexBuilder};
 
 /// This structure handles API for expression simplification
 ///
@@ -494,6 +497,8 @@ enum ConstSimplifyResult {
     NotSimplified(ScalarValue, Option<FieldMetadata>),
     // Evaluation encountered an error, contains the original expression
     SimplifyRuntimeError(DataFusionError, Expr),
+    // Evaluation was deliberately deferred to runtime
+    Deferred(Expr),
 }
 
 impl TreeNodeRewriter for ConstEvaluator {
@@ -551,6 +556,14 @@ impl TreeNodeRewriter for ConstEvaluator {
                     // For other expressions (like CASE, COALESCE), preserve the original
                     // to allow short-circuit evaluation at execution time
                     Ok(Transformed::yes(expr))
+                }
+                ConstSimplifyResult::Deferred(expr) => {
+                    // Prevent an evaluatable parent (for example, an Alias)
+                    // from evaluating this deferred subtree indirectly.
+                    self.can_evaluate.iter_mut().for_each(|can_evaluate| {
+                        *can_evaluate = false;
+                    });
+                    Ok(Transformed::no(expr))
                 }
             },
             Some(false) => Ok(Transformed::no(expr)),
@@ -691,6 +704,10 @@ impl ConstEvaluator {
             return ConstSimplifyResult::NotSimplified(s, m);
         }
 
+        if !should_evaluate_const_expr(&expr) {
+            return ConstSimplifyResult::Deferred(expr);
+        }
+
         let phys_expr = match create_physical_expr(
             &expr,
             &DUMMY_DF_SCHEMA,
@@ -745,6 +762,51 @@ impl ConstEvaluator {
             ColumnarValue::Scalar(s) => ConstSimplifyResult::Simplified(s, metadata),
         }
     }
+}
+
+fn should_evaluate_const_expr(expr: &Expr) -> bool {
+    match expr {
+        Expr::ScalarFunction(ScalarFunction { func, args }) => {
+            let Some(args) = args
+                .iter()
+                .map(|arg| match arg {
+                    Expr::Literal(value, _) => Some(value),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()
+            else {
+                return true;
+            };
+            func.should_evaluate_const(&args)
+        }
+        Expr::BinaryExpr(BinaryExpr { op, right, .. })
+            if matches!(
+                op,
+                Operator::RegexMatch
+                    | Operator::RegexNotMatch
+                    | Operator::RegexIMatch
+                    | Operator::RegexNotIMatch
+            ) =>
+        {
+            regex_is_within_planning_budget(op, right)
+        }
+        _ => true,
+    }
+}
+
+fn regex_is_within_planning_budget(op: &Operator, pattern: &Expr) -> bool {
+    let Expr::Literal(pattern, _) = pattern else {
+        return true;
+    };
+    let Some(pattern) = pattern.try_as_str().flatten() else {
+        return true;
+    };
+    let mut builder = RegexBuilder::new(pattern);
+    builder.size_limit(REGEX_PLANNING_SIZE_LIMIT_BYTES);
+    if matches!(op, Operator::RegexIMatch | Operator::RegexNotIMatch) {
+        builder.case_insensitive(true);
+    }
+    !matches!(builder.build(), Err(RegexError::CompiledTooBig(_)))
 }
 
 /// Simplifies [`Expr`]s by applying algebraic transformation rules
@@ -1649,7 +1711,17 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 left,
                 op: op @ (RegexMatch | RegexNotMatch | RegexIMatch | RegexNotIMatch),
                 right,
-            }) => simplify_regex_expr(left, op, right)?,
+            }) => {
+                // Non-constant regexes are not evaluated during planning, so
+                // avoid adding a compilation preflight to their normal path.
+                if !matches!(left.as_ref(), Expr::Literal(_, _))
+                    || regex_is_within_planning_budget(&op, &right)
+                {
+                    simplify_regex_expr(left, op, right)?
+                } else {
+                    Transformed::no(Expr::BinaryExpr(BinaryExpr { left, op, right }))
+                }
+            }
 
             // Rules for Like
             Expr::Like(like) => {
@@ -3456,6 +3528,60 @@ mod tests {
         let expr_eq = binary_expr(lit(1), Operator::Eq, lit(1));
 
         assert_eq!(simplify(expr_eq), lit(true));
+    }
+
+    #[test]
+    fn test_constant_regex_respects_planning_budget() {
+        // Small regexes retain the common-case constant folding behavior.
+        assert_eq!(simplify(regex_match(lit("aaaaa"), lit("^a+$"))), lit(true));
+
+        // Six nested repetitions fit under the runtime regex limit, but exceed
+        // the smaller planning budget and therefore remain for execution.
+        let pattern = "a{5}{5}{5}{5}{5}{5}";
+        let binary_expr = regex_match(lit("aaaaa"), lit(pattern));
+        assert_eq!(simplify(binary_expr.clone()), binary_expr);
+
+        // Deferring a subtree must also prevent an evaluatable parent from
+        // invoking it indirectly during constant folding.
+        let aliased = regex_match(lit("aaaaa"), lit(pattern)).alias("matched");
+        assert_eq!(simplify(aliased.clone()), aliased);
+
+        #[derive(Debug, PartialEq, Eq, Hash)]
+        struct DeferredConstUdf {
+            signature: Signature,
+        }
+
+        impl ScalarUDFImpl for DeferredConstUdf {
+            fn name(&self) -> &str {
+                "deferred_const"
+            }
+
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+
+            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+                Ok(DataType::Boolean)
+            }
+
+            fn invoke_with_args(
+                &self,
+                _args: ScalarFunctionArgs,
+            ) -> Result<ColumnarValue> {
+                panic!("deferred UDF must not be evaluated during planning")
+            }
+
+            fn should_evaluate_const(&self, _args: &[&ScalarValue]) -> bool {
+                false
+            }
+        }
+
+        // UDFs can use the same hook when their literal inputs are expensive.
+        let udf = ScalarUDF::new_from_impl(DeferredConstUdf {
+            signature: Signature::exact(vec![DataType::Utf8], Volatility::Immutable),
+        });
+        let udf_expr = udf.call(vec![lit("value")]);
+        assert_eq!(simplify(udf_expr.clone()), udf_expr);
     }
 
     #[test]
