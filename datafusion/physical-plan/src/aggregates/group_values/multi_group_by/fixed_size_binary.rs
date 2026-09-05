@@ -99,11 +99,59 @@ impl FixedSizeBinaryGroupValueBuilder {
         self.value(lhs_row) == array.value(rhs_row)
     }
 
+    #[inline]
+    fn vectorized_equal_to_non_nullable(
+        &self,
+        lhs_rows: &[usize],
+        array: &FixedSizeBinaryArray,
+        rhs_rows: &[usize],
+        equal_to_results: &mut BooleanBufferBuilder,
+    ) {
+        debug_assert!(
+            array.null_count() == 0 && !self.nulls.might_have_nulls(),
+            "called with nullable input"
+        );
+
+        for (idx, (&lhs_row, &rhs_row)) in
+            lhs_rows.iter().zip(rhs_rows.iter()).enumerate()
+        {
+            // Has found not equal to in previous column, don't need to check
+            if !equal_to_results.get_bit(idx) {
+                continue;
+            }
+
+            let equal = if cfg!(debug_assertions) {
+                self.value(lhs_row) == array.value(rhs_row)
+            } else {
+                // SAFETY: GroupColumn callers provide valid group and array row
+                // indices. Debug builds retain bounds checks to verify this.
+                unsafe { self.value_unchecked(lhs_row) == array.value_unchecked(rhs_row) }
+            };
+
+            if !equal {
+                equal_to_results.set_bit(idx, false);
+            }
+        }
+    }
+
     /// return the current value of the specified row irrespective of null
     /// (null rows store `byte_width` zeroed bytes)
     pub fn value(&self, row: usize) -> &[u8] {
         let start = row * self.byte_width;
         &self.buffer[start..start + self.byte_width]
+    }
+
+    /// Return the current value without checking that `row` is in bounds.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `row < self.len`.
+    #[inline]
+    unsafe fn value_unchecked(&self, row: usize) -> &[u8] {
+        let start = row * self.byte_width;
+        unsafe {
+            std::slice::from_raw_parts(self.buffer.as_ptr().add(start), self.byte_width)
+        }
     }
 
     /// Assemble an output array from `values` + `nulls` parts
@@ -148,16 +196,25 @@ impl GroupColumn for FixedSizeBinaryGroupValueBuilder {
     ) {
         let array = array.as_fixed_size_binary();
 
-        for (idx, (&lhs_row, &rhs_row)) in
-            lhs_rows.iter().zip(rhs_rows.iter()).enumerate()
-        {
-            // Has found not equal to in previous column, don't need to check
-            if !equal_to_results.get_bit(idx) {
-                continue;
-            }
+        if array.null_count() == 0 && !self.nulls.might_have_nulls() {
+            self.vectorized_equal_to_non_nullable(
+                lhs_rows,
+                array,
+                rhs_rows,
+                equal_to_results,
+            );
+        } else {
+            for (idx, (&lhs_row, &rhs_row)) in
+                lhs_rows.iter().zip(rhs_rows.iter()).enumerate()
+            {
+                // Has found not equal to in previous column, don't need to check
+                if !equal_to_results.get_bit(idx) {
+                    continue;
+                }
 
-            if !self.do_equal_to_inner(lhs_row, array, rhs_row) {
-                equal_to_results.set_bit(idx, false);
+                if !self.do_equal_to_inner(lhs_row, array, rhs_row) {
+                    equal_to_results.set_bit(idx, false);
+                }
             }
         }
     }
@@ -335,6 +392,42 @@ mod tests {
             };
 
         test_fixed_size_binary_equal_to_internal(append, equal_to);
+    }
+
+    #[test]
+    fn test_fixed_size_binary_vectorized_equal_to_non_nullable() {
+        let mut builder = FixedSizeBinaryGroupValueBuilder::new(2);
+        let builder_array = make_array(
+            vec![
+                Some(b"aa".as_slice()),
+                Some(b"bb".as_slice()),
+                Some(b"cc".as_slice()),
+            ],
+            2,
+        );
+        builder
+            .vectorized_append(&builder_array, &[0, 1, 2])
+            .unwrap();
+
+        let input_array = make_array(
+            vec![
+                Some(b"aa".as_slice()),
+                Some(b"xx".as_slice()),
+                Some(b"cc".as_slice()),
+            ],
+            2,
+        );
+        let mut equal_to_results = make_true_buffer(3);
+        equal_to_results.set_bit(2, false);
+
+        builder.vectorized_equal_to(
+            &[0, 1, 2],
+            &input_array,
+            &[0, 1, 2],
+            &mut equal_to_results,
+        );
+
+        assert_eq!(to_vec(&equal_to_results), vec![true, false, false]);
     }
 
     fn test_fixed_size_binary_equal_to_internal<A, E>(mut append: A, mut equal_to: E)
