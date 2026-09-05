@@ -23,18 +23,40 @@ use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{ArrowPrimitiveType, Field};
 use datafusion_common::HashSet;
 use datafusion_common::hash_utils::RandomState;
-use datafusion_expr_common::groups_accumulator::{
-    EmitTo, GroupSelection, GroupsAccumulator,
-};
+use datafusion_expr_common::groups_accumulator::{BlockedEmitTo, BlockedGroupSelection, BlockedGroupsAccumulator, BlocksIndex, EmitTo, GroupSelection, GroupsAccumulator};
 use std::hash::Hash;
 use std::mem::size_of;
 use std::sync::Arc;
-
+use datafusion_expr_common::blocked_helpers::CopyItemBlockedVecBuilder;
 use crate::aggregate::groups_accumulator::accumulate::accumulate;
+
+fn convert_to_state<T: ArrowPrimitiveType>(
+    values: &[ArrayRef],
+    opt_filter: Option<&BooleanArray>,
+) -> datafusion_common::Result<Vec<ArrayRef>> {
+    debug_assert_eq!(values.len(), 1);
+    let arr = values[0].as_primitive::<T>();
+
+    let values_builder = PrimitiveBuilder::<T>::with_capacity(arr.len());
+    let mut builder = ListBuilder::new(values_builder)
+      .with_field(Arc::new(Field::new_list_field(T::DATA_TYPE, true)));
+
+    for row in 0..arr.len() {
+        let included = arr.is_valid(row)
+          && opt_filter
+          .is_none_or(|filter| filter.is_valid(row) && filter.value(row));
+        if included {
+            builder.values().append_value(arr.value(row));
+        }
+        builder.append(true);
+    }
+
+    Ok(vec![Arc::new(builder.finish())])
+}
 
 pub struct PrimitiveDistinctCountGroupsAccumulator<T: ArrowPrimitiveType>
 where
-    T::Native: Eq + Hash,
+  T::Native: Eq + Hash,
 {
     seen: HashSet<(usize, T::Native), RandomState>,
     counts: Vec<i64>,
@@ -42,7 +64,7 @@ where
 
 impl<T: ArrowPrimitiveType> PrimitiveDistinctCountGroupsAccumulator<T>
 where
-    T::Native: Eq + Hash,
+  T::Native: Eq + Hash,
 {
     pub fn new() -> Self {
         Self {
@@ -54,7 +76,7 @@ where
 
 impl<T: ArrowPrimitiveType> Default for PrimitiveDistinctCountGroupsAccumulator<T>
 where
-    T::Native: Eq + Hash,
+  T::Native: Eq + Hash,
 {
     fn default() -> Self {
         Self::new()
@@ -62,9 +84,9 @@ where
 }
 
 impl<T: ArrowPrimitiveType + Send + std::fmt::Debug> GroupsAccumulator
-    for PrimitiveDistinctCountGroupsAccumulator<T>
+for PrimitiveDistinctCountGroupsAccumulator<T>
 where
-    T::Native: Eq + Hash,
+  T::Native: Eq + Hash,
 {
     fn update_batch(
         &mut self,
@@ -114,9 +136,9 @@ where
     ) -> datafusion_common::Result<ArrayRef> {
         selection.validate_num_groups(self.counts.len())?;
         let counts = selection
-            .iter()
-            .map(|index| self.counts[index])
-            .collect::<Vec<_>>();
+          .iter()
+          .map(|index| self.counts[index])
+          .collect::<Vec<_>>();
         Ok(Arc::new(Int64Array::from(counts)))
     }
 
@@ -211,29 +233,322 @@ where
         values: &[ArrayRef],
         opt_filter: Option<&BooleanArray>,
     ) -> datafusion_common::Result<Vec<ArrayRef>> {
-        debug_assert_eq!(values.len(), 1);
-        let arr = values[0].as_primitive::<T>();
-
-        let values_builder = PrimitiveBuilder::<T>::with_capacity(arr.len());
-        let mut builder = ListBuilder::new(values_builder)
-            .with_field(Arc::new(Field::new_list_field(T::DATA_TYPE, true)));
-
-        for row in 0..arr.len() {
-            let included = arr.is_valid(row)
-                && opt_filter
-                    .is_none_or(|filter| filter.is_valid(row) && filter.value(row));
-            if included {
-                builder.values().append_value(arr.value(row));
-            }
-            builder.append(true);
-        }
-
-        Ok(vec![Arc::new(builder.finish())])
+        convert_to_state::<T>(values, opt_filter)
     }
+
     fn size(&self) -> usize {
         size_of::<Self>()
-            + self.seen.capacity() * (size_of::<(usize, T::Native)>() + size_of::<u64>())
-            + self.counts.capacity() * size_of::<i64>()
+          + self.seen.capacity() * (size_of::<(usize, T::Native)>() + size_of::<u64>())
+          + self.counts.capacity() * size_of::<i64>()
+    }
+}
+
+pub struct PrimitiveDistinctCountBlockedGroupsAccumulator<T: ArrowPrimitiveType>
+where
+  T::Native: Eq + Hash,
+{
+    seen: HashSet<(BlocksIndex, T::Native), RandomState>,
+    counts: CopyItemBlockedVecBuilder<true, i64>,
+}
+
+impl<T: ArrowPrimitiveType + Send + std::fmt::Debug> PrimitiveDistinctCountBlockedGroupsAccumulator<T>
+where
+  T::Native: Eq + Hash,
+{
+    pub fn new(block_size: usize) -> Self {
+        Self {
+            seen: HashSet::default(),
+            counts: CopyItemBlockedVecBuilder::new(block_size),
+        }
+    }
+
+    fn ensure_groups(&mut self, total_num_groups: usize) {
+        let prev_groups = self.counts.len();
+        assert!(prev_groups <= total_num_groups);
+        self.counts.push_value_n(0, total_num_groups - prev_groups);
+    }
+
+    fn evaluate_next_block(&mut self, update_seen: bool) -> Option<ArrayRef> {
+        let Some(counts) = self.counts.take_block() else {
+            return None;
+        };
+
+        if update_seen {
+            let mut remaining = HashSet::default();
+
+            for (group_idx, value) in self.seen.drain() {
+                if let Some(group_idx) = group_idx.prev_block_checked() {
+                    // SAFETY: this is unique as it came from unique set
+                    unsafe {remaining.insert_unique_unchecked((group_idx, value)); }
+                }
+            }
+            self.seen = remaining;
+        }
+
+        Some(Arc::new(Int64Array::from(counts)))
+    }
+
+    fn state_block_or_n<const IS_FIRST_N: bool>(&mut self, n: usize) -> Option<Vec<ArrayRef>> {
+        let batch_size = self.batch_size();
+
+        if IS_FIRST_N {
+            assert!(n < self.counts.len(), "n ({n}) must be less than len ({})", self.counts.len());
+            assert!(n < batch_size, "n ({n}) must be less than batch size ({batch_size})");
+        } else {
+            assert_eq!(n, batch_size);
+        }
+
+        // Prefix-sum counts[..num_emitted] into offsets
+        let mut offsets = Vec::with_capacity(n + 1);
+        offsets.push(0i32);
+        let mut total = 0i32;
+        let counts_block = if IS_FIRST_N {
+            self.counts.take_n(n, None::<std::iter::Empty<_>>)
+        } else {
+            self.counts.take_block()?
+        };
+        for c in counts_block {
+            total += c as i32;
+            offsets.push(total);
+        }
+
+        let mut all_values = vec![T::Native::default(); total as usize];
+        let mut cursors: Vec<i32> = offsets[..offsets.len() - 1].to_vec();
+
+        let mut remaining = HashSet::default();
+        for (group_idx, value) in self.seen.drain() {
+            let updated_group_idx = if IS_FIRST_N {
+                group_idx.sub_flat_checked(n, batch_size)
+            } else {
+                group_idx.prev_block_checked()
+            };
+            if let Some(group_idx) = updated_group_idx {
+                // SAFETY: safe as this came from unique set and all group indexes are shifted by the same amount
+                unsafe { remaining.insert_unique_unchecked((group_idx, value)) };
+            } else {
+                let pos = cursors[group_idx.index_in_block()] as usize;
+                all_values[pos] = value;
+                cursors[group_idx.index_in_block()] += 1;
+            }
+        }
+        self.seen = remaining;
+
+        Some(Self::build_state_from_parts(all_values, offsets))
+    }
+
+    fn state_first_n(&mut self, n: usize) -> Vec<ArrayRef> {
+        self.state_block_or_n::<true>(n).expect("must have at least one in progress block")
+    }
+
+    fn state_next_block(&mut self) -> Option<Vec<ArrayRef>> {
+        self.state_block_or_n::<false>(self.batch_size())
+    }
+
+    fn state_all(&mut self) -> Vec<Vec<ArrayRef>> {
+        let batch_size = self.batch_size();
+        let counts_len = self.counts.len();
+        let counts_blocks = self.counts.take_all();
+
+        let mut blocks_all_values = Vec::with_capacity(counts_blocks.len());
+        let mut blocks_offsets = Vec::with_capacity(counts_blocks.len());
+        let mut flat_cursors = Vec::with_capacity(counts_len);
+        // SAFETY: this is save as we just reserved for it
+        unsafe {
+            flat_cursors.set_len(counts_len)
+        };
+
+        let mut flat_cursor_index = 0;
+
+        for block in counts_blocks {
+            // Prefix-sum counts[..num_emitted] into offsets
+            let mut offsets = Vec::with_capacity(block.len() + 1);
+            offsets.push(0i32);
+            let mut total = 0i32;
+
+            for c in block {
+                total += c as i32;
+                offsets.push(total);
+            }
+
+            blocks_all_values.push(vec![T::Native::default(); total as usize]);
+            {
+                let end = offsets.len() - 1;
+                flat_cursors[flat_cursor_index..flat_cursor_index + end].copy_from_slice(&offsets[..end]);
+                flat_cursor_index += end;
+            }
+            blocks_offsets.push(offsets);
+        }
+
+        {
+            for (group_idx, value) in self.seen.drain() {
+                let pos = &mut flat_cursors[group_idx.into_index_in_fixed_block_size(batch_size)];
+                blocks_all_values[group_idx.block_index()][*pos as usize] = value;
+                *pos += 1;
+            }
+        }
+
+        drop(flat_cursors);
+
+        blocks_all_values
+          .into_iter()
+          .zip(blocks_offsets.into_iter())
+          .map(|(values, offsets)| Self::build_state_from_parts(values, offsets))
+          .collect::<Vec<_>>()
+    }
+
+    fn build_state_from_parts(values: Vec<T::Native>, offsets: Vec<i32>) -> Vec<ArrayRef> {
+        let values_array = Arc::new(PrimitiveArray::<T>::new(
+            ScalarBuffer::from(values),
+            None,
+        ));
+        let list_array = ListArray::new(
+            // TODO - this has a bug with data types that the const cant represent like decimal or timestamp
+            Arc::new(Field::new_list_field(T::DATA_TYPE, true)),
+            OffsetBuffer::new(offsets.into()),
+            values_array,
+            None,
+        );
+
+        vec![Arc::new(list_array) as ArrayRef]
+    }
+}
+
+impl<T: ArrowPrimitiveType + Send + std::fmt::Debug> BlockedGroupsAccumulator
+for PrimitiveDistinctCountBlockedGroupsAccumulator<T>
+where
+  T::Native: Eq + Hash,
+{
+    fn batch_size(&self) -> usize {
+        self.counts.block_size()
+    }
+
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[BlocksIndex],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> datafusion_common::Result<()> {
+        debug_assert_eq!(values.len(), 1);
+
+        self.ensure_groups(total_num_groups);
+        let arr = values[0].as_primitive::<T>();
+        accumulate(group_indices, arr, opt_filter, |group_idx, value| {
+            if self.seen.insert((group_idx, value)) {
+                self.counts[group_idx] += 1;
+            }
+        });
+        Ok(())
+    }
+
+    fn evaluate(&mut self, emit_to: BlockedEmitTo) -> datafusion_common::Result<Vec<ArrayRef>> {
+        match emit_to {
+            BlockedEmitTo::All => {
+                self.seen.clear();
+
+                let mut blocks = vec![];
+
+                while let Some(block) = self.evaluate_next_block(false) {
+                    blocks.push(block);
+                }
+
+                Ok(blocks)
+            }
+            BlockedEmitTo::NextBlock => {
+                Ok(self.evaluate_next_block(true).into_iter().collect::<Vec<_>>())
+            }
+            BlockedEmitTo::First(n) => {
+                assert!(n < self.counts.len(), "n ({n}) must be less than len ({})", self.counts.len());
+                assert!(n < self.batch_size(), "n ({n}) must be less than batch size ({})", self.batch_size());
+
+                let first = self.counts.take_n(n, None::<std::iter::Empty<_>>);
+
+                let mut remaining = HashSet::default();
+
+                let batch_size = self.batch_size();
+
+                for (group_idx, value) in self.seen.drain() {
+                    if let Some(group_idx) = group_idx.sub_flat_checked(n, batch_size) {
+                        // SAFETY: this is unique as it came from unique set
+                        unsafe {remaining.insert_unique_unchecked((group_idx, value)); }
+                    }
+                }
+                self.seen = remaining;
+
+                Ok(vec![Arc::new(Int64Array::from(first))])
+            }
+        }
+    }
+
+    fn evaluate_preserving(
+        &mut self,
+        selection: BlockedGroupSelection<'_>,
+    ) -> datafusion_common::Result<ArrayRef> {
+        selection.validate_num_groups(self.counts.len())?;
+        let counts = selection
+          .iter()
+          .map(|index| self.counts[index])
+          .collect::<Vec<_>>();
+        Ok(Arc::new(Int64Array::from(counts)))
+    }
+
+    fn supports_evaluate_preserving(&self) -> bool {
+        true
+    }
+
+    fn state(&mut self, emit_to: BlockedEmitTo) -> datafusion_common::Result<Vec<Vec<ArrayRef>>> {
+        match emit_to {
+            BlockedEmitTo::All => {
+                Ok(self.state_all())
+            }
+            BlockedEmitTo::NextBlock => {
+                Ok(self.state_next_block().into_iter().collect::<Vec<_>>())
+            }
+            BlockedEmitTo::First(n) => {
+                Ok(vec![self.state_first_n(n)])
+
+            }
+        }
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[BlocksIndex],
+        total_num_groups: usize,
+    ) -> datafusion_common::Result<()> {
+        debug_assert_eq!(values.len(), 1);
+        self.ensure_groups(total_num_groups);
+        let list_array = values[0].as_list::<i32>();
+        let inner = list_array.values().as_primitive::<T>();
+        let inner_values = inner.values();
+        let offsets = list_array.offsets();
+
+        for (row_idx, &group_idx) in group_indices.iter().enumerate() {
+            let start = offsets[row_idx] as usize;
+            let end = offsets[row_idx + 1] as usize;
+            for &value in &inner_values[start..end] {
+                if self.seen.insert((group_idx, value)) {
+                    self.counts[group_idx] += 1;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> datafusion_common::Result<Vec<ArrayRef>> {
+        convert_to_state::<T>(values, opt_filter)
+    }
+
+    fn size(&self) -> usize {
+        size_of::<Self>()
+          + self.seen.capacity() * (size_of::<(BlocksIndex, T::Native)>() + size_of::<u64>())
+          + self.counts.allocated_size()
     }
 }
 

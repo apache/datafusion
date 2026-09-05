@@ -1,0 +1,2763 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+//! `GroupValues` implementations for multi group by cases
+
+mod boolean;
+mod bytes;
+pub mod bytes_view;
+// mod dictionary;
+// mod fixed_size_binary;
+pub mod primitive;
+// pub mod row_backed;
+
+use std::mem::{self, size_of};
+
+use crate::aggregates::group_values::GroupValues;
+use {
+    boolean::BooleanGroupValueBuilder,
+    bytes::ByteGroupValueBuilder,
+    bytes_view::ByteViewGroupValueBuilder,
+    // fixed_size_binary::FixedSizeBinaryGroupValueBuilder,
+    primitive::PrimitiveGroupValueBuilder,
+    // row_backed::RowsGroupColumn,
+};
+use arrow::array::{Array, ArrayRef, BooleanBufferBuilder, new_empty_array};
+use arrow::datatypes::{
+    BinaryViewType, DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
+    DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
+    DurationSecondType, Field, Float16Type, Float32Type, Float64Type, Int8Type,
+    Int16Type, Int32Type, Int64Type, IntervalDayTimeType, IntervalMonthDayNanoType,
+    IntervalUnit, IntervalYearMonthType, Schema, SchemaRef, StringViewType,
+    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
+    TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type,
+    UInt64Type,
+};
+use datafusion_common::hash_utils::RandomState;
+use datafusion_common::hash_utils::create_hashes;
+use datafusion_common::{Result, not_impl_err};
+use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
+use datafusion_expr::{EmitTo, GroupSelection};
+use datafusion_physical_expr::binary_map::OutputType;
+
+use hashbrown::hash_table::HashTable;
+use datafusion_expr_common::groups_accumulator::{BlockedGroupSelection, BlocksIndex};
+use crate::aggregates::group_values::multi_group_by::row_backed::RowsGroupColumn;
+use crate::aggregates_blocked::group_values::BlockedGroupValues;
+
+const NON_INLINED_FLAG: u64 = 0x8000000000000000;
+const VALUE_MASK: u64 = 0x7FFFFFFFFFFFFFFF;
+
+/// Trait for storing a single column of group values in [`GroupValuesColumn`]
+///
+/// Implementations of this trait store an in-progress collection of group values
+/// (similar to various builders in Arrow-rs) that allow for quick comparison to
+/// incoming rows.
+///
+/// [`GroupValuesColumn`]: crate::aggregates::group_values::GroupValuesColumn
+pub trait BlockedGroupColumn<const IS_FIXED_GROUP_SIZE: bool>: Send + Sync {
+    fn batch_size(&self) -> usize;
+
+    /// Returns equal if the row stored in this builder at `lhs_row` is equal to
+    /// the row in `array` at `rhs_row`
+    ///
+    /// Note that this comparison returns true if both elements are NULL
+    fn equal_to(&self, lhs_row: BlocksIndex, array: &ArrayRef, rhs_row: usize) -> bool;
+
+    /// Appends the row at `row` in `array` to this builder
+    fn append_val(&mut self, array: &ArrayRef, row: usize) -> Result<()>;
+
+    /// The vectorized version equal to
+    ///
+    /// When found nth row stored in this builder at `lhs_row`
+    /// is equal to the row in `array` at `rhs_row`,
+    /// it will record the `true` result at the corresponding
+    /// position in `equal_to_results`.
+    ///
+    /// And if found nth result in `equal_to_results` is already
+    /// `false`, the check for nth row will be skipped.
+    fn vectorized_equal_to(
+        &self,
+        lhs_rows: &[BlocksIndex],
+        array: &ArrayRef,
+        rhs_rows: &[usize],
+        equal_to_results: &mut BooleanBufferBuilder,
+    );
+
+    /// The vectorized version `append_val`
+    fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]) -> Result<()>;
+
+    /// Returns the number of rows stored in this builder
+    fn len(&self) -> usize;
+
+    /// true if len == 0
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Returns the number of bytes used by this [`BlockedGroupColumn`]
+    fn size(&self) -> usize;
+
+    /// Builds a new array from selected stored rows without changing this
+    /// column. Rows are returned in selection order.
+    fn values_preserving(&self, selection: BlockedGroupSelection<'_>) -> Result<ArrayRef>;
+
+    /// Builds a new array from the first `n` stored rows, shifting the
+    /// remaining rows to the start of the builder
+    fn take_n(&mut self, n: usize,
+              // adjusted_block_size_iter: Option<Box<dyn ClonableIter<Item = usize>>>,
+    ) -> ArrayRef;
+
+    /// Take next block
+    fn take_next_block(&mut self) -> Option<ArrayRef>;
+
+    /// Builds a new array from all of the stored rows
+    fn take_all(self: Box<Self>) -> Vec<ArrayRef>;
+
+    fn start_new_block(&mut self);
+}
+
+/// Determines if the nullability of the existing and new input array can be used
+/// to short-circuit the comparison of the two values.
+///
+/// Returns `Some(result)` if the result of the comparison can be determined
+/// from the nullness of the two values, and `None` if the comparison must be
+/// done on the values themselves.
+pub fn nulls_equal_to(lhs_null: bool, rhs_null: bool) -> Option<bool> {
+    match (lhs_null, rhs_null) {
+        (true, true) => Some(true),
+        (false, true) | (true, false) => Some(false),
+        _ => None,
+    }
+}
+
+/// The view of indices pointing to the actual values in `GroupValues`
+///
+/// If only single `group index` represented by view,
+/// value of view is just the `group index`, and we call it a `inlined view`.
+///
+/// If multiple `group indices` represented by view,
+/// value of view is the actually the index pointing to `group indices`,
+/// and we call it `non-inlined view`.
+///
+/// The view(a u64) format is like:
+///   +---------------------+---------------------------------------------+
+///   | inlined flag(1bit)  | group index / index to group indices(63bit) |
+///   +---------------------+---------------------------------------------+
+///
+/// `inlined flag`: 1 represents `non-inlined`, and 0 represents `inlined`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct GroupIndexView(u64);
+
+impl GroupIndexView {
+    #[inline]
+    pub fn is_non_inlined(&self) -> bool {
+        (self.0 & NON_INLINED_FLAG) > 0
+    }
+
+    #[inline]
+    pub fn new_inlined(group_index: u64) -> Self {
+        Self(group_index)
+    }
+
+    #[inline]
+    pub fn new_non_inlined(list_offset: u64) -> Self {
+        let non_inlined_value = list_offset | NON_INLINED_FLAG;
+        Self(non_inlined_value)
+    }
+
+    #[inline]
+    pub fn value(&self) -> u64 {
+        self.0 & VALUE_MASK
+    }
+}
+
+/// A [`GroupValues`] that stores multiple columns of group values,
+/// and supports vectorized operators for them
+pub struct BlockedGroupValuesColumn<const STREAMING: bool> {
+    block_size: usize,
+    /// The output schema
+    schema: SchemaRef,
+
+    /// Logically maps group values to a group_index in
+    /// [`Self::group_values`] and in each accumulator
+    ///
+    /// It is a `hashtable` based on `hashbrown`.
+    ///
+    /// Key and value in the `hashtable`:
+    ///   - The `key` is `hash value(u64)` of the `group value`
+    ///   - The `value` is the `group values` with the same `hash value`
+    ///
+    /// We don't really store the actual `group values` in `hashtable`,
+    /// instead we store the `group indices` pointing to values in `GroupValues`.
+    /// And we use [`GroupIndexView`] to represent such `group indices` in table.
+    ///
+    map: HashTable<(u64, GroupIndexView)>,
+
+    /// The size of `map` in bytes
+    map_size: usize,
+
+    /// The lists for group indices with the same hash value
+    ///
+    /// It is possible that hash value collision exists,
+    /// and we will chain the `group indices` with same hash value
+    ///
+    /// The chained indices is like:
+    ///   `latest group index -> older group index -> even older group index -> ...`
+    group_index_lists: Vec<Vec<BlocksIndex>>,
+
+    /// When emitting first n, we need to decrease/erase group indices in
+    /// `map` and `group_index_lists`.
+    ///
+    /// This buffer is used to temporarily store the remaining group indices in
+    /// a specific list in `group_index_lists`.
+    emit_group_index_list_buffer: Vec<BlocksIndex>,
+
+    /// Buffers for `vectorized_append` and `vectorized_equal_to`
+    vectorized_operation_buffers: VectorizedOperationBuffers,
+
+    /// The actual group by values, stored column-wise. Compare from
+    /// the left to right, each column is stored as [`BlockedGroupColumn`].
+    ///
+    /// Performance tests showed that this design is faster than using the
+    /// more general purpose [`GroupValuesRows`]. See the ticket for details:
+    /// <https://github.com/apache/datafusion/pull/12269>
+    ///
+    /// [`GroupValuesRows`]: crate::aggregates::group_values::GroupValuesRows
+    group_values: Vec<Box<dyn BlockedGroupColumn<true>>>,
+
+    /// reused buffer to store hashes
+    hashes_buffer: Vec<u64>,
+
+    /// Random state for creating hashes
+    random_state: RandomState,
+}
+
+/// Buffers to store intermediate results in `vectorized_append`
+/// and `vectorized_equal_to`, for reducing memory allocation
+struct VectorizedOperationBuffers {
+    /// The `vectorized append` row indices buffer
+    append_row_indices: Vec<usize>,
+
+    /// The `vectorized_equal_to` row indices buffer
+    equal_to_row_indices: Vec<usize>,
+
+    /// The `vectorized_equal_to` group indices buffer
+    equal_to_group_indices: Vec<BlocksIndex>,
+
+    /// The `vectorized_equal_to` result buffer (bitmask)
+    equal_to_results: BooleanBufferBuilder,
+
+    /// The buffer for storing row indices found not equal to
+    /// exist groups in `group_values` in `vectorized_equal_to`.
+    /// We will perform `scalarized_intern` for such rows.
+    remaining_row_indices: Vec<usize>,
+}
+
+impl Default for VectorizedOperationBuffers {
+    fn default() -> Self {
+        Self {
+            append_row_indices: Vec::new(),
+            equal_to_row_indices: Vec::new(),
+            equal_to_group_indices: Vec::new(),
+            equal_to_results: BooleanBufferBuilder::new(0),
+            remaining_row_indices: Vec::new(),
+        }
+    }
+}
+
+impl VectorizedOperationBuffers {
+    fn clear(&mut self) {
+        self.append_row_indices.clear();
+        self.equal_to_row_indices.clear();
+        self.equal_to_group_indices.clear();
+        self.remaining_row_indices.clear();
+    }
+}
+
+impl<const STREAMING: bool> BlockedGroupValuesColumn<STREAMING> {
+    // ========================================================================
+    // Initialization functions
+    // ========================================================================
+
+    /// Create a new instance of GroupValuesColumn if supported for the specified schema
+    pub fn try_new(schema: SchemaRef, block_size: usize) -> Result<Self> {
+        let map = HashTable::with_capacity(0);
+        let group_values = Self::build_group_columns(&schema, block_size)?;
+        Ok(Self {
+            block_size,
+            schema,
+            map,
+            group_index_lists: Vec::new(),
+            emit_group_index_list_buffer: Vec::new(),
+            vectorized_operation_buffers: VectorizedOperationBuffers::default(),
+            map_size: 0,
+            group_values,
+            hashes_buffer: Default::default(),
+            random_state: crate::aggregates::AGGREGATION_HASH_SEED,
+        })
+    }
+
+    /// Build one fresh [`BlockedGroupColumn`] per field in the schema.
+    ///
+    /// Used at construction time (`try_new`) and to repopulate the column
+    /// vector after operations that drain it (`emit(EmitTo::All)`,
+    /// `clear_shrink`). Centralising it keeps the post-condition that
+    /// `self.group_values` always contains exactly one builder per schema
+    /// field outside of those transient drain points.
+    fn build_group_columns(schema: &Schema, block_size: usize) -> Result<Vec<Box<dyn BlockedGroupColumn<true>>>> {
+        let mut v: Vec<Box<dyn BlockedGroupColumn<true>>> = Vec::with_capacity(schema.fields().len());
+        for f in schema.fields().iter() {
+            v.push(make_group_column(f.as_ref(), block_size)?);
+        }
+        Ok(v)
+    }
+
+    // ========================================================================
+    // Scalarized intern
+    // ========================================================================
+
+    /// Scalarized intern
+    ///
+    /// This is used only for `streaming aggregation`, because `streaming aggregation`
+    /// depends on the order between `input rows` and their corresponding `group indices`.
+    ///
+    /// For example, assuming `input rows` in `cols` with 4 new rows
+    /// (not equal to `exist rows` in `group_values`, and need to create
+    /// new groups for them):
+    ///
+    /// ```text
+    ///   row1 (hash collision with the exist rows)
+    ///   row2
+    ///   row3 (hash collision with the exist rows)
+    ///   row4
+    /// ```
+    ///
+    /// # In `scalarized_intern`, their `group indices` will be
+    ///
+    /// ```text
+    ///   row1 --> 0
+    ///   row2 --> 1
+    ///   row3 --> 2
+    ///   row4 --> 3
+    /// ```
+    ///
+    /// `Group indices` order agrees with their input order, and the `streaming aggregation`
+    /// depends on this.
+    ///
+    /// # However In `vectorized_intern`, their `group indices` will be
+    ///
+    /// ```text
+    ///   row1 --> 2
+    ///   row2 --> 0
+    ///   row3 --> 3
+    ///   row4 --> 1
+    /// ```
+    ///
+    /// `Group indices` order are against with their input order, and this will lead to error
+    /// in `streaming aggregation`.
+    fn scalarized_intern(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<BlocksIndex>,
+    ) -> Result<()> {
+        let n_rows = cols[0].len();
+
+        // tracks to which group each of the input rows belongs
+        groups.clear();
+
+        // 1.1 Calculate the group keys for the group values
+        let batch_hashes = &mut self.hashes_buffer;
+        batch_hashes.clear();
+        batch_hashes.resize(n_rows, 0);
+        create_hashes(cols, &self.random_state, batch_hashes)?;
+
+        for (row, &target_hash) in batch_hashes.iter().enumerate() {
+            let entry = self
+                .map
+                .find_mut(target_hash, |(exist_hash, group_idx_view)| {
+                    // It is ensured to be inlined in `scalarized_intern`
+                    debug_assert!(!group_idx_view.is_non_inlined());
+
+                    // Somewhat surprisingly, this closure can be called even if the
+                    // hash doesn't match, so check the hash first with an integer
+                    // comparison first avoid the more expensive comparison with
+                    // group value. https://github.com/apache/datafusion/pull/11718
+                    if target_hash != *exist_hash {
+                        return false;
+                    }
+
+                    fn check_row_equal(
+                        array_row: &dyn BlockedGroupColumn<true>,
+                        lhs_row: BlocksIndex,
+                        array: &ArrayRef,
+                        rhs_row: usize,
+                    ) -> bool {
+                        array_row.equal_to(lhs_row, array, rhs_row)
+                    }
+
+                    for (i, group_val) in self.group_values.iter().enumerate() {
+                        if !check_row_equal(
+                            group_val.as_ref(),
+                            BlocksIndex::from_index_in_fixed_block_size(group_idx_view.value() as usize, self.block_size),
+                            &cols[i],
+                            row,
+                        ) {
+                            return false;
+                        }
+                    }
+
+                    true
+                });
+
+            let group_idx = match entry {
+                // Existing group_index for this group value
+                Some((_hash, group_idx_view)) => group_idx_view.value() as usize,
+                //  1.2 Need to create new entry for the group
+                None => {
+                    // Add new entry to aggr_state and save newly created index
+                    // let group_idx = group_values.num_rows();
+                    // group_values.push(group_rows.row(row));
+
+                    let mut checklen = 0;
+                    let group_idx = self.group_values[0].len();
+                    for (i, group_value) in self.group_values.iter_mut().enumerate() {
+                        group_value.append_val(&cols[i], row)?;
+                        let len = group_value.len();
+                        if i == 0 {
+                            checklen = len;
+                        } else {
+                            debug_assert_eq!(checklen, len);
+                        }
+                    }
+
+                    // for hasher function, use precomputed hash value
+                    self.map.insert_accounted(
+                        (target_hash, GroupIndexView::new_inlined(group_idx as u64)),
+                        |(hash, _group_index)| *hash,
+                        &mut self.map_size,
+                    );
+                    group_idx
+                }
+            };
+            groups.push(BlocksIndex::from_index_in_fixed_block_size(group_idx, self.block_size));
+        }
+
+        Ok(())
+    }
+
+    // ========================================================================
+    // Vectorized intern
+    // ========================================================================
+
+    /// Vectorized intern
+    ///
+    /// This is used in `non-streaming aggregation` without requiring the order between
+    /// rows in `cols` and corresponding groups in `group_values`.
+    ///
+    /// The vectorized approach can offer higher performance for avoiding row by row
+    /// downcast for `cols` and being able to implement even more optimizations(like simd).
+    fn vectorized_intern(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<BlocksIndex>,
+    ) -> Result<()> {
+        let n_rows = cols[0].len();
+
+        // tracks to which group each of the input rows belongs
+        groups.clear();
+        groups.resize(n_rows, BlocksIndex::MAX);
+
+        let mut batch_hashes = mem::take(&mut self.hashes_buffer);
+        batch_hashes.clear();
+        batch_hashes.resize(n_rows, 0);
+        create_hashes(cols, &self.random_state, &mut batch_hashes)?;
+
+        // General steps for one round `vectorized equal_to & append`:
+        //   1. Collect vectorized context by checking hash values of `cols` in `map`,
+        //      mainly fill `vectorized_append_row_indices`, `vectorized_equal_to_row_indices`
+        //      and `vectorized_equal_to_group_indices`
+        //
+        //   2. Perform `vectorized_append` for `vectorized_append_row_indices`.
+        //     `vectorized_append` must be performed before `vectorized_equal_to`,
+        //      because some `group indices` in `vectorized_equal_to_group_indices`
+        //      maybe still point to no actual values in `group_values` before performing append.
+        //
+        //   3. Perform `vectorized_equal_to` for `vectorized_equal_to_row_indices`
+        //      and `vectorized_equal_to_group_indices`. If found some rows in input `cols`
+        //      not equal to `exist rows` in `group_values`, place them in `remaining_row_indices`
+        //      and perform `scalarized_intern_remaining` for them similar as `scalarized_intern`
+        //      after.
+        //
+        //   4. Perform `scalarized_intern_remaining` for rows mentioned above, about in what situation
+        //      we will process this can see the comments of `scalarized_intern_remaining`.
+        //
+
+        // 1. Collect vectorized context by checking hash values of `cols` in `map`
+        self.collect_vectorized_process_context(&batch_hashes, groups);
+
+        // 2. Perform `vectorized_append`
+        self.vectorized_append(cols)?;
+
+        // 3. Perform `vectorized_equal_to`
+        self.vectorized_equal_to(cols, groups);
+
+        // 4. Perform scalarized inter for remaining rows
+        // (about remaining rows, can see comments for `remaining_row_indices`)
+        self.scalarized_intern_remaining(cols, &batch_hashes, groups)?;
+
+        self.hashes_buffer = batch_hashes;
+
+        Ok(())
+    }
+
+    /// Collect vectorized context by checking hash values of `cols` in `map`
+    ///
+    /// 1. If bucket not found
+    ///   - Build and insert the `new inlined group index view`
+    ///     and its hash value to `map`
+    ///   - Add row index to `vectorized_append_row_indices`
+    ///   - Set group index to row in `groups`
+    ///
+    /// 2. bucket found
+    ///   - Add row index to `vectorized_equal_to_row_indices`
+    ///   - Check if the `group index view` is `inlined` or `non_inlined`:
+    ///     If it is inlined, add to `vectorized_equal_to_group_indices` directly.
+    ///     Otherwise get all group indices from `group_index_lists`, and add them.
+    fn collect_vectorized_process_context(
+        &mut self,
+        batch_hashes: &[u64],
+        groups: &mut [BlocksIndex],
+    ) {
+        self.vectorized_operation_buffers.append_row_indices.clear();
+        self.vectorized_operation_buffers
+            .equal_to_row_indices
+            .clear();
+        self.vectorized_operation_buffers
+            .equal_to_group_indices
+            .clear();
+
+        for (row, &target_hash) in batch_hashes.iter().enumerate() {
+            let entry = self
+                .map
+                .find(target_hash, |(exist_hash, _)| target_hash == *exist_hash);
+
+            let Some((_, group_index_view)) = entry else {
+                // 1. Bucket not found case
+                // Build `new inlined group index view`
+                let current_group_idx = self.group_values[0].len()
+                    + self.vectorized_operation_buffers.append_row_indices.len();
+                let group_index_view =
+                    GroupIndexView::new_inlined(current_group_idx as u64);
+
+                // Insert the `group index view` and its hash into `map`
+                // for hasher function, use precomputed hash value
+                self.map.insert_accounted(
+                    (target_hash, group_index_view),
+                    |(hash, _)| *hash,
+                    &mut self.map_size,
+                );
+
+                // Add row index to `vectorized_append_row_indices`
+                self.vectorized_operation_buffers
+                    .append_row_indices
+                    .push(row);
+
+                // Set group index to row in `groups`
+                groups[row] = BlocksIndex::from_index_in_fixed_block_size(current_group_idx, self.block_size);
+
+                continue;
+            };
+
+            // 2. bucket found
+            // Check if the `group index view` is `inlined` or `non_inlined`
+            if group_index_view.is_non_inlined() {
+                // Non-inlined case, the value of view is offset in `group_index_lists`.
+                // We use it to get `group_index_list`, and add related `rows` and `group_indices`
+                // into `vectorized_equal_to_row_indices` and `vectorized_equal_to_group_indices`.
+                let list_offset = group_index_view.value() as usize;
+                let group_index_list = &self.group_index_lists[list_offset];
+
+                self.vectorized_operation_buffers
+                    .equal_to_group_indices
+                    .extend_from_slice(group_index_list);
+                self.vectorized_operation_buffers
+                    .equal_to_row_indices
+                    .extend(std::iter::repeat_n(row, group_index_list.len()));
+            } else {
+                let group_index = BlocksIndex::from_index_in_fixed_block_size(group_index_view.value() as usize, self.block_size);
+                self.vectorized_operation_buffers
+                    .equal_to_row_indices
+                    .push(row);
+                self.vectorized_operation_buffers
+                    .equal_to_group_indices
+                    .push(group_index);
+            }
+        }
+    }
+
+    /// Perform `vectorized_append`` for `rows` in `vectorized_append_row_indices`
+    fn vectorized_append(&mut self, cols: &[ArrayRef]) -> Result<()> {
+        if self
+            .vectorized_operation_buffers
+            .append_row_indices
+            .is_empty()
+        {
+            return Ok(());
+        }
+
+        let iter = self.group_values.iter_mut().zip(cols.iter());
+        for (group_column, col) in iter {
+            group_column.vectorized_append(
+                col,
+                &self.vectorized_operation_buffers.append_row_indices,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    /// Perform `vectorized_equal_to`
+    ///
+    /// 1. Perform `vectorized_equal_to` for `rows` in `vectorized_equal_to_group_indices`
+    ///    and `group_indices` in `vectorized_equal_to_group_indices`.
+    ///
+    /// 2. Check `equal_to_results`:
+    ///
+    ///    If found equal to `rows`, set the `group_indices` to `rows` in `groups`.
+    ///
+    ///    If found not equal to `row`s, just add them to `scalarized_indices`,
+    ///    and perform `scalarized_intern` for them after.
+    ///    Usually, such `rows` having same hash but different value with `exists rows`
+    ///    are very few.
+    fn vectorized_equal_to(&mut self, cols: &[ArrayRef], groups: &mut [BlocksIndex]) {
+        assert_eq!(
+            self.vectorized_operation_buffers
+                .equal_to_group_indices
+                .len(),
+            self.vectorized_operation_buffers.equal_to_row_indices.len()
+        );
+
+        self.vectorized_operation_buffers
+            .remaining_row_indices
+            .clear();
+
+        if self
+            .vectorized_operation_buffers
+            .equal_to_group_indices
+            .is_empty()
+        {
+            return;
+        }
+
+        // 1. Perform `vectorized_equal_to` for `rows` in `vectorized_equal_to_group_indices`
+        //    and `group_indices` in `vectorized_equal_to_group_indices`
+        let n = self
+            .vectorized_operation_buffers
+            .equal_to_group_indices
+            .len();
+        let mut equal_to_results = mem::replace(
+            &mut self.vectorized_operation_buffers.equal_to_results,
+            BooleanBufferBuilder::new(0),
+        );
+        equal_to_results.truncate(0);
+        equal_to_results.append_n(n, true);
+
+        for (col_idx, group_col) in self.group_values.iter().enumerate() {
+            group_col.vectorized_equal_to(
+                &self.vectorized_operation_buffers.equal_to_group_indices,
+                &cols[col_idx],
+                &self.vectorized_operation_buffers.equal_to_row_indices,
+                &mut equal_to_results,
+            );
+        }
+
+        // 2. Check `equal_to_results`, if found not equal to `row`s, just add them
+        //    to `scalarized_indices`, and perform `scalarized_intern` for them after.
+        let mut current_row_equal_to_result = false;
+        for (idx, &row) in self
+            .vectorized_operation_buffers
+            .equal_to_row_indices
+            .iter()
+            .enumerate()
+        {
+            let equal_to_result = equal_to_results.get_bit(idx);
+
+            // Equal to case, set the `group_indices` to `rows` in `groups`
+            if equal_to_result {
+                groups[row] =
+                    self.vectorized_operation_buffers.equal_to_group_indices[idx];
+            }
+            current_row_equal_to_result |= equal_to_result;
+
+            // Look forward next one row to check if have checked all results
+            // of current row
+            let next_row = self
+                .vectorized_operation_buffers
+                .equal_to_row_indices
+                .get(idx + 1)
+                .unwrap_or(&usize::MAX);
+
+            // Have checked all results of current row, check the total result
+            if row != *next_row {
+                // Not equal to case, add `row` to `scalarized_indices`
+                if !current_row_equal_to_result {
+                    self.vectorized_operation_buffers
+                        .remaining_row_indices
+                        .push(row);
+                }
+
+                // Init the total result for checking next row
+                current_row_equal_to_result = false;
+            }
+        }
+
+        self.vectorized_operation_buffers.equal_to_results = equal_to_results;
+    }
+
+    /// It is possible that some `input rows` have the same
+    /// hash values with the `exist rows`, but have the different
+    /// actual values the exists.
+    ///
+    /// We can found them in `vectorized_equal_to`, and put them
+    /// into `scalarized_indices`. And for these `input rows`,
+    /// we will perform the `scalarized_intern` similar as what in
+    /// [`BlockedGroupValuesColumn`].
+    ///
+    /// This design can make the process simple and still efficient enough:
+    ///
+    /// # About making the process simple
+    ///
+    /// Some corner cases become really easy to solve, like following cases:
+    ///
+    /// ```text
+    ///   input row1 (same hash value with exist rows, but value different)
+    ///   input row1
+    ///   ...
+    ///   input row1
+    /// ```
+    ///
+    /// After performing `vectorized_equal_to`, we will found multiple `input rows`
+    /// not equal to the `exist rows`. However such `input rows` are repeated, only
+    /// one new group should be create for them.
+    ///
+    /// If we don't fallback to `scalarized_intern`, it is really hard for us to
+    /// distinguish the such `repeated rows` in `input rows`. And if we just fallback,
+    /// it is really easy to solve, and the performance is at least not worse than origin.
+    ///
+    /// # About performance
+    ///
+    /// The hash collision may be not frequent, so the fallback will indeed hardly happen.
+    /// In most situations, `scalarized_indices` will found to be empty after finishing to
+    /// perform `vectorized_equal_to`.
+    fn scalarized_intern_remaining(
+        &mut self,
+        cols: &[ArrayRef],
+        batch_hashes: &[u64],
+        groups: &mut [BlocksIndex],
+    ) -> Result<()> {
+        if self
+            .vectorized_operation_buffers
+            .remaining_row_indices
+            .is_empty()
+        {
+            return Ok(());
+        }
+
+        let mut map = mem::take(&mut self.map);
+
+        for &row in &self.vectorized_operation_buffers.remaining_row_indices {
+            let target_hash = batch_hashes[row];
+            let entry = map.find_mut(target_hash, |(exist_hash, _)| {
+                // Somewhat surprisingly, this closure can be called even if the
+                // hash doesn't match, so check the hash first with an integer
+                // comparison first avoid the more expensive comparison with
+                // group value. https://github.com/apache/datafusion/pull/11718
+                target_hash == *exist_hash
+            });
+
+            // Only `rows` having the same hash value with `exist rows` but different value
+            // will be process in `scalarized_intern`.
+            // So related `buckets` in `map` is ensured to be `Some`.
+            let Some((_, group_index_view)) = entry else {
+                unreachable!()
+            };
+
+            // Perform scalarized equal to
+            if self.scalarized_equal_to_remaining(group_index_view, cols, row, groups) {
+                // Found the row actually exists in group values,
+                // don't need to create new group for it.
+                continue;
+            }
+
+            // Insert the `row` to `group_values` before checking `next row`
+            let group_idx = BlocksIndex::from_index_in_fixed_block_size(self.group_values[0].len(), self.block_size);
+            let mut checklen = 0;
+            for (i, group_value) in self.group_values.iter_mut().enumerate() {
+                group_value.append_val(&cols[i], row)?;
+                let len = group_value.len();
+                if i == 0 {
+                    checklen = len;
+                } else {
+                    debug_assert_eq!(checklen, len);
+                }
+            }
+
+            // Check if the `view` is `inlined` or `non-inlined`
+            if group_index_view.is_non_inlined() {
+                // Non-inlined case, get `group_index_list` from `group_index_lists`,
+                // then add the new `group` with the same hash values into it.
+                let list_offset = group_index_view.value() as usize;
+                let group_index_list = &mut self.group_index_lists[list_offset];
+                group_index_list.push(group_idx);
+            } else {
+                // Inlined case
+                let list_offset = self.group_index_lists.len();
+
+                // Create new `group_index_list` including
+                // `exist group index` + `new group index`.
+                // Add new `group_index_list` into ``group_index_lists`.
+                let exist_group_index = group_index_view.value() as usize;
+                let new_group_index_list = vec![BlocksIndex::from_index_in_fixed_block_size(exist_group_index, self.block_size), group_idx];
+                self.group_index_lists.push(new_group_index_list);
+
+                // Update the `group_index_view` to non-inlined
+                let new_group_index_view =
+                    GroupIndexView::new_non_inlined(list_offset as u64);
+                *group_index_view = new_group_index_view;
+            }
+
+            groups[row] = group_idx;
+        }
+
+        self.map = map;
+        Ok(())
+    }
+
+    fn scalarized_equal_to_remaining(
+        &self,
+        group_index_view: &GroupIndexView,
+        cols: &[ArrayRef],
+        row: usize,
+        groups: &mut [BlocksIndex],
+    ) -> bool {
+        // Check if this row exists in `group_values`
+        fn check_row_equal(
+            array_row: &dyn BlockedGroupColumn<true>,
+            lhs_row: BlocksIndex,
+            array: &ArrayRef,
+            rhs_row: usize,
+        ) -> bool {
+            array_row.equal_to(lhs_row, array, rhs_row)
+        }
+
+        if group_index_view.is_non_inlined() {
+            let list_offset = group_index_view.value() as usize;
+            let group_index_list = &self.group_index_lists[list_offset];
+
+            for &group_idx in group_index_list {
+                let mut check_result = true;
+                for (i, group_val) in self.group_values.iter().enumerate() {
+                    if !check_row_equal(group_val.as_ref(), group_idx, &cols[i], row) {
+                        check_result = false;
+                        break;
+                    }
+                }
+
+                if check_result {
+                    groups[row] = group_idx;
+                    return true;
+                }
+            }
+
+            // All groups unmatched, return false result
+            false
+        } else {
+            let group_idx = BlocksIndex::from_index_in_fixed_block_size(group_index_view.value() as usize, self.block_size);
+            for (i, group_val) in self.group_values.iter().enumerate() {
+                if !check_row_equal(group_val.as_ref(), group_idx, &cols[i], row) {
+                    return false;
+                }
+            }
+
+            groups[row] = group_idx;
+            true
+        }
+    }
+
+    /// Return group indices of the hash, also if its `group_index_view` is non-inlined
+    #[cfg(test)]
+    fn get_indices_by_hash(&self, hash: u64) -> Option<(Vec<BlocksIndex>, GroupIndexView)> {
+        let entry = self.map.find(hash, |(exist_hash, _)| hash == *exist_hash);
+
+        match entry {
+            Some((_, group_index_view)) => {
+                if group_index_view.is_non_inlined() {
+                    let list_offset = group_index_view.value() as usize;
+                    Some((
+                        self.group_index_lists[list_offset].clone(),
+                        *group_index_view,
+                    ))
+                } else {
+                    let group_index = group_index_view.value() as usize;
+                    Some((vec![BlocksIndex::from_index_in_fixed_block_size(group_index, self.block_size)], *group_index_view))
+                }
+            }
+            None => None,
+        }
+    }
+}
+
+/// Returns true if the specified data type has a specialized
+/// [`BlockedGroupColumn`] builder in [`make_group_column`].
+///
+/// This is the allow-list that gates the `GroupValuesRows` fallback in
+/// [`crate::aggregates::group_values::new_group_values`]: it must accept
+/// exactly the set of types that [`make_group_column`] constructs a
+/// builder for. The `group_column_supported_type_matches_make_group_column`
+/// test below pins this biconditional.
+fn group_column_supported_type(data_type: &DataType) -> bool {
+    // Nested types (Struct / List / LargeList / FixedSizeList, recursively) have
+    // no type-specialized `GroupColumn`; they are handled by the generic
+    // row-backed fallback in `make_group_column` whenever arrow's row format can
+    // encode them. Gate the fallback to nested types so intentionally-excluded
+    // scalar types (e.g. Float16, Decimal256) stay on `GroupValuesRows` and the
+    // `group_column_supported_type` ⇔ `make_group_column` invariant holds.
+    if data_type.is_nested() {
+        // return RowsGroupColumn::supports_type(data_type) ;
+        return false;
+    }
+    matches!(
+        *data_type,
+        DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Float16
+            | DataType::Float32
+            | DataType::Float64
+            | DataType::Decimal128(_, _)
+            | DataType::Decimal256(_, _)
+            // Only non-negative widths: a negative width is not a valid
+            // Arrow type (no array can be constructed for it), and the
+            // dispatcher in `make_group_column` rejects it. Keep the two
+            // in lockstep.
+            // | DataType::FixedSizeBinary(0..)
+            | DataType::Date32
+            | DataType::Date64
+            // Only the semantically valid Time variants per the Arrow spec.
+            // The dispatcher in `make_group_column` returns NotImpl for the
+            // other unit combinations, so accepting them here would cause a
+            // schema to be routed into GroupValuesColumn and then fail at
+            // intern. Keep these two arms in lockstep with the dispatcher.
+            | DataType::Time32(TimeUnit::Second)
+            | DataType::Time32(TimeUnit::Millisecond)
+            | DataType::Time64(TimeUnit::Microsecond)
+            | DataType::Time64(TimeUnit::Nanosecond)
+            | DataType::Timestamp(_, _)
+            | DataType::Duration(_)
+            | DataType::Interval(_)
+            | DataType::Utf8
+            | DataType::LargeUtf8
+            | DataType::Binary
+            | DataType::LargeBinary
+            | DataType::Utf8View
+            | DataType::BinaryView
+            | DataType::Boolean
+    )
+      // || matches!(data_type, DataType::Dictionary(_,v ) if group_column_supported_type(v))
+}
+
+/// Build a [`BlockedGroupColumn`] for a single schema field.
+///
+/// Extracted from the inline match that used to live in
+/// [`BlockedGroupValuesColumn::intern`] so the per-field dispatch lives in one
+/// place. This factory is the single source of truth for which Arrow types
+/// map to which builder, and it is the function that future nested-type
+/// specializations (e.g. `Struct`, `List`, `LargeList`) plug into without
+/// having to enumerate every combination inline.
+///
+/// Returns `Err(not_impl_err!(...))` for any type not in the supported set;
+/// callers (`GroupValues::intern`) propagate that error so the
+/// `GroupValuesRows` fallback can take over upstream of this builder.
+///
+/// The allow-list that gates this dispatcher lives in
+/// [`group_column_supported_type`] directly above.
+fn make_group_column<const IS_FIXED_BLOCK: bool>(field: &Field, block_size: usize) -> Result<Box<dyn BlockedGroupColumn<IS_FIXED_BLOCK>>> {
+    let nullable = field.is_nullable();
+    let data_type = field.data_type();
+
+    let mut v: Vec<Box<dyn BlockedGroupColumn<IS_FIXED_BLOCK>>> = Vec::with_capacity(1);
+
+    /// instantiates a [`PrimitiveGroupValueBuilder`] and pushes it into $v
+    ///
+    /// Arguments:
+    /// `$v`: the vector to push the new builder into
+    /// `$nullable`: whether the input can contains nulls
+    /// `$t`: the primitive type of the builder
+    macro_rules! instantiate_primitive {
+    ($v:expr, $nullable:expr, $t:ty, $data_type:ident) => {
+        if $nullable {
+            let b = PrimitiveGroupValueBuilder::<IS_FIXED_BLOCK, $t, true>::new($data_type.to_owned(), block_size);
+            $v.push(Box::new(b) as _)
+        } else {
+            let b = PrimitiveGroupValueBuilder::<IS_FIXED_BLOCK, $t, false>::new($data_type.to_owned(), block_size);
+            $v.push(Box::new(b) as _)
+        }
+    };
+}
+    match *data_type {
+        DataType::Int8 => instantiate_primitive!(v, nullable, Int8Type, data_type),
+        DataType::Int16 => instantiate_primitive!(v, nullable, Int16Type, data_type),
+        DataType::Int32 => instantiate_primitive!(v, nullable, Int32Type, data_type),
+        DataType::Int64 => instantiate_primitive!(v, nullable, Int64Type, data_type),
+        DataType::UInt8 => instantiate_primitive!(v, nullable, UInt8Type, data_type),
+        DataType::UInt16 => instantiate_primitive!(v, nullable, UInt16Type, data_type),
+        DataType::UInt32 => instantiate_primitive!(v, nullable, UInt32Type, data_type),
+        DataType::UInt64 => instantiate_primitive!(v, nullable, UInt64Type, data_type),
+        DataType::Float16 => {
+            instantiate_primitive!(v, nullable, Float16Type, data_type)
+        }
+        DataType::Float32 => {
+            instantiate_primitive!(v, nullable, Float32Type, data_type)
+        }
+        DataType::Float64 => {
+            instantiate_primitive!(v, nullable, Float64Type, data_type)
+        }
+        DataType::Date32 => instantiate_primitive!(v, nullable, Date32Type, data_type),
+        DataType::Date64 => instantiate_primitive!(v, nullable, Date64Type, data_type),
+        DataType::Time32(t) => match t {
+            TimeUnit::Second => {
+                instantiate_primitive!(v, nullable, Time32SecondType, data_type)
+            }
+            TimeUnit::Millisecond => {
+                instantiate_primitive!(v, nullable, Time32MillisecondType, data_type)
+            }
+            // Time32 with Microsecond / Nanosecond is not a valid Arrow type
+            // combination; reject explicitly so group_column_supported_type
+            // and this dispatcher stay in lockstep (see consistency fuzz below).
+            _ => return not_impl_err!("{data_type} not supported in BlockedGroupColumn"),
+        },
+        DataType::Time64(t) => match t {
+            TimeUnit::Microsecond => {
+                instantiate_primitive!(v, nullable, Time64MicrosecondType, data_type)
+            }
+            TimeUnit::Nanosecond => {
+                instantiate_primitive!(v, nullable, Time64NanosecondType, data_type)
+            }
+            // Time64 with Second / Millisecond is not a valid Arrow type
+            // combination; reject explicitly.
+            _ => return not_impl_err!("{data_type} not supported in BlockedGroupColumn"),
+        },
+        DataType::Timestamp(t, _) => match t {
+            TimeUnit::Second => {
+                instantiate_primitive!(v, nullable, TimestampSecondType, data_type)
+            }
+            TimeUnit::Millisecond => {
+                instantiate_primitive!(v, nullable, TimestampMillisecondType, data_type)
+            }
+            TimeUnit::Microsecond => {
+                instantiate_primitive!(v, nullable, TimestampMicrosecondType, data_type)
+            }
+            TimeUnit::Nanosecond => {
+                instantiate_primitive!(v, nullable, TimestampNanosecondType, data_type)
+            }
+        },
+        DataType::Duration(t) => match t {
+            TimeUnit::Second => {
+                instantiate_primitive!(v, nullable, DurationSecondType, data_type)
+            }
+            TimeUnit::Millisecond => {
+                instantiate_primitive!(v, nullable, DurationMillisecondType, data_type)
+            }
+            TimeUnit::Microsecond => {
+                instantiate_primitive!(v, nullable, DurationMicrosecondType, data_type)
+            }
+            TimeUnit::Nanosecond => {
+                instantiate_primitive!(v, nullable, DurationNanosecondType, data_type)
+            }
+        },
+        // `IntervalUnit` has exactly three variants, so this match is exhaustive
+        // with no fallback arm (unlike Time32 / Time64).
+        DataType::Interval(u) => match u {
+            IntervalUnit::YearMonth => {
+                instantiate_primitive!(v, nullable, IntervalYearMonthType, data_type)
+            }
+            IntervalUnit::DayTime => {
+                instantiate_primitive!(v, nullable, IntervalDayTimeType, data_type)
+            }
+            IntervalUnit::MonthDayNano => {
+                instantiate_primitive!(v, nullable, IntervalMonthDayNanoType, data_type)
+            }
+        },
+        DataType::Decimal128(_, _) => {
+            instantiate_primitive!(v, nullable, Decimal128Type, data_type)
+        }
+        DataType::Decimal256(_, _) => {
+            instantiate_primitive!(v, nullable, Decimal256Type, data_type)
+        }
+        DataType::Utf8 => {
+            v.push(Box::new(ByteGroupValueBuilder::<IS_FIXED_BLOCK, i32>::new(
+                OutputType::Utf8,
+                block_size,
+            )));
+        }
+        DataType::LargeUtf8 => {
+            v.push(Box::new(ByteGroupValueBuilder::<IS_FIXED_BLOCK, i64>::new(
+                OutputType::Utf8,
+                block_size,
+            )));
+        }
+        DataType::Binary => {
+            v.push(Box::new(ByteGroupValueBuilder::<IS_FIXED_BLOCK, i32>::new(
+                OutputType::Binary,
+                block_size,
+            )));
+        }
+        DataType::LargeBinary => {
+            v.push(Box::new(ByteGroupValueBuilder::<IS_FIXED_BLOCK, i64>::new(
+                OutputType::Binary,
+                block_size,
+            )));
+        }
+        DataType::Utf8View => {
+            v.push(Box::new(ByteViewGroupValueBuilder::<
+                IS_FIXED_BLOCK,
+                StringViewType,
+            >::new(block_size)));
+        }
+        DataType::BinaryView => {
+            v.push(Box::new(ByteViewGroupValueBuilder::<
+                IS_FIXED_BLOCK,
+                BinaryViewType,
+            >::new(block_size)));
+        }
+        DataType::Boolean => {
+            if nullable {
+                v.push(Box::new(BooleanGroupValueBuilder::<IS_FIXED_BLOCK, true>::new(block_size)));
+            } else {
+                v.push(Box::new(BooleanGroupValueBuilder::<IS_FIXED_BLOCK, false>::new(block_size)));
+            }
+        }
+        _ => return not_impl_err!("{data_type} not supported in BlockedGroupColumn"),
+    }
+    debug_assert_eq!(
+        v.len(),
+        1,
+        "make_group_column must push exactly one builder"
+    );
+    Ok(v.into_iter().next().unwrap())
+}
+
+impl<const STREAMING: bool> BlockedGroupValues for BlockedGroupValuesColumn<STREAMING> {
+    fn block_size(&self) -> usize {
+        self.group_values[0].batch_size()
+    }
+
+    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<BlocksIndex>) -> Result<()> {
+        // `try_new` and the reset points in `emit` / `clear_shrink` keep
+        // `self.group_values` populated with one builder per schema field,
+        // so no lazy initialization is needed here.
+        if !STREAMING {
+            self.vectorized_intern(cols, groups)
+        } else {
+            self.scalarized_intern(cols, groups)
+        }
+    }
+
+    fn size(&self) -> usize {
+        let group_values_size: usize = self.group_values.iter().map(|v| v.size()).sum();
+        group_values_size + self.map_size + self.hashes_buffer.allocated_size()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    fn len(&self) -> usize {
+        if self.group_values.is_empty() {
+            return 0;
+        }
+
+        self.group_values[0].len()
+    }
+
+    fn values_preserving(
+        &mut self,
+        selection: BlockedGroupSelection<'_>,
+    ) -> Result<Vec<ArrayRef>> {
+        selection.validate_num_groups(self.len())?;
+        if self.group_values.is_empty() {
+            return Ok(self
+                .schema
+                .fields()
+                .iter()
+                .map(|field| new_empty_array(field.data_type()))
+                .collect());
+        }
+
+        self.group_values
+            .iter()
+            .map(|column| column.values_preserving(selection))
+            .collect()
+    }
+
+    fn supports_values_preserving(&self) -> bool {
+        true
+    }
+
+    fn clear_shrink(&mut self, num_rows: usize) {
+        // Reset to a fresh column-builder vector. The schema was validated
+        // in `try_new`, so rebuilding cannot fail unless something else
+        // mutated the schema out-of-band — surface that as a panic since
+        // `clear_shrink` is infallible by trait signature.
+        self.group_values = Self::build_group_columns(&self.schema, self.block_size())
+            .expect("schema previously validated in try_new");
+        self.map.clear();
+        self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
+        self.map_size = self.map.capacity() * size_of::<(u64, usize)>();
+        self.hashes_buffer.clear();
+        self.hashes_buffer.shrink_to(num_rows);
+
+        // Such structures are only used in `non-streaming` case
+        if !STREAMING {
+            self.group_index_lists.clear();
+            self.emit_group_index_list_buffer.clear();
+            self.vectorized_operation_buffers.clear();
+        }
+    }
+
+    fn emit_all(&mut self) -> Result<Vec<Vec<ArrayRef>>> {
+        // Replace the column builders with a fresh set so the
+        // aggregator is immediately reusable after the drain.
+        // Same `self.schema` was already validated by `try_new`,
+        // so `build_group_columns` would only error here if some
+        // out-of-band schema mutation occurred — propagate it as
+        // a real Result rather than panicking.
+        let fresh = Self::build_group_columns(&self.schema, self.block_size())?;
+        let group_values = mem::replace(&mut self.group_values, fresh);
+
+        let mut blocks = vec![Vec::with_capacity(group_values.len()); group_values[0].len().div_ceil(self.block_size())];
+
+        for group_column in group_values {
+            for (group_block, output_block) in group_column.take_all().into_iter().zip(blocks.iter_mut()) {
+                output_block.push(group_block);
+            }
+        }
+
+        Ok(blocks)
+    }
+
+    fn emit_block(&mut self) -> Result<Option<Vec<ArrayRef>>> {
+        let block_size = self.block_size();
+        let output = self
+          .group_values
+          .iter_mut()
+          .map(|v| v.take_next_block())
+          .collect::<Vec<_>>();
+
+        let output = if output[0].is_some() {
+            output.into_iter().map(|item| item.expect("must have block")).collect::<Vec<_>>()
+        } else {
+            for array in output {
+                assert!(array.is_none(), "must not have none");
+            }
+
+            return Ok(None)
+        };
+
+        let mut next_new_list_offset = 0;
+
+        self.map.retain(|(_exist_hash, group_idx_view)| {
+            // In non-streaming case, we need to check if the `group index view`
+            // is `inlined` or `non-inlined`
+            if !STREAMING && group_idx_view.is_non_inlined() {
+                // Non-inlined case
+                // We take `group_index_list` from `old_group_index_lists`
+
+                // list_offset is incrementally
+                self.emit_group_index_list_buffer.clear();
+                let list_offset = group_idx_view.value() as usize;
+                for group_index in self.group_index_lists[list_offset].iter() {
+                    if let Some(remaining) = group_index.prev_block_checked() {
+                        self.emit_group_index_list_buffer.push(remaining);
+                    }
+                }
+
+                // The possible results:
+                //   - `new_group_index_list` is empty, we should erase this bucket
+                //   - only one value in `new_group_index_list`, switch the `view` to `inlined`
+                //   - still multiple values in `new_group_index_list`, build and set the new `unlined view`
+                if self.emit_group_index_list_buffer.is_empty() {
+                    false
+                } else if self.emit_group_index_list_buffer.len() == 1 {
+                    let group_index =
+                      self.emit_group_index_list_buffer.first().unwrap();
+                    *group_idx_view =
+                      GroupIndexView::new_inlined(group_index.into_index_in_fixed_block_size(block_size) as u64);
+                    true
+                } else {
+                    let group_index_list =
+                      &mut self.group_index_lists[next_new_list_offset];
+                    group_index_list.clear();
+                    group_index_list
+                      .extend(self.emit_group_index_list_buffer.iter());
+                    *group_idx_view = GroupIndexView::new_non_inlined(
+                        next_new_list_offset as u64,
+                    );
+                    next_new_list_offset += 1;
+                    true
+                }
+            } else {
+                // In `streaming case`, the `group index view` is ensured to be `inlined`
+                debug_assert!(!group_idx_view.is_non_inlined());
+
+                // Inlined case, we just decrement group index by n)
+                let group_index = group_idx_view.value() as usize;
+                match group_index.checked_sub(block_size) {
+                    // Group index was >= n, shift value down
+                    Some(sub) => {
+                        *group_idx_view = GroupIndexView::new_inlined(sub as u64);
+                        true
+                    }
+                    // Group index was < n, so remove from table
+                    None => false,
+                }
+            }
+        });
+
+        if !STREAMING {
+            self.group_index_lists.truncate(next_new_list_offset);
+        }
+
+        Ok(Some(output))
+    }
+
+    fn emit_first_n(&mut self, n: usize) -> Result<Vec<ArrayRef>> {
+        let block_size = self.block_size();
+        let output = self
+          .group_values
+          .iter_mut()
+          .map(|v| v.take_n(
+              n,
+              // None
+          ))
+          .collect::<Vec<_>>();
+
+        let mut next_new_list_offset = 0;
+
+        self.map.retain(|(_exist_hash, group_idx_view)| {
+            // In non-streaming case, we need to check if the `group index view`
+            // is `inlined` or `non-inlined`
+            if !STREAMING && group_idx_view.is_non_inlined() {
+                // Non-inlined case
+                // We take `group_index_list` from `old_group_index_lists`
+
+                // list_offset is incrementally
+                self.emit_group_index_list_buffer.clear();
+                let list_offset = group_idx_view.value() as usize;
+                for group_index in self.group_index_lists[list_offset].iter() {
+                    if let Some(remaining) = group_index.sub_flat_checked(n, block_size) {
+                        self.emit_group_index_list_buffer.push(remaining);
+                    }
+                }
+
+                // The possible results:
+                //   - `new_group_index_list` is empty, we should erase this bucket
+                //   - only one value in `new_group_index_list`, switch the `view` to `inlined`
+                //   - still multiple values in `new_group_index_list`, build and set the new `unlined view`
+                if self.emit_group_index_list_buffer.is_empty() {
+                    false
+                } else if self.emit_group_index_list_buffer.len() == 1 {
+                    let group_index =
+                      self.emit_group_index_list_buffer.first().unwrap();
+                    *group_idx_view =
+                      GroupIndexView::new_inlined(group_index.into_index_in_fixed_block_size(block_size) as u64);
+                    true
+                } else {
+                    let group_index_list =
+                      &mut self.group_index_lists[next_new_list_offset];
+                    group_index_list.clear();
+                    group_index_list
+                      .extend(self.emit_group_index_list_buffer.iter());
+                    *group_idx_view = GroupIndexView::new_non_inlined(
+                        next_new_list_offset as u64,
+                    );
+                    next_new_list_offset += 1;
+                    true
+                }
+            } else {
+                // In `streaming case`, the `group index view` is ensured to be `inlined`
+                debug_assert!(!group_idx_view.is_non_inlined());
+
+                // Inlined case, we just decrement group index by n)
+                let group_index = group_idx_view.value() as usize;
+                match group_index.checked_sub(n) {
+                    // Group index was >= n, shift value down
+                    Some(sub) => {
+                        *group_idx_view = GroupIndexView::new_inlined(sub as u64);
+                        true
+                    }
+                    // Group index was < n, so remove from table
+                    None => false,
+                }
+            }
+        });
+
+        if !STREAMING {
+            self.group_index_lists.truncate(next_new_list_offset);
+        }
+
+        Ok(output)
+    }
+}
+
+/// Returns true if [`BlockedGroupValuesColumn`] supported for the specified schema
+pub fn supported_schema(schema: &Schema) -> bool {
+    schema
+        .fields()
+        .iter()
+        .map(|f| f.data_type())
+        .all(group_column_supported_type)
+}
+
+///Shows how many `null`s there are in an array
+enum Nulls {
+    /// All array items are `null`s
+    All,
+    /// There are both `null`s and non-`null`s in the array items
+    Some,
+    /// There are no `null`s in the array items
+    None,
+}
+
+// #[cfg(test)]
+// mod tests {
+//     use std::{collections::HashMap, sync::Arc};
+//
+//     use arrow::array::{
+//         Array, ArrayRef, DurationMicrosecondArray, FixedSizeBinaryArray, Float16Array,
+//         Int32Array, Int64Array, PrimitiveArray, RecordBatch, StringArray,
+//         StringViewArray, UInt32Array,
+//     };
+//     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+//     use arrow::{
+//         compute::{concat_batches, take},
+//         util::pretty::pretty_format_batches,
+//     };
+//     use datafusion_common::utils::proxy::HashTableAllocExt;
+//     use datafusion_expr::{EmitTo, GroupSelection};
+//     use datafusion_expr_common::groups_accumulator::{BlockedEmitTo, BlocksIndex};
+//     use crate::aggregates::group_values::GroupValues;
+//     use crate::aggregates_blocked::group_values::{
+//         BlockedGroupValues, multi_group_by::GroupValuesColumn,
+//     };
+//
+//     use super::{
+//         GroupIndexView, group_column_supported_type, make_group_column, supported_schema,
+//     };
+//
+//     const DEFAULT_BLOCK_SIZE: usize = 8192;
+//
+//     /// A mixed group-by key of several native columns plus one nested column
+//     /// that has no type-specialized `GroupColumn`.
+//     ///
+//     /// Before the generic row-backed fallback, `supported_schema` returned
+//     /// `false` for this schema, so the *entire* key dropped to the row-wise
+//     /// `GroupValuesRows`. Now only the nested column pays the row-encoding
+//     /// cost; the native columns keep their compact column-wise storage. This
+//     /// test proves both that (a) the results are identical and (b) the
+//     /// column-wise path now uses less memory than the all-rows fallback.
+//     #[test]
+//     fn mixed_schema_column_path_uses_less_memory_than_rows_fallback() {
+//         use crate::aggregates::group_values::GroupValuesRows;
+//         use arrow::array::{FixedSizeListArray, Int64Array};
+//         use arrow::datatypes::Int64Type;
+//
+//         // 8 native Int64 columns + 1 FixedSizeList<Int64, 4> ("embedding").
+//         let fsl_field = Arc::new(Field::new("item", DataType::Int64, true));
+//         let mut fields: Vec<Field> = (0..8)
+//             .map(|i| Field::new(format!("k{i}"), DataType::Int64, false))
+//             .collect();
+//         fields.push(Field::new(
+//             "emb",
+//             DataType::FixedSizeList(Arc::clone(&fsl_field), 4),
+//             true,
+//         ));
+//         let schema: SchemaRef = Arc::new(Schema::new(fields));
+//
+//         // The whole schema must now be eligible for the column-wise path.
+//         assert!(
+//             supported_schema(schema.as_ref()),
+//             "mixed native + nested schema should be column-supported now"
+//         );
+//
+//         // Build `n_groups` distinct rows (each row is its own group).
+//         let n_groups = 4000usize;
+//         let mut cols: Vec<ArrayRef> = (0..8)
+//             .map(|c| {
+//                 let vals: Vec<i64> =
+//                     (0..n_groups).map(|r| (r as i64) * 8 + c as i64).collect();
+//                 Arc::new(Int64Array::from(vals)) as ArrayRef
+//             })
+//             .collect();
+//         let emb: Vec<Option<Vec<Option<i64>>>> = (0..n_groups)
+//             .map(|r| {
+//                 Some(vec![
+//                     Some(r as i64),
+//                     Some(r as i64 + 1),
+//                     Some(r as i64 + 2),
+//                     Some(r as i64 + 3),
+//                 ])
+//             })
+//             .collect();
+//         cols.push(
+//             Arc::new(FixedSizeListArray::from_iter_primitive::<Int64Type, _, _>(
+//                 emb, 4,
+//             )) as ArrayRef,
+//         );
+//
+//         // Intern the same data into both implementations.
+//         let mut column_path = GroupValuesColumn::<false>::try_new(Arc::clone(&schema), DEFAULT_BLOCK_SIZE)
+//             .expect("column path");
+//         let mut rows_path =
+//             GroupValuesRows::try_new(Arc::clone(&schema)).expect("rows path");
+//
+//         let mut g1 = vec![];
+//         let mut g2 = vec![];
+//         column_path.intern(&cols, &mut g1).unwrap();
+//         rows_path.intern(&cols, &mut g2).unwrap();
+//
+//         // (a) Correctness: same number of groups and identical group assignment.
+//         assert_eq!(column_path.len(), n_groups);
+//         assert_eq!(rows_path.len(), n_groups);
+//         assert_eq!(g1, g2, "group assignment must match the rows fallback");
+//
+//         // (b) Memory: the column-wise path stores the 8 native columns compactly
+//         //     and only row-encodes the nested one, so it should be smaller than
+//         //     encoding every column into rows.
+//         //
+//         // The delta is only printed here — a hard `column_size < rows_size`
+//         // assert would be brittle to future Arrow row-format or memory-
+//         // accounting changes without reflecting a grouping-correctness
+//         // regression. Track the memory improvement via benchmarks instead.
+//         let column_size = column_path.size();
+//         let rows_size = rows_path.size();
+//         println!(
+//             "mixed-schema group values size: column-wise = {column_size} bytes, \
+//              all-rows fallback = {rows_size} bytes \
+//              ({:.1}% of fallback)",
+//             100.0 * column_size as f64 / rows_size as f64
+//         );
+//
+//         // Emitted values must be equal too (compare via the rows fallback which
+//         // is the established reference implementation).
+//         let out_col = column_path.emit(BlockedEmitTo::All).unwrap();
+//         let out_row = rows_path.emit(EmitTo::All).unwrap();
+//         assert_eq!(out_col.len(), out_row.len());
+//         for (a, b) in out_col.iter().zip(out_row.iter()) {
+//             assert_eq!(a.as_ref(), b.as_ref());
+//         }
+//     }
+//
+//     /// Relabel a group-index vector so labels are assigned in order of first
+//     /// appearance. Two vectors are equivalent groupings iff their canonical
+//     /// forms are equal — this ignores the (opaque, non-semantic) difference in
+//     /// group-index numbering between the vectorized column path and the
+//     /// sequential rows fallback.
+//     ///
+//     /// The [`GroupValues`] trait only guarantees that equal keys receive the
+//     /// same group-id and that new keys receive a fresh id; the order in which
+//     /// new ids are handed out is deliberately not part of the contract, and
+//     /// can differ between correct implementations (e.g. because of internal
+//     /// hash-map ordering). Canonicalizing before comparison is what lets us
+//     /// assert equivalence across implementations.
+//     fn canonical_grouping(groups: &[BlocksIndex]) -> Vec<usize> {
+//         let mut map = HashMap::new();
+//         let mut next = 0usize;
+//         groups
+//             .iter()
+//             .map(|&g| {
+//                 *map.entry(g).or_insert_with(|| {
+//                     let v = next;
+//                     next += 1;
+//                     v
+//                 })
+//             })
+//             .collect()
+//     }
+//
+//     /// The generic row-backed column must be behavior-preserving: for the
+//     /// nested columns it now handles, `GroupValuesColumn` must induce the same
+//     /// grouping (partition of rows) as the established `GroupValuesRows`
+//     /// fallback — including the float `-0.0` / `+0.0` / `NaN` edge cases decided
+//     /// jointly by hashing and the row format.
+//     #[test]
+//     fn nested_float_edge_cases_match_rows_fallback() {
+//         use crate::aggregates::group_values::GroupValuesRows;
+//         use arrow::array::{FixedSizeListArray, Float64Array};
+//
+//         let item = Arc::new(Field::new("item", DataType::Float64, true));
+//         let schema: SchemaRef = Arc::new(Schema::new(vec![Field::new(
+//             "emb",
+//             DataType::FixedSizeList(Arc::clone(&item), 2),
+//             true,
+//         )]));
+//         assert!(supported_schema(schema.as_ref()));
+//
+//         // Rows exercising +0.0 vs -0.0, two NaN bit patterns, and inner nulls.
+//         let nan = f64::NAN;
+//         let other_nan = f64::from_bits(0x7ff8_0000_0000_0001);
+//         let values = Float64Array::from(vec![
+//             Some(0.0),
+//             Some(1.0), // [ +0.0, 1.0 ]
+//             Some(-0.0),
+//             Some(1.0), // [ -0.0, 1.0 ]
+//             Some(nan),
+//             Some(2.0), // [ NaN,  2.0 ]
+//             Some(other_nan),
+//             Some(2.0), // [ NaN', 2.0 ]
+//             Some(0.0),
+//             Some(1.0), // [ +0.0, 1.0 ]  (dup of row 0)
+//         ]);
+//         let field_ref = Arc::new(Field::new("item", DataType::Float64, true));
+//         let input: ArrayRef = Arc::new(FixedSizeListArray::new(
+//             field_ref,
+//             2,
+//             Arc::new(values),
+//             None,
+//         ));
+//
+//         let cols = vec![input];
+//
+//         let mut column_path =
+//             GroupValuesColumn::<false>::try_new(Arc::clone(&schema), DEFAULT_BLOCK_SIZE).unwrap();
+//         let mut rows_path = GroupValuesRows::try_new(Arc::clone(&schema)).unwrap();
+//
+//         let mut g1 = vec![];
+//         let mut g2 = vec![];
+//         column_path.intern(&cols, &mut g1).unwrap();
+//         rows_path.intern(&cols, &mut g2).unwrap();
+//
+//         assert_eq!(
+//             canonical_grouping(&g1),
+//             canonical_grouping(&g2),
+//             "column-wise path must induce the same grouping as the rows fallback \
+//              on float edge cases (got column={g1:?}, rows={g2:?})"
+//         );
+//         assert_eq!(column_path.len(), rows_path.len());
+//     }
+//
+//     /// Equivalence across multiple `intern` batches and `EmitTo::First(n)`.
+//     #[test]
+//     fn multi_batch_and_emit_first_matches_rows_fallback() {
+//         use crate::aggregates::group_values::GroupValuesRows;
+//         use arrow::array::{FixedSizeListArray, Int32Array};
+//         use arrow::datatypes::Int32Type;
+//
+//         let item = Arc::new(Field::new("item", DataType::Int32, true));
+//         let schema: SchemaRef = Arc::new(Schema::new(vec![
+//             Field::new("k", DataType::Int32, false),
+//             Field::new("emb", DataType::FixedSizeList(Arc::clone(&item), 2), true),
+//         ]));
+//
+//         let make_batch = |base: i32| -> Vec<ArrayRef> {
+//             let k = Arc::new(Int32Array::from(vec![base, base + 1, base])) as ArrayRef;
+//             let emb: Vec<Option<Vec<Option<i32>>>> = vec![
+//                 Some(vec![Some(base), Some(base)]),
+//                 Some(vec![Some(base + 1), None]),
+//                 Some(vec![Some(base), Some(base)]), // dup of row 0
+//             ];
+//             let emb = Arc::new(
+//                 FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(emb, 2),
+//             ) as ArrayRef;
+//             vec![k, emb]
+//         };
+//
+//         let mut column_path =
+//             GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
+//         let mut rows_path = GroupValuesRows::try_new(Arc::clone(&schema)).unwrap();
+//
+//         for base in [0, 10, 0] {
+//             let cols = make_batch(base);
+//             let (mut a, mut b) = (vec![], vec![]);
+//             column_path.intern(&cols, &mut a).unwrap();
+//             rows_path.intern(&cols, &mut b).unwrap();
+//             // Same grouping (partition), even if the opaque group-index labels
+//             // differ between the vectorized and sequential paths.
+//             assert_eq!(
+//                 canonical_grouping(&a),
+//                 canonical_grouping(&b),
+//                 "grouping must match for batch base={base}"
+//             );
+//         }
+//
+//         let total_groups = column_path.len();
+//         assert_eq!(total_groups, rows_path.len());
+//
+//         // `EmitTo::First(n)` then `EmitTo::All` on the nested column path must
+//         // work and together emit exactly `total_groups` rows. (Cross-path value
+//         // equality is covered by `mixed_schema_...` and the row_backed unit
+//         // tests; group-index ordering differs here so we check counts.)
+//         let col_first = column_path.emit(EmitTo::First(2)).unwrap();
+//         assert_eq!(col_first[0].len(), 2);
+//         let col_rest = column_path.emit(EmitTo::All).unwrap();
+//         assert_eq!(col_first[0].len() + col_rest[0].len(), total_groups);
+//         // Column count / schema preserved on both emits.
+//         assert_eq!(col_first.len(), schema.fields().len());
+//         assert_eq!(col_rest.len(), schema.fields().len());
+//     }
+//
+//     /// CRITICAL invariant: if `group_column_supported_type(t)` returns true
+//     /// the dispatcher must accept that type at intern time, and conversely
+//     /// if `group_column_supported_type(t)` returns false the planner must
+//     /// NOT route it through `GroupValuesColumn`. A divergence here would
+//     /// let the planner select `GroupValuesColumn` for a type whose
+//     /// dispatcher arm is missing, producing a runtime `not_impl_err` after
+//     /// the field reaches the builder factory.
+//     ///
+//     /// This test fuzzes a representative cross-section of types and asserts
+//     /// both directions of the biconditional. When a new specialization is
+//     /// added (`Float16`, `FixedSizeList`, `Struct`, ...) it should be added
+//     /// to the supported_cases vector; when a type is intentionally rejected
+//     /// it should be added to unsupported_cases.
+//     #[test]
+//     fn group_column_supported_type_matches_make_group_column() {
+//         let supported_cases: Vec<DataType> = vec![
+//             DataType::Int8,
+//             DataType::Int64,
+//             DataType::UInt64,
+//             DataType::Float32,
+//             DataType::Float64,
+//             DataType::Float16,
+//             DataType::Decimal128(38, 10),
+//             DataType::Decimal256(76, 10),
+//             DataType::Utf8,
+//             DataType::LargeUtf8,
+//             DataType::Utf8View,
+//             DataType::Binary,
+//             DataType::LargeBinary,
+//             DataType::BinaryView,
+//             DataType::FixedSizeBinary(16),
+//             // Zero-width FixedSizeBinary is valid per the Arrow spec
+//             DataType::FixedSizeBinary(0),
+//             DataType::Boolean,
+//             DataType::Date32,
+//             DataType::Date64,
+//             DataType::Time32(arrow::datatypes::TimeUnit::Second),
+//             DataType::Time32(arrow::datatypes::TimeUnit::Millisecond),
+//             DataType::Time64(arrow::datatypes::TimeUnit::Microsecond),
+//             DataType::Time64(arrow::datatypes::TimeUnit::Nanosecond),
+//             DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+//             DataType::Duration(arrow::datatypes::TimeUnit::Second),
+//             DataType::Duration(arrow::datatypes::TimeUnit::Millisecond),
+//             DataType::Duration(arrow::datatypes::TimeUnit::Microsecond),
+//             DataType::Duration(arrow::datatypes::TimeUnit::Nanosecond),
+//             DataType::Interval(arrow::datatypes::IntervalUnit::YearMonth),
+//             DataType::Interval(arrow::datatypes::IntervalUnit::DayTime),
+//             DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano),
+//             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+//             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int64)),
+//             DataType::Dictionary(
+//                 Box::new(DataType::UInt16),
+//                 Box::new(DataType::LargeUtf8),
+//             ),
+//             DataType::Dictionary(
+//                 Box::new(DataType::Int32),
+//                 Box::new(DataType::Timestamp(
+//                     arrow::datatypes::TimeUnit::Nanosecond,
+//                     None,
+//                 )),
+//             ),
+//             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Float16)),
+//         ];
+//
+//         for dt in &supported_cases {
+//             assert!(
+//                 group_column_supported_type(dt),
+//                 "expected group_column_supported_type=true for {dt:?}"
+//             );
+//             let field = Field::new("col", dt.clone(), true);
+//             make_group_column::<true>(&field, DEFAULT_BLOCK_SIZE).unwrap_or_else(|e| {
+//                 panic!(
+//                     "group_column_supported_type accepted {dt:?} but make_group_column rejected: {e}"
+//                 )
+//             });
+//         }
+//
+//         let unsupported_cases: Vec<DataType> = vec![
+//             // Invalid Time-unit combinations: Time32 is defined only for
+//             // Second / Millisecond and Time64 only for Microsecond /
+//             // Nanosecond. The TimeUnit enum allows constructing the other
+//             // combinations programmatically, but they are not valid Arrow
+//             // types and must be rejected by both group_column_supported_type
+//             // and the dispatcher.
+//             DataType::Time64(arrow::datatypes::TimeUnit::Second),
+//             DataType::Time64(arrow::datatypes::TimeUnit::Millisecond),
+//             DataType::Time32(arrow::datatypes::TimeUnit::Microsecond),
+//             DataType::Time32(arrow::datatypes::TimeUnit::Nanosecond),
+//             // A negative width is representable in the DataType but is not
+//             // a valid Arrow type; no array can be constructed for it.
+//             DataType::FixedSizeBinary(-5),
+//         ];
+//
+//         for dt in &unsupported_cases {
+//             assert!(
+//                 !group_column_supported_type(dt),
+//                 "expected group_column_supported_type=false for {dt:?}"
+//             );
+//             let field = Field::new("col", dt.clone(), true);
+//             assert!(
+//                 make_group_column::<true>(&field, DEFAULT_BLOCK_SIZE).is_err(),
+//                 "group_column_supported_type rejected {dt:?} but make_group_column accepted it"
+//             );
+//         }
+//     }
+//
+//     // `Duration` group keys stay on the `GroupValuesColumn` fast path, dedup
+//     // (including nulls), and round-trip with the `Duration` type preserved.
+//     #[test]
+//     fn test_group_values_column_duration() {
+//         use arrow::datatypes::TimeUnit;
+//
+//         let schema = Arc::new(Schema::new(vec![
+//             Field::new("d", DataType::Duration(TimeUnit::Microsecond), true),
+//             Field::new("i", DataType::Int64, true),
+//         ]));
+//         assert!(supported_schema(&schema));
+//         let mut group_values =
+//             GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
+//
+//         // (d, i) rows, where row 3 repeats row 0 and row 4 repeats the null pair.
+//         let d: ArrayRef = Arc::new(DurationMicrosecondArray::from(vec![
+//             Some(10),
+//             None,
+//             Some(20),
+//             Some(10),
+//             None,
+//         ]));
+//         let i: ArrayRef = Arc::new(Int64Array::from(vec![
+//             Some(1),
+//             None,
+//             Some(2),
+//             Some(1),
+//             None,
+//         ]));
+//         let mut groups = Vec::new();
+//         group_values.intern(&[d, i], &mut groups).unwrap();
+//         assert_eq!(groups, vec![0, 1, 2, 0, 1]);
+//
+//         let emitted = group_values.emit(EmitTo::All).unwrap();
+//         assert_eq!(emitted.len(), 2);
+//         // The Duration column round-trips as Duration on emit, not bare i64.
+//         assert_eq!(
+//             emitted[0].data_type(),
+//             &DataType::Duration(TimeUnit::Microsecond)
+//         );
+//         let actual = emitted[0]
+//             .as_any()
+//             .downcast_ref::<DurationMicrosecondArray>()
+//             .expect("emitted column should be a DurationMicrosecondArray");
+//         // Three groups in first-seen order: 10, null, 20.
+//         assert_eq!(actual.len(), 3);
+//         assert_eq!(actual.value(0), 10);
+//         assert!(actual.is_null(1));
+//         assert_eq!(actual.value(2), 20);
+//     }
+//
+//     // `(Float16, Int32)` keys: ±0.0 collapse (stored as +0.0), NaNs collapse, and
+//     // the Int32 key keeps `(0.0, 4)` distinct from `(±0.0, 3)`.
+//     #[test]
+//     fn test_group_values_column_float16() {
+//         use half::f16;
+//
+//         let schema = Arc::new(Schema::new(vec![
+//             Field::new("f", DataType::Float16, true),
+//             Field::new("i", DataType::Int32, true),
+//         ]));
+//         assert!(supported_schema(&schema));
+//         let mut group_values =
+//             GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
+//
+//         let f: ArrayRef = Arc::new(Float16Array::from(vec![
+//             Some(f16::from_f32(1.0)),
+//             Some(f16::from_f32(-0.0)),
+//             Some(f16::from_f32(0.0)),
+//             Some(f16::from_f32(0.0)),
+//             Some(f16::NAN),
+//             Some(f16::NAN),
+//             None,
+//             None,
+//         ]));
+//         let i: ArrayRef = Arc::new(Int32Array::from(vec![
+//             Some(3),
+//             Some(3),
+//             Some(3),
+//             Some(4),
+//             Some(3),
+//             Some(3),
+//             Some(3),
+//             Some(3),
+//         ]));
+//         let mut groups = Vec::new();
+//         group_values.intern(&[f, i], &mut groups).unwrap();
+//         assert_eq!(groups, vec![0, 1, 1, 2, 3, 3, 4, 4]);
+//
+//         let emitted = group_values.emit(EmitTo::All).unwrap();
+//         assert_eq!(emitted.len(), 2);
+//         assert_eq!(emitted[0].data_type(), &DataType::Float16);
+//         let keys = emitted[0]
+//             .as_any()
+//             .downcast_ref::<Float16Array>()
+//             .expect("emitted column should be a Float16Array");
+//         assert_eq!(keys.len(), 5);
+//         assert_eq!(keys.value(0), f16::from_f32(1.0));
+//         // The ±0.0 group is stored canonically as +0.0 (not -0.0).
+//         assert_eq!(keys.value(1).to_bits(), f16::from_f32(0.0).to_bits());
+//         assert_eq!(keys.value(2).to_bits(), f16::from_f32(0.0).to_bits());
+//         assert!(keys.value(3).is_nan());
+//         assert!(keys.is_null(4));
+//         let ids = emitted[1]
+//             .as_any()
+//             .downcast_ref::<Int32Array>()
+//             .expect("emitted column should be an Int32Array");
+//         assert_eq!(ids.values().to_vec(), vec![3, 3, 4, 3, 3]);
+//     }
+//
+//     // `(Interval, Int32)` keys for each of the three interval units: null keys
+//     // dedup, the Int32 key splits equal intervals, and emit gives back Interval.
+//     #[test]
+//     fn test_group_values_column_interval() {
+//         use arrow::datatypes::{
+//             ArrowPrimitiveType, IntervalDayTime, IntervalDayTimeType,
+//             IntervalMonthDayNano, IntervalMonthDayNanoType, IntervalUnit,
+//             IntervalYearMonthType,
+//         };
+//
+//         fn check<T: ArrowPrimitiveType>(unit: IntervalUnit, value: T::Native) {
+//             let schema = Arc::new(Schema::new(vec![
+//                 Field::new("i", DataType::Interval(unit), true),
+//                 Field::new("n", DataType::Int32, true),
+//             ]));
+//             assert!(supported_schema(&schema), "{unit:?} schema not supported");
+//             let mut group_values =
+//                 GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
+//
+//             let i: ArrayRef = Arc::new(PrimitiveArray::<T>::from_iter([
+//                 Some(value),
+//                 None,
+//                 Some(value),
+//                 None,
+//                 Some(value),
+//             ]));
+//             let n: ArrayRef = Arc::new(Int32Array::from(vec![3, 3, 3, 3, 4]));
+//             let mut groups = Vec::new();
+//             group_values.intern(&[i, n], &mut groups).unwrap();
+//             assert_eq!(groups, vec![0, 1, 0, 1, 2], "{unit:?}");
+//
+//             let emitted = group_values.emit(EmitTo::All).unwrap();
+//             assert_eq!(emitted.len(), 2);
+//             // The emitted key keeps its Interval type, not the bare native.
+//             assert_eq!(emitted[0].data_type(), &DataType::Interval(unit));
+//             let actual = emitted[0]
+//                 .as_any()
+//                 .downcast_ref::<PrimitiveArray<T>>()
+//                 .unwrap_or_else(|| panic!("emitted column should be a {unit:?} array"));
+//             // Three groups in first-seen order: value, null, value (n=4).
+//             assert_eq!(actual.len(), 3, "{unit:?}");
+//             assert_eq!(actual.value(0), value, "{unit:?}");
+//             assert!(actual.is_null(1), "{unit:?}");
+//             assert_eq!(actual.value(2), value, "{unit:?}");
+//             let ids = emitted[1]
+//                 .as_any()
+//                 .downcast_ref::<Int32Array>()
+//                 .expect("emitted column should be an Int32Array");
+//             assert_eq!(ids.values().to_vec(), vec![3, 3, 4], "{unit:?}");
+//         }
+//
+//         check::<IntervalYearMonthType>(IntervalUnit::YearMonth, 13);
+//         check::<IntervalDayTimeType>(IntervalUnit::DayTime, IntervalDayTime::new(1, 500));
+//         check::<IntervalMonthDayNanoType>(
+//             IntervalUnit::MonthDayNano,
+//             IntervalMonthDayNano::new(1, 0, 0),
+//         );
+//     }
+//
+//     #[test]
+//     fn supported_schema_rejects_mix_of_supported_and_unsupported() {
+//         // One unsupported column flips the whole schema to the GroupValuesRows
+//         // fallback. Time64(Second) stays invalid as new primitive builders land.
+//         let schema = Schema::new(vec![
+//             Field::new("a", DataType::Int32, true),
+//             Field::new("b", DataType::Utf8, true),
+//             Field::new(
+//                 "c",
+//                 DataType::Time64(arrow::datatypes::TimeUnit::Second),
+//                 true,
+//             ),
+//         ]);
+//         assert!(!supported_schema(&schema));
+//
+//         let schema = Schema::new(vec![
+//             Field::new("a", DataType::Int32, true),
+//             Field::new("b", DataType::Utf8, true),
+//             Field::new("c", DataType::Boolean, true),
+//         ]);
+//         assert!(supported_schema(&schema));
+//     }
+//
+//     #[test]
+//     fn try_new_returns_not_impl_for_unsupported_top_level_type() {
+//         // `try_new` now eagerly constructs the per-field GroupColumn
+//         // builders via `make_group_column`, so an unsupported schema is
+//         // rejected at construction time rather than at first `intern`.
+//         // `GroupValuesColumn` doesn't implement `Debug`, so explicit match
+//         // instead of `unwrap_err`.
+//         let schema = Arc::new(Schema::new(vec![Field::new(
+//             "x",
+//             DataType::Time64(arrow::datatypes::TimeUnit::Second),
+//             true,
+//         )]));
+//         match GroupValuesColumn::<false>::try_new(schema) {
+//             Ok(_) => panic!("expected NotImpl error, but try_new succeeded"),
+//             Err(e) => {
+//                 let msg = e.to_string();
+//                 assert!(
+//                     msg.contains("not supported in GroupValuesColumn"),
+//                     "expected NotImpl error from dispatcher, got: {msg}"
+//                 );
+//             }
+//         }
+//     }
+//
+//     // https://github.com/apache/datafusion/issues/23127
+//     // validate DictionaryGroupColumn deduplicates values — only k distinct keys appear
+//     // in the values array even when there are more than 128 groups total.
+//     #[test]
+//     fn multi_col_groupby_dict_many_groups_two_values() {
+//         use arrow::array::{AsArray, DictionaryArray, Int8Array};
+//         use arrow::datatypes::Int8Type;
+//
+//         let n_groups = 129_usize;
+//         let dict_vocab: ArrayRef = Arc::new(StringArray::from(vec!["cat", "dog"]));
+//
+//         // Each row has a unique label (forcing a new group) and alternates
+//         // between the two dictionary values.  Int8 keys are used; only 2
+//         // distinct values exist so the key type never overflows.
+//         let labels: ArrayRef = Arc::new(StringArray::from(
+//             (0..n_groups).map(|i| format!("g{i}")).collect::<Vec<_>>(),
+//         ));
+//         let dict_keys = Int8Array::from(
+//             (0..n_groups)
+//                 .map(|i| Some((i % 2) as i8))
+//                 .collect::<Vec<_>>(),
+//         );
+//         let categories: ArrayRef = Arc::new(DictionaryArray::<Int8Type>::new(
+//             dict_keys,
+//             Arc::clone(&dict_vocab),
+//         ));
+//
+//         let schema = Arc::new(Schema::new(vec![
+//             Field::new("label", DataType::Utf8, false),
+//             Field::new(
+//                 "category",
+//                 DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
+//                 false,
+//             ),
+//         ]));
+//
+//         let mut gv = GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
+//         gv.intern(&[labels, categories], &mut vec![]).unwrap();
+//         let out = gv.emit(EmitTo::All).unwrap();
+//
+//         assert_eq!(out[0].len(), n_groups);
+//         assert!(matches!(
+//             out[1].data_type(),
+//             DataType::Dictionary(k, v)
+//                 if k.as_ref() == &DataType::Int8 && v.as_ref() == &DataType::Utf8
+//         ));
+//         // Both vectorized and streaming paths now deduplicate dict values.
+//         assert_eq!(out[1].as_dictionary::<Int8Type>().values().len(), 2);
+//     }
+//
+//     #[test]
+//     fn test_intern_for_vectorized_group_values() {
+//         let data_set = VectorizedTestDataSet::new();
+//         let mut group_values =
+//             GroupValuesColumn::<false>::try_new(data_set.schema()).unwrap();
+//
+//         data_set.load_to_group_values(&mut group_values);
+//         let actual_batch = group_values.emit(EmitTo::All).unwrap();
+//         let actual_batch = RecordBatch::try_new(data_set.schema(), actual_batch).unwrap();
+//
+//         check_result(&actual_batch, &data_set.expected_batch);
+//     }
+//
+//     #[test]
+//     fn test_intern_for_fixed_size_binary_group_values() {
+//         // Two-column group by `(FixedSizeBinary(2), Int64)` exercising the
+//         // vectorized intern path end-to-end (hashing included), with nulls,
+//         // within-batch repeats and across-batch repeats.
+//         let schema = Arc::new(Schema::new(vec![
+//             Field::new("a", DataType::FixedSizeBinary(2), true),
+//             Field::new("b", DataType::Int64, true),
+//         ]));
+//         let mut group_values =
+//             GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
+//
+//         fn fsb(values: Vec<Option<&[u8; 2]>>) -> ArrayRef {
+//             Arc::new(
+//                 FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+//                     values.into_iter(),
+//                     2,
+//                 )
+//                 .unwrap(),
+//             )
+//         }
+//
+//         let batch1: Vec<ArrayRef> = vec![
+//             fsb(vec![Some(b"aa"), Some(b"aa"), None, None, Some(b"bb")]),
+//             Arc::new(Int64Array::from(vec![
+//                 Some(1),
+//                 Some(1),
+//                 None,
+//                 Some(2),
+//                 None,
+//             ])),
+//         ];
+//         // Mix of groups repeated from batch1 and new groups
+//         let batch2: Vec<ArrayRef> = vec![
+//             fsb(vec![Some(b"aa"), Some(b"cc"), None, Some(b"bb")]),
+//             Arc::new(Int64Array::from(vec![Some(1), Some(1), None, Some(3)])),
+//         ];
+//
+//         group_values.intern(&batch1, &mut vec![]).unwrap();
+//         group_values.intern(&batch2, &mut vec![]).unwrap();
+//
+//         let actual_batch = group_values.emit(EmitTo::All).unwrap();
+//         let actual_batch =
+//             RecordBatch::try_new(Arc::clone(&schema), actual_batch).unwrap();
+//
+//         let expected_batch = RecordBatch::try_new(
+//             schema,
+//             vec![
+//                 fsb(vec![
+//                     Some(b"aa"),
+//                     None,
+//                     None,
+//                     Some(b"bb"),
+//                     Some(b"cc"),
+//                     Some(b"bb"),
+//                 ]),
+//                 Arc::new(Int64Array::from(vec![
+//                     Some(1),
+//                     None,
+//                     Some(2),
+//                     None,
+//                     Some(1),
+//                     Some(3),
+//                 ])),
+//             ],
+//         )
+//         .unwrap();
+//
+//         assert_eq!(actual_batch.num_rows(), expected_batch.num_rows());
+//         check_result(&actual_batch, &expected_batch);
+//     }
+//
+//     #[test]
+//     fn test_preserving_selected_vectorized_group_values() {
+//         let data_set = VectorizedTestDataSet::new();
+//         let mut group_values =
+//             GroupValuesColumn::<false>::try_new(data_set.schema()).unwrap();
+//         data_set.load_to_group_values(&mut group_values);
+//
+//         let selection = [16, 0, 4, 0];
+//         let group_selection =
+//             GroupSelection::try_from_indices(&selection, group_values.len()).unwrap();
+//         let actual = group_values.values_preserving(group_selection).unwrap();
+//         let indices = UInt32Array::from_iter_values(selection.map(|index| index as u32));
+//         let mut destructive_group_values =
+//             GroupValuesColumn::<false>::try_new(data_set.schema()).unwrap();
+//         data_set.load_to_group_values(&mut destructive_group_values);
+//         let all = destructive_group_values.emit(EmitTo::All).unwrap();
+//         let expected = all
+//             .iter()
+//             .map(|column| take(column.as_ref(), &indices, None).unwrap())
+//             .collect::<Vec<_>>();
+//         let expected = RecordBatch::try_new(data_set.schema(), expected).unwrap();
+//         let actual = RecordBatch::try_new(data_set.schema(), actual).unwrap();
+//         assert_eq!(actual, expected);
+//
+//         // A repeated preserving read returns the same rows and leaves all groups.
+//         let repeated = group_values.values_preserving(group_selection).unwrap();
+//         assert_eq!(
+//             RecordBatch::try_new(data_set.schema(), repeated).unwrap(),
+//             expected
+//         );
+//         assert_eq!(group_values.len(), data_set.expected_batch.num_rows());
+//     }
+//
+//     #[test]
+//     fn test_emit_first_n_for_vectorized_group_values() {
+//         let data_set = VectorizedTestDataSet::new();
+//         let mut group_values =
+//             GroupValuesColumn::<false>::try_new(data_set.schema()).unwrap();
+//
+//         // 1~num_rows times to emit the groups
+//         let num_rows = data_set.expected_batch.num_rows();
+//         let schema = data_set.schema();
+//         for times_to_take in 1..=num_rows {
+//             // Write data after emitting
+//             data_set.load_to_group_values(&mut group_values);
+//
+//             // Emit `times_to_take` times, collect and concat the sub-results to total result,
+//             // then check it
+//             let suggest_num_emit = data_set.expected_batch.num_rows() / times_to_take;
+//             let mut num_remaining_rows = num_rows;
+//             let mut actual_sub_batches = Vec::new();
+//
+//             for nth_time in 0..times_to_take {
+//                 let num_emit = if nth_time == times_to_take - 1 {
+//                     num_remaining_rows
+//                 } else {
+//                     suggest_num_emit
+//                 };
+//
+//                 let sub_batch = group_values.emit(EmitTo::First(num_emit)).unwrap();
+//                 let sub_batch =
+//                     RecordBatch::try_new(Arc::clone(&schema), sub_batch).unwrap();
+//                 actual_sub_batches.push(sub_batch);
+//
+//                 num_remaining_rows -= num_emit;
+//             }
+//             assert_eq!(num_remaining_rows, 0);
+//
+//             let actual_batch = concat_batches(&schema, &actual_sub_batches).unwrap();
+//             check_result(&actual_batch, &data_set.expected_batch);
+//         }
+//     }
+//
+//     #[test]
+//     fn test_hashtable_modifying_in_emit_first_n() {
+//         // Situations should be covered:
+//         //   1. Erase inlined group index view
+//         //   2. Erase whole non-inlined group index view
+//         //   3. Erase + decrease group indices in non-inlined group index view
+//         //      + view still non-inlined after decreasing
+//         //   4. Erase + decrease group indices in non-inlined group index view
+//         //      + view switch to inlined after decreasing
+//         //   5. Only decrease group index in inlined group index view
+//         //   6. Only decrease group indices in non-inlined group index view
+//         //   7. Erase all things
+//
+//         let field = Field::new_list_field(DataType::Int32, true);
+//         let schema = Arc::new(Schema::new_with_metadata(vec![field], HashMap::new()));
+//         let mut group_values = GroupValuesColumn::<false>::try_new(schema).unwrap();
+//
+//         // Seed the column with 12 placeholder rows so the upcoming
+//         // `emit(EmitTo::First(4))` calls can `take_n` without panicking.
+//         // The hashmap entries below reference group indices 0..=11, so the
+//         // single column builder needs at least 12 rows to back them.
+//         let seed: ArrayRef = Arc::new(Int32Array::from(vec![0_i32; 12]));
+//         for row in 0..12 {
+//             group_values.group_values[0]
+//                 .append_val(&seed, row)
+//                 .expect("seed append");
+//         }
+//
+//         // Insert group index views and check if success to insert
+//         insert_inline_group_index_view(&mut group_values, 0, 0);
+//         insert_non_inline_group_index_view(&mut group_values, 1, vec![1, 2]);
+//         insert_non_inline_group_index_view(&mut group_values, 2, vec![3, 4, 5]);
+//         insert_inline_group_index_view(&mut group_values, 3, 6);
+//         insert_non_inline_group_index_view(&mut group_values, 4, vec![7, 8]);
+//         insert_non_inline_group_index_view(&mut group_values, 5, vec![9, 10, 11]);
+//
+//         assert_eq!(
+//             group_values.get_indices_by_hash(0).unwrap(),
+//             (vec![0], GroupIndexView::new_inlined(0))
+//         );
+//         assert_eq!(
+//             group_values.get_indices_by_hash(1).unwrap(),
+//             (vec![1, 2], GroupIndexView::new_non_inlined(0))
+//         );
+//         assert_eq!(
+//             group_values.get_indices_by_hash(2).unwrap(),
+//             (vec![3, 4, 5], GroupIndexView::new_non_inlined(1))
+//         );
+//         assert_eq!(
+//             group_values.get_indices_by_hash(3).unwrap(),
+//             (vec![6], GroupIndexView::new_inlined(6))
+//         );
+//         assert_eq!(
+//             group_values.get_indices_by_hash(4).unwrap(),
+//             (vec![7, 8], GroupIndexView::new_non_inlined(2))
+//         );
+//         assert_eq!(
+//             group_values.get_indices_by_hash(5).unwrap(),
+//             (vec![9, 10, 11], GroupIndexView::new_non_inlined(3))
+//         );
+//         assert_eq!(group_values.map.len(), 6);
+//
+//         // Emit first 4 to test cases 1~3, 5~6
+//         let _ = group_values.emit(EmitTo::First(4)).unwrap();
+//         assert!(group_values.get_indices_by_hash(0).is_none());
+//         assert!(group_values.get_indices_by_hash(1).is_none());
+//         assert_eq!(
+//             group_values.get_indices_by_hash(2).unwrap(),
+//             (vec![0, 1], GroupIndexView::new_non_inlined(0))
+//         );
+//         assert_eq!(
+//             group_values.get_indices_by_hash(3).unwrap(),
+//             (vec![2], GroupIndexView::new_inlined(2))
+//         );
+//         assert_eq!(
+//             group_values.get_indices_by_hash(4).unwrap(),
+//             (vec![3, 4], GroupIndexView::new_non_inlined(1))
+//         );
+//         assert_eq!(
+//             group_values.get_indices_by_hash(5).unwrap(),
+//             (vec![5, 6, 7], GroupIndexView::new_non_inlined(2))
+//         );
+//         assert_eq!(group_values.map.len(), 4);
+//
+//         // Emit first 1 to test case 4, and cases 5~6 again
+//         let _ = group_values.emit(EmitTo::First(1)).unwrap();
+//         assert_eq!(
+//             group_values.get_indices_by_hash(2).unwrap(),
+//             (vec![0], GroupIndexView::new_inlined(0))
+//         );
+//         assert_eq!(
+//             group_values.get_indices_by_hash(3).unwrap(),
+//             (vec![1], GroupIndexView::new_inlined(1))
+//         );
+//         assert_eq!(
+//             group_values.get_indices_by_hash(4).unwrap(),
+//             (vec![2, 3], GroupIndexView::new_non_inlined(0))
+//         );
+//         assert_eq!(
+//             group_values.get_indices_by_hash(5).unwrap(),
+//             (vec![4, 5, 6], GroupIndexView::new_non_inlined(1))
+//         );
+//         assert_eq!(group_values.map.len(), 4);
+//
+//         // Emit first 5 to test cases 1~3 again
+//         let _ = group_values.emit(EmitTo::First(5)).unwrap();
+//         assert_eq!(
+//             group_values.get_indices_by_hash(5).unwrap(),
+//             (vec![0, 1], GroupIndexView::new_non_inlined(0))
+//         );
+//         assert_eq!(group_values.map.len(), 1);
+//
+//         // Emit first 1 to test cases 4 again
+//         let _ = group_values.emit(EmitTo::First(1)).unwrap();
+//         assert_eq!(
+//             group_values.get_indices_by_hash(5).unwrap(),
+//             (vec![0], GroupIndexView::new_inlined(0))
+//         );
+//         assert_eq!(group_values.map.len(), 1);
+//
+//         // Emit first 1 to test cases 7
+//         let _ = group_values.emit(EmitTo::First(1)).unwrap();
+//         assert!(group_values.map.is_empty());
+//     }
+//
+//     /// Test data set for [`GroupValuesColumn::vectorized_intern`]
+//     ///
+//     /// Define the test data and support loading them into test [`GroupValuesColumn::vectorized_intern`]
+//     ///
+//     /// The covering situations:
+//     ///
+//     /// Array type:
+//     ///   - Primitive array
+//     ///   - String(byte) array
+//     ///   - String view(byte view) array
+//     ///
+//     /// Repeation and nullability in single batch:
+//     ///   - All not null rows
+//     ///   - Mixed null + not null rows
+//     ///   - All null rows
+//     ///   - All not null rows(repeated)
+//     ///   - Null + not null rows(repeated)
+//     ///   - All not null rows(repeated)
+//     ///
+//     /// If group exists in `map`:
+//     ///   - Group exists in inlined group view
+//     ///   - Group exists in non-inlined group view
+//     ///   - Group not exist + bucket not found in `map`
+//     ///   - Group not exist + not equal to inlined group view(tested in hash collision)
+//     ///   - Group not exist + not equal to non-inlined group view(tested in hash collision)
+//     struct VectorizedTestDataSet {
+//         test_batches: Vec<Vec<ArrayRef>>,
+//         expected_batch: RecordBatch,
+//     }
+//
+//     impl VectorizedTestDataSet {
+//         fn new() -> Self {
+//             // Intern batch 1
+//             let col1 = Int64Array::from(vec![
+//                 // Repeated rows in batch
+//                 Some(42),   // all not nulls + repeated rows + exist in map case
+//                 None,       // mixed + repeated rows + exist in map case
+//                 None,       // mixed + repeated rows + not exist in map case
+//                 Some(1142), // mixed + repeated rows + not exist in map case
+//                 None,       // all nulls + repeated rows + exist in map case
+//                 Some(42),
+//                 None,
+//                 None,
+//                 Some(1142),
+//                 None,
+//                 // Unique rows in batch
+//                 Some(4211), // all not nulls + unique rows + exist in map case
+//                 None,       // mixed + unique rows + exist in map case
+//                 None,       // mixed + unique rows + not exist in map case
+//                 Some(4212), // mixed + unique rows + not exist in map case
+//             ]);
+//
+//             let col2 = StringArray::from(vec![
+//                 // Repeated rows in batch
+//                 Some("string1"), // all not nulls + repeated rows + exist in map case
+//                 None,            // mixed + repeated rows + exist in map case
+//                 Some("string2"), // mixed + repeated rows + not exist in map case
+//                 None,            // mixed + repeated rows + not exist in map case
+//                 None,            // all nulls + repeated rows + exist in map case
+//                 Some("string1"),
+//                 None,
+//                 Some("string2"),
+//                 None,
+//                 None,
+//                 // Unique rows in batch
+//                 Some("string3"), // all not nulls + unique rows + exist in map case
+//                 None,            // mixed + unique rows + exist in map case
+//                 Some("string4"), // mixed + unique rows + not exist in map case
+//                 None,            // mixed + unique rows + not exist in map case
+//             ]);
+//
+//             let col3 = StringViewArray::from(vec![
+//                 // Repeated rows in batch
+//                 Some("stringview1"), // all not nulls + repeated rows + exist in map case
+//                 Some("stringview2"), // mixed + repeated rows + exist in map case
+//                 None,                // mixed + repeated rows + not exist in map case
+//                 None,                // mixed + repeated rows + not exist in map case
+//                 None,                // all nulls + repeated rows + exist in map case
+//                 Some("stringview1"),
+//                 Some("stringview2"),
+//                 None,
+//                 None,
+//                 None,
+//                 // Unique rows in batch
+//                 Some("stringview3"), // all not nulls + unique rows + exist in map case
+//                 Some("stringview4"), // mixed + unique rows + exist in map case
+//                 None,                // mixed + unique rows + not exist in map case
+//                 None,                // mixed + unique rows + not exist in map case
+//             ]);
+//             let batch1 = vec![
+//                 Arc::new(col1) as _,
+//                 Arc::new(col2) as _,
+//                 Arc::new(col3) as _,
+//             ];
+//
+//             // Intern batch 2
+//             let col1 = Int64Array::from(vec![
+//                 // Repeated rows in batch
+//                 Some(42),    // all not nulls + repeated rows + exist in map case
+//                 None,        // mixed + repeated rows + exist in map case
+//                 None,        // mixed + repeated rows + not exist in map case
+//                 Some(21142), // mixed + repeated rows + not exist in map case
+//                 None,        // all nulls + repeated rows + exist in map case
+//                 Some(42),
+//                 None,
+//                 None,
+//                 Some(21142),
+//                 None,
+//                 // Unique rows in batch
+//                 Some(4211),  // all not nulls + unique rows + exist in map case
+//                 None,        // mixed + unique rows + exist in map case
+//                 None,        // mixed + unique rows + not exist in map case
+//                 Some(24212), // mixed + unique rows + not exist in map case
+//             ]);
+//
+//             let col2 = StringArray::from(vec![
+//                 // Repeated rows in batch
+//                 Some("string1"), // all not nulls + repeated rows + exist in map case
+//                 None,            // mixed + repeated rows + exist in map case
+//                 Some("2string2"), // mixed + repeated rows + not exist in map case
+//                 None,            // mixed + repeated rows + not exist in map case
+//                 None,            // all nulls + repeated rows + exist in map case
+//                 Some("string1"),
+//                 None,
+//                 Some("2string2"),
+//                 None,
+//                 None,
+//                 // Unique rows in batch
+//                 Some("string3"), // all not nulls + unique rows + exist in map case
+//                 None,            // mixed + unique rows + exist in map case
+//                 Some("2string4"), // mixed + unique rows + not exist in map case
+//                 None,            // mixed + unique rows + not exist in map case
+//             ]);
+//
+//             let col3 = StringViewArray::from(vec![
+//                 // Repeated rows in batch
+//                 Some("stringview1"), // all not nulls + repeated rows + exist in map case
+//                 Some("stringview2"), // mixed + repeated rows + exist in map case
+//                 None,                // mixed + repeated rows + not exist in map case
+//                 None,                // mixed + repeated rows + not exist in map case
+//                 None,                // all nulls + repeated rows + exist in map case
+//                 Some("stringview1"),
+//                 Some("stringview2"),
+//                 None,
+//                 None,
+//                 None,
+//                 // Unique rows in batch
+//                 Some("stringview3"), // all not nulls + unique rows + exist in map case
+//                 Some("stringview4"), // mixed + unique rows + exist in map case
+//                 None,                // mixed + unique rows + not exist in map case
+//                 None,                // mixed + unique rows + not exist in map case
+//             ]);
+//             let batch2 = vec![
+//                 Arc::new(col1) as _,
+//                 Arc::new(col2) as _,
+//                 Arc::new(col3) as _,
+//             ];
+//
+//             // Intern batch 3
+//             let col1 = Int64Array::from(vec![
+//                 // Repeated rows in batch
+//                 Some(42),    // all not nulls + repeated rows + exist in map case
+//                 None,        // mixed + repeated rows + exist in map case
+//                 None,        // mixed + repeated rows + not exist in map case
+//                 Some(31142), // mixed + repeated rows + not exist in map case
+//                 None,        // all nulls + repeated rows + exist in map case
+//                 Some(42),
+//                 None,
+//                 None,
+//                 Some(31142),
+//                 None,
+//                 // Unique rows in batch
+//                 Some(4211),  // all not nulls + unique rows + exist in map case
+//                 None,        // mixed + unique rows + exist in map case
+//                 None,        // mixed + unique rows + not exist in map case
+//                 Some(34212), // mixed + unique rows + not exist in map case
+//             ]);
+//
+//             let col2 = StringArray::from(vec![
+//                 // Repeated rows in batch
+//                 Some("string1"), // all not nulls + repeated rows + exist in map case
+//                 None,            // mixed + repeated rows + exist in map case
+//                 Some("3string2"), // mixed + repeated rows + not exist in map case
+//                 None,            // mixed + repeated rows + not exist in map case
+//                 None,            // all nulls + repeated rows + exist in map case
+//                 Some("string1"),
+//                 None,
+//                 Some("3string2"),
+//                 None,
+//                 None,
+//                 // Unique rows in batch
+//                 Some("string3"), // all not nulls + unique rows + exist in map case
+//                 None,            // mixed + unique rows + exist in map case
+//                 Some("3string4"), // mixed + unique rows + not exist in map case
+//                 None,            // mixed + unique rows + not exist in map case
+//             ]);
+//
+//             let col3 = StringViewArray::from(vec![
+//                 // Repeated rows in batch
+//                 Some("stringview1"), // all not nulls + repeated rows + exist in map case
+//                 Some("stringview2"), // mixed + repeated rows + exist in map case
+//                 None,                // mixed + repeated rows + not exist in map case
+//                 None,                // mixed + repeated rows + not exist in map case
+//                 None,                // all nulls + repeated rows + exist in map case
+//                 Some("stringview1"),
+//                 Some("stringview2"),
+//                 None,
+//                 None,
+//                 None,
+//                 // Unique rows in batch
+//                 Some("stringview3"), // all not nulls + unique rows + exist in map case
+//                 Some("stringview4"), // mixed + unique rows + exist in map case
+//                 None,                // mixed + unique rows + not exist in map case
+//                 None,                // mixed + unique rows + not exist in map case
+//             ]);
+//             let batch3 = vec![
+//                 Arc::new(col1) as _,
+//                 Arc::new(col2) as _,
+//                 Arc::new(col3) as _,
+//             ];
+//
+//             // Expected batch
+//             let schema = Arc::new(Schema::new(vec![
+//                 Field::new("a", DataType::Int64, true),
+//                 Field::new("b", DataType::Utf8, true),
+//                 Field::new("c", DataType::Utf8View, true),
+//             ]));
+//
+//             let col1 = Int64Array::from(vec![
+//                 // Repeated rows in batch
+//                 Some(42),
+//                 None,
+//                 None,
+//                 Some(1142),
+//                 None,
+//                 Some(21142),
+//                 None,
+//                 Some(31142),
+//                 None,
+//                 // Unique rows in batch
+//                 Some(4211),
+//                 None,
+//                 None,
+//                 Some(4212),
+//                 None,
+//                 Some(24212),
+//                 None,
+//                 Some(34212),
+//             ]);
+//
+//             let col2 = StringArray::from(vec![
+//                 // Repeated rows in batch
+//                 Some("string1"),
+//                 None,
+//                 Some("string2"),
+//                 None,
+//                 Some("2string2"),
+//                 None,
+//                 Some("3string2"),
+//                 None,
+//                 None,
+//                 // Unique rows in batch
+//                 Some("string3"),
+//                 None,
+//                 Some("string4"),
+//                 None,
+//                 Some("2string4"),
+//                 None,
+//                 Some("3string4"),
+//                 None,
+//             ]);
+//
+//             let col3 = StringViewArray::from(vec![
+//                 // Repeated rows in batch
+//                 Some("stringview1"),
+//                 Some("stringview2"),
+//                 None,
+//                 None,
+//                 None,
+//                 None,
+//                 None,
+//                 None,
+//                 None,
+//                 // Unique rows in batch
+//                 Some("stringview3"),
+//                 Some("stringview4"),
+//                 None,
+//                 None,
+//                 None,
+//                 None,
+//                 None,
+//                 None,
+//             ]);
+//             let expected_batch = vec![
+//                 Arc::new(col1) as _,
+//                 Arc::new(col2) as _,
+//                 Arc::new(col3) as _,
+//             ];
+//             let expected_batch = RecordBatch::try_new(schema, expected_batch).unwrap();
+//
+//             Self {
+//                 test_batches: vec![batch1, batch2, batch3],
+//                 expected_batch,
+//             }
+//         }
+//
+//         fn load_to_group_values(&self, group_values: &mut impl GroupValues) {
+//             for batch in self.test_batches.iter() {
+//                 group_values.intern(batch, &mut vec![]).unwrap();
+//             }
+//         }
+//
+//         fn schema(&self) -> SchemaRef {
+//             self.expected_batch.schema()
+//         }
+//     }
+//
+//     fn check_result(actual_batch: &RecordBatch, expected_batch: &RecordBatch) {
+//         let formatted_actual_batch =
+//             pretty_format_batches(std::slice::from_ref(actual_batch))
+//                 .unwrap()
+//                 .to_string();
+//         let mut formatted_actual_batch_sorted: Vec<&str> =
+//             formatted_actual_batch.trim().lines().collect();
+//         formatted_actual_batch_sorted.sort_unstable();
+//
+//         let formatted_expected_batch =
+//             pretty_format_batches(std::slice::from_ref(expected_batch))
+//                 .unwrap()
+//                 .to_string();
+//
+//         let mut formatted_expected_batch_sorted: Vec<&str> =
+//             formatted_expected_batch.trim().lines().collect();
+//         formatted_expected_batch_sorted.sort_unstable();
+//
+//         for (i, (actual_line, expected_line)) in formatted_actual_batch_sorted
+//             .iter()
+//             .zip(&formatted_expected_batch_sorted)
+//             .enumerate()
+//         {
+//             assert_eq!(
+//                 (i, actual_line),
+//                 (i, expected_line),
+//                 "Inconsistent result\n\n\
+//                  Actual batch:\n{formatted_actual_batch}\n\
+//                  Expected batch:\n{formatted_expected_batch}\n\
+//                  ",
+//             );
+//         }
+//     }
+//
+//     fn insert_inline_group_index_view(
+//         group_values: &mut GroupValuesColumn<false>,
+//         hash_key: u64,
+//         group_index: u64,
+//     ) {
+//         let group_index_view = GroupIndexView::new_inlined(group_index);
+//         group_values.map.insert_accounted(
+//             (hash_key, group_index_view),
+//             |(hash, _)| *hash,
+//             &mut group_values.map_size,
+//         );
+//     }
+//
+//     fn insert_non_inline_group_index_view(
+//         group_values: &mut GroupValuesColumn<false>,
+//         hash_key: u64,
+//         group_indices: Vec<usize>,
+//     ) {
+//         let list_offset = group_values.group_index_lists.len();
+//         let group_index_view = GroupIndexView::new_non_inlined(list_offset as u64);
+//         group_values.group_index_lists.push(group_indices);
+//         group_values.map.insert_accounted(
+//             (hash_key, group_index_view),
+//             |(hash, _)| *hash,
+//             &mut group_values.map_size,
+//         );
+//     }
+// }

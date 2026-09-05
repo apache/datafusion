@@ -1565,7 +1565,7 @@ mod tests {
         let exec = Arc::new(TestMemoryExec::update_cache(&Arc::new(exec)));
 
         // Use Partial mode where the race condition occurs
-        let aggregate_exec = AggregateExec::try_new(
+        let aggregate_exec = AggregateExec::actual_try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::new_single(group_expr),
             aggr_expr,
@@ -1659,7 +1659,7 @@ mod tests {
 
         // GROUP BY sort_col, group_col with input sorted on sort_col
         // gives PartiallySorted([0])
-        let aggregate_exec = AggregateExec::try_new(
+        let aggregate_exec = AggregateExec::actual_try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::new_single(vec![
                 (col("sort_col", &schema)?, "sort_col".to_string()),

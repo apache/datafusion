@@ -674,7 +674,7 @@ mod tests {
             sum_aggregate(&schema, "a", "SUM(a)")?,
             sum_aggregate(&schema, "b", "SUM(b)")?,
         ];
-        let aggregate = Arc::new(AggregateExec::try_new(
+        let aggregate = Arc::new(AggregateExec::actual_try_new(
             AggregateMode::Single,
             PhysicalGroupBy::default(),
             aggregates,
@@ -725,7 +725,7 @@ mod tests {
             sum_aggregate(&schema, "b", "SUM(b)")?,
         ];
         let group_by = PhysicalGroupBy::default();
-        let partial = Arc::new(AggregateExec::try_new(
+        let partial = Arc::new(AggregateExec::actual_try_new(
             AggregateMode::Partial,
             group_by.clone(),
             aggregates.clone(),
@@ -733,7 +733,7 @@ mod tests {
             input,
             Arc::clone(&schema),
         )?);
-        let final_aggregate = Arc::new(AggregateExec::try_new(
+        let final_aggregate = Arc::new(AggregateExec::actual_try_new(
             AggregateMode::Final,
             group_by.as_final(),
             aggregates,

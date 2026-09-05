@@ -68,6 +68,7 @@ mod topk;
 mod visitor;
 
 pub mod aggregates;
+pub mod aggregates_blocked;
 pub mod analyze;
 pub mod async_func;
 pub mod buffer;

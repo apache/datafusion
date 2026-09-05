@@ -45,10 +45,13 @@ use datafusion_expr::{
     TypeSignatureClass, Volatility,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::blocked_prim_op::BlockedPrimitiveGroupsAccumulator;
 use datafusion_functions_aggregate_common::aggregate::sum_distinct::DistinctSumAccumulator;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr::expressions::{CastExpr, Column};
 use std::mem::{size_of, size_of_val};
+use datafusion_expr::groups_accumulator::BlockedGroupsAccumulator;
+use datafusion_functions_aggregate_common::accumulator::BlockedAccumulatorArgs;
 
 make_udaf_expr_and_func!(
     Sum,
@@ -314,6 +317,26 @@ impl AggregateUDFImpl for Sum {
                 Ok(Box::new(PrimitiveGroupsAccumulator::<$t, _>::new(
                     &$dt,
                     |x, y| *x = x.add_wrapping(y),
+                )))
+            };
+        }
+        downcast_sum!(args, helper)
+    }
+
+    fn blocked_groups_accumulator_supported(&self, args: BlockedAccumulatorArgs) -> bool {
+        !args.is_distinct
+    }
+
+    fn create_blocked_groups_accumulator(
+        &self,
+        args: BlockedAccumulatorArgs,
+    ) -> Result<Box<dyn BlockedGroupsAccumulator>> {
+        macro_rules! helper {
+            ($t:ty, $dt:expr) => {
+                Ok(Box::new(BlockedPrimitiveGroupsAccumulator::<$t, _>::new(
+                    &$dt,
+                    |x, y| *x = x.add_wrapping(y),
+                    args.batch_size,
                 )))
             };
         }

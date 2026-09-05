@@ -45,7 +45,7 @@ use datafusion_expr::{
 use datafusion_functions_aggregate_common::aggregate::avg_distinct::{
     DecimalDistinctAvgAccumulator, Float64DistinctAvgAccumulator,
 };
-use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::{BlockedNullState, NullState};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::{
     filtered_null_mask, set_nulls,
 };
@@ -56,6 +56,10 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
+use arrow::datatypes::DataType::Float64;
+use datafusion_expr::blocked_helpers::CopyItemBlockedVecBuilder;
+use datafusion_expr::groups_accumulator::{BlockedEmitTo, BlockedGroupSelection, BlockedGroupsAccumulator, BlocksIndex};
+use datafusion_functions_aggregate_common::accumulator::BlockedAccumulatorArgs;
 
 make_udaf_expr_and_func!(
     Avg,
@@ -227,6 +231,63 @@ macro_rules! decimal_avg_dispatch {
                 DataType::Decimal256(..),
                 DataType::Decimal256(..),
             ) => $builder::<Decimal256Type, Decimal256Type, Decimal256Type>(sum, output),
+            (input, sum, output) => {
+                internal_err!(
+                    "avg cannot accumulate {input} as {sum} and return {output}"
+                )
+            }
+        }
+    }};
+    ($input:expr, $sum:expr, $output:expr, $builder:ident, $batch_size:expr) => {{
+        let input = $input;
+        let sum = $sum;
+        let output = $output;
+        match (input, sum, output) {
+            (
+                DataType::Decimal32(..),
+                DataType::Decimal64(..),
+                DataType::Decimal32(..),
+            ) => $builder::<Decimal32Type, Decimal64Type, Decimal32Type>(sum, output, $batch_size),
+            (
+                DataType::Decimal32(..),
+                DataType::Decimal128(..),
+                DataType::Decimal64(..),
+            ) => $builder::<Decimal32Type, Decimal128Type, Decimal64Type>(sum, output, $batch_size),
+            (
+                DataType::Decimal64(..),
+                DataType::Decimal64(..),
+                DataType::Decimal64(..),
+            ) => $builder::<Decimal64Type, Decimal64Type, Decimal64Type>(sum, output, $batch_size),
+            (
+                DataType::Decimal64(..),
+                DataType::Decimal128(..),
+                DataType::Decimal64(..),
+            ) => $builder::<Decimal64Type, Decimal128Type, Decimal64Type>(sum, output, $batch_size),
+            (
+                DataType::Decimal64(..),
+                DataType::Decimal128(..),
+                DataType::Decimal128(..),
+            ) => $builder::<Decimal64Type, Decimal128Type, Decimal128Type>(sum, output, $batch_size),
+            (
+                DataType::Decimal128(..),
+                DataType::Decimal128(..),
+                DataType::Decimal128(..),
+            ) => $builder::<Decimal128Type, Decimal128Type, Decimal128Type>(sum, output, $batch_size),
+            (
+                DataType::Decimal128(..),
+                DataType::Decimal256(..),
+                DataType::Decimal128(..),
+            ) => $builder::<Decimal128Type, Decimal256Type, Decimal128Type>(sum, output, $batch_size),
+            (
+                DataType::Decimal128(..),
+                DataType::Decimal256(..),
+                DataType::Decimal256(..),
+            ) => $builder::<Decimal128Type, Decimal256Type, Decimal256Type>(sum, output, $batch_size),
+            (
+                DataType::Decimal256(..),
+                DataType::Decimal256(..),
+                DataType::Decimal256(..),
+            ) => $builder::<Decimal256Type, Decimal256Type, Decimal256Type>(sum, output, $batch_size),
             (input, sum, output) => {
                 internal_err!(
                     "avg cannot accumulate {input} as {sum} and return {output}"
@@ -484,6 +545,101 @@ impl AggregateUDFImpl for Avg {
         }
     }
 
+    fn blocked_groups_accumulator_supported(&self, args: BlockedAccumulatorArgs) -> bool {
+        matches!(
+            args.return_field.data_type(),
+            DataType::Float64
+                | DataType::Decimal32(_, _)
+                | DataType::Decimal64(_, _)
+                | DataType::Decimal128(_, _)
+                | DataType::Decimal256(_, _)
+                | DataType::Duration(_)
+        ) && !args.is_distinct
+    }
+
+    fn create_blocked_groups_accumulator(
+        &self,
+        args: BlockedAccumulatorArgs,
+    ) -> Result<Box<dyn BlockedGroupsAccumulator>> {
+        use DataType::*;
+
+        let data_type = args.expr_fields[0].data_type();
+
+        // instantiate specialized accumulator based for the type
+        match (data_type, args.return_field.data_type()) {
+            (Float64, Float64) => {
+                Ok(Box::new(AvgBlockedGroupsAccumulator::<Float64Type, _>::new(
+                    data_type,
+                    args.return_field.data_type(),
+                    |sum: f64, count: u64| Ok(sum / count as f64),
+                    args.batch_size,
+                )))
+            }
+            (
+                Decimal32(..) | Decimal64(..) | Decimal128(..) | Decimal256(..),
+                Decimal32(..) | Decimal64(..) | Decimal128(..) | Decimal256(..),
+            ) => {
+                let sum_data_type = avg_sum_data_type(data_type);
+                decimal_avg_dispatch!(
+                    data_type,
+                    &sum_data_type,
+                    args.return_field.data_type(),
+                    decimal_avg_blocked_groups_accumulator,
+                    args.batch_size
+                )
+            }
+
+            (Duration(time_unit), Duration(_result_unit)) => {
+                let avg_fn = move |sum: i64, count: u64| Ok(sum / count as i64);
+
+                match time_unit {
+                    TimeUnit::Second => Ok(Box::new(AvgBlockedGroupsAccumulator::<
+                        DurationSecondType,
+                        _,
+                    >::new(
+                        data_type,
+                        args.return_type(),
+                        avg_fn,
+                        args.batch_size,
+                    ))),
+                    TimeUnit::Millisecond => Ok(Box::new(AvgBlockedGroupsAccumulator::<
+                        DurationMillisecondType,
+                        _,
+                    >::new(
+                        data_type,
+                        args.return_type(),
+                        avg_fn,
+                        args.batch_size,
+                    ))),
+                    TimeUnit::Microsecond => Ok(Box::new(AvgBlockedGroupsAccumulator::<
+                        DurationMicrosecondType,
+                        _,
+                    >::new(
+                        data_type,
+                        args.return_type(),
+                        avg_fn,
+                        args.batch_size,
+                    ))),
+                    TimeUnit::Nanosecond => Ok(Box::new(AvgBlockedGroupsAccumulator::<
+                        DurationNanosecondType,
+                        _,
+                    >::new(
+                        data_type,
+                        args.return_type(),
+                        avg_fn,
+                        args.batch_size,
+                    ))),
+                }
+            }
+
+            _ => not_impl_err!(
+                "AvgBlockedGroupsAccumulator for ({} --> {})",
+                &data_type,
+                args.return_field.data_type()
+            ),
+        }
+    }
+
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
@@ -595,12 +751,12 @@ fn decimal_avg_groups_accumulator<I, S, O>(
     return_data_type: &DataType,
 ) -> Result<Box<dyn GroupsAccumulator>>
 where
-    I: DecimalType + ArrowNumericType + Debug + Send + Sync,
-    O: DecimalType + ArrowNumericType + Debug + Send + Sync,
-    S: DecimalType + ArrowNumericType + Debug + Send + Sync,
-    I::Native: Into<S::Native> + DecimalCast,
-    O::Native: DecimalCast,
-    S::Native: DecimalCast,
+  I: DecimalType + ArrowNumericType + Debug + Send + Sync,
+  O: DecimalType + ArrowNumericType + Debug + Send + Sync,
+  S: DecimalType + ArrowNumericType + Debug + Send + Sync,
+  I::Native: Into<S::Native> + DecimalCast,
+  O::Native: DecimalCast,
+  S::Native: DecimalCast,
 {
     let (_, sum_scale) = decimal_parts(sum_data_type)?;
     let (target_precision, target_scale) = decimal_parts(return_data_type)?;
@@ -610,6 +766,31 @@ where
         sum_data_type,
         return_data_type,
         avg_fn,
+    )))
+}
+
+fn decimal_avg_blocked_groups_accumulator<I, S, O>(
+    sum_data_type: &DataType,
+    return_data_type: &DataType,
+    batch_size: usize,
+) -> Result<Box<dyn BlockedGroupsAccumulator>>
+where
+  I: DecimalType + ArrowNumericType + Debug + Send + Sync,
+  O: DecimalType + ArrowNumericType + Debug + Send + Sync,
+  S: DecimalType + ArrowNumericType + Debug + Send + Sync,
+  I::Native: Into<S::Native> + DecimalCast,
+  O::Native: DecimalCast,
+  S::Native: DecimalCast,
+{
+    let (_, sum_scale) = decimal_parts(sum_data_type)?;
+    let (target_precision, target_scale) = decimal_parts(return_data_type)?;
+    let avg_fn = decimal_avg_fn::<O, S>(sum_scale, target_precision, target_scale)?;
+
+    Ok(Box::new(AvgBlockedGroupsAccumulator::<I, _, S, O>::new(
+        sum_data_type,
+        return_data_type,
+        avg_fn,
+        batch_size,
     )))
 }
 
@@ -978,11 +1159,11 @@ impl Accumulator for DurationAvgAccumulator {
 #[derive(Debug)]
 struct AvgGroupsAccumulator<I, F, S = I, O = I>
 where
-    I: ArrowNumericType + Send,
-    O: ArrowNumericType + Send,
-    S: ArrowNumericType + Send,
-    I::Native: Into<S::Native>,
-    F: Fn(S::Native, u64) -> Result<O::Native> + Send + 'static,
+  I: ArrowNumericType + Send,
+  O: ArrowNumericType + Send,
+  S: ArrowNumericType + Send,
+  I::Native: Into<S::Native>,
+  F: Fn(S::Native, u64) -> Result<O::Native> + Send + 'static,
 {
     /// The type of the internal sum
     sum_data_type: DataType,
@@ -1007,11 +1188,11 @@ where
 
 impl<I, F, S, O> AvgGroupsAccumulator<I, F, S, O>
 where
-    I: ArrowNumericType + Send,
-    O: ArrowNumericType + Send,
-    S: ArrowNumericType + Send,
-    I::Native: Into<S::Native>,
-    F: Fn(S::Native, u64) -> Result<O::Native> + Send + 'static,
+  I: ArrowNumericType + Send,
+  O: ArrowNumericType + Send,
+  S: ArrowNumericType + Send,
+  I::Native: Into<S::Native>,
+  F: Fn(S::Native, u64) -> Result<O::Native> + Send + 'static,
 {
     pub fn new(sum_data_type: &DataType, return_data_type: &DataType, avg_fn: F) -> Self {
         debug!(
@@ -1043,10 +1224,10 @@ where
 
         // Don't evaluate averages with null inputs to avoid errors on null values.
         let array: PrimitiveArray<O> = if let Some(nulls) = &nulls
-            && nulls.null_count() > 0
+          && nulls.null_count() > 0
         {
             let mut builder = PrimitiveBuilder::<O>::with_capacity(nulls.len())
-                .with_data_type(self.return_data_type.clone());
+              .with_data_type(self.return_data_type.clone());
             let iter = sums.into_iter().zip(counts).zip(nulls.iter());
 
             for ((sum, count), is_valid) in iter {
@@ -1059,12 +1240,12 @@ where
             builder.finish()
         } else {
             let averages: Vec<O::Native> = sums
-                .into_iter()
-                .zip(counts)
-                .map(|(sum, count)| (self.avg_fn)(sum, count))
-                .collect::<Result<Vec<_>>>()?;
+              .into_iter()
+              .zip(counts)
+              .map(|(sum, count)| (self.avg_fn)(sum, count))
+              .collect::<Result<Vec<_>>>()?;
             PrimitiveArray::new(averages.into(), nulls)
-                .with_data_type(self.return_data_type.clone())
+              .with_data_type(self.return_data_type.clone())
         };
 
         Ok(Arc::new(array))
@@ -1078,18 +1259,18 @@ where
     ) -> Vec<ArrayRef> {
         let counts = UInt64Array::new(counts.into(), nulls.clone());
         let sums = PrimitiveArray::<S>::new(sums.into(), nulls)
-            .with_data_type(self.sum_data_type.clone());
+          .with_data_type(self.sum_data_type.clone());
         vec![Arc::new(counts), Arc::new(sums)]
     }
 }
 
 impl<I, F, S, O> GroupsAccumulator for AvgGroupsAccumulator<I, F, S, O>
 where
-    I: ArrowNumericType + Send,
-    O: ArrowNumericType + Send,
-    S: ArrowNumericType + Send,
-    I::Native: Into<S::Native>,
-    F: Fn(S::Native, u64) -> Result<O::Native> + Send + 'static,
+  I: ArrowNumericType + Send,
+  O: ArrowNumericType + Send,
+  S: ArrowNumericType + Send,
+  I::Native: Into<S::Native>,
+  F: Fn(S::Native, u64) -> Result<O::Native> + Send + 'static,
 {
     fn update_batch(
         &mut self,
@@ -1225,12 +1406,12 @@ where
                 // Values under null slots are widened too rather than branching per
                 // element; `set_nulls` below masks them out again.
                 let sums: Vec<S::Native> = values
-                    .values()
-                    .iter()
-                    .map(|value| (*value).into())
-                    .collect();
+                  .values()
+                  .iter()
+                  .map(|value| (*value).into())
+                  .collect();
                 PrimitiveArray::<S>::new(sums.into(), values.nulls().cloned())
-                    .with_data_type(self.sum_data_type.clone())
+                  .with_data_type(self.sum_data_type.clone())
             }
         };
         let counts = UInt64Array::from_value(1, sums.len());
@@ -1246,12 +1427,376 @@ where
     fn size(&self) -> usize {
         // Heap buffers
         self.counts.capacity() * size_of::<u64>()
-        + self.sums.capacity() * size_of::<S::Native>()
-        // Vec struct overhead (ptr, len, cap) for each field
-        + size_of::<Vec<u64>>()
-        + size_of::<Vec<S::Native>>()
-        // Null tracking buffers
-        + self.null_state.size()
+          + self.sums.capacity() * size_of::<S::Native>()
+          // Vec struct overhead (ptr, len, cap) for each field
+          + size_of::<Vec<u64>>()
+          + size_of::<Vec<S::Native>>()
+          // Null tracking buffers
+          + self.null_state.size()
+    }
+}
+
+/// An accumulator to compute the average of `[PrimitiveArray<I>]`.
+/// Stores values as native types, and does overflow checking
+///
+/// F: Function that calculates the average value from a sum of
+/// S::Native and a total count
+///
+/// `I` is the input type, `O` is the output type, and `S` is a possibly wider
+/// type used to accumulate the sum so it does not overflow.
+#[derive(Debug)]
+struct AvgBlockedGroupsAccumulator<I, F, S = I, O = I>
+where
+  I: ArrowNumericType + Send,
+  O: ArrowNumericType + Send,
+  S: ArrowNumericType + Send,
+  I::Native: Into<S::Native>,
+  F: Fn(S::Native, u64) -> Result<O::Native> + Send + 'static,
+{
+    /// The type of the internal sum
+    sum_data_type: DataType,
+
+    /// The type of the returned average
+    return_data_type: DataType,
+
+    /// Count per group (use u64 to make UInt64Array)
+    counts: CopyItemBlockedVecBuilder<true, u64>,
+
+    /// Sums per group, stored as the native type
+    sums: CopyItemBlockedVecBuilder<true, S::Native>,
+
+    /// Track nulls in the input / filters
+    null_state: BlockedNullState,
+
+    /// Function that computes the final average (value / count)
+    avg_fn: F,
+
+    _phantom: PhantomData<(I, O)>,
+}
+
+impl<I, F, S, O> AvgBlockedGroupsAccumulator<I, F, S, O>
+where
+  I: ArrowNumericType + Send,
+  O: ArrowNumericType + Send,
+  S: ArrowNumericType + Send,
+  I::Native: Into<S::Native>,
+  F: Fn(S::Native, u64) -> Result<O::Native> + Send + 'static,
+{
+    pub fn new(sum_data_type: &DataType, return_data_type: &DataType, avg_fn: F, batch_size: usize) -> Self {
+        debug!(
+            "AvgBlockedGroupsAccumulator ({}, sum type: {sum_data_type}) --> {return_data_type}",
+            std::any::type_name::<I>()
+        );
+
+        Self {
+            return_data_type: return_data_type.clone(),
+            sum_data_type: sum_data_type.clone(),
+            counts: CopyItemBlockedVecBuilder::new(batch_size),
+            sums: CopyItemBlockedVecBuilder::new(batch_size),
+            null_state: BlockedNullState::new(batch_size),
+            avg_fn,
+            _phantom: PhantomData,
+        }
+    }
+
+    fn evaluate_values(
+        &self,
+        counts: Vec<u64>,
+        sums: Vec<S::Native>,
+        nulls: Option<NullBuffer>,
+    ) -> Result<ArrayRef> {
+        if let Some(nulls) = &nulls {
+            assert_eq!(nulls.len(), sums.len());
+        }
+        assert_eq!(counts.len(), sums.len());
+
+        // Don't evaluate averages with null inputs to avoid errors on null values.
+        let array: PrimitiveArray<O> = if let Some(nulls) = &nulls
+          && nulls.null_count() > 0
+        {
+            let mut builder = PrimitiveBuilder::<O>::with_capacity(nulls.len())
+              .with_data_type(self.return_data_type.clone());
+            let iter = sums.into_iter().zip(counts).zip(nulls.iter());
+
+            for ((sum, count), is_valid) in iter {
+                if is_valid {
+                    builder.append_value((self.avg_fn)(sum, count)?)
+                } else {
+                    builder.append_null();
+                }
+            }
+            builder.finish()
+        } else {
+            let averages: Vec<O::Native> = sums
+              .into_iter()
+              .zip(counts)
+              .map(|(sum, count)| (self.avg_fn)(sum, count))
+              .collect::<Result<Vec<_>>>()?;
+            PrimitiveArray::new(averages.into(), nulls)
+              .with_data_type(self.return_data_type.clone())
+        };
+
+        Ok(Arc::new(array))
+    }
+
+    fn state_values(
+        &self,
+        counts: Vec<u64>,
+        sums: Vec<S::Native>,
+        nulls: Option<NullBuffer>,
+    ) -> Vec<ArrayRef> {
+        let counts = UInt64Array::new(counts.into(), nulls.clone());
+        let sums = PrimitiveArray::<S>::new(sums.into(), nulls)
+          .with_data_type(self.sum_data_type.clone());
+        vec![Arc::new(counts), Arc::new(sums)]
+    }
+}
+
+impl<I, F, S, O> BlockedGroupsAccumulator for AvgBlockedGroupsAccumulator<I, F, S, O>
+where
+  I: ArrowNumericType + Send,
+  O: ArrowNumericType + Send,
+  S: ArrowNumericType + Send,
+  I::Native: Into<S::Native>,
+  F: Fn(S::Native, u64) -> Result<O::Native> + Send + 'static,
+{
+    fn batch_size(&self) -> usize {
+        self.counts.block_size()
+    }
+
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[BlocksIndex],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 1, "single argument to update_batch");
+        let values = values[0].as_primitive::<I>();
+
+        // increment counts, update sums
+        {
+            // update counts with partial counts
+            let prev_len = self.counts.len();
+            self.counts.push_value_n(0, total_num_groups - prev_len);
+        }
+        {
+            // update counts with partial counts
+            let prev_len = self.sums.len();
+            self.sums.push_default_n(total_num_groups - prev_len);
+        }
+
+        self.null_state.accumulate(
+            group_indices,
+            values,
+            opt_filter,
+            total_num_groups,
+            |group_index, new_value| {
+                // SAFETY: group_index is guaranteed to be in bounds
+                // TODO - add get unchecked mut back
+                let sum = &mut self.sums[group_index];
+                *sum = add_avg_sum::<I, S>(*sum, new_value);
+
+                self.counts[group_index] += 1;
+            },
+        );
+
+        Ok(())
+    }
+
+    fn evaluate(&mut self, emit_to: BlockedEmitTo) -> Result<Vec<ArrayRef>> {
+        match emit_to {
+            BlockedEmitTo::All => {
+                let mut blocks = Vec::with_capacity(self.counts.num_blocks());
+                while let Some(counts) = self.counts.take_block() {
+                    let sums = self.sums.take_block().expect("must have");
+                    let nulls = self.null_state.take_block();
+
+                    blocks.push(self.evaluate_values(counts, sums, nulls)?);
+                }
+                assert!(self.sums.take_block().is_none());
+
+                Ok(blocks)
+            }
+            BlockedEmitTo::NextBlock => {
+                let Some(counts) = self.counts.take_block() else {
+                    assert!(self.sums.take_block().is_none());
+                    return Ok(vec![]);
+                };
+                let sums = self.sums.take_block().expect("must have");
+                let nulls = self.null_state.take_block();
+
+                Ok(vec![self.evaluate_values(counts, sums, nulls)?])
+            }
+            BlockedEmitTo::First(n) => {
+                let counts = self.counts.take_n_fixed(n);
+                let sums = self.sums.take_n_fixed(n);
+                let nulls = self.null_state.take_n(n);
+
+                Ok(vec![self.evaluate_values(counts, sums, nulls)?])
+            }
+        }
+    }
+
+    fn evaluate_preserving(&mut self, selection: BlockedGroupSelection<'_>) -> Result<ArrayRef> {
+        debug_assert_eq!(self.counts.len(), self.sums.len());
+        selection.validate_num_groups(self.counts.len())?;
+        let counts = selection.iter().map(|index| self.counts[index]).collect();
+        let sums = selection.iter().map(|index| self.sums[index]).collect();
+        let nulls = self.null_state.build_preserving(selection)?;
+        self.evaluate_values(counts, sums, nulls)
+    }
+
+    fn supports_evaluate_preserving(&self) -> bool {
+        true
+    }
+
+    // return arrays for sums and counts
+    fn state(&mut self, emit_to: BlockedEmitTo) -> Result<Vec<Vec<ArrayRef>>> {
+        match emit_to {
+            BlockedEmitTo::All => {
+                let mut blocks = Vec::with_capacity(self.counts.num_blocks());
+                while let Some(counts) = self.counts.take_block() {
+                    let sums = self.sums.take_block().expect("must have");
+                    let nulls = self.null_state.take_block();
+
+                    blocks.push(self.state_values(counts, sums, nulls));
+                }
+                assert!(self.sums.take_block().is_none());
+
+                Ok(blocks)
+            }
+            BlockedEmitTo::NextBlock => {
+                let Some(counts) = self.counts.take_block() else {
+                    assert!(self.sums.take_block().is_none());
+                    return Ok(vec![]);
+                };
+                let sums = self.sums.take_block().expect("must have");
+                let nulls = self.null_state.take_block();
+
+                Ok(vec![self.state_values(counts, sums, nulls)])
+            }
+            BlockedEmitTo::First(n) => {
+                let counts = self.counts.take_n_fixed(n);
+                let sums = self.sums.take_n_fixed(n);
+                let nulls = self.null_state.take_n(n);
+
+                Ok(vec![self.state_values(counts, sums, nulls)])
+            }
+        }
+    }
+
+    fn state_preserving(
+        &mut self,
+        selection: BlockedGroupSelection<'_>,
+    ) -> Result<Vec<ArrayRef>> {
+        debug_assert_eq!(self.counts.len(), self.sums.len());
+        selection.validate_num_groups(self.counts.len())?;
+        let counts = selection.iter().map(|index| self.counts[index]).collect();
+        let sums = selection.iter().map(|index| self.sums[index]).collect();
+        let nulls = self.null_state.build_preserving(selection)?;
+        Ok(self.state_values(counts, sums, nulls))
+    }
+
+    fn supports_state_preserving(&self) -> bool {
+        true
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[BlocksIndex],
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 2, "two arguments to merge_batch");
+        // first batch is counts, second is partial sums
+        let partial_counts = values[0].as_primitive::<UInt64Type>();
+        let partial_sums = values[1].as_primitive::<S>();
+        {
+            // update counts with partial counts
+            let prev_len = self.counts.len();
+            self.counts.push_value_n(0, total_num_groups - prev_len);
+        }
+        self.null_state.accumulate(
+            group_indices,
+            partial_counts,
+            None,
+            total_num_groups,
+            |group_index, partial_count| {
+                // SAFETY: group_index is guaranteed to be in bounds
+                // TODO - add back the get_mut_unchecked
+                let count = &mut self.counts[group_index];
+                *count += partial_count;
+            },
+        );
+
+        // update sums
+        {
+            // update counts with partial counts
+            let prev_len = self.sums.len();
+            self.sums.push_default_n(total_num_groups - prev_len);
+        }
+        self.null_state.accumulate(
+            group_indices,
+            partial_sums,
+            None,
+            total_num_groups,
+            |group_index, new_value: <S as ArrowPrimitiveType>::Native| {
+                // SAFETY: group_index is guaranteed to be in bounds
+                // TODO - add back the get unchecked
+                let sum = &mut self.sums[group_index];
+                *sum = add_avg_sum::<S, S>(*sum, new_value);
+            },
+        );
+
+        Ok(())
+    }
+
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        // When the sum type equals the input type (`I == S`: `Float64`,
+        // `Duration`, `Decimal256`, and any decimal whose precision already
+        // leaves [`avg_sum_data_type`] enough headroom) the input is already a
+        // valid sum array and is reused as is; the downcast is by Rust type, so
+        // it succeeds even when precision differs. Otherwise every value is
+        // widened.
+        let sums = match values[0].as_any().downcast_ref::<PrimitiveArray<S>>() {
+            Some(sums) => sums.clone().with_data_type(self.sum_data_type.clone()),
+            None => {
+                let values = values[0].as_primitive::<I>();
+                // Values under null slots are widened too rather than branching per
+                // element; `set_nulls` below masks them out again.
+                let sums: Vec<S::Native> = values
+                  .values()
+                  .iter()
+                  .map(|value| (*value).into())
+                  .collect();
+                PrimitiveArray::<S>::new(sums.into(), values.nulls().cloned())
+                  .with_data_type(self.sum_data_type.clone())
+            }
+        };
+        let counts = UInt64Array::from_value(1, sums.len());
+
+        let nulls = filtered_null_mask(opt_filter, &sums);
+
+        // set nulls on the arrays
+        let counts = set_nulls(counts, nulls.clone());
+        let sums = set_nulls(sums, nulls);
+
+        Ok(vec![Arc::new(counts) as ArrayRef, Arc::new(sums)])
+    }
+    fn size(&self) -> usize {
+        // Heap buffers
+        self.counts.allocated_size()
+          + self.sums.allocated_size()
+          // Vec struct overhead (ptr, len, cap) for each field
+          + size_of::<Vec<u64>>()
+          + size_of::<Vec<S::Native>>()
+          // Null tracking buffers
+          + self.null_state.size()
     }
 }
 
