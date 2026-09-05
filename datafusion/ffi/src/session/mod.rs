@@ -21,10 +21,10 @@
 //!
 //! Consider a session owned by library A that uses a query planner owned by
 //! library C. After A installs C's planner, [`ForeignSession::query_planner`]
-//! returns C's planner and [`ForeignSession::create_physical_plan`] dispatches
-//! to C's planner. C must not call `create_physical_plan`, or invoke the planner
-//! returned by `query_planner`, to delegate planning back to A. Repeating either
-//! self-call recurses until the stack is exhausted.
+//! returns C's planner. Invoking it to delegate planning back to A is a direct
+//! self-call. [`ForeignSession::create_physical_plan`] is deliberately
+//! unsupported because dispatching through A's session would likewise re-enter
+//! C's planner.
 //!
 //! To delegate safely, A must export its original planner before installing C's
 //! planner, and C must retain and invoke that planner directly. See the
@@ -40,7 +40,7 @@ use arrow_schema::ffi::FFI_ArrowSchema;
 use async_ffi::{FfiFuture, FutureExt};
 use async_trait::async_trait;
 use datafusion_common::config::{ConfigFileType, ConfigOptions, TableOptions};
-use datafusion_common::{DFSchema, DataFusionError};
+use datafusion_common::{DFSchema, DataFusionError, not_impl_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
@@ -117,6 +117,8 @@ pub(crate) struct FFI_SessionRef {
         logical_plan_serialized: SVec<u8>,
     ) -> FFI_Result<SVec<u8>>,
 
+    /// Retained at its original position for ABI compatibility with consumers
+    /// compiled against DataFusion 55. Direct session planning is unsupported.
     create_physical_plan:
         unsafe extern "C" fn(
             &Self,
@@ -239,31 +241,15 @@ unsafe extern "C" fn optimize_fn_wrapper(
 }
 
 unsafe extern "C" fn create_physical_plan_fn_wrapper(
-    session: &FFI_SessionRef,
-    logical_plan_serialized: SVec<u8>,
+    _session: &FFI_SessionRef,
+    _logical_plan_serialized: SVec<u8>,
 ) -> FfiFuture<FFI_Result<FFI_ExecutionPlan>> {
-    unsafe {
-        let runtime = session.runtime().cloned();
-        let session = session.clone();
-        async move {
-            let logical_codec: Arc<dyn LogicalExtensionCodec> =
-                (&session.logical_codec).into();
-            let session = session.inner();
-            let task_ctx = session.task_ctx();
-
-            let logical_plan =
-                sresult_return!(logical_plan_from_bytes_with_extension_codec(
-                    logical_plan_serialized.as_slice(),
-                    task_ctx.as_ref(),
-                    logical_codec.as_ref(),
-                ));
-
-            let physical_plan = session.create_physical_plan(&logical_plan).await;
-
-            sresult!(physical_plan.map(|plan| FFI_ExecutionPlan::new(plan, runtime)))
-        }
-        .into_ffi()
+    async move {
+        sresult!(not_impl_err!(
+            "FFI_SessionRef::create_physical_plan is unsupported; export and invoke an FFI_QueryPlanner captured before installing a foreign planner"
+        ))
     }
+    .into_ffi()
 }
 
 unsafe extern "C" fn create_physical_expr_fn_wrapper(
@@ -529,11 +515,11 @@ impl FFI_SessionRef {
 /// # Query planner delegation
 ///
 /// If the session owner installed the current foreign query planner,
-/// [`Session::create_physical_plan`] dispatches back to that planner and
 /// [`Session::query_planner`] returns that planner. The planner must retain and
-/// invoke the session owner's previous planner instead of using either method to
-/// delegate back to the session. Otherwise, repeated delegation exhausts the
-/// stack. See [`crate::query_planner`] for details.
+/// invoke the session owner's previous planner rather than delegate back through
+/// the session. [`Session::create_physical_plan`] returns an error because such
+/// delegation would re-enter the installed planner. See [`crate::query_planner`]
+/// for details.
 #[derive(Debug)]
 pub struct ForeignSession {
     session: FFI_SessionRef,
@@ -748,24 +734,11 @@ impl Session for ForeignSession {
 
     async fn create_physical_plan(
         &self,
-        logical_plan: &LogicalPlan,
+        _logical_plan: &LogicalPlan,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
-        unsafe {
-            let codec: Arc<dyn LogicalExtensionCodec> =
-                (&self.session.logical_codec).into();
-            let logical_plan =
-                logical_plan_to_bytes_with_extension_codec(logical_plan, codec.as_ref())?;
-            let physical_plan = df_result!(
-                (self.session.create_physical_plan)(
-                    &self.session,
-                    logical_plan.as_ref().into()
-                )
-                .await
-            )?;
-            let physical_plan = <Arc<dyn ExecutionPlan>>::try_from(&physical_plan)?;
-
-            Ok(physical_plan)
-        }
+        not_impl_err!(
+            "ForeignSession::create_physical_plan is unsupported; export and invoke an FFI_QueryPlanner captured before installing a foreign planner"
+        )
     }
 
     fn create_physical_expr(
@@ -859,20 +832,37 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use arrow::array::record_batch;
     use arrow_schema::{DataType, Field, Schema};
-    use datafusion::catalog::{MemTable, MemoryCatalogProvider};
+    use datafusion::catalog::MemoryCatalogProvider;
     use datafusion::execution::SessionStateBuilder;
-    use datafusion_common::DataFusionError;
+    use datafusion_common::{DataFusionError, Result, exec_err};
     use datafusion_expr::col;
     use datafusion_expr::registry::FunctionRegistry;
     use datafusion_proto::logical_plan::DefaultLogicalExtensionCodec;
 
     use super::*;
-    use crate::proto::physical_extension_codec::tests::TestExtensionCodec;
 
     static QUERY_PLANNER_CALLS: AtomicUsize = AtomicUsize::new(0);
     static PHYSICAL_OPTIMIZER_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static REENTERING_PLANNER_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    #[derive(Debug)]
+    struct ReenteringQueryPlanner;
+
+    #[async_trait]
+    impl QueryPlanner for ReenteringQueryPlanner {
+        async fn create_physical_plan(
+            &self,
+            logical_plan: &LogicalPlan,
+            session: &dyn Session,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            if REENTERING_PLANNER_CALLS.fetch_add(1, Ordering::Relaxed) == 0 {
+                session.create_physical_plan(logical_plan).await
+            } else {
+                exec_err!("query planner was re-entered through the session")
+            }
+        }
+    }
 
     unsafe extern "C" fn counting_query_planner(
         session: &FFI_SessionRef,
@@ -983,12 +973,6 @@ mod tests {
             .await?;
         assert_eq!(planned.name(), "EmptyExec");
 
-        let physical_plan = foreign_session.create_physical_plan(&logical_plan).await?;
-        assert_eq!(
-            format!("{physical_plan:?}"),
-            "EmptyExec { schema: Schema { fields: [], metadata: {} }, partitions: 1, cache: PlanProperties { eq_properties: EquivalenceProperties { eq_group: EquivalenceGroup { map: {}, classes: [] }, oeq_class: OrderingEquivalenceClass { orderings: [] }, oeq_cache: OrderingEquivalenceCache { normal_cls: OrderingEquivalenceClass { orderings: [] }, leading_map: {} }, constraints: Constraints { inner: [] }, schema: Schema { fields: [], metadata: {} } }, partitioning: UnknownPartitioning(1), emission_type: Incremental, boundedness: Bounded, evaluation_type: Lazy, scheduling_type: Cooperative, output_ordering: None } }"
-        );
-
         assert_eq!(
             format!("{:?}", foreign_session.default_table_options()),
             format!("{:?}", state.default_table_options())
@@ -1015,35 +999,48 @@ mod tests {
         Ok(())
     }
 
-    /// `create_physical_plan` must serialize with the session's logical codec on
-    /// both sides of the boundary. A plan that scans a custom table provider is
-    /// unserializable without it.
     #[tokio::test]
-    async fn test_create_physical_plan_uses_logical_codec() -> Result<(), DataFusionError>
-    {
+    async fn test_foreign_session_rejects_create_physical_plan() {
+        REENTERING_PLANNER_CALLS.store(0, Ordering::Relaxed);
+
         let (ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
-
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
-        let batch = record_batch!(("a", Int32, [1, 2, 3]))?;
-        let table = MemTable::try_new(schema, vec![vec![batch]])?;
-        ctx.register_table("test_table", Arc::new(table))?;
-
+        let state = SessionStateBuilder::new_from_existing(ctx.state())
+            .with_query_planner(Arc::new(ReenteringQueryPlanner))
+            .build();
         let logical_codec = FFI_LogicalExtensionCodec::new(
-            Arc::new(TestExtensionCodec),
+            Arc::new(DefaultLogicalExtensionCodec {}),
             None,
             task_ctx_provider,
         );
-
-        let state = ctx.state();
         let local_session = FFI_SessionRef::new(&state, None, logical_codec);
-        let foreign_session = ForeignSession::try_from(&local_session)?;
+        let foreign_session = ForeignSession::try_from(&local_session).unwrap();
 
-        let logical_plan = ctx.table("test_table").await?.into_optimized_plan()?;
-        let physical_plan = foreign_session.create_physical_plan(&logical_plan).await?;
+        let error = foreign_session
+            .create_physical_plan(&LogicalPlan::default())
+            .await
+            .unwrap_err();
 
-        assert_eq!(physical_plan.name(), "DataSourceExec");
-        assert_eq!(physical_plan.schema().field(0).name(), "a");
+        assert_eq!(REENTERING_PLANNER_CALLS.load(Ordering::Relaxed), 0);
+        assert!(matches!(error, DataFusionError::NotImplemented(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("export and invoke an FFI_QueryPlanner captured before")
+        );
 
-        Ok(())
+        // An already-compiled DataFusion 55 consumer calls this retained slot
+        // directly. It must receive the same safe failure without re-entering
+        // the installed planner.
+        let callback_error = unsafe {
+            (local_session.create_physical_plan)(&local_session, SVec::new())
+                .await
+                .unwrap_err()
+        };
+        assert_eq!(REENTERING_PLANNER_CALLS.load(Ordering::Relaxed), 0);
+        assert!(
+            callback_error
+                .as_str()
+                .contains("export and invoke an FFI_QueryPlanner captured before")
+        );
     }
 }
