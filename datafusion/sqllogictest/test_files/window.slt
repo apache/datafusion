@@ -7018,8 +7018,8 @@ query error DataFusion error: type_coercion\ncaused by\nError during planning: R
 SELECT COUNT(*) OVER (ORDER BY x RANGE BETWEEN CURRENT ROW AND INTERVAL '1' HOUR FOLLOWING)
 FROM (VALUES (arrow_cast('01:00:00', 'Time64(Microsecond)'))) t(x)
 
-# Unsupported RANGE ORDER BY types still propagate the type-coercion error.
-query error DataFusion error: type_coercion\ncaused by\nInternal error: Cannot run range queries on datatype: Struct\("c0": Int64\)
+# Unsupported RANGE ORDER BY types are rejected during planning.
+query error Error during planning: RANGE window frames are not supported for ORDER BY type Struct
 SELECT COUNT(*) OVER (ORDER BY x)
 FROM (VALUES (struct(1))) t(x)
 
@@ -7093,3 +7093,44 @@ SELECT last_value() OVER () FROM (VALUES (1), (2), (3)) t(x)
 
 statement error DataFusion error: Error during planning: 'nth_value' does not support zero arguments
 SELECT nth_value() OVER () FROM (VALUES (1), (2), (3)) t(x)
+
+# The default frame of `OVER (ORDER BY ...)` is a free RANGE frame, which
+# needs no offset arithmetic on the ORDER BY type. Durations and intervals
+# used to fail with "Internal error: Cannot run range queries on datatype".
+query ?I
+select x, row_number() over (order by x) from (values (arrow_cast(2, 'Duration(Second)')), (arrow_cast(1, 'Duration(Second)'))) t(x) order by 2
+----
+0 days 0 hours 0 mins 1 secs 1
+0 days 0 hours 0 mins 2 secs 2
+
+query ?I
+select x, rank() over (order by x) from (values (interval '2 months'), (interval '1 month')) t(x) order by 2
+----
+1 mons 1
+2 mons 2
+
+query ?I
+select x, row_number() over (order by x range between unbounded preceding and current row) from (values (arrow_cast(2, 'Duration(Millisecond)')), (arrow_cast(1, 'Duration(Millisecond)'))) t(x) order by 2
+----
+0 days 0 hours 0 mins 0.001 secs 1
+0 days 0 hours 0 mins 0.002 secs 2
+
+# offset frames still need an arithmetic ORDER BY type; the map and struct
+# types are not accepted in free frames either, see `supports_free_range_frame`
+statement error Error during planning: RANGE window frames are not supported for ORDER BY type Struct
+select count(*) over (order by x range between 1 preceding and current row) from (values (struct(1))) t(x)
+
+statement error Error during planning: RANGE window frames are not supported for ORDER BY type Map
+select count(*) over (order by x) from (values (map(['a'], [1])), (map(['a'], [2]))) t(x)
+
+# every ORDER BY expression takes part in the peer comparison, so a map after
+# a duration is rejected as well, while two durations are fine
+statement error Error during planning: RANGE window frames are not supported for ORDER BY type Duration
+select count(*) over (order by d, m) from (values (arrow_cast(1, 'Duration(Second)'), map(['a'], [1])), (arrow_cast(1, 'Duration(Second)'), map(['a'], [2]))) t(d, m)
+
+query ??I
+select d, e, count(*) over (order by d, e) from (values (arrow_cast(1, 'Duration(Second)'), arrow_cast(2, 'Duration(Millisecond)')), (arrow_cast(1, 'Duration(Second)'), arrow_cast(1, 'Duration(Millisecond)'))) t(d, e) order by 3
+----
+0 days 0 hours 0 mins 1 secs 0 days 0 hours 0 mins 0.001 secs 1
+0 days 0 hours 0 mins 1 secs 0 days 0 hours 0 mins 0.002 secs 2
+

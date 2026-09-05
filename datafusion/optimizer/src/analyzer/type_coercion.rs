@@ -1122,7 +1122,27 @@ fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
     } else if let DataType::RunEndEncoded(_, value_type) = col_type {
         extract_window_frame_target_type(value_type.data_type())
     } else {
-        internal_err!("Cannot run range queries on datatype: {col_type}")
+        plan_err!("RANGE window frames are not supported for ORDER BY type {col_type}")
+    }
+}
+
+/// Whether a free RANGE frame (all bounds `UNBOUNDED` or `CURRENT ROW`) can
+/// run over an ORDER BY column of `col_type` even though the type has no
+/// arithmetic for finite offsets.
+///
+/// Such a frame only compares rows to find peers, so the type must compare
+/// the same way in the RANGE peer check (`ScalarValue::partial_cmp`) as in
+/// the sort that produced the input order. That holds for durations and
+/// intervals; it does not for structs and maps, whose `ScalarValue`
+/// comparison differs from the sorter's, so they stay unsupported.
+fn supports_free_range_frame(col_type: &DataType) -> bool {
+    match col_type {
+        DataType::Duration(_) | DataType::Interval(_) => true,
+        DataType::Dictionary(_, value_type) => supports_free_range_frame(value_type),
+        DataType::RunEndEncoded(_, value_type) => {
+            supports_free_range_frame(value_type.data_type())
+        }
+        _ => false,
     }
 }
 
@@ -1141,7 +1161,27 @@ fn coerce_window_frame(
                 .map(|s| s.expr.get_type(schema))
                 .transpose()?;
             if let Some(col_type) = current_types {
-                let target_type = extract_window_frame_target_type(&col_type)?;
+                let target_type = match extract_window_frame_target_type(&col_type) {
+                    Ok(target_type) => target_type,
+                    // A free range frame has no offsets to coerce, so ORDER BY
+                    // types without arithmetic are fine as long as their peer
+                    // comparison is sound (see `supports_free_range_frame`).
+                    // Every ORDER BY expression takes part in that comparison,
+                    // so all of them have to qualify, not just the first.
+                    Err(_)
+                        if window_frame.free_range()
+                            && expressions.iter().try_fold(true, |ok, s| {
+                                let t = s.expr.get_type(schema)?;
+                                Ok::<_, DataFusionError>(
+                                    ok && (extract_window_frame_target_type(&t).is_ok()
+                                        || supports_free_range_frame(&t)),
+                                )
+                            })? =>
+                    {
+                        return Ok(window_frame);
+                    }
+                    Err(e) => return Err(e),
+                };
                 // A finite offset bound (e.g. `5 PRECEDING`) is computed as
                 // `current_value ± offset`, so it is only meaningful for target
                 // types that support arithmetic. Other orderable target types can
