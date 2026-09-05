@@ -242,6 +242,7 @@ impl ClassicPWMJStream {
 
                 self.join_metrics.input_batches.add(1);
                 self.join_metrics.input_rows.add(batch.num_rows());
+                self.join_metrics.probe_hit_rate.add_total(batch.num_rows());
 
                 // Sort stream values and change the streamed record batch accordingly
                 let indices = sort_to_indices(
@@ -294,6 +295,7 @@ impl ClassicPWMJStream {
         }
 
         // Produce more work
+        let join_timer = self.join_metrics.join_time.timer();
         let batch = resolve_classic_join(
             buffered_side,
             stream_batch,
@@ -302,7 +304,9 @@ impl ClassicPWMJStream {
             self.sort_option,
             self.join_type,
             &mut self.batch_process_state,
+            &self.join_metrics,
         )?;
+        join_timer.done();
 
         if !self.batch_process_state.continue_process {
             // Scan finished; re-enter through the drain guard above.
@@ -336,6 +340,7 @@ impl ClassicPWMJStream {
         let buffered_data = Arc::clone(&self.buffered_side.try_as_ready()?.buffered_data);
         let buffered_batch = buffered_data.batch();
 
+        let join_timer = self.join_metrics.join_time.timer();
         // Every match marks the suffix `[k, buffered_len)`, so the buffered rows that were
         // never matched are exactly the complementary prefix `[0, min_marked)` -- which
         // includes the null-keyed rows, since nulls sort first and the scan starts past
@@ -358,6 +363,7 @@ impl ClassicPWMJStream {
         buffered_columns.extend(streamed_columns);
 
         let batch = RecordBatch::try_new(Arc::clone(&self.schema), buffered_columns)?;
+        join_timer.done();
 
         self.batch_process_state.output_batches.push_batch(batch)?;
 
@@ -429,12 +435,15 @@ impl Stream for ClassicPWMJStream {
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
+        // `record_poll` fills in `output_rows` and `end_time`; `elapsed_compute` is handled
+        // by `BuildProbeJoinMetrics::drop`.
         let poll = self.poll_next_impl(cx);
         self.join_metrics.baseline.record_poll(poll)
     }
 }
 
 // For Left, Right, Full, and Inner joins, incoming stream batches will already be sorted.
+#[expect(clippy::too_many_arguments)]
 fn resolve_classic_join(
     buffered_side: &mut BufferedSideReadyState,
     stream_batch: &SortedStreamBatch,
@@ -443,6 +452,7 @@ fn resolve_classic_join(
     sort_options: SortOptions,
     join_type: JoinType,
     batch_process_state: &mut BatchProcessState,
+    join_metrics: &BuildProbeJoinMetrics,
 ) -> Result<RecordBatch> {
     let buffered_len = buffered_side.buffered_data.values().len();
     let stream_values = stream_batch.compare_key_values();
@@ -488,6 +498,9 @@ fn resolve_classic_join(
                     if compare == Ordering::Less {
                         batch_process_state.found = true;
                         let count = buffered_len - buffer_idx;
+                        join_metrics.probe_hit_rate.add_part(1);
+                        join_metrics.avg_fanout.add_part(count);
+                        join_metrics.avg_fanout.add_total(1);
 
                         let batch = build_matched_indices_and_mark_buffered(
                             (buffer_idx, count),
@@ -518,6 +531,9 @@ fn resolve_classic_join(
                     if matches!(compare, Ordering::Equal | Ordering::Less) {
                         batch_process_state.found = true;
                         let count = buffered_len - buffer_idx;
+                        join_metrics.probe_hit_rate.add_part(1);
+                        join_metrics.avg_fanout.add_part(count);
+                        join_metrics.avg_fanout.add_total(1);
                         let batch = build_matched_indices_and_mark_buffered(
                             (buffer_idx, count),
                             (row_idx, count),
@@ -1598,6 +1614,143 @@ mod tests {
         ");
 
         assert_join_metrics!(metrics, 2);
+        Ok(())
+    }
+
+    fn ratio_metric(metrics: &MetricsSet, name: &str) -> (usize, usize) {
+        metrics
+            .iter()
+            .find_map(|m| match m.value() {
+                crate::metrics::MetricValue::Ratio {
+                    name: metric_name,
+                    ratio_metrics,
+                } if metric_name == name => {
+                    Some((ratio_metrics.part(), ratio_metrics.total()))
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{name} metric not found"))
+    }
+
+    fn sum_metric(
+        metrics: &MetricsSet,
+        matches: impl Fn(&crate::metrics::MetricValue) -> Option<usize>,
+    ) -> usize {
+        metrics.iter().filter_map(|m| matches(m.value())).sum()
+    }
+
+    /// Classic joins never routed `poll_next` through `record_poll`, so `output_rows`,
+    /// `output_bytes` and `output_batches` stayed at zero regardless of how many rows the
+    /// join actually produced. Also pins `probe_hit_rate`/`avg_fanout`, which classic join
+    /// never populated at all.
+    #[tokio::test]
+    async fn inner_join_records_output_and_probe_metrics() -> Result<()> {
+        // Buffered side must already be ascending for `Gt`, so this is the one classic-join
+        // test that hand-derives expected counts rather than only checking output rows.
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![1, 2, 5]),
+            ("c1", &vec![7, 8, 9]),
+        );
+        // Fed unsorted; `fetch_stream_batch` sorts each streamed batch internally.
+        let right = build_table(
+            ("a2", &vec![10, 20, 30]),
+            ("b1", &vec![4, 3, 2]),
+            ("c2", &vec![70, 80, 90]),
+        );
+
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        let join = join(left, right, on, Operator::Gt, JoinType::Inner)?;
+        let stream = join.execute(0, Arc::new(TaskContext::default()))?;
+        let batches = common::collect(stream).await?;
+
+        // Every streamed value (2, 3, 4) is only exceeded by buffered value 5, so each
+        // produces exactly one matched row.
+        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
+
+        let metrics = join.metrics().unwrap();
+        assert_eq!(
+            metrics.output_rows(),
+            Some(3),
+            "output_rows must reflect the batches actually produced"
+        );
+        assert!(
+            sum_metric(&metrics, |v| match v {
+                crate::metrics::MetricValue::OutputBytes(c) => Some(c.value()),
+                _ => None,
+            }) > 0
+        );
+        assert_eq!(
+            sum_metric(&metrics, |v| match v {
+                crate::metrics::MetricValue::OutputBatches(c) => Some(c.value()),
+                _ => None,
+            }),
+            1
+        );
+
+        // All 3 streamed rows found a match.
+        assert_eq!(ratio_metric(&metrics, "probe_hit_rate"), (3, 3));
+        // Each match was against exactly one buffered row (value 5).
+        assert_eq!(ratio_metric(&metrics, "avg_fanout"), (3, 3));
+
+        Ok(())
+    }
+
+    /// `Full` join is the only join type that runs both `join_time`-wrapped code paths:
+    /// `resolve_classic_join`'s matched/unmatched-streamed pass, and
+    /// `process_unmatched_buffered_batch`'s unmatched-buffered pass. `probe_hit_rate` and
+    /// `avg_fanout` must count only the 3 real matches -- the 2 unmatched buffered rows the
+    /// second pass adds to the output must not leak into either ratio.
+    #[tokio::test]
+    async fn full_join_unmatched_buffered_rows_do_not_pollute_probe_metrics() -> Result<()>
+    {
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![1, 2, 5]),
+            ("c1", &vec![7, 8, 9]),
+        );
+        // Fed unsorted; `fetch_stream_batch` sorts each streamed batch internally. Every
+        // value here is less than the buffered maximum (5), so every streamed row matches
+        // and buffered rows 1 and 2 are left unmatched.
+        let right = build_table(
+            ("a2", &vec![10, 20, 30]),
+            ("b1", &vec![4, 3, 2]),
+            ("c2", &vec![70, 80, 90]),
+        );
+
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        let join = join(left, right, on, Operator::Gt, JoinType::Full)?;
+        let stream = join.execute(0, Arc::new(TaskContext::default()))?;
+        let batches = common::collect(stream).await?;
+
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+----+----+----+----+----+
+        | a1 | b1 | c1 | a2 | b1 | c2 |
+        +----+----+----+----+----+----+
+        | 3  | 5  | 9  | 30 | 2  | 90 |
+        | 3  | 5  | 9  | 20 | 3  | 80 |
+        | 3  | 5  | 9  | 10 | 4  | 70 |
+        | 1  | 1  | 7  |    |    |    |
+        | 2  | 2  | 8  |    |    |    |
+        +----+----+----+----+----+----+
+        ");
+
+        let metrics = join.metrics().unwrap();
+        // 3 matched rows + 2 unmatched-buffered rows.
+        assert_eq!(metrics.output_rows(), Some(5));
+
+        // Still only the 3 real matches -- the unmatched-buffered pass leaves these alone.
+        assert_eq!(ratio_metric(&metrics, "probe_hit_rate"), (3, 3));
+        assert_eq!(ratio_metric(&metrics, "avg_fanout"), (3, 3));
+
         Ok(())
     }
 

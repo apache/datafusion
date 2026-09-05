@@ -241,12 +241,19 @@ impl ExistencePWMJStream {
                 self.join_metrics.input_batches.add(1);
                 self.join_metrics.input_rows.add(batch.num_rows());
 
-                // Only the batch's extreme key is ever compared against the buffered side,
-                // so reduce the batch to that one key.
-                let stream_values =
-                    extreme_key(&stream_values, self.sort_option.descending)?;
+                // An empty batch has no extreme key to compare, so it can neither match
+                // nor miss -- counting it either way would understate the real hit rate.
+                if batch.num_rows() > 0 {
+                    let join_time = self.join_metrics.join_time.clone();
+                    let join_timer = join_time.timer();
+                    // Only the batch's extreme key is ever compared against the buffered
+                    // side, so reduce the batch to that one key.
+                    let stream_values =
+                        extreme_key(&stream_values, self.sort_option.descending)?;
 
-                self.mark_matched_buffered_rows(&stream_values)?;
+                    self.mark_matched_buffered_rows(&stream_values)?;
+                    join_timer.done();
+                }
             }
             Some(Err(err)) => return Poll::Ready(Err(err)),
         }
@@ -294,6 +301,7 @@ impl ExistencePWMJStream {
     fn mark_matched_buffered_rows(&mut self, stream_values: &ArrayRef) -> Result<()> {
         let operator = self.operator;
         let sort_option = self.sort_option;
+        self.join_metrics.probe_hit_rate.add_total(1);
 
         {
             let buffered_data = &self.buffered_side.try_as_ready()?.buffered_data;
@@ -365,6 +373,7 @@ impl ExistencePWMJStream {
                 // batch matches nothing new.
                 let buffer_idx = lo;
                 if buffer_idx < scan_limit {
+                    self.join_metrics.probe_hit_rate.add_part(1);
                     // Everything from `buffer_idx` on matches, so lowering the
                     // watermark to it records the match: the marked set is exactly
                     // `[min_marked, buffered_len)` and needs no bitmap.
@@ -820,6 +829,154 @@ mod tests {
                 "unexpected error for {join_type}: {err}"
             );
         }
+        Ok(())
+    }
+
+    /// Existence join never populated `probe_hit_rate`, so a streamed batch whose extreme
+    /// key failed to lower the watermark was indistinguishable from one that did. Two
+    /// batches here: the first lowers the watermark, the second lands entirely inside the
+    /// already-marked region and must count as a miss.
+    #[tokio::test]
+    async fn probe_hit_rate_counts_batches_that_advance_the_watermark() -> Result<()> {
+        let left = build_table(
+            ("a1", &vec![1, 2, 3, 4, 5]),
+            ("b1", &vec![1, 2, 3, 4, 5]),
+            ("c1", &vec![10, 20, 30, 40, 50]),
+        );
+
+        let streamed_schema = Schema::new(vec![
+            Field::new("a2", DataType::Int32, false),
+            Field::new("b1", DataType::Int32, false),
+            Field::new("c2", DataType::Int32, false),
+        ]);
+        // b1=3 lowers the watermark to buffered index 3 (value 4).
+        let batch1 =
+            build_table_i32(("a2", &vec![10]), ("b1", &vec![3]), ("c2", &vec![70]));
+        // b1=4 only matches within the already-marked suffix, so it can't lower the
+        // watermark further -- a miss.
+        let batch2 =
+            build_table_i32(("a2", &vec![20]), ("b1", &vec![4]), ("c2", &vec![80]));
+        let right = TestMemoryExec::try_new_exec(
+            &[vec![batch1, batch2]],
+            Arc::new(streamed_schema),
+            None,
+        )?;
+
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+        let join = PiecewiseMergeJoinExec::try_new(
+            left,
+            right,
+            on,
+            Operator::Gt,
+            JoinType::LeftSemi,
+            1,
+        )?;
+
+        let stream = join.execute(0, Arc::new(TaskContext::default()))?;
+        let batches = common::collect(stream).await?;
+
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+----+----+
+        | a1 | b1 | c1 |
+        +----+----+----+
+        | 4  | 4  | 40 |
+        | 5  | 5  | 50 |
+        +----+----+----+
+        ");
+
+        let metrics = join.metrics().unwrap();
+        let hit_rate = metrics
+            .iter()
+            .find_map(|m| match m.value() {
+                crate::metrics::MetricValue::Ratio {
+                    name,
+                    ratio_metrics,
+                } if name == "probe_hit_rate" => {
+                    Some((ratio_metrics.part(), ratio_metrics.total()))
+                }
+                _ => None,
+            })
+            .expect("probe_hit_rate metric");
+        assert_eq!(hit_rate, (1, 2), "one hit, one miss");
+
+        Ok(())
+    }
+
+    /// An empty streamed batch has no extreme key to compare against the buffered side,
+    /// so it must count as neither a hit nor a miss. Before the guard in `scan_stream_batch`,
+    /// `mark_matched_buffered_rows` ran unconditionally and inflated `probe_hit_rate`'s
+    /// denominator with misses for batches that never actually scanned anything.
+    #[tokio::test]
+    async fn probe_hit_rate_ignores_empty_streamed_batches() -> Result<()> {
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![1, 2, 5]),
+            ("c1", &vec![7, 8, 9]),
+        );
+        let streamed_schema = Schema::new(vec![
+            Field::new("a2", DataType::Int32, false),
+            Field::new("b1", DataType::Int32, false),
+            Field::new("c2", DataType::Int32, false),
+        ]);
+        let empty_batch = build_table_i32(
+            ("a2", &Vec::new()),
+            ("b1", &Vec::new()),
+            ("c2", &Vec::new()),
+        );
+        let real_batch =
+            build_table_i32(("a2", &vec![10]), ("b1", &vec![0]), ("c2", &vec![70]));
+        let right = TestMemoryExec::try_new_exec(
+            &[vec![empty_batch, real_batch]],
+            Arc::new(streamed_schema),
+            None,
+        )?;
+
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+        let join = PiecewiseMergeJoinExec::try_new(
+            left,
+            right,
+            on,
+            Operator::Gt,
+            JoinType::LeftSemi,
+            1,
+        )?;
+
+        let stream = join.execute(0, Arc::new(TaskContext::default()))?;
+        let batches = common::collect(stream).await?;
+
+        // b1=0 is below every buffered value, so all three buffered rows match.
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+----+----+
+        | a1 | b1 | c1 |
+        +----+----+----+
+        | 1  | 1  | 7  |
+        | 2  | 2  | 8  |
+        | 3  | 5  | 9  |
+        +----+----+----+
+        ");
+
+        let metrics = join.metrics().unwrap();
+        let hit_rate = metrics
+            .iter()
+            .find_map(|m| match m.value() {
+                crate::metrics::MetricValue::Ratio {
+                    name,
+                    ratio_metrics,
+                } if name == "probe_hit_rate" => {
+                    Some((ratio_metrics.part(), ratio_metrics.total()))
+                }
+                _ => None,
+            })
+            .expect("probe_hit_rate metric");
+        // Only the real batch counts -- the empty batch contributes to neither part nor total.
+        assert_eq!(hit_rate, (1, 1));
+
         Ok(())
     }
 }
