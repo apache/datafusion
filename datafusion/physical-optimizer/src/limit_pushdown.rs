@@ -70,6 +70,7 @@ use datafusion_common::error::Result;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::utils::combine_limit;
+use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::execution_plan::replace_children_if_necessary;
@@ -97,7 +98,7 @@ pub struct GlobalRequirements {
     fetch: Option<usize>,
     skip: usize,
     satisfied: bool,
-    preserve_order: bool,
+    required_ordering: Option<LexOrdering>,
 }
 
 impl LimitPushdown {
@@ -117,7 +118,7 @@ impl PhysicalOptimizerRule for LimitPushdown {
             fetch: None,
             skip: 0,
             satisfied: false,
-            preserve_order: false,
+            required_ordering: None,
         };
         pushdown_limits(plan, global_state)
     }
@@ -135,7 +136,7 @@ struct LimitInfo {
     input: Arc<dyn ExecutionPlan>,
     fetch: Option<usize>,
     skip: usize,
-    preserve_order: bool,
+    required_ordering: Option<LexOrdering>,
 }
 
 /// This function is the main helper function of the `LimitPushDown` rule.
@@ -161,7 +162,7 @@ pub fn pushdown_limit_helper(
         );
         global_state.skip = skip;
         global_state.fetch = fetch;
-        global_state.preserve_order = limit_info.preserve_order;
+        global_state.required_ordering = limit_info.required_ordering;
         global_state.satisfied = false;
 
         if let Some(fetch) = fetch
@@ -220,6 +221,7 @@ pub fn pushdown_limit_helper(
                     pushdown_plan,
                     global_state.skip,
                     None,
+                    global_state.required_ordering.clone(),
                 )),
                 global_state,
             ))
@@ -244,8 +246,12 @@ pub fn pushdown_limit_helper(
             // Execution plans can't (yet) handle skip, so if we have one,
             // we still need to add a global limit
             if global_state.skip > 0 {
-                new_plan =
-                    add_global_limit(new_plan, global_state.skip, global_state.fetch);
+                new_plan = add_global_limit(
+                    new_plan,
+                    global_state.skip,
+                    global_state.fetch,
+                    global_state.required_ordering.clone(),
+                );
             }
             global_state.fetch = skip_and_fetch;
             global_state.skip = 0;
@@ -261,6 +267,7 @@ pub fn pushdown_limit_helper(
                     pushdown_plan,
                     global_state.skip,
                     global_fetch,
+                    global_state.required_ordering.clone(),
                 )),
                 global_state,
             ))
@@ -279,7 +286,7 @@ pub fn pushdown_limit_helper(
         if global_state.satisfied {
             if let Some(plan_with_fetch) = maybe_fetchable {
                 let plan_with_preserve_order = plan_with_fetch
-                    .with_preserve_order(global_state.preserve_order)
+                    .with_preserve_order(global_state.required_ordering.is_some())
                     .unwrap_or(plan_with_fetch);
                 Ok((Transformed::yes(plan_with_preserve_order), global_state))
             } else {
@@ -289,7 +296,7 @@ pub fn pushdown_limit_helper(
             global_state.satisfied = true;
             pushdown_plan = if let Some(plan_with_fetch) = maybe_fetchable {
                 let plan_with_preserve_order = plan_with_fetch
-                    .with_preserve_order(global_state.preserve_order)
+                    .with_preserve_order(global_state.required_ordering.is_some())
                     .unwrap_or(plan_with_fetch);
 
                 if global_skip > 0 {
@@ -297,12 +304,18 @@ pub fn pushdown_limit_helper(
                         plan_with_preserve_order,
                         global_skip,
                         Some(global_fetch),
+                        global_state.required_ordering.clone(),
                     )
                 } else {
                     plan_with_preserve_order
                 }
             } else {
-                add_limit(pushdown_plan, global_skip, global_fetch)
+                add_limit(
+                    pushdown_plan,
+                    global_skip,
+                    global_fetch,
+                    global_state.required_ordering.clone(),
+                )
             };
             Ok((Transformed::yes(pushdown_plan), global_state))
         }
@@ -418,7 +431,7 @@ fn extract_limit(plan: &Arc<dyn ExecutionPlan>) -> Option<LimitInfo> {
             input: Arc::clone(global_limit.input()),
             fetch: global_limit.fetch(),
             skip: global_limit.skip(),
-            preserve_order: global_limit.required_ordering().is_some(),
+            required_ordering: global_limit.required_ordering().clone(),
         })
     } else {
         plan.downcast_ref::<LocalLimitExec>()
@@ -426,7 +439,7 @@ fn extract_limit(plan: &Arc<dyn ExecutionPlan>) -> Option<LimitInfo> {
                 input: Arc::clone(local_limit.input()),
                 fetch: Some(local_limit.fetch()),
                 skip: 0,
-                preserve_order: local_limit.required_ordering().is_some(),
+                required_ordering: local_limit.required_ordering().clone(),
             })
     }
 }
@@ -436,17 +449,22 @@ fn combines_input_partitions(plan: &Arc<dyn ExecutionPlan>) -> bool {
     plan.is::<CoalescePartitionsExec>() || plan.is::<SortPreservingMergeExec>()
 }
 
-/// Adds a limit to the plan, chooses between global and local limits based on
-/// skip value and the number of partitions.
+/// Adds a limit to the plan, choosing between global and local limits
+/// based on the skip value and the number of partitions.
 fn add_limit(
     pushdown_plan: Arc<dyn ExecutionPlan>,
     skip: usize,
     fetch: usize,
+    required_ordering: Option<LexOrdering>,
 ) -> Arc<dyn ExecutionPlan> {
     if skip > 0 || pushdown_plan.output_partitioning().partition_count() == 1 {
-        add_global_limit(pushdown_plan, skip, Some(fetch))
+        add_global_limit(pushdown_plan, skip, Some(fetch), required_ordering)
     } else {
-        Arc::new(LocalLimitExec::new(pushdown_plan, fetch + skip)) as _
+        let mut limit = LocalLimitExec::new(pushdown_plan, fetch + skip);
+
+        limit.set_required_ordering(required_ordering);
+
+        Arc::new(limit)
     }
 }
 
@@ -455,8 +473,10 @@ fn add_global_limit(
     pushdown_plan: Arc<dyn ExecutionPlan>,
     skip: usize,
     fetch: Option<usize>,
+    required_ordering: Option<LexOrdering>,
 ) -> Arc<dyn ExecutionPlan> {
-    Arc::new(GlobalLimitExec::new(pushdown_plan, skip, fetch)) as _
+    let mut limit = GlobalLimitExec::new(pushdown_plan, skip, fetch);
+    limit.set_required_ordering(required_ordering);
+    Arc::new(limit)
 }
-
 // See tests in datafusion/core/tests/physical_optimizer
