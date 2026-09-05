@@ -30,9 +30,13 @@ use crate::variation_const::{
     TIMESTAMP_SECOND_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
     VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
-use datafusion::arrow::array::{AsArray, MapArray, new_empty_array};
+use datafusion::arrow::array::{
+    Array, AsArray, LargeListArray, ListArray, MapArray, new_empty_array,
+};
 use datafusion::arrow::buffer::OffsetBuffer;
-use datafusion::arrow::datatypes::{Field, IntervalDayTime, IntervalMonthDayNano};
+use datafusion::arrow::datatypes::{
+    DataType, Field, FieldRef, IntervalDayTime, IntervalMonthDayNano,
+};
 use datafusion::arrow::temporal_conversions::NANOSECONDS;
 use datafusion::common::scalar::ScalarStructBuilder;
 use datafusion::common::{
@@ -69,6 +73,24 @@ pub(crate) fn from_substrait_literal(
     lit: &Literal,
     dfs_names: &Vec<String>,
     name_idx: &mut usize,
+) -> datafusion::common::Result<ScalarValue> {
+    from_substrait_literal_impl(consumer, lit, dfs_names, name_idx, None)
+}
+
+pub(crate) fn from_substrait_literal_with_expected_field(
+    consumer: &impl SubstraitConsumer,
+    lit: &Literal,
+    expected_field: &Field,
+) -> datafusion::common::Result<ScalarValue> {
+    from_substrait_literal_impl(consumer, lit, &vec![], &mut 0, Some(expected_field))
+}
+
+fn from_substrait_literal_impl(
+    consumer: &impl SubstraitConsumer,
+    lit: &Literal,
+    dfs_names: &Vec<String>,
+    name_idx: &mut usize,
+    expected_field: Option<&Field>,
 ) -> datafusion::common::Result<ScalarValue> {
     let scalar_value = match &lit.literal_type {
         Some(LiteralType::Boolean(b)) => ScalarValue::Boolean(Some(*b)),
@@ -234,6 +256,8 @@ pub(crate) fn from_substrait_literal(
             ScalarValue::Decimal128(Some(i128::from_le_bytes(value)), p, s)
         }
         Some(LiteralType::List(l)) => {
+            let expected_item =
+                expected_list_item(expected_field, lit.type_variation_reference)?;
             // Each element should start the name index from the same value, then we increase it
             // once at the end
             let mut element_name_idx = *name_idx;
@@ -242,7 +266,13 @@ pub(crate) fn from_substrait_literal(
                 .iter()
                 .map(|el| {
                     element_name_idx = *name_idx;
-                    from_substrait_literal(consumer, el, dfs_names, &mut element_name_idx)
+                    from_substrait_literal_impl(
+                        consumer,
+                        el,
+                        dfs_names,
+                        &mut element_name_idx,
+                        expected_item.map(FieldRef::as_ref),
+                    )
                 })
                 .collect::<datafusion::common::Result<Vec<_>>>()?;
             *name_idx = element_name_idx;
@@ -251,39 +281,57 @@ pub(crate) fn from_substrait_literal(
                     "Empty list must be encoded as EmptyList literal type, not List"
                 );
             }
-            let element_type = elements[0].data_type();
-            match lit.type_variation_reference {
-                DEFAULT_CONTAINER_TYPE_VARIATION_REF => ScalarValue::List(
-                    ScalarValue::new_list_nullable(elements.as_slice(), &element_type),
-                ),
-                LARGE_CONTAINER_TYPE_VARIATION_REF => ScalarValue::LargeList(
-                    ScalarValue::new_large_list(elements.as_slice(), &element_type),
-                ),
-                others => {
-                    return substrait_err!("Unknown type variation reference {others}");
+            if let Some(expected_item) = expected_item {
+                make_list_scalar(elements, expected_item, lit.type_variation_reference)?
+            } else {
+                let element_type = elements[0].data_type();
+                match lit.type_variation_reference {
+                    DEFAULT_CONTAINER_TYPE_VARIATION_REF => {
+                        ScalarValue::List(ScalarValue::new_list_nullable(
+                            elements.as_slice(),
+                            &element_type,
+                        ))
+                    }
+                    LARGE_CONTAINER_TYPE_VARIATION_REF => ScalarValue::LargeList(
+                        ScalarValue::new_large_list(elements.as_slice(), &element_type),
+                    ),
+                    others => {
+                        return substrait_err!(
+                            "Unknown type variation reference {others}"
+                        );
+                    }
                 }
             }
         }
         Some(LiteralType::EmptyList(l)) => {
-            let element_type = from_substrait_type(
-                consumer,
-                l.r#type.clone().unwrap().as_ref(),
-                dfs_names,
-                name_idx,
-            )?;
-            match lit.type_variation_reference {
-                DEFAULT_CONTAINER_TYPE_VARIATION_REF => {
-                    ScalarValue::List(ScalarValue::new_list_nullable(&[], &element_type))
-                }
-                LARGE_CONTAINER_TYPE_VARIATION_REF => ScalarValue::LargeList(
-                    ScalarValue::new_large_list(&[], &element_type),
-                ),
-                others => {
-                    return substrait_err!("Unknown type variation reference {others}");
+            let expected_item =
+                expected_list_item(expected_field, lit.type_variation_reference)?;
+            if let Some(expected_item) = expected_item {
+                make_list_scalar(vec![], expected_item, lit.type_variation_reference)?
+            } else {
+                let element_type = from_substrait_type(
+                    consumer,
+                    l.r#type.clone().unwrap().as_ref(),
+                    dfs_names,
+                    name_idx,
+                )?;
+                match lit.type_variation_reference {
+                    DEFAULT_CONTAINER_TYPE_VARIATION_REF => ScalarValue::List(
+                        ScalarValue::new_list_nullable(&[], &element_type),
+                    ),
+                    LARGE_CONTAINER_TYPE_VARIATION_REF => ScalarValue::LargeList(
+                        ScalarValue::new_large_list(&[], &element_type),
+                    ),
+                    others => {
+                        return substrait_err!(
+                            "Unknown type variation reference {others}"
+                        );
+                    }
                 }
             }
         }
         Some(LiteralType::Map(m)) => {
+            let expected_map = expected_map_fields(expected_field)?;
             // Each entry should start the name index from the same value, then we increase it
             // once at the end
             let mut entry_name_idx = *name_idx;
@@ -292,25 +340,37 @@ pub(crate) fn from_substrait_literal(
                 .iter()
                 .map(|kv| {
                     entry_name_idx = *name_idx;
-                    let key_sv = from_substrait_literal(
+                    let key_sv = from_substrait_literal_impl(
                         consumer,
                         kv.key.as_ref().unwrap(),
                         dfs_names,
                         &mut entry_name_idx,
+                        expected_map.map(|fields| fields.key.as_ref()),
                     )?;
-                    let value_sv = from_substrait_literal(
+                    let value_sv = from_substrait_literal_impl(
                         consumer,
                         kv.value.as_ref().unwrap(),
                         dfs_names,
                         &mut entry_name_idx,
+                        expected_map.map(|fields| fields.value.as_ref()),
                     )?;
-                    ScalarStructBuilder::new()
-                        .with_scalar(Field::new("key", key_sv.data_type(), false), key_sv)
-                        .with_scalar(
-                            Field::new("value", value_sv.data_type(), true),
-                            value_sv,
-                        )
-                        .build()
+                    if let Some(expected_map) = expected_map {
+                        ScalarStructBuilder::new()
+                            .with_scalar(expected_map.key, key_sv)
+                            .with_scalar(expected_map.value, value_sv)
+                            .build()
+                    } else {
+                        ScalarStructBuilder::new()
+                            .with_scalar(
+                                Field::new("key", key_sv.data_type(), false),
+                                key_sv,
+                            )
+                            .with_scalar(
+                                Field::new("value", value_sv.data_type(), true),
+                                value_sv,
+                            )
+                            .build()
+                    }
                 })
                 .collect::<datafusion::common::Result<Vec<_>>>()?;
             *name_idx = entry_name_idx;
@@ -321,60 +381,117 @@ pub(crate) fn from_substrait_literal(
                 );
             }
 
+            let entries_array =
+                ScalarValue::iter_to_array(entries)?.as_struct().to_owned();
+            let (entries_field, keys_sorted) = if let Some(expected_map) = expected_map {
+                (Arc::clone(expected_map.entries), expected_map.keys_sorted)
+            } else {
+                (
+                    Arc::new(Field::new(
+                        "entries",
+                        entries_array.data_type().clone(),
+                        false,
+                    )),
+                    false,
+                )
+            };
             ScalarValue::Map(Arc::new(MapArray::new(
-                Arc::new(Field::new("entries", entries[0].data_type(), false)),
-                OffsetBuffer::new(vec![0, entries.len() as i32].into()),
-                ScalarValue::iter_to_array(entries)?.as_struct().to_owned(),
+                entries_field,
+                OffsetBuffer::new(vec![0, entries_array.len() as i32].into()),
+                entries_array,
                 None,
-                false,
+                keys_sorted,
             )))
         }
         Some(LiteralType::EmptyMap(m)) => {
-            let key = match &m.key {
-                Some(k) => Ok(k),
-                _ => plan_err!("Missing key type for empty map"),
-            }?;
-            let value = match &m.value {
-                Some(v) => Ok(v),
-                _ => plan_err!("Missing value type for empty map"),
-            }?;
-            let key_type = from_substrait_type(consumer, key, dfs_names, name_idx)?;
-            let value_type = from_substrait_type(consumer, value, dfs_names, name_idx)?;
+            let expected_map = expected_map_fields(expected_field)?;
+            if let Some(expected_map) = expected_map {
+                let struct_array = new_empty_array(expected_map.entries.data_type())
+                    .as_struct()
+                    .to_owned();
+                ScalarValue::Map(Arc::new(MapArray::new(
+                    Arc::clone(expected_map.entries),
+                    OffsetBuffer::new(vec![0, 0].into()),
+                    struct_array,
+                    None,
+                    expected_map.keys_sorted,
+                )))
+            } else {
+                let key = match &m.key {
+                    Some(k) => Ok(k),
+                    _ => plan_err!("Missing key type for empty map"),
+                }?;
+                let value = match &m.value {
+                    Some(v) => Ok(v),
+                    _ => plan_err!("Missing value type for empty map"),
+                }?;
+                let key_type = from_substrait_type(consumer, key, dfs_names, name_idx)?;
+                let value_type =
+                    from_substrait_type(consumer, value, dfs_names, name_idx)?;
 
-            // new_empty_array on a MapType creates a too empty array
-            // We want it to contain an empty struct array to align with an empty MapBuilder one
-            let entries = Field::new_struct(
-                "entries",
-                vec![
-                    Field::new("key", key_type, false),
-                    Field::new("value", value_type, true),
-                ],
-                false,
-            );
-            let struct_array =
-                new_empty_array(entries.data_type()).as_struct().to_owned();
-            ScalarValue::Map(Arc::new(MapArray::new(
-                Arc::new(entries),
-                OffsetBuffer::new(vec![0, 0].into()),
-                struct_array,
-                None,
-                false,
-            )))
+                // new_empty_array on a MapType creates a too empty array
+                // We want it to contain an empty struct array to align with an empty MapBuilder one
+                let entries = Field::new_struct(
+                    "entries",
+                    vec![
+                        Field::new("key", key_type, false),
+                        Field::new("value", value_type, true),
+                    ],
+                    false,
+                );
+                let struct_array =
+                    new_empty_array(entries.data_type()).as_struct().to_owned();
+                ScalarValue::Map(Arc::new(MapArray::new(
+                    Arc::new(entries),
+                    OffsetBuffer::new(vec![0, 0].into()),
+                    struct_array,
+                    None,
+                    false,
+                )))
+            }
         }
         Some(LiteralType::Struct(s)) => {
+            let expected_fields = expected_struct_fields(expected_field)?;
+            if let Some(expected_fields) = expected_fields
+                && s.fields.len() != expected_fields.len()
+            {
+                return substrait_err!(
+                    "Struct literal field count mismatch: expected {} fields but found {}",
+                    expected_fields.len(),
+                    s.fields.len()
+                );
+            }
             let mut builder = ScalarStructBuilder::new();
             for (i, field) in s.fields.iter().enumerate() {
-                let name = next_struct_field_name(i, dfs_names, name_idx)?;
-                let sv = from_substrait_literal(consumer, field, dfs_names, name_idx)?;
-                // We assume everything to be nullable, since Arrow's strict about things matching
-                // and it's hard to match otherwise.
-                builder = builder.with_scalar(Field::new(name, sv.data_type(), true), sv);
+                if let Some(expected_field) =
+                    expected_fields.map(|fields| fields[i].as_ref())
+                {
+                    let sv = from_substrait_literal_impl(
+                        consumer,
+                        field,
+                        dfs_names,
+                        name_idx,
+                        Some(expected_field),
+                    )?;
+                    builder = builder.with_scalar(expected_field.clone(), sv);
+                } else {
+                    let name = next_struct_field_name(i, dfs_names, name_idx)?;
+                    let sv = from_substrait_literal_impl(
+                        consumer, field, dfs_names, name_idx, None,
+                    )?;
+                    // Schema-less literals retain the existing nullable-field behavior.
+                    builder =
+                        builder.with_scalar(Field::new(name, sv.data_type(), true), sv);
+                }
             }
             builder.build()?
         }
         Some(LiteralType::Null(null_type)) => {
-            let data_type =
-                from_substrait_type(consumer, null_type, dfs_names, name_idx)?;
+            let data_type = if let Some(expected_field) = expected_field {
+                expected_field.data_type().clone()
+            } else {
+                from_substrait_type(consumer, null_type, dfs_names, name_idx)?
+            };
             ScalarValue::try_from(&data_type)?
         }
         Some(LiteralType::IntervalDayToSecond(IntervalDayToSecond {
@@ -583,13 +700,144 @@ pub(crate) fn from_substrait_literal(
         _ => return not_impl_err!("Unsupported literal_type: {:?}", lit.literal_type),
     };
 
+    if let Some(expected_field) = expected_field
+        && scalar_value.data_type() != *expected_field.data_type()
+    {
+        return substrait_err!(
+            "Literal type mismatch: expected {:?} but found {:?}",
+            expected_field.data_type(),
+            scalar_value.data_type()
+        );
+    }
+
     Ok(scalar_value)
+}
+
+fn expected_list_item(
+    expected_field: Option<&Field>,
+    type_variation_reference: u32,
+) -> datafusion::common::Result<Option<&FieldRef>> {
+    let Some(expected_field) = expected_field else {
+        return Ok(None);
+    };
+
+    match (expected_field.data_type(), type_variation_reference) {
+        (DataType::List(item), DEFAULT_CONTAINER_TYPE_VARIATION_REF)
+        | (DataType::LargeList(item), LARGE_CONTAINER_TYPE_VARIATION_REF) => {
+            Ok(Some(item))
+        }
+        (expected, _) => substrait_err!(
+            "Expected List literal to have List or LargeList type, found {expected:?}"
+        ),
+    }
+}
+
+fn make_list_scalar(
+    elements: Vec<ScalarValue>,
+    expected_item: &FieldRef,
+    type_variation_reference: u32,
+) -> datafusion::common::Result<ScalarValue> {
+    let values = if elements.is_empty() {
+        new_empty_array(expected_item.data_type())
+    } else {
+        ScalarValue::iter_to_array(elements)?
+    };
+
+    match type_variation_reference {
+        DEFAULT_CONTAINER_TYPE_VARIATION_REF => {
+            Ok(ScalarValue::List(Arc::new(ListArray::new(
+                Arc::clone(expected_item),
+                OffsetBuffer::new(vec![0, values.len() as i32].into()),
+                values,
+                None,
+            ))))
+        }
+        LARGE_CONTAINER_TYPE_VARIATION_REF => {
+            Ok(ScalarValue::LargeList(Arc::new(LargeListArray::new(
+                Arc::clone(expected_item),
+                OffsetBuffer::new(vec![0, values.len() as i64].into()),
+                values,
+                None,
+            ))))
+        }
+        others => substrait_err!("Unknown type variation reference {others}"),
+    }
+}
+
+fn expected_struct_fields(
+    expected_field: Option<&Field>,
+) -> datafusion::common::Result<Option<&datafusion::arrow::datatypes::Fields>> {
+    let Some(expected_field) = expected_field else {
+        return Ok(None);
+    };
+
+    match expected_field.data_type() {
+        DataType::Struct(fields) => Ok(Some(fields)),
+        expected => substrait_err!(
+            "Expected Struct literal to have Struct type, found {expected:?}"
+        ),
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ExpectedMapFields<'a> {
+    entries: &'a FieldRef,
+    key: &'a FieldRef,
+    value: &'a FieldRef,
+    keys_sorted: bool,
+}
+
+fn expected_map_fields(
+    expected_field: Option<&Field>,
+) -> datafusion::common::Result<Option<ExpectedMapFields<'_>>> {
+    let Some(expected_field) = expected_field else {
+        return Ok(None);
+    };
+
+    let DataType::Map(entries, keys_sorted) = expected_field.data_type() else {
+        return substrait_err!(
+            "Expected Map literal to have Map type, found {:?}",
+            expected_field.data_type()
+        );
+    };
+    let DataType::Struct(fields) = entries.data_type() else {
+        return substrait_err!("Expected Map entries field to contain a Struct");
+    };
+    if fields.len() != 2 {
+        return substrait_err!(
+            "Expected Map entries Struct to have 2 fields, found {}",
+            fields.len()
+        );
+    }
+
+    Ok(Some(ExpectedMapFields {
+        entries,
+        key: &fields[0],
+        value: &fields[1],
+        keys_sorted: *keys_sorted,
+    }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::logical_plan::consumer::utils::tests::test_consumer;
+    use substrait::proto::expression::literal::map::KeyValue;
+
+    fn literal(literal_type: Option<LiteralType>) -> Literal {
+        Literal {
+            nullable: false,
+            type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+            literal_type,
+        }
+    }
+
+    fn assert_expected_field_error(lit: &Literal, field: &Field, expected: &str) {
+        let err =
+            from_substrait_literal_with_expected_field(&test_consumer(), lit, field)
+                .unwrap_err();
+        assert!(err.to_string().contains(expected), "got: {err}");
+    }
 
     #[test]
     fn interval_compound_different_precision() -> datafusion::common::Result<()> {
@@ -625,5 +873,125 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn expected_field_validation_errors() {
+        let i32_literal = literal(Some(LiteralType::I32(1)));
+        assert_expected_field_error(
+            &i32_literal,
+            &Field::new("expected", DataType::Utf8, false),
+            "Literal type mismatch",
+        );
+
+        let list_literal =
+            literal(Some(LiteralType::List(proto::expression::literal::List {
+                values: vec![i32_literal.clone()],
+            })));
+        assert_expected_field_error(
+            &list_literal,
+            &Field::new("expected", DataType::Int32, false),
+            "Expected List literal",
+        );
+
+        let struct_literal = literal(Some(LiteralType::Struct(
+            proto::expression::literal::Struct {
+                fields: vec![i32_literal.clone()],
+            },
+        )));
+        assert_expected_field_error(
+            &struct_literal,
+            &Field::new("expected", DataType::Int32, false),
+            "Expected Struct literal",
+        );
+        assert_expected_field_error(
+            &struct_literal,
+            &Field::new_struct("expected", Vec::<Field>::new(), false),
+            "Struct literal field count mismatch",
+        );
+
+        let map_literal =
+            literal(Some(LiteralType::Map(proto::expression::literal::Map {
+                key_values: vec![KeyValue {
+                    key: Some(i32_literal.clone()),
+                    value: Some(i32_literal.clone()),
+                }],
+            })));
+        assert_expected_field_error(
+            &map_literal,
+            &Field::new("expected", DataType::Int32, false),
+            "Expected Map literal",
+        );
+
+        let non_struct_entries = Field::new("entries", DataType::Int32, false);
+        assert_expected_field_error(
+            &map_literal,
+            &Field::new(
+                "expected",
+                DataType::Map(Arc::new(non_struct_entries), false),
+                false,
+            ),
+            "Expected Map entries field to contain a Struct",
+        );
+
+        let one_field_entries = Field::new_struct(
+            "entries",
+            vec![Field::new("key", DataType::Int32, false)],
+            false,
+        );
+        assert_expected_field_error(
+            &map_literal,
+            &Field::new(
+                "expected",
+                DataType::Map(Arc::new(one_field_entries), false),
+                false,
+            ),
+            "Expected Map entries Struct to have 2 fields",
+        );
+
+        let mismatched_key_entries = Field::new_struct(
+            "entries",
+            vec![
+                Field::new("key", DataType::Utf8, false),
+                Field::new("value", DataType::Int32, false),
+            ],
+            false,
+        );
+        assert_expected_field_error(
+            &map_literal,
+            &Field::new(
+                "expected",
+                DataType::Map(Arc::new(mismatched_key_entries), false),
+                false,
+            ),
+            "Literal type mismatch",
+        );
+
+        let unsupported_literal = literal(None);
+        assert_expected_field_error(
+            &unsupported_literal,
+            &Field::new("expected", DataType::Int32, false),
+            "Unsupported literal_type",
+        );
+
+        let invalid_list_variation = Literal {
+            type_variation_reference: u32::MAX,
+            ..list_literal
+        };
+        let err = from_substrait_literal_without_names(
+            &test_consumer(),
+            &invalid_list_variation,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("Unknown type variation reference"),
+            "got: {err}"
+        );
+
+        let empty_map =
+            literal(Some(LiteralType::EmptyMap(proto::r#type::Map::default())));
+        let err = from_substrait_literal_without_names(&test_consumer(), &empty_map)
+            .unwrap_err();
+        assert!(err.to_string().contains("Missing key type"), "got: {err}");
     }
 }

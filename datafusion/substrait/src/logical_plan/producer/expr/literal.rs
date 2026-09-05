@@ -406,10 +406,15 @@ fn convert_array_to_literal_list<T: OffsetSizeTrait>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logical_plan::consumer::from_substrait_literal_without_names;
     use crate::logical_plan::consumer::tests::test_consumer;
+    use crate::logical_plan::consumer::{
+        from_substrait_literal_with_expected_field, from_substrait_literal_without_names,
+    };
     use crate::logical_plan::producer::DefaultSubstraitProducer;
-    use datafusion::arrow::array::{Int64Builder, MapBuilder, StringBuilder};
+    use datafusion::arrow::array::{
+        AsArray, Int64Builder, MapArray, MapBuilder, StringBuilder, new_empty_array,
+    };
+    use datafusion::arrow::buffer::OffsetBuffer;
     use datafusion::arrow::datatypes::{
         DataType, Field, IntervalDayTime, IntervalMonthDayNano,
     };
@@ -548,6 +553,79 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn round_trip_literals_with_expected_field() -> Result<()> {
+        let required_struct = ScalarStructBuilder::new()
+            .with_scalar(
+                Field::new("required", DataType::Int32, false),
+                ScalarValue::Int32(Some(1)),
+            )
+            .build()?;
+        let state = SessionContext::default().state();
+        let mut producer = DefaultSubstraitProducer::new(&state);
+        let substrait_literal = to_substrait_literal(&mut producer, &required_struct)?;
+        let schema_less =
+            from_substrait_literal_without_names(&test_consumer(), &substrait_literal)?;
+        let DataType::Struct(fields) = schema_less.data_type() else {
+            panic!("expected struct literal")
+        };
+        assert!(fields[0].is_nullable());
+
+        round_trip_literal_with_expected_field(required_struct.clone())?;
+
+        let required_list = ScalarValue::List(ScalarValue::new_list(
+            std::slice::from_ref(&required_struct),
+            &required_struct.data_type(),
+            false,
+        ));
+        round_trip_literal_with_expected_field(required_list)?;
+
+        let empty_required_list = ScalarValue::List(ScalarValue::new_list(
+            &[],
+            &required_struct.data_type(),
+            false,
+        ));
+        round_trip_literal_with_expected_field(empty_required_list)?;
+
+        let required_entry = ScalarStructBuilder::new()
+            .with_scalar(
+                Field::new("key", DataType::Utf8, false),
+                ScalarValue::Utf8(Some("key".to_string())),
+            )
+            .with_scalar(
+                Field::new("value", DataType::Int64, false),
+                ScalarValue::Int64(Some(1)),
+            )
+            .build()?;
+        let entries = ScalarValue::iter_to_array([required_entry])?
+            .as_struct()
+            .to_owned();
+        let entries_field =
+            Arc::new(Field::new("entries", entries.data_type().clone(), false));
+        let required_map = ScalarValue::Map(Arc::new(MapArray::new(
+            Arc::clone(&entries_field),
+            OffsetBuffer::new(vec![0, 1].into()),
+            entries,
+            None,
+            false,
+        )));
+        round_trip_literal_with_expected_field(required_map)?;
+
+        let empty_entries = new_empty_array(entries_field.data_type())
+            .as_struct()
+            .to_owned();
+        let empty_required_map = ScalarValue::Map(Arc::new(MapArray::new(
+            entries_field,
+            OffsetBuffer::new(vec![0, 0].into()),
+            empty_entries,
+            None,
+            false,
+        )));
+        round_trip_literal_with_expected_field(empty_required_map)?;
+
+        Ok(())
+    }
+
     fn round_trip_literal(scalar: ScalarValue) -> Result<()> {
         println!("Checking round trip of {scalar:?}");
         let state = SessionContext::default().state();
@@ -555,6 +633,20 @@ mod tests {
         let substrait_literal = to_substrait_literal(&mut producer, &scalar)?;
         let roundtrip_scalar =
             from_substrait_literal_without_names(&test_consumer(), &substrait_literal)?;
+        assert_eq!(scalar, roundtrip_scalar);
+        Ok(())
+    }
+
+    fn round_trip_literal_with_expected_field(scalar: ScalarValue) -> Result<()> {
+        let state = SessionContext::default().state();
+        let mut producer = DefaultSubstraitProducer::new(&state);
+        let substrait_literal = to_substrait_literal(&mut producer, &scalar)?;
+        let expected_field = Field::new("expected", scalar.data_type(), false);
+        let roundtrip_scalar = from_substrait_literal_with_expected_field(
+            &test_consumer(),
+            &substrait_literal,
+            &expected_field,
+        )?;
         assert_eq!(scalar, roundtrip_scalar);
         Ok(())
     }

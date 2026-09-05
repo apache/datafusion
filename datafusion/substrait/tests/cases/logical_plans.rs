@@ -21,6 +21,7 @@
 mod tests {
     use crate::cases::roundtrip_logical_plan::higher_order_function_ctx;
     use crate::utils::test::{add_plan_schemas_to_ctx, read_json};
+    use datafusion::arrow::datatypes::DataType;
     use datafusion::common::test_util::format_batches;
     use std::collections::HashSet;
 
@@ -210,13 +211,15 @@ mod tests {
 
     #[tokio::test]
     async fn non_nullable_lists() -> Result<()> {
-        // DataFusion's Substrait consumer treats all lists as nullable, even if the Substrait plan specifies them as non-nullable.
-        // That's because implementing the non-nullability consistently is non-trivial.
-        // This test confirms that reading a plan with non-nullable lists works as expected.
         let proto_plan =
             read_json("tests/testdata/test_plans/non_nullable_lists.substrait.json");
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+        let DataType::List(item) = plan.schema().field(0).data_type() else {
+            panic!("expected list field")
+        };
+        assert!(!item.is_nullable());
 
         assert_snapshot!(
                 &plan,

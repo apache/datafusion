@@ -437,12 +437,14 @@ mod tests {
         round_trip_type(DataType::Decimal128(10, 2))?;
         round_trip_type(DataType::Decimal256(30, 2))?;
 
-        round_trip_type(DataType::List(
-            Field::new_list_field(DataType::Int32, true).into(),
-        ))?;
-        round_trip_type(DataType::LargeList(
-            Field::new_list_field(DataType::Int32, true).into(),
-        ))?;
+        for nullable in [true, false] {
+            round_trip_type(DataType::List(
+                Field::new_list_field(DataType::Int32, nullable).into(),
+            ))?;
+            round_trip_type(DataType::LargeList(
+                Field::new_list_field(DataType::Int32, nullable).into(),
+            ))?;
+        }
 
         round_trip_type(DataType::Map(
             Field::new_struct(
@@ -450,6 +452,18 @@ mod tests {
                 [
                     Field::new("key", DataType::Utf8, false).into(),
                     Field::new("value", DataType::Int32, true).into(),
+                ],
+                false,
+            )
+            .into(),
+            false,
+        ))?;
+        round_trip_type(DataType::Map(
+            Field::new_struct(
+                "entries",
+                [
+                    Field::new("key", DataType::Utf8, false).into(),
+                    Field::new("value", DataType::Int32, false).into(),
                 ],
                 false,
             )

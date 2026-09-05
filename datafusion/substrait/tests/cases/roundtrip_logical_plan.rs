@@ -1891,11 +1891,8 @@ async fn roundtrip_values_duplicate_column_join() -> Result<()> {
 async fn roundtrip_preserves_field_nullability() -> Result<()> {
     use datafusion::arrow::datatypes::Fields;
 
-    // Verify that required and nullable fields, including nested struct fields,
+    // Verify that required and nullable fields, including nested fields,
     // preserve their nullability through a Substrait round-trip.
-    //
-    // List child nullability is intentionally omitted because it is not
-    // preserved today.
     let ctx = create_context().await?;
     let df_schema = DFSchema::try_from(Schema::new(vec![
         Field::new("required_int", DataType::Int32, false),
@@ -1906,6 +1903,26 @@ async fn roundtrip_preserves_field_nullability() -> Result<()> {
                 Field::new("required_inner", DataType::Boolean, false),
                 Field::new("nullable_inner", DataType::Utf8, true),
             ])),
+            false,
+        ),
+        Field::new(
+            "required_list_item",
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false))),
+            false,
+        ),
+        Field::new(
+            "required_map_value",
+            DataType::Map(
+                Arc::new(Field::new_struct(
+                    "entries",
+                    vec![
+                        Field::new("key", DataType::Utf8, false),
+                        Field::new("value", DataType::Int32, false),
+                    ],
+                    false,
+                )),
+                false,
+            ),
             false,
         ),
     ]))?;
