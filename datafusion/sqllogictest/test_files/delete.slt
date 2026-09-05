@@ -36,7 +36,7 @@ logical_plan
 02)--TableScan: t1
 physical_plan
 01)CooperativeExec
-02)--DmlResultExec: rows_affected=0
+02)--MemDmlExec: op=Delete
 
 
 # Filtered by existing columns
@@ -49,7 +49,7 @@ logical_plan
 03)----TableScan: t1
 physical_plan
 01)CooperativeExec
-02)--DmlResultExec: rows_affected=0
+02)--MemDmlExec: op=Delete
 
 
 # Filtered by existing columns, using qualified and unqualified names
@@ -62,7 +62,7 @@ logical_plan
 03)----TableScan: t1
 physical_plan
 01)CooperativeExec
-02)--DmlResultExec: rows_affected=0
+02)--MemDmlExec: op=Delete
 
 
 # Filtered by a mix of columns and literal predicates
@@ -75,7 +75,7 @@ logical_plan
 03)----TableScan: t1
 physical_plan
 01)CooperativeExec
-02)--DmlResultExec: rows_affected=0
+02)--MemDmlExec: op=Delete
 
 
 # Deleting by columns that do not exist returns an error
@@ -126,7 +126,7 @@ logical_plan
 03)----TableScan: t1
 physical_plan
 01)CooperativeExec
-02)--DmlResultExec: rows_affected=0
+02)--MemDmlExec: op=Delete
 
 
 query TT
@@ -139,7 +139,7 @@ logical_plan
 04)------TableScan: t1
 physical_plan
 01)CooperativeExec
-02)--DmlResultExec: rows_affected=0
+02)--MemDmlExec: op=Delete
 
 # Config reset
 statement ok

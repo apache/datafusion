@@ -284,3 +284,53 @@ SELECT * FROM test_update_div;
 
 statement ok
 DROP TABLE test_update_div;
+
+# Test that EXPLAIN UPDATE does not change the rows
+# The rows change when the plan runs, and EXPLAIN prints the plan without
+# running it.
+statement ok
+CREATE TABLE test_explain_update(id INT, name VARCHAR);
+
+statement ok
+INSERT INTO test_explain_update VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+query TT
+EXPLAIN UPDATE test_explain_update SET name = 'z' WHERE id > 1;
+----
+logical_plan
+01)Dml: op=[Update] table=[test_explain_update]
+02)--Projection: test_explain_update.id AS id, Utf8View("z") AS name
+03)----Filter: test_explain_update.id > Int32(1)
+04)------TableScan: test_explain_update projection=[id]
+physical_plan
+01)CooperativeExec
+02)--MemDmlExec: op=Update
+
+query IT rowsort
+SELECT * FROM test_explain_update;
+----
+1 a
+2 b
+3 c
+
+# EXPLAIN still reports a statement that cannot be planned
+statement error No field named nonexistent
+EXPLAIN UPDATE test_explain_update SET nonexistent = 'z';
+
+# EXPLAIN ANALYZE runs the plan, so the rows do change
+query TT
+EXPLAIN ANALYZE UPDATE test_explain_update SET name = 'z' WHERE id > 1;
+----
+Plan with Metrics
+01)CooperativeExec, metrics=[]
+02)--MemDmlExec: op=Update, metrics=[]
+
+query IT rowsort
+SELECT * FROM test_explain_update;
+----
+1 a
+2 z
+3 z
+
+statement ok
+DROP TABLE test_explain_update;
