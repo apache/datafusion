@@ -23,25 +23,192 @@
 
 ## Original Query: SELECT equal_null(1, '11');
 ## PySpark 3.5.5 Result: {'equal_null(1, 11)': False, 'typeof(equal_null(1, 11))': 'boolean', 'typeof(1)': 'int', 'typeof(11)': 'string'}
-#query
-#SELECT equal_null(1::int, '11'::string);
+query B
+SELECT equal_null(1::int, '11'::string);
+----
+false
 
 ## Original Query: SELECT equal_null(3, 3);
 ## PySpark 3.5.5 Result: {'equal_null(3, 3)': True, 'typeof(equal_null(3, 3))': 'boolean', 'typeof(3)': 'int'}
-#query
-#SELECT equal_null(3::int);
+query B
+SELECT equal_null(3::int, 3::int);
+----
+true
 
 ## Original Query: SELECT equal_null(NULL, 'abc');
 ## PySpark 3.5.5 Result: {'equal_null(NULL, abc)': False, 'typeof(equal_null(NULL, abc))': 'boolean', 'typeof(NULL)': 'void', 'typeof(abc)': 'string'}
-#query
-#SELECT equal_null(NULL::void, 'abc'::string);
+query B
+SELECT equal_null(NULL, 'abc'::string);
+----
+false
 
 ## Original Query: SELECT equal_null(NULL, NULL);
 ## PySpark 3.5.5 Result: {'equal_null(NULL, NULL)': True, 'typeof(equal_null(NULL, NULL))': 'boolean', 'typeof(NULL)': 'void'}
-#query
-#SELECT equal_null(NULL::void);
+query B
+SELECT equal_null(NULL, NULL);
+----
+true
 
 ## Original Query: SELECT equal_null(true, NULL);
 ## PySpark 3.5.5 Result: {'equal_null(true, NULL)': False, 'typeof(equal_null(true, NULL))': 'boolean', 'typeof(true)': 'boolean', 'typeof(NULL)': 'void'}
-#query
-#SELECT equal_null(true::boolean, NULL::void);
+query B
+SELECT equal_null(true::boolean, NULL);
+----
+false
+
+query B
+SELECT equal_null(NULL, true::boolean);
+----
+false
+
+query BB
+SELECT equal_null(1::int, 1::int), equal_null(1::int, 2::int);
+----
+true false
+
+query BB
+SELECT equal_null(NULL::int, 1::int), equal_null(NULL::int, NULL::int);
+----
+false true
+
+# EqualNullSafe is declared non-nullable in Spark, so the result is never NULL
+query B
+SELECT equal_null(NULL::int, NULL::int) IS NULL;
+----
+false
+
+query BB
+SELECT equal_null('abc'::string, 'abc'::string), equal_null('abc'::string, 'abd'::string);
+----
+true false
+
+# The default UTF8_BINARY collation compares strings by byte
+query B
+SELECT equal_null('a'::string, 'A'::string);
+----
+false
+
+query BB
+SELECT equal_null(true, true), equal_null(true, false);
+----
+true false
+
+query BB
+SELECT equal_null(1::int, 1::bigint), equal_null(1::int, 1.0::double);
+----
+true true
+
+# Spark's float ordering makes NaN equal to itself, unlike IEEE-754
+query BB
+SELECT equal_null('NaN'::double, 'NaN'::double) AS d, equal_null('NaN'::float, 'NaN'::float) AS f;
+----
+true true
+
+query BBB
+SELECT equal_null('NaN'::double, 1.0::double), equal_null('NaN'::double, NULL), equal_null('NaN'::double, 'Infinity'::double);
+----
+false false false
+
+# Spark's float ordering also makes -0.0 equal to 0.0
+query BB
+SELECT equal_null(0.0::double, -0.0::double) AS d, equal_null(0.0::float, -0.0::float) AS f;
+----
+true true
+
+query BB
+SELECT equal_null('Infinity'::double, 'Infinity'::double), equal_null('Infinity'::double, '-Infinity'::double);
+----
+true false
+
+statement ok
+CREATE TABLE equal_null_ints(id INT, a INT, b INT) AS VALUES
+(1, 1, 1),
+(2, 1, 2),
+(3, CAST(NULL AS INT), 1),
+(4, 1, CAST(NULL AS INT)),
+(5, CAST(NULL AS INT), CAST(NULL AS INT));
+
+query B
+SELECT equal_null(a, b) FROM equal_null_ints ORDER BY id;
+----
+true
+false
+false
+false
+true
+
+statement ok
+DROP TABLE equal_null_ints;
+
+statement ok
+CREATE TABLE equal_null_doubles(id INT, a DOUBLE, b DOUBLE) AS VALUES
+(1, 'NaN'::double, 'NaN'::double),
+(2, 0.0, -0.0),
+(3, 1.0, CAST(NULL AS DOUBLE)),
+(4, CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE));
+
+query B
+SELECT equal_null(a, b) FROM equal_null_doubles ORDER BY id;
+----
+true
+true
+false
+true
+
+statement ok
+DROP TABLE equal_null_doubles;
+
+query BB
+SELECT equal_null(array(1, 2), array(1, 2)), equal_null(array(1, 2), array(1, 2, 3));
+----
+true false
+
+# Two NULLs in the same array slot compare equal, per Spark's array ordering
+query BB
+SELECT equal_null(array(1, NULL), array(1, NULL)), equal_null(array(1, NULL), array(1, 2));
+----
+true false
+
+query B
+SELECT equal_null(named_struct('a', 1), named_struct('a', 1));
+----
+true
+
+query B
+SELECT equal_null(1.0::decimal(2,1), 1.00::decimal(3,2));
+----
+true
+
+statement error Function 'equal_null' expects 2 arguments but received 1
+SELECT equal_null(1::int);
+
+statement error Function 'equal_null' expects 2 arguments but received 3
+SELECT equal_null(1::int, 2::int, 3::int);
+
+# Without the simplify() rewrite the function runs its own kernel, which Comet relies on
+statement ok
+set datafusion.optimizer.max_passes = 0;
+
+query BBBB
+SELECT equal_null(NULL, NULL), equal_null(0.0::double, -0.0::double), equal_null('NaN'::double, 'NaN'::double), equal_null(array(1, NULL), array(1, NULL));
+----
+true true true true
+
+statement ok
+CREATE TABLE equal_null_physical(id INT, a INT, b INT) AS VALUES
+(1, 1, 1),
+(2, 1, CAST(NULL AS INT)),
+(3, CAST(NULL AS INT), CAST(NULL AS INT));
+
+query B
+SELECT equal_null(a, b) FROM equal_null_physical ORDER BY id;
+----
+true
+false
+true
+
+statement ok
+DROP TABLE equal_null_physical;
+
+statement ok
+reset datafusion.optimizer.max_passes;
