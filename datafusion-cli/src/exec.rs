@@ -36,7 +36,7 @@ use datafusion::logical_expr::{DdlStatement, LogicalPlan};
 use datafusion::physical_plan::execution_plan::EmissionType;
 use datafusion::physical_plan::spill::get_record_batch_memory_size;
 use datafusion::physical_plan::{ExecutionPlanProperties, execute_stream};
-use datafusion::sql::parser::{DFParser, Statement};
+use datafusion::sql::parser::{DFParserBuilder, Statement};
 use datafusion::sql::sqlparser;
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
 use futures::StreamExt;
@@ -222,7 +222,13 @@ pub(super) async fn exec_and_print(
         )
     })?;
 
-    let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
+    // Honour `datafusion.sql_parser.recursion_limit` like `SessionState::sql_to_statement`
+    // does, instead of the parser's built-in default.
+    let statements = DFParserBuilder::new(sql.as_str())
+        .with_dialect(dialect.as_ref())
+        .with_recursion_limit(options.sql_parser.recursion_limit.get())
+        .build()?
+        .parse_statements()?;
     for statement in statements {
         StatementExecutor::new(statement)
             .execute(ctx, print_options)
@@ -519,10 +525,45 @@ mod tests {
     use super::*;
 
     use datafusion::common::plan_err;
+    use datafusion::sql::parser::DFParser;
 
     use datafusion::prelude::SessionContext;
     use datafusion_common::assert_contains;
     use url::Url;
+
+    /// `datafusion.sql_parser.recursion_limit` used to be ignored by the CLI:
+    /// statements were parsed with the parser's built-in default.
+    #[tokio::test]
+    async fn exec_and_print_honours_parser_recursion_limit() -> Result<()> {
+        use crate::object_storage::instrumented::InstrumentedObjectStoreRegistry;
+        use datafusion::prelude::SessionConfig;
+        use std::sync::Arc;
+
+        // 60 nested calls exceed the parser's default recursion limit of 50.
+        let depth = 60;
+        let sql = format!("SELECT {}1{}", "abs(".repeat(depth), ")".repeat(depth));
+        let print_options = PrintOptions {
+            format: PrintFormat::Automatic,
+            quiet: true,
+            maxrows: MaxRows::Unlimited,
+            color: false,
+            instrumented_registry: Arc::new(InstrumentedObjectStoreRegistry::new()),
+        };
+
+        let ctx = SessionContext::new();
+        let err = exec_and_print(&ctx, &print_options, sql.clone())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert_contains!(err, "RecursionLimitExceeded");
+
+        let config =
+            SessionConfig::new().set_usize("datafusion.sql_parser.recursion_limit", 100);
+        let ctx = SessionContext::new_with_config(config);
+        exec_and_print(&ctx, &print_options, sql).await?;
+
+        Ok(())
+    }
 
     async fn create_external_table_test(location: &str, sql: &str) -> Result<()> {
         let ctx = SessionContext::new();
