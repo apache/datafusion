@@ -239,27 +239,25 @@ impl Stream for AlignedBoundaryStream {
                         }
                         Poll::Ready(Some(Ok(chunk))) => {
                             this.bytes_consumed += chunk.len() as u64;
-                            match chunk.iter().position(|&b| b == this.terminator) {
-                                Some(pos) => {
-                                    let remainder = chunk.slice((pos + 1)..);
-                                    // The aligned start position is where
-                                    // data begins after the newline.
-                                    let aligned_start =
-                                        this.abs_pos() - remainder.len() as u64;
-                                    if aligned_start >= this.end {
-                                        // Start alignment landed at or past
-                                        // the end boundary — no complete
-                                        // lines in this partition's range.
-                                        this.phase = Phase::Done;
-                                        return Poll::Ready(None);
-                                    }
-                                    if !remainder.is_empty() {
-                                        this.pending = Some(remainder);
-                                    }
-                                    this.phase = Phase::FetchingChunks;
-                                    continue;
+                            if let Some(pos) =
+                                chunk.iter().position(|&b| b == this.terminator)
+                            {
+                                let remainder = chunk.slice((pos + 1)..);
+                                // The aligned start position is where
+                                // data begins after the newline.
+                                let aligned_start =
+                                    this.abs_pos() - remainder.len() as u64;
+                                if aligned_start >= this.end {
+                                    // Start alignment landed at or past
+                                    // the end boundary — no complete
+                                    // lines in this partition's range.
+                                    this.phase = Phase::Done;
+                                    return Poll::Ready(None);
                                 }
-                                None => continue,
+                                if !remainder.is_empty() {
+                                    this.pending = Some(remainder);
+                                }
+                                this.phase = Phase::FetchingChunks;
                             }
                         }
                     }

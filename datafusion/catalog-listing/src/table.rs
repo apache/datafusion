@@ -23,7 +23,7 @@ use crate::{ListingOptions, ListingTableConfig};
 use arrow::datatypes::{Field, Schema, SchemaBuilder, SchemaRef};
 use async_trait::async_trait;
 use datafusion_catalog::{ScanArgs, ScanResult, Session, TableProvider};
-use datafusion_common::stats::Precision;
+use datafusion_common::stats::{Precision, is_known_empty};
 use datafusion_common::{
     Constraints, DFSchema, SchemaExt, Statistics, internal_datafusion_err, plan_err,
     project_schema,
@@ -400,6 +400,9 @@ fn derive_common_ordering_from_files(file_groups: &[FileGroup]) -> Option<LexOrd
     // Collect file orderings and track counts
     for group in file_groups {
         for file in group.iter() {
+            if file.statistics.as_deref().is_some_and(is_known_empty) {
+                continue;
+            }
             state = match (&state, &file.ordering) {
                 // If this is the first file with ordering, set it as current
                 (CurrentOrderingState::FirstFile, Some(ordering)) => {
@@ -673,7 +676,7 @@ impl ListingTable {
                 }
             }
             None => {} // no ordering required
-        };
+        }
 
         let output_partitioning = if let Some(output_partitioning) =
             declared_output_partitioning
@@ -1237,6 +1240,14 @@ mod tests {
         PartitionedFile::new(name.to_string(), 1024).with_ordering(ordering)
     }
 
+    /// Helper to create an exact zero-row file with optional ordering
+    fn create_empty_file(name: &str, ordering: Option<LexOrdering>) -> PartitionedFile {
+        create_file(name, ordering).with_statistics(Arc::new(Statistics {
+            num_rows: Precision::Exact(0),
+            ..Default::default()
+        }))
+    }
+
     #[test]
     fn test_derive_common_ordering_all_files_same_ordering() {
         // All files have the same ordering -> returns that ordering
@@ -1306,6 +1317,19 @@ mod tests {
 
         let result = derive_common_ordering_from_files(&file_groups);
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_derive_common_ordering_ignores_empty_files() {
+        let ordering = lex_ordering(vec![sort_expr("a", 0, false, true)]);
+
+        let file_groups = vec![FileGroup::new(vec![
+            create_empty_file("empty.parquet", None),
+            create_file("data.parquet", Some(ordering.clone())),
+        ])];
+
+        let result = derive_common_ordering_from_files(&file_groups);
+        assert_eq!(result, Some(ordering));
     }
 
     #[test]

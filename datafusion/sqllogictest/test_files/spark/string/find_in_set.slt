@@ -21,7 +21,215 @@
 # For more information, please see:
 #   https://github.com/apache/datafusion/issues/15914
 
-## Original Query: SELECT find_in_set('ab','abc,b,ab,c,def');
-## PySpark 3.5.5 Result: {'find_in_set(ab, abc,b,ab,c,def)': 3, 'typeof(find_in_set(ab, abc,b,ab,c,def))': 'int', 'typeof(ab)': 'string', 'typeof(abc,b,ab,c,def)': 'string'}
-#query
-#SELECT find_in_set('ab'::string, 'abc,b,ab,c,def'::string);
+query I
+SELECT find_in_set('ab'::string, 'abc,b,ab,c,def'::string);
+----
+3
+
+query I
+SELECT find_in_set('abc'::string, 'abc,b,ab,c,def'::string);
+----
+1
+
+query I
+SELECT find_in_set('def'::string, 'abc,b,ab,c,def'::string);
+----
+5
+
+query I
+SELECT find_in_set('xyz'::string, 'abc,b,ab,c,def'::string);
+----
+0
+
+query I
+SELECT find_in_set('a'::string, 'abc,b,ab,c,def'::string);
+----
+0
+
+query I
+SELECT find_in_set('abcd'::string, 'abc,b,ab,c,def'::string);
+----
+0
+
+query I
+SELECT find_in_set('Ab'::string, 'abc,b,ab,c,def'::string);
+----
+0
+
+query I
+SELECT find_in_set('d,ef'::string, 'abc,b,ab,c,def'::string);
+----
+0
+
+query I
+SELECT find_in_set('ab,'::string, 'abc,b,ab,c,def'::string);
+----
+0
+
+# by definition a needle containing a comma is never found
+query I
+SELECT find_in_set(','::string, 'a,,b'::string);
+----
+0
+
+# a list with no comma is one element, so an empty list has one empty element
+query I
+SELECT find_in_set(''::string, ''::string);
+----
+1
+
+query I
+SELECT find_in_set('a'::string, ''::string);
+----
+0
+
+# one comma delimits two empty elements, and the first match wins
+query I
+SELECT find_in_set(''::string, ','::string);
+----
+1
+
+query I
+SELECT find_in_set(''::string, 'a,,b'::string);
+----
+2
+
+query I
+SELECT find_in_set(''::string, ',abc,b,ab,c,def'::string);
+----
+1
+
+# a trailing comma adds a final empty element
+query I
+SELECT find_in_set(''::string, 'abc,b,ab,c,def,'::string);
+----
+6
+
+query I
+SELECT find_in_set(''::string, 'abc,b,ab,c,def'::string);
+----
+0
+
+query I
+SELECT find_in_set(''::string, 'abc'::string);
+----
+0
+
+query I
+SELECT find_in_set('ab'::string, ',,,ab,abc,b,ab,c,def'::string);
+----
+4
+
+query I
+SELECT find_in_set('ab'::string, 'ab,abc,b,ab,c,def'::string);
+----
+1
+
+query I
+SELECT find_in_set('b'::string, 'a, b'::string);
+----
+0
+
+query I
+SELECT find_in_set(' b'::string, 'a, b'::string);
+----
+2
+
+query I
+SELECT find_in_set('大'::string, 'test,大千,世,界X,大,千,世界'::string);
+----
+5
+
+query I
+SELECT find_in_set('界x'::string, 'test,大千,世,界X,大,千,世界'::string);
+----
+0
+
+query I
+SELECT find_in_set('𝔸'::string, 'a,𐐅,𝔸'::string);
+----
+3
+
+query I
+SELECT find_in_set('🔥'::string, 'a,Д,🔥'::string);
+----
+3
+
+query I
+SELECT find_in_set(NULL::string, 'abc,b,ab,c,def'::string);
+----
+NULL
+
+query I
+SELECT find_in_set('ab'::string, NULL::string);
+----
+NULL
+
+query I
+SELECT find_in_set(NULL::string, NULL::string);
+----
+NULL
+
+query I
+SELECT find_in_set(a, 'abc,b,ab,c,def'::string) FROM (VALUES ('abc'::string), ('def'::string), ('zzz'::string), (''::string), ('d,ef'::string), (NULL::string)) AS t(a);
+----
+1
+5
+0
+0
+0
+NULL
+
+query I
+SELECT find_in_set('ab'::string, a) FROM (VALUES ('abc,b,ab,c,def'::string), ('ab'::string), (''::string), (',ab'::string), (NULL::string)) AS t(a);
+----
+3
+1
+0
+2
+NULL
+
+query I
+SELECT find_in_set(a, b) FROM (VALUES ('ab'::string, 'abc,b,ab,c,def'::string), (''::string, 'a,,b'::string), ('c'::string, 'a,b'::string), ('a,b'::string, 'a,b'::string), (NULL::string, 'a,b'::string), ('a'::string, NULL::string)) AS t(a, b);
+----
+3
+2
+0
+0
+NULL
+NULL
+
+# 20 elements is past the size at which the set is looked up rather than scanned, and a5 repeats at 19
+query I
+SELECT find_in_set(a, 'a0,a1,a2,a3,a4,a5,a6,a7,a8,a9,a10,a11,a12,a13,a14,a15,a16,a17,a5,'::string) FROM (VALUES ('a0'::string), ('a17'::string), ('a5'::string), (''::string), ('zz'::string), (NULL::string)) AS t(a);
+----
+1
+18
+6
+20
+0
+NULL
+
+query I
+SELECT find_in_set(arrow_cast('ab', 'Utf8View'), arrow_cast('abc,b,ab,c,def', 'Utf8View'));
+----
+3
+
+query I
+SELECT find_in_set(arrow_cast(a, 'Utf8View'), arrow_cast('abc,b,ab,c,def', 'Utf8View')) FROM (VALUES ('ab'::string), (''::string), (NULL::string)) AS t(a);
+----
+3
+0
+NULL
+
+query I
+SELECT find_in_set(arrow_cast('ab', 'LargeUtf8'), arrow_cast('abc,b,ab,c,def', 'LargeUtf8'));
+----
+3
+
+query I
+SELECT find_in_set(arrow_cast(a, 'LargeUtf8'), arrow_cast('abc,b,ab,c,def', 'LargeUtf8')) FROM (VALUES ('ab'::string), (''::string), (NULL::string)) AS t(a);
+----
+3
+0
+NULL

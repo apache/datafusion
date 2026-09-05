@@ -212,7 +212,9 @@ impl ClassicPWMJStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
-        match ready!(self.streamed.poll_next_unpin(cx)) {
+        let next_batch = ready!(self.streamed.poll_next_unpin(cx));
+        let _join_timer = self.join_metrics.join_time.timer();
+        match next_batch {
             None => {
                 // Release the streamed input pipeline's resources.
                 let streamed_schema = self.streamed.schema();
@@ -258,7 +260,7 @@ impl ClassicPWMJStream {
                 );
             }
             Some(Err(err)) => return Poll::Ready(Err(err)),
-        };
+        }
 
         Poll::Ready(Ok(StatefulStreamResult::Continue))
     }
@@ -268,6 +270,7 @@ impl ClassicPWMJStream {
     fn process_stream_batch(
         &mut self,
     ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
+        let _join_timer = self.join_metrics.join_time.timer();
         let buffered_side = self.buffered_side.try_as_ready_mut()?;
         let stream_batch = self.state.try_as_process_stream_batch_mut()?;
 
@@ -317,6 +320,7 @@ impl ClassicPWMJStream {
     fn process_unmatched_buffered_batch(
         &mut self,
     ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
+        let _join_timer = self.join_metrics.join_time.timer();
         // Return early for `JoinType::Right` and `JoinType::Inner`
         if matches!(self.join_type, JoinType::Right | JoinType::Inner) {
             self.state = PiecewiseMergeJoinStreamState::Completed;
@@ -560,7 +564,7 @@ fn resolve_classic_join(
                         operator
                     );
                 }
-            };
+            }
 
             // Increment buffer_idx after every row
             buffer_idx += 1;
@@ -674,19 +678,24 @@ fn create_unmatched_batch(
 mod tests {
     use super::*;
     use crate::{
-        ExecutionPlan, common,
+        DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, common,
         joins::PiecewiseMergeJoinExec,
-        test::{TestMemoryExec, build_table_i32},
+        metrics::MetricsSet,
+        stream::RecordBatchStreamAdapter,
+        test::{TestMemoryExec, assert_join_metrics, build_table_i32},
     };
     use arrow::array::{Date32Array, Date64Array};
     use arrow_schema::{DataType, Field};
+    use datafusion_common::instant::Instant;
     use datafusion_common::test_util::batches_to_string;
+    use datafusion_common::tree_node::TreeNodeRecursion;
     use datafusion_execution::TaskContext;
     use datafusion_execution::config::SessionConfig;
     use datafusion_physical_expr::{PhysicalExpr, expressions::Column};
     use futures::TryStreamExt;
     use insta::assert_snapshot;
     use std::sync::Arc;
+    use std::time::Duration;
 
     fn columns(schema: &Schema) -> Vec<String> {
         schema.fields().iter().map(|f| f.name().clone()).collect()
@@ -768,7 +777,7 @@ mod tests {
         on: (PhysicalExprRef, PhysicalExprRef),
         operator: Operator,
         join_type: JoinType,
-    ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
+    ) -> Result<(Vec<String>, Vec<RecordBatch>, MetricsSet)> {
         join_collect_with_options(left, right, on, operator, join_type).await
     }
 
@@ -778,14 +787,15 @@ mod tests {
         on: (PhysicalExprRef, PhysicalExprRef),
         operator: Operator,
         join_type: JoinType,
-    ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
+    ) -> Result<(Vec<String>, Vec<RecordBatch>, MetricsSet)> {
         let task_ctx = Arc::new(TaskContext::default());
         let join = join(left, right, on, operator, join_type)?;
         let columns = columns(&join.schema());
 
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
-        Ok((columns, batches))
+        let metrics = join.metrics().expect("metrics should be available");
+        Ok((columns, batches, metrics))
     }
 
     #[tokio::test]
@@ -821,7 +831,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         );
 
-        let (_, batches) =
+        let (_, batches, metrics) =
             join_collect(left, right, on, Operator::Lt, JoinType::Inner).await?;
 
         assert_snapshot!(batches_to_string(&batches), @r"
@@ -836,6 +846,8 @@ mod tests {
         | 3  | 1  | 9  | 10 | 2  | 70 |
         +----+----+----+----+----+----+
         ");
+
+        assert_join_metrics!(metrics, 6);
         Ok(())
     }
 
@@ -872,7 +884,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         );
 
-        let (_, batches) =
+        let (_, batches, metrics) =
             join_collect(left, right, on, Operator::Lt, JoinType::Inner).await?;
 
         assert_snapshot!(batches_to_string(&batches), @r"
@@ -887,6 +899,8 @@ mod tests {
         | 3  | 1  | 9  | 20 | 2  | 80 |
         +----+----+----+----+----+----+
         ");
+
+        assert_join_metrics!(metrics, 6);
         Ok(())
     }
 
@@ -923,7 +937,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         );
 
-        let (_, batches) =
+        let (_, batches, metrics) =
             join_collect(left, right, on, Operator::GtEq, JoinType::Inner).await?;
 
         assert_snapshot!(batches_to_string(&batches), @r"
@@ -940,6 +954,8 @@ mod tests {
         | 3  | 4  | 9  | 10 | 3  | 70 |
         +----+----+----+----+----+----+
         ");
+
+        assert_join_metrics!(metrics, 8);
         Ok(())
     }
 
@@ -972,10 +988,12 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         );
-        let (_, batches) =
+        let (_, batches, metrics) =
             join_collect(left, right, on, Operator::LtEq, JoinType::Inner).await?;
         // An empty join result produces no batches at all, not an empty batch.
         assert!(batches.is_empty());
+
+        assert_join_metrics!(metrics, 0);
         Ok(())
     }
 
@@ -1010,7 +1028,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         );
 
-        let (_, batches) =
+        let (_, batches, metrics) =
             join_collect(left, right, on, Operator::GtEq, JoinType::Full).await?;
 
         assert_snapshot!(batches_to_string(&batches), @r"
@@ -1023,6 +1041,7 @@ mod tests {
         +----+----+-----+----+----+-----+
         ");
 
+        assert_join_metrics!(metrics, 3);
         Ok(())
     }
 
@@ -1059,7 +1078,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         );
 
-        let (_, batches) =
+        let (_, batches, metrics) =
             join_collect(left, right, on, Operator::Gt, JoinType::Left).await?;
 
         assert_snapshot!(batches_to_string(&batches), @r"
@@ -1074,6 +1093,8 @@ mod tests {
         | 1  | 1  | 7  |    |    |    |
         +----+----+----+----+----+----+
         ");
+
+        assert_join_metrics!(metrics, 6);
         Ok(())
     }
 
@@ -1110,7 +1131,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         );
 
-        let (_, batches) =
+        let (_, batches, metrics) =
             join_collect(left, right, on, Operator::Gt, JoinType::Right).await?;
 
         assert_snapshot!(batches_to_string(&batches), @r"
@@ -1123,6 +1144,8 @@ mod tests {
         |    |    |    | 10 | 5  | 70 |
         +----+----+----+----+----+----+
         ");
+
+        assert_join_metrics!(metrics, 4);
         Ok(())
     }
 
@@ -1159,7 +1182,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         );
 
-        let (_, batches) =
+        let (_, batches, metrics) =
             join_collect(left, right, on, Operator::Lt, JoinType::Right).await?;
 
         assert_snapshot!(batches_to_string(&batches), @r"
@@ -1173,6 +1196,8 @@ mod tests {
         | 3  | 1  | 9  | 10 | 2  | 70 |
         +----+----+----+----+----+----+
         ");
+
+        assert_join_metrics!(metrics, 5);
         Ok(())
     }
 
@@ -1209,7 +1234,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         );
 
-        let (_, batches) =
+        let (_, batches, metrics) =
             join_collect(left, right, on, Operator::LtEq, JoinType::Inner).await?;
 
         // Expected grouping follows right.b1 descending (4, 3, 2)
@@ -1224,6 +1249,8 @@ mod tests {
         | 3  | 2  | 9  | 30 | 2  | 90 |
         +----+----+----+----+----+----+
         ");
+
+        assert_join_metrics!(metrics, 5);
         Ok(())
     }
 
@@ -1260,7 +1287,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         );
 
-        let (_, batches) =
+        let (_, batches, metrics) =
             join_collect(left, right, on, Operator::Gt, JoinType::Inner).await?;
 
         // Grouped by right in ascending evaluation for > (1,2,3)
@@ -1274,6 +1301,8 @@ mod tests {
         | 3  | 4  | 9  | 10 | 3  | 70 |
         +----+----+----+----+----+----+
         ");
+
+        assert_join_metrics!(metrics, 4);
         Ok(())
     }
 
@@ -1373,6 +1402,16 @@ mod tests {
         |    |    |    | 20 | 5  | 80 |
         +----+----+----+----+----+----+
         ");
+
+        let metrics = join.metrics().expect("metrics should be available");
+        assert_join_metrics!(metrics, 2);
+        assert!(
+            metrics
+                .sum_by_name("join_time")
+                .expect("join_time metric")
+                .as_usize()
+                > 0
+        );
         Ok(())
     }
 
@@ -1391,7 +1430,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         );
 
-        let (_, batches) =
+        let (_, batches, metrics) =
             join_collect(left, right, on, Operator::Lt, JoinType::Inner).await?;
 
         assert_snapshot!(batches_to_string(&batches), @r"
@@ -1401,6 +1440,8 @@ mod tests {
         | 42 | 5  | 999 | 30 | 7  | 90 |
         +----+----+-----+----+----+----+
         ");
+
+        assert_join_metrics!(metrics, 1);
         Ok(())
     }
 
@@ -1423,11 +1464,13 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         );
 
-        let (_, batches) =
+        let (_, batches, metrics) =
             join_collect(left, right, on, Operator::Gt, JoinType::Inner).await?;
 
         // An empty join result produces no batches at all, not an empty batch.
         assert!(batches.is_empty());
+
+        assert_join_metrics!(metrics, 0);
         Ok(())
     }
 
@@ -1464,7 +1507,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         );
 
-        let (_, batches) =
+        let (_, batches, metrics) =
             join_collect(left, right, on, Operator::Lt, JoinType::Inner).await?;
 
         assert_snapshot!(batches_to_string(&batches), @r"
@@ -1474,6 +1517,8 @@ mod tests {
         | 1970-01-04 | 2022-04-23 | 1970-01-10 | 1970-01-31 | 2022-04-25 | 1970-04-01 |
         +------------+------------+------------+------------+------------+------------+
         ");
+
+        assert_join_metrics!(metrics, 1);
         Ok(())
     }
 
@@ -1510,7 +1555,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         );
 
-        let (_, batches) =
+        let (_, batches, metrics) =
             join_collect(left, right, on, Operator::Lt, JoinType::Inner).await?;
 
         assert_snapshot!(batches_to_string(&batches), @r"
@@ -1520,6 +1565,8 @@ mod tests {
         | 1970-01-01T00:00:00.003 | 2022-04-23T08:44:01 | 1970-01-01T00:00:00.009 | 1970-01-01T00:00:00.030 | 2022-04-25T16:17:21 | 1970-01-01T00:00:00.090 |
         +-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+
         ");
+
+        assert_join_metrics!(metrics, 1);
         Ok(())
     }
 
@@ -1554,7 +1601,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         );
 
-        let (_, batches) =
+        let (_, batches, metrics) =
             join_collect(left, right, on, Operator::Lt, JoinType::Right).await?;
 
         assert_snapshot!(batches_to_string(&batches), @r"
@@ -1565,10 +1612,12 @@ mod tests {
         |                         |                     |                         | 1970-01-01T00:00:00.010 | 2022-04-23T08:44:01 | 1970-01-01T00:00:00.080 |
         +-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+
         ");
+
+        assert_join_metrics!(metrics, 2);
         Ok(())
     }
 
-    fn ratio_metric(metrics: &crate::metrics::MetricsSet, name: &str) -> (usize, usize) {
+    fn ratio_metric(metrics: &MetricsSet, name: &str) -> (usize, usize) {
         metrics
             .iter()
             .find_map(|m| match m.value() {
@@ -1584,7 +1633,7 @@ mod tests {
     }
 
     fn sum_metric(
-        metrics: &crate::metrics::MetricsSet,
+        metrics: &MetricsSet,
         matches: impl Fn(&crate::metrics::MetricValue) -> Option<usize>,
     ) -> usize {
         metrics.iter().filter_map(|m| matches(m.value())).sum()
@@ -1703,5 +1752,156 @@ mod tests {
         assert_eq!(ratio_metric(&metrics, "avg_fanout"), (3, 3));
 
         Ok(())
+    }
+
+    /// Wraps an input plan and sleeps `delay` before yielding each of its batches, to
+    /// simulate a slow streamed input.
+    #[derive(Debug)]
+    struct DelayedExec {
+        input: Arc<dyn ExecutionPlan>,
+        delay: Duration,
+    }
+
+    impl DisplayAs for DelayedExec {
+        fn fmt_as(
+            &self,
+            _t: DisplayFormatType,
+            f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            write!(f, "DelayedExec")
+        }
+    }
+
+    impl ExecutionPlan for DelayedExec {
+        fn name(&self) -> &str {
+            "DelayedExec"
+        }
+
+        fn properties(&self) -> &Arc<PlanProperties> {
+            self.input.properties()
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![&self.input]
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(Arc::new(Self {
+                input: Arc::clone(&children[0]),
+                delay: self.delay,
+            }))
+        }
+
+        fn execute(
+            &self,
+            partition: usize,
+            context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            let stream = self.input.execute(partition, context)?;
+            let schema = stream.schema();
+            let delay = self.delay;
+            Ok(Box::pin(RecordBatchStreamAdapter::new(
+                schema,
+                stream.then(move |item| async move {
+                    tokio::time::sleep(delay).await;
+                    item
+                }),
+            )))
+        }
+    }
+
+    fn join_time_of(metrics: &MetricsSet) -> Duration {
+        Duration::from_nanos(
+            metrics
+                .sum_by_name("join_time")
+                .map(|m| m.as_usize())
+                .unwrap_or(0) as u64,
+        )
+    }
+
+    /// `join_time` must not include time spent waiting for the streamed input: the timer
+    /// in `fetch_stream_batch` starts only once the input's poll returns `Ready`.
+    ///
+    /// Retries with 4x the delay (up to 3 attempts) when the `join_time < delay` check
+    /// fails. This de-flakes the check without masking real bugs: a genuine exclusion bug
+    /// makes `join_time` absorb the injected waits, so it scales with the delay and fails
+    /// at every escalation level, while a fixed-size disturbance (e.g. the OS preempting
+    /// the thread while a `join_time` timer is running) cannot grow 4x with it.
+    /// Deterministic invariants (row count, wall-time lower bound) are asserted on every
+    /// run and never retried. Mirrors the sort-merge join's `check_join_time_excluded`.
+    #[tokio::test]
+    async fn join_time_excludes_streamed_input_wait() -> Result<()> {
+        let mut delay = Duration::from_millis(50);
+        for attempt in 0..3 {
+            // Same data as `join_inner_less_than`, with the streamed side split into
+            // three batches so each one incurs the injected delay.
+            let left = build_table(
+                ("a1", &vec![1, 2, 3]),
+                ("b1", &vec![3, 2, 1]),
+                ("c1", &vec![7, 8, 9]),
+            );
+
+            let streamed_schema = Schema::new(vec![
+                Field::new("a2", DataType::Int32, false),
+                Field::new("b1", DataType::Int32, false),
+                Field::new("c2", DataType::Int32, false),
+            ]);
+            let streamed_batches = vec![
+                build_table_i32(("a2", &vec![10]), ("b1", &vec![2]), ("c2", &vec![70])),
+                build_table_i32(("a2", &vec![20]), ("b1", &vec![3]), ("c2", &vec![80])),
+                build_table_i32(("a2", &vec![30]), ("b1", &vec![4]), ("c2", &vec![90])),
+            ];
+            let right_mem = TestMemoryExec::try_new_exec(
+                &[streamed_batches],
+                Arc::new(streamed_schema),
+                None,
+            )?;
+            let right = Arc::new(DelayedExec {
+                input: right_mem,
+                delay,
+            });
+
+            let on = (
+                Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+            );
+            let join = join(left, right, on, Operator::Lt, JoinType::Inner)?;
+
+            let start = Instant::now();
+            let batches =
+                common::collect(join.execute(0, Arc::new(TaskContext::default()))?)
+                    .await?;
+            let wall = start.elapsed();
+
+            let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+            assert_eq!(rows, 6, "all streamed rows should find their matches");
+            assert!(
+                wall >= delay * 3,
+                "streamed delays should dominate wall time, got {wall:?}"
+            );
+
+            let join_time =
+                join_time_of(&join.metrics().expect("metrics should be available"));
+            if join_time < delay {
+                return Ok(());
+            }
+            assert!(
+                attempt < 2,
+                "join_time ({join_time:?}) should be well below the injected \
+                 delay ({delay:?}) even after escalating retries; wall {wall:?}"
+            );
+            delay *= 4;
+        }
+        unreachable!()
     }
 }

@@ -122,7 +122,7 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
                             exec_datafusion_err!("Error writing to object store: {e}"),
                         );
                     }
-                };
+                }
                 row_count += cnt;
             }
             Ok(Err(e)) => {

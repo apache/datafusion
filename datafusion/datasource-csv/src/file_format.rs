@@ -765,7 +765,7 @@ impl DisplayAs for CsvSink {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "CsvSink(file_groups=",)?;
+                write!(f, "CsvSink(file_groups=")?;
                 FileGroupDisplay(&self.config.file_group).fmt_as(t, f)?;
                 write!(f, ")")
             }
@@ -941,7 +941,7 @@ impl CsvSink {
 
 /// Encode a [`CsvFormatFactory`]'s options as their protobuf form.
 ///
-/// The reverse direction is `From<&protobuf::CsvOptions> for CsvOptions` in
+/// The reverse direction is `TryFrom<&protobuf::CsvOptions> for CsvOptions` in
 /// `datafusion-proto-models`: `CsvOptions` is a `datafusion-common` type, so
 /// that half cannot live here.
 #[cfg(feature = "proto")]

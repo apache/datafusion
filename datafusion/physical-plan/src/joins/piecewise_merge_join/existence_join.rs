@@ -227,7 +227,10 @@ impl ExistencePWMJStream {
             return Poll::Ready(Ok(StatefulStreamResult::Continue));
         }
 
-        match ready!(self.streamed.poll_next_unpin(cx)) {
+        let next_batch = ready!(self.streamed.poll_next_unpin(cx));
+        let join_time = self.join_metrics.join_time.clone();
+        let _join_timer = join_time.timer();
+        match next_batch {
             None => self.finish_streamed_side()?,
             Some(Ok(batch)) => {
                 let stream_values: ArrayRef = self
@@ -396,6 +399,7 @@ impl ExistencePWMJStream {
     /// Emits the existence result by slicing at the watermark: the marked buffered rows for
     /// `LeftSemi`, the unmarked ones for `LeftAnti`.
     fn emit_matched(&mut self) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
+        let _join_timer = self.join_metrics.join_time.timer();
         if !self.emitted {
             self.emitted = true;
 
@@ -492,7 +496,7 @@ mod tests {
     use crate::{
         ExecutionPlan, common,
         joins::PiecewiseMergeJoinExec,
-        test::{TestMemoryExec, build_table_i32},
+        test::{TestMemoryExec, assert_join_metrics, build_table_i32},
     };
     use arrow_schema::{DataType, Field, Schema};
     use datafusion_common::test_util::batches_to_string;
@@ -645,7 +649,8 @@ mod tests {
 
     /// The final pass pushes one slice of the buffered batch into a `BatchCoalescer`, so a
     /// result wider than `batch_size` has to be drained over several polls. Also pins the
-    /// `output_rows` metric, which `record_poll` in `poll_next` is what supplies.
+    /// `output_rows` metric, which `record_poll` in `poll_next` is what supplies, and
+    /// `join_time`, which the streamed-side scan and the final pass record.
     #[tokio::test]
     async fn final_pass_chunks_output_and_records_output_rows() -> Result<()> {
         let left = build_table(
@@ -692,12 +697,15 @@ mod tests {
         assert_eq!(batches.len(), 2, "expected the final pass to be chunked");
         assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 4);
 
-        let output_rows = join
-            .metrics()
-            .unwrap()
-            .output_rows()
-            .expect("output_rows metric");
-        assert_eq!(output_rows, 4);
+        let metrics = join.metrics().expect("metrics should be available");
+        assert_join_metrics!(metrics, 4);
+        assert!(
+            metrics
+                .sum_by_name("join_time")
+                .expect("join_time metric")
+                .as_usize()
+                > 0
+        );
         Ok(())
     }
 
