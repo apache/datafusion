@@ -88,6 +88,33 @@ select make_array(NULL), make_array(NULL, NULL, NULL), make_array(make_array(NUL
 ----
 [NULL] [NULL, NULL, NULL] [[NULL, NULL], [NULL, NULL]]
 
+# make_array over NULL-typed columns builds one list per row, not a single
+# list of all the nulls (https://github.com/apache/datafusion/issues/21841)
+query ?
+select make_array(n) from (values (NULL), (NULL), (NULL)) as t(n);
+----
+[NULL]
+[NULL]
+[NULL]
+
+query ?T
+select [n, n], arrow_typeof([n, n]) from (values (NULL), (NULL)) as t(n);
+----
+[NULL, NULL] List(Null)
+[NULL, NULL] List(Null)
+
+query I
+select count(*) from (select unnest([n, n]) from (values (NULL), (NULL), (NULL)) as t(n));
+----
+6
+
+# the NULL-typed path of array_append goes through make_array as well
+query ?
+select array_append(n, n) from (values (NULL), (NULL)) as t(n);
+----
+[NULL]
+[NULL]
+
 # make_array with 1 columns
 query ???
 select make_array(a), make_array(d), make_array(e) from values;

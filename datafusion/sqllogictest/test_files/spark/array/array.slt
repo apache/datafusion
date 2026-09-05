@@ -85,3 +85,10 @@ query ?
 SELECT array(arrow_cast(array(1,2), 'LargeList(Int64)'), array(3));
 ----
 [[1, 2], [3]]
+
+# NULL-typed columns build one list per row
+query ?
+SELECT array(n) FROM (VALUES (NULL), (NULL)) AS t(n);
+----
+[NULL]
+[NULL]

@@ -17,15 +17,16 @@
 
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, new_null_array};
+use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
 };
-use datafusion_functions_nested::make_array::{array_array, coerce_types_inner};
+use datafusion_functions_nested::make_array::{
+    array_array, coerce_types_inner, null_list_array,
+};
 
 use crate::function::functions_nested_utils::make_scalar_function;
 
@@ -121,17 +122,7 @@ pub fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
 
     match data_type {
         // Either an empty array or all nulls:
-        DataType::Null => {
-            let length = arrays.iter().map(|a| a.len()).sum();
-            // By default Int32
-            let array = new_null_array(&DataType::Null, length);
-            Ok(Arc::new(
-                SingleRowListArrayBuilder::new(array)
-                    .with_nullable(true)
-                    .with_field_name(Some(ARRAY_FIELD_DEFAULT_NAME.to_string()))
-                    .build_list_array(),
-            ))
-        }
+        DataType::Null => Ok(Arc::new(null_list_array(arrays, ARRAY_FIELD_DEFAULT_NAME))),
         _ => array_array::<i32>(arrays, data_type, ARRAY_FIELD_DEFAULT_NAME),
     }
 }
