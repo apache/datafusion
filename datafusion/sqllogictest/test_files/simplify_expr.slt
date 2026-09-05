@@ -503,3 +503,45 @@ select id from date_unwrap where cast(d64 as date) = DATE '1970-01-01' order by 
 
 statement ok
 drop table date_unwrap;
+
+# Immutable scalar functions are pushed into CASE branches with literal
+# outputs and each branch is constant-folded at plan time (#24477).
+statement ok
+create table case_pushdown(s varchar, flag boolean) as values ('a', true), ('b', false), ('c', NULL);
+
+query TT
+explain select to_timestamp(case when flag then '2024-03-01T00:00:00Z' else '2024-09-01T00:00:00Z' end) as ts from case_pushdown;
+----
+logical_plan
+01)Projection: CASE WHEN case_pushdown.flag THEN TimestampNanosecond(1709251200000000000, None) ELSE TimestampNanosecond(1725148800000000000, None) END AS ts
+02)--TableScan: case_pushdown projection=[flag]
+physical_plan
+01)ProjectionExec: expr=[CASE WHEN flag@0 THEN 1709251200000000000 ELSE 1725148800000000000 END as ts]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query P
+select to_timestamp(case when flag then '2024-03-01T00:00:00Z' else '2024-09-01T00:00:00Z' end) as ts from case_pushdown order by s;
+----
+2024-03-01T00:00:00
+2024-09-01T00:00:00
+2024-09-01T00:00:00
+
+# A branch that fails to fold leaves the call untouched (the branch may never
+# be taken); an implicit ELSE stays implicit when f(NULL) folds to NULL.
+query TT
+explain select to_timestamp(case when flag then '2024-03-01T00:00:00Z' else 'garbage' end) as ts, to_timestamp(case when flag then '2024-03-01T00:00:00Z' end) as ts2 from case_pushdown;
+----
+logical_plan
+01)Projection: to_timestamp(CASE WHEN case_pushdown.flag THEN Utf8("2024-03-01T00:00:00Z") ELSE Utf8("garbage") END) AS ts, CASE WHEN case_pushdown.flag THEN TimestampNanosecond(1709251200000000000, None) END AS ts2
+02)--TableScan: case_pushdown projection=[flag]
+physical_plan
+01)ProjectionExec: expr=[to_timestamp(CASE WHEN flag@0 THEN 2024-03-01T00:00:00Z ELSE garbage END) as ts, CASE WHEN flag@0 THEN 1709251200000000000 END as ts2]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query P
+select to_timestamp(case when flag then '2024-03-01T00:00:00Z' else 'garbage' end) from case_pushdown where flag;
+----
+2024-03-01T00:00:00
+
+statement ok
+drop table case_pushdown;
