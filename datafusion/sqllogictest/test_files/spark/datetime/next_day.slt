@@ -21,6 +21,14 @@
 # For more information, please see:
 #   https://github.com/apache/datafusion/issues/15914
 
+# Audited against Spark 4.2.0 on 2026-07-25.
+# Expected values verified with pyspark==4.2.0.
+# Known divergences are captured as commented-out queries below.
+
+##############################################################################
+# Scalar inputs, non-ANSI mode (the DataFusion default)
+##############################################################################
+
 query D
 SELECT next_day('2015-01-14'::DATE, 'TU'::string);
 ----
@@ -36,11 +44,297 @@ SELECT next_day('2015-07-27'::DATE, 'Sat'::string);
 ----
 2015-08-01
 
+# All three name lengths are accepted, case insensitively.
+query D
+SELECT next_day('2015-07-23'::DATE, 'MONDAY'::string);
+----
+2015-07-27
+
+query D
+SELECT next_day('2015-07-23'::DATE, 'monday'::string);
+----
+2015-07-27
+
+query D
+SELECT next_day('2015-07-23'::DATE, 'mo'::string);
+----
+2015-07-27
+
+# A start date already on the requested weekday advances a full week.
+# 2015-07-23 is a Thursday.
+query D
+SELECT next_day('2015-07-23'::DATE, 'Thu'::string);
+----
+2015-07-30
+
 # Whitespace-padded day names should be rejected (return NULL) per Spark behavior
 query D
 SELECT next_day('2015-01-14'::DATE, ' MO '::string);
 ----
 NULL
+
+query D
+SELECT next_day('2020-01-01'::DATE, 'invalid_day'::string);
+----
+NULL
+
+query D
+SELECT next_day('2015-01-14'::DATE, ''::string);
+----
+NULL
+
+query D
+SELECT next_day('2015-07-23'::DATE, 'MÖ'::string);
+----
+NULL
+
+##############################################################################
+# NULL propagation
+##############################################################################
+
+query D
+SELECT next_day(NULL::DATE, 'Mon'::string);
+----
+NULL
+
+query D
+SELECT next_day('2015-01-14'::DATE, NULL::string);
+----
+NULL
+
+# Spark's `NextDay` is null intolerant, so a NULL start date short circuits to
+# NULL before the day-of-week name is ever validated. This holds in both modes.
+query D
+SELECT next_day(NULL::DATE, 'xx'::string);
+----
+NULL
+
+##############################################################################
+# Boundary dates
+##############################################################################
+
+query D
+SELECT next_day('0001-01-01'::DATE, 'Mon'::string);
+----
+0001-01-08
+
+query D
+SELECT next_day('1000-01-01'::DATE, 'Mon'::string);
+----
+1000-01-06
+
+query D
+SELECT next_day('1969-12-31'::DATE, 'Mon'::string);
+----
+1970-01-05
+
+# Crossing out of the four-digit year range does not overflow or error.
+query D
+SELECT next_day('9999-12-31'::DATE, 'Mon'::string);
+----
++10000-01-03
+
+# https://github.com/apache/datafusion/issues/23891
+# The last date DataFusion can print is +262142-12-31, epoch day 95026236, which
+# is a Monday. The result is computed on the epoch day, so a next occurrence past
+# that date still returns the value Spark's Int arithmetic produces. Those epoch
+# days have no Date32 rendering, so they are cast to Int32 to be asserted.
+query D
+SELECT next_day(arrow_cast(95026235, 'Date32'), 'Mon'::string);
+----
++262142-12-31
+
+query I
+SELECT arrow_cast(next_day(arrow_cast(95026236, 'Date32'), 'Mon'::string), 'Int32');
+----
+95026243
+
+# A start date already on the requested weekday advances a full week, so it
+# passes the printable range six days earlier for that weekday.
+query D
+SELECT next_day(arrow_cast(95026230, 'Date32'), 'Mon'::string);
+----
++262142-12-31
+
+query I
+SELECT arrow_cast(next_day(arrow_cast(95026230, 'Date32'), 'Tue'::string), 'Int32');
+----
+95026237
+
+# The array path carries the same values through a batch.
+query I
+SELECT arrow_cast(next_day(a, 'Mon'::string), 'Int32')
+FROM VALUES (arrow_cast(95026235, 'Date32')), (arrow_cast(95026236, 'Date32')) as t(a);
+----
+95026236
+95026243
+
+# Date32 values that are not representable dates at all also return NULL.
+query D
+SELECT next_day(arrow_cast(2147483647, 'Date32'), 'Mon'::string);
+----
+NULL
+
+query D
+SELECT next_day(arrow_cast(-2147483648, 'Date32'), 'Mon'::string);
+----
+NULL
+
+##############################################################################
+# Array and mixed scalar/array inputs
+##############################################################################
+
+query D
+SELECT next_day(a, b)
+FROM VALUES
+    ('2000-01-01'::DATE, 'Mon'::string),
+    (NULL::DATE, NULL::string),
+    (NULL::DATE, 'Mon'::string),
+    ('2015-01-14'::DATE, NULL::string) as t(a, b);
+----
+2000-01-03
+NULL
+NULL
+NULL
+
+# Array start date with a scalar day of week.
+query D
+SELECT next_day(a, 'Mon'::string)
+FROM VALUES ('2000-01-01'::DATE), ('2000-01-02'::DATE), ('2000-01-03'::DATE) as t(a);
+----
+2000-01-03
+2000-01-03
+2000-01-10
+
+# Array start date with a NULL scalar day of week returns one NULL per row.
+query D
+SELECT next_day(a, NULL::string)
+FROM VALUES ('2000-01-01'::DATE), ('2000-01-02'::DATE), ('2000-01-03'::DATE) as t(a);
+----
+NULL
+NULL
+NULL
+
+# Array start date with an unparsable scalar day of week.
+query D
+SELECT next_day(a, 'xx'::string)
+FROM VALUES ('2000-01-01'::DATE), ('2000-01-02'::DATE), ('2000-01-03'::DATE) as t(a);
+----
+NULL
+NULL
+NULL
+
+# Scalar start date with an array day of week.
+query D
+SELECT next_day('2018-01-01'::DATE, b)
+FROM VALUES ('Mon'::string), (NULL::string), ('xx'::string) as t(b);
+----
+2018-01-08
+NULL
+NULL
+
+##############################################################################
+# ANSI mode
+#
+# Spark 3.5.8 defaults `spark.sql.ansi.enabled` to false, so an unparsable
+# day of week returns NULL there. Spark 4.0 and later default it to true and
+# raise ILLEGAL_DAY_OF_WEEK instead. Spark 3.5.8 also used the error class
+# _LEGACY_ERROR_TEMP_2000 rather than ILLEGAL_DAY_OF_WEEK. The expectations
+# below assert Spark 4.2.0. Version-specific expectations are tracked by
+# https://github.com/apache/datafusion/issues/23887 and this specific
+# divergence is recorded in
+# https://github.com/apache/datafusion/issues/23890
+##############################################################################
+
+statement ok
+set datafusion.execution.enable_ansi_mode = true;
+
+query error Illegal input for day of week: NOT_A_DAY\.
+SELECT next_day('2015-01-14'::DATE, 'NOT_A_DAY'::string);
+
+# Spark 4.2.0's ILLEGAL_DAY_OF_WEEK message ends with a period, which pins down
+# where the echoed day name stops and makes the padded and empty names
+# assertable. The runner collapses runs of whitespace in the expected-error
+# regex, so the two spaces in " MO " cannot be written literally, but `\s+`
+# expresses them and carries no literal whitespace of its own.
+query error Illegal input for day of week:\s+MO \.
+SELECT next_day('2015-01-14'::DATE, ' MO '::string);
+
+query error Illegal input for day of week: \.
+SELECT next_day('2015-01-14'::DATE, ''::string);
+
+query error Illegal input for day of week: xx\.
+SELECT next_day(a, 'xx'::string)
+FROM VALUES ('2000-01-01'::DATE), ('2000-01-02'::DATE) as t(a);
+
+query error Illegal input for day of week: xx\.
+SELECT next_day(a, b)
+FROM VALUES ('2018-01-01'::DATE, 'Mon'::string), ('2018-01-02'::DATE, 'xx'::string) as t(a, b);
+
+query error Illegal input for day of week: xx\.
+SELECT next_day('2018-01-01'::DATE, b)
+FROM VALUES ('Mon'::string), (NULL::string), ('xx'::string) as t(b);
+
+# NULL inputs still short circuit to NULL under ANSI mode. Spark's `NextDay` is
+# null intolerant, so a NULL start date suppresses the day-of-week validation
+# that would otherwise raise. This holds per row, in every argument shape: an
+# all-NULL start date column yields NULLs rather than an error, while a single
+# non-NULL row in the same column is enough to raise.
+query D
+SELECT next_day(NULL::DATE, 'xx'::string);
+----
+NULL
+
+query D
+SELECT next_day('2015-01-14'::DATE, NULL::string);
+----
+NULL
+
+query D
+SELECT next_day(a, 'xx'::string)
+FROM VALUES (NULL::DATE), (NULL::DATE) as t(a);
+----
+NULL
+NULL
+
+query error Illegal input for day of week: xx\.
+SELECT next_day(a, 'xx'::string)
+FROM VALUES (NULL::DATE), ('2000-01-01'::DATE) as t(a);
+
+query D
+SELECT next_day(a, b)
+FROM VALUES (NULL::DATE, 'xx'::string), (NULL::DATE, 'xx'::string) as t(a, b);
+----
+NULL
+NULL
+
+query D
+SELECT next_day(NULL::DATE, b)
+FROM VALUES ('Mon'::string), ('xx'::string) as t(b);
+----
+NULL
+NULL
+
+query D
+SELECT next_day(a, NULL::string)
+FROM VALUES (NULL::DATE), (NULL::DATE) as t(a);
+----
+NULL
+NULL
+
+# Deliberately duplicates the first query in this file. ANSI mode must not turn
+# a valid day name into an error, so the happy path is asserted in both modes.
+query D
+SELECT next_day('2015-01-14'::DATE, 'TU'::string);
+----
+2015-01-20
+
+statement ok
+set datafusion.execution.enable_ansi_mode = false;
+
+##############################################################################
+# Argument type and arity errors
+##############################################################################
 
 query error Failed to coerce arguments to satisfy a call to 'next_day' function
 SELECT next_day('2015-07-27'::DATE);
@@ -57,46 +351,50 @@ SELECT next_day(1::int, 'Sun'::string);
 query error Failed to coerce arguments to satisfy a call to 'next_day' function
 SELECT next_day('2015-07-27'::DATE, 'Sat'::string, 'Sun'::string);
 
-query error Failed to coerce arguments to satisfy a call to 'next_day' function
-SELECT next_day('invalid_date'::string, 'Mon'::string);
-
 query D
 SELECT next_day('2000-01-01'::DATE, 2.0::float);
-----
-NULL
-
-query D
-SELECT next_day('2020-01-01'::DATE, 'invalid_day'::string);
 ----
 NULL
 
 query error Cast error: Cannot cast string '2015-13-32' to value of Date32 type
 SELECT next_day('2015-13-32'::DATE, 'Sun'::string);
 
-query D
-SELECT next_day(a, b)
-FROM VALUES
-    ('2000-01-01'::DATE, 'Mon'::string),
-    (NULL::DATE, NULL::string),
-    (NULL::DATE, 'Mon'::string),
-    ('2015-01-14'::DATE, NULL::string) as t(a, b);
-----
-2000-01-03
-NULL
-NULL
-NULL
+# DataFusion's signature is Exact(Date32, Utf8), so a STRING or TIMESTAMP start
+# date is rejected during coercion. Spark's `NextDay` uses ImplicitCastInputTypes
+# and accepts both, casting to DATE first. The three queries below assert
+# DataFusion's current behavior, and the commented-out queries below them carry
+# the Spark 4.2.0 result.
+# https://github.com/apache/datafusion/issues/23889
+query error Failed to coerce arguments to satisfy a call to 'next_day' function
+SELECT next_day('invalid_date'::string, 'Mon'::string);
 
-# https://github.com/apache/datafusion/issues/23891
-# Far-future start dates whose next occurrence lands past chrono::NaiveDate::MAX
-# (epoch day 95026236) must still return a value, matching Spark's integer
-# arithmetic, rather than panicking. Cast the Date32 result to Int32 to assert
-# the epoch day directly (these dates are past the printable range).
-query I
-SELECT arrow_cast(next_day(arrow_cast(95026236, 'Date32'), 'Mon'::string), 'Int32');
-----
-95026243
+query error Failed to coerce arguments to satisfy a call to 'next_day' function
+SELECT next_day('2015-07-23'::string, 'Mon'::string);
 
-query I
-SELECT arrow_cast(next_day(arrow_cast(95026230, 'Date32'), 'Tue'::string), 'Int32');
-----
-95026237
+query error Failed to coerce arguments to satisfy a call to 'next_day' function
+SELECT next_day('2015-07-23 12:12:12'::timestamp, 'Mon'::string);
+
+# Spark 4.2.0 returns 2015-07-27 for the first two of these. The third is a
+# STRING that is not a date, which Spark casts to NULL with ANSI mode off and
+# rejects with CAST_INVALID_INPUT with ANSI mode on, so it needs one
+# expectation per mode. DataFusion raises a coercion error for all three.
+# Uncomment once the signature accepts Spark's implicit casts.
+# https://github.com/apache/datafusion/issues/23889
+# query D
+# SELECT next_day('2015-07-23'::string, 'Mon'::string);
+# ----
+# 2015-07-27
+#
+# query D
+# SELECT next_day('2015-07-23 12:12:12'::timestamp, 'Mon'::string);
+# ----
+# 2015-07-27
+#
+# query D
+# SELECT next_day('invalid_date'::string, 'Mon'::string);
+# ----
+# NULL
+#
+# The same query under `set datafusion.execution.enable_ansi_mode = true`:
+# query error CAST_INVALID_INPUT
+# SELECT next_day('invalid_date'::string, 'Mon'::string);
