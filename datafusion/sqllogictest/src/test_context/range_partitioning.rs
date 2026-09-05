@@ -344,9 +344,11 @@ type TimeBinRow = (
 /// - partition 1: `[2024-01-01 01:00, 02:00)`
 ///
 /// Files are range-partitioned on `timestamp` and sorted on `(key, timestamp)`.
-/// Because `date_bin(60 seconds, timestamp)` does not straddle the hour split,
-/// grouping by `(key, time_bin)` is partition-disjoint. Today's planner still
-/// inserts a hash shuffle; the test pins that plan so a follow-up can remove it.
+/// Because `date_bin(60 seconds, timestamp)` and `date_trunc('hour', timestamp)`
+/// do not straddle the hour split, grouping by `(key, time_bin)` is
+/// partition-disjoint and aggregation can run in one streaming step. Bins that
+/// do straddle the split (for example `date_trunc('day', timestamp)`) still
+/// require a hash shuffle.
 pub(super) fn register_range_sorted_time_bin_table(ctx: &SessionContext) {
     let schema = Arc::new(Schema::new(vec![
         Field::new("key", DataType::Utf8, false),

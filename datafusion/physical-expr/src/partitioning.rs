@@ -17,15 +17,21 @@
 
 //! [`Partitioning`] and [`Distribution`] for `ExecutionPlans`
 
+use crate::expressions::{Literal, UnKnownColumn};
+use crate::simplifier::const_evaluator::create_dummy_batch;
 use crate::{
     EquivalenceProperties, PhysicalExpr, equivalence::ProjectionMapping,
-    expressions::UnKnownColumn, physical_exprs_contains, physical_exprs_equal,
+    physical_exprs_contains, physical_exprs_equal,
 };
 use arrow::datatypes::Schema;
 pub use datafusion_common::SplitPoint;
-use datafusion_common::{Result, validate_range_split_points};
+use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::{Result, ScalarValue, validate_range_split_points};
+use datafusion_expr::ColumnarValue;
+use datafusion_expr::interval_arithmetic::{checked_predecessor, checked_successor};
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+
 #[cfg(feature = "proto")]
 use datafusion_physical_expr_common::sort_expr::{
     sort_exprs_try_from_proto, sort_exprs_try_to_proto,
@@ -253,25 +259,63 @@ impl RangePartitioning {
     ///
     /// Returns `None` if any range key cannot be projected or if projection
     /// collapses distinct range keys into duplicate output expressions.
+    ///
+    /// If a projection drops a range key but keeps a monotonic function of it
+    /// (for example `date_bin(interval, timestamp)` or `date_trunc(unit, timestamp)`
+    /// while range-partitioned on `timestamp`), the range can still be projected
+    /// when that key is the **final** range key. Flooring transforms are not
+    /// injective: rows above a split can collapse onto `f(split)` and then be
+    /// reordered by trailing keys, so the same fallback on an earlier key would
+    /// move rows across the projected boundary.
+    /// Adjacent partitions stay disjoint only when evaluating the function at
+    /// each split point and the adjacent value on the open side of the split
+    /// (predecessor for ASC, successor for DESC) yields different values, so
+    /// bins do not straddle file groups.
     fn project(
         &self,
         mapping: &ProjectionMapping,
         input_eq_properties: &EquivalenceProperties,
     ) -> Option<Self> {
-        let exprs = self
-            .ordering
-            .iter()
-            .map(|sort_expr| Arc::clone(&sort_expr.expr))
-            .collect::<Vec<_>>();
-        let projected_exprs = input_eq_properties
-            .project_expressions(&exprs, mapping)
-            .collect::<Option<Vec<_>>>()?;
-        let sort_exprs = self
-            .ordering
-            .iter()
-            .zip(projected_exprs)
-            .map(|(sort_expr, expr)| PhysicalSortExpr::new(expr, sort_expr.options))
-            .collect::<Vec<_>>();
+        let mut split_points = self.split_points.clone();
+        let mut sort_exprs = Vec::with_capacity(self.ordering.len());
+        let last_key_idx = self.ordering.len().checked_sub(1)?;
+        for (key_idx, sort_expr) in self.ordering.iter().enumerate() {
+            if let Some(projected) =
+                input_eq_properties.project_expr(&sort_expr.expr, mapping)
+            {
+                sort_exprs.push(PhysicalSortExpr::new(projected, sort_expr.options));
+                continue;
+            }
+
+            // A non-injective transform preserves the partition boundary
+            // only for the final range key. For an earlier key, rows above
+            // the split can collapse onto `f(split)` and are then ordered
+            // by the trailing keys, crossing the projected boundary.
+            if key_idx != last_key_idx {
+                return None;
+            }
+
+            let (target, source) =
+                monotonic_range_key_projection(sort_expr, mapping, input_eq_properties)
+                    .find(|(_, source)| {
+                    monotonic_fn_keeps_partitions_disjoint(
+                        source,
+                        &sort_expr.expr,
+                        &split_points,
+                        key_idx,
+                        sort_expr.options.descending,
+                    )
+                })?;
+            // Fail closed: if the split cannot be rewritten into the
+            // transformed domain, do not keep Range with source-domain bounds.
+            split_points = project_split_points_through_fn(
+                &source,
+                &sort_expr.expr,
+                &split_points,
+                key_idx,
+            )?;
+            sort_exprs.push(PhysicalSortExpr::new(target, sort_expr.options));
+        }
         let ordering = LexOrdering::new(sort_exprs)?;
         if ordering.len() != self.ordering.len() {
             return None;
@@ -279,7 +323,7 @@ impl RangePartitioning {
 
         Some(Self {
             ordering,
-            split_points: self.split_points.clone(),
+            split_points,
         })
     }
 
@@ -324,6 +368,149 @@ impl RangePartitioning {
                 .collect::<Vec<_>>(),
         )?;
         Self::try_new(new_ordering, self.split_points.clone()).ok()
+    }
+}
+
+/// Yields projection mappings whose source is a same-direction monotonic
+/// transform of `sort_expr`. Callers pick the first candidate that also
+/// keeps adjacent partitions disjoint.
+fn monotonic_range_key_projection<'a>(
+    sort_expr: &'a PhysicalSortExpr,
+    mapping: &'a ProjectionMapping,
+    eq_properties: &'a EquivalenceProperties,
+) -> impl Iterator<Item = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> + 'a {
+    mapping
+        .iter()
+        .filter(|(source, _)| {
+            eq_properties.check_monotonic_transform(source, &sort_expr.expr)
+        })
+        .map(|(source, targets)| (Arc::clone(&targets.first().0), Arc::clone(source)))
+}
+
+/// Adjacent range partitions remain disjoint on `fn_expr` when the function
+/// value at each split differs from the value immediately on the open side
+/// of the split: predecessor for ASC, successor for DESC.
+fn monotonic_fn_keeps_partitions_disjoint(
+    fn_expr: &Arc<dyn PhysicalExpr>,
+    range_key: &Arc<dyn PhysicalExpr>,
+    split_points: &[SplitPoint],
+    key_idx: usize,
+    descending: bool,
+) -> bool {
+    split_points.iter().all(|split_point| {
+        let Some(split_value) = split_point.values().get(key_idx) else {
+            return false;
+        };
+        // ASC:  partition 0 is key < split,  adjacent is predecessor.
+        // DESC: partition 0 is key > split,  adjacent is successor.
+        let adjacent = if descending {
+            checked_successor(split_value)
+        } else {
+            checked_predecessor(split_value)
+        };
+        let Some(adjacent) = adjacent else {
+            return false;
+        };
+        let Some(at_split) = evaluate_expr_on_key(fn_expr, range_key, split_value) else {
+            return false;
+        };
+        let Some(across_split) = evaluate_expr_on_key(fn_expr, range_key, &adjacent)
+        else {
+            return false;
+        };
+        at_split != across_split
+    })
+}
+
+fn project_split_points_through_fn(
+    fn_expr: &Arc<dyn PhysicalExpr>,
+    range_key: &Arc<dyn PhysicalExpr>,
+    split_points: &[SplitPoint],
+    key_idx: usize,
+) -> Option<Vec<SplitPoint>> {
+    split_points
+        .iter()
+        .map(|split_point| {
+            let split_value = split_point.values().get(key_idx)?;
+            let projected = evaluate_expr_on_key(fn_expr, range_key, split_value)?;
+            let mut values = split_point.values().to_vec();
+            values[key_idx] = projected;
+            Some(SplitPoint::new(values))
+        })
+        .collect()
+}
+
+/// Evaluates `expr` after substituting `range_key` with `value`.
+fn evaluate_expr_on_key(
+    expr: &Arc<dyn PhysicalExpr>,
+    range_key: &Arc<dyn PhysicalExpr>,
+    value: &ScalarValue,
+) -> Option<ScalarValue> {
+    let literal: Arc<dyn PhysicalExpr> = Arc::new(Literal::new(value.clone()));
+    let rewritten = Arc::clone(expr)
+        .transform(|node| {
+            if node.eq(range_key) {
+                Ok(Transformed::yes(Arc::clone(&literal)))
+            } else {
+                Ok(Transformed::no(node))
+            }
+        })
+        .ok()?;
+    if !rewritten.transformed {
+        return None;
+    }
+    let batch = create_dummy_batch().ok()?;
+    match rewritten.data.evaluate(batch).ok()? {
+        ColumnarValue::Scalar(scalar) => Some(scalar),
+        ColumnarValue::Array(array) => ScalarValue::try_from_array(&array, 0).ok(),
+    }
+}
+
+/// `Range([x])` satisfies grouping by `(..., f(x), ...)` when `f` is monotonic in
+/// `x` and adjacent partitions do not share `f` values (bins do not straddle
+/// split points).
+///
+/// - [`PartitioningSatisfaction::Exact`] when every required key is such an
+///   `f(x)` (for example `GROUP BY date_bin(x)`).
+/// - [`PartitioningSatisfaction::Subset`] when at least one required key is
+///   such an `f(x)` and others are not (for example `GROUP BY date_bin(x), baz`),
+///   and `allow_subset` is true.
+///
+/// Multi-key Range + monotonic transforms (e.g. `Range([key, timestamp])`
+/// + `GROUP BY (key, date_bin(timestamp))`) is not handled here; see #24644.
+fn range_monotonic_fn_satisfaction(
+    range: &RangePartitioning,
+    required_exprs: &[Arc<dyn PhysicalExpr>],
+    eq_properties: &EquivalenceProperties,
+    allow_subset: bool,
+) -> PartitioningSatisfaction {
+    if range.ordering().len() != 1 || required_exprs.is_empty() {
+        return PartitioningSatisfaction::NotSatisfied;
+    }
+    let range_sort = &range.ordering()[0];
+    let range_key = &range_sort.expr;
+    let matching = required_exprs
+        .iter()
+        .filter(|required| {
+            eq_properties.check_monotonic_transform(required, range_key)
+                && monotonic_fn_keeps_partitions_disjoint(
+                    required,
+                    range_key,
+                    range.split_points(),
+                    0,
+                    range_sort.options.descending,
+                )
+        })
+        .count();
+
+    if matching == 0 {
+        PartitioningSatisfaction::NotSatisfied
+    } else if matching == required_exprs.len() {
+        PartitioningSatisfaction::Exact
+    } else if allow_subset {
+        PartitioningSatisfaction::Subset
+    } else {
+        PartitioningSatisfaction::NotSatisfied
     }
 }
 
@@ -477,12 +664,22 @@ impl Partitioning {
                         .iter()
                         .map(|sort_expr| Arc::clone(&sort_expr.expr))
                         .collect::<Vec<_>>();
-                    Self::key_satisfaction(
+                    let satisfaction = Self::key_satisfaction(
                         &partition_exprs,
                         required_exprs,
                         eq_properties,
                         allow_subset,
-                    )
+                    );
+                    if satisfaction != PartitioningSatisfaction::NotSatisfied {
+                        satisfaction
+                    } else {
+                        range_monotonic_fn_satisfaction(
+                            range,
+                            required_exprs,
+                            eq_properties,
+                            allow_subset,
+                        )
+                    }
                 }
                 Partitioning::RoundRobinBatch(_)
                 | Partitioning::UnknownPartitioning(_) => {
@@ -800,11 +997,13 @@ impl Display for Distribution {
 mod tests {
 
     use super::*;
-    use crate::expressions::Column;
+    use crate::ScalarFunctionExpr;
+    use crate::expressions::{Column, Literal, NegativeExpr};
     use crate::projection::ProjectionTargets;
 
     use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{Result, ScalarValue};
 
     struct PartitioningTestFixture {
@@ -1275,6 +1474,885 @@ mod tests {
         let projected = range_partitioning.project(&mapping, &fixture.eq_properties);
         let Partitioning::UnknownPartitioning(partition_count) = projected else {
             panic!("expected UnknownPartitioning, got {projected:?}");
+        };
+        assert_eq!(partition_count, 2);
+
+        Ok(())
+    }
+
+    fn date_bin_of(
+        timestamp: Arc<dyn PhysicalExpr>,
+        stride_ns: i64,
+    ) -> Arc<dyn PhysicalExpr> {
+        datetime_fn(
+            "date_bin",
+            datafusion_functions::datetime::date_bin(),
+            vec![
+                Arc::new(Literal::new(ScalarValue::new_interval_mdn(0, 0, stride_ns))),
+                timestamp,
+            ],
+        )
+    }
+
+    fn date_trunc_of(
+        timestamp: Arc<dyn PhysicalExpr>,
+        precision: &str,
+    ) -> Arc<dyn PhysicalExpr> {
+        datetime_fn(
+            "date_trunc",
+            datafusion_functions::datetime::date_trunc(),
+            vec![
+                Arc::new(Literal::new(ScalarValue::Utf8(Some(precision.to_string())))),
+                timestamp,
+            ],
+        )
+    }
+
+    fn datetime_fn(
+        name: &str,
+        fun: Arc<datafusion_expr::ScalarUDF>,
+        args: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Arc<dyn PhysicalExpr> {
+        Arc::new(ScalarFunctionExpr::new(
+            name,
+            fun,
+            args,
+            Field::new(
+                "time_bin",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                true,
+            )
+            .into(),
+            Arc::new(ConfigOptions::default()),
+        ))
+    }
+
+    fn ts_ns_split(ns: i64) -> SplitPoint {
+        SplitPoint::new(vec![ScalarValue::TimestampNanosecond(Some(ns), None)])
+    }
+
+    #[test]
+    fn range_partitioning_satisfies_monotonic_date_bin_grouping() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![
+            ("key", DataType::Utf8),
+            ("timestamp", DataType::Timestamp(TimeUnit::Nanosecond, None)),
+        ])?;
+        // 2024-01-01T01:00:00, aligned to a 60-second date_bin.
+        let hour_ns = 1_704_070_800_000_000_000i64;
+        let aligned = fixture.range_partitioning([1], vec![ts_ns_split(hour_ns)]);
+        let unaligned =
+            fixture.range_partitioning([1], vec![ts_ns_split(hour_ns + 30_000_000_000)]);
+
+        let required = Distribution::KeyPartitioned(vec![
+            fixture.col(0),
+            date_bin_of(fixture.col(1), 60_000_000_000),
+        ]);
+
+        assert_satisfaction(
+            "aligned hour split: Range(timestamp) subset-satisfies GROUP BY (key, date_bin(60s, timestamp))",
+            &aligned,
+            &required,
+            &fixture.eq_properties,
+            PartitioningSatisfaction::Subset,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+        assert_satisfaction(
+            "unaligned split does not satisfy date_bin grouping",
+            &unaligned,
+            &required,
+            &fixture.eq_properties,
+            PartitioningSatisfaction::NotSatisfied,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+
+        let trunc_hour = Distribution::KeyPartitioned(vec![
+            fixture.col(0),
+            date_trunc_of(fixture.col(1), "hour"),
+        ]);
+        assert_satisfaction(
+            "aligned hour split: Range(timestamp) subset-satisfies GROUP BY (key, date_trunc(hour, timestamp))",
+            &aligned,
+            &trunc_hour,
+            &fixture.eq_properties,
+            PartitioningSatisfaction::Subset,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+
+        let trunc_day = Distribution::KeyPartitioned(vec![
+            fixture.col(0),
+            date_trunc_of(fixture.col(1), "day"),
+        ]);
+        assert_satisfaction(
+            "hour split straddles date_trunc(day) bins",
+            &aligned,
+            &trunc_day,
+            &fixture.eq_properties,
+            PartitioningSatisfaction::NotSatisfied,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+
+        let min_ts = fixture.range_partitioning([1], vec![ts_ns_split(i64::MIN)]);
+        assert_satisfaction(
+            "type-minimum split has no predecessor so date_bin grouping is not disjoint",
+            &min_ts,
+            &required,
+            &fixture.eq_properties,
+            PartitioningSatisfaction::NotSatisfied,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+
+        let compound = fixture.range_partitioning(
+            [0, 1],
+            vec![SplitPoint::new(vec![
+                ScalarValue::Utf8(Some("k".into())),
+                ScalarValue::TimestampNanosecond(Some(hour_ns), None),
+            ])],
+        );
+        assert_satisfaction(
+            "multi-key Range([key, timestamp]) does not use single-key date_bin subset logic",
+            &compound,
+            &required,
+            &fixture.eq_properties,
+            PartitioningSatisfaction::NotSatisfied,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+
+        let bin_only = Distribution::KeyPartitioned(vec![date_bin_of(
+            fixture.col(1),
+            60_000_000_000,
+        )]);
+        assert_satisfaction(
+            "aligned hour split: Range(timestamp) exactly satisfies GROUP BY date_bin(60s, timestamp)",
+            &aligned,
+            &bin_only,
+            &fixture.eq_properties,
+            PartitioningSatisfaction::Exact,
+            PartitioningSatisfaction::Exact,
+        );
+
+        let null_split = fixture.range_partitioning(
+            [1],
+            vec![SplitPoint::new(vec![ScalarValue::TimestampNanosecond(
+                None, None,
+            )])],
+        );
+        assert_satisfaction(
+            "null split has no predecessor so date_bin grouping is not disjoint",
+            &null_split,
+            &required,
+            &fixture.eq_properties,
+            PartitioningSatisfaction::NotSatisfied,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+
+        // `RangePartitioning::new` skips validation, so disjointness must still
+        // fail closed on split points that do not match the range key.
+        let empty_split = Partitioning::Range(RangePartitioning::new(
+            fixture.range_ordering([1]),
+            vec![SplitPoint::new(vec![])],
+        ));
+        assert_satisfaction(
+            "split point missing the range key is not disjoint for date_bin grouping",
+            &empty_split,
+            &required,
+            &fixture.eq_properties,
+            PartitioningSatisfaction::NotSatisfied,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+        let mismatched_split = Partitioning::Range(RangePartitioning::new(
+            fixture.range_ordering([1]),
+            vec![int_split_point([10])],
+        ));
+        assert_satisfaction(
+            "non-timestamp split cannot be evaluated as date_bin, so grouping is not disjoint",
+            &mismatched_split,
+            &required,
+            &fixture.eq_properties,
+            PartitioningSatisfaction::NotSatisfied,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+
+        Ok(())
+    }
+
+    /// Range([a]) vs grouping keys, including monotonic `date_bin(a)`.
+    ///
+    /// 1. GROUP BY a, baz          → Subset
+    /// 2. GROUP BY a               → Exact
+    /// 3. GROUP BY date_bin(a), baz → Subset
+    /// 4. GROUP BY date_bin(a)      → Exact
+    #[test]
+    fn range_partitioning_monotonic_fn_exact_vs_subset() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![
+            ("a", DataType::Timestamp(TimeUnit::Nanosecond, None)),
+            ("baz", DataType::Utf8),
+        ])?;
+        // 2024-01-01T01:00:00, aligned to a 60-second date_bin.
+        let hour_ns = 1_704_070_800_000_000_000i64;
+        let range_a = fixture.range_partitioning([0], vec![ts_ns_split(hour_ns)]);
+        let date_bin = date_bin_of(fixture.col(0), 60_000_000_000);
+
+        let cases = [
+            (
+                "1. GROUP BY a, baz: Range([a]) is a subset of the grouping key",
+                Distribution::KeyPartitioned(vec![fixture.col(0), fixture.col(1)]),
+                PartitioningSatisfaction::Subset,
+                PartitioningSatisfaction::NotSatisfied,
+            ),
+            (
+                "2. GROUP BY a: Range([a]) exactly matches the grouping key",
+                Distribution::KeyPartitioned(vec![fixture.col(0)]),
+                PartitioningSatisfaction::Exact,
+                PartitioningSatisfaction::Exact,
+            ),
+            (
+                "3. GROUP BY date_bin(a), baz: transformed range key is a subset of the grouping key",
+                Distribution::KeyPartitioned(vec![Arc::clone(&date_bin), fixture.col(1)]),
+                PartitioningSatisfaction::Subset,
+                PartitioningSatisfaction::NotSatisfied,
+            ),
+            (
+                "4. GROUP BY date_bin(a): transformed range key exactly matches the grouping key",
+                Distribution::KeyPartitioned(vec![date_bin]),
+                PartitioningSatisfaction::Exact,
+                PartitioningSatisfaction::Exact,
+            ),
+        ];
+
+        let mut failures = Vec::new();
+        for (desc, required, expected_with_subset, expected_without_subset) in cases {
+            let with_subset =
+                range_a.satisfaction(&required, &fixture.eq_properties, true);
+            let without_subset =
+                range_a.satisfaction(&required, &fixture.eq_properties, false);
+            if with_subset != expected_with_subset {
+                failures.push(format!(
+                    "{desc} with subset enabled: got {with_subset:?}, expected {expected_with_subset:?}"
+                ));
+            }
+            if without_subset != expected_without_subset {
+                failures.push(format!(
+                    "{desc} with subset disabled: got {without_subset:?}, expected {expected_without_subset:?}"
+                ));
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "Range([a]) Exact vs Subset cases failed:\n{}",
+            failures.join("\n")
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn range_monotonic_fn_satisfaction_covers_remaining_key_shapes() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![
+            ("a", DataType::Timestamp(TimeUnit::Nanosecond, None)),
+            ("baz", DataType::Utf8),
+        ])?;
+        let hour_ns = 1_704_070_800_000_000_000i64;
+        let range_a = fixture.range_partitioning([0], vec![ts_ns_split(hour_ns)]);
+        let date_bin = date_bin_of(fixture.col(0), 60_000_000_000);
+        let trunc_hour = date_trunc_of(fixture.col(0), "hour");
+        let trunc_day = date_trunc_of(fixture.col(0), "day");
+
+        assert_satisfaction(
+            "empty grouping keys are not satisfied by Range",
+            &range_a,
+            &Distribution::KeyPartitioned(vec![]),
+            &fixture.eq_properties,
+            PartitioningSatisfaction::NotSatisfied,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+        assert_satisfaction(
+            "GROUP BY date_trunc(hour, a) is Exact when the hour split is aligned",
+            &range_a,
+            &Distribution::KeyPartitioned(vec![Arc::clone(&trunc_hour)]),
+            &fixture.eq_properties,
+            PartitioningSatisfaction::Exact,
+            PartitioningSatisfaction::Exact,
+        );
+        assert_satisfaction(
+            "GROUP BY date_bin(a), date_trunc(hour, a) is Exact when both transforms stay disjoint",
+            &range_a,
+            &Distribution::KeyPartitioned(vec![
+                Arc::clone(&date_bin),
+                Arc::clone(&trunc_hour),
+            ]),
+            &fixture.eq_properties,
+            PartitioningSatisfaction::Exact,
+            PartitioningSatisfaction::Exact,
+        );
+        assert_satisfaction(
+            "GROUP BY date_bin(a), date_trunc(day, a) is Subset: only date_bin stays disjoint",
+            &range_a,
+            &Distribution::KeyPartitioned(vec![Arc::clone(&date_bin), trunc_day]),
+            &fixture.eq_properties,
+            PartitioningSatisfaction::Subset,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+
+        let two_aligned = fixture.range_partitioning(
+            [0],
+            vec![
+                ts_ns_split(hour_ns),
+                ts_ns_split(hour_ns + 3_600_000_000_000),
+            ],
+        );
+        assert_satisfaction(
+            "multiple aligned splits still exactly satisfy GROUP BY date_bin(a)",
+            &two_aligned,
+            &Distribution::KeyPartitioned(vec![Arc::clone(&date_bin)]),
+            &fixture.eq_properties,
+            PartitioningSatisfaction::Exact,
+            PartitioningSatisfaction::Exact,
+        );
+
+        let mixed_alignment = fixture.range_partitioning(
+            [0],
+            vec![ts_ns_split(hour_ns), ts_ns_split(hour_ns + 30_000_000_000)],
+        );
+        assert_satisfaction(
+            "a later unaligned split makes date_bin grouping not disjoint",
+            &mixed_alignment,
+            &Distribution::KeyPartitioned(vec![date_bin]),
+            &fixture.eq_properties,
+            PartitioningSatisfaction::NotSatisfied,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn evaluate_and_project_split_points_cover_error_paths() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![
+            ("a", DataType::Timestamp(TimeUnit::Nanosecond, None)),
+            ("baz", DataType::Utf8),
+        ])?;
+        let hour_ns = 1_704_070_800_000_000_000i64;
+        let date_bin = date_bin_of(fixture.col(0), 60_000_000_000);
+        let split = ts_ns_split(hour_ns);
+
+        assert!(
+            evaluate_expr_on_key(&date_bin, &fixture.col(1), &split.values()[0])
+                .is_none(),
+            "date_bin(a) does not contain baz, so substitution is a no-op"
+        );
+        assert!(
+            evaluate_expr_on_key(
+                &date_bin,
+                &fixture.col(0),
+                &ScalarValue::Utf8(Some("not-a-timestamp".into())),
+            )
+            .is_none(),
+            "date_bin cannot evaluate a Utf8 stand-in for the timestamp key"
+        );
+        assert!(
+            project_split_points_through_fn(&date_bin, &fixture.col(0), &[split], 1)
+                .is_none(),
+            "key_idx past the split-point width cannot be projected"
+        );
+        assert!(
+            !monotonic_fn_keeps_partitions_disjoint(
+                &date_bin,
+                &fixture.col(0),
+                &[SplitPoint::new(vec![])],
+                0,
+                false,
+            ),
+            "a split point missing the range key is not disjoint"
+        );
+
+        let empty_splits = fixture.range_partitioning([0], vec![]);
+        let target: Arc<dyn PhysicalExpr> = Arc::new(Column::new("time_bin", 0));
+        let mapping = ProjectionMapping::from_iter([(
+            Arc::clone(&date_bin),
+            ProjectionTargets::from(vec![(Arc::clone(&target), 0)]),
+        )]);
+        let projected = empty_splits.project(&mapping, &fixture.eq_properties);
+        assert_eq!(
+            projected.to_string(),
+            "Range([time_bin@0 ASC], [], 1)",
+            "empty split points are vacuously disjoint, so Range projects through date_bin"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_range_partitioning_project_through_date_bin() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        )])?;
+        let hour_ns = 1_704_070_800_000_000_000i64;
+        let date_bin = date_bin_of(fixture.col(0), 60_000_000_000);
+        let target: Arc<dyn PhysicalExpr> = Arc::new(Column::new("time_bin", 0));
+        let mapping = ProjectionMapping::from_iter([(
+            Arc::clone(&date_bin),
+            ProjectionTargets::from(vec![(Arc::clone(&target), 0)]),
+        )]);
+
+        let aligned = fixture.range_partitioning([0], vec![ts_ns_split(hour_ns)]);
+        let projected = aligned.project(&mapping, &fixture.eq_properties);
+        assert_eq!(
+            projected.to_string(),
+            "Range([time_bin@0 ASC], [(1704070800000000000)], 2)"
+        );
+
+        let unaligned =
+            fixture.range_partitioning([0], vec![ts_ns_split(hour_ns + 30_000_000_000)]);
+        let projected = unaligned.project(&mapping, &fixture.eq_properties);
+        let Partitioning::UnknownPartitioning(partition_count) = projected else {
+            panic!("expected UnknownPartitioning, got {projected:?}");
+        };
+        assert_eq!(partition_count, 2);
+
+        let min_ts = fixture.range_partitioning([0], vec![ts_ns_split(i64::MIN)]);
+        let projected = min_ts.project(&mapping, &fixture.eq_properties);
+        let Partitioning::UnknownPartitioning(partition_count) = projected else {
+            panic!("expected UnknownPartitioning, got {projected:?}");
+        };
+        assert_eq!(partition_count, 2);
+
+        let null_split = fixture.range_partitioning(
+            [0],
+            vec![SplitPoint::new(vec![ScalarValue::TimestampNanosecond(
+                None, None,
+            )])],
+        );
+        let projected = null_split.project(&mapping, &fixture.eq_properties);
+        let Partitioning::UnknownPartitioning(partition_count) = projected else {
+            panic!("expected UnknownPartitioning, got {projected:?}");
+        };
+        assert_eq!(partition_count, 2);
+
+        let empty_split = Partitioning::Range(RangePartitioning::new(
+            fixture.range_ordering([0]),
+            vec![SplitPoint::new(vec![])],
+        ));
+        let projected = empty_split.project(&mapping, &fixture.eq_properties);
+        let Partitioning::UnknownPartitioning(partition_count) = projected else {
+            panic!("expected UnknownPartitioning, got {projected:?}");
+        };
+        assert_eq!(partition_count, 2);
+
+        let mismatched_split = Partitioning::Range(RangePartitioning::new(
+            fixture.range_ordering([0]),
+            vec![int_split_point([10])],
+        ));
+        let projected = mismatched_split.project(&mapping, &fixture.eq_properties);
+        let Partitioning::UnknownPartitioning(partition_count) = projected else {
+            panic!("expected UnknownPartitioning, got {projected:?}");
+        };
+        assert_eq!(partition_count, 2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn check_monotonic_transform_rejects_order_reversing_negation() -> Result<()> {
+        let int_fixture = PartitioningTestFixture::int64(&["x"])?;
+        let neg: Arc<dyn PhysicalExpr> = Arc::new(NegativeExpr::new(int_fixture.col(0)));
+        assert!(
+            !int_fixture
+                .eq_properties
+                .check_monotonic_transform(&neg, &int_fixture.col(0)),
+            "-x reverses ASC to DESC"
+        );
+        assert!(
+            !int_fixture
+                .eq_properties
+                .check_monotonic_transform(&int_fixture.col(0), &int_fixture.col(0)),
+            "identity is not a transform"
+        );
+
+        let ts_fixture = PartitioningTestFixture::new(vec![(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        )])?;
+        let date_bin = date_bin_of(ts_fixture.col(0), 60_000_000_000);
+        let date_trunc = date_trunc_of(ts_fixture.col(0), "hour");
+        assert!(
+            ts_fixture
+                .eq_properties
+                .check_monotonic_transform(&date_bin, &ts_fixture.col(0)),
+            "date_bin preserves ASC"
+        );
+        assert!(
+            ts_fixture
+                .eq_properties
+                .check_monotonic_transform(&date_trunc, &ts_fixture.col(0)),
+            "date_trunc preserves ASC"
+        );
+        assert!(
+            !int_fixture
+                .eq_properties
+                .check_monotonic_transform(&int_fixture.col(0), &neg),
+            "a column is not a transform of -x"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_range_partitioning_project_keeps_range_key() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![(
+            "a",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        )])?;
+        let hour_ns = 1_704_070_800_000_000_000i64;
+        let date_bin = date_bin_of(fixture.col(0), 60_000_000_000);
+        let aligned = fixture.range_partitioning([0], vec![ts_ns_split(hour_ns)]);
+
+        // SELECT a, date_bin(a) — range key is kept, so Range stays on a.
+        let a_target: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        let bin_target: Arc<dyn PhysicalExpr> = Arc::new(Column::new("date_bin", 1));
+        let keep_a_mapping = ProjectionMapping::from_iter([
+            (
+                fixture.col(0),
+                ProjectionTargets::from(vec![(Arc::clone(&a_target), 0)]),
+            ),
+            (
+                Arc::clone(&date_bin),
+                ProjectionTargets::from(vec![(Arc::clone(&bin_target), 1)]),
+            ),
+        ]);
+        let projected = aligned.project(&keep_a_mapping, &fixture.eq_properties);
+        assert_eq!(
+            projected.to_string(),
+            "Range([a@0 ASC], [(1704070800000000000)], 2)"
+        );
+
+        // SELECT a AS b, date_bin(a) AS bucket — alias of a preserves Range.
+        let b_target: Arc<dyn PhysicalExpr> = Arc::new(Column::new("b", 0));
+        let bucket_target: Arc<dyn PhysicalExpr> = Arc::new(Column::new("bucket", 1));
+        let alias_mapping = ProjectionMapping::from_iter([
+            (
+                fixture.col(0),
+                ProjectionTargets::from(vec![(Arc::clone(&b_target), 0)]),
+            ),
+            (
+                Arc::clone(&date_bin),
+                ProjectionTargets::from(vec![(Arc::clone(&bucket_target), 1)]),
+            ),
+        ]);
+        let projected = aligned.project(&alias_mapping, &fixture.eq_properties);
+        assert_eq!(
+            projected.to_string(),
+            "Range([b@0 ASC], [(1704070800000000000)], 2)"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_range_partitioning_project_skips_non_monotonic_and_straddling_bins()
+    -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![(
+            "a",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        )])?;
+        let hour_ns = 1_704_070_800_000_000_000i64;
+        let aligned = fixture.range_partitioning([0], vec![ts_ns_split(hour_ns)]);
+        let date_bin_60s = date_bin_of(fixture.col(0), 60_000_000_000);
+        // 70s does not divide the hour split, so bins straddle the file groups.
+        let date_bin_70s = date_bin_of(fixture.col(0), 70_000_000_000);
+        let neg: Arc<dyn PhysicalExpr> = Arc::new(NegativeExpr::new(fixture.col(0)));
+
+        // SELECT -a, date_bin(60s, a) — skip the order-reversing source.
+        let neg_target: Arc<dyn PhysicalExpr> = Arc::new(Column::new("neg", 0));
+        let bin_target: Arc<dyn PhysicalExpr> = Arc::new(Column::new("bin", 1));
+        let mapping = ProjectionMapping::from_iter([
+            (
+                Arc::clone(&neg),
+                ProjectionTargets::from(vec![(Arc::clone(&neg_target), 0)]),
+            ),
+            (
+                Arc::clone(&date_bin_60s),
+                ProjectionTargets::from(vec![(Arc::clone(&bin_target), 1)]),
+            ),
+        ]);
+        let projected = aligned.project(&mapping, &fixture.eq_properties);
+        assert_eq!(
+            projected.to_string(),
+            "Range([bin@1 ASC], [(1704070800000000000)], 2)"
+        );
+
+        // SELECT -a, date_bin(60s, a) AS bin1, date_bin(60s, a) AS bin2
+        let bin1: Arc<dyn PhysicalExpr> = Arc::new(Column::new("bin1", 1));
+        let bin2: Arc<dyn PhysicalExpr> = Arc::new(Column::new("bin2", 2));
+        let mapping = ProjectionMapping::from_iter([
+            (
+                Arc::clone(&neg),
+                ProjectionTargets::from(vec![(Arc::clone(&neg_target), 0)]),
+            ),
+            (
+                Arc::clone(&date_bin_60s),
+                ProjectionTargets::from(vec![
+                    (Arc::clone(&bin1), 1),
+                    (Arc::clone(&bin2), 2),
+                ]),
+            ),
+        ]);
+        let projected = aligned.project(&mapping, &fixture.eq_properties);
+        assert_eq!(
+            projected.to_string(),
+            "Range([bin1@1 ASC], [(1704070800000000000)], 2)"
+        );
+
+        // SELECT date_bin(70s, a), date_bin(60s, a) — first bin straddles,
+        // second is aligned, so Range is preserved through the 60s bin.
+        let bin70: Arc<dyn PhysicalExpr> = Arc::new(Column::new("bin70", 0));
+        let bin60: Arc<dyn PhysicalExpr> = Arc::new(Column::new("bin60", 1));
+        let mapping = ProjectionMapping::from_iter([
+            (
+                Arc::clone(&date_bin_70s),
+                ProjectionTargets::from(vec![(Arc::clone(&bin70), 0)]),
+            ),
+            (
+                Arc::clone(&date_bin_60s),
+                ProjectionTargets::from(vec![(Arc::clone(&bin60), 1)]),
+            ),
+        ]);
+        let projected = aligned.project(&mapping, &fixture.eq_properties);
+        assert_eq!(
+            projected.to_string(),
+            "Range([bin60@1 ASC], [(1704070800000000000)], 2)"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_range_partitioning_project_through_date_trunc() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        )])?;
+        let hour_ns = 1_704_070_800_000_000_000i64;
+        let trunc_hour = date_trunc_of(fixture.col(0), "hour");
+        let target: Arc<dyn PhysicalExpr> = Arc::new(Column::new("time_bin", 0));
+        let mapping = ProjectionMapping::from_iter([(
+            Arc::clone(&trunc_hour),
+            ProjectionTargets::from(vec![(Arc::clone(&target), 0)]),
+        )]);
+
+        let aligned = fixture.range_partitioning([0], vec![ts_ns_split(hour_ns)]);
+        let projected = aligned.project(&mapping, &fixture.eq_properties);
+        assert_eq!(
+            projected.to_string(),
+            "Range([time_bin@0 ASC], [(1704070800000000000)], 2)"
+        );
+
+        let trunc_day = date_trunc_of(fixture.col(0), "day");
+        let day_mapping = ProjectionMapping::from_iter([(
+            Arc::clone(&trunc_day),
+            ProjectionTargets::from(vec![(Arc::clone(&target), 0)]),
+        )]);
+        let projected = aligned.project(&day_mapping, &fixture.eq_properties);
+        let Partitioning::UnknownPartitioning(partition_count) = projected else {
+            panic!("expected UnknownPartitioning, got {projected:?}");
+        };
+        assert_eq!(partition_count, 2);
+
+        Ok(())
+    }
+
+    /// DESC range partitions put values *above* the split in partition 0, so
+    /// the adjacent value is the successor, not the predecessor.
+    ///
+    /// `Range([timestamp DESC], [01:00])`:
+    ///   partition 0: timestamp >  01:00
+    ///   partition 1: timestamp <= 01:00
+    /// An hour-aligned split shares the 01:00 bin (`f(01:00) == f(01:00+1ns)`).
+    /// A split at the last nanosecond of the hour does not.
+    #[test]
+    fn test_range_partitioning_descending_uses_successor_for_disjointness() -> Result<()>
+    {
+        let fixture = PartitioningTestFixture::new(vec![(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        )])?;
+        let hour_ns = 1_704_070_800_000_000_000i64;
+        let last_ns_of_hour = hour_ns + 3_600_000_000_000 - 1;
+        let desc: LexOrdering =
+            [fixture.range_sort_expr(0, SortOptions::new(true, false))].into();
+        let hour_aligned = fixture
+            .range_partitioning_with_ordering(desc.clone(), vec![ts_ns_split(hour_ns)]);
+        let hour_end = fixture
+            .range_partitioning_with_ordering(desc, vec![ts_ns_split(last_ns_of_hour)]);
+
+        let trunc_hour = date_trunc_of(fixture.col(0), "hour");
+        let trunc_required = Distribution::KeyPartitioned(vec![Arc::clone(&trunc_hour)]);
+        assert_satisfaction(
+            "DESC hour-aligned split shares the hour bin; successor check rejects it",
+            &hour_aligned,
+            &trunc_required,
+            &fixture.eq_properties,
+            PartitioningSatisfaction::NotSatisfied,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+        assert_satisfaction(
+            "DESC split at last ns of the hour is disjoint for date_trunc(hour)",
+            &hour_end,
+            &trunc_required,
+            &fixture.eq_properties,
+            PartitioningSatisfaction::Exact,
+            PartitioningSatisfaction::Exact,
+        );
+
+        let date_bin = date_bin_of(fixture.col(0), 60_000_000_000);
+        let bin_required = Distribution::KeyPartitioned(vec![Arc::clone(&date_bin)]);
+        assert_satisfaction(
+            "DESC hour-aligned split also shares the 60s date_bin",
+            &hour_aligned,
+            &bin_required,
+            &fixture.eq_properties,
+            PartitioningSatisfaction::NotSatisfied,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+        let last_ns_of_minute = hour_ns + 60_000_000_000 - 1;
+        let minute_end = fixture.range_partitioning_with_ordering(
+            [fixture.range_sort_expr(0, SortOptions::new(true, false))].into(),
+            vec![ts_ns_split(last_ns_of_minute)],
+        );
+        assert_satisfaction(
+            "DESC split at last ns of a 60s bin is disjoint for date_bin(60s)",
+            &minute_end,
+            &bin_required,
+            &fixture.eq_properties,
+            PartitioningSatisfaction::Exact,
+            PartitioningSatisfaction::Exact,
+        );
+
+        let target: Arc<dyn PhysicalExpr> = Arc::new(Column::new("time_bin", 0));
+        let mapping = ProjectionMapping::from_iter([(
+            Arc::clone(&trunc_hour),
+            ProjectionTargets::from(vec![(Arc::clone(&target), 0)]),
+        )]);
+        let projected = hour_aligned.project(&mapping, &fixture.eq_properties);
+        let Partitioning::UnknownPartitioning(partition_count) = projected else {
+            panic!("DESC hour-aligned date_trunc must drop Range, got {projected}");
+        };
+        assert_eq!(partition_count, 2);
+
+        let projected = hour_end.project(&mapping, &fixture.eq_properties);
+        assert_eq!(
+            projected.to_string(),
+            "Range([time_bin@0 DESC NULLS LAST], [(1704070800000000000)], 2)",
+            "DESC last-ns-of-hour split projects through date_trunc(hour)"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_range_partitioning_project_compound_through_date_bin() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![
+            ("key", DataType::Utf8),
+            ("timestamp", DataType::Timestamp(TimeUnit::Nanosecond, None)),
+        ])?;
+        let hour_ns = 1_704_070_800_000_000_000i64;
+        let date_bin = date_bin_of(fixture.col(1), 60_000_000_000);
+        let key_target: Arc<dyn PhysicalExpr> = Arc::new(Column::new("key", 0));
+        let bin_target: Arc<dyn PhysicalExpr> = Arc::new(Column::new("time_bin", 1));
+        let mapping = ProjectionMapping::from_iter([
+            (
+                fixture.col(0),
+                ProjectionTargets::from(vec![(Arc::clone(&key_target), 0)]),
+            ),
+            (
+                Arc::clone(&date_bin),
+                ProjectionTargets::from(vec![(Arc::clone(&bin_target), 1)]),
+            ),
+        ]);
+
+        let aligned = fixture.range_partitioning(
+            [0, 1],
+            vec![SplitPoint::new(vec![
+                ScalarValue::Utf8(Some("k".into())),
+                ScalarValue::TimestampNanosecond(Some(hour_ns), None),
+            ])],
+        );
+        let projected = aligned.project(&mapping, &fixture.eq_properties);
+        assert_eq!(
+            projected.to_string(),
+            "Range([key@0 ASC, time_bin@1 ASC], [(k, 1704070800000000000)], 2)"
+        );
+
+        Ok(())
+    }
+
+    /// `date_trunc` / `date_bin` on a *non-final* range key is not injective
+    /// around the split. Rows above the split collapse onto `f(split)` and
+    /// trailing keys can then reorder them across the projected boundary.
+    ///
+    /// `Range([timestamp, key], [(01:00, 'k5')])` projected through
+    /// `SELECT date_trunc('hour', timestamp) AS h, key` must drop `Range`
+    /// (become `UnknownPartitioning`) rather than
+    /// `Range([h, key], [(01:00, 'k5')])`.
+    #[test]
+    fn test_range_partitioning_project_rejects_monotonic_transform_on_non_final_key()
+    -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![
+            ("timestamp", DataType::Timestamp(TimeUnit::Nanosecond, None)),
+            ("key", DataType::Utf8),
+        ])?;
+        let hour_ns = 1_704_070_800_000_000_000i64;
+        // Real membership: (ts, key) < (01:00, 'k5') is partition 0, else 1.
+        // A row (01:30, 'k1') is in partition 1 because 01:30 > 01:00.
+        let range = fixture.range_partitioning(
+            [0, 1],
+            vec![SplitPoint::new(vec![
+                ScalarValue::TimestampNanosecond(Some(hour_ns), None),
+                ScalarValue::Utf8(Some("k5".into())),
+            ])],
+        );
+        let h_target: Arc<dyn PhysicalExpr> = Arc::new(Column::new("h", 0));
+        let key_target: Arc<dyn PhysicalExpr> = Arc::new(Column::new("key", 1));
+
+        // SELECT date_trunc('hour', timestamp) AS h, key
+        // date_trunc floors [01:00, 02:00) onto 01:00, so (01:30, 'k1')
+        // would compare as (01:00, 'k1') < (01:00, 'k5') and be claimed
+        // as partition 0. Drop Range so that false boundary is not advertised.
+        let trunc_hour = date_trunc_of(fixture.col(0), "hour");
+        let trunc_mapping = ProjectionMapping::from_iter([
+            (
+                Arc::clone(&trunc_hour),
+                ProjectionTargets::from(vec![(Arc::clone(&h_target), 0)]),
+            ),
+            (
+                fixture.col(1),
+                ProjectionTargets::from(vec![(Arc::clone(&key_target), 1)]),
+            ),
+        ]);
+        let projected = range.project(&trunc_mapping, &fixture.eq_properties);
+        let Partitioning::UnknownPartitioning(partition_count) = projected else {
+            panic!(
+                "date_trunc on a non-final range key must drop Range, got {projected}"
+            );
+        };
+        // Partition count is preserved; only the Range claim is dropped.
+        assert_eq!(partition_count, 2);
+
+        // Same drop for date_bin: it is also a flooring transform on key 0.
+        let date_bin = date_bin_of(fixture.col(0), 60_000_000_000);
+        let bin_mapping = ProjectionMapping::from_iter([
+            (
+                Arc::clone(&date_bin),
+                ProjectionTargets::from(vec![(Arc::clone(&h_target), 0)]),
+            ),
+            (
+                fixture.col(1),
+                ProjectionTargets::from(vec![(Arc::clone(&key_target), 1)]),
+            ),
+        ]);
+        let projected = range.project(&bin_mapping, &fixture.eq_properties);
+        let Partitioning::UnknownPartitioning(partition_count) = projected else {
+            panic!("date_bin on a non-final range key must drop Range, got {projected}");
         };
         assert_eq!(partition_count, 2);
 
