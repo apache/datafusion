@@ -332,10 +332,13 @@ message DmlNode{
   MergeIntoOpNode merge_into = 6;
 }
 
-// Carries the ON condition and WHEN clauses of a MERGE INTO operation.
+// Carries the target qualifier, ON condition, and WHEN clauses of a MERGE INTO operation.
 message MergeIntoOpNode {
   LogicalExprNode on = 1;
   repeated MergeIntoClauseNode clauses = 2;
+  // SQL-visible target qualifier. Absent in payloads written before this field
+  // was introduced; readers then fall back to DmlNode.table_name.
+  TableReference target_qualifier = 3;
 }
 
 // A single WHEN clause within a MERGE INTO statement.

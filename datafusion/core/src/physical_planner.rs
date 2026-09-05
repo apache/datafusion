@@ -870,11 +870,9 @@ impl DefaultPhysicalPlanner {
                     e.context(format!("MERGE INTO operation on table '{table_name}'"))
                 })?;
                 let input_exec = children.one()?;
-                let target_schema = DFSchema::try_from_qualified_schema(
-                    table_name.clone(),
-                    &target.schema(),
-                )?;
-                let merge_schema = Arc::new(target_schema.join(input.schema())?);
+                let merge_schema = Arc::new(
+                    merge_op.expression_schema(&target.schema(), input.schema())?,
+                );
                 provider
                     .merge_into(
                         session_state,
@@ -3626,8 +3624,8 @@ mod tests {
         ctx.register_table("source", source)?;
 
         ctx.sql(
-            "MERGE INTO target AS t USING source AS s ON t.id = s.id \
-             WHEN MATCHED AND t.id > s.id THEN DELETE",
+            "MERGE INTO target AS t USING source AS target ON t.id = target.id \
+             WHEN MATCHED AND t.id > target.id THEN DELETE",
         )
         .await?
         .create_physical_plan()
@@ -3638,11 +3636,11 @@ mod tests {
             captured.as_ref().expect("merge_into should be called");
         assert_eq!(*clause_count, 1);
         assert_eq!(
-            merge_schema.index_of_column(&Column::new(Some("target"), "id"))?,
+            merge_schema.index_of_column(&Column::new(Some("t"), "id"))?,
             0
         );
         assert_eq!(
-            merge_schema.index_of_column(&Column::new(Some("s"), "id"))?,
+            merge_schema.index_of_column(&Column::new(Some("target"), "id"))?,
             1
         );
         assert_contains!(physical_on, "index: 0");
