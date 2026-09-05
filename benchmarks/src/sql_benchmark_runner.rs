@@ -20,6 +20,7 @@
 
 use crate::sql_benchmark::SqlBenchmark;
 use crate::util::{CommonOpt, print_memory_stats};
+use clap::Parser;
 use criterion::{Criterion, SamplingMode};
 use datafusion::error::Result;
 use datafusion::prelude::SessionContext;
@@ -31,6 +32,8 @@ use std::fs;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use tokio::runtime::Runtime;
+
+const CRITERION_MAX_DIRECTORY_NAME_LEN: usize = 64;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BenchmarkFilter {
@@ -50,12 +53,81 @@ pub struct SqlRunConfig {
     pub output: Option<PathBuf>,
 }
 
+#[derive(Debug, Parser)]
+#[command(ignore_errors = true)]
+struct CriterionHarnessEnv {
+    #[command(flatten)]
+    options: CommonOpt,
+
+    #[arg(
+        env = "BENCH_PERSIST_RESULTS",
+        long = "persist_results",
+        default_value = "false",
+        action = clap::ArgAction::SetTrue
+    )]
+    persist_results: bool,
+
+    #[arg(
+        env = "BENCH_VALIDATE",
+        long = "validate_results",
+        default_value = "false",
+        action = clap::ArgAction::SetTrue
+    )]
+    validate: bool,
+
+    #[arg(env = "BENCH_NAME")]
+    name: Option<String>,
+
+    #[arg(env = "BENCH_SUBGROUP")]
+    subgroup: Option<String>,
+
+    #[arg(env = "BENCH_QUERY")]
+    query: Option<String>,
+
+    #[arg(env = "BENCH_NAMESPACE")]
+    criterion_namespace: Option<String>,
+}
+
+/// Builds the direct Criterion harness configuration from its `BENCH_*`
+/// environment variables.
+pub fn criterion_harness_config_from_env() -> (SqlRunConfig, Option<String>) {
+    let args = CriterionHarnessEnv::parse();
+    let config = SqlRunConfig {
+        common: args.options,
+        filter: BenchmarkFilter {
+            name: args.name,
+            subgroup: args.subgroup,
+            query: args.query,
+        },
+        replacements: default_criterion_replacements(),
+        query_filename: None,
+        persist_results: args.persist_results,
+        validate_results: args.validate,
+        output: None,
+    };
+
+    (config, args.criterion_namespace)
+}
+
 /// Runs the selected SQL benchmarks through a caller-provided Criterion instance.
 pub fn run_criterion_benchmarks_impl(
     benchmark_dir: &Path,
     config: &SqlRunConfig,
     criterion: &mut Criterion,
 ) -> Result<()> {
+    run_criterion_benchmarks_impl_with_namespace(benchmark_dir, config, None, criterion)
+}
+
+/// Runs the selected SQL benchmarks through a caller-provided Criterion instance,
+/// optionally appending a safe invocation namespace to each benchmark group.
+pub fn run_criterion_benchmarks_impl_with_namespace(
+    benchmark_dir: &Path,
+    config: &SqlRunConfig,
+    namespace: Option<&str>,
+    criterion: &mut Criterion,
+) -> Result<()> {
+    validate_criterion_namespace(namespace)?;
+
     let rt = make_tokio_runtime()?;
     let listing_ctx = make_ctx(&config.common)?;
     let all_benchmarks = rt.block_on(load_benchmark_definitions_for_query(
@@ -69,7 +141,13 @@ pub fn run_criterion_benchmarks_impl(
 
     ensure_selection(&config.filter, &all_benchmarks, &selected)?;
 
+    let mut named_benchmarks = Vec::with_capacity(selected.len());
     for (group_name, benchmarks) in selected {
+        named_benchmarks
+            .push((criterion_group_name(&group_name, namespace)?, benchmarks));
+    }
+
+    for (group_name, benchmarks) in named_benchmarks {
         let mut group = criterion.benchmark_group(group_name);
 
         group.sample_size(10);
@@ -88,6 +166,43 @@ pub fn run_criterion_benchmarks_impl(
     }
 
     Ok(())
+}
+
+fn validate_criterion_namespace(namespace: Option<&str>) -> Result<()> {
+    let Some(namespace) = namespace else {
+        return Ok(());
+    };
+
+    if namespace.is_empty()
+        || !namespace.chars().all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || "_-".contains(character)
+        })
+    {
+        return Err(exec_datafusion_err!(
+            "criterion namespace must be nonempty and contain only lowercase ASCII letters, digits, '_', or '-'"
+        ));
+    }
+
+    Ok(())
+}
+
+fn criterion_group_name(group_name: &str, namespace: Option<&str>) -> Result<String> {
+    validate_criterion_namespace(namespace)?;
+
+    let Some(namespace) = namespace else {
+        return Ok(group_name.to_string());
+    };
+
+    let group_name = format!("{group_name}__{namespace}");
+    if group_name.len() > CRITERION_MAX_DIRECTORY_NAME_LEN {
+        return Err(exec_datafusion_err!(
+            "criterion group with namespace must not exceed {CRITERION_MAX_DIRECTORY_NAME_LEN} bytes"
+        ));
+    }
+
+    Ok(group_name)
 }
 
 /// Runs one benchmark case inside Criterion and converts benchmark panics to errors.
@@ -766,5 +881,85 @@ mod tests {
 
         assert_eq!(benchmark.group(), "tpch");
         assert_eq!(criterion_function_name(&benchmark), "Q01_sf1");
+    }
+
+    #[test]
+    fn criterion_group_names_include_safe_namespaces() {
+        assert_eq!(criterion_group_name("tpch", None).unwrap(), "tpch");
+        assert_eq!(
+            criterion_group_name("tpch", Some("parquet-sf1")).unwrap(),
+            "tpch__parquet-sf1"
+        );
+        assert_eq!(
+            criterion_group_name("tpch", Some("memory_sf1")).unwrap(),
+            "tpch__memory_sf1"
+        );
+    }
+
+    #[test]
+    fn criterion_group_names_reject_unsafe_namespaces() {
+        for namespace in ["", "csv/sf1", "csv sf1", "csv.sf1", "parquét"] {
+            let error = criterion_group_name("tpch", Some(namespace)).unwrap_err();
+
+            assert!(error.to_string().contains("namespace"), "{error}");
+        }
+    }
+
+    #[test]
+    fn criterion_group_names_reject_windows_case_collisions() {
+        let error = criterion_group_name("tpch", Some("Parquet")).unwrap_err();
+
+        assert!(error.to_string().contains("lowercase"), "{error}");
+        assert_eq!(
+            criterion_group_name("tpch", Some("parquet")).unwrap(),
+            "tpch__parquet"
+        );
+    }
+
+    #[test]
+    fn criterion_group_names_reject_components_criterion_would_truncate() {
+        let group_name = "g".repeat(55);
+
+        assert_eq!(
+            criterion_group_name(&group_name, Some("1234567"))
+                .unwrap()
+                .len(),
+            64
+        );
+
+        let first = criterion_group_name(&group_name, Some("12345678"));
+        let second = criterion_group_name(&group_name, Some("12345679"));
+
+        assert!(first.unwrap_err().to_string().contains("64 bytes"));
+        assert!(second.unwrap_err().to_string().contains("64 bytes"));
+    }
+
+    #[test]
+    fn criterion_harness_reads_namespace_from_env_in_subprocess() {
+        const CHILD_ENV: &str = "DATAFUSION_CRITERION_HARNESS_ENV_TEST_CHILD";
+
+        if std::env::var_os(CHILD_ENV).is_some() {
+            let (_, namespace) = criterion_harness_config_from_env();
+
+            assert_eq!(namespace.as_deref(), Some("parquet_sf1"));
+            return;
+        }
+
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "sql_benchmark_runner::tests::criterion_harness_reads_namespace_from_env_in_subprocess",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .env("BENCH_NAMESPACE", "parquet_sf1")
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "child failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }
