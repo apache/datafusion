@@ -99,7 +99,7 @@ select 1.0::DOUBLE, 1.023::DOUBLE, 'NaN'::DOUBLE,'+Inf'::DOUBLE,'-Inf'::DOUBLE
 query RRR
 select 1.0::DECIMAL(5,3) as one, 2.023::DECIMAL(5,3) as two, 3.023::DECIMAL(5,2) as three
 ----
-1 2.023 3.02
+1.000 2.023 3.02
 
 query D
 select '2018-01-01'::DATE

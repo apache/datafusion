@@ -742,9 +742,9 @@ FROM decimal_table CROSS JOIN t
 GROUP BY i
 ORDER BY i;
 ----
-1 66
-2 66
-3 33
+1 66.000
+2 66.000
+3 33.000
 
 # Config reset
 statement ok

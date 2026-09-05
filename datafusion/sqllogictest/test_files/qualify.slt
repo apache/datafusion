@@ -92,9 +92,9 @@ FROM users
 QUALIFY prev_salary IS NOT NULL AND salary > prev_salary
 ORDER BY dept, id;
 ----
-2 Bob 60000 50000
-8 Henry 62000 52000
-7 Grace 75000 65000
+2 Bob 60000.00 50000.00
+8 Henry 62000.00 52000.00
+7 Grace 75000.00 65000.00
 
 # QUALIFY with LEAD function
 query ITRR
@@ -103,9 +103,9 @@ FROM users
 QUALIFY next_salary IS NOT NULL AND salary < next_salary
 ORDER BY dept, id;
 ----
-1 Alice 50000 60000
-6 Frank 52000 62000
-5 Eve 65000 75000
+1 Alice 50000.00 60000.00
+6 Frank 52000.00 62000.00
+5 Eve 65000.00 75000.00
 
 # QUALIFY with NTILE
 query ITI
@@ -164,8 +164,8 @@ FROM users
 QUALIFY rn = 1 AND salary > 60000
 ORDER BY dept, id;
 ----
-8 Henry 62000 1
-7 Grace 75000 1
+8 Henry 62000.00 1
+7 Grace 75000.00 1
 
 # QUALIFY with string functions
 query ITI
@@ -200,9 +200,9 @@ GROUP BY dept, salary
 HAVING SUM(salary) > 20000
 QUALIFY r > 60000
 ----
-Marketing 70000
-Marketing 70000
-Marketing 70000
+Marketing 70000.000000
+Marketing 70000.000000
+Marketing 70000.000000
 
 # QUALIFY with aggregate function reference from projection
 query TR
@@ -212,7 +212,7 @@ GROUP BY dept
 QUALIFY RANK() OVER (ORDER BY dept DESC) = 1 AND s > 1000
 ORDER BY dept;
 ----
-Marketing 210000
+Marketing 210000.00
 
 # QUALIFY with aggregate function
 query T
@@ -232,7 +232,7 @@ GROUP BY dept
 QUALIFY RANK() OVER (ORDER BY SUM(salary) DESC) = 1
 ORDER BY dept;
 ----
-Engineering 279000
+Engineering 279000.00
 
 # QUALIFY with aggregate function reference from projection within window function
 query TR
@@ -242,7 +242,7 @@ GROUP BY dept
 QUALIFY RANK() OVER (ORDER BY s DESC) = 1
 ORDER BY dept;
 ----
-Engineering 279000
+Engineering 279000.00
 
 # Error: QUALIFY without window functions
 query error

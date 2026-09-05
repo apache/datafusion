@@ -63,10 +63,10 @@ SELECT
     arrow_cast(arrow_cast(temperature, 'Decimal128(10, 2)'), 'RunEndEncoded("run_ends": non-null Int32, "values": Decimal128(10, 2))') + 1 AS t_dec_plus_one
 FROM sensor_readings;
 ----
-21 21
-23 23
-24 24
-25 25
+21 21.00
+23 23.00
+24 24.00
+25 25.00
 
 # Regex / LIKE match against an REE column whose values are themselves Dictionary-encoded
 query BB rowsort
