@@ -899,6 +899,57 @@ date_trunc Time(ns) [precision, expression] [String, Time(ns)] SCALAR Truncates 
 date_trunc Timestamp(ns) [precision, expression] [String, Timestamp(ns)] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
 date_trunc Timestamp(ns, "+TZ") [precision, expression] [String, Timestamp(ns, "+TZ")] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
 
+# Schema for function with TypeSignature::Numeric
+query TTITI rowsort
+select specific_name, data_type, ordinal_position, parameter_mode, rid from information_schema.parameters where specific_name = 'abs';
+----
+abs Decimal(38, 10) 1 IN 0
+abs Decimal(38, 10) 1 OUT 0
+abs Float64 1 IN 1
+abs Float64 1 OUT 1
+abs Int64 1 IN 2
+abs Int64 1 OUT 2
+
+query TTT rowsort
+select routine_name, data_type, function_type from information_schema.routines where routine_name = 'abs';
+----
+abs Decimal(38, 10) SCALAR
+abs Float64 SCALAR
+abs Int64 SCALAR
+
+# Schema for function with TypeSignature::Coercible plus uniform with exact float types
+query TTITI rowsort
+select specific_name, data_type, ordinal_position, parameter_mode, rid from information_schema.parameters where specific_name = 'floor';
+----
+floor Decimal(38, 10) 1 IN 0
+floor Decimal(38, 10) 1 OUT 0
+floor Float32 1 IN 1
+floor Float32 1 OUT 1
+floor Float64 1 IN 2
+floor Float64 1 OUT 2
+
+query TTT rowsort
+select routine_name, data_type, function_type from information_schema.routines where routine_name = 'floor';
+----
+floor Decimal(38, 10) SCALAR
+floor Float32 SCALAR
+floor Float64 SCALAR
+
+# Schemas for date/duration - exact type for Date32/Date64 (logical type is provided)
+query TTITI rowsort
+select specific_name, data_type, ordinal_position, parameter_mode, rid from information_schema.parameters where specific_name = 'to_char' and (data_type like '%Date%' or data_type like '%Duration%');
+----
+to_char Date 1 IN 0
+to_char Duration(ms) 1 IN 1
+to_char Duration(ns) 1 IN 2
+to_char Duration(s) 1 IN 3
+to_char Duration(µs) 1 IN 4
+
+query TTT rowsort
+select routine_name, data_type, function_type from information_schema.routines where routine_name = 'to_char';
+----
+to_char String SCALAR
+
 # Table functions (UDTFs) appear in information_schema.routines with
 # function_type = TABLE and data_type = TABLE.
 # Note: built-in `generate_series` and `range` are registered as BOTH a
