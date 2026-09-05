@@ -102,6 +102,17 @@ pub struct GroupsAccumulatorAdapter {
     /// bottleneck in earlier implementations when there were many
     /// distinct groups.
     allocation_bytes: usize,
+
+    /// The portion of [`Self::allocation_bytes`] that is the scratch
+    /// [`AccumulatorState::indices`] capacity held by [`Self::states`].
+    ///
+    /// The scratch vectors are cleared, but not deallocated, at the end of every
+    /// batch, so their capacity is retained for the lifetime of the group. The
+    /// pre/post deltas taken around [`Accumulator`] work therefore see the same
+    /// capacity on both sides and can never charge it. This field records what
+    /// has already been charged so each batch charges only the growth since the
+    /// previous one.
+    indices_allocation_bytes: usize,
 }
 
 struct AccumulatorState {
@@ -139,6 +150,7 @@ impl GroupsAccumulatorAdapter {
             factory: Box::new(factory),
             states: vec![],
             allocation_bytes: 0,
+            indices_allocation_bytes: 0,
         }
     }
 
@@ -221,8 +233,12 @@ impl GroupsAccumulatorAdapter {
         let mut offsets = vec![0];
 
         let mut offset_so_far = 0;
+        let mut indices_allocation_bytes = 0;
         for (group_index, state) in self.states.iter_mut().enumerate() {
             let indices = &state.indices;
+            // this pass already visits every group, so totalling the scratch
+            // capacity here costs a field read rather than a `size()` call
+            indices_allocation_bytes += indices.allocated_size();
             if indices.is_empty() {
                 continue;
             }
@@ -233,6 +249,13 @@ impl GroupsAccumulatorAdapter {
             offsets.push(offset_so_far);
         }
         let batch_indices = batch_indices.into();
+
+        // The push loop above is the only place `indices` grows. Charge the
+        // growth since the previous batch here: the pre/post deltas below
+        // observe the identical capacity on both sides, because `f` does not
+        // touch `indices` and the `clear()` after it retains the capacity.
+        self.adjust_allocation(self.indices_allocation_bytes, indices_allocation_bytes);
+        self.indices_allocation_bytes = indices_allocation_bytes;
 
         // reorder the values and opt_filter by batch_indices so that
         // all values for each group are contiguous, then invoke the
@@ -284,6 +307,18 @@ impl GroupsAccumulatorAdapter {
         self.allocation_bytes = self.allocation_bytes.saturating_sub(size)
     }
 
+    /// Release the allocation held by a state that is being emitted.
+    ///
+    /// [`AccumulatorState::size`] covers the scratch `indices` capacity, so
+    /// this also drops it from [`Self::indices_allocation_bytes`] to keep that
+    /// running total equal to the capacity still held by [`Self::states`].
+    fn free_state_allocation(&mut self, state: &AccumulatorState) {
+        self.free_allocation(state.size());
+        self.indices_allocation_bytes = self
+            .indices_allocation_bytes
+            .saturating_sub(state.indices.allocated_size());
+    }
+
     /// Adjusts the allocation for something that started with
     /// start_size and now has new_size avoiding overflow
     ///
@@ -325,7 +360,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         let results: Vec<ScalarValue> = states
             .into_iter()
             .map(|mut state| {
-                self.free_allocation(state.size());
+                self.free_state_allocation(&state);
                 state.accumulator.evaluate()
             })
             .collect::<Result<_>>()?;
@@ -375,7 +410,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         let mut results: Vec<Vec<ScalarValue>> = vec![];
 
         for mut state in states {
-            self.free_allocation(state.size());
+            self.free_state_allocation(&state);
             let accumulator_state = state.accumulator.state()?;
             results.resize_with(accumulator_state.len(), Vec::new);
             for (idx, state_val) in accumulator_state.into_iter().enumerate() {
@@ -575,5 +610,137 @@ mod tests {
         assert!(accumulator.supports_evaluate_preserving());
         assert!(!accumulator.supports_state_preserving());
         Ok(())
+    }
+
+    /// Accumulator whose `size()` is constant, so that the only thing that can
+    /// move the adapter's reported size is the adapter's own bookkeeping.
+    #[derive(Debug, Default)]
+    struct CountingAccumulator {
+        count: i64,
+    }
+
+    impl Accumulator for CountingAccumulator {
+        fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+            self.count += values[0].len() as i64;
+            Ok(())
+        }
+
+        fn evaluate(&mut self) -> Result<ScalarValue> {
+            Ok(ScalarValue::Int64(Some(self.count)))
+        }
+
+        fn size(&self) -> usize {
+            size_of::<Self>()
+        }
+
+        fn state(&mut self) -> Result<Vec<ScalarValue>> {
+            Ok(vec![ScalarValue::Int64(Some(self.count))])
+        }
+
+        fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+            let counts = states[0].as_primitive::<Int64Type>();
+            self.count += counts.iter().flatten().sum::<i64>();
+            Ok(())
+        }
+    }
+
+    fn test_adapter() -> GroupsAccumulatorAdapter {
+        GroupsAccumulatorAdapter::new(|| Ok(Box::new(CountingAccumulator::default())))
+    }
+
+    /// The size the adapter should be reporting, computed directly from the
+    /// states it is holding rather than from its running total.
+    fn retained_size(adapter: &GroupsAccumulatorAdapter) -> usize {
+        adapter
+            .states
+            .iter()
+            .map(|state| state.size())
+            .sum::<usize>()
+            + adapter.states.allocated_size()
+    }
+
+    /// Builds a batch where group 0 takes `hot_rows` rows and group 1 takes one.
+    fn skewed_batch(hot_rows: usize) -> (Vec<ArrayRef>, Vec<usize>) {
+        let mut group_indices = vec![0; hot_rows];
+        group_indices.push(1);
+        let values: ArrayRef = Arc::new(Int64Array::from(vec![1; group_indices.len()]));
+        (vec![values], group_indices)
+    }
+
+    fn update(adapter: &mut GroupsAccumulatorAdapter, hot_rows: usize) {
+        let (values, group_indices) = skewed_batch(hot_rows);
+        adapter
+            .update_batch(&values, &group_indices, None, 2)
+            .unwrap();
+    }
+
+    #[test]
+    fn accounts_for_retained_indices_capacity() {
+        const HOT_ROWS: usize = 8192;
+
+        let mut adapter = test_adapter();
+        update(&mut adapter, HOT_ROWS);
+
+        // The scratch `indices` vector for group 0 grew to hold `HOT_ROWS`
+        // `u32`s and keeps that capacity after `clear()`, so it has to show up
+        // in the reported size.
+        assert_eq!(adapter.size(), retained_size(&adapter));
+        assert!(
+            adapter.size() >= HOT_ROWS * size_of::<u32>(),
+            "reported {} bytes, which cannot cover {} retained indices",
+            adapter.size(),
+            HOT_ROWS
+        );
+
+        // A second batch of the same shape reuses the existing capacity, so the
+        // reported size must not move: the capacity is charged once, not once
+        // per batch.
+        let after_first_batch = adapter.size();
+        update(&mut adapter, HOT_ROWS);
+        assert_eq!(adapter.size(), after_first_batch);
+        assert_eq!(adapter.size(), retained_size(&adapter));
+
+        // Growing the hot group further charges only the additional capacity.
+        update(&mut adapter, HOT_ROWS * 4);
+        assert!(adapter.size() > after_first_batch);
+        assert_eq!(adapter.size(), retained_size(&adapter));
+
+        // A smaller batch afterwards keeps the capacity, and keeps charging it.
+        let after_growth = adapter.size();
+        update(&mut adapter, 1);
+        assert_eq!(adapter.size(), after_growth);
+        assert_eq!(adapter.size(), retained_size(&adapter));
+    }
+
+    #[test]
+    fn releases_retained_indices_capacity_on_emit() {
+        const HOT_ROWS: usize = 8192;
+
+        let mut adapter = test_adapter();
+        update(&mut adapter, HOT_ROWS);
+
+        // Emitting the hot group must release its retained capacity, and must
+        // not release capacity that belongs to the groups left behind.
+        adapter.state(EmitTo::First(1)).unwrap();
+        assert_eq!(adapter.size(), retained_size(&adapter));
+
+        update(&mut adapter, HOT_ROWS);
+        assert_eq!(adapter.size(), retained_size(&adapter));
+
+        adapter.evaluate(EmitTo::All).unwrap();
+        assert_eq!(adapter.size(), 0);
+        assert_eq!(adapter.size(), retained_size(&adapter));
+    }
+
+    #[test]
+    fn merge_batch_accounts_for_retained_indices_capacity() {
+        const HOT_ROWS: usize = 8192;
+
+        let mut adapter = test_adapter();
+        let (values, group_indices) = skewed_batch(HOT_ROWS);
+        adapter.merge_batch(&values, &group_indices, 2).unwrap();
+
+        assert_eq!(adapter.size(), retained_size(&adapter));
+        assert!(adapter.size() >= HOT_ROWS * size_of::<u32>());
     }
 }

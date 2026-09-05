@@ -881,6 +881,65 @@ async fn test_spill_file_compressed_with_lz4_frame() -> Result<()> {
 
     Ok(())
 }
+
+/// `covar_samp` has no native [`GroupsAccumulator`], so its per-group state is
+/// held by `GroupsAccumulatorAdapter`. The adapter keeps one scratch
+/// `Vec<u32>` of row indices per group, grown to the largest number of rows
+/// that group has ever taken from a single input batch and retained (cleared,
+/// but not deallocated) for the lifetime of the group.
+///
+/// This query hands the aggregate one batch of 8192 rows per group, so 128
+/// groups retain `128 * 8192 * 4` bytes = 4 MiB of scratch capacity, four
+/// times the 1 MiB limit. Everything else the aggregate holds is two orders of
+/// magnitude smaller: without the scratch capacity the reported size peaks
+/// around 85 KB, twelve times under the limit, and the query runs to
+/// completion without ever asking the pool for what it is really using.
+///
+/// `target_partitions = 1` puts the aggregate in `Single` mode, which spills
+/// under memory pressure instead of emitting groups early, so the accounting
+/// is observable as a spill.
+///
+/// [`GroupsAccumulator`]: datafusion_expr::GroupsAccumulator
+#[tokio::test]
+async fn aggregate_adapter_spills_on_retained_indices() -> Result<()> {
+    const GROUPS: i64 = 128;
+    const BATCH_SIZE: i64 = 8192;
+
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::new(GreedyMemoryPool::new(1024 * 1024)))
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+        )
+        .build_arc()?;
+
+    let config = SessionConfig::new()
+        .with_target_partitions(1)
+        .with_batch_size(BATCH_SIZE as usize);
+    let ctx = SessionContext::new_with_config_rt(config, runtime);
+
+    let sql = format!(
+        "SELECT v / {BATCH_SIZE} AS g, covar_samp(v, v) AS c \
+         FROM generate_series(0, {}) AS t(v) \
+         GROUP BY v / {BATCH_SIZE}",
+        GROUPS * BATCH_SIZE - 1
+    );
+
+    let plan = ctx.sql(&sql).await?.create_physical_plan().await?;
+    let batches = collect_batches(Arc::clone(&plan), ctx.task_ctx()).await?;
+
+    let rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+    assert_eq!(rows, GROUPS as usize);
+
+    let spill_count = plan_spill_count(plan.as_ref());
+    assert!(
+        spill_count > 0,
+        "the aggregate retains 4 MiB of scratch indices against a 1 MiB limit, \
+         so it must spill, but spill_count was {spill_count}"
+    );
+
+    Ok(())
+}
+
 /// Run the query with the specified memory limit,
 /// and verifies the expected errors are returned
 #[derive(Clone, Debug)]
