@@ -196,7 +196,7 @@ fn roundtrip_range_expr() -> Result<()> {
             ScalarValue::Float64(Some(1.0)),
         ])],
     )?;
-    let range_expr: Arc<dyn PhysicalExpr> = Arc::new(RangeExpr::try_new(
+    let range_expr: Arc<dyn PhysicalExpr> = Arc::new(RangeExpr::try_new_with_schema(
         // Expression remapping may produce duplicate children. Preserve both
         // so their sort options stay aligned with the split-point values.
         vec![col("a", &schema)?, col("a", &schema)?],

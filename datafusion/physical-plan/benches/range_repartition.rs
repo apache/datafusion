@@ -351,7 +351,8 @@ fn bench_range_expr_routing_i64(c: &mut Criterion) {
 
         let range_part = RangePartitioning::try_new(ordering, split_points).unwrap();
         let range_expr =
-            RangeExpr::try_new(vec![col_expr], &range_part, &batch.schema()).unwrap();
+            RangeExpr::try_new_with_schema(vec![col_expr], &range_part, &batch.schema())
+                .unwrap();
 
         group.bench_with_input(
             BenchmarkId::new("partitions", num_partitions),

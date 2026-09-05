@@ -761,7 +761,7 @@ impl SharedBuildAccumulator {
                     partition_filters.len(),
                     range_partitioning.partition_count()
                 );
-                Arc::new(RangeExpr::try_new(
+                Arc::new(RangeExpr::try_new_with_schema(
                     self.on_right.clone(),
                     range_partitioning,
                     &self.probe_schema,

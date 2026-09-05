@@ -699,7 +699,7 @@ impl Hash for RangeExpr {
 impl RangeExpr {
     /// Creates a Range expression for `on_columns` using the supplied routing
     /// metadata and schema.
-    pub fn try_new(
+    pub fn try_new_with_schema(
         on_columns: Vec<PhysicalExprRef>,
         range_partitioning: &RangePartitioning,
         schema: &Schema,
@@ -715,6 +715,36 @@ impl RangeExpr {
             &sort_options,
             schema,
         )
+    }
+
+    /// Creates a Range expression for `on_columns` using the supplied routing
+    /// metadata.
+    ///
+    /// # Workaround for backwards compatibility
+    /// This method is preserved for backwards compatibility with DataFusion 55.0 and earlier,
+    /// where `RangeExpr` was constructed without a schema. Key data types are inferred from the
+    /// split points, which will fail to route batches if split points do not carry the exact
+    /// precision, scale, or timezone as the input schema columns.
+    ///
+    /// Prefer [`Self::try_new_with_schema`].
+    #[deprecated(since = "56.0.0", note = "Use RangeExpr::try_new_with_schema instead")]
+    pub fn try_new(
+        on_columns: Vec<PhysicalExprRef>,
+        range_partitioning: &RangePartitioning,
+    ) -> Result<Self> {
+        let sort_options: Vec<SortOptions> = range_partitioning
+            .ordering()
+            .iter()
+            .map(|expr| expr.options)
+            .collect();
+        assert_or_internal_err!(!on_columns.is_empty(), "RangeExpr requires a key");
+        assert_or_internal_err!(
+            on_columns.len() == sort_options.len(),
+            "RangeExpr key count must match sort options"
+        );
+        let router =
+            RangeRouter::try_new(&sort_options, range_partitioning.split_points())?;
+        Ok(Self { on_columns, router })
     }
 
     fn try_new_parts(
@@ -1061,9 +1091,16 @@ impl BatchPartitioner {
     ///
     /// # Panics
     /// Panics if the range partitioning is invalid or cannot construct a range router.
+    ///
+    /// # Workaround for backwards compatibility
+    /// This method is preserved for backwards compatibility with DataFusion 55.0 and earlier,
+    /// but does not accept a schema. Key data types are inferred from the split points, which
+    /// will fail if split points do not carry the exact precision, scale, or timezone as the
+    /// underlying columns.
+    ///
     /// Prefer [`Self::try_new_range_partitioner`] for fallible construction with schema validation.
     #[deprecated(
-        since = "55.0.0",
+        since = "56.0.0",
         note = "Use try_new_range_partitioner with schema instead"
     )]
     pub fn new_range_partitioner(
@@ -2635,7 +2672,7 @@ mod tests {
             .into(),
             split_points.clone(),
         )?;
-        let expr = Arc::new(RangeExpr::try_new(
+        let expr = Arc::new(RangeExpr::try_new_with_schema(
             vec![col("a", &schema)?, col("b", &schema)?],
             &range_partitioning,
             &schema,
@@ -3211,7 +3248,11 @@ mod tests {
             )])],
         )?;
 
-        let expr = RangeExpr::try_new(vec![col("k", &schema)?], &range_part, &schema)?;
+        let expr = RangeExpr::try_new_with_schema(
+            vec![col("k", &schema)?],
+            &range_part,
+            &schema,
+        )?;
 
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
@@ -3259,7 +3300,7 @@ mod tests {
             ])],
         )?;
 
-        let expr = RangeExpr::try_new(
+        let expr = RangeExpr::try_new_with_schema(
             vec![col("t", &schema)?, col("i", &schema)?],
             &range_part,
             &schema,
@@ -3274,6 +3315,42 @@ mod tests {
                 ),
                 Arc::new(Int64Array::from(vec![Some(1i64), Some(2)])),
             ],
+        )?;
+
+        let res = expr.evaluate(&batch)?;
+        let ColumnarValue::Array(array) = res else {
+            panic!("expected array result");
+        };
+        let partition_ids = array
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .unwrap()
+            .values();
+        assert_eq!(partition_ids, &[0, 1]);
+
+        Ok(())
+    }
+
+    #[test]
+    #[expect(deprecated)]
+    fn range_expr_deprecated_try_new_routes_matching_types() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, true)]));
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+            col("k", &schema)?,
+            SortOptions::default(),
+        )])
+        .unwrap();
+        let range_part = RangePartitioning::try_new(
+            ordering,
+            vec![SplitPoint::new(vec![ScalarValue::Int64(Some(100))])],
+        )?;
+
+        // Deprecated 2-argument constructor infers data types from split points
+        let expr = RangeExpr::try_new(vec![col("k", &schema)?], &range_part)?;
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int64Array::from(vec![Some(50), Some(200)]))],
         )?;
 
         let res = expr.evaluate(&batch)?;
