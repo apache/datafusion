@@ -1,0 +1,147 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# tests for `COPY ... TO ... STORED AS AVRO`
+
+statement ok
+create table source_table(col1 integer, col2 varchar) as values (1, 'Foo'), (2, 'Bar');
+
+# Copy from table to a single Avro file
+query I
+COPY source_table TO 'test_files/scratch/copy_avro/table.avro' STORED AS AVRO;
+----
+2
+
+# Validate single Avro file output
+statement ok
+CREATE EXTERNAL TABLE validate_avro_file
+STORED AS AVRO
+LOCATION 'test_files/scratch/copy_avro/table.avro';
+
+query IT
+select * from validate_avro_file;
+----
+1 Foo
+2 Bar
+
+# Copy from table to a directory of (multiple) Avro files
+query I
+COPY (select * from source_table UNION ALL select * from source_table) to 'test_files/scratch/copy_avro/table_dir' STORED AS AVRO;
+----
+4
+
+# Validate multiple Avro file output
+statement ok
+CREATE EXTERNAL TABLE validate_avro_dir STORED AS AVRO LOCATION 'test_files/scratch/copy_avro/table_dir';
+
+query IT
+select * from validate_avro_dir order by col1, col2;
+----
+1 Foo
+1 Foo
+2 Bar
+2 Bar
+
+# Copy 0 rows to a single Avro file output
+query I
+COPY (SELECT 1 AS id WHERE FALSE) TO 'test_files/scratch/copy_avro/table_no_rows.avro' STORED AS AVRO;
+----
+0
+
+statement ok
+CREATE EXTERNAL TABLE validate_avro_no_rows STORED AS AVRO LOCATION 'test_files/scratch/copy_avro/table_no_rows.avro';
+
+# validate the Avro file contains 0 rows.
+query I
+SELECT count(id) FROM validate_avro_no_rows;
+----
+0
+
+# Copy to directory as partitioned files
+query I
+COPY (values (1, 'a', 'x'), (2, 'b', 'y'), (3, 'c', 'z')) TO 'test_files/scratch/copy_avro/partitioned_table/' STORED AS AVRO PARTITIONED BY (column2, column3);
+----
+3
+
+# validate multiple partitioned Avro file output
+statement ok
+CREATE EXTERNAL TABLE validate_partitioned_avro STORED AS AVRO
+LOCATION 'test_files/scratch/copy_avro/partitioned_table/' PARTITIONED BY (column2, column3);
+
+query ITT
+select * from validate_partitioned_avro order by column1, column2, column3;
+----
+1 a x
+2 b y
+3 c z
+
+statement ok
+CREATE EXTERNAL TABLE validate_partitioned_avro_a_x STORED AS AVRO
+LOCATION 'test_files/scratch/copy_avro/partitioned_table/column2=a/column3=x';
+
+query I
+select * from validate_partitioned_avro_a_x order by column1;
+----
+1
+
+# Copy a variety of data types, including nested/complex types (list, struct,
+# map), to a single Avro file and validate the round trip. The schema is
+# inferred from the self-describing Avro file rather than declared explicitly.
+query I
+COPY (values
+    (arrow_cast(1, 'Int32'), arrow_cast(2, 'Int64'), arrow_cast(3.1, 'Float64'), 19968::date, true, 'x',
+        make_array(1, 2, 3), named_struct('a', 1, 'b', 'foo'), MAP(['k1', 'k2'], [10, 20])),
+    (arrow_cast(11, 'Int32'), arrow_cast(22, 'Int64'), arrow_cast(3.2, 'Float64'), 19969::date, false, 'y',
+        make_array(4, 5), named_struct('a', 2, 'b', 'bar'), MAP(['k3'], [30]))
+) TO 'test_files/scratch/copy_avro/table_types.avro' STORED AS AVRO;
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE validate_avro_types STORED AS AVRO LOCATION 'test_files/scratch/copy_avro/table_types.avro';
+
+query IIRDBT???
+select * from validate_avro_types order by column1;
+----
+1 2 3.1 2024-09-02 true x [1, 2, 3] {a: 1, b: foo} {k1: 10, k2: 20}
+11 22 3.2 2024-09-03 false y [4, 5] {a: 2, b: bar} {k3: 30}
+
+# EXPLAIN output for COPY ... STORED AS AVRO
+query TT
+EXPLAIN COPY source_table TO 'test_files/scratch/copy_avro/table_explain.avro' STORED AS AVRO;
+----
+logical_plan
+01)CopyTo: format=avro output_url=test_files/scratch/copy_avro/table_explain.avro options: ()
+02)--TableScan: source_table projection=[col1, col2]
+physical_plan
+01)DataSinkExec: sink=AvroFileSink(file_groups=[])
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# EXPLAIN ANALYZE COPY ... STORED AS AVRO. Note the AvroFileSink does not
+# currently report rows_written/bytes_written/elapsed_compute metrics.
+query TT
+EXPLAIN ANALYZE COPY (SELECT col1, upper(col2) AS col2_upper FROM source_table ORDER BY col1) TO 'test_files/scratch/copy_avro/table_metrics.avro' STORED AS AVRO;
+----
+Plan with Metrics
+01)DataSinkExec: sink=AvroFileSink(file_groups=[]), metrics=[]
+02)--SortExec: expr=[col1@0 ASC NULLS LAST], preserve_partitioning=[false], metrics=[output_rows=2, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=<slt:ignore>, spill_count=0, spilled_bytes=0.0 B, spilled_rows=0]
+03)----ProjectionExec: expr=[col1@0 as col1, upper(col2@1) as col2_upper], metrics=[output_rows=2, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=1, expr_0_eval_time=<slt:ignore>, expr_1_eval_time=<slt:ignore>]
+04)------DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
+
+# Error case: Format not explicitly set and unable to infer extension from output path
+query error DataFusion error: Invalid or Unsupported Configuration: Format not explicitly set and unable to get file extension! Use STORED AS to define file format.
+EXPLAIN COPY source_table to 'test_files/scratch/copy_avro/no_format_specified';

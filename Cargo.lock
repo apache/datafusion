@@ -1994,13 +1994,18 @@ dependencies = [
  "async-trait",
  "bytes",
  "datafusion-common",
+ "datafusion-common-runtime",
  "datafusion-datasource",
+ "datafusion-execution",
+ "datafusion-expr",
  "datafusion-physical-expr-adapter",
+ "datafusion-physical-expr-common",
  "datafusion-physical-plan",
  "datafusion-proto-models",
  "datafusion-session",
  "futures",
  "object_store",
+ "tokio",
 ]
 
 [[package]]
