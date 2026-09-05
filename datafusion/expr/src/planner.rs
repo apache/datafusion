@@ -373,13 +373,20 @@ pub enum PlannerResult<T> {
 pub struct PlannedRelation {
     /// The logical plan for the relation
     pub plan: LogicalPlan,
-    /// Optional table alias for the relation
+    /// Optional alias for the completed relation.
+    ///
+    /// DataFusion applies this alias after the extension planner returns. If the
+    /// planner also passes this alias to [`RelationPlannerContext::plan`], it will
+    /// be applied twice.
     pub alias: Option<TableAlias>,
 }
 
 #[cfg(feature = "sql")]
 impl PlannedRelation {
-    /// Create a new `PlannedRelation` with the given plan and alias
+    /// Create a new `PlannedRelation` with the given plan and optional alias.
+    ///
+    /// DataFusion applies `alias` after the relation planner returns. The same
+    /// alias must therefore not already have been applied to `plan`.
     pub fn new(plan: LogicalPlan, alias: Option<TableAlias>) -> Self {
         Self { plan, alias }
     }
@@ -428,6 +435,11 @@ pub trait RelationPlannerContext {
 
     /// Plans the specified relation through the full planner pipeline, starting
     /// from the first registered relation planner.
+    ///
+    /// This method applies any alias present on `relation`. A planner that returns
+    /// an alias in [`PlannedRelation`] must therefore not also include the same
+    /// alias in a relation passed to this method, or DataFusion will apply it
+    /// twice.
     fn plan(&mut self, relation: TableFactor) -> Result<LogicalPlan>;
 
     /// Converts a SQL expression into a logical expression using the current

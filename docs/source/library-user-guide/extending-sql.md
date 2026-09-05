@@ -285,6 +285,12 @@ There are two main approaches when implementing a [`RelationPlanner`]:
    represent the operation in the logical plan, along with a custom [`ExecutionPlan`]
    to execute it. Both are required for end-to-end execution.
 
+DataFusion applies the alias returned in a [`PlannedRelation`] to the completed
+plan. Because `ctx.plan(...)` also applies the alias on the relation it receives,
+do not both pass and return the same outer alias. For example, when rebuilding a
+table factor without a modifier such as `TABLESAMPLE`, set the rebuilt factor's
+alias to `None` and return the original alias with the completed plan.
+
 #### Example: Basic RelationPlanner Structure
 
 ```rust
@@ -314,11 +320,13 @@ impl RelationPlanner for MyRelationPlanner {
                 // Transform or wrap the plan as needed
                 // ...
 
-                Ok(RelationPlanning::Planned(PlannedRelation::new(input, alias)))
+                Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
+                    input, alias,
+                ))))
             }
 
             // Return Original for relations you don't handle
-            other => Ok(RelationPlanning::Original(other)),
+            other => Ok(RelationPlanning::Original(Box::new(other))),
         }
     }
 }
@@ -380,6 +388,7 @@ SELECT * FROM sales
 [`sessioncontext`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html
 [`sessionstatebuilder`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionStateBuilder.html
 [`relationplannercontext`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/planner/trait.RelationPlannerContext.html
+[`plannedrelation`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/planner/struct.PlannedRelation.html
 [exprplanner api documentation]: https://docs.rs/datafusion/latest/datafusion/logical_expr/planner/trait.ExprPlanner.html
 [typeplanner api documentation]: https://docs.rs/datafusion/latest/datafusion/logical_expr/planner/trait.TypePlanner.html
 [relationplanner api documentation]: https://docs.rs/datafusion/latest/datafusion/logical_expr/planner/trait.RelationPlanner.html
