@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! End-to-end coverage for compact, large string IN-list pruning. The positive
-//! IN-list cases disable the row and Bloom filters to isolate min/max pruning.
+//! End-to-end coverage for compact, large string IN-list pruning. The `IN` and
+//! `NOT IN` cases disable the row and Bloom filters to isolate min/max pruning.
 
 use std::sync::Arc;
 
@@ -47,10 +47,37 @@ const UNITS: usize = 4;
 const TOTAL_ROWS: usize = ROWS_PER_UNIT * UNITS;
 const MATCHING_ROWS: usize = ROWS_PER_UNIT * 2;
 
-/// Write either four row groups or four pages in one row group. The second
-/// unit lies in a gap between two members of every test IN list; an enclosing
-/// min/max range for the list cannot prune it.
+/// Write either four row groups or four pages in one row group. Each unit holds
+/// a single repeated value, so `NOT IN` can exclude the two units whose value is
+/// a list member. The second unit lies in a gap between two members of every
+/// test IN list; an enclosing min/max range for the list cannot prune it.
 fn make_file(page_pruning: bool) -> NamedTempFile {
+    let values = ["v000000", "v000001", "v000010", "v999999"]
+        .into_iter()
+        .flat_map(|value| std::iter::repeat_n(value, ROWS_PER_UNIT))
+        .collect::<Vec<_>>();
+    write_file(page_pruning, values)
+}
+
+/// Write one mixed unit and one single-valued unit. The mixed unit contains
+/// both a list member and a value that satisfies `NOT IN`.
+fn make_mixed_not_in_file(page_pruning: bool) -> NamedTempFile {
+    let values = std::iter::repeat_n("v000000", ROWS_PER_UNIT / 2)
+        .chain(std::iter::repeat_n("v000001", ROWS_PER_UNIT / 2))
+        .chain(std::iter::repeat_n("v000010", ROWS_PER_UNIT))
+        .collect::<Vec<_>>();
+    write_file(page_pruning, values)
+}
+
+fn write_file(page_pruning: bool, values: Vec<&str>) -> NamedTempFile {
+    write_file_with_truncation(page_pruning, values, None)
+}
+
+fn write_file_with_truncation(
+    page_pruning: bool,
+    values: Vec<&str>,
+    truncation_length: Option<usize>,
+) -> NamedTempFile {
     let mut file = tempfile::Builder::new()
         .prefix("string_in_list_pruning")
         .suffix(".parquet")
@@ -61,32 +88,35 @@ fn make_file(page_pruning: bool) -> NamedTempFile {
         DataType::Utf8,
         false,
     )]));
-    let values = ["v000000", "v000001", "v000010", "v999999"]
-        .into_iter()
-        .flat_map(|value| std::iter::repeat_n(value, ROWS_PER_UNIT))
-        .collect::<Vec<_>>();
+    let total_rows = values.len();
+    assert_eq!(total_rows % ROWS_PER_UNIT, 0);
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
         vec![Arc::new(StringArray::from(values))],
     )
     .unwrap();
     let rows_per_group = if page_pruning {
-        TOTAL_ROWS
+        total_rows
     } else {
         ROWS_PER_UNIT
     };
-    let properties = WriterProperties::builder()
+    let mut properties = WriterProperties::builder()
         .set_max_row_group_row_count(Some(rows_per_group))
         .set_data_page_row_count_limit(ROWS_PER_UNIT)
         .set_write_batch_size(ROWS_PER_UNIT)
         .set_dictionary_enabled(false)
         .set_bloom_filter_enabled(false)
-        .set_statistics_enabled(EnabledStatistics::Page)
-        .build();
+        .set_statistics_enabled(EnabledStatistics::Page);
+    if let Some(truncation_length) = truncation_length {
+        properties = properties
+            .set_statistics_truncate_length(Some(truncation_length))
+            .set_column_index_truncate_length(Some(truncation_length));
+    }
+    let properties = properties.build();
     let mut writer = ArrowWriter::try_new(&mut file, schema, Some(properties)).unwrap();
     writer.write(&batch).unwrap();
     let metadata = writer.close().unwrap();
-    assert_eq!(metadata.num_row_groups(), TOTAL_ROWS / rows_per_group);
+    assert_eq!(metadata.num_row_groups(), total_rows / rows_per_group);
     let offsets = metadata.offset_index().unwrap();
     for row_group in offsets {
         assert_eq!(
@@ -151,6 +181,27 @@ impl ScanOutput {
             ],
             &self.batches
         );
+        self.assert_no_filter_interference();
+    }
+
+    /// The complement of [`Self::assert_results`]: the two units whose value is
+    /// not a list member.
+    fn assert_negated_results(&self) {
+        assert_batches_eq!(
+            [
+                "+---------+----+",
+                "| value   | n  |",
+                "+---------+----+",
+                "| v000001 | 16 |",
+                "| v999999 | 16 |",
+                "+---------+----+",
+            ],
+            &self.batches
+        );
+        self.assert_no_filter_interference();
+    }
+
+    fn assert_no_filter_interference(&self) {
         assert_eq!(self.counter("predicate_evaluation_errors"), 0);
         assert_eq!(self.counter("pushdown_rows_pruned"), 0);
         assert_eq!(self.pruned("row_groups_pruned_bloom_filter"), 0);
@@ -162,6 +213,7 @@ async fn scan(
     list_size: usize,
     max_in_list_size: Option<usize>,
     page_pruning: bool,
+    negated: bool,
 ) -> ScanOutput {
     let mut config = SessionConfig::new()
         .with_target_partitions(1)
@@ -183,9 +235,10 @@ async fn scan(
         .map(|index| format!("'v{:06}'", index * 10))
         .collect::<Vec<_>>()
         .join(", ");
+    let op = if negated { "NOT IN" } else { "IN" };
     let sql = format!(
         "SELECT value, count(*) AS n FROM t \
-         WHERE value IN ({values}) GROUP BY value ORDER BY value"
+         WHERE value {op} ({values}) GROUP BY value ORDER BY value"
     );
     let plan = ctx
         .sql(&sql)
@@ -209,14 +262,14 @@ async fn check_string_in_list_pruning(page_pruning: bool) {
     for list_size in [20, 21, 256, 1024] {
         // A zero cap provides a result-equivalence control that cannot use
         // min/max IN-list pruning at either granularity.
-        let unpruned = scan(&file, list_size, Some(0), page_pruning).await;
+        let unpruned = scan(&file, list_size, Some(0), page_pruning, false).await;
         unpruned.assert_results();
         assert!(!unpruned.plan.contains("IN_SET_INTERSECTS"));
         assert_eq!(unpruned.pruned("row_groups_pruned_statistics"), 0);
         assert_eq!(unpruned.pruned("page_index_rows_pruned"), 0);
         assert_eq!(unpruned.counter("output_rows"), TOTAL_ROWS);
 
-        let output = scan(&file, list_size, Some(list_size), page_pruning).await;
+        let output = scan(&file, list_size, Some(list_size), page_pruning, false).await;
         output.assert_results();
         assert_eq!(
             pretty_format_batches(&output.batches).unwrap().to_string(),
@@ -247,12 +300,117 @@ async fn check_string_in_list_pruning(page_pruning: bool) {
 
     // The default remains 20: enabling the compact representation must not
     // silently change the public cap's meaning.
-    let default = scan(&file, 21, None, page_pruning).await;
+    let default = scan(&file, 21, None, page_pruning, false).await;
     default.assert_results();
     assert!(!default.plan.contains("IN_SET_INTERSECTS"));
     assert_eq!(default.pruned("row_groups_pruned_statistics"), 0);
     assert_eq!(default.pruned("page_index_rows_pruned"), 0);
     assert_eq!(default.counter("output_rows"), TOTAL_ROWS);
+}
+
+/// The compact `NOT IN` form must prune exactly the units whose single repeated
+/// value is a list member, and nothing else. Overlapping a list member is not
+/// enough: units 1 and 3 each sit inside the list's enclosing range.
+async fn check_string_not_in_list_pruning(page_pruning: bool) {
+    let file = make_file(page_pruning);
+    for list_size in [20, 21, 256, 1024] {
+        let unpruned = scan(&file, list_size, Some(0), page_pruning, true).await;
+        unpruned.assert_negated_results();
+        assert!(!unpruned.plan.contains("NOT_IN_SET_MAY_MATCH"));
+        assert_eq!(unpruned.pruned("row_groups_pruned_statistics"), 0);
+        assert_eq!(unpruned.pruned("page_index_rows_pruned"), 0);
+        assert_eq!(unpruned.counter("output_rows"), TOTAL_ROWS);
+
+        let output = scan(&file, list_size, Some(list_size), page_pruning, true).await;
+        output.assert_negated_results();
+        assert_eq!(
+            pretty_format_batches(&output.batches).unwrap().to_string(),
+            pretty_format_batches(&unpruned.batches)
+                .unwrap()
+                .to_string()
+        );
+        assert_eq!(
+            output.plan.contains("NOT_IN_SET_MAY_MATCH"),
+            list_size > 20,
+            "list_size={list_size}, plan={}",
+            output.plan
+        );
+        // The compact form and the per-value AND chain it replaces prune the
+        // same units, so the counts do not depend on which one ran.
+        assert_eq!(
+            output.pruned("row_groups_pruned_statistics"),
+            if page_pruning { 0 } else { 2 },
+            "list_size={list_size}, metrics={}",
+            output.metrics
+        );
+        assert_eq!(
+            output.pruned("page_index_rows_pruned"),
+            if page_pruning { MATCHING_ROWS } else { 0 },
+            "list_size={list_size}, metrics={}",
+            output.metrics
+        );
+        assert_eq!(output.counter("output_rows"), MATCHING_ROWS);
+    }
+
+    let default = scan(&file, 21, None, page_pruning, true).await;
+    default.assert_negated_results();
+    assert!(!default.plan.contains("NOT_IN_SET_MAY_MATCH"));
+    assert_eq!(default.pruned("row_groups_pruned_statistics"), 0);
+    assert_eq!(default.pruned("page_index_rows_pruned"), 0);
+    assert_eq!(default.counter("output_rows"), TOTAL_ROWS);
+
+    // A mixed interval that overlaps a list member can still contain matching
+    // rows. Only the adjacent single-valued unit can be excluded.
+    let mixed_file = make_mixed_not_in_file(page_pruning);
+    let unpruned = scan(&mixed_file, 21, Some(0), page_pruning, true).await;
+    assert_batches_eq!(
+        [
+            "+---------+---+",
+            "| value   | n |",
+            "+---------+---+",
+            "| v000001 | 8 |",
+            "+---------+---+",
+        ],
+        &unpruned.batches
+    );
+    unpruned.assert_no_filter_interference();
+    assert_eq!(unpruned.pruned("row_groups_pruned_statistics"), 0);
+    assert_eq!(unpruned.pruned("page_index_rows_pruned"), 0);
+    assert_eq!(unpruned.counter("output_rows"), ROWS_PER_UNIT * 2);
+
+    let output = scan(&mixed_file, 21, Some(21), page_pruning, true).await;
+    assert_eq!(
+        pretty_format_batches(&output.batches).unwrap().to_string(),
+        pretty_format_batches(&unpruned.batches)
+            .unwrap()
+            .to_string()
+    );
+    output.assert_no_filter_interference();
+    assert!(output.plan.contains("NOT_IN_SET_MAY_MATCH"));
+    assert_eq!(
+        output.pruned("row_groups_pruned_statistics"),
+        usize::from(!page_pruning)
+    );
+    assert_eq!(
+        output.pruned("page_index_rows_pruned"),
+        if page_pruning { ROWS_PER_UNIT } else { 0 }
+    );
+    assert_eq!(output.counter("output_rows"), ROWS_PER_UNIT);
+}
+
+async fn check_string_not_in_list_with_truncated_bounds(page_pruning: bool) {
+    // Exact bounds for this singleton are equal and can exclude the unit. With
+    // four-byte truncation, Parquet lowers the min and raises the max instead.
+    let values = std::iter::repeat_n("v000000", ROWS_PER_UNIT).collect();
+    let file = write_file_with_truncation(page_pruning, values, Some(4));
+    let output = scan(&file, 21, Some(21), page_pruning, true).await;
+
+    assert!(output.batches.iter().all(|batch| batch.num_rows() == 0));
+    output.assert_no_filter_interference();
+    assert!(output.plan.contains("NOT_IN_SET_MAY_MATCH"));
+    assert_eq!(output.pruned("row_groups_pruned_statistics"), 0);
+    assert_eq!(output.pruned("page_index_rows_pruned"), 0);
+    assert_eq!(output.counter("output_rows"), ROWS_PER_UNIT);
 }
 
 #[tokio::test]
@@ -263,6 +421,22 @@ async fn string_in_list_row_group_pruning() {
 #[tokio::test]
 async fn string_in_list_page_pruning() {
     check_string_in_list_pruning(true).await;
+}
+
+#[tokio::test]
+async fn string_not_in_list_row_group_pruning() {
+    check_string_not_in_list_pruning(false).await;
+}
+
+#[tokio::test]
+async fn string_not_in_list_page_pruning() {
+    check_string_not_in_list_pruning(true).await;
+}
+
+#[tokio::test]
+async fn string_not_in_list_with_truncated_bounds() {
+    check_string_not_in_list_with_truncated_bounds(false).await;
+    check_string_not_in_list_with_truncated_bounds(true).await;
 }
 
 #[tokio::test]

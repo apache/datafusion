@@ -2145,6 +2145,83 @@ true
 true
 
 #####################
+# Section: leaf expression extraction does not duplicate volatile expressions
+#
+# Regression test for #24678. `extract_leaf_expressions` / `push_down_leaf_projections`
+# build an extraction projection by *merging* into the input projection, which
+# inlines the definition of every column the extracted expression references.
+# When that definition is volatile the inlined copy is an independent
+# evaluation, so `random()` is drawn twice and the extracted value no longer
+# matches the struct it was derived from.
+#
+# Before the fix the plan below read
+#   Projection: named_struct(Utf8("a"), random()) AS s, random() AS field
+# and `field` differed from `s['a']` on every row. This is the same invariant
+# `FileScanConfig::try_swapping_with_projection` already enforces for the
+# physical pushdown path (#23220).
+#####################
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+# `random()` must appear once; `field` reads the struct materialized below it.
+query TT
+EXPLAIN SELECT s, s['a'] AS field
+FROM (SELECT named_struct('a', random()) AS s FROM generate_series(1, 3));
+----
+logical_plan
+01)Projection: s, get_field(s, Utf8("a")) AS field
+02)--Projection: named_struct(Utf8("a"), random()) AS s
+03)----TableScan: generate_series() projection=[]
+
+# Same for an extraction out of a Filter: the predicate must test the struct
+# that is returned, not a second draw.
+query TT
+EXPLAIN SELECT s
+FROM (SELECT named_struct('a', random()) AS s FROM generate_series(1, 3))
+WHERE s['a'] > 0.5;
+----
+logical_plan
+01)Filter: get_field(s, Utf8("a")) > Float64(0.5)
+02)--Projection: named_struct(Utf8("a"), random()) AS s
+03)----TableScan: generate_series() projection=[]
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+# Every row's `field` is the `a` field of that row's own struct.
+query B
+SELECT bool_and(field = s['a'])
+FROM (
+  SELECT s, s['a'] AS field
+  FROM (SELECT named_struct('a', random()) AS s FROM generate_series(1, 1000))
+);
+----
+true
+
+# Same invariant when the extraction is routed into one side of a join.
+query B
+SELECT bool_and(field = s['a'])
+FROM (
+  SELECT l.s, l.s['a'] AS field
+  FROM (SELECT named_struct('a', random()) AS s FROM generate_series(1, 1000)) AS l
+  INNER JOIN (SELECT 1 AS k) AS r ON true
+);
+----
+true
+
+# Every surviving row satisfies the predicate it was filtered on.
+query B
+SELECT bool_and(s['a'] > 0.5)
+FROM (
+  SELECT s
+  FROM (SELECT named_struct('a', random()) AS s FROM generate_series(1, 1000))
+  WHERE s['a'] > 0.5
+);
+----
+true
+
+#####################
 # Section: expensive expressions are not re-inlined by projection pushdown
 #
 # A repeated expensive expression (e.g. `power(a, 2)`) is extracted by CSE into

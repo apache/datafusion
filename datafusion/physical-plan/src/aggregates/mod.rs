@@ -715,7 +715,7 @@ impl From<StreamType> for SendableRecordBatchStream {
             StreamType::AggregateStream(stream) => Box::pin(stream),
             StreamType::PartialHash(stream) => Box::pin(stream),
             StreamType::PartialReduceHash(stream) => Box::pin(stream),
-            StreamType::FinalHash(stream) => Box::pin(stream),
+            StreamType::FinalHash(stream) => stream.into_stream(),
             StreamType::SingleHash(stream) => Box::pin(stream),
             StreamType::OrderedPartialAggregate(stream) => stream.into_stream(),
             StreamType::OrderedFinalAggregate(stream) => Box::pin(stream),
@@ -1278,11 +1278,20 @@ impl AggregateExec {
         )?))
     }
 
+    // # Grouping sets
+    //
+    // `GROUPING SETS`, `CUBE` and `ROLLUP` are expanded by the raw-input stages
+    // (partial and single aggregation), which evaluate every grouping set of
+    // each input batch into the same hash table. They are always planned with
+    // `InputOrderMode::Linear` (see `try_new_with_schema`), so they only reach
+    // the unordered hash streams. State-input stages (final and partial-reduce
+    // aggregation) must receive the expanded keys as a plain group by (see
+    // `PhysicalGroupBy::as_final`), which their predicates check explicitly.
+
     fn should_use_partial_hash_stream(&self, _context: &TaskContext) -> bool {
         self.mode == AggregateMode::Partial
             && self.input_order_mode == InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
-            && self.group_by.is_single()
             && self.limit_options_supported_by_hash_stream()
     }
 
@@ -1293,7 +1302,6 @@ impl AggregateExec {
         self.mode == AggregateMode::Partial
             && self.input_order_mode != InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
-            && self.group_by.is_single()
             && self.limit_options_supported_by_hash_stream()
     }
 
@@ -1322,7 +1330,6 @@ impl AggregateExec {
         ) && self.limit_options.is_none()
             && self.input_order_mode == InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
-            && self.group_by.is_single()
     }
 
     fn should_use_ordered_single_aggregate_stream(&self, _context: &TaskContext) -> bool {
@@ -1332,7 +1339,6 @@ impl AggregateExec {
         ) && self.limit_options.is_none()
             && self.input_order_mode != InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
-            && self.group_by.is_single()
     }
 
     fn should_use_ordered_final_aggregate_stream(&self, _context: &TaskContext) -> bool {
@@ -3519,12 +3525,14 @@ mod tests {
             | 2 | 1.0 | 0             | 1               |
             | 3 |     | 1             | 1               |
             | 3 |     | 1             | 2               |
-            | 3 | 2.0 | 0             | 2               |
+            | 3 | 2.0 | 0             | 1               |
+            | 3 | 2.0 | 0             | 1               |
             | 3 | 3.0 | 0             | 1               |
             | 4 |     | 1             | 1               |
             | 4 |     | 1             | 2               |
             | 4 | 3.0 | 0             | 1               |
-            | 4 | 4.0 | 0             | 2               |
+            | 4 | 4.0 | 0             | 1               |
+            | 4 | 4.0 | 0             | 1               |
             +---+-----+---------------+-----------------+
             "
             );

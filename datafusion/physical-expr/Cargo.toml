@@ -106,3 +106,7 @@ name = "string_concat"
 
 [package.metadata.cargo-machete]
 ignored = ["half"]
+
+[[bench]]
+harness = false
+name = "equivalence_properties"
