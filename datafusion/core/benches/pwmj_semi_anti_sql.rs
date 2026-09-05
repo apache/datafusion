@@ -43,7 +43,8 @@
 //!
 //! ## Axes
 //! - **join type**: `EXISTS` (LeftSemi) and `NOT EXISTS` (LeftAnti), plus `RIGHT SEMI` and
-//!   `RIGHT ANTI` written out as joins.
+//!   `RIGHT ANTI` written out as joins, and `EXISTS` inside an always-false disjunction
+//!   (LeftMark).
 //! - **match regime**: the fraction of rows on the marked side that have at least one match
 //!   on the other, set by shifting the right-side key range relative to the left one:
 //!   `all_match` (100%), `no_match` (0%) and `half_match` (~50%, where the buffered side
@@ -65,6 +66,26 @@
 //! The **same three key offsets** serve both halves, each read against the other side's
 //! extreme: a left row survives `EXISTS` iff `lhs.key < max(rhs.key)`, a right row survives
 //! `RIGHT SEMI` iff `min(lhs.key) < rhs.key`.
+//!
+//! ## Mark joins
+//! `LeftMark` reuses the exact same watermark-marking path as `LeftSemi` -- the only
+//! difference is the final pass, which appends a `mark` column instead of slicing the batch
+//! -- so it is folded into the same SQL sweep above via an `EXISTS` wrapped in an
+//! always-false `OR`, the one shape that decorrelates to it (see `Kind::LeftMark`'s doc). It
+//! needs no build-dependent handling beyond what `Kind::LeftMark` already gets from
+//! `PWMJ_OR_NLJ`: on a build that does not yet route `LeftMark` to PWMJ, the planner itself
+//! falls back to `NestedLoopJoinExec`, same as every other case here before its dependency
+//! landed.
+//!
+//! `RightMark` has no SQL surface at all: no keyword parses to it, and no optimizer rule
+//! constructs it (`decorrelate_predicate_subquery.rs` only ever builds `LeftMark`), so
+//! `ctx.sql(...)` can never plan one. `bench_pwmj_right_mark_hand_built`, in a separate
+//! benchmark group below, builds `PiecewiseMergeJoinExec` and `NestedLoopJoinExec` directly
+//! instead -- the one place in this file that deviates from planning through SQL, forced by
+//! there being no SQL to plan. That also means it has no planner fallback to lean on if the
+//! build does not support `RightMark` yet, so it probes `try_new` up front and skips the
+//! whole group with a note instead of panicking, the hand-built equivalent of what the
+//! planner does automatically for every SQL-planned case in this file.
 
 use std::sync::Arc;
 
@@ -75,8 +96,15 @@ use criterion::{
     BatchSize, BenchmarkGroup, BenchmarkId, Criterion, criterion_group, criterion_main,
 };
 use datafusion::datasource::MemTable;
+use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::logical_expr::{JoinType, Operator};
+use datafusion::physical_expr::expressions::{BinaryExpr, Column};
+use datafusion::physical_plan::empty::EmptyExec;
+use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
+use datafusion::physical_plan::joins::{NestedLoopJoinExec, PiecewiseMergeJoinExec};
 use datafusion::physical_plan::{ExecutionPlan, collect, displayable};
 use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_common::JoinSide;
 use tokio::runtime::Runtime;
 
 const LEFT_ROWS: usize = 20_000;
@@ -171,14 +199,19 @@ enum Kind {
     RightSemi,
     /// `RIGHT ANTI`, written out.
     RightAnti,
+    /// `EXISTS` inside an always-false disjunction, decorrelated to `LeftMark`: the outer
+    /// filter then needs the subquery's match result as a value rather than as a row filter
+    /// (see `decorrelate_predicate_subquery.rs`). No SQL syntax reaches `LeftMark` directly.
+    LeftMark,
 }
 
 impl Kind {
     /// Whether this join keeps the marked rows that matched, rather than the ones that did not.
     ///
-    /// The two are complements, which is why one expected row count covers both.
+    /// The two are complements, which is why one expected row count covers both. `LeftMark`'s
+    /// disjunct is always false, so its final row set is the same as `LeftSemi`'s.
     fn keeps_matched(self) -> bool {
-        matches!(self, Kind::LeftSemi | Kind::RightSemi)
+        matches!(self, Kind::LeftSemi | Kind::RightSemi | Kind::LeftMark)
     }
 
     /// The query, over the range relation `lhs.key < rhs.key`, projecting whichever side this
@@ -201,6 +234,13 @@ impl Kind {
                 "SELECT rhs.key, rhs.payload FROM lhs \
                  RIGHT ANTI JOIN rhs ON lhs.key < rhs.key"
             }
+            // `lhs.payload` is always >= 0 (see `build_batches`), so `< 0` is always false and
+            // the `OR` degenerates to the `EXISTS` alone -- but only after decorrelating to a
+            // `LeftMark` join whose `mark` the outer `Filter` reads.
+            Kind::LeftMark => {
+                "SELECT lhs.key, lhs.payload FROM lhs \
+                 WHERE lhs.payload < 0 OR EXISTS (SELECT 1 FROM rhs WHERE lhs.key < rhs.key)"
+            }
         }
     }
 
@@ -212,14 +252,19 @@ impl Kind {
             Kind::LeftAnti => "anti",
             Kind::RightSemi => "right_semi",
             Kind::RightAnti => "right_anti",
+            Kind::LeftMark => "left_mark",
         }
     }
 
-    /// Plan fragment every arm must contain. Only the Semi/Anti half of the join type is pinned,
-    /// not the side: the planner is free to swap the nested-loop inputs, so the arms can disagree
-    /// on the side while computing the same thing.
+    /// Plan fragment every arm must contain. Only the Semi/Anti/Mark half of the join type is
+    /// pinned, not the side: the planner is free to swap the nested-loop inputs, so the arms
+    /// can disagree on the side while computing the same thing.
     fn plan_fragment(self) -> &'static str {
-        if self.keeps_matched() { "Semi" } else { "Anti" }
+        match self {
+            Kind::LeftSemi | Kind::RightSemi => "Semi",
+            Kind::LeftAnti | Kind::RightAnti => "Anti",
+            Kind::LeftMark => "Mark",
+        }
     }
 
     /// Rows on the marked side: this join emits either those that matched or the rest. Both
@@ -227,18 +272,19 @@ impl Kind {
     /// whole difference between the two halves.
     fn marked_rows(self) -> usize {
         match self {
-            Kind::LeftSemi | Kind::LeftAnti => LEFT_ROWS,
+            Kind::LeftSemi | Kind::LeftAnti | Kind::LeftMark => LEFT_ROWS,
             Kind::RightSemi | Kind::RightAnti => RIGHT_ROWS,
         }
     }
 }
 
 /// Every join type covered, in the order cases run.
-const KINDS: [Kind; 4] = [
+const KINDS: [Kind; 5] = [
     Kind::LeftSemi,
     Kind::LeftAnti,
     Kind::RightSemi,
     Kind::RightAnti,
+    Kind::LeftMark,
 ];
 
 /// How much of the marked side has a match, set by where the `rhs` key range sits relative to
@@ -472,5 +518,180 @@ fn bench_pwmj_semi_anti_sql(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_pwmj_semi_anti_sql);
+/// A `JoinFilter` for `lhs.key < rhs.key`, the same range relation every case in this file
+/// uses, for the `NestedLoopJoinExec` arm below -- which needs one built by hand since it is
+/// constructed directly rather than planned from SQL.
+fn key_lt_key_filter(s: &SchemaRef) -> JoinFilter {
+    let expr = Arc::new(BinaryExpr::new(
+        Arc::new(Column::new("key", 0)),
+        Operator::Lt,
+        Arc::new(Column::new("key", 1)),
+    )) as _;
+    let column_indices = vec![
+        ColumnIndex {
+            index: 0,
+            side: JoinSide::Left,
+        },
+        ColumnIndex {
+            index: 0,
+            side: JoinSide::Right,
+        },
+    ];
+    let key_field = s.field_with_name("key").unwrap().clone();
+    let intermediate_schema = Schema::new(vec![key_field.clone(), key_field]);
+    JoinFilter::new(expr, column_indices, Arc::new(intermediate_schema))
+}
+
+/// `RightMark` has no SQL surface (see the module doc's "Mark joins" section), so both arms
+/// are hand-built here instead of planned from SQL text: `PiecewiseMergeJoinExec` and
+/// `NestedLoopJoinExec`, over the same data, the same `lhs.key < rhs.key` relation, and the
+/// same join type -- with no risk of comparing an operator against itself, since which
+/// operator each arm uses is fixed by construction rather than read back off a plan.
+///
+/// Neither arm needs a `SortExec`: `RightMark`, like `RightSemi`/`RightAnti`, folds the
+/// buffered side to one key regardless of its order, and `NestedLoopJoinExec` never needs
+/// either side ordered.
+fn bench_pwmj_right_mark_hand_built(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let s = schema();
+    let ctx = SessionContext::new();
+
+    // Every other case in this file falls back to `NestedLoopJoinExec` through the planner
+    // itself when a build does not yet support the join type -- there is no such fallback
+    // here, since `RightMark` has no SQL surface to plan through in the first place. Probe
+    // `try_new` directly and skip the whole group rather than panic, so this benchmark stays
+    // runnable (as a no-op) against a build that has not merged `RightMark` support yet, and
+    // starts measuring on its own once that support lands.
+    if let Err(err) = PiecewiseMergeJoinExec::try_new(
+        Arc::new(EmptyExec::new(Arc::clone(&s))),
+        Arc::new(EmptyExec::new(Arc::clone(&s))),
+        (
+            Arc::new(Column::new("key", 0)) as _,
+            Arc::new(Column::new("key", 0)) as _,
+        ),
+        Operator::Lt,
+        JoinType::RightMark,
+        1,
+    ) {
+        println!(
+            "note: pwmj_vs_nlj_right_mark_hand_built skipped -- this build's \
+             PiecewiseMergeJoinExec does not support RightMark yet: {err}"
+        );
+        return;
+    }
+
+    let mut group = c.benchmark_group("pwmj_vs_nlj_right_mark_hand_built");
+    group.sample_size(10);
+
+    for (regime, right_offset, _fraction) in REGIMES {
+        let lhs_batches = build_batches(LEFT_ROWS, 0, &s);
+        let rhs_batches = build_batches(RIGHT_ROWS, right_offset, &s);
+
+        let pwmj_plan = {
+            let (lhs_batches, rhs_batches, s) =
+                (lhs_batches.clone(), rhs_batches.clone(), Arc::clone(&s));
+            move || -> Arc<dyn ExecutionPlan> {
+                let lhs = MemorySourceConfig::try_new_exec(
+                    std::slice::from_ref(&lhs_batches),
+                    Arc::clone(&s),
+                    None,
+                )
+                .unwrap();
+                let rhs = MemorySourceConfig::try_new_exec(
+                    std::slice::from_ref(&rhs_batches),
+                    Arc::clone(&s),
+                    None,
+                )
+                .unwrap();
+                Arc::new(
+                    PiecewiseMergeJoinExec::try_new(
+                        lhs,
+                        rhs,
+                        (
+                            Arc::new(Column::new("key", 0)) as _,
+                            Arc::new(Column::new("key", 0)) as _,
+                        ),
+                        Operator::Lt,
+                        JoinType::RightMark,
+                        1,
+                    )
+                    .unwrap(),
+                )
+            }
+        };
+        let nlj_plan = {
+            let (lhs_batches, rhs_batches, s) =
+                (lhs_batches.clone(), rhs_batches.clone(), Arc::clone(&s));
+            move || -> Arc<dyn ExecutionPlan> {
+                let lhs = MemorySourceConfig::try_new_exec(
+                    std::slice::from_ref(&lhs_batches),
+                    Arc::clone(&s),
+                    None,
+                )
+                .unwrap();
+                let rhs = MemorySourceConfig::try_new_exec(
+                    std::slice::from_ref(&rhs_batches),
+                    Arc::clone(&s),
+                    None,
+                )
+                .unwrap();
+                Arc::new(
+                    NestedLoopJoinExec::try_new(
+                        lhs,
+                        rhs,
+                        Some(key_lt_key_filter(&s)),
+                        &JoinType::RightMark,
+                        None,
+                    )
+                    .unwrap(),
+                )
+            }
+        };
+
+        // `RightMark` keeps every streamed row, matched or not, so both arms must return
+        // exactly `RIGHT_ROWS` regardless of the regime -- unlike `RightSemi`/`RightAnti`,
+        // where the regime changes the row count. The regime still matters to what is timed
+        // below: it changes how much of the comparison work each arm actually does (`mark`
+        // true vs false), even though the row count it returns cannot show that.
+        let pwmj_rows = run(pwmj_plan(), &ctx, &rt);
+        let nlj_rows = run(nlj_plan(), &ctx, &rt);
+        assert_eq!(
+            pwmj_rows, nlj_rows,
+            "right_mark_{regime}: pwmj and nlj disagree ({pwmj_rows} vs {nlj_rows} rows)"
+        );
+        assert_eq!(
+            pwmj_rows, RIGHT_ROWS,
+            "right_mark_{regime}: RightMark must keep every streamed row"
+        );
+
+        group.bench_function(
+            BenchmarkId::new("pwmj", format!("{regime}_{RIGHT_ROWS}")),
+            |b| {
+                b.iter_batched(
+                    pwmj_plan.clone(),
+                    |plan| run(plan, &ctx, &rt),
+                    BatchSize::SmallInput,
+                )
+            },
+        );
+        group.bench_function(
+            BenchmarkId::new("nlj", format!("{regime}_{RIGHT_ROWS}")),
+            |b| {
+                b.iter_batched(
+                    nlj_plan.clone(),
+                    |plan| run(plan, &ctx, &rt),
+                    BatchSize::SmallInput,
+                )
+            },
+        );
+    }
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_pwmj_semi_anti_sql,
+    bench_pwmj_right_mark_hand_built
+);
 criterion_main!(benches);
