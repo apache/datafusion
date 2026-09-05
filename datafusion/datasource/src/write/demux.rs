@@ -38,7 +38,9 @@ use datafusion_common::cast::{
     as_int64_array, as_large_string_array, as_string_array, as_string_view_array,
     as_uint8_array, as_uint16_array, as_uint32_array, as_uint64_array,
 };
-use datafusion_common::{exec_datafusion_err, internal_datafusion_err, not_impl_err};
+use datafusion_common::{
+    exec_datafusion_err, exec_err, internal_datafusion_err, not_impl_err,
+};
 use datafusion_common_runtime::SpawnedTask;
 
 use chrono::NaiveDate;
@@ -392,6 +394,11 @@ fn compute_partition_keys_by_row<'a>(
             "PartitionBy Column {} does not exist in source data! Got schema {schema}.",
             col
         ))?;
+        if col_array.logical_null_count() > 0 {
+            return exec_err!(
+                "NULL values are not supported for partition column '{col}'"
+            );
+        }
 
         match dtype {
             DataType::Utf8 => {
@@ -594,4 +601,70 @@ fn compute_hive_style_file_path(
     }
 
     file_path.join(format!("{write_id}.{file_extension}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{Array, ArrayRef, DictionaryArray, Int32Array};
+    use arrow::datatypes::Int32Type;
+
+    fn partition_batch(column: ArrayRef) -> RecordBatch {
+        RecordBatch::try_from_iter_with_nullable([("p", column, true)]).unwrap()
+    }
+
+    #[test]
+    fn partition_keys_reject_null_values() {
+        let columns: Vec<ArrayRef> = vec![
+            Arc::new(Int32Array::from(vec![Some(0), None])),
+            Arc::new(StringArray::from(vec![Some(""), None])),
+        ];
+        for column in columns {
+            let partition_by = vec![("p".to_string(), column.data_type().clone())];
+            let batch = partition_batch(column);
+            let err = compute_partition_keys_by_row(&batch, &partition_by).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                "Execution error: NULL values are not supported for partition column 'p'"
+            );
+        }
+    }
+
+    #[test]
+    fn partition_keys_accept_slice_without_nulls() {
+        let column = Int32Array::from(vec![None, Some(0), Some(1)]).slice(1, 2);
+        let batch = partition_batch(Arc::new(column));
+        let partition_by = vec![("p".to_string(), DataType::Int32)];
+        let keys = compute_partition_keys_by_row(&batch, &partition_by).unwrap();
+        assert_eq!(keys, vec![vec![Cow::Borrowed("0"), Cow::Borrowed("1")]]);
+    }
+
+    fn dictionary_with_null_value() -> DictionaryArray<Int32Type> {
+        DictionaryArray::try_new(
+            Int32Array::from(vec![0, 1]),
+            Arc::new(StringArray::from(vec![Some("a"), None])),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn partition_keys_reject_dictionary_null_values() {
+        let column = dictionary_with_null_value();
+        let partition_by = vec![("p".to_string(), column.data_type().clone())];
+        let batch = partition_batch(Arc::new(column));
+        let err = compute_partition_keys_by_row(&batch, &partition_by).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Execution error: NULL values are not supported for partition column 'p'"
+        );
+    }
+
+    #[test]
+    fn partition_keys_accept_unused_dictionary_null_values() {
+        let column = dictionary_with_null_value().slice(0, 1);
+        let partition_by = vec![("p".to_string(), column.data_type().clone())];
+        let batch = partition_batch(Arc::new(column));
+        let keys = compute_partition_keys_by_row(&batch, &partition_by).unwrap();
+        assert_eq!(keys, vec![vec![Cow::Borrowed("a")]]);
+    }
 }
