@@ -518,6 +518,20 @@ from table_with_metadata limit 1;
 ----
 NULL the id field
 
+# Regression test: uncorrelated scalar subquery preserves field metadata
+# https://github.com/apache/datafusion/issues/24933
+query IT
+SELECT
+    (SELECT id FROM table_with_metadata WHERE id = 1),
+    arrow_metadata((SELECT id FROM table_with_metadata WHERE id = 1), 'metadata_key');
+----
+1 the id field
+
+query ?
+select arrow_metadata((select id from table_with_metadata where id = 1));
+----
+{metadata_key: the id field}
+
 statement ok
 drop table table_with_metadata;
 

@@ -523,10 +523,12 @@ pub fn create_physical_expr(
                             schema.fields().len()
                         );
                     }
-                    let dt = schema.field(0).data_type().clone();
-                    Ok(Arc::new(ScalarSubqueryExpr::new(
-                        dt,
+                    let output_field = schema.field(0);
+                    let metadata = FieldMetadata::from(output_field.as_ref());
+                    Ok(Arc::new(ScalarSubqueryExpr::new_with_metadata(
+                        output_field.data_type().clone(),
                         e.nullable(input_dfschema)?,
+                        (!metadata.is_empty()).then_some(metadata),
                         index,
                         planning_ctx.results().clone(),
                     )))
@@ -824,6 +826,43 @@ mod tests {
             assert_eq!(physical_expr.nullable(&Schema::empty())?, expected_nullable);
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn scalar_subquery_preserves_output_field_metadata() -> Result<()> {
+        let metadata = FieldMetadata::from(HashMap::from([(
+            EXTENSION_TYPE_NAME_KEY.to_string(),
+            "example.extension".to_string(),
+        )]));
+        let plan = LogicalPlanBuilder::empty(true)
+            .project(vec![
+                lit("a").alias_with_metadata("geometry", Some(metadata)),
+            ])?
+            .build()?;
+        let expr = scalar_subquery(Arc::new(plan));
+        let Expr::ScalarSubquery(subquery) = &expr else {
+            unreachable!()
+        };
+
+        let index = SubqueryIndex::new(0);
+        let planning_ctx = PhysicalPlanningContext::new(
+            HashMap::from([(subquery.clone(), index)]),
+            ScalarSubqueryResults::new(1),
+        );
+        let physical_expr = create_physical_expr(
+            &expr,
+            &DFSchema::empty(),
+            &ExecutionProps::new(),
+            &planning_ctx,
+        )?;
+
+        let field = physical_expr.return_field(&Schema::empty())?;
+        assert_eq!(
+            field.metadata().get(EXTENSION_TYPE_NAME_KEY),
+            Some(&"example.extension".to_string()),
+            "scalar subquery physical expr must keep ARROW extension metadata: {field:?}"
+        );
         Ok(())
     }
 
