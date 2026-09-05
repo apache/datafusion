@@ -152,6 +152,7 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
             }
 
             if let Some(bloom_filter_fpp) = options.bloom_filter_fpp {
+                validate_bloom_filter_fpp(bloom_filter_fpp)?;
                 builder =
                     builder.set_column_bloom_filter_fpp(path.clone(), bloom_filter_fpp);
             }
@@ -251,6 +252,54 @@ impl ParquetOptions {
             max_in_list_size: _,
         } = self;
 
+        // The `parquet` crate rejects these values with a panic (`assert!`)
+        // while the properties are being built, so check them here and report
+        // a configuration error instead.
+        if *write_batch_size == 0 {
+            return Err(DataFusionError::Configuration(
+                "datafusion.execution.parquet.write_batch_size must be greater than 0"
+                    .to_string(),
+            ));
+        }
+        if *max_row_group_size == 0 {
+            return Err(DataFusionError::Configuration(
+                "datafusion.execution.parquet.max_row_group_size must be greater than 0"
+                    .to_string(),
+            ));
+        }
+        if *column_index_truncate_length == Some(0) {
+            return Err(DataFusionError::Configuration(
+                "datafusion.execution.parquet.column_index_truncate_length must be                  greater than 0 (unset it to disable truncation)"
+                    .to_string(),
+            ));
+        }
+        if *statistics_truncate_length == Some(0) {
+            return Err(DataFusionError::Configuration(
+                "datafusion.execution.parquet.statistics_truncate_length must be                  greater than 0 (unset it to disable truncation)"
+                    .to_string(),
+            ));
+        }
+        if let Some(bloom_filter_fpp) = bloom_filter_fpp {
+            validate_bloom_filter_fpp(*bloom_filter_fpp)?;
+        }
+        if content_defined_chunking.enabled {
+            if content_defined_chunking.min_chunk_size == 0 {
+                return Err(DataFusionError::Configuration(
+                    "datafusion.execution.parquet.content_defined_chunking.min_chunk_size                      must be greater than 0"
+                        .to_string(),
+                ));
+            }
+            if content_defined_chunking.max_chunk_size
+                <= content_defined_chunking.min_chunk_size
+            {
+                return Err(DataFusionError::Configuration(format!(
+                    "datafusion.execution.parquet.content_defined_chunking.max_chunk_size                      ({}) must be greater than min_chunk_size ({})",
+                    content_defined_chunking.max_chunk_size,
+                    content_defined_chunking.min_chunk_size
+                )));
+            }
+        }
+
         let mut builder = WriterProperties::builder()
             .set_data_page_size_limit(*data_pagesize_limit)
             .set_write_batch_size(*write_batch_size)
@@ -291,6 +340,18 @@ impl ParquetOptions {
         builder = builder.set_content_defined_chunking(content_defined_chunking.into());
 
         Ok(builder)
+    }
+}
+
+/// Checks that a bloom filter false positive probability is strictly between
+/// 0 and 1, which is what the `parquet` crate requires (it panics otherwise).
+fn validate_bloom_filter_fpp(fpp: f64) -> Result<()> {
+    if fpp > 0.0 && fpp < 1.0 {
+        Ok(())
+    } else {
+        Err(DataFusionError::Configuration(format!(
+            "bloom_filter_fpp must be strictly between 0 and 1, got {fpp}"
+        )))
     }
 }
 
@@ -959,6 +1020,115 @@ mod tests {
                     .build()
             ),
             "should have only the ndv set, and the fpp at default",
+        );
+    }
+
+    /// Values the `parquet` crate rejects with a panic while building
+    /// `WriterProperties` must surface as configuration errors instead.
+    #[test]
+    fn test_invalid_writer_options_are_rejected() {
+        fn err(options: ParquetOptions) -> String {
+            options
+                .into_writer_properties_builder()
+                .expect_err("expected a configuration error")
+                .to_string()
+        }
+
+        assert!(
+            err(ParquetOptions {
+                write_batch_size: 0,
+                ..Default::default()
+            })
+            .contains("write_batch_size")
+        );
+        assert!(
+            err(ParquetOptions {
+                max_row_group_size: 0,
+                ..Default::default()
+            })
+            .contains("max_row_group_size")
+        );
+        assert!(
+            err(ParquetOptions {
+                column_index_truncate_length: Some(0),
+                ..Default::default()
+            })
+            .contains("column_index_truncate_length")
+        );
+        assert!(
+            err(ParquetOptions {
+                statistics_truncate_length: Some(0),
+                ..Default::default()
+            })
+            .contains("statistics_truncate_length")
+        );
+        for fpp in [0.0, 1.0, 1.5, -1.0, f64::NAN] {
+            assert!(
+                err(ParquetOptions {
+                    bloom_filter_fpp: Some(fpp),
+                    ..Default::default()
+                })
+                .contains("bloom_filter_fpp"),
+                "fpp {fpp}"
+            );
+        }
+        assert!(
+            err(ParquetOptions {
+                content_defined_chunking: ParquetCdcOptions {
+                    enabled: true,
+                    min_chunk_size: 0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .contains("min_chunk_size")
+        );
+        assert!(
+            err(ParquetOptions {
+                content_defined_chunking: ParquetCdcOptions {
+                    enabled: true,
+                    min_chunk_size: 10,
+                    max_chunk_size: 10,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .contains("max_chunk_size")
+        );
+
+        // A per-column bloom filter fpp goes through the same check.
+        let table_options = TableParquetOptions {
+            global: ParquetOptions {
+                skip_arrow_metadata: true,
+                ..Default::default()
+            },
+            column_specific_options: HashMap::from([(
+                COL_NAME.to_string(),
+                ParquetColumnOptions {
+                    bloom_filter_fpp: Some(2.0),
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
+        let err = WriterPropertiesBuilder::try_from(&table_options)
+            .expect_err("expected a configuration error")
+            .to_string();
+        assert!(err.contains("bloom_filter_fpp"), "{err}");
+
+        // The defaults, and a value just inside the valid range, still build.
+        assert!(
+            ParquetOptions::default()
+                .into_writer_properties_builder()
+                .is_ok()
+        );
+        assert!(
+            ParquetOptions {
+                bloom_filter_fpp: Some(f64::EPSILON),
+                ..Default::default()
+            }
+            .into_writer_properties_builder()
+            .is_ok()
         );
     }
 }
