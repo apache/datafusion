@@ -195,6 +195,9 @@ enum PartialHashAggregateState {
         // After each incremental emitting step, the `remaining_groups` will be updated
         // with batch slicing.
         remaining_groups: RecordBatch,
+
+        // The size of remaining_groups in case we need to hold on it while slicing
+        batch_memory_size: usize,
     },
     ProducingOutput {
         hash_table: AggregateHashTable<PartialMarker>,
@@ -633,10 +636,19 @@ impl PartialHashAggregateStream {
                         let _timer = elapsed_compute.timer();
                         let state_batch_result = hash_table.take_state_batch();
 
+                        // If we are holding on the memory due to slicing account for that
+                        let state_batch_size = match &state_batch_result {
+                            Ok(Some(batch)) if batch.num_rows() > self.batch_size => {
+                                batch.get_array_memory_size()
+                            }
+                            _ => 0,
+                        };
+
                         // Emitting clears the aggregate table and releases its
                         // accumulated memory. Update the reservation accordingly.
-                        let resize_result =
-                            self.reservation.try_resize(hash_table.memory_size());
+                        let resize_result = self
+                            .reservation
+                            .try_resize(hash_table.memory_size() + state_batch_size);
 
                         if let Err(e) = resize_result {
                             return Self::break_with_err(e);
@@ -656,6 +668,7 @@ impl PartialHashAggregateStream {
                             PartialHashAggregateState::EmittingOnMemoryPressure {
                                 hash_table,
                                 remaining_groups: materialized_group_states,
+                                batch_memory_size: state_batch_size,
                             },
                         );
                     }
@@ -699,6 +712,7 @@ impl PartialHashAggregateStream {
         let PartialHashAggregateState::EmittingOnMemoryPressure {
             hash_table,
             remaining_groups: batch,
+            batch_memory_size: size,
         } = original_state
         else {
             return Self::break_with_internal_err(
@@ -722,11 +736,18 @@ impl PartialHashAggregateStream {
                 PartialHashAggregateState::EmittingOnMemoryPressure {
                     hash_table,
                     remaining_groups: remaining,
+                    batch_memory_size: size,
                 },
             )
         };
 
         self.reduction_factor.add_part(output_batch.num_rows());
+        if matches!(next_state, PartialHashAggregateState::ReadingInput { .. })
+            && size > 0
+        {
+            self.reservation.shrink(size);
+        }
+
         debug_assert!(output_batch.num_rows() > 0);
         ControlFlow::Break((
             Poll::Ready(Some(Ok(output_batch.record_output(&self.baseline_metrics)))),
@@ -1544,6 +1565,107 @@ mod tests {
             skipped_rows, batch3_rows,
             "Expected batch 3's rows ({batch3_rows}) to be skipped",
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_partial_hash_stream_accounts_held_batch_on_memory_pressure()
+    -> Result<()> {
+        // When memory pressure triggers early emission, the materialized state
+        // batch is held in `EmittingOnMemoryPressure::remaining_groups` while it
+        // is sliced into `batch_size` outputs. The stream must keep that held
+        // batch accounted for in its memory reservation until the last slice is
+        // emitted; before the fix the reservation was resized down to just the
+        // (emptied) hash table size, leaving the held batch unaccounted.
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("group_col", DataType::Int32, false),
+            Field::new("value_col", DataType::Int64, false),
+        ]));
+
+        let batch_size = 1024;
+        // One row per group so the state batch is emitted in 4 slices
+        let num_groups = 4 * batch_size;
+        let group_ids: Vec<i32> = (0..num_groups as i32).collect();
+        let values: Vec<i64> = vec![1; num_groups];
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(group_ids)),
+                Arc::new(Int64Array::from(values)),
+            ],
+        )?;
+        let input_partitions = vec![vec![batch]];
+
+        // Smaller than the building hash table (so pressure triggers) but large
+        // enough to hold the materialized state batch (so emission can proceed)
+        let memory_limit = 100 * 1024;
+        let runtime = RuntimeEnvBuilder::default()
+            .with_memory_limit(memory_limit, 1.0)
+            .build_arc()?;
+
+        let mut task_ctx = TaskContext::default().with_runtime(Arc::clone(&runtime));
+        let session_config = task_ctx.session_config().clone().set(
+            "datafusion.execution.batch_size",
+            &datafusion_common::ScalarValue::UInt64(Some(batch_size as u64)),
+        );
+        task_ctx = task_ctx.with_session_config(session_config);
+        let task_ctx = Arc::new(task_ctx);
+
+        // Create aggregate: COUNT(*) GROUP BY group_col
+        let group_expr = vec![(col("group_col", &schema)?, "group_col".to_string())];
+        let aggr_expr = vec![Arc::new(
+            AggregateExprBuilder::new(count_udaf(), vec![col("value_col", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("count_value")
+                .build()?,
+        )];
+
+        let exec = TestMemoryExec::try_new(&input_partitions, Arc::clone(&schema), None)?;
+        let exec = Arc::new(TestMemoryExec::update_cache(&Arc::new(exec)));
+
+        let aggregate_exec = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::new_single(group_expr),
+            aggr_expr,
+            vec![None],
+            exec,
+            Arc::clone(&schema),
+        )?;
+
+        let mut stream = PartialHashAggregateStream::new(&aggregate_exec, &task_ctx, 0)?;
+
+        // The first output batch must be a pressure-emitted slice, with the rest
+        // of the materialized state batch still held by the stream
+        let first = stream.next().await.expect("stream ended early")?;
+        assert_eq!(first.num_rows(), batch_size);
+        assert!(
+            matches!(
+                stream.state,
+                Some(PartialHashAggregateState::EmittingOnMemoryPressure { .. })
+            ),
+            "expected the stream to still be emitting under memory pressure \
+             (if this fails the test setup no longer triggers early emission)"
+        );
+
+        // The emitted slice shares buffers with the held state batch, so its
+        // array memory size reflects the full held allocation
+        let held_size = first.get_array_memory_size();
+        let reserved = runtime.memory_pool.reserved();
+        assert!(
+            reserved >= held_size,
+            "memory pool has {reserved} bytes reserved but the stream is \
+             holding a materialized state batch of {held_size} bytes"
+        );
+
+        // Drain the stream: no groups lost and the reservation is released
+        let mut total_rows = first.num_rows();
+        while let Some(batch) = stream.next().await {
+            total_rows += batch?.num_rows();
+        }
+        assert_eq!(total_rows, num_groups);
 
         Ok(())
     }
