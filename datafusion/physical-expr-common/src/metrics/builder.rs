@@ -249,6 +249,53 @@ impl<'a> MetricBuilder<'a> {
         gauge
     }
 
+    /// Consumes self and creates a new [`Count`] for recording some
+    /// arbitrary byte-measured metric of an operator (e.g. `bytes_scanned`),
+    /// always displayed with byte units regardless of [`MetricCategory`].
+    pub fn bytes_counter(
+        self,
+        counter_name: impl Into<Cow<'static, str>>,
+        partition: usize,
+    ) -> Count {
+        self.with_partition(partition)
+            .global_bytes_counter(counter_name)
+    }
+
+    /// Consumes self and creates a new [`Gauge`] for reporting some
+    /// arbitrary byte-measured metric of an operator (e.g.
+    /// `stream_memory_usage`), always displayed with byte units regardless
+    /// of [`MetricCategory`].
+    pub fn bytes_gauge(
+        self,
+        gauge_name: impl Into<Cow<'static, str>>,
+        partition: usize,
+    ) -> Gauge {
+        let gauge = Gauge::new();
+        self.with_category(MetricCategory::Bytes)
+            .with_partition(partition)
+            .build(MetricValue::Gauge {
+                name: gauge_name.into(),
+                gauge: gauge.clone(),
+            });
+        gauge
+    }
+
+    /// Consumes self and creates a new [`Count`] for recording a
+    /// byte-measured metric of an overall operator (not per partition),
+    /// always displayed with byte units regardless of [`MetricCategory`].
+    pub fn global_bytes_counter(
+        self,
+        counter_name: impl Into<Cow<'static, str>>,
+    ) -> Count {
+        let count = Count::new();
+        self.with_category(MetricCategory::Bytes)
+            .build(MetricValue::Count {
+                name: counter_name.into(),
+                count: count.clone(),
+            });
+        count
+    }
+
     /// Consumes self and creates a new [`Gauge`] for recording peak memory
     /// usage in bytes.
     pub fn peak_memory_usage(

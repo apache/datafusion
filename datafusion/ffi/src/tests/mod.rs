@@ -232,6 +232,47 @@ pub(crate) extern "C" fn create_exec_with_statistics() -> FFI_ExecutionPlan {
     FFI_ExecutionPlan::new(plan, None)
 }
 
+/// Registers real Bytes-category [`MetricValue::Count`] and
+/// [`MetricValue::Gauge`] metrics (via the same [`MetricBuilder::bytes_counter`]
+/// and [`MetricBuilder::bytes_gauge`] constructors production code uses for
+/// `bytes_scanned`/`stream_memory_usage`) on the returned plan, so the
+/// consumer-side integration test can exercise the category-aware
+/// byte-formatting `Display` logic through a real cross-library `metrics()`
+/// FFI call rather than only the in-process `FFI_MetricValue` conversion
+/// tests in `physical_expr::metrics`.
+///
+/// This is deliberately exported as its own top-level symbol rather than a
+/// new field on [`ForeignLibraryModule`]: that struct is public and
+/// `#[repr(C)]` with no private/gated constructor, so every field is part of
+/// its exhaustive-construction ABI surface - adding one is exactly what
+/// `cargo-semver-checks`'s `constructible_struct_adds_field` lint flags, even
+/// for a test-only, `integration-tests`-gated struct like this one. A
+/// separate exported symbol, loaded the same way [`load_module`] loads
+/// `datafusion_ffi_get_module`, avoids touching that struct's layout at all.
+///
+/// [`MetricValue::Count`]: datafusion_physical_expr_common::metrics::MetricValue::Count
+/// [`MetricValue::Gauge`]: datafusion_physical_expr_common::metrics::MetricValue::Gauge
+#[unsafe(no_mangle)]
+pub extern "C" fn datafusion_ffi_test_create_exec_with_byte_metrics() -> FFI_ExecutionPlan
+{
+    use datafusion_physical_expr_common::metrics::{
+        ExecutionPlanMetricsSet, MetricBuilder,
+    };
+
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
+
+    let metrics_set = ExecutionPlanMetricsSet::new();
+    MetricBuilder::new(&metrics_set)
+        .bytes_counter("bytes_scanned", 0)
+        .add(1536);
+    MetricBuilder::new(&metrics_set)
+        .bytes_gauge("stream_memory_usage", 0)
+        .add(2048);
+
+    let plan = Arc::new(EmptyExec::new(schema).with_metrics(metrics_set.clone_inner()));
+    FFI_ExecutionPlan::new(plan, None)
+}
+
 /// Thin wrapper that attaches a fixed [`Statistics`] snapshot to any inner
 /// [`TableProvider`] without changing its scan behaviour.
 #[derive(Debug)]
