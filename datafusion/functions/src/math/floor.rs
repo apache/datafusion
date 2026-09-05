@@ -261,6 +261,11 @@ impl ScalarUDFImpl for FloorFunc {
         Ok(input[0].sort_properties)
     }
 
+    fn strictly_order_preserving(&self, _inputs: &[ExprProperties]) -> Result<bool> {
+        // floor allow distinct inputs to collapse into equal outputs
+        Ok(false)
+    }
+
     fn evaluate_bounds(&self, inputs: &[&Interval]) -> Result<Interval> {
         let data_type = decimal_floor_ceil_return_type(&inputs[0].data_type());
         Interval::make_unbounded(&data_type)

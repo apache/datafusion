@@ -32,6 +32,7 @@ use datafusion_common::{
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
+use datafusion_expr_common::sort_properties::ExprProperties;
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -159,6 +160,12 @@ impl ScalarUDFImpl for RepeatFunc {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn strictly_order_preserving(&self, _inputs: &[ExprProperties]) -> Result<bool> {
+        // repeat does not strictly preserve ordering since for the following 2 rows:
+        // "bc" and "bca" and repeat(2) the result will be "bcbc" and "bcabca" which now the order is different
+        Ok(false)
     }
 }
 
