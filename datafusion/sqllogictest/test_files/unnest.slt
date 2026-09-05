@@ -525,8 +525,16 @@ x y [30, 40, 50]
 query error DataFusion error: type_coercion\ncaused by\nThis feature is not implemented: Unnest should be rewritten to LogicalPlan::Unnest before type coercion
 select sum(unnest(generate_series(1,10)));
 
-query error DataFusion error: Internal error: Assertion failed: struct_allowed: unnest on struct can only be applied at the root level of select expression
+# unnest on a struct is only supported as the top level select expression;
+# nesting it in another expression is a planning error, not an internal one
+query error DataFusion error: Error during planning: unnest on struct can only be applied at the root level of select expression
 select arrow_typeof(unnest(column5)) from unnest_table;
+
+query error DataFusion error: Error during planning: unnest on struct can only be applied at the root level of select expression
+select unnest(struct(1))['c0'];
+
+query error DataFusion error: Error during planning: unnest on struct can only be applied at the root level of select expression
+select unnest(unnest(struct([1])));
 
 query T
 select arrow_typeof(unnest(column1)) from unnest_table;
