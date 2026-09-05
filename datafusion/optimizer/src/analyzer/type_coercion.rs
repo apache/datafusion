@@ -1166,6 +1166,31 @@ fn coerce_window_frame(
     window_frame.start_bound =
         coerce_frame_bound(&target_type, window_frame.start_bound)?;
     window_frame.end_bound = coerce_frame_bound(&target_type, window_frame.end_bound)?;
+    if window_frame.units == WindowFrameUnits::Range {
+        // ROWS and GROUPS offsets are parsed as `UInt64`, so they can never be
+        // negative. RANGE offsets are only typed here, once the ORDER BY type is
+        // known, and an interval literal such as `INTERVAL '-1 day'` carries its
+        // sign inside the string. A negative offset makes the frame start after
+        // it ends, which the execution code does not expect.
+        for bound in [&window_frame.start_bound, &window_frame.end_bound] {
+            let (WindowFrameBound::Preceding(offset)
+            | WindowFrameBound::Following(offset)) = bound
+            else {
+                continue;
+            };
+            if offset.is_null() {
+                // UNBOUNDED PRECEDING / FOLLOWING
+                continue;
+            }
+            if let Ok(zero) = ScalarValue::new_zero(&offset.data_type())
+                && *offset < zero
+            {
+                return plan_err!(
+                    "Invalid window frame: frame offsets for RANGE must not be negative"
+                );
+            }
+        }
+    }
     Ok(window_frame)
 }
 
