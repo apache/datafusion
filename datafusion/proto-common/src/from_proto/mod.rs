@@ -1092,11 +1092,11 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                 "dictionary_page_size_limit",
             )?,
             statistics_enabled: value
-                .statistics_enabled_opt.clone()
+                .statistics_enabled_opt.as_ref()
                 .map(|opt| match opt {
-                    protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled(v) => Some(v),
+                    protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled(v) => v.parse(),
                 })
-                .unwrap_or(None),
+                .transpose()?,
             max_row_group_size: to_usize(value.max_row_group_size, "max_row_group_size")?,
             max_in_list_size: to_usize(value.max_in_list_size, "max_in_list_size")?,
             created_by: value.created_by.clone(),
@@ -1378,6 +1378,7 @@ mod tests {
     use datafusion_common::config::{
         MaxRowGroupBytes, ParquetCdcOptions, ParquetOptions, TableParquetOptions,
     };
+    use datafusion_common::parquet_config::DFParquetStatistics;
 
     #[test]
     fn constraint_requires_mode() {
@@ -1485,6 +1486,39 @@ mod tests {
         let recovered = parquet_options_proto_round_trip(opts.clone());
         assert_eq!(recovered.coerce_int96, Some("us".to_string()));
         assert_eq!(recovered.coerce_int96_tz, Some("UTC".to_string()));
+    }
+
+    #[test]
+    fn test_parquet_statistics_round_trip() {
+        let opts = ParquetOptions {
+            statistics_enabled: Some(DFParquetStatistics::Chunk),
+            ..ParquetOptions::default()
+        };
+        let recovered = parquet_options_proto_round_trip(opts);
+        assert_eq!(
+            recovered.statistics_enabled,
+            Some(DFParquetStatistics::Chunk)
+        );
+    }
+
+    #[test]
+    fn test_invalid_parquet_statistics_rejected_from_proto() {
+        let opts = ParquetOptions::default();
+        let mut proto: crate::protobuf_common::ParquetOptions =
+            (&opts).try_into().expect("to_proto");
+        proto.statistics_enabled_opt = Some(
+            crate::protobuf_common::parquet_options::StatisticsEnabledOpt::StatisticsEnabled(
+                "invalid".to_string(),
+            ),
+        );
+
+        let err = ParquetOptions::try_from(&proto).unwrap_err();
+        assert!(
+            err.to_string().contains(
+                "Invalid parquet statistics setting: invalid. Expected one of: none, chunk, page"
+            ),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

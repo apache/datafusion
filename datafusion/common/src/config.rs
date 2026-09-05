@@ -23,7 +23,7 @@ use arrow_ipc::CompressionType;
 use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::{_config_datafusion_err, _config_err};
 use crate::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
-use crate::parquet_config::DFParquetWriterVersion;
+use crate::parquet_config::{DFParquetStatistics, DFParquetWriterVersion};
 use crate::parsers::{CompressionTypeVariant, CsvQuoteStyle};
 use crate::utils::get_available_parallelism;
 use crate::{DataFusionError, Result};
@@ -1421,7 +1421,7 @@ config_namespace! {
         /// Valid values are: "none", "chunk", and "page"
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
-        pub statistics_enabled: Option<String>, transform = str::to_lowercase, default = Some("page".into())
+        pub statistics_enabled: Option<DFParquetStatistics>, default = Some(DFParquetStatistics::Page)
 
         /// (writing) Target maximum number of rows in each row group (defaults to 1M
         /// rows). Writing larger row groups requires more memory to write, but
@@ -4576,6 +4576,73 @@ mod tests {
             err.to_string(),
             "Invalid or Unsupported Configuration: Invalid parquet writer version: 3.0. Expected one of: 1.0, 2.0"
         );
+    }
+
+    #[cfg(feature = "parquet")]
+    #[test]
+    fn test_parquet_statistics_validation() {
+        use crate::{config::ConfigOptions, parquet_config::DFParquetStatistics};
+
+        let mut config = ConfigOptions::default();
+
+        for (value, expected) in [
+            ("none", DFParquetStatistics::None),
+            ("CHUNK", DFParquetStatistics::Chunk),
+            ("page", DFParquetStatistics::Page),
+        ] {
+            config
+                .set("datafusion.execution.parquet.statistics_enabled", value)
+                .unwrap();
+            assert_eq!(config.execution.parquet.statistics_enabled, Some(expected));
+        }
+
+        let err = config
+            .set("datafusion.execution.parquet.statistics_enabled", "invalid")
+            .unwrap_err();
+        assert_contains!(
+            err.to_string(),
+            "Invalid parquet statistics setting: invalid. Expected one of: none, chunk, page"
+        );
+
+        // An unset value can arise from deserialization. An invalid update must
+        // leave that state unchanged rather than inserting the default.
+        config.execution.parquet.statistics_enabled = None;
+        assert_eq!(config.execution.parquet.statistics_enabled, None);
+
+        assert!(
+            config
+                .set("datafusion.execution.parquet.statistics_enabled", "invalid")
+                .is_err()
+        );
+        assert_eq!(config.execution.parquet.statistics_enabled, None);
+
+        config.execution.parquet.statistics_enabled = Some(DFParquetStatistics::Page);
+        assert!(
+            config
+                .set(
+                    "datafusion.execution.parquet.statistics_enabled.typo",
+                    "none"
+                )
+                .is_err()
+        );
+        assert_eq!(
+            config.execution.parquet.statistics_enabled,
+            Some(DFParquetStatistics::Page)
+        );
+
+        assert!(
+            config
+                .reset("datafusion.execution.parquet.statistics_enabled.typo")
+                .is_err()
+        );
+        assert_eq!(
+            config.execution.parquet.statistics_enabled,
+            Some(DFParquetStatistics::Page)
+        );
+
+        let mut scalar = DFParquetStatistics::Page;
+        assert!(ConfigField::set(&mut scalar, "typo", "none").is_err());
+        assert_eq!(scalar, DFParquetStatistics::Page);
     }
 
     #[cfg(feature = "parquet")]
