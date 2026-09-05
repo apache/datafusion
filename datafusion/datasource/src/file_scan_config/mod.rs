@@ -29,10 +29,14 @@ mod proto;
 
 use crate::file_groups::FileGroup;
 use crate::{
-    PartitionedFile, display::FileGroupsDisplay, file::FileSource,
-    file_compression_type::FileCompressionType, file_stream::FileStreamBuilder,
-    file_stream::work_source::SharedWorkSource, source::DataSource,
-    statistics::MinMaxStatistics,
+    PartitionedFile,
+    display::FileGroupsDisplay,
+    file::FileSource,
+    file_compression_type::FileCompressionType,
+    file_stream::FileStreamBuilder,
+    file_stream::work_source::SharedWorkSource,
+    source::DataSource,
+    statistics::{MinMaxStatistics, compute_file_group_statistics},
 };
 use arrow::datatypes::Fields;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
@@ -1404,10 +1408,13 @@ impl FileScanConfig {
     ///
     /// The method distributes files across a target number of partitions while ensuring
     /// files within each partition maintain sort order based on their min/max statistics.
+    /// If possible, it also tries to make groups that are non-overlapping with respect
+    /// to the sort order.
     ///
     /// The algorithm works by:
     /// 1. Takes files sorted by minimum values
-    /// 2. For each file:
+    /// 2. If all files are non-overlapping with respect to the sort order, partition them into
+    ///    groups in order. Otherwise, for each file:
     ///   - Finds eligible groups (empty or where file's min > group's last max)
     ///   - Selects the smallest eligible group
     ///   - Creates a new group if needed
@@ -1456,43 +1463,72 @@ impl FileScanConfig {
 
         let indices_sorted_by_min = statistics.min_values_sorted();
 
-        // Initialize with target_partitions empty groups
-        let mut file_groups_indices: Vec<Vec<usize>> = vec![vec![]; target_partitions];
+        // When the files are all non-overlapping with respect to the sort order,
+        // chunk them contiguously so the resulting groups are also non-overlapping.
+        // This could allow the `sequence_sorted_inputs` optimization to be applied.
+        let non_overlapping_files = indices_sorted_by_min
+            .windows(2)
+            .all(|pair| pair[1].1 >= statistics.max(pair[0].0));
 
-        for (idx, min) in indices_sorted_by_min {
-            if let Some((_, group)) = file_groups_indices
-                .iter_mut()
-                .enumerate()
-                .filter(|(_, group)| {
-                    group.is_empty()
-                        || min
-                            > statistics
-                                .max(*group.last().expect("groups should not be empty"))
+        let mut file_groups_indices: Vec<Vec<usize>> = if non_overlapping_files {
+            let chunk_count = target_partitions.min(indices_sorted_by_min.len());
+            let chunk_size = indices_sorted_by_min.len() / chunk_count;
+            let remainder = indices_sorted_by_min.len() % chunk_count;
+            let mut files = indices_sorted_by_min.iter().map(|(idx, _)| *idx);
+            (0..chunk_count)
+                .map(|chunk_idx| {
+                    let len = chunk_size + usize::from(chunk_idx < remainder);
+                    files.by_ref().take(len).collect()
                 })
-                .min_by_key(|(_, group)| group.len())
-            {
-                group.push(idx);
-            } else {
-                // Create a new group if no existing group fits
-                file_groups_indices.push(vec![idx]);
+                .collect()
+        } else {
+            // Initialize with target_partitions empty groups
+            let mut file_groups_indices: Vec<Vec<usize>> =
+                vec![vec![]; target_partitions];
+
+            for (idx, min) in indices_sorted_by_min {
+                if let Some((_, group)) = file_groups_indices
+                    .iter_mut()
+                    .enumerate()
+                    .filter(|(_, group)| {
+                        group.is_empty()
+                            || min
+                                > statistics.max(
+                                    *group.last().expect("groups should not be empty"),
+                                )
+                    })
+                    .min_by_key(|(_, group)| group.len())
+                {
+                    group.push(idx);
+                } else {
+                    // Create a new group if no existing group fits
+                    file_groups_indices.push(vec![idx]);
+                }
             }
-        }
+            file_groups_indices
+        };
 
         // Remove any empty groups
         file_groups_indices.retain(|group| !group.is_empty());
 
-        // Assemble indices back into groups of PartitionedFiles
+        // Assemble indices back into groups of PartitionedFiles, recomputing
+        // group-level statistics.
         let mut file_groups = file_groups_indices
             .into_iter()
             .map(|file_group_indices| {
-                FileGroup::new(
+                let group = FileGroup::new(
                     file_group_indices
                         .into_iter()
                         .map(|idx| files[idx].clone())
                         .collect(),
-                )
+                );
+                if group.iter().all(|file| file.statistics.is_some()) {
+                    compute_file_group_statistics(group, Arc::clone(table_schema), true)
+                } else {
+                    Ok(group)
+                }
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
 
         append_known_empty_files(&mut file_groups, empty_files);
         Ok(file_groups)
