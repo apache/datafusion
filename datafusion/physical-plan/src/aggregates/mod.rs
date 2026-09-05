@@ -713,7 +713,7 @@ impl From<StreamType> for SendableRecordBatchStream {
     fn from(stream: StreamType) -> Self {
         match stream {
             StreamType::AggregateStream(stream) => Box::pin(stream),
-            StreamType::PartialHash(stream) => Box::pin(stream),
+            StreamType::PartialHash(stream) => stream.into_stream(),
             StreamType::PartialReduceHash(stream) => Box::pin(stream),
             StreamType::FinalHash(stream) => stream.into_stream(),
             StreamType::SingleHash(stream) => Box::pin(stream),
