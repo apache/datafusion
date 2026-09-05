@@ -28,12 +28,60 @@ use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
+use datafusion_physical_plan::metrics::{
+    Count, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory, MetricsSet, Time,
+};
 
 use async_trait::async_trait;
 use object_store::ObjectStore;
 
 #[cfg(feature = "proto")]
 mod proto;
+
+/// Common metrics exposed by file sinks.
+#[derive(Debug)]
+pub struct FileSinkMetrics {
+    metrics: ExecutionPlanMetricsSet,
+}
+
+impl FileSinkMetrics {
+    /// Create a new set of file sink metrics.
+    pub fn new() -> Self {
+        Self {
+            metrics: ExecutionPlanMetricsSet::new(),
+        }
+    }
+
+    /// Create a counter for rows written by one sink execution.
+    pub fn rows_written(&self) -> Count {
+        MetricBuilder::new(&self.metrics)
+            .with_category(MetricCategory::Rows)
+            .global_counter("rows_written")
+    }
+
+    /// Create a counter for bytes written by one sink execution.
+    pub fn bytes_written(&self) -> Count {
+        MetricBuilder::new(&self.metrics)
+            .with_category(MetricCategory::Bytes)
+            .global_counter("bytes_written")
+    }
+
+    /// Create an elapsed-compute metric for one sink execution.
+    pub fn elapsed_compute(&self) -> Time {
+        MetricBuilder::new(&self.metrics).elapsed_compute(0)
+    }
+
+    /// Return a snapshot of the metrics.
+    pub fn snapshot(&self) -> MetricsSet {
+        self.metrics.clone_inner()
+    }
+}
+
+impl Default for FileSinkMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Determines how `FileSink` output paths are interpreted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -169,5 +217,23 @@ impl FileSinkConfig {
     /// Get output schema
     pub fn output_schema(&self) -> &SchemaRef {
         &self.output_schema
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metrics_are_created_per_sink_execution() {
+        let metrics = FileSinkMetrics::new();
+
+        let first_rows = metrics.rows_written();
+        first_rows.add(3);
+
+        let second_rows = metrics.rows_written();
+
+        assert_eq!(first_rows.value(), 3);
+        assert_eq!(second_rows.value(), 0);
     }
 }

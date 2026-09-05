@@ -168,11 +168,14 @@ impl FileCompressionType {
     ///
     /// If `compression_level` is `Some`, the encoder will use the specified
     /// compression level. If `None`, the default level for each algorithm is used.
-    pub fn convert_async_writer_with_level(
+    pub fn convert_async_writer_with_level<W>(
         &self,
-        w: BufWriter,
+        w: W,
         compression_level: Option<u32>,
-    ) -> Result<Box<dyn AsyncWrite + Send + Unpin>> {
+    ) -> Result<Box<dyn AsyncWrite + Send + Unpin>>
+    where
+        W: AsyncWrite + Send + Unpin + 'static,
+    {
         #[cfg(feature = "compression")]
         use async_compression::Level;
 

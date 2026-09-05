@@ -19,7 +19,10 @@
 //! write support for the various file formats
 
 use std::io::Write;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::{Context, Poll};
 
 use crate::file_compression_type::FileCompressionType;
 use crate::file_sink_config::FileSinkConfig;
@@ -64,6 +67,62 @@ impl Write for SharedBuffer {
     fn flush(&mut self) -> std::io::Result<()> {
         let mut buffer = self.buffer.try_lock().unwrap();
         Write::flush(&mut *buffer)
+    }
+}
+
+/// An async writer that counts the number of bytes written to its inner writer.
+#[derive(Debug)]
+struct CountingWriter<W> {
+    inner: W,
+    bytes_written: Arc<AtomicUsize>,
+}
+
+impl<W> CountingWriter<W> {
+    fn new(inner: W) -> (Self, Arc<AtomicUsize>) {
+        let bytes_written = Arc::new(AtomicUsize::new(0));
+
+        (
+            Self {
+                inner,
+                bytes_written: Arc::clone(&bytes_written),
+            },
+            bytes_written,
+        )
+    }
+}
+
+impl<W> AsyncWrite for CountingWriter<W>
+where
+    W: AsyncWrite + Unpin,
+{
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let this = self.get_mut();
+
+        match Pin::new(&mut this.inner).poll_write(cx, buf) {
+            Poll::Ready(Ok(written)) => {
+                this.bytes_written.fetch_add(written, Ordering::Relaxed);
+                Poll::Ready(Ok(written))
+            }
+            result => result,
+        }
+    }
+
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
     }
 }
 
@@ -228,5 +287,69 @@ impl ObjectWriterBuilder {
 
         file_compression_type
             .convert_async_writer_with_level(buf_writer, compression_level)
+    }
+
+    /// Build a compressed object writer and return a shared counter containing
+    /// the number of compressed bytes written to the object store writer.
+    pub(crate) fn build_with_byte_counter(
+        self,
+    ) -> Result<(Box<dyn AsyncWrite + Send + Unpin>, Arc<AtomicUsize>)> {
+        let Self {
+            file_compression_type,
+            location,
+            object_store,
+            buffer_size,
+            compression_level,
+        } = self;
+
+        let buf_writer = match buffer_size {
+            Some(size) => BufWriter::with_capacity(object_store, location, size),
+            None => BufWriter::new(object_store, location),
+        };
+
+        let (counting_writer, bytes_written) = CountingWriter::new(buf_writer);
+        let writer = file_compression_type
+            .convert_async_writer_with_level(counting_writer, compression_level)?;
+
+        Ok((writer, bytes_written))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use object_store::ObjectStoreExt;
+    use object_store::memory::InMemory;
+    use tokio::io::AsyncWriteExt;
+
+    #[tokio::test]
+    async fn compressed_byte_counter_matches_object_size() {
+        let object_store = Arc::new(InMemory::new());
+        let location = Path::from("compressed.csv.gz");
+        let input = vec![b'a'; 16 * 1024];
+
+        let (mut writer, bytes_written) = ObjectWriterBuilder::new(
+            FileCompressionType::GZIP,
+            &location,
+            object_store.clone(),
+        )
+        .build_with_byte_counter()
+        .unwrap();
+
+        writer.write_all(&input).await.unwrap();
+        writer.shutdown().await.unwrap();
+
+        let actual_size = object_store
+            .get(&location)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap()
+            .len();
+
+        assert_eq!(bytes_written.load(Ordering::Relaxed), actual_size);
+        assert!(actual_size < input.len());
     }
 }
