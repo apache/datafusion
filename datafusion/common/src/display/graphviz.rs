@@ -73,22 +73,17 @@ impl GraphvizBuilder {
         label: &str,
         tooltip: Option<&str>,
     ) -> fmt::Result {
-        if let Some(tooltip) = tooltip {
-            writeln!(
-                f,
-                "    {}[shape=box label={}, tooltip={}]",
-                id,
-                GraphvizBuilder::quoted(label),
-                GraphvizBuilder::quoted(tooltip),
-            )
-        } else {
-            writeln!(
-                f,
-                "    {}[shape=box label={}]",
-                id,
-                GraphvizBuilder::quoted(label),
-            )
-        }
+        let tooltip = tooltip
+            .map(|tooltip| format!(", tooltip={}", GraphvizBuilder::quoted(tooltip)))
+            .unwrap_or_default();
+
+        writeln!(
+            f,
+            "    {}[shape=box label={}{}]",
+            id,
+            GraphvizBuilder::quoted(label),
+            tooltip,
+        )
     }
 
     pub fn add_edge(

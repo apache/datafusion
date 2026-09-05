@@ -126,28 +126,29 @@ pub fn serialize_expr(
             escape_char,
             case_insensitive,
         }) => {
-            if *case_insensitive {
-                let pb = Box::new(protobuf::ILikeNode {
-                    negated: *negated,
-                    expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
-                    pattern: Some(Box::new(serialize_expr(pattern.as_ref(), codec)?)),
-                    escape_char: escape_char.map(|ch| ch.to_string()).unwrap_or_default(),
-                });
+            let negated = *negated;
+            let expr = Some(Box::new(serialize_expr(expr.as_ref(), codec)?));
+            let pattern = Some(Box::new(serialize_expr(pattern.as_ref(), codec)?));
+            let escape_char = escape_char.map(|ch| ch.to_string()).unwrap_or_default();
 
-                protobuf::LogicalExprNode {
-                    expr_type: Some(ExprType::Ilike(pb)),
-                }
+            let expr_type = if *case_insensitive {
+                ExprType::Ilike(Box::new(protobuf::ILikeNode {
+                    negated,
+                    expr,
+                    pattern,
+                    escape_char,
+                }))
             } else {
-                let pb = Box::new(protobuf::LikeNode {
-                    negated: *negated,
-                    expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
-                    pattern: Some(Box::new(serialize_expr(pattern.as_ref(), codec)?)),
-                    escape_char: escape_char.map(|ch| ch.to_string()).unwrap_or_default(),
-                });
+                ExprType::Like(Box::new(protobuf::LikeNode {
+                    negated,
+                    expr,
+                    pattern,
+                    escape_char,
+                }))
+            };
 
-                protobuf::LogicalExprNode {
-                    expr_type: Some(ExprType::Like(pb)),
-                }
+            protobuf::LogicalExprNode {
+                expr_type: Some(expr_type),
             }
         }
         Expr::SimilarTo(Like {

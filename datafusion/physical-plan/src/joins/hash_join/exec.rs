@@ -3143,25 +3143,16 @@ mod tests {
     ) -> Arc<TaskContext> {
         let mut session_config = SessionConfig::default().with_batch_size(batch_size);
 
-        if use_perfect_hash_join_as_possible {
-            session_config
-                .options_mut()
-                .execution
-                .perfect_hash_join_small_build_threshold = 819200;
-            session_config
-                .options_mut()
-                .execution
-                .perfect_hash_join_min_key_density = 0.0;
-        } else {
-            session_config
-                .options_mut()
-                .execution
-                .perfect_hash_join_small_build_threshold = 0;
-            session_config
-                .options_mut()
-                .execution
-                .perfect_hash_join_min_key_density = f64::INFINITY;
-        }
+        // Either always take the perfect hash join path, or never take it.
+        let (small_build_threshold, min_key_density) =
+            if use_perfect_hash_join_as_possible {
+                (819200, 0.0)
+            } else {
+                (0, f64::INFINITY)
+            };
+        let execution = &mut session_config.options_mut().execution;
+        execution.perfect_hash_join_small_build_threshold = small_build_threshold;
+        execution.perfect_hash_join_min_key_density = min_key_density;
         Arc::new(TaskContext::default().with_session_config(session_config))
     }
 
