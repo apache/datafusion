@@ -62,7 +62,6 @@ NULL
 NULL
 NULL
 
-# Signed integer inputs and NULL; expected results verified with Spark 4.2.0.
 query IIIII
 SELECT factorial(5) AS i64_literal,
        factorial(5::TINYINT) AS i8,
