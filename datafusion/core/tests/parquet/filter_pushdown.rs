@@ -26,10 +26,12 @@
 //! select * from data limit 10;
 //! ```
 
+use arrow::array::{ArrayRef, Int32Array, StringArray};
 use arrow::compute::concat_batches;
+use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
-use datafusion::physical_plan::collect;
 use datafusion::physical_plan::metrics::{MetricValue, MetricsSet};
+use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::{
     Expr, ParquetReadOptions, SessionContext, col, lit, lit_timestamp_nano,
 };
@@ -37,10 +39,14 @@ use datafusion::test_util::parquet::{ParquetScanOptions, TestParquetFile};
 use datafusion_expr::utils::{conjunction, disjunction, split_conjunction};
 use std::path::Path;
 
+use datafusion_common::DataFusionError;
 use datafusion_common::test_util::parquet_test_data;
 use datafusion_execution::config::SessionConfig;
 use itertools::Itertools;
+use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
+use std::fs::File;
+use std::sync::Arc;
 use tempfile::TempDir;
 
 /// how many rows of generated data to write to our parquet file (arbitrary)
@@ -559,7 +565,7 @@ impl<'a> TestCase<'a> {
                     self.name
                 );
             }
-        };
+        }
 
         let (page_index_rows_pruned, page_index_rows_matched) =
             get_pruning_metrics(&metrics, "page_index_rows_pruned");
@@ -584,7 +590,7 @@ impl<'a> TestCase<'a> {
                     "Expected to filter rows via page index but none were",
                 );
             }
-        };
+        }
 
         batch
     }
@@ -745,4 +751,61 @@ impl PredicateCacheTest {
         );
         Ok(())
     }
+}
+
+/// A predicate that is pushed into the parquet decoder and then fails while it
+/// is being evaluated must report the original error, so that callers can still
+/// tell a user error apart from an internal one.
+#[tokio::test]
+async fn pushed_down_predicate_reports_the_original_error() {
+    let tempdir = TempDir::new_in(Path::new(".")).unwrap();
+    let path = tempdir.path().join("cast_error.parquet");
+
+    // `v` is never referenced by the predicate, so the projection always has a
+    // column that only the scan can supply and a narrow-projection pushdown
+    // heuristic has no reason to decline this scan
+    let batch = RecordBatch::try_from_iter(vec![
+        (
+            "s",
+            Arc::new(StringArray::from(vec!["not_an_int"])) as ArrayRef,
+        ),
+        ("v", Arc::new(Int32Array::from(vec![1])) as ArrayRef),
+    ])
+    .unwrap();
+    let mut writer =
+        ArrowWriter::try_new(File::create(&path).unwrap(), batch.schema(), None).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.parquet.pushdown_filters = true;
+    let ctx = SessionContext::new_with_config(config);
+    ctx.register_parquet("t", path.to_str().unwrap(), ParquetReadOptions::default())
+        .await
+        .unwrap();
+
+    // Casting the column in the file to `Int32` fails on this data
+    let df = ctx
+        .sql("SELECT * FROM t WHERE CAST(s AS INT) = 1")
+        .await
+        .unwrap();
+
+    let plan = df.clone().create_physical_plan().await.unwrap();
+    let plan = displayable(plan.as_ref()).indent(false).to_string();
+    assert!(
+        !plan.contains("FilterExec"),
+        "the predicate has to reach the decoder for this test to mean anything, \
+         but a FilterExec here means pushdown was declined:\n{plan}"
+    );
+
+    let err = df.collect().await.unwrap_err();
+    let root = err.find_root();
+    assert!(
+        matches!(
+            root,
+            DataFusionError::ArrowError(inner, _)
+                if matches!(inner.as_ref(), ArrowError::CastError(_))
+        ),
+        "expected the original cast error, got {root:?}"
+    );
 }

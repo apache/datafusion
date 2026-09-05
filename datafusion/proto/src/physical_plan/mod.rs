@@ -23,8 +23,10 @@ use std::sync::Arc;
 
 use arrow::datatypes::{IntervalMonthDayNanoType, Schema, SchemaRef};
 use datafusion_catalog::memory::MemorySourceConfig;
+use datafusion_common::utils::{usize_from_wire, usize_to_wire};
 use datafusion_common::{
     DataFusionError, Result, internal_datafusion_err, internal_err, not_impl_err,
+    plan_err,
 };
 use datafusion_datasource_arrow::source::ArrowSource;
 #[cfg(feature = "avro")]
@@ -60,8 +62,8 @@ use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::explain::ExplainExec;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::{
-    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, SortMergeJoinExec,
-    SymmetricHashJoinExec,
+    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PiecewiseMergeJoinExec,
+    SortMergeJoinExec, SymmetricHashJoinExec,
 };
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::memory::LazyMemoryExec;
@@ -106,6 +108,7 @@ mod file_scan_config_serde {
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::{Constraint, Constraints, ScalarValue, Statistics};
     use datafusion_datasource::file::FileSource;
+    use datafusion_datasource::file_compression_type::FileCompressionType;
     use datafusion_datasource::file_groups::FileGroup;
     use datafusion_datasource::file_scan_config::{
         FileScanConfig, FileScanConfigBuilder,
@@ -257,6 +260,7 @@ mod file_scan_config_serde {
             .with_statistics(table_statistics)
             .with_limit(Some(17))
             .with_batch_size(Some(256))
+            .with_file_compression_type(FileCompressionType::GZIP)
             .with_output_ordering(vec![ordering])
             .with_output_partitioning(output_partitioning)
             .build()
@@ -365,7 +369,24 @@ mod file_scan_config_serde {
         assert_eq!(decoded.file_groups[1].len(), 1);
         assert!(decoded.file_groups[0].files()[0].arrow_schema.is_some());
         assert!(decoded.file_groups[0].files()[1].arrow_schema.is_none());
+        assert_eq!(decoded.file_compression_type, FileCompressionType::GZIP);
 
+        Ok(())
+    }
+
+    #[test]
+    fn new_file_scan_config_decode_without_compression_uses_legacy_default() -> Result<()>
+    {
+        let serde = FileScanSerdeHarness::new();
+        let mut encoded = serde.encode(&test_config(None))?;
+        assert!(encoded.file_compression_type.is_some());
+
+        encoded.file_compression_type = None;
+        let decoded = serde.decode(&encoded)?;
+        assert_eq!(
+            decoded.file_compression_type,
+            FileCompressionType::UNCOMPRESSED
+        );
         Ok(())
     }
 
@@ -446,6 +467,16 @@ mod file_scan_config_serde {
         assert!(
             err.to_string()
                 .contains("ProjectionExpr missing expr field"),
+            "unexpected error: {err}"
+        );
+
+        let mut unknown_compression = valid;
+        unknown_compression.file_compression_type = Some(i32::MAX);
+        let err = serde
+            .decode(&unknown_compression)
+            .expect_err("unknown compression type must fail");
+        assert!(
+            err.to_string().contains("Unknown file compression type"),
             "unexpected error: {err}"
         );
 
@@ -1209,6 +1240,9 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::ScalarSubquery(_) => {
                 ScalarSubqueryExec::try_from_proto(self.node(), &decode_ctx)
             }
+            PhysicalPlanType::PiecewiseMergeJoin(_) => {
+                PiecewiseMergeJoinExec::try_from_proto(self.node(), &decode_ctx)
+            }
         }
     }
 
@@ -1372,7 +1406,17 @@ pub trait PhysicalPlanNodeExt: Sized {
         };
 
         let table = GenerateSeriesTable::new(Arc::clone(&schema), args);
-        let generator = table.as_generator(generate_series.target_batch_size as usize)?;
+        let target_batch_size = usize_from_wire(
+            generate_series.target_batch_size,
+            "GenerateSeriesNode",
+            "target_batch_size",
+        )?;
+        if target_batch_size == 0 {
+            return plan_err!(
+                "GenerateSeriesNode: target_batch_size must be greater than 0"
+            );
+        }
+        let generator = table.as_generator(target_batch_size)?;
 
         Ok(Arc::new(LazyMemoryExec::try_new(schema, vec![generator])?))
     }
@@ -1417,6 +1461,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             }));
         }
 
+        let encode_target_batch_size =
+            |size| usize_to_wire::<u32>(size, "GenerateSeriesNode", "target_batch_size");
         if let Some(int_64) = generator_guard
             .as_any()
             .downcast_ref::<GenericSeriesState<i64>>()
@@ -1424,7 +1470,7 @@ pub trait PhysicalPlanNodeExt: Sized {
             let schema = exec.schema();
             let node = protobuf::GenerateSeriesNode {
                 schema: Some(schema.as_ref().try_into()?),
-                target_batch_size: int_64.batch_size() as u32,
+                target_batch_size: encode_target_batch_size(int_64.batch_size())?,
                 args: Some(protobuf::generate_series_node::Args::Int64Args(
                     protobuf::GenerateSeriesArgsInt64 {
                         start: *int_64.start(),
@@ -1488,7 +1534,7 @@ pub trait PhysicalPlanNodeExt: Sized {
 
             let node = protobuf::GenerateSeriesNode {
                 schema: Some(schema.as_ref().try_into()?),
-                target_batch_size: timestamp_args.batch_size() as u32,
+                target_batch_size: encode_target_batch_size(timestamp_args.batch_size())?,
                 args: Some(args),
             };
 

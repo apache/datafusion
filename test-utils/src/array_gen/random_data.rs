@@ -51,6 +51,31 @@ macro_rules! basic_random_data {
     };
 }
 
+macro_rules! float_random_data {
+    ($ARROW_TYPE:ty, $NATIVE:ty) => {
+        impl RandomNativeData for $ARROW_TYPE {
+            fn generate_random_native_data(rng: &mut StdRng) -> Self::Native {
+                match rng.random_range(0..100) {
+                    0 => 0.0,
+                    1 => -0.0,
+                    2 => <$NATIVE>::INFINITY,
+                    3 => <$NATIVE>::NEG_INFINITY,
+                    4 => {
+                        // Generate a NaN with a uniformly selected sign and nonzero payload.
+                        let sign_mask = (-0.0 as $NATIVE).to_bits();
+                        let exponent_mask = <$NATIVE>::INFINITY.to_bits();
+                        let payload_mask = !(sign_mask | exponent_mask);
+                        let sign = if rng.random() { sign_mask } else { 0 };
+                        let payload = rng.random_range(1..=payload_mask);
+                        <$NATIVE>::from_bits(sign | exponent_mask | payload)
+                    }
+                    _ => rng.random(),
+                }
+            }
+        }
+    };
+}
+
 basic_random_data!(Int8Type);
 basic_random_data!(Int16Type);
 basic_random_data!(Int32Type);
@@ -59,8 +84,8 @@ basic_random_data!(UInt8Type);
 basic_random_data!(UInt16Type);
 basic_random_data!(UInt32Type);
 basic_random_data!(UInt64Type);
-basic_random_data!(Float32Type);
-basic_random_data!(Float64Type);
+float_random_data!(Float32Type, f32);
+float_random_data!(Float64Type, f64);
 basic_random_data!(Date32Type);
 basic_random_data!(Time32SecondType);
 basic_random_data!(Time32MillisecondType);

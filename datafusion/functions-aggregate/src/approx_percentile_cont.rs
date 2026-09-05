@@ -139,10 +139,9 @@ impl ApproxPercentileCont {
                         vec![TypeSignatureClass::Numeric],
                         NativeType::Float64,
                     ),
-                    Coercion::new_implicit(
-                        TypeSignatureClass::Native(logical_float64()),
+                    Coercion::new_implicit_native(
+                        logical_float64(),
                         vec![TypeSignatureClass::Numeric],
-                        NativeType::Float64,
                     ),
                 ]),
                 // 3 args - numeric, percentile (float), number of centroid for T-Digest (integer)
@@ -152,10 +151,9 @@ impl ApproxPercentileCont {
                         vec![TypeSignatureClass::Numeric],
                         NativeType::Float64,
                     ),
-                    Coercion::new_implicit(
-                        TypeSignatureClass::Native(logical_float64()),
+                    Coercion::new_implicit_native(
+                        logical_float64(),
                         vec![TypeSignatureClass::Numeric],
-                        NativeType::Float64,
                     ),
                     Coercion::new_implicit(
                         TypeSignatureClass::Integer,

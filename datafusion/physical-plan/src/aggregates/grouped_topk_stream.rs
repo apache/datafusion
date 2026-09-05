@@ -17,13 +17,13 @@
 
 //! A memory-conscious aggregation implementation that limits group buckets to a fixed number
 
-use crate::aggregates::group_values::GroupByMetrics;
+use crate::aggregates::group_values::{AggregateArgumentMetrics, GroupByMetrics};
 use crate::aggregates::topk::priority_map::PriorityMap;
 #[cfg(debug_assertions)]
 use crate::aggregates::topk_types_supported;
 use crate::aggregates::{
-    AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
-    evaluate_many,
+    AggregateExec, PhysicalGroupBy, aggregate_expressions, aggregate_metric_label,
+    evaluate_group_by,
 };
 use crate::metrics::BaselineMetrics;
 use crate::stream::EmptyRecordBatchStream;
@@ -37,6 +37,7 @@ use datafusion_common::internal_datafusion_err;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::metrics::RecordOutput;
+use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::stream::{Stream, StreamExt};
 use log::{Level, trace};
 use std::pin::Pin;
@@ -52,6 +53,9 @@ pub struct GroupedTopKAggregateStream {
     input: SendableRecordBatchStream,
     baseline_metrics: BaselineMetrics,
     group_by_metrics: GroupByMetrics,
+    // TopK directly maintains MIN/MAX values in its priority map, so it has no
+    // accumulator update, merge, state, or evaluate phases to time.
+    aggregate_argument_metrics: AggregateArgumentMetrics,
     aggregate_arguments: Vec<Vec<Arc<dyn PhysicalExpr>>>,
     group_by: Arc<PhysicalGroupBy>,
     priority_map: PriorityMap,
@@ -71,6 +75,13 @@ impl GroupedTopKAggregateStream {
         let input = aggr.input.execute(partition, Arc::clone(context))?;
         let baseline_metrics = BaselineMetrics::new(&aggr.metrics, partition);
         let group_by_metrics = GroupByMetrics::new(&aggr.metrics, partition);
+        let aggregate_argument_metrics = AggregateArgumentMetrics::new(
+            &aggr.metrics,
+            partition,
+            aggr.aggr_expr
+                .iter()
+                .map(|agg_expr| aggregate_metric_label(agg_expr)),
+        );
         let aggregate_arguments =
             aggregate_expressions(&aggr.aggr_expr, &aggr.mode, group_by.expr.len())?;
 
@@ -119,6 +130,7 @@ impl GroupedTopKAggregateStream {
             input,
             baseline_metrics,
             group_by_metrics,
+            aggregate_argument_metrics,
             aggregate_arguments,
             group_by,
             priority_map,
@@ -235,9 +247,7 @@ impl Stream for GroupedTopKAggregateStream {
                         print_batches(std::slice::from_ref(&batch))?;
                     }
                     self.row_count += batch.num_rows();
-                    let batches = &[batch];
-                    let group_by_values =
-                        evaluate_group_by(&self.group_by, batches.first().unwrap())?;
+                    let group_by_values = evaluate_group_by(&self.group_by, &batch)?;
                     assert_eq!(
                         group_by_values.len(),
                         1,
@@ -256,10 +266,16 @@ impl Stream for GroupedTopKAggregateStream {
                         // MIN/MAX case: evaluate aggregate expressions
                         let _timer =
                             self.group_by_metrics.aggregate_arguments_time.timer();
-                        let input_values = evaluate_many(
-                            &self.aggregate_arguments,
-                            batches.first().unwrap(),
-                        )?;
+                        let input_values = self
+                            .aggregate_arguments
+                            .iter()
+                            .enumerate()
+                            .map(|(idx, expr)| {
+                                self.aggregate_argument_metrics.time(idx, || {
+                                    evaluate_expressions_to_arrays(expr, &batch)
+                                })
+                            })
+                            .collect::<Result<Vec<_>>>()?;
                         assert_eq!(input_values.len(), 1, "Exactly 1 input required");
                         assert_eq!(input_values[0].len(), 1, "Exactly 1 input required");
                         Arc::clone(&input_values[0][0])
@@ -302,5 +318,86 @@ impl Stream for GroupedTopKAggregateStream {
             }
         }
         Poll::Pending
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ExecutionPlan;
+    use crate::aggregates::{AggregateMode, LimitOptions};
+    use crate::collect;
+    use crate::metrics::MetricValue;
+    use crate::test::TestMemoryExec;
+    use arrow::array::{Float64Array, UInt32Array};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use datafusion_common::assert_batches_eq;
+    use datafusion_functions_aggregate::min_max::min_udaf;
+    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+    use datafusion_physical_expr::expressions::col;
+
+    #[tokio::test]
+    async fn test_topk_aggregate_argument_metrics() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::UInt32, false),
+            Field::new("a", DataType::Float64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(UInt32Array::from(vec![1, 2, 3, 4])),
+                Arc::new(Float64Array::from(vec![4.0, 3.0, 2.0, 1.0])),
+            ],
+        )?;
+        let input =
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("k", &schema)?, "k".to_string())]);
+        let aggregate = Arc::new(
+            AggregateExprBuilder::new(min_udaf(), vec![col("a", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("MIN(a)")
+                .build()?,
+        );
+        let aggregate_exec = Arc::new(
+            AggregateExec::try_new(
+                AggregateMode::Single,
+                group_by,
+                vec![aggregate],
+                vec![None],
+                input,
+                schema,
+            )?
+            .with_limit_options(Some(LimitOptions::new(2))),
+        );
+        let context = Arc::new(TaskContext::default());
+        let result = collect(Arc::clone(&aggregate_exec) as _, context).await?;
+        assert_batches_eq!(
+            [
+                "+---+--------+",
+                "| k | MIN(a) |",
+                "+---+--------+",
+                "| 4 | 1.0    |",
+                "| 3 | 2.0    |",
+                "+---+--------+",
+            ],
+            &result
+        );
+
+        let metrics = aggregate_exec.metrics().unwrap();
+        let argument_metric = metrics.iter().find(|metric| {
+            matches!(
+                metric.value(),
+                MetricValue::Time { name, .. } if name == "agg_expr_0_arguments_time"
+            ) && metric
+                .labels()
+                .iter()
+                .any(|label| label.name() == "aggregate" && label.value() == "MIN(a)")
+        });
+        assert!(argument_metric.is_some());
+        assert!(argument_metric.unwrap().value().as_usize() > 0);
+
+        Ok(())
     }
 }

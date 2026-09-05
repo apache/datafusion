@@ -1001,3 +1001,298 @@ SELECT * INTO dup_into FROM dup_src LEFT JOIN dup_src y ON dup_src.column1 = y.c
 
 statement ok
 DROP TABLE dup_src;
+
+
+# Test string type aliases
+statement ok
+create table t (
+  a varchar,
+  b varchar(10),
+  c character varying,
+  d character varying(10),
+  e char varying,
+  f char varying(10),
+  g nvarchar,
+  h nvarchar(10),
+  i string,
+  j string(10)
+);
+
+query TTT
+describe t;
+----
+a Utf8View YES
+b Utf8View YES
+c Utf8View YES
+d Utf8View YES
+e Utf8View YES
+f Utf8View YES
+g Utf8View YES
+h Utf8View YES
+i Utf8View YES
+j Utf8View YES
+
+statement ok
+drop table t;
+
+# Test binary type aliases
+statement ok
+create table t (
+  a bytea,
+  b blob,
+  c binary,
+  d varbinary,
+  e bytes
+);
+
+query TTT
+describe t;
+----
+a Binary YES
+b Binary YES
+c Binary YES
+d Binary YES
+e Binary YES
+
+statement ok
+drop table t;
+
+# Test bool type aliases
+statement ok
+create table t (
+  a boolean,
+  b bool
+);
+
+query TTT
+describe t;
+----
+a Boolean YES
+b Boolean YES
+
+statement ok
+drop table t;
+
+# Test int16 type aliases
+statement ok
+create table t (
+  a smallint,
+  b int2
+);
+
+query TTT
+describe t;
+----
+a Int16 YES
+b Int16 YES
+
+statement ok
+drop table t;
+
+# Test int32 type aliases
+statement ok
+create table t (
+  a int,
+  b integer,
+  c int4
+);
+
+query TTT
+describe t;
+----
+a Int32 YES
+b Int32 YES
+c Int32 YES
+
+statement ok
+drop table t;
+
+# Test int64 type aliases
+statement ok
+create table t (
+  a bigint,
+  b int8
+);
+
+query TTT
+describe t;
+----
+a Int64 YES
+b Int64 YES
+
+statement ok
+drop table t;
+
+# Test uint8 type aliases
+statement ok
+create table t (
+  a tinyint unsigned,
+  b utinyint
+);
+
+query TTT
+describe t;
+----
+a UInt8 YES
+b UInt8 YES
+
+statement ok
+drop table t;
+
+# Test uint16 type aliases
+statement ok
+create table t (
+  a smallint unsigned,
+  b int2 unsigned,
+  c usmallint
+);
+
+query TTT
+describe t;
+----
+a UInt16 YES
+b UInt16 YES
+c UInt16 YES
+
+statement ok
+drop table t;
+
+# Test uint32 type aliases
+statement ok
+create table t (
+  a int unsigned,
+  b integer unsigned,
+  c int4 unsigned
+);
+
+query TTT
+describe t;
+----
+a UInt32 YES
+b UInt32 YES
+c UInt32 YES
+
+statement ok
+drop table t;
+
+# Test uint64 type aliases
+statement ok
+create table t (
+  a int8 unsigned,
+  b bigint unsigned,
+  c ubigint
+);
+
+query TTT
+describe t;
+----
+a UInt64 YES
+b UInt64 YES
+c UInt64 YES
+
+statement ok
+drop table t;
+
+# Test float32 type aliases
+statement ok
+create table t (
+  a float,
+  b float4,
+  c real
+);
+
+query TTT
+describe t;
+----
+a Float32 YES
+b Float32 YES
+c Float32 YES
+
+statement ok
+drop table t;
+
+# Test float64 type aliases
+statement ok
+create table t (
+  a double,
+  b double precision,
+  c float8
+);
+
+query TTT
+describe t;
+----
+a Float64 YES
+b Float64 YES
+c Float64 YES
+
+statement ok
+drop table t;
+
+# Test decimal128 type aliases
+statement ok
+create table t (
+  a decimal(10, 2),
+  b numeric(10, 2)
+);
+
+query TTT
+describe t;
+----
+a Decimal128(10, 2) YES
+b Decimal128(10, 2) YES
+
+statement ok
+drop table t;
+
+# Test decimal256 type aliases
+statement ok
+create table t (
+  a decimal(40, 2),
+  b numeric(40, 2)
+);
+
+query TTT
+describe t;
+----
+a Decimal256(40, 2) YES
+b Decimal256(40, 2) YES
+
+statement ok
+drop table t;
+
+# Table with Map types
+statement ok
+create table t (a map(int, int), b map(varchar, map(varchar, int)));
+
+query TTT
+describe t;
+----
+a Map("entries": non-null Struct("key": non-null Int32, "value": Int32), unsorted) YES
+b Map("entries": non-null Struct("key": non-null Utf8View, "value": Map("entries": non-null Struct("key": non-null Utf8View, "value": Int32), unsorted)), unsorted) YES
+
+statement ok
+insert into t values
+  (map{1: 10, 2: 20}, map{'a': map{'aa': 1, 'ab': 2}, 'b': map{'ba': 10, 'bb': 20}}),
+  (map{10: 100}, map{'c': map{'d': 100}}),
+  (map{}, map{'a': map{}}),
+  (null, map{'a': null});
+
+query ?? rowsort
+select * from t;
+----
+NULL {a: NULL}
+{10: 100} {c: {d: 100}}
+{1: 10, 2: 20} {a: {aa: 1, ab: 2}, b: {ba: 10, bb: 20}}
+{} {a: {}}
+
+# duplicate keys
+statement error DataFusion error: Execution error: map key must be unique, duplicate key found: a
+insert into t values (map{'a': 1, 'a': 10}, null);
+
+# key can't be null
+statement error DataFusion error: Execution error: map key cannot be null
+insert into t values (map{null: 1}, null);
+
+statement ok
+drop table t;

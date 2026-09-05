@@ -889,6 +889,7 @@ async fn parquet_explain_analyze() {
     );
     assert_contains!(&formatted, "output_rows_skew=0%");
     assert_contains!(&formatted, "scan_efficiency_ratio=13.99%");
+    assert_contains!(&formatted, "bytes_processed=");
 
     // The order of metrics is expected to be the same as the actual pruning order
     // (file-> row-group -> page)

@@ -125,17 +125,13 @@ explain analyze select s from full_schema;
 ----
 Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=219<slt:ignore>]
 
-# `get_field` on a schema-narrowed struct becomes `get_field(CAST(s), 'x')`;
-# the read clips to the cast target (every field the *narrow* schema
-# declares), not further down to just `x`. The fair "nothing was clipped"
-# baseline is therefore reading every physical leaf of `s`
-# (`select s from full_schema` above), not the same `get_field` query against
-# `full_schema` -- that one needs no cast at all and takes `get_field`'s own,
-# more precise, single-leaf pushdown path.
+# Selecting a single field of `s` reads fewer bytes than selecting `s` itself
+# (above): the read clips down to `x` rather than to every field the narrow
+# schema declares.
 query TT
 explain analyze select s['x'] from narrow;
 ----
-Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=146<slt:ignore>]
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=75<slt:ignore>]
 
 # Mixed access -- the whole (narrowed) column and a subfield of it -- still
 # reads only the narrow schema's leaves.
@@ -473,10 +469,8 @@ set datafusion.execution.parquet.pushdown_filters = false;
 # Query-level casts. `ProjectionExec` is merged into the scan, so a `CAST`
 # written in the query reaches the same read-plan analysis as an
 # adapter-inserted one — including one column consumed through two *different*
-# cast targets, which no single clipped read can serve. Clipping to one
-# target's leaves would leave the other cast reading a struct that is missing
-# the fields it names, which `cast_column` either null-fills (wrong results)
-# or, for disjoint targets, rejects outright.
+# cast targets. The read plan unions the targets' leaves so both casts receive
+# the fields they name without reading unreferenced siblings.
 #
 # `exact` infers its schema from the file, so no adapter cast is interposed
 # and the casts below are the only ones the scan sees.
@@ -515,6 +509,25 @@ FROM exact ORDER BY id;
 {x: 200} {x: 200, y: s2}
 NULL NULL
 
+# A cast plus a separate get_field access on the same physical root.
+query ?T
+SELECT CAST(s AS STRUCT<x BIGINT>) AS q0, s['y'] AS q1
+FROM exact ORDER BY id;
+----
+{x: 100} s1
+{x: 200} s2
+NULL NULL
+
+# The targets diverge below a shared ARRAY<STRUCT<...>> prefix.
+query ??
+SELECT CAST(events AS ARRAY<STRUCT<x BIGINT>>) AS q0,
+       CAST(events AS ARRAY<STRUCT<y VARCHAR>>) AS q1
+FROM exact ORDER BY id;
+----
+[{x: 10}] [{y: a1}]
+[{x: 20}, {x: 21}] [{y: b1}, {y: b2}]
+NULL NULL
+
 # Repeated identical targets still clip.
 query ??
 SELECT CAST(s AS STRUCT<x BIGINT>) AS q0,
@@ -534,14 +547,25 @@ FROM exact ORDER BY id;
 {x: 200} {x: 200, y: s2, pad: sp2}
 NULL NULL
 
-# The conflicting-target fallback reads the whole column -- exactly what a
-# scan with no clipping at all reads, and never more. These two must match:
-# the first falls back, the second never clips in the first place.
+# The disjoint targets read their two-leaf union and skip `pad`.
 query TT
 explain analyze select CAST(s AS STRUCT<x BIGINT>) AS q0, CAST(s AS STRUCT<pad VARCHAR>) AS q1 from exact;
 ----
-Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=219<slt:ignore>]
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=148<slt:ignore>]
 
+# The cast/get_field union likewise skips `pad`.
+query TT
+explain analyze select CAST(s AS STRUCT<x BIGINT>) AS q0, s['y'] AS q1 from exact;
+----
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=146<slt:ignore>]
+
+# The nested union reads x/y but skips both pad leaves.
+query TT
+explain analyze select CAST(events AS ARRAY<STRUCT<x BIGINT>>) AS q0, CAST(events AS ARRAY<STRUCT<y VARCHAR>>) AS q1 from exact;
+----
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=172<slt:ignore>]
+
+# A full-root baseline remains larger than every union above.
 query TT
 explain analyze select s from exact;
 ----

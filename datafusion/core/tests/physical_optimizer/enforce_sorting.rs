@@ -200,7 +200,7 @@ impl EnforceSortingTest {
             .to_string();
 
         if input_plan_string == optimized_plan_string {
-            format!("Input / Optimized Plan:\n{input_plan_string}",)
+            format!("Input / Optimized Plan:\n{input_plan_string}")
         } else {
             format!(
                 "Input Plan:\n{input_plan_string}\nOptimized Plan:\n{optimized_plan_string}",
@@ -235,6 +235,40 @@ async fn test_remove_unnecessary_sort5() -> Result<()> {
     Optimized Plan:
     SortPreservingMergeExec: [a@2 ASC]
       HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col_a@0, c@2)]
+        RepartitionExec: partitioning=Hash([col_a@0], 10), input_partitions=1
+          DataSourceExec: partitions=1, partition_sizes=[0]
+        RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1, maintains_sort_order=true
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+    ");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_propagate_in_right_mark_join() -> Result<()> {
+    let left_schema = create_test_schema2()?;
+    let right_schema = create_test_schema3()?;
+    let left_input = memory_exec(&left_schema);
+    let parquet_ordering = [sort_expr("a", &right_schema)].into();
+    let right_input =
+        parquet_exec_with_sort(right_schema.clone(), vec![parquet_ordering]);
+    let on = vec![(
+        Arc::new(Column::new_with_schema("col_a", &left_schema)?) as _,
+        Arc::new(Column::new_with_schema("c", &right_schema)?) as _,
+    )];
+    let join = hash_join_exec(left_input, right_input, on, None, &JoinType::RightMark)?;
+    let physical_plan = sort_exec([sort_expr("a", &join.schema())].into(), join);
+
+    let test = EnforceSortingTest::new(physical_plan).with_repartition_sorts(true);
+    assert_snapshot!(test.run(), @r"
+    Input Plan:
+    SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+      HashJoinExec: mode=Partitioned, join_type=RightMark, on=[(col_a@0, c@2)]
+        DataSourceExec: partitions=1, partition_sizes=[0]
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+
+    Optimized Plan:
+    SortPreservingMergeExec: [a@0 ASC]
+      HashJoinExec: mode=Partitioned, join_type=RightMark, on=[(col_a@0, c@2)]
         RepartitionExec: partitioning=Hash([col_a@0], 10), input_partitions=1
           DataSourceExec: partitions=1, partition_sizes=[0]
         RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1, maintains_sort_order=true
@@ -1431,7 +1465,7 @@ async fn test_sort_merge_join_order_by_left() -> Result<()> {
                       DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
                 ");
             }
-        };
+        }
         })
         }
     }
@@ -1543,7 +1577,7 @@ async fn test_sort_merge_join_order_by_right() -> Result<()> {
                       DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
                 ");
             }
-        };
+        }
         })
         }
     }
@@ -2888,7 +2922,7 @@ async fn test_partial_sort_with_homogeneous_batches() -> Result<()> {
             .downcast_ref::<Int32Array>()
             .unwrap();
         let actual = c_array.values().iter().copied().collect::<Vec<i32>>();
-        assert_eq!(actual, expected_values[i], "Batch {i} not sorted correctly",);
+        assert_eq!(actual, expected_values[i], "Batch {i} not sorted correctly");
     }
 
     assert_eq!(

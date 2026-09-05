@@ -31,8 +31,9 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::stream::{Stream, StreamExt};
 
-use super::aggregate_hash_table::{OrderedAggregateTable, SingleMarker};
-use super::group_values::GroupByMetrics;
+use super::aggregate_hash_table::{
+    OrderedAggregateTable, OrderedAggregateTableMetrics, SingleMarker,
+};
 use super::ordered_final_stream::OrderedFinalAggregateStream;
 use super::{AggregateExec, create_schema};
 use crate::aggregates::AggregateMode;
@@ -276,7 +277,7 @@ impl OrderedSingleSpillContext {
     fn into_replay_stream(
         self,
         baseline_metrics: &BaselineMetrics,
-        group_by_metrics: GroupByMetrics,
+        metrics: OrderedAggregateTableMetrics,
         reservation: MemoryReservation,
     ) -> Result<SendableRecordBatchStream> {
         let Self {
@@ -310,7 +311,7 @@ impl OrderedSingleSpillContext {
             merged,
             &InputOrderMode::Sorted,
             baseline_metrics.clone(),
-            group_by_metrics,
+            metrics,
             None,
             reservation,
         )?;
@@ -635,12 +636,12 @@ impl OrderedSingleAggregateStream {
         let timer = elapsed_compute.timer();
         let replay = match spill_context.spill_table(&mut table) {
             Ok(()) => {
-                let group_by_metrics = table.group_by_metrics();
+                let metrics = table.metrics();
                 drop(table);
                 match self.reservation.try_resize(0) {
                     Ok(()) => (*spill_context).into_replay_stream(
                         &self.baseline_metrics,
-                        group_by_metrics,
+                        metrics,
                         self.reservation.new_empty(),
                     ),
                     Err(e) => Err(e),
@@ -855,7 +856,6 @@ impl Stream for OrderedSingleAggregateStream {
             match next_state {
                 ControlFlow::Continue(next_state) => {
                     self.state = Some(next_state);
-                    continue;
                 }
                 ControlFlow::Break((Poll::Ready(Some(Err(e))), next_state)) => {
                     debug_assert!(matches!(

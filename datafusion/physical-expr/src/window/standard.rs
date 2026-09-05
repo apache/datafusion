@@ -179,9 +179,13 @@ impl WindowExpr for StandardWindowExpr {
                             published: false,
                         })
                 };
-            let evaluator = match &mut window_state.window_fn {
-                WindowFn::Builtin(evaluator) => evaluator,
-                _ => unreachable!(),
+            // Skip partitions whose input is unchanged since the last
+            // evaluation pass.
+            if window_state.state.is_input_unchanged(partition_batch_state) {
+                continue;
+            }
+            let WindowFn::Builtin(evaluator) = &mut window_state.window_fn else {
+                unreachable!()
             };
             let state = &mut window_state.state;
 

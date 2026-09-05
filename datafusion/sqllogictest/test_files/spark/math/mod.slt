@@ -160,6 +160,18 @@ SELECT MOD(10.5::float8, 0.0::float8) as mod_div_zero_float;
 ----
 NULL
 
+# A negative zero divisor counts as zero and returns NULL in legacy mode
+query R
+SELECT MOD(10.5::float8, -0.0::float8) as mod_div_zero_neg_float;
+----
+NULL
+
+# A NULL dividend evaluates to NULL regardless of the divisor
+query I
+SELECT MOD(NULL::int, 0::int) as mod_null_dividend_legacy;
+----
+NULL
+
 # Division by zero errors in ANSI mode
 statement ok
 set datafusion.execution.enable_ansi_mode = true;
@@ -169,6 +181,25 @@ SELECT MOD(10::int, 0::int);
 
 statement error DataFusion error: Arrow error: Divide by zero error
 SELECT MOD(-7::int, 0::int);
+
+# A zero divisor of any numeric type raises, including floating point
+statement error DataFusion error: Arrow error: Divide by zero error
+SELECT MOD(10.5::float8, 0.0::float8);
+
+# A negative zero divisor counts as zero and raises
+statement error DataFusion error: Arrow error: Divide by zero error
+SELECT MOD(10.5::float8, -0.0::float8);
+
+# A NULL dividend short-circuits to NULL before the divisor is validated
+query I
+SELECT MOD(NULL::int, 0::int) as mod_null_dividend_ansi;
+----
+NULL
+
+query R
+SELECT MOD(NULL::float8, 0.0::float8) as mod_null_dividend_ansi_float;
+----
+NULL
 
 statement ok
 set datafusion.execution.enable_ansi_mode = false;

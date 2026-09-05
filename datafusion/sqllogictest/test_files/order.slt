@@ -1485,7 +1485,9 @@ physical_plan
 03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
 
-# Boolean to integer casts preserve the order.
+# The cast preserves the order, but the comparison does not: `inc_col` is
+# ASC NULLS LAST while `desc_col` is DESC NULLS FIRST, so `inc_col > desc_col`
+# is null at both ends and the sort has to stay.
 statement ok
 CREATE EXTERNAL TABLE annotated_data_finite (
   ts INTEGER,
@@ -1507,9 +1509,158 @@ logical_plan
 03)----TableScan: annotated_data_finite projection=[inc_col, desc_col]
 physical_plan
 01)SortPreservingMergeExec: [c@0 ASC NULLS LAST]
+02)--SortExec: expr=[c@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[CAST(inc_col@0 > desc_col@1 AS Int32) as c]
+04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_1.csv]]}, projection=[inc_col, desc_col], output_orderings=[[inc_col@0 ASC NULLS LAST], [desc_col@1 DESC]], file_type=csv, has_header=true
+
+# With matching null placement the comparison keeps its order: no sort needed.
+statement ok
+CREATE EXTERNAL TABLE annotated_data_finite_nulls_last (
+  ts INTEGER,
+  inc_col INTEGER,
+  desc_col INTEGER,
+)
+STORED AS CSV
+WITH ORDER (inc_col ASC NULLS LAST)
+WITH ORDER (desc_col DESC NULLS LAST)
+LOCATION '../core/tests/data/window_1.csv'
+OPTIONS ('format.has_header' 'true');
+
+query TT
+EXPLAIN SELECT CAST((inc_col>desc_col) as integer) as c from annotated_data_finite_nulls_last order by c;
+----
+logical_plan
+01)Sort: c ASC NULLS LAST
+02)--Projection: CAST(annotated_data_finite_nulls_last.inc_col > annotated_data_finite_nulls_last.desc_col AS Int32) AS c
+03)----TableScan: annotated_data_finite_nulls_last projection=[inc_col, desc_col]
+physical_plan
+01)SortPreservingMergeExec: [c@0 ASC NULLS LAST]
 02)--ProjectionExec: expr=[CAST(inc_col@0 > desc_col@1 AS Int32) as c]
 03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_1.csv]]}, projection=[inc_col, desc_col], output_orderings=[[inc_col@0 ASC NULLS LAST], [desc_col@1 DESC]], file_type=csv, has_header=true
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_1.csv]]}, projection=[inc_col, desc_col], output_orderings=[[inc_col@0 ASC NULLS LAST], [desc_col@1 DESC NULLS LAST]], file_type=csv, has_header=true
+
+# Regression test for #11596. `a` is ASC NULLS FIRST and `b` is ASC NULLS LAST,
+# so `a + b` is null at both ends of the scan: (NULL, 3, 6, NULL). No nulls
+# placement describes that.
+query I
+COPY (VALUES (NULL, 1), (1, 2), (2, 4), (3, NULL))
+TO 'test_files/scratch/order/mixed_null_placement.csv'
+OPTIONS ('format.has_header' 'true');
+----
+4
+
+statement ok
+CREATE EXTERNAL TABLE mixed_null_placement (
+  a BIGINT,
+  b BIGINT
+)
+STORED AS CSV
+WITH ORDER (a ASC NULLS FIRST)
+WITH ORDER (b ASC NULLS LAST)
+LOCATION 'test_files/scratch/order/mixed_null_placement.csv'
+OPTIONS ('format.has_header' 'true');
+
+# The sort has to happen. Without it, this comes back in scan order.
+query I
+SELECT a + b AS s FROM mixed_null_placement ORDER BY s;
+----
+3
+6
+NULL
+NULL
+
+# Same at the plan level. Two separate things keep this sort: `add()` won't
+# merge mismatched `nulls_first`, and `arithmetic_sort_properties` gives up on
+# any `col + col` with unbounded ranges, which is every column read from a
+# file. The second masks the first today.
+query TT
+EXPLAIN SELECT a + b AS s FROM mixed_null_placement ORDER BY s;
+----
+logical_plan
+01)Sort: s ASC NULLS LAST
+02)--Projection: mixed_null_placement.a + mixed_null_placement.b AS s
+03)----TableScan: mixed_null_placement projection=[a, b]
+physical_plan
+01)SortPreservingMergeExec: [s@0 ASC NULLS LAST]
+02)--SortExec: expr=[s@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[a@0 + b@1 as s]
+04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/order/mixed_null_placement.csv]]}, projection=[a, b], output_orderings=[[a@0 ASC], [b@1 ASC NULLS LAST]], file_type=csv, has_header=true
+
+statement ok
+DROP TABLE mixed_null_placement;
+
+# ASC NULLS FIRST survives OR but not AND. The per-operator rules are
+# unit-tested in sort_properties.rs; this checks the planner uses them.
+query I
+COPY (VALUES
+  (CAST(NULL AS BOOLEAN), false),
+  (CAST(NULL AS BOOLEAN), true),
+  (false,                 true),
+  (true,                  true))
+TO 'test_files/scratch/order/kleene_nulls_first.csv'
+OPTIONS ('format.has_header' 'true');
+----
+4
+
+statement ok
+CREATE EXTERNAL TABLE kleene_nulls_first (a BOOLEAN, b BOOLEAN)
+STORED AS CSV
+WITH ORDER (a ASC NULLS FIRST)
+WITH ORDER (b ASC NULLS FIRST)
+LOCATION 'test_files/scratch/order/kleene_nulls_first.csv'
+OPTIONS ('format.has_header' 'true');
+
+# a AND b is (false, NULL, false, true) in scan order, so it needs sorting.
+query B
+SELECT a AND b AS c FROM kleene_nulls_first ORDER BY c ASC NULLS FIRST;
+----
+NULL
+false
+false
+true
+
+# AND must not claim ASC NULLS FIRST.
+query TT
+EXPLAIN SELECT a AND b AS c FROM kleene_nulls_first ORDER BY c ASC NULLS FIRST;
+----
+logical_plan
+01)Sort: c ASC NULLS FIRST
+02)--Projection: kleene_nulls_first.a AND kleene_nulls_first.b AS c
+03)----TableScan: kleene_nulls_first projection=[a, b]
+physical_plan
+01)SortPreservingMergeExec: [c@0 ASC]
+02)--SortExec: expr=[c@0 ASC], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[a@0 AND b@1 as c]
+04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/order/kleene_nulls_first.csv]]}, projection=[a, b], output_orderings=[[a@0 ASC], [b@1 ASC]], file_type=csv, has_header=true
+
+# a OR b is (NULL, true, true, true) in scan order, already ASC NULLS FIRST,
+# so no SortExec.
+query B
+SELECT a OR b AS c FROM kleene_nulls_first ORDER BY c ASC NULLS FIRST;
+----
+NULL
+true
+true
+true
+
+query TT
+EXPLAIN SELECT a OR b AS c FROM kleene_nulls_first ORDER BY c ASC NULLS FIRST;
+----
+logical_plan
+01)Sort: c ASC NULLS FIRST
+02)--Projection: kleene_nulls_first.a OR kleene_nulls_first.b AS c
+03)----TableScan: kleene_nulls_first projection=[a, b]
+physical_plan
+01)SortPreservingMergeExec: [c@0 ASC]
+02)--ProjectionExec: expr=[a@0 OR b@1 as c]
+03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/order/kleene_nulls_first.csv]]}, projection=[a, b], output_orderings=[[a@0 ASC], [b@1 ASC]], file_type=csv, has_header=true
+
+statement ok
+DROP TABLE kleene_nulls_first;
 
 # Union a query with the actual data and one with a constant
 query I

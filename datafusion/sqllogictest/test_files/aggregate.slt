@@ -827,6 +827,15 @@ SELECT approx_median(col_f64_nan) FROM median_table
 ----
 NaN
 
+query R
+SELECT percentile_cont(col_f64_nan, 0.5) FROM median_table
+----
+NaN
+
+query R
+SELECT approx_percentile_cont(col_f64_nan, 0.5) FROM median_table
+----
+NaN
 
 # median_i8_overflow_negative
 query R
@@ -1171,6 +1180,39 @@ FROM distinct_pct_nulls ORDER BY id;
 
 statement ok
 DROP TABLE distinct_pct_nulls;
+
+# percentile_cont for shorter floats
+
+query RT
+select percentile_cont(arrow_cast(col_f32, 'Float16'), 0.5), arrow_typeof(percentile_cont(arrow_cast(col_f32, 'Float16'), 0.5)) from median_table;
+----
+2.75 Float16
+
+query RT
+select percentile_cont(col_f32, 0.5), arrow_typeof(percentile_cont(col_f32, 0.5)) from median_table;
+----
+2.75 Float32
+
+query RT
+select percentile_cont(DISTINCT arrow_cast(col_f32, 'Float16'), 0.5), arrow_typeof(percentile_cont(DISTINCT arrow_cast(col_f32, 'Float16'), 0.5)) from median_table;
+----
+2.75 Float16
+
+query RT
+select percentile_cont(DISTINCT col_f32, 0.5), arrow_typeof(percentile_cont(DISTINCT col_f32, 0.5)) from median_table;
+----
+2.75 Float32
+
+query RT
+select median(arrow_cast(col_f32, 'Float16')), arrow_typeof(median(arrow_cast(col_f32, 'Float16'))) from median_table;
+----
+2.75 Float16
+
+query RT
+select median(col_f32), arrow_typeof(median(col_f32)) from median_table;
+----
+2.75 Float32
+
 
 query RT
 select approx_median(arrow_cast(col_f32, 'Float16')), arrow_typeof(approx_median(arrow_cast(col_f32, 'Float16'))) from median_table;
@@ -1749,6 +1791,67 @@ SELECT g, approx_distinct(arrow_cast(arrow_cast(s, 'Binary'), 'FixedSizeBinary(1
 2 2
 3 0
 4 1
+
+
+# Dictionary: dictionary-encoded values must hash identically to the plain
+# (non-dictionary) values, so the counts below match the Utf8 case above.
+
+# Dictionary non-grouped
+query I
+SELECT approx_distinct(arrow_cast(s, 'Dictionary(Int32, Utf8)')) FROM approx_distinct_group_test WHERE g = 2;
+----
+2
+
+# Dictionary grouped
+query II
+SELECT g, approx_distinct(arrow_cast(s, 'Dictionary(Int32, Utf8)')) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+# Dictionary with a non-string value type (Int32), also exercising a
+# larger (Int64) key type
+query I
+SELECT approx_distinct(arrow_cast(i, 'Dictionary(Int64, Int32)')) FROM approx_distinct_group_test WHERE g = 2;
+----
+2
+
+query II
+SELECT g, approx_distinct(arrow_cast(i, 'Dictionary(Int64, Int32)')) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+# Dictionary over a fixed-domain value type (Int8). The bitmap accumulator only
+# understands its native value array, so these go through the HyperLogLog groups
+# accumulator and must still match the Int32 counts above.
+query I
+SELECT approx_distinct(arrow_cast(arrow_cast(i, 'Int8'), 'Dictionary(Int32, Int8)')) FROM approx_distinct_group_test WHERE g = 2;
+----
+2
+
+query II
+SELECT g, approx_distinct(arrow_cast(arrow_cast(i, 'Int8'), 'Dictionary(Int32, Int8)')) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+# A dictionary is supported exactly when its value type is: floats are rejected
+# just like a bare Float64 is, rather than silently reaching the HLL accumulator.
+statement error DataFusion error: This feature is not implemented: Support for 'approx_distinct' for data type Float64 is not implemented
+SELECT approx_distinct(arrow_cast(i, 'Float64')) FROM approx_distinct_group_test;
+
+statement error DataFusion error: This feature is not implemented: Support for 'approx_distinct' for data type Dictionary\(Int32, Float64\) is not implemented
+SELECT approx_distinct(arrow_cast(i, 'Dictionary(Int32, Float64)')) FROM approx_distinct_group_test;
+
+statement error DataFusion error: This feature is not implemented: Support for 'approx_distinct' for data type Dictionary\(Int32, Float64\) is not implemented
+SELECT g, approx_distinct(arrow_cast(i, 'Dictionary(Int32, Float64)')) FROM approx_distinct_group_test GROUP BY g;
 
 
 # List
@@ -2732,6 +2835,26 @@ b 68
 c 122
 d 123.15
 e 110.266666666667
+
+# inline ORDER BY preserves percentile and centroids arguments
+query TR
+SELECT c1, approx_percentile_cont(0.95, 200 ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY c1 ORDER BY c1
+----
+a 73.55
+b 68
+c 122.5
+d 124.2
+e 115.6
+
+# inline ORDER BY preserves the weight argument
+query TR
+SELECT c1, approx_percentile_cont_with_weight(1, 0.95 ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY c1 ORDER BY c1
+----
+a 73.55
+b 68
+c 122.5
+d 124.2
+e 115.6
 
 # csv_query_sum_crossjoin
 query TTI
@@ -4497,6 +4620,352 @@ query R
 SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY v DESC) FROM (VALUES (1), (2), (3), (4), (5), (6), (7), (8)) as t (v)
 ----
 2.75
+
+
+#####################
+## percentile_cont tests for decimal types
+#####################
+
+# Decimal128: typical percentiles (exact index, n=5)
+statement ok
+CREATE TABLE t (c DECIMAL(10, 2)) AS VALUES (10.10), (20.20), (30.30), (40.40), (50.50);
+
+query RT
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c), arrow_typeof(percentile_cont(0.5) WITHIN GROUP (ORDER BY c)) FROM t
+----
+30.3 Decimal128(10, 2)
+
+query R
+SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY c) FROM t
+----
+20.2
+
+query R
+SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY c) FROM t
+----
+40.4
+
+query R
+SELECT percentile_cont(0.0) WITHIN GROUP (ORDER BY c) FROM t
+----
+10.1
+
+query R
+SELECT percentile_cont(1.0) WITHIN GROUP (ORDER BY c) FROM t
+----
+50.5
+
+# Alternate syntax should agree with WITHIN GROUP syntax
+query B
+SELECT percentile_cont(c, 0.5) = percentile_cont(0.5) WITHIN GROUP (ORDER BY c) FROM t
+----
+true
+
+statement ok
+DROP TABLE t;
+
+# Decimal128: interpolation between two values
+statement ok
+CREATE TABLE t (c DECIMAL(10, 2)) AS VALUES (10.00), (20.00);
+
+query RT
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c), arrow_typeof(percentile_cont(0.5) WITHIN GROUP (ORDER BY c)) FROM t
+----
+15 Decimal128(10, 2)
+
+query R
+SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY c) FROM t
+----
+12.5
+
+query R
+SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY c) FROM t
+----
+17.5
+
+statement ok
+DROP TABLE t;
+
+# Decimal128: negative numbers and NULL handling
+statement ok
+CREATE TABLE t (c DECIMAL(10, 2)) AS VALUES (-10.00), (-5.00), (0.00), (5.00), (10.00), (NULL);
+
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c) FROM t
+----
+0
+
+query R
+SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY c) FROM t
+----
+-5
+
+statement ok
+DROP TABLE t;
+
+# Decimal128: all NULLs
+statement ok
+CREATE TABLE t (c DECIMAL(10, 2)) AS VALUES (NULL);
+
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c) FROM t
+----
+NULL
+
+statement ok
+DROP TABLE t;
+
+# Decimal128: single value
+statement ok
+CREATE TABLE t (c DECIMAL(10, 2)) AS VALUES (42.00);
+
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c) FROM t
+----
+42
+
+statement ok
+DROP TABLE t;
+
+# Decimal128: GROUP BY
+statement ok
+CREATE TABLE t (g INT, c DECIMAL(10, 2)) AS VALUES (1, 10.00), (1, 20.00), (2, 30.00), (2, 40.00), (2, 50.00);
+
+query IR
+SELECT g, percentile_cont(0.5) WITHIN GROUP (ORDER BY c) FROM t GROUP BY g ORDER BY g
+----
+1 15
+2 40
+
+statement ok
+DROP TABLE t;
+
+# Decimal128: DISTINCT
+statement ok
+CREATE TABLE t (c DECIMAL(10, 2)) AS VALUES (10.00), (10.00), (10.00), (10.00), (20.00);
+
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c) FROM t
+----
+10
+
+query RT
+SELECT percentile_cont(DISTINCT c, 0.5), arrow_typeof(percentile_cont(DISTINCT c, 0.5)) FROM t
+----
+15 Decimal128(10, 2)
+
+statement ok
+DROP TABLE t;
+
+# Other decimals
+
+query RT
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v), arrow_typeof(percentile_cont(0.5) WITHIN GROUP (ORDER BY v))
+FROM (VALUES (arrow_cast(10.00, 'Decimal32(9, 2)')), (arrow_cast(20.00, 'Decimal32(9, 2)'))) as t (v)
+----
+15 Decimal32(9, 2)
+
+query RT
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v), arrow_typeof(percentile_cont(0.5) WITHIN GROUP (ORDER BY v))
+FROM (VALUES (arrow_cast(10.00, 'Decimal64(18, 2)')), (arrow_cast(20.00, 'Decimal64(18, 2)'))) as t (v)
+----
+15 Decimal64(18, 2)
+
+query RT
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v), arrow_typeof(percentile_cont(0.5) WITHIN GROUP (ORDER BY v))
+FROM (VALUES (arrow_cast(10.00, 'Decimal256(54, 6)')), (arrow_cast(20.00, 'Decimal256(54, 6)'))) as t (v)
+----
+15 Decimal256(54, 6)
+
+# Other decimals: GROUP BY and DISTINCT
+
+statement ok
+CREATE TABLE t (g INT, c DECIMAL(10, 2)) AS VALUES
+    (1, 10.00), (1, 10.00), (1, 10.00), (1, 20.00), (2, 30.00), (2, 40.00);
+
+query IRT
+SELECT g,
+    percentile_cont(arrow_cast(c, 'Decimal32(9, 2)'), 0.5),
+    arrow_typeof(percentile_cont(arrow_cast(c, 'Decimal32(9, 2)'), 0.5))
+FROM t GROUP BY g ORDER BY g
+----
+1 10 Decimal32(9, 2)
+2 35 Decimal32(9, 2)
+
+query RRT
+SELECT
+    percentile_cont(arrow_cast(c, 'Decimal32(9, 2)'), 0.5),
+    percentile_cont(DISTINCT arrow_cast(c, 'Decimal32(9, 2)'), 0.5),
+    arrow_typeof(percentile_cont(DISTINCT arrow_cast(c, 'Decimal32(9, 2)'), 0.5))
+FROM t
+----
+15 25 Decimal32(9, 2)
+
+query IRT
+SELECT g,
+    percentile_cont(arrow_cast(c, 'Decimal64(18, 2)'), 0.5),
+    arrow_typeof(percentile_cont(arrow_cast(c, 'Decimal64(18, 2)'), 0.5))
+FROM t GROUP BY g ORDER BY g
+----
+1 10 Decimal64(18, 2)
+2 35 Decimal64(18, 2)
+
+query RRT
+SELECT
+    percentile_cont(arrow_cast(c, 'Decimal64(18, 2)'), 0.5),
+    percentile_cont(DISTINCT arrow_cast(c, 'Decimal64(18, 2)'), 0.5),
+    arrow_typeof(percentile_cont(DISTINCT arrow_cast(c, 'Decimal64(18, 2)'), 0.5))
+FROM t
+----
+15 25 Decimal64(18, 2)
+
+query IRT
+SELECT g,
+    percentile_cont(arrow_cast(c, 'Decimal256(54, 6)'), 0.5),
+    arrow_typeof(percentile_cont(arrow_cast(c, 'Decimal256(54, 6)'), 0.5))
+FROM t GROUP BY g ORDER BY g
+----
+1 10 Decimal256(54, 6)
+2 35 Decimal256(54, 6)
+
+query RRT
+SELECT
+    percentile_cont(arrow_cast(c, 'Decimal256(54, 6)'), 0.5),
+    percentile_cont(DISTINCT arrow_cast(c, 'Decimal256(54, 6)'), 0.5),
+    arrow_typeof(percentile_cont(DISTINCT arrow_cast(c, 'Decimal256(54, 6)'), 0.5))
+FROM t
+----
+15 25 Decimal256(54, 6)
+
+statement ok
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t (c DECIMAL(50, 2)) AS VALUES (10.00), (20.00);
+
+query RT
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c), arrow_typeof(percentile_cont(0.5) WITHIN GROUP (ORDER BY c)) FROM t
+----
+15 Decimal256(50, 2)
+
+statement ok
+DROP TABLE t;
+
+# Decimal128 overflow cases
+statement ok
+CREATE TABLE t (c DECIMAL(38, 0)) AS VALUES
+    (arrow_cast('-90000000000000000000000000000000000000', 'Decimal128(38,0)')),
+    (arrow_cast('90000000000000000000000000000000000000', 'Decimal128(38,0)'));
+
+query RT
+SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY c), arrow_typeof(percentile_cont(0.25) WITHIN GROUP (ORDER BY c)) FROM t
+----
+-45000000000000000000000000000000000000 Decimal128(38, 0)
+
+statement ok
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t (c DECIMAL(38, 0)) AS VALUES
+    (arrow_cast('-99999999999999999999999999999999999999', 'Decimal128(38,0)')),
+    (arrow_cast('99999999999999999999999999999999999999', 'Decimal128(38,0)'));
+
+query RT
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c), arrow_typeof(percentile_cont(0.5) WITHIN GROUP (ORDER BY c)) FROM t
+----
+0 Decimal128(38, 0)
+
+statement ok
+DROP TABLE t;
+
+# Decimal32 overflow cases
+query RT
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v), arrow_typeof(percentile_cont(0.5) WITHIN GROUP (ORDER BY v))
+FROM (VALUES (arrow_cast(-999999999, 'Decimal32(9, 0)')), (arrow_cast(999999999, 'Decimal32(9, 0)'))) as t (v)
+----
+0 Decimal32(9, 0)
+
+# A fraction lower than `1 / den` returns zero numerator, so the interpolation
+# floors to the lower value
+query RT
+SELECT percentile_cont(0.0000001) WITHIN GROUP (ORDER BY v), arrow_typeof(percentile_cont(0.0000001) WITHIN GROUP (ORDER BY v))
+FROM (VALUES (arrow_cast(10.00, 'Decimal64(18, 2)')), (arrow_cast(20.00, 'Decimal64(18, 2)'))) as t (v)
+----
+10 Decimal64(18, 2)
+
+# Decimal overflow tests to test i32 overflows for interpolation, issued for all decimals
+statement ok
+CREATE TABLE t_percentile_series (v DECIMAL(9, 2)) AS VALUES
+    (0.00), (4009999.99), (4010000.00), (4010000.01), (4010000.02),
+    (9999999.99), (9999999.99), (9999999.99), (9999999.99), (9999999.99);
+
+query RT
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v), arrow_typeof(percentile_cont(0.5) WITHIN GROUP (ORDER BY v))
+FROM t_percentile_series
+----
+7005000 Decimal128(9, 2)
+
+query RT
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY d), arrow_typeof(percentile_cont(0.5) WITHIN GROUP (ORDER BY d))
+FROM (SELECT arrow_cast(v, 'Decimal32(9, 2)') AS d FROM t_percentile_series)
+----
+7005000 Decimal32(9, 2)
+
+query RT
+SELECT percentile_cont(0.01) WITHIN GROUP (ORDER BY d), arrow_typeof(percentile_cont(0.01) WITHIN GROUP (ORDER BY d))
+FROM (SELECT arrow_cast(v, 'Decimal32(9, 2)') AS d FROM t_percentile_series)
+----
+360899.99 Decimal32(9, 2)
+
+# Decimal64 and Decimal256 agree on the harder p = 0.01 case as well
+query RT
+SELECT percentile_cont(0.01) WITHIN GROUP (ORDER BY d), arrow_typeof(percentile_cont(0.01) WITHIN GROUP (ORDER BY d))
+FROM (SELECT arrow_cast(v, 'Decimal64(18, 2)') AS d FROM t_percentile_series)
+----
+360899.99 Decimal64(18, 2)
+
+query RT
+SELECT percentile_cont(0.01) WITHIN GROUP (ORDER BY v), arrow_typeof(percentile_cont(0.01) WITHIN GROUP (ORDER BY v))
+FROM t_percentile_series
+----
+360899.99 Decimal128(9, 2)
+
+query RT
+SELECT percentile_cont(0.01) WITHIN GROUP (ORDER BY d), arrow_typeof(percentile_cont(0.01) WITHIN GROUP (ORDER BY d))
+FROM (SELECT arrow_cast(v, 'Decimal256(40, 2)') AS d FROM t_percentile_series)
+----
+360899.99 Decimal256(40, 2)
+
+# Sanity check with floats
+query RT
+SELECT percentile_cont(0.01) WITHIN GROUP (ORDER BY d), arrow_typeof(percentile_cont(0.01) WITHIN GROUP (ORDER BY d))
+FROM (SELECT arrow_cast(v, 'Float64') AS d FROM t_percentile_series)
+----
+360899.9991 Float64
+
+statement ok
+DROP TABLE t_percentile_series;
+
+# regressions for edge cases, verified with DuckDB
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v)
+FROM (VALUES (arrow_cast(0, 'Decimal32(9, 2)')), (arrow_cast(9999999, 'Decimal32(9, 2)'))) as t (v)
+----
+4999999.5
+
+query RT
+SELECT percentile_cont(0.00009) WITHIN GROUP (ORDER BY v),
+arrow_typeof(percentile_cont(0.00009) WITHIN GROUP (ORDER BY v))
+FROM (VALUES (arrow_cast(0, 'Decimal32(9,0)')), (arrow_cast(999999999, 'Decimal32(9,0)'))) as t (v)
+----
+89999 Decimal32(9, 0)
+
+# saniry check with floats
+query R
+SELECT percentile_cont(0.00009) WITHIN GROUP (ORDER BY v)
+FROM (VALUES (0), (999999999)) as t (v);
+----
+89999.99991
 
 
 # variance_single_value
@@ -7237,6 +7706,44 @@ from aggregate_test_100;
 statement ok
 set datafusion.execution.batch_size = 8192;
 
+# Test negative nth_value update_batch() with batches smaller than, equal to,
+# and larger than N for both order-insensitive and order-sensitive accumulators.
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+set datafusion.execution.batch_size = 1;
+
+query II
+select nth_value(i, -3), nth_value(i, -3 order by i)
+from generate_series(1, 4) t(i);
+----
+2 2
+
+statement ok
+set datafusion.execution.batch_size = 3;
+
+query II
+select nth_value(i, -3), nth_value(i, -3 order by i)
+from generate_series(1, 6) t(i);
+----
+4 4
+
+statement ok
+set datafusion.execution.batch_size = 4;
+
+query II
+select nth_value(i, -3), nth_value(i, -3 order by i)
+from generate_series(1, 8) t(i);
+----
+6 6
+
+statement ok
+set datafusion.execution.batch_size = 8192;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
 
 # regr_*() testing retract_batch() from RegrAccumulator's internal implementation
 query RRIRRRRRR
@@ -8817,10 +9324,11 @@ NULL NULL NULL NULL
 statement ok
 drop table distinct_avg;
 
-query R
-select percentile_cont(null, 0.5);
+# Null evaluates to null
+query ?T
+select percentile_cont(null, 0.5), arrow_typeof(percentile_cont(null, 0.5));
 ----
-NULL
+NULL Null
 
 # Test string_agg window frame behavior (fix for issue #19612)
 statement ok

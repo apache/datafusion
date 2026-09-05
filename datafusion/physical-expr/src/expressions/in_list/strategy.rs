@@ -17,180 +17,95 @@
 
 use std::sync::Arc;
 
-use arrow::array::ArrayRef;
-use arrow::compute::cast;
-use arrow::datatypes::{
-    DataType, Date32Type, Date64Type, Decimal128Type, DurationMicrosecondType,
-    DurationMillisecondType, DurationNanosecondType, DurationSecondType, Float16Type,
-    Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
-    IntervalMonthDayNanoType, IntervalUnit, Time32MillisecondType, Time32SecondType,
-    Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt8Type,
-    UInt16Type, UInt32Type, UInt64Type,
-};
+use arrow::array::{ArrayRef, AsArray};
+use arrow::compute::take;
+use arrow::datatypes::DataType;
 use datafusion_common::Result;
 
 use super::array_static_filter::ArrayStaticFilter;
-use super::branchless_filter::{
-    BranchlessFilter, BranchlessFilterType, BranchlessNative,
-};
-use super::primitive_filter::*;
-use super::static_filter::StaticFilter;
+use super::dictionary_filter::DictionaryFilter;
+use super::fixed_size_binary_filter::instantiate_fixed_size_binary_filter;
+use super::primitive_filter::instantiate_primitive_filter;
+use super::static_filter::StaticFilterRef;
 
-type StaticFilterRef = Arc<dyn StaticFilter + Send + Sync>;
-
-pub(super) fn instantiate_static_filter(in_array: ArrayRef) -> Result<StaticFilterRef> {
+pub(super) fn instantiate_static_filter(
+    in_array: ArrayRef,
+    needle_data_type: &DataType,
+) -> Result<StaticFilterRef> {
     let in_array = flatten_dictionary_haystack(in_array)?;
 
-    if let Some(filter) = instantiate_branchless_filter(&in_array)? {
-        return Ok(filter);
-    }
+    let filter = if let Some(filter) = instantiate_fixed_size_binary_filter(&in_array)? {
+        filter
+    } else if let Some(filter) = instantiate_primitive_filter(&in_array)? {
+        filter
+    } else {
+        Arc::new(ArrayStaticFilter::try_new(in_array)?)
+    };
 
-    instantiate_standard_filter(in_array)
-}
-
-fn flatten_dictionary_haystack(in_array: ArrayRef) -> Result<ArrayRef> {
-    // Flatten dictionary-encoded haystacks to their value type so that
-    // specialized filters (e.g. Int32StaticFilter) are used instead of
-    // falling through to the generic ArrayStaticFilter.
-    match in_array.data_type() {
-        DataType::Dictionary(_, value_type) => Ok(cast(&in_array, value_type.as_ref())?),
-        _ => Ok(in_array),
-    }
-}
-
-fn instantiate_branchless_filter(in_array: &ArrayRef) -> Result<Option<StaticFilterRef>> {
-    let non_null_count = in_array.len() - in_array.null_count();
-
-    macro_rules! filter {
-        ($arrow_type:ty) => {
-            branchless_filter::<$arrow_type>(in_array, non_null_count)
-        };
-    }
-
-    match in_array.data_type() {
-        DataType::Int8 => filter!(Int8Type),
-        DataType::UInt8 => filter!(UInt8Type),
-        DataType::Int16 => filter!(Int16Type),
-        DataType::UInt16 => filter!(UInt16Type),
-        DataType::Float16 => filter!(Float16Type),
-        DataType::Int32 => filter!(Int32Type),
-        DataType::UInt32 => filter!(UInt32Type),
-        DataType::Float32 => filter!(Float32Type),
-        DataType::Date32 => filter!(Date32Type),
-        DataType::Time32(unit) => match unit {
-            TimeUnit::Second => filter!(Time32SecondType),
-            TimeUnit::Millisecond => filter!(Time32MillisecondType),
-            _ => Ok(None),
-        },
-        DataType::Int64 => filter!(Int64Type),
-        DataType::UInt64 => filter!(UInt64Type),
-        DataType::Float64 => filter!(Float64Type),
-        DataType::Date64 => filter!(Date64Type),
-        DataType::Time64(unit) => match unit {
-            TimeUnit::Microsecond => filter!(Time64MicrosecondType),
-            TimeUnit::Nanosecond => filter!(Time64NanosecondType),
-            _ => Ok(None),
-        },
-        DataType::Timestamp(unit, _) => match unit {
-            TimeUnit::Second => filter!(TimestampSecondType),
-            TimeUnit::Millisecond => filter!(TimestampMillisecondType),
-            TimeUnit::Microsecond => filter!(TimestampMicrosecondType),
-            TimeUnit::Nanosecond => filter!(TimestampNanosecondType),
-        },
-        DataType::Duration(unit) => match unit {
-            TimeUnit::Second => filter!(DurationSecondType),
-            TimeUnit::Millisecond => filter!(DurationMillisecondType),
-            TimeUnit::Microsecond => filter!(DurationMicrosecondType),
-            TimeUnit::Nanosecond => filter!(DurationNanosecondType),
-        },
-        DataType::Decimal128(_, _) => filter!(Decimal128Type),
-        DataType::Interval(IntervalUnit::MonthDayNano) => {
-            filter!(IntervalMonthDayNanoType)
-        }
-        _ => Ok(None),
+    // Plain inputs can call the concrete filter directly. Dictionary inputs
+    // share one adapter across all concrete filter types.
+    if matches!(needle_data_type, DataType::Dictionary(_, _)) {
+        Ok(Arc::new(DictionaryFilter::new(filter)))
+    } else {
+        Ok(filter)
     }
 }
 
-fn instantiate_standard_filter(in_array: ArrayRef) -> Result<StaticFilterRef> {
-    match in_array.data_type() {
-        DataType::Int8 => bitmap_filter::<Int8Type>(&in_array),
-        DataType::UInt8 => bitmap_filter::<UInt8Type>(&in_array),
-        DataType::Int16 => bitmap_filter::<Int16Type>(&in_array),
-        DataType::UInt16 => bitmap_filter::<UInt16Type>(&in_array),
-        DataType::Float16 => bitmap_filter::<Float16Type>(&in_array),
-        DataType::Int32 => Ok(Arc::new(Int32StaticFilter::try_new(&in_array)?)),
-        DataType::Int64 => Ok(Arc::new(Int64StaticFilter::try_new(&in_array)?)),
-        DataType::UInt32 => Ok(Arc::new(UInt32StaticFilter::try_new(&in_array)?)),
-        DataType::UInt64 => Ok(Arc::new(UInt64StaticFilter::try_new(&in_array)?)),
-        // Float primitive types (use ordered wrappers for Hash/Eq)
-        DataType::Float32 => Ok(Arc::new(Float32StaticFilter::try_new(&in_array)?)),
-        DataType::Float64 => Ok(Arc::new(Float64StaticFilter::try_new(&in_array)?)),
-        _ => {
-            // Fall through to generic implementation for unsupported types
-            // (Struct, etc.).
-            Ok(Arc::new(ArrayStaticFilter::try_new(in_array)?))
-        }
-    }
-}
-
-fn bitmap_filter<T>(in_array: &ArrayRef) -> Result<StaticFilterRef>
-where
-    T: BitmapFilterType,
-{
-    Ok(Arc::new(BitmapFilter::<T>::try_new(in_array)?))
-}
-
-fn branchless_filter<T>(
-    in_array: &ArrayRef,
-    non_null_count: usize,
-) -> Result<Option<StaticFilterRef>>
-where
-    T: BranchlessFilterType,
-    BranchlessNative<T>: Copy + PartialEq + Send + Sync,
-{
-    // Larger lists use the standard filter. `try_new` checks the limit again.
-    if non_null_count > T::MAX_LIST_LEN {
-        return Ok(None);
+fn flatten_dictionary_haystack(mut in_array: ArrayRef) -> Result<ArrayRef> {
+    // Flatten every dictionary layer so the final value type can use a
+    // specialized filter.
+    while let Some(dictionary) = in_array.as_any_dictionary_opt() {
+        in_array = take(dictionary.values().as_ref(), dictionary.keys(), None)?;
     }
 
-    Ok(Some(Arc::new(BranchlessFilter::<T>::try_new(in_array)?)))
+    Ok(in_array)
 }
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::UInt32Array;
-    use arrow::datatypes::UInt32Type;
+    use std::sync::Arc;
 
-    use super::super::branchless_filter::BranchlessFilterType;
+    use arrow::array::{
+        BooleanArray, DictionaryArray, Int8Array, Int16Array, Int32Array,
+    };
+
     use super::*;
 
-    fn uint32_array(values: Vec<Option<u32>>) -> ArrayRef {
-        Arc::new(UInt32Array::from(values))
+    fn nested_dictionary(keys: Int16Array) -> Result<ArrayRef> {
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]));
+        // This dictionary represents [1, 3, NULL].
+        let inner: ArrayRef = Arc::new(DictionaryArray::try_new(
+            Int8Array::from(vec![0, 2, 1]),
+            values,
+        )?);
+        Ok(Arc::new(DictionaryArray::try_new(keys, inner)?))
     }
 
     #[test]
-    fn branchless_routing_respects_max_list_len() -> Result<()> {
-        let max_len = <UInt32Type as BranchlessFilterType>::MAX_LIST_LEN;
+    fn nested_dictionary_haystacks_only_include_referenced_values() -> Result<()> {
+        let needles = Int32Array::from(vec![1, 2, 3]);
 
-        let values = (0..max_len)
-            .map(|value| Some(value as u32))
-            .collect::<Vec<_>>();
-        assert!(instantiate_branchless_filter(&uint32_array(values))?.is_some());
+        // The null in the inner dictionary is not referenced by the outer one.
+        let filter = instantiate_static_filter(
+            nested_dictionary(Int16Array::from(vec![0, 1]))?,
+            &DataType::Int32,
+        )?;
+        assert_eq!(filter.null_count(), 0);
+        assert_eq!(
+            filter.contains(&needles, false)?,
+            BooleanArray::from(vec![true, false, true])
+        );
 
-        let values = (0..=max_len)
-            .map(|value| Some(value as u32))
-            .collect::<Vec<_>>();
-        assert!(instantiate_branchless_filter(&uint32_array(values))?.is_none());
-
-        Ok(())
-    }
-
-    #[test]
-    fn branchless_routing_handles_zero_non_null_values() -> Result<()> {
-        let array = uint32_array(vec![None; 3]);
-
-        assert!(instantiate_branchless_filter(&array)?.is_some());
+        // Referencing that same value gives the list normal SQL null semantics.
+        let filter = instantiate_static_filter(
+            nested_dictionary(Int16Array::from(vec![0, 2]))?,
+            &DataType::Int32,
+        )?;
+        assert_eq!(filter.null_count(), 1);
+        assert_eq!(
+            filter.contains(&needles, false)?,
+            BooleanArray::from(vec![Some(true), None, None])
+        );
 
         Ok(())
     }

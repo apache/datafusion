@@ -68,6 +68,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::bisect;
+use datafusion_common::utils::memory::RecordBatchMemoryCounter;
 use datafusion_common::{
     HashSet, JoinSide, JoinType, NullEquality, Result, assert_eq_or_internal_err,
     plan_err,
@@ -666,10 +667,32 @@ impl ExecutionPlan for SymmetricHashJoinExec {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
 
-        let left = ctx.encode_child(self.left())?;
-        let right = ctx.encode_child(self.right())?;
-        let on = self
-            .on()
+        // Destructure exhaustively (no `..`) so that a newly added field is a
+        // compile error here instead of being silently left out of the proto.
+        let Self {
+            left,
+            right,
+            on,
+            filter,
+            join_type,
+            null_equality,
+            left_sort_exprs,
+            right_sort_exprs,
+            mode,
+            // deterministic (`RandomState::with_seed(0)`), rebuilt identically
+            // by `try_new` on decode
+            random_state: _,
+            // runtime metrics, not part of the plan
+            metrics: _,
+            // recomputed by `try_new` on decode
+            column_indices: _,
+            // recomputed by `try_new` on decode
+            cache: _,
+        } = self;
+
+        let left = ctx.encode_child(left)?;
+        let right = ctx.encode_child(right)?;
+        let on = on
             .iter()
             .map(|(left, right)| {
                 Ok(protobuf::JoinOn {
@@ -679,7 +702,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let join_type = match self.join_type() {
+        let join_type = match join_type {
             JoinType::Inner => protobuf::JoinType::Inner,
             JoinType::Left => protobuf::JoinType::Left,
             JoinType::Right => protobuf::JoinType::Right,
@@ -691,11 +714,11 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             JoinType::LeftMark => protobuf::JoinType::Leftmark,
             JoinType::RightMark => protobuf::JoinType::Rightmark,
         };
-        let null_equality = match self.null_equality() {
+        let null_equality = match null_equality {
             NullEquality::NullEqualsNothing => protobuf::NullEquality::NullEqualsNothing,
             NullEquality::NullEqualsNull => protobuf::NullEquality::NullEqualsNull,
         };
-        let partition_mode = match self.partition_mode() {
+        let partition_mode = match mode {
             StreamJoinPartitionMode::SinglePartition => {
                 protobuf::StreamPartitionMode::SinglePartition
             }
@@ -703,8 +726,8 @@ impl ExecutionPlan for SymmetricHashJoinExec {
                 protobuf::StreamPartitionMode::PartitionedExec
             }
         };
-        let filter = self
-            .filter()
+        let filter = filter
+            .as_ref()
             .map(|filter| -> Result<protobuf::JoinFilter> {
                 let expression = ctx.encode_expr(filter.expression())?;
                 let column_indices = filter
@@ -732,12 +755,12 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         let expr_ctx = ctx.expr_ctx();
         let left_sort_exprs =
             datafusion_physical_expr_common::sort_expr::optional_ordering_try_to_proto(
-                self.left_sort_exprs(),
+                left_sort_exprs.as_ref(),
                 &expr_ctx,
             )?;
         let right_sort_exprs =
             datafusion_physical_expr_common::sort_expr::optional_ordering_try_to_proto(
-                self.right_sort_exprs(),
+                right_sort_exprs.as_ref(),
                 &expr_ctx,
             )?;
 
@@ -780,20 +803,30 @@ impl SymmetricHashJoinExec {
             protobuf::physical_plan_node::PhysicalPlanType::SymmetricHashJoin,
             "SymmetricHashJoinExec",
         );
-        let left = ctx.decode_required_child(
-            sym_join.left.as_deref(),
-            "SymmetricHashJoinExec",
-            "left",
-        )?;
+        // Destructure exhaustively (no `..`) so that a newly added proto field
+        // is a compile error here instead of being silently ignored.
+        let protobuf::SymmetricHashJoinExecNode {
+            left,
+            right,
+            on,
+            join_type,
+            partition_mode,
+            null_equality,
+            filter,
+            left_sort_exprs,
+            right_sort_exprs,
+        } = &**sym_join;
+
+        let left =
+            ctx.decode_required_child(left.as_deref(), "SymmetricHashJoinExec", "left")?;
         let right = ctx.decode_required_child(
-            sym_join.right.as_deref(),
+            right.as_deref(),
             "SymmetricHashJoinExec",
             "right",
         )?;
         let left_schema = left.schema();
         let right_schema = right.schema();
-        let on = sym_join
-            .on
+        let on = on
             .iter()
             .map(|columns| {
                 let left = ctx.decode_required_expr(
@@ -812,51 +845,47 @@ impl SymmetricHashJoinExec {
             })
             .collect::<Result<JoinOn>>()?;
 
-        let join_type =
-            match protobuf::JoinType::try_from(sym_join.join_type).map_err(|_| {
-                internal_datafusion_err!(
-                    "SymmetricHashJoinExec: unknown JoinType {}",
-                    sym_join.join_type
-                )
-            })? {
-                protobuf::JoinType::Inner => JoinType::Inner,
-                protobuf::JoinType::Left => JoinType::Left,
-                protobuf::JoinType::Right => JoinType::Right,
-                protobuf::JoinType::Full => JoinType::Full,
-                protobuf::JoinType::Leftsemi => JoinType::LeftSemi,
-                protobuf::JoinType::Rightsemi => JoinType::RightSemi,
-                protobuf::JoinType::Leftanti => JoinType::LeftAnti,
-                protobuf::JoinType::Rightanti => JoinType::RightAnti,
-                protobuf::JoinType::Leftmark => JoinType::LeftMark,
-                protobuf::JoinType::Rightmark => JoinType::RightMark,
-            };
-        let null_equality = match protobuf::NullEquality::try_from(sym_join.null_equality)
+        let join_type = match protobuf::JoinType::try_from(*join_type).map_err(|_| {
+            internal_datafusion_err!(
+                "SymmetricHashJoinExec: unknown JoinType {join_type}"
+            )
+        })? {
+            protobuf::JoinType::Inner => JoinType::Inner,
+            protobuf::JoinType::Left => JoinType::Left,
+            protobuf::JoinType::Right => JoinType::Right,
+            protobuf::JoinType::Full => JoinType::Full,
+            protobuf::JoinType::Leftsemi => JoinType::LeftSemi,
+            protobuf::JoinType::Rightsemi => JoinType::RightSemi,
+            protobuf::JoinType::Leftanti => JoinType::LeftAnti,
+            protobuf::JoinType::Rightanti => JoinType::RightAnti,
+            protobuf::JoinType::Leftmark => JoinType::LeftMark,
+            protobuf::JoinType::Rightmark => JoinType::RightMark,
+        };
+        let null_equality = match protobuf::NullEquality::try_from(*null_equality)
             .map_err(|_| {
                 internal_datafusion_err!(
-                    "SymmetricHashJoinExec: unknown NullEquality {}",
-                    sym_join.null_equality
+                    "SymmetricHashJoinExec: unknown NullEquality {null_equality}"
                 )
             })? {
             protobuf::NullEquality::NullEqualsNothing => NullEquality::NullEqualsNothing,
             protobuf::NullEquality::NullEqualsNull => NullEquality::NullEqualsNull,
         };
-        let partition_mode =
-            match protobuf::StreamPartitionMode::try_from(sym_join.partition_mode)
-                .map_err(|_| {
-                    internal_datafusion_err!(
-                        "SymmetricHashJoinExec: unknown StreamPartitionMode {}",
-                        sym_join.partition_mode
-                    )
-                })? {
-                protobuf::StreamPartitionMode::SinglePartition => {
-                    StreamJoinPartitionMode::SinglePartition
-                }
-                protobuf::StreamPartitionMode::PartitionedExec => {
-                    StreamJoinPartitionMode::Partitioned
-                }
-            };
-        let filter = sym_join
-            .filter
+        let partition_mode = match protobuf::StreamPartitionMode::try_from(
+            *partition_mode,
+        )
+        .map_err(|_| {
+            internal_datafusion_err!(
+                "SymmetricHashJoinExec: unknown StreamPartitionMode {partition_mode}"
+            )
+        })? {
+            protobuf::StreamPartitionMode::SinglePartition => {
+                StreamJoinPartitionMode::SinglePartition
+            }
+            protobuf::StreamPartitionMode::PartitionedExec => {
+                StreamJoinPartitionMode::Partitioned
+            }
+        };
+        let filter = filter
             .as_ref()
             .map(|filter| -> Result<JoinFilter> {
                 let schema: Schema = filter
@@ -905,12 +934,12 @@ impl SymmetricHashJoinExec {
             .transpose()?;
         let left_sort_exprs =
             datafusion_physical_expr_common::sort_expr::optional_ordering_try_from_proto(
-                &sym_join.left_sort_exprs,
+                left_sort_exprs,
                 &ctx.expr_ctx(left_schema.as_ref()),
             )?;
         let right_sort_exprs =
             datafusion_physical_expr_common::sort_expr::optional_ordering_try_from_proto(
-                &sym_join.right_sort_exprs,
+                right_sort_exprs,
                 &ctx.expr_ctx(right_schema.as_ref()),
             )?;
 
@@ -1211,6 +1240,7 @@ pub(crate) fn build_side_determined_results(
             column_indices,
             build_hash_joiner.build_side,
             join_type,
+            None,
         )
         .map(|batch| (batch.num_rows() > 0).then_some(batch))
     } else {
@@ -1314,6 +1344,7 @@ pub(crate) fn join_with_probe_batch(
             column_indices,
             build_hash_joiner.build_side,
             join_type,
+            None,
         )
         .map(|batch| (batch.num_rows() > 0).then_some(batch))
     }
@@ -1441,18 +1472,24 @@ pub struct OneSideHashJoiner {
 }
 
 impl OneSideHashJoiner {
+    /// Returns the joiner descriptor, directly owned container allocations, and input arrays.
+    ///
+    /// Allocations referenced by `on` are shared plan expressions and are excluded.
     pub fn size(&self) -> usize {
-        let mut size = 0;
-        size += size_of_val(self);
-        size += size_of_val(&self.build_side);
-        size += self.input_buffer.get_array_memory_size();
-        size += size_of_val(&self.on);
-        size += self.hashmap.size();
-        size += self.hashes_buffer.capacity() * size_of::<u64>();
-        size += self.visited_rows.capacity() * size_of::<usize>();
-        size += size_of_val(&self.offset);
-        size += size_of_val(&self.deleted_offset);
-        size
+        // `allocation_size` uses the hashbrown 0.17 layout, including control bytes.
+        size_of_val(self)
+            + self.input_buffer.get_array_memory_size()
+            + self.on.capacity() * size_of::<PhysicalExprRef>()
+            // `PruningJoinHashMap::size()` includes its descriptor, which is
+            // already included by `size_of_val(self)`.
+            + self.hashmap.size()
+            - size_of_val(&self.hashmap)
+            + self.hashes_buffer.capacity() * size_of::<u64>()
+            + self.visited_rows.allocation_size()
+    }
+
+    fn size_without_input_buffer(&self) -> usize {
+        self.size() - self.input_buffer.get_array_memory_size()
     }
     pub fn new(
         build_side: JoinSide,
@@ -1665,11 +1702,14 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
                         }
                         StatefulStreamResult::Ready(Some(batch)) => {
                             self.batch_transformer.set_batch(batch);
+                            self.update_reservation()?;
                         }
                         _ => {}
                     }
                 }
                 Some((batch, _)) => {
+                    // The transformer released this batch before it is emitted.
+                    self.update_reservation()?;
                     return self
                         .metrics
                         .baseline_metrics
@@ -1921,13 +1961,23 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
         self.state.clone()
     }
 
+    /// Returns the memory retained by this stream at its reservation boundary.
+    ///
+    /// Input buffers and a transformer-held output batch can share Arrow buffers,
+    /// so count them as one sequence rather than summing individual batch sizes.
     fn size(&self) -> usize {
-        let mut size = 0;
+        let mut batch_memory_counter = RecordBatchMemoryCounter::new();
+        batch_memory_counter.count_batch_with_array_overhead(&self.left.input_buffer);
+        batch_memory_counter.count_batch_with_array_overhead(&self.right.input_buffer);
+        self.batch_transformer
+            .count_memory(&mut batch_memory_counter);
+
+        let mut size = batch_memory_counter.memory_usage();
         size += size_of_val(&self.schema);
         size += size_of_val(&self.filter);
         size += size_of_val(&self.join_type);
-        size += self.left.size();
-        size += self.right.size();
+        size += self.left.size_without_input_buffer();
+        size += self.right.size_without_input_buffer();
         size += size_of_val(&self.column_indices);
         size += self.graph.as_ref().map(|g| g.size()).unwrap_or(0);
         size += size_of_val(&self.left_sorted_filter_expr);
@@ -1936,6 +1986,14 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
         size += size_of_val(&self.null_equality);
         size += size_of_val(&self.metrics);
         size
+    }
+
+    /// Resizes the stream reservation to match all memory retained by the stream.
+    fn update_reservation(&mut self) -> Result<()> {
+        let capacity = self.size();
+        self.reservation.try_resize(capacity)?;
+        self.metrics.stream_memory_usage.set(capacity);
+        Ok(())
     }
 
     /// Performs a join operation for the specified `probe_side` (either left or right).
@@ -2035,9 +2093,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
 
         // Combine results:
         let result = combine_two_batches(&self.schema, equal_result, anti_result)?;
-        let capacity = self.size();
-        self.metrics.stream_memory_usage.set(capacity);
-        self.reservation.try_resize(capacity)?;
+        self.update_reservation()?;
         Ok(result)
     }
 }
@@ -2082,11 +2138,16 @@ mod tests {
         join_expr_tests_fixture_temporal, partitioned_hash_join_with_filter,
         partitioned_sym_join_with_filter, split_record_batches,
     };
-
+    use crate::test::TestMemoryExec;
+    use arrow::array::{ArrayRef, Int32Array, StructArray};
     use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
-    use datafusion_common::ScalarValue;
+    use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
+    use datafusion_common::{DataFusionError, ScalarValue};
     use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::memory_pool::{
+        MemoryLimit, MemoryPool, MemoryReservation, UnboundedMemoryPool,
+    };
+    use datafusion_execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{Column, binary, col, lit};
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
@@ -2101,6 +2162,472 @@ mod tests {
     // Cache for storing tables
     static TABLE_CACHE: LazyLock<Mutex<HashMap<TableKey, TableValue>>> =
         LazyLock::new(|| Mutex::new(HashMap::new()));
+
+    fn create_stream<T: BatchTransformer>(
+        batch_transformer: T,
+        input_schema: SchemaRef,
+    ) -> SymmetricHashJoinStream<T> {
+        let context = TaskContext::default();
+        create_stream_with_context(batch_transformer, input_schema, &context)
+    }
+
+    fn create_stream_with_context<T: BatchTransformer>(
+        batch_transformer: T,
+        input_schema: SchemaRef,
+        context: &TaskContext,
+    ) -> SymmetricHashJoinStream<T> {
+        let metrics = ExecutionPlanMetricsSet::new();
+        SymmetricHashJoinStream {
+            left_stream: Box::pin(EmptyRecordBatchStream::new(Arc::clone(&input_schema))),
+            right_stream: Box::pin(EmptyRecordBatchStream::new(Arc::clone(
+                &input_schema,
+            ))),
+            schema: Arc::clone(&input_schema),
+            filter: None,
+            join_type: JoinType::Inner,
+            left: OneSideHashJoiner::new(
+                JoinSide::Left,
+                vec![],
+                Arc::clone(&input_schema),
+            ),
+            right: OneSideHashJoiner::new(JoinSide::Right, vec![], input_schema),
+            column_indices: vec![],
+            graph: None,
+            left_sorted_filter_expr: None,
+            right_sorted_filter_expr: None,
+            random_state: RandomState::default(),
+            null_equality: NullEquality::NullEqualsNothing,
+            metrics: StreamJoinMetrics::new(0, &metrics),
+            reservation: Arc::new(
+                MemoryConsumer::new("SymmetricHashJoinStream[test]")
+                    .register(context.memory_pool()),
+            ),
+            state: SHJStreamState::PullRight,
+            batch_transformer,
+        }
+    }
+
+    fn expected_one_side_hash_joiner_size(joiner: &OneSideHashJoiner) -> usize {
+        size_of_val(joiner)
+            + joiner.input_buffer.get_array_memory_size()
+            + joiner.on.capacity() * size_of::<PhysicalExprRef>()
+            // `PruningJoinHashMap::size()` includes its inline descriptor.
+            + joiner.hashmap.size()
+            - size_of_val(&joiner.hashmap)
+            + joiner.hashes_buffer.capacity() * size_of::<u64>()
+            + joiner.visited_rows.allocation_size()
+    }
+
+    #[test]
+    fn one_side_hash_joiner_size_counts_descriptor_and_hash_set_allocation_once() {
+        let schema = Arc::new(Schema::empty());
+        let mut joiner = OneSideHashJoiner::new(JoinSide::Left, vec![], schema);
+
+        let empty_size = joiner.size();
+        assert_eq!(empty_size, expected_one_side_hash_joiner_size(&joiner));
+        assert_eq!(joiner.visited_rows.allocation_size(), 0);
+
+        joiner.visited_rows.extend(0..3);
+        let initial_capacity = joiner.visited_rows.capacity();
+        let initial_allocation = joiner.visited_rows.allocation_size();
+        assert!(initial_capacity > 0);
+        assert_eq!(joiner.size(), expected_one_side_hash_joiner_size(&joiner));
+        assert_eq!(joiner.size() - empty_size, initial_allocation);
+
+        joiner.visited_rows.extend(3..initial_capacity * 2);
+        let grown_allocation = joiner.visited_rows.allocation_size();
+        assert!(joiner.visited_rows.capacity() > initial_capacity);
+        assert_eq!(joiner.size(), expected_one_side_hash_joiner_size(&joiner));
+        assert_eq!(joiner.size() - empty_size, grown_allocation);
+        assert!(grown_allocation > initial_allocation);
+
+        let size_with_visited_rows = joiner.size();
+        let initial_hashmap_allocation =
+            joiner.hashmap.size() - size_of_val(&joiner.hashmap);
+        joiner.on = vec![Arc::new(Column::new("a", 0))];
+        joiner.hashmap = PruningJoinHashMap::with_capacity(3);
+        joiner.hashes_buffer.try_reserve(3).unwrap();
+        assert!(joiner.on.capacity() > 0);
+        assert!(joiner.hashmap.map.capacity() > 0);
+        assert!(joiner.hashes_buffer.capacity() > 0);
+
+        let owned_container_allocation_delta = joiner.on.capacity()
+            * size_of::<PhysicalExprRef>()
+            + (joiner.hashmap.size()
+                - size_of_val(&joiner.hashmap)
+                - initial_hashmap_allocation)
+            + joiner.hashes_buffer.capacity() * size_of::<u64>();
+        assert!(owned_container_allocation_delta > 0);
+        assert_eq!(joiner.size(), expected_one_side_hash_joiner_size(&joiner));
+        assert_eq!(
+            joiner.size() - size_with_visited_rows,
+            owned_container_allocation_delta
+        );
+    }
+
+    fn assert_stream_accounts_for_transformer<T: BatchTransformer>(batch_transformer: T) {
+        let batch = RecordBatch::try_from_iter(vec![(
+            "a",
+            Arc::new(Int32Array::from_iter_values(0..10)) as _,
+        )])
+        .unwrap();
+        let expected_size = batch.get_array_memory_size();
+        let mut stream = create_stream(batch_transformer, batch.schema());
+
+        let empty_size = stream.size();
+        stream.batch_transformer.set_batch(batch.clone());
+        stream.update_reservation().unwrap();
+        assert_eq!(stream.size() - empty_size, expected_size);
+        assert_eq!(stream.reservation.size(), stream.size());
+
+        while stream.batch_transformer.next().is_some() {}
+        stream.update_reservation().unwrap();
+        assert_eq!(stream.reservation.size(), empty_size);
+
+        stream.left.input_buffer = batch;
+        let size_with_shared_batch = stream.size();
+        stream
+            .batch_transformer
+            .set_batch(stream.left.input_buffer.clone());
+        assert_eq!(stream.size(), size_with_shared_batch);
+    }
+
+    #[test]
+    fn stream_accounts_for_transformer_batches_once() {
+        assert_stream_accounts_for_transformer(NoopBatchTransformer::new());
+        assert_stream_accounts_for_transformer(BatchSplitter::new(3));
+    }
+
+    #[tokio::test]
+    async fn symmetric_hash_join_retains_reservation_until_dropped() -> Result<()> {
+        let pool = Arc::new(RecordingMemoryPool::default());
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::clone(&pool) as Arc<dyn MemoryPool>)
+            .build_arc()?;
+        let context = TaskContext::default().with_runtime(runtime);
+        let schema = Arc::new(Schema::empty());
+        let mut stream =
+            create_stream_with_context(NoopBatchTransformer::new(), schema, &context);
+        stream.update_reservation()?;
+        let reserved_size = stream.reservation.size();
+        assert_ne!(reserved_size, 0);
+
+        // Empty input streams drive the normal exhaustion/finalization path:
+        // PullRight -> RightExhausted -> BothExhausted(false) -> final_result.
+        assert!(stream.next().await.is_none());
+        assert!(matches!(
+            stream.state(),
+            SHJStreamState::BothExhausted { final_result: true }
+        ));
+        assert_eq!(stream.reservation.size(), reserved_size);
+        assert_eq!(stream.metrics.stream_memory_usage.value(), reserved_size);
+
+        drop(stream);
+        assert_eq!(pool.reserved(), 0);
+        Ok(())
+    }
+
+    fn assert_stream_deduplicates_nested_transformer_batch<T: BatchTransformer>(
+        batch_transformer: T,
+    ) {
+        let shared_child: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let fields =
+            Fields::from(vec![Arc::new(Field::new("value", DataType::Int32, false))]);
+        let left_batch = RecordBatch::try_from_iter(vec![(
+            "nested",
+            Arc::new(StructArray::new(
+                fields.clone(),
+                vec![Arc::clone(&shared_child)],
+                None,
+            )) as ArrayRef,
+        )])
+        .unwrap();
+        let transformer_batch = RecordBatch::try_from_iter(vec![(
+            "nested",
+            Arc::new(StructArray::new(
+                fields,
+                vec![Arc::clone(&shared_child)],
+                None,
+            )) as ArrayRef,
+        )])
+        .unwrap();
+        let mut stream = create_stream(batch_transformer, left_batch.schema());
+        stream.left.input_buffer = left_batch;
+        let size_without_transformer = stream.size();
+
+        stream
+            .batch_transformer
+            .set_batch(transformer_batch.clone());
+
+        assert_eq!(
+            stream.size() - size_without_transformer,
+            transformer_batch.get_array_memory_size()
+                - shared_child.get_array_memory_size()
+        );
+    }
+
+    #[test]
+    fn stream_deduplicates_nested_transformer_batches() {
+        assert_stream_deduplicates_nested_transformer_batch(NoopBatchTransformer::new());
+        assert_stream_deduplicates_nested_transformer_batch(BatchSplitter::new(3));
+    }
+
+    fn assert_transformer_reservation_exhausts_pool<T: BatchTransformer>(
+        batch_transformer: T,
+    ) -> Result<()> {
+        let batch = RecordBatch::try_from_iter(vec![(
+            "a",
+            Arc::new(Int32Array::from_iter_values(0..10)) as _,
+        )])?;
+        let empty_size =
+            create_stream(NoopBatchTransformer::new(), batch.schema()).size();
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(empty_size + batch.get_array_memory_size() - 1, 1.0)
+            .build_arc()?;
+        let context = TaskContext::default().with_runtime(runtime);
+        let mut stream =
+            create_stream_with_context(batch_transformer, batch.schema(), &context);
+
+        stream.update_reservation()?;
+        let reserved_size = stream.reservation.size();
+        stream.batch_transformer.set_batch(batch);
+        let error = stream.update_reservation().unwrap_err();
+        assert!(
+            matches!(error.find_root(), DataFusionError::ResourcesExhausted(_)),
+            "expected a memory-pool error, got: {error}"
+        );
+        assert_eq!(stream.metrics.stream_memory_usage.value(), reserved_size);
+        Ok(())
+    }
+
+    #[test]
+    fn transformer_reservation_exhausts_pool() -> Result<()> {
+        assert_transformer_reservation_exhausts_pool(NoopBatchTransformer::new())?;
+        assert_transformer_reservation_exhausts_pool(BatchSplitter::new(3))?;
+        Ok(())
+    }
+
+    #[derive(Debug, Default)]
+    struct RecordingMemoryPool {
+        inner: UnboundedMemoryPool,
+        symmetric_join_changes: Mutex<Vec<isize>>,
+    }
+
+    impl fmt::Display for RecordingMemoryPool {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            fmt::Display::fmt(&self.inner, f)
+        }
+    }
+
+    impl RecordingMemoryPool {
+        fn record(&self, reservation: &MemoryReservation, change: isize) {
+            if reservation
+                .consumer()
+                .name()
+                .starts_with("SymmetricHashJoinStream")
+            {
+                self.symmetric_join_changes
+                    .lock()
+                    .expect("recording pool mutex is not poisoned")
+                    .push(change);
+            }
+        }
+
+        fn change_deltas(&self) -> Vec<isize> {
+            self.symmetric_join_changes
+                .lock()
+                .expect("recording pool mutex is not poisoned")
+                .clone()
+        }
+    }
+
+    impl MemoryPool for RecordingMemoryPool {
+        fn name(&self) -> &str {
+            self.inner.name()
+        }
+
+        fn grow(&self, reservation: &MemoryReservation, additional: usize) {
+            self.inner.grow(reservation, additional);
+            self.record(reservation, additional as isize);
+        }
+
+        fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
+            self.inner.shrink(reservation, shrink);
+            self.record(reservation, -(shrink as isize));
+        }
+
+        fn try_grow(
+            &self,
+            reservation: &MemoryReservation,
+            additional: usize,
+        ) -> Result<()> {
+            self.inner.try_grow(reservation, additional)?;
+            self.record(reservation, additional as isize);
+            Ok(())
+        }
+
+        fn reserved(&self) -> usize {
+            self.inner.reserved()
+        }
+
+        fn memory_limit(&self) -> MemoryLimit {
+            self.inner.memory_limit()
+        }
+    }
+
+    fn transformer_lifecycle_test_join() -> Result<SymmetricHashJoinExec> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from_iter_values(0..10))],
+        )?;
+        let left = TestMemoryExec::try_new_exec(
+            &[vec![batch.clone()]],
+            Arc::clone(&schema),
+            None,
+        )?;
+        let right =
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+        let on = vec![(col("id", &schema)?, col("id", &schema)?)];
+        SymmetricHashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            None,
+            None,
+            StreamJoinPartitionMode::Partitioned,
+        )
+    }
+
+    fn transformer_lifecycle_test_context(
+        runtime: Arc<RuntimeEnv>,
+        enforce_batch_size_in_joins: bool,
+    ) -> Arc<TaskContext> {
+        Arc::new(
+            TaskContext::default()
+                .with_session_config(
+                    SessionConfig::new()
+                        .with_batch_size(3)
+                        .with_enforce_batch_size_in_joins(enforce_batch_size_in_joins),
+                )
+                .with_runtime(runtime),
+        )
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn symmetric_hash_join_updates_reservation_while_transforming_output(
+        #[values(false, true)] enforce_batch_size_in_joins: bool,
+    ) -> Result<()> {
+        let pool = Arc::new(RecordingMemoryPool::default());
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::clone(&pool) as Arc<dyn MemoryPool>)
+            .build_arc()?;
+        let mut stream = transformer_lifecycle_test_join()?.execute(
+            0,
+            transformer_lifecycle_test_context(runtime, enforce_batch_size_in_joins),
+        )?;
+
+        let first_batch = stream.next().await.transpose()?.unwrap();
+        let retained_batch_size = first_batch.get_array_memory_size() as isize;
+        let changes_after_first_batch = pool.change_deltas();
+        assert!(
+            changes_after_first_batch.contains(&retained_batch_size),
+            "expected transformer retain reservation update: {changes_after_first_batch:?}"
+        );
+        if enforce_batch_size_in_joins {
+            assert!(
+                !changes_after_first_batch.contains(&-retained_batch_size),
+                "splitter must retain the output batch after a non-final slice: {changes_after_first_batch:?}"
+            );
+        } else {
+            assert!(
+                changes_after_first_batch
+                    .windows(2)
+                    .any(|changes| changes == [retained_batch_size, -retained_batch_size]),
+                "expected Noop transformer release after emission: {changes_after_first_batch:?}"
+            );
+        }
+
+        let remaining_batches = crate::common::collect(stream).await?;
+        let changes_after_completion = pool.change_deltas();
+        if enforce_batch_size_in_joins {
+            assert!(
+                changes_after_completion.contains(&-retained_batch_size),
+                "expected splitter release after final slice: {changes_after_completion:?}"
+            );
+        }
+        let output_rows = first_batch.num_rows()
+            + remaining_batches
+                .iter()
+                .map(RecordBatch::num_rows)
+                .sum::<usize>();
+        assert_eq!(output_rows, 10);
+        Ok(())
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn symmetric_hash_join_transformer_retention_exhausts_bounded_pool(
+        #[values(false, true)] enforce_batch_size_in_joins: bool,
+    ) -> Result<()> {
+        let calibration_pool = Arc::new(RecordingMemoryPool::default());
+        let calibration_runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::clone(&calibration_pool) as Arc<dyn MemoryPool>)
+            .build_arc()?;
+        let mut calibration_stream = transformer_lifecycle_test_join()?.execute(
+            0,
+            transformer_lifecycle_test_context(
+                calibration_runtime,
+                enforce_batch_size_in_joins,
+            ),
+        )?;
+
+        let first_batch = calibration_stream.next().await.transpose()?.unwrap();
+        let retained_size = first_batch.get_array_memory_size() as isize;
+        let changes = calibration_pool.change_deltas();
+        let retain_index = changes
+            .len()
+            .checked_sub(if enforce_batch_size_in_joins { 1 } else { 2 })
+            .expect("transformer retain must update the stream reservation");
+        assert_eq!(
+            changes[retain_index], retained_size,
+            "expected transformer retain reservation update: {changes:?}"
+        );
+        if !enforce_batch_size_in_joins {
+            assert_eq!(
+                changes.last(),
+                Some(&-retained_size),
+                "Noop must release the retained batch before emitting it: {changes:?}"
+            );
+        }
+        let pre_retain_size: isize = changes[..retain_index].iter().sum();
+        assert!(
+            pre_retain_size > 0,
+            "expected a positive reservation before retention: {changes:?}"
+        );
+
+        // This limit is one byte below the independently measured retained
+        // output batch added to the reservation immediately before it.
+        // Without retain-side accounting, the first batch is emitted.
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit((pre_retain_size + retained_size) as usize - 1, 1.0)
+            .build_arc()?;
+        let mut stream = transformer_lifecycle_test_join()?.execute(
+            0,
+            transformer_lifecycle_test_context(runtime, enforce_batch_size_in_joins),
+        )?;
+        let error = stream.next().await.transpose().unwrap_err();
+        assert!(
+            matches!(error.find_root(), DataFusionError::ResourcesExhausted(_)),
+            "expected transformer retention to exhaust the pool, got: {error}"
+        );
+        Ok(())
+    }
 
     fn get_or_create_table(
         cardinality: (i32, i32),

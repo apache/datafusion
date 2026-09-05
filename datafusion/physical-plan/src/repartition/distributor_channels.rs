@@ -40,7 +40,6 @@
 use std::{
     collections::VecDeque,
     future::Future,
-    ops::DerefMut,
     pin::Pin,
     sync::{
         Arc,
@@ -173,12 +172,7 @@ impl<T> Drop for DistributionSender<T> {
             // senders and it will decrement the `empty_channels` counter. It will also set `data` to `None`. The sender
             // side will then see that `data` is `None` and can therefore infer that the receiver end was dropped, and
             // hence it MUST NOT decrement the `empty_channels` counter.
-            if state
-                .data
-                .as_ref()
-                .map(|data| data.is_empty())
-                .unwrap_or_default()
-            {
+            if state.data.as_ref().is_some_and(|data| data.is_empty()) {
                 // channel is gone, so we need to clear our signal
                 self.gate.decr_empty_channels();
             }
@@ -225,7 +219,7 @@ impl<T> Future for SendFuture<'_, T> {
             // if so, allow sender to create another
             if this.gate.empty_channels.load(Ordering::SeqCst) == 0 {
                 let mut guard = this.gate.send_wakers.lock();
-                if let Some(send_wakers) = guard.deref_mut() {
+                if let Some(send_wakers) = &mut *guard {
                     send_wakers.push((cx.waker().clone(), this.channel.id));
                     return Poll::Pending;
                 }
@@ -303,7 +297,7 @@ impl<T> Future for RecvFuture<'_, T> {
         assert!(!this.rdy, "polled ready future");
 
         let mut guard_channel_state = this.channel.state.lock();
-        let channel_state = guard_channel_state.deref_mut();
+        let channel_state = &mut *guard_channel_state;
         let data = channel_state.data.as_mut().expect("not dropped yet");
 
         match data.pop_front() {
@@ -436,7 +430,7 @@ impl Gate {
         let to_wake = {
             let mut guard = self.send_wakers.lock();
 
-            if let Some(send_wakers) = guard.deref_mut() {
+            if let Some(send_wakers) = &mut *guard {
                 // `drain_filter` is unstable, so implement our own
                 let (wake, keep) =
                     send_wakers.drain(..).partition(|(_waker, id2)| id == *id2);

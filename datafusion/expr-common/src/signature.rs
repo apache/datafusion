@@ -1025,17 +1025,16 @@ fn get_data_types(native_type: &NativeType) -> Vec<DataType> {
 /// # Examples
 ///
 /// ```
-/// use datafusion_common::types::{logical_binary, logical_string, NativeType};
+/// use datafusion_common::types::{logical_binary, logical_string};
 /// use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 ///
 /// // Exact coercion that only accepts timestamp types
 /// let exact = Coercion::new_exact(TypeSignatureClass::Timestamp);
 ///
 /// // Implicit coercion that accepts string types but can coerce from binary types
-/// let implicit = Coercion::new_implicit(
-///     TypeSignatureClass::Native(logical_string()),
+/// let implicit = Coercion::new_implicit_native(
+///     logical_string(),
 ///     vec![TypeSignatureClass::Native(logical_binary())],
-///     NativeType::String,
 /// );
 /// ```
 ///
@@ -1116,6 +1115,25 @@ impl Coercion {
             },
             encoding_preservation: EncodingPreservation::default(),
         }
+    }
+
+    /// Create a new coercion to a native logical type with implicit coercion rules.
+    ///
+    /// This is a convenience method for coercing to a specific logical type,
+    /// avoiding the need to separately pass the matching native default cast type.
+    ///
+    /// The native type of `desired_type` is used as the default type when coercing
+    /// from `allowed_source_types`.
+    pub fn new_implicit_native(
+        desired_type: LogicalTypeRef,
+        allowed_source_types: Vec<TypeSignatureClass>,
+    ) -> Self {
+        let default_casted_type = desired_type.native().clone();
+        Self::new_implicit(
+            TypeSignatureClass::Native(desired_type),
+            allowed_source_types,
+            default_casted_type,
+        )
     }
 
     pub fn with_encoding_preservation(
@@ -2243,6 +2261,23 @@ mod tests {
             NativeType::Int64,
         );
         assert_snapshot!(implicit_with_multiple_sources, @"Int64");
+    }
+
+    #[test]
+    fn test_new_implicit_native() {
+        let allowed_source_types = vec![TypeSignatureClass::Numeric];
+
+        assert_eq!(
+            Coercion::new_implicit_native(
+                logical_float64(),
+                allowed_source_types.clone(),
+            ),
+            Coercion::new_implicit(
+                TypeSignatureClass::Native(logical_float64()),
+                allowed_source_types,
+                NativeType::Float64,
+            )
+        );
     }
 
     #[test]

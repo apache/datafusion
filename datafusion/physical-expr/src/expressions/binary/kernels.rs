@@ -165,23 +165,17 @@ macro_rules! regexp_is_match_flag {
         // The analyzer coerces both operands to a common string type, but
         // expressions that bypass it may still reach here with mismatched
         // types, which must surface as an error rather than a panic.
-        let ll = match $LEFT.as_any().downcast_ref::<$ARRAYTYPE>() {
-            Some(ll) => ll,
-            None => {
-                return exec_err!(
-                    "failed to downcast array to {} for operation 'regex_match_dyn'",
-                    stringify!($ARRAYTYPE)
-                );
-            }
+        let Some(ll) = $LEFT.as_any().downcast_ref::<$ARRAYTYPE>() else {
+            return exec_err!(
+                "failed to downcast array to {} for operation 'regex_match_dyn'",
+                stringify!($ARRAYTYPE)
+            );
         };
-        let rr = match $RIGHT.as_any().downcast_ref::<$ARRAYTYPE>() {
-            Some(rr) => rr,
-            None => {
-                return exec_err!(
-                    "failed to downcast array to {} for operation 'regex_match_dyn'",
-                    stringify!($ARRAYTYPE)
-                );
-            }
+        let Some(rr) = $RIGHT.as_any().downcast_ref::<$ARRAYTYPE>() else {
+            return exec_err!(
+                "failed to downcast array to {} for operation 'regex_match_dyn'",
+                stringify!($ARRAYTYPE)
+            );
         };
 
         let flag = if $FLAG {
@@ -223,14 +217,11 @@ pub(crate) fn regex_match_dyn(
 /// Invoke a compute kernel on a data array and a scalar value with flag
 macro_rules! regexp_is_match_flag_scalar {
     ($LEFT:expr, $RIGHT:expr, $ARRAYTYPE:ident, $NOT:expr, $FLAG:expr) => {{
-        let ll = match $LEFT.as_any().downcast_ref::<$ARRAYTYPE>() {
-            Some(ll) => ll,
-            None => {
-                return Some(exec_err!(
-                    "failed to downcast array to {} for operation 'regex_match_dyn_scalar'",
-                    stringify!($ARRAYTYPE)
-                ));
-            }
+        let Some(ll) = $LEFT.as_any().downcast_ref::<$ARRAYTYPE>() else {
+            return Some(exec_err!(
+                "failed to downcast array to {} for operation 'regex_match_dyn_scalar'",
+                stringify!($ARRAYTYPE)
+            ));
         };
 
         if let Some(Some(string_value)) = $RIGHT.try_as_str() {

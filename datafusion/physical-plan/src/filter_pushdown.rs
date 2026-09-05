@@ -401,6 +401,13 @@ impl ChildFilterDescription {
         parent_filters: &[Arc<dyn PhysicalExpr>],
         child: &Arc<dyn crate::ExecutionPlan>,
     ) -> Result<Self> {
+        // Building the remapper indexes every column of the child's schema, so
+        // with no filters to remap it is pure cost for the empty description
+        // `remap_filters` would return anyway. On a wide schema, and once per
+        // child, that is worth not paying.
+        if parent_filters.is_empty() {
+            return Ok(Self::empty());
+        }
         let remapper = FilterRemapper::new(child.schema());
         Self::remap_filters(parent_filters, &remapper)
     }
@@ -422,6 +429,10 @@ impl ChildFilterDescription {
         allowed_indices: HashSet<usize>,
         child: &Arc<dyn crate::ExecutionPlan>,
     ) -> Result<Self> {
+        // See [`Self::from_child`]: nothing to remap, nothing to index.
+        if parent_filters.is_empty() {
+            return Ok(Self::empty());
+        }
         let remapper =
             FilterRemapper::with_allowed_indices(child.schema(), allowed_indices);
         Self::remap_filters(parent_filters, &remapper)
@@ -445,6 +456,14 @@ impl ChildFilterDescription {
             parent_filters: child_parent_filters,
             self_filters: vec![],
         })
+    }
+
+    /// A description carrying no filters in either direction.
+    fn empty() -> Self {
+        Self {
+            parent_filters: vec![],
+            self_filters: vec![],
+        }
     }
 
     /// Mark all parent filters as unsupported for this child.

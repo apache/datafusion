@@ -566,6 +566,7 @@ impl OptimizerRule for CommonSubexprEliminate {
             LogicalPlan::Window(window) => self.try_optimize_window(window, config)?,
             LogicalPlan::Aggregate(agg) => self.try_optimize_aggregate(agg, config)?,
             LogicalPlan::Join(_)
+            | LogicalPlan::AsOfJoin(_)
             | LogicalPlan::Repartition(_)
             | LogicalPlan::Union(_)
             | LogicalPlan::TableScan(_)
@@ -1404,7 +1405,7 @@ mod test {
     fn test_extract_expressions_from_col() -> Result<()> {
         let mut result = Vec::with_capacity(1);
         extract_expressions(&col("a"), &mut result);
-        assert!(result.len() == 1);
+        assert_eq!(result.len(), 1);
         Ok(())
     }
 

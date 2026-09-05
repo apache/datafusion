@@ -266,9 +266,8 @@ impl ScanState {
         }
 
         // No outstanding work remains, so begin planning the next unopened file.
-        let part_file = match self.work_source.pop_front() {
-            Some(part_file) => part_file,
-            None => return ScanAndReturn::Done(None),
+        let Some(part_file) = self.work_source.pop_front() else {
+            return ScanAndReturn::Done(None);
         };
 
         self.metrics.time_opening.start();

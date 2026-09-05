@@ -3303,6 +3303,10 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
     Ok(())
 }
 
+#[expect(
+    clippy::literal_string_with_formatting_args,
+    reason = "The `{testdata}` placeholder is substituted with `str::replace`"
+)]
 async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(
     repartition_sorts: bool,
 ) -> Result<String> {
@@ -3355,7 +3359,7 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(
 
     // To be able to remove user specific paths from the plan, for stable assertions
     let testdata_clean = Path::new(&testdata).canonicalize()?.display().to_string();
-    let testdata_clean = testdata_clean.replace("\\", "/");
+    let testdata_clean = testdata_clean.replace('\\', "/");
     let testdata_clean = testdata_clean
         .strip_prefix("//?/")
         .or_else(|| testdata_clean.strip_prefix("/"))
@@ -6964,7 +6968,7 @@ async fn test_dataframe_from_columns() -> Result<()> {
     let strings: ArrayRef =
         Arc::new(StringArray::from(vec![Some("foo"), Some("bar"), None]));
 
-    let df = DataFrame::from_columns(vec![
+    let columns = [
         ("bool", bools),
         ("i8", i8s),
         ("i16", i16s),
@@ -6978,10 +6982,10 @@ async fn test_dataframe_from_columns() -> Result<()> {
         ("f32", f32s),
         ("f64", f64s),
         ("str", strings),
-    ])?;
+    ];
 
-    assert_eq!(df.schema().fields().len(), 13);
-    assert_eq!(df.clone().count().await?, 3);
+    let df1 = DataFrame::from_columns(columns.clone())?;
+    let df2 = DataFrame::from_columns(columns.to_vec())?;
 
     let expected_types = [
         ("bool", DataType::Boolean),
@@ -6999,14 +7003,89 @@ async fn test_dataframe_from_columns() -> Result<()> {
         ("str", DataType::Utf8),
     ];
 
-    let schema = df.schema();
+    for df in [df1, df2] {
+        assert_eq!(df.schema().fields().len(), expected_types.len());
+        assert_eq!(df.clone().count().await?, 3);
 
-    for (name, data_type) in expected_types {
-        assert_eq!(schema.field_with_name(None, name)?.data_type(), &data_type);
+        let schema = df.schema();
+
+        for (name, data_type) in &expected_types {
+            assert_eq!(schema.field_with_name(None, name)?.data_type(), data_type);
+        }
+
+        let rows = df.sort(vec![col("i32").sort(true, true)])?;
+
+        assert_batches_eq!(
+            &[
+                "+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",
+                "| bool  | i8 | i16 | i32 | i64 | u8 | u16 | u32 | u64 | f16 | f32 | f64 | str |",
+                "+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",
+                "| true  | -1 | -1  | -1  | -1  | 0  | 0   | 0   | 0   | 1   | 1.0 | 1.0 | foo |",
+                "| false | 0  | 0   | 0   | 0   | 1  | 1   | 1   | 1   | 2   | 2.0 | 2.0 | bar |",
+                "| true  | 1  | 1   | 1   | 1   | 2  | 2   | 2   | 2   | 3   | 3.0 | 3.0 |     |",
+                "+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",
+            ],
+            &rows.collect().await?
+        );
     }
 
-    let rows = df.sort(vec![col("i32").sort(true, true)])?;
+    Ok(())
+}
 
+#[test]
+fn test_dataframe_from_columns_empty() {
+    let result = DataFrame::from_columns(vec![]);
+    assert!(result.is_err());
+
+    let result = DataFrame::from_columns([]);
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn test_dataframe_from_columns_with_iterator() -> Result<()> {
+    let bools: ArrayRef = Arc::new(BooleanArray::from(vec![true, false, true]));
+    let i8s: ArrayRef = Arc::new(Int8Array::from(vec![-1, 0, 1]));
+    let i16s: ArrayRef = Arc::new(Int16Array::from(vec![-1, 0, 1]));
+    let i32s: ArrayRef = Arc::new(Int32Array::from(vec![-1, 0, 1]));
+    let i64s: ArrayRef = Arc::new(Int64Array::from(vec![-1, 0, 1]));
+
+    let u8s: ArrayRef = Arc::new(UInt8Array::from(vec![0, 1, 2]));
+    let u16s: ArrayRef = Arc::new(UInt16Array::from(vec![0, 1, 2]));
+    let u32s: ArrayRef = Arc::new(UInt32Array::from(vec![0, 1, 2]));
+    let u64s: ArrayRef = Arc::new(UInt64Array::from(vec![0, 1, 2]));
+
+    let f16s: ArrayRef = Arc::new(Float16Array::from(vec![
+        half::f16::from_f64(1.0),
+        half::f16::from_f64(2.0),
+        half::f16::from_f64(3.0),
+    ]));
+    let f32s: ArrayRef = Arc::new(Float32Array::from(vec![1.0, 2.0, 3.0]));
+    let f64s: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0]));
+
+    let strings: ArrayRef =
+        Arc::new(StringArray::from(vec![Some("foo"), Some("bar"), None]));
+
+    let columns = [
+        ("bool", bools),
+        ("i8", i8s),
+        ("i16", i16s),
+        ("i32", i32s),
+        ("i64", i64s),
+        ("u8", u8s),
+        ("u16", u16s),
+        ("u32", u32s),
+        ("u64", u64s),
+        ("f16", f16s),
+        ("f32", f32s),
+        ("f64", f64s),
+        ("str", strings),
+    ];
+
+    let df = DataFrame::from_columns(columns.into_iter())?;
+
+    assert_eq!(df.schema().fields().len(), 13);
+    assert_eq!(df.clone().count().await?, 3);
+    let rows = df.sort(vec![col("i32").sort(true, true)])?;
     assert_batches_eq!(
         &[
             "+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",

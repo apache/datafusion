@@ -32,22 +32,28 @@ use crate::utils::DecimalAverager;
 /// Generic implementation of `AVG DISTINCT` for Decimal types.
 /// Handles both all Arrow decimal types (32, 64, 128 and 256 bits).
 ///
-/// The distinct values are stored in the input type `I`; only the intermediate
-/// sum is computed in the (never narrower) sum type `S` so it cannot overflow
-/// `I`'s native type.
+/// The distinct values are stored in the input type `I`, the result is returned
+/// as the same or wider type `O`, and the intermediate sum is computed in the
+/// (never narrower) sum type `S` so it cannot overflow `I`'s native type.
 #[derive(Debug)]
 pub struct DecimalDistinctAvgAccumulator<
     I: DecimalType + Debug,
     S: DecimalType + Debug = I,
+    O: DecimalType + Debug = I,
 > {
     sum_accumulator: DistinctSumAccumulator<I>,
     sum_scale: i8,
     target_precision: u8,
     target_scale: i8,
-    _sum_type: PhantomData<S>,
+    _types: PhantomData<(S, O)>,
 }
 
-impl<I: DecimalType + Debug, S: DecimalType + Debug> DecimalDistinctAvgAccumulator<I, S> {
+impl<I, S, O> DecimalDistinctAvgAccumulator<I, S, O>
+where
+    I: DecimalType + Debug,
+    S: DecimalType + Debug,
+    O: DecimalType + Debug,
+{
     pub fn with_decimal_params(
         sum_scale: i8,
         target_precision: u8,
@@ -60,17 +66,32 @@ impl<I: DecimalType + Debug, S: DecimalType + Debug> DecimalDistinctAvgAccumulat
             sum_scale,
             target_precision,
             target_scale,
-            _sum_type: PhantomData,
+            _types: PhantomData,
         }
     }
 }
 
-impl<I, S> Accumulator for DecimalDistinctAvgAccumulator<I, S>
+/// Adds a distinct input value to AVG's widened intermediate sum.
+/// Wrapping is intentional because the caller selects `S` with the same
+/// `avg_sum_data_type` headroom contract as the non-distinct AVG path.
+#[inline]
+fn add_avg_distinct_sum<I, S>(sum: S::Native, value: I::Native) -> S::Native
+where
+    I: ArrowNumericType,
+    S: ArrowNumericType,
+    I::Native: Into<S::Native>,
+{
+    sum.add_wrapping(value.into())
+}
+
+impl<I, S, O> Accumulator for DecimalDistinctAvgAccumulator<I, S, O>
 where
     I: DecimalType + ArrowNumericType + Debug,
     S: DecimalType + ArrowNumericType + Debug,
+    O: DecimalType + ArrowNumericType + Debug,
     I::Native: Into<S::Native> + DecimalCast,
     S::Native: DecimalCast,
+    O::Native: DecimalCast,
 {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         self.sum_accumulator.state()
@@ -85,17 +106,17 @@ where
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let out_type = I::TYPE_CONSTRUCTOR(self.target_precision, self.target_scale);
+        let out_type = O::TYPE_CONSTRUCTOR(self.target_precision, self.target_scale);
         let count = self.sum_accumulator.distinct_count();
         if count == 0 {
-            return ScalarValue::new_primitive::<I>(None, &out_type);
+            return ScalarValue::new_primitive::<O>(None, &out_type);
         }
 
         // Sum the distinct input values in the wider `S` so the total cannot
         // overflow the input's native width (mirrors the non-distinct path).
         let mut sum = S::Native::usize_as(0);
         for value in self.sum_accumulator.distinct_values() {
-            sum = sum.add_wrapping(value.into());
+            sum = add_avg_distinct_sum::<I, S>(sum, value);
         }
 
         let Some(count) = S::Native::from_usize(count) else {
@@ -110,18 +131,17 @@ where
             self.target_precision,
             self.target_scale,
         )?;
-        // Narrowing the average back to the (never wider) output type cannot
-        // fail in practice: `DecimalAverager::avg` validates the average
-        // against the output precision, whose bound fits the output's native
-        // type by construction
+        // Converting the average to the output type cannot fail in practice:
+        // `DecimalAverager::avg` validates it against the output precision,
+        // whose bound fits the output's native type by construction.
         let avg =
-            I::Native::from_decimal(averager.avg(sum, count)?).ok_or_else(|| {
+            O::Native::from_decimal(averager.avg(sum, count)?).ok_or_else(|| {
                 exec_datafusion_err!(
                     "Arithmetic overflow in avg: the computed average does not fit \
-                 the output type"
+                     the output type"
                 )
             })?;
-        ScalarValue::new_primitive::<I>(Some(avg), &out_type)
+        ScalarValue::new_primitive::<O>(Some(avg), &out_type)
     }
 
     fn size(&self) -> usize {
@@ -134,6 +154,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    #![expect(
+        clippy::large_digit_groups,
+        reason = "the single `_` marks the decimal point of the fixed-point literal"
+    )]
+
     use super::*;
     use arrow::array::{
         Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,

@@ -128,10 +128,10 @@ impl TableProvider for CteWorkTable {
 }
 
 impl CteWorkTable {
-    fn scan_with_args_inner<'a>(
+    fn scan_with_args_inner(
         &self,
         _state: &dyn Session,
-        args: &ScanArgs<'a>,
+        args: &ScanArgs<'_>,
     ) -> Result<ScanResult> {
         Ok(ScanResult::new(Arc::new(WorkTableExec::new(
             self.name.clone(),

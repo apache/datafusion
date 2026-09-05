@@ -23,15 +23,50 @@
 
 ## Original Query: SELECT try_to_binary('abc', 'utf-8');
 ## PySpark 3.5.5 Result: {'try_to_binary(abc, utf-8)': bytearray(b'abc'), 'typeof(try_to_binary(abc, utf-8))': 'binary', 'typeof(abc)': 'string', 'typeof(utf-8)': 'string'}
-#query
-#SELECT try_to_binary('abc'::string, 'utf-8'::string);
+query ?
+SELECT try_to_binary('abc'::string, 'utf-8'::string);
+----
+616263
 
 ## Original Query: select try_to_binary('a!', 'base64');
 ## PySpark 3.5.5 Result: {'try_to_binary(a!, base64)': None, 'typeof(try_to_binary(a!, base64))': 'binary', 'typeof(a!)': 'string', 'typeof(base64)': 'string'}
-#query
-#SELECT try_to_binary('a!'::string, 'base64'::string);
+query ?
+SELECT try_to_binary('a!'::string, 'base64'::string);
+----
+NULL
 
 ## Original Query: select try_to_binary('abc', 'invalidFormat');
 ## PySpark 3.5.5 Result: {'try_to_binary(abc, invalidFormat)': None, 'typeof(try_to_binary(abc, invalidFormat))': 'binary', 'typeof(abc)': 'string', 'typeof(invalidFormat)': 'string'}
-#query
-#SELECT try_to_binary('abc'::string, 'invalidFormat'::string);
+query ?
+SELECT try_to_binary('abc'::string, 'invalidFormat'::string);
+----
+NULL
+
+# where the conversion succeeds, try_to_binary matches to_binary
+query ?
+SELECT try_to_binary('537061726b'::string);
+----
+537061726b
+
+query ?
+SELECT try_to_binary('U3Bhcms='::string, 'base64'::string);
+----
+537061726b
+
+# an invalid value is NULL rather than an error
+query ?
+SELECT try_to_binary('zz'::string, 'hex'::string);
+----
+NULL
+
+query ?
+SELECT try_to_binary(NULL::string, 'hex'::string);
+----
+NULL
+
+# in a column, only the offending row becomes NULL
+query ?
+SELECT try_to_binary(a, 'hex'::string) FROM (VALUES ('4142'::string), ('zz')) AS t(a);
+----
+4142
+NULL

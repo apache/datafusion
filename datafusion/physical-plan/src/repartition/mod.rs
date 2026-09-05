@@ -551,9 +551,9 @@ impl RepartitionExecState {
                     tx,
                     rx,
                     reservation,
-                    spill_readers,
-                    spill_writers,
                     shared_coalescer,
+                    spill_writers,
+                    spill_readers,
                 },
             );
         }
@@ -816,9 +816,10 @@ impl RangeExpr {
         ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
     ) -> Result<PhysicalExprRef> {
         // Decode the raw ordered children for the same reason as `try_to_proto`.
-        let range_expr = match &node.expr_type {
-            Some(protobuf::physical_expr_node::ExprType::RangeExpr(expr)) => expr,
-            _ => return internal_err!("PhysicalExprNode is not a RangeExpr"),
+        let Some(protobuf::physical_expr_node::ExprType::RangeExpr(range_expr)) =
+            &node.expr_type
+        else {
+            return internal_err!("PhysicalExprNode is not a RangeExpr");
         };
         let sort_exprs = sort_exprs_try_from_proto(&range_expr.sort_expr, ctx)?;
         let (on_columns, sort_options) = sort_exprs
@@ -1128,7 +1129,9 @@ impl BatchPartitioner {
                         hash_buffer,
                     )?;
 
-                    indices.iter_mut().for_each(|v| v.clear());
+                    for v in indices.iter_mut() {
+                        v.clear();
+                    }
 
                     partition_reducer.partition_indices(hash_buffer, indices);
 
@@ -1158,7 +1161,9 @@ impl BatchPartitioner {
                             &batch,
                         )?;
 
-                        indices.iter_mut().for_each(|v| v.clear());
+                        for v in indices.iter_mut() {
+                            v.clear();
+                        }
 
                         Self::partition_range_indices(
                             &arrays,
@@ -1518,7 +1523,7 @@ impl DisplayAs for RepartitionExec {
                 Ok(())
             }
             DisplayFormatType::TreeRender => {
-                writeln!(f, "partitioning_scheme={}", self.partitioning(),)?;
+                writeln!(f, "partitioning_scheme={}", self.partitioning())?;
                 let output_partition_count = self.partitioning().partition_count();
                 let input_to_output_partition_str =
                     format!("{input_partition_count} -> {output_partition_count}");
@@ -1955,9 +1960,25 @@ impl ExecutionPlan for RepartitionExec {
         &self,
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<protobuf::PhysicalPlanNode>> {
-        let input = ctx.encode_child(self.input())?;
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `RepartitionExec` is a compile error here until it is either
+        // serialized or explicitly documented as not needing to be.
+        let Self {
+            input,
+            // Execution-time channel state, created on `execute()`.
+            state: _,
+            // Runtime metrics, not part of the plan shape.
+            metrics: _,
+            preserve_order,
+            // Derived plan properties. The output partitioning lives here (it is
+            // the plan's own `partitioning`) and *is* serialized below; the rest
+            // is recomputed on decode.
+            cache,
+        } = self;
 
-        let partitioning = self.partitioning().try_to_proto(&ctx.expr_ctx())?;
+        let input = ctx.encode_child(input)?;
+
+        let partitioning = cache.partitioning.try_to_proto(&ctx.expr_ctx())?;
 
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
@@ -1965,7 +1986,7 @@ impl ExecutionPlan for RepartitionExec {
                     protobuf::RepartitionExecNode {
                         input: Some(Box::new(input)),
                         partitioning: Some(partitioning),
-                        preserve_order: self.preserve_order(),
+                        preserve_order: *preserve_order,
                     },
                 )),
             ),
@@ -1985,15 +2006,19 @@ impl RepartitionExec {
             protobuf::physical_plan_node::PhysicalPlanType::Repartition,
             "RepartitionExec",
         );
-        let input = ctx.decode_required_child(
-            repart.input.as_deref(),
-            "RepartitionExec",
-            "input",
-        )?;
+        // Destructure exhaustively so that a new field on
+        // `RepartitionExecNode` is a compile error here rather than a silently
+        // dropped field.
+        let protobuf::RepartitionExecNode {
+            input,
+            partitioning,
+            preserve_order,
+        } = &**repart;
+        let input =
+            ctx.decode_required_child(input.as_deref(), "RepartitionExec", "input")?;
         let input_schema = input.schema();
 
-        let partitioning = repart
-            .partitioning
+        let partitioning = partitioning
             .as_ref()
             .map(|partitioning| {
                 Partitioning::try_from_proto(
@@ -2010,7 +2035,7 @@ impl RepartitionExec {
             })?;
 
         let mut repart_exec = RepartitionExec::try_new(input, partitioning)?;
-        if repart.preserve_order {
+        if *preserve_order {
             repart_exec = repart_exec.with_preserve_order();
         }
         Ok(Arc::new(repart_exec))
@@ -2384,7 +2409,6 @@ impl PerPartitionStream {
                                 // We must block on spill stream until we get the batch
                                 // to preserve ordering
                                 self.state = StreamState::ReadingSpilled;
-                                continue;
                             }
                             Err(e) => {
                                 return Poll::Ready(Some(Err(e)));
@@ -2397,8 +2421,7 @@ impl PerPartitionStream {
                                 // All input partitions finished
                                 return Poll::Ready(None);
                             }
-                            // Continue to poll for more data from other partitions
-                            continue;
+                            // Otherwise poll for more data from the other partitions
                         }
                         None => {
                             // Channel closed unexpectedly

@@ -15,22 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, BooleanArray, new_null_array};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, assert_eq_or_internal_err};
 
-use crate::aggregates::group_values::new_group_values;
+use crate::aggregates::AggregateExec;
+use crate::aggregates::group_values::{AccumulatorPhase, new_group_values};
 use crate::aggregates::order::GroupOrdering;
-use crate::aggregates::{AggregateExec, group_id_array, max_duplicate_ordinal};
 
 use super::common::{
     AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState,
-    EvaluatedAccumulatorArgs, HashAggregateAccumulator, PartialMarker, PartialSkipMarker,
+    HashAggregateAccumulator, PartialMarker, PartialSkipMarker,
 };
 
 /// Implementation specific to partial aggregation, where the table stores
@@ -66,7 +64,10 @@ impl AggregateHashTable<PartialMarker> {
     pub(in crate::aggregates) fn next_output_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
-        self.next_output_batch_inner(HashAggregateAccumulator::state)
+        self.next_output_batch_inner(
+            HashAggregateAccumulator::state,
+            AccumulatorPhase::State,
+        )
     }
 
     /// In skip-partial-aggregation optimization, when a decision has been made to skip
@@ -86,6 +87,10 @@ impl AggregateHashTable<PartialMarker> {
 
         Ok(AggregateHashTable {
             group_by_metrics: self.group_by_metrics.clone(),
+            aggregate_argument_metrics: self.aggregate_argument_metrics.clone(),
+            aggregate_accumulator_metrics: Arc::clone(
+                &self.aggregate_accumulator_metrics,
+            ),
             input_schema: Arc::clone(&self.input_schema),
             output_schema: Arc::clone(&self.output_schema),
             state_schema: Arc::clone(&self.state_schema),
@@ -106,80 +111,16 @@ impl AggregateHashTable<PartialMarker> {
         &mut self,
         batch: &RecordBatch,
     ) -> Result<()> {
-        self.aggregate_batch_inner(batch, HashAggregateAccumulator::update_batch)
+        self.aggregate_batch_inner(
+            batch,
+            HashAggregateAccumulator::update_batch,
+            AccumulatorPhase::Update,
+        )
     }
 
     pub(in crate::aggregates) fn start_output(&mut self) -> Result<()> {
         self.init_empty_grouping_sets()?;
         self.start_outputting();
-        Ok(())
-    }
-
-    /// Creates the required empty grouping-set rows when the input is empty.
-    ///
-    /// For example, this query must still produce one grand-total group even if
-    /// `t` has no rows:
-    ///
-    /// ```sql
-    /// SELECT COUNT(v)
-    /// FROM t
-    /// GROUP BY GROUPING SETS (());
-    /// ```
-    ///
-    /// The synthetic row is filtered out before accumulator update so aggregates
-    /// see the same state they would see for an empty input, rather than a real
-    /// null-valued row.
-    fn init_empty_grouping_sets(&mut self) -> Result<()> {
-        let state = self.state.building_mut();
-        if !state.group_by.has_grouping_set() || !state.group_values.is_empty() {
-            return Ok(());
-        }
-
-        let max_ordinal = max_duplicate_ordinal(state.group_by.groups());
-        let mut ordinals: HashMap<&[bool], usize> = HashMap::new();
-        let group_schema = state.group_by.group_schema(&self.input_schema)?;
-        let n_expr = state.group_by.expr().len();
-        let mut any_interned = false;
-
-        for group in state.group_by.groups() {
-            let ordinal = {
-                let entry = ordinals.entry(group.as_slice()).or_insert(0);
-                let ordinal = *entry;
-                *entry += 1;
-                ordinal
-            };
-
-            if !group.iter().all(|&is_null| is_null) {
-                continue;
-            }
-
-            let mut cols: Vec<ArrayRef> = group_schema
-                .fields()
-                .iter()
-                .take(n_expr)
-                .map(|field| new_null_array(field.data_type(), 1))
-                .collect();
-            cols.push(group_id_array(group, ordinal, max_ordinal, 1)?);
-
-            state
-                .group_values
-                .intern(&cols, &mut state.batch_group_indices)?;
-            any_interned = true;
-        }
-
-        if any_interned {
-            let total_groups = state.group_values.len();
-            let false_filter = BooleanArray::from(vec![false]);
-            for acc in state.accumulators.iter_mut() {
-                let null_args = acc.null_arguments(&self.input_schema)?;
-                let values = EvaluatedAccumulatorArgs {
-                    arguments: null_args,
-                    filter: Some(Arc::new(false_filter.clone())),
-                };
-                acc.update_batch(&values, &[0], total_groups)?;
-            }
-        }
-
         Ok(())
     }
 }
@@ -202,13 +143,19 @@ impl AggregateHashTable<PartialSkipMarker> {
             .next()
             .unwrap_or_default();
 
+        let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
         let state = self.state.building_mut();
-        for (acc, values) in state
+        for (idx, (acc, values)) in state
             .accumulators
             .iter_mut()
             .zip(evaluated_batch.accumulator_args.iter())
+            .enumerate()
         {
-            output.extend(acc.convert_to_state(values)?);
+            output.extend(accumulator_metrics.time(
+                idx,
+                AccumulatorPhase::ConvertToState,
+                || acc.convert_to_state(values),
+            )?);
         }
 
         Ok(RecordBatch::try_new(

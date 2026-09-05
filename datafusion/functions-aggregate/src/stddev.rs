@@ -30,8 +30,8 @@ use datafusion_common::{Result, internal_err, not_impl_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, Signature,
-    Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, GroupSelection, GroupsAccumulator,
+    Signature, Volatility,
 };
 use datafusion_functions_aggregate_common::stats::StatsType;
 use datafusion_macros::user_doc;
@@ -53,7 +53,7 @@ make_udaf_expr_and_func!(
     sql_example = r#"```sql
 > SELECT stddev(column_name) FROM table_name;
 +----------------------+
-| stddev(column_name)   |
+| stddev(column_name)  |
 +----------------------+
 | 12.34                |
 +----------------------+
@@ -157,7 +157,7 @@ make_udaf_expr_and_func!(
     sql_example = r#"```sql
 > SELECT stddev_pop(column_name) FROM table_name;
 +--------------------------+
-| stddev_pop(column_name)   |
+| stddev_pop(column_name)  |
 +--------------------------+
 | 10.56                    |
 +--------------------------+
@@ -337,8 +337,22 @@ impl GroupsAccumulator for StddevGroupsAccumulator {
 
     fn evaluate(&mut self, emit_to: datafusion_expr::EmitTo) -> Result<ArrayRef> {
         let (mut variances, nulls) = self.variance.variance(emit_to);
-        variances.iter_mut().for_each(|v| *v = v.sqrt());
+        for v in &mut variances {
+            *v = v.sqrt();
+        }
         Ok(Arc::new(Float64Array::new(variances.into(), Some(nulls))))
+    }
+
+    fn evaluate_preserving(&mut self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
+        let (mut variances, nulls) = self.variance.variance_preserving(selection)?;
+        for value in &mut variances {
+            *value = value.sqrt();
+        }
+        Ok(Arc::new(Float64Array::new(variances.into(), Some(nulls))))
+    }
+
+    fn supports_evaluate_preserving(&self) -> bool {
+        true
     }
 
     fn state(&mut self, emit_to: datafusion_expr::EmitTo) -> Result<Vec<ArrayRef>> {
@@ -352,6 +366,17 @@ impl GroupsAccumulator for StddevGroupsAccumulator {
     ) -> Result<Vec<ArrayRef>> {
         self.variance.convert_to_state(values, opt_filter)
     }
+    fn state_preserving(
+        &mut self,
+        selection: GroupSelection<'_>,
+    ) -> Result<Vec<ArrayRef>> {
+        self.variance.state_preserving(selection)
+    }
+
+    fn supports_state_preserving(&self) -> bool {
+        true
+    }
+
     fn size(&self) -> usize {
         self.variance.size()
     }
@@ -364,6 +389,38 @@ mod tests {
     use datafusion_expr::AggregateUDF;
     use datafusion_functions_aggregate_common::utils::get_accum_scalar_values_as_arrays;
     use datafusion_physical_expr::expressions::col;
+
+    #[test]
+    fn stddev_groups_preserving_reads() -> Result<()> {
+        let mut accumulator = StddevGroupsAccumulator::new(StatsType::Population);
+        let values = Arc::new(Float64Array::from(vec![1.0, 3.0, 2.0, 2.0, 6.0]));
+        accumulator.update_batch(&[values], &[0, 0, 1, 2, 2], None, 4)?;
+
+        let selection = GroupSelection::try_from_indices(&[2, 0, 3, 2], 4)?;
+        let expected = Float64Array::from(vec![Some(2.0), Some(1.0), None, Some(2.0)]);
+        for _ in 0..2 {
+            assert_eq!(
+                accumulator
+                    .evaluate_preserving(selection)?
+                    .as_primitive::<Float64Type>(),
+                &expected
+            );
+            assert_eq!(
+                accumulator.state_preserving(selection)?[0].as_primitive::<UInt64Type>(),
+                &UInt64Array::from(vec![2, 2, 0, 2])
+            );
+        }
+
+        let values = Arc::new(Float64Array::from(vec![4.0, 5.0, 7.0]));
+        accumulator.update_batch(&[values], &[1, 3, 3], None, 4)?;
+        assert_eq!(
+            accumulator
+                .evaluate_preserving(GroupSelection::all(4))?
+                .as_primitive::<Float64Type>(),
+            &Float64Array::from(vec![1.0, 1.0, 2.0, 1.0])
+        );
+        Ok(())
+    }
 
     #[test]
     fn stddev_f64_merge_1() -> Result<()> {

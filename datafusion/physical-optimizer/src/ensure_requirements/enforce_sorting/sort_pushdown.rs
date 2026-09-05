@@ -816,7 +816,7 @@ fn expr_source_side(
                         }
                         false
                     });
-                };
+                }
                 if !(valid_left || valid_right) {
                     return None;
                 }
@@ -954,7 +954,7 @@ fn handle_custom_pushdown(
 }
 
 // For hash join we only maintain the input order for the right child
-// for join type: Inner, Right, RightSemi, RightAnti
+// for join type: Inner, Right, RightSemi, RightAnti, RightMark
 fn handle_hash_join(
     plan: &HashJoinExec,
     parent_required: OrderingRequirements,
@@ -1045,7 +1045,7 @@ fn build_join_column_index(plan: &HashJoinExec) -> Vec<ColumnIndex> {
                 .chain(map_fields(plan.right().schema(), JoinSide::Right))
                 .collect::<Vec<_>>()
         }
-        JoinType::RightSemi | JoinType::RightAnti => {
+        JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
             map_fields(plan.right().schema(), JoinSide::Right)
         }
         _ => unreachable!("unexpected join type: {}", plan.join_type()),

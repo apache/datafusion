@@ -151,9 +151,8 @@ mod test {
 
         let args = ColumnarValue::Array(Arc::new(input));
         let result = spark_factorial(&[args]).unwrap();
-        let result = match result {
-            ColumnarValue::Array(array) => array,
-            _ => panic!("Expected array"),
+        let ColumnarValue::Array(result) = result else {
+            panic!("Expected array")
         };
 
         let actual = as_int64_array(&result).unwrap();
@@ -177,9 +176,8 @@ mod test {
 
         let args = ColumnarValue::Scalar(input);
         let result = spark_factorial(&[args]).unwrap();
-        let result = match result {
-            ColumnarValue::Scalar(ScalarValue::Int64(val)) => val,
-            _ => panic!("Expected scalar"),
+        let ColumnarValue::Scalar(ScalarValue::Int64(result)) = result else {
+            panic!("Expected scalar")
         };
         let actual = result.unwrap();
         let expected = 120_i64;

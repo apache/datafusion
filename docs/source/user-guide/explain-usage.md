@@ -207,6 +207,7 @@ Again, reading from bottom up:
 - `DataSourceExec`
   - `output_rows=99997497`: A total 99.9M rows were produced
   - `bytes_scanned=3703192723`: Of the 14GB file, 3.7GB were actually read (due to projection pushdown)
+  - `bytes_processed=14779976446`: All 14GB were accounted for: the 3.7GB read, plus the bytes of row groups that pruning ruled out. Comparing this against the total size of the files in the plan tells you how far along a scan is
   - `time_elapsed_opening=308.203002ms`: It took 300ms to open the file and prepare to read it
   - `time_elapsed_scanning_total=8.350342183s`: It took 8.3 seconds of CPU time (across 16 cores) to actually decode the parquet data
 - `FilterExec`

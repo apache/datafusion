@@ -39,9 +39,7 @@ struct SqlToRelRelationContext<'a, 'b, S: ContextProvider> {
 }
 
 // Implement RelationPlannerContext
-impl<'a, 'b, S: ContextProvider> RelationPlannerContext
-    for SqlToRelRelationContext<'a, 'b, S>
-{
+impl<S: ContextProvider> RelationPlannerContext for SqlToRelRelationContext<'_, '_, S> {
     fn context_provider(&self) -> &dyn ContextProvider {
         self.planner.context_provider
     }

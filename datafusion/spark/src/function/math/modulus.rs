@@ -15,41 +15,77 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Scalar, new_null_array};
+use arrow::array::{ArrayRef, BooleanArray, Scalar, new_null_array};
 use arrow::compute::kernels::numeric::add;
 use arrow::compute::kernels::{
+    boolean::{and, is_not_null, or},
     cmp::{eq, lt},
-    numeric::rem,
+    numeric::{neg, rem},
     zip::zip,
 };
 use arrow::datatypes::DataType;
+use arrow::error::ArrowError;
 use datafusion_common::{Result, ScalarValue, assert_eq_or_internal_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
-/// Computes `rem(left, right)` with divide-by-zero handling.
-/// In ANSI mode, any zero divisor causes an error.
-/// In legacy mode (ANSI off), zero divisors are replaced with NULL before
-/// computing the remainder, so those positions return NULL while others
-/// compute normally.
-fn try_rem(
-    left: &arrow::array::ArrayRef,
-    right: &arrow::array::ArrayRef,
-    enable_ansi_mode: bool,
-) -> Result<arrow::array::ArrayRef> {
-    if enable_ansi_mode {
-        Ok(rem(left, right)?)
-    } else {
-        // In legacy mode, null out zero divisors so that division by zero
-        // returns NULL instead of erroring (integers) or returning NaN (floats).
-        let zero = ScalarValue::new_zero(right.data_type())?.to_array()?;
-        let zero = Scalar::new(zero);
-        let null = Scalar::new(new_null_array(right.data_type(), 1));
-        let is_zero = eq(right, &zero)?;
-        let safe_right = zip(&is_zero, &null, right)?;
-        Ok(rem(left, &safe_right)?)
+/// Returns a one element array holding negative zero, for the floating point
+/// types only.
+///
+/// Arrow's comparison kernels order floating point values totally, so `-0.0`
+/// compares as distinct from, and less than, `0.0`. Java, and therefore Spark,
+/// treats `-0.0` as equal to zero. The helper below uses this to restore the
+/// IEEE 754 answer.
+fn negative_zero(data_type: &DataType) -> Result<Option<ArrayRef>> {
+    match data_type {
+        DataType::Float16 | DataType::Float32 | DataType::Float64 => {
+            let zero = ScalarValue::new_zero(data_type)?.to_array()?;
+            Ok(Some(neg(zero.as_ref())?))
+        }
+        _ => Ok(None),
     }
+}
+
+/// Rows of `values` that equal zero, counting `-0.0` as zero.
+fn is_zero(values: &ArrayRef) -> Result<BooleanArray> {
+    let zero = ScalarValue::new_zero(values.data_type())?.to_array()?;
+    let mask = eq(values, &Scalar::new(zero))?;
+    match negative_zero(values.data_type())? {
+        Some(negative_zero) => Ok(or(&mask, &eq(values, &Scalar::new(negative_zero))?)?),
+        None => Ok(mask),
+    }
+}
+
+/// Computes `rem(left, right)` with divide-by-zero handling.
+/// In ANSI mode, a zero divisor of any numeric type causes an error, with
+/// `-0.0` counting as zero; a row whose dividend is NULL never raises, to
+/// match Spark's null-intolerant remainder. In legacy mode (ANSI off), zero
+/// divisors are replaced with NULL before computing the remainder, so those
+/// positions return NULL while others compute normally.
+fn try_rem(
+    left: &ArrayRef,
+    right: &ArrayRef,
+    enable_ansi_mode: bool,
+) -> Result<ArrayRef> {
+    let divisor_is_zero = is_zero(right)?;
+    // Null out zero divisors so that the remainder kernels never see one:
+    // division by zero then returns NULL instead of erroring (integers) or
+    // returning NaN (floats). ANSI mode reports the error itself below, so
+    // this substitution is harmless on rows that must raise.
+    let null = Scalar::new(new_null_array(right.data_type(), 1));
+    let safe_right = zip(&divisor_is_zero, &null, right)?;
+    if enable_ansi_mode {
+        // Spark's remainder expressions are null intolerant, so a row whose
+        // dividend is NULL evaluates to NULL and never raises, even when the
+        // divisor on that row is zero. Mask the check by the validity of the
+        // dividend to match.
+        let raises = and(&divisor_is_zero, &is_not_null(left.as_ref())?)?;
+        if raises.iter().flatten().any(|raises| raises) {
+            return Err(ArrowError::DivideByZero.into());
+        }
+    }
+    Ok(rem(left, &safe_right)?)
 }
 
 /// Spark-compatible `mod` function
@@ -418,6 +454,101 @@ mod test {
         assert!(result.is_err());
     }
 
+    #[test]
+    fn test_mod_zero_division_ansi_float() {
+        // In ANSI mode a zero divisor of any numeric type must raise,
+        // including floating point, where Arrow's `rem` follows IEEE 754
+        // and quietly returns NaN (#23894)
+        let left = Float64Array::from(vec![Some(10.5), Some(7.2)]);
+        let right = Float64Array::from(vec![Some(0.0), Some(2.0)]);
+
+        let left_value = ColumnarValue::Array(Arc::new(left));
+        let right_value = ColumnarValue::Array(Arc::new(right));
+
+        let result = spark_mod(&[left_value, right_value], true);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_mod_negative_zero_divisor_legacy() {
+        // `-0.0` counts as a zero divisor, so it returns NULL in legacy
+        // mode rather than NaN (#23894)
+        let left = Float64Array::from(vec![Some(10.5), Some(7.5)]);
+        let right = Float64Array::from(vec![Some(-0.0), Some(2.0)]);
+
+        let left_value = ColumnarValue::Array(Arc::new(left));
+        let right_value = ColumnarValue::Array(Arc::new(right));
+
+        let result = spark_mod(&[left_value, right_value], false).unwrap();
+
+        if let ColumnarValue::Array(result_array) = result {
+            let result_float64 = result_array
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .unwrap();
+            assert!(result_float64.is_null(0)); // 10.5 % -0.0 = NULL
+            assert_eq!(result_float64.value(1), 1.5); // 7.5 % 2.0 = 1.5
+        } else {
+            panic!("Expected array result");
+        }
+    }
+
+    #[test]
+    fn test_mod_negative_zero_divisor_ansi() {
+        // `-0.0` counts as a zero divisor, so it raises in ANSI mode (#23894)
+        let left = Float64Array::from(vec![Some(10.5)]);
+        let right = Float64Array::from(vec![Some(-0.0)]);
+
+        let left_value = ColumnarValue::Array(Arc::new(left));
+        let right_value = ColumnarValue::Array(Arc::new(right));
+
+        let result = spark_mod(&[left_value, right_value], true);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_mod_zero_division_ansi_null_dividend() {
+        // Spark's remainder expressions are null intolerant: a NULL dividend
+        // short-circuits to NULL before the divisor is validated, so a zero
+        // divisor on such a row must not raise, even in ANSI mode (#23894)
+        let left = Int32Array::from(vec![None, Some(10)]);
+        let right = Int32Array::from(vec![Some(0), Some(3)]);
+
+        let left_value = ColumnarValue::Array(Arc::new(left));
+        let right_value = ColumnarValue::Array(Arc::new(right));
+
+        let result = spark_mod(&[left_value, right_value], true).unwrap();
+
+        if let ColumnarValue::Array(result_array) = result {
+            let result_int32 =
+                result_array.as_any().downcast_ref::<Int32Array>().unwrap();
+            assert!(result_int32.is_null(0)); // NULL % 0 = NULL (no error)
+            assert_eq!(result_int32.value(1), 1); // 10 % 3 = 1
+        } else {
+            panic!("Expected array result");
+        }
+
+        // Same for floating point
+        let left = Float64Array::from(vec![None, Some(10.5)]);
+        let right = Float64Array::from(vec![Some(0.0), Some(2.0)]);
+
+        let left_value = ColumnarValue::Array(Arc::new(left));
+        let right_value = ColumnarValue::Array(Arc::new(right));
+
+        let result = spark_mod(&[left_value, right_value], true).unwrap();
+
+        if let ColumnarValue::Array(result_array) = result {
+            let result_float64 = result_array
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .unwrap();
+            assert!(result_float64.is_null(0)); // NULL % 0.0 = NULL (no error)
+            assert!((result_float64.value(1) - 0.5).abs() < f64::EPSILON); // 10.5 % 2.0 = 0.5
+        } else {
+            panic!("Expected array result");
+        }
+    }
+
     // PMOD tests
     #[test]
     fn test_pmod_int32() {
@@ -643,6 +774,102 @@ mod test {
 
         let result = spark_pmod(&[left_value, right_value], true);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_pmod_zero_division_ansi_float() {
+        // pmod routes through `try_rem` twice, so it needs the same coverage
+        // as mod: in ANSI mode a zero divisor of any numeric type must
+        // raise, including floating point, where Arrow's `rem` follows
+        // IEEE 754 and quietly returns NaN (#23894)
+        let left = Float64Array::from(vec![Some(10.5), Some(7.2)]);
+        let right = Float64Array::from(vec![Some(0.0), Some(2.0)]);
+
+        let left_value = ColumnarValue::Array(Arc::new(left));
+        let right_value = ColumnarValue::Array(Arc::new(right));
+
+        let result = spark_pmod(&[left_value, right_value], true);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_pmod_negative_zero_divisor_legacy() {
+        // `-0.0` counts as a zero divisor, so it returns NULL in legacy
+        // mode rather than NaN (#23894)
+        let left = Float64Array::from(vec![Some(10.5), Some(-7.5)]);
+        let right = Float64Array::from(vec![Some(-0.0), Some(2.0)]);
+
+        let left_value = ColumnarValue::Array(Arc::new(left));
+        let right_value = ColumnarValue::Array(Arc::new(right));
+
+        let result = spark_pmod(&[left_value, right_value], false).unwrap();
+
+        if let ColumnarValue::Array(result_array) = result {
+            let result_float64 = result_array
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .unwrap();
+            assert!(result_float64.is_null(0)); // 10.5 pmod -0.0 = NULL
+            assert!((result_float64.value(1) - 0.5).abs() < f64::EPSILON); // -7.5 pmod 2.0 = 0.5
+        } else {
+            panic!("Expected array result");
+        }
+    }
+
+    #[test]
+    fn test_pmod_negative_zero_divisor_ansi() {
+        // `-0.0` counts as a zero divisor, so it raises in ANSI mode (#23894)
+        let left = Float64Array::from(vec![Some(10.5)]);
+        let right = Float64Array::from(vec![Some(-0.0)]);
+
+        let left_value = ColumnarValue::Array(Arc::new(left));
+        let right_value = ColumnarValue::Array(Arc::new(right));
+
+        let result = spark_pmod(&[left_value, right_value], true);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_pmod_zero_division_ansi_null_dividend() {
+        // Spark's remainder expressions are null intolerant: a NULL dividend
+        // short-circuits to NULL before the divisor is validated, so a zero
+        // divisor on such a row must not raise, even in ANSI mode (#23894)
+        let left = Int32Array::from(vec![None, Some(10)]);
+        let right = Int32Array::from(vec![Some(0), Some(3)]);
+
+        let left_value = ColumnarValue::Array(Arc::new(left));
+        let right_value = ColumnarValue::Array(Arc::new(right));
+
+        let result = spark_pmod(&[left_value, right_value], true).unwrap();
+
+        if let ColumnarValue::Array(result_array) = result {
+            let result_int32 =
+                result_array.as_any().downcast_ref::<Int32Array>().unwrap();
+            assert!(result_int32.is_null(0)); // NULL pmod 0 = NULL (no error)
+            assert_eq!(result_int32.value(1), 1); // 10 pmod 3 = 1
+        } else {
+            panic!("Expected array result");
+        }
+
+        // Same for floating point
+        let left = Float64Array::from(vec![None, Some(10.5)]);
+        let right = Float64Array::from(vec![Some(0.0), Some(2.0)]);
+
+        let left_value = ColumnarValue::Array(Arc::new(left));
+        let right_value = ColumnarValue::Array(Arc::new(right));
+
+        let result = spark_pmod(&[left_value, right_value], true).unwrap();
+
+        if let ColumnarValue::Array(result_array) = result {
+            let result_float64 = result_array
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .unwrap();
+            assert!(result_float64.is_null(0)); // NULL pmod 0.0 = NULL (no error)
+            assert!((result_float64.value(1) - 0.5).abs() < f64::EPSILON); // 10.5 pmod 2.0 = 0.5
+        } else {
+            panic!("Expected array result");
+        }
     }
 
     #[test]

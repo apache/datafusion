@@ -624,7 +624,6 @@ fn case_conversion_utf8view_ascii_inner<F: Fn(&u8) -> u8>(
             for b in &mut bytes[4..4 + len] {
                 *b = convert(b);
             }
-            new_views.push(u128::from_le_bytes(bytes));
         } else {
             // Long: input view points into shared `data_buffers` we can't
             // mutate, so copy-convert into our own buffer and rewrite the
@@ -676,8 +675,8 @@ fn case_conversion_utf8view_ascii_inner<F: Fn(&u8) -> u8>(
             bytes[4..8].copy_from_slice(&prefix);
             bytes[8..12].copy_from_slice(&buffer_index.to_le_bytes());
             bytes[12..16].copy_from_slice(&new_offset.to_le_bytes());
-            new_views.push(u128::from_le_bytes(bytes));
         }
+        new_views.push(u128::from_le_bytes(bytes));
     }
 
     if !in_progress.is_empty() {

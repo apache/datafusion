@@ -209,7 +209,7 @@ FROM (
 100000 5000050000
 
 # Assert spill happened in the final aggregation.
-# In multi-partitions configuration, 'spilled_rows' is not deterministic, so assert 
+# In multi-partitions configuration, 'spilled_rows' is not deterministic, so assert
 # the unit to be 'K'
 query TT
 EXPLAIN ANALYZE

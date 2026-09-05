@@ -311,7 +311,7 @@ impl Display for ParquetMetadataIndex {
             self.last_num_pruned()
         )?;
         let batches = pretty_format_batches(std::slice::from_ref(&self.index)).unwrap();
-        write!(f, "{batches}",)
+        write!(f, "{batches}")
     }
 }
 
@@ -501,7 +501,8 @@ impl ParquetMetadataIndexBuilder {
         let file_size = file.metadata()?.len();
 
         let file = File::open(file).map_err(|e| {
-            DataFusionError::from(e).context(format!("Error opening file {file:?}"))
+            DataFusionError::from(e)
+                .context(format!("Error opening file {}", file.display()))
         })?;
 
         let reader = ParquetRecordBatchReaderBuilder::try_new(file)?;
@@ -621,12 +622,15 @@ fn read_dir(dir: &Path) -> Result<Vec<DirEntry>> {
     let mut files = dir
         .read_dir()
         .map_err(|e| {
-            DataFusionError::from(e).context(format!("Error reading directory {dir:?}"))
+            DataFusionError::from(e)
+                .context(format!("Error reading directory {}", dir.display()))
         })?
         .map(|entry| {
             entry.map_err(|e| {
-                DataFusionError::from(e)
-                    .context(format!("Error reading directory entry in {dir:?}"))
+                DataFusionError::from(e).context(format!(
+                    "Error reading directory entry in {}",
+                    dir.display()
+                ))
             })
         })
         .collect::<Result<Vec<DirEntry>>>()?;

@@ -53,8 +53,8 @@ use datafusion_expr::{
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_proto::bytes::{
-    logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
-    logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
+    logical_plan_from_bytes_with_extension_codec,
+    logical_plan_to_bytes_with_extension_codec,
 };
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::logical_plan::from_proto::parse_expr;
@@ -180,10 +180,10 @@ impl FFI_SessionRef {
         unsafe { (*private_data).session }
     }
 
-    unsafe fn runtime(&self) -> &Option<Handle> {
+    unsafe fn runtime(&self) -> Option<&Handle> {
         unsafe {
             let private_data = self.private_data as *const SessionPrivateData;
-            &(*private_data).runtime
+            (*private_data).runtime.as_ref()
         }
     }
 }
@@ -203,7 +203,7 @@ unsafe extern "C" fn catalog_list_fn_wrapper(
 ) -> FFI_CatalogProviderList {
     FFI_CatalogProviderList::new_with_ffi_codec(
         session.inner().catalog_list(),
-        unsafe { session.runtime() }.clone(),
+        unsafe { session.runtime() }.cloned(),
         session.logical_codec.clone(),
     )
 }
@@ -243,16 +243,20 @@ unsafe extern "C" fn create_physical_plan_fn_wrapper(
     logical_plan_serialized: SVec<u8>,
 ) -> FfiFuture<FFI_Result<FFI_ExecutionPlan>> {
     unsafe {
-        let runtime = session.runtime().clone();
+        let runtime = session.runtime().cloned();
         let session = session.clone();
         async move {
+            let logical_codec: Arc<dyn LogicalExtensionCodec> =
+                (&session.logical_codec).into();
             let session = session.inner();
             let task_ctx = session.task_ctx();
 
-            let logical_plan = sresult_return!(logical_plan_from_bytes(
-                logical_plan_serialized.as_slice(),
-                task_ctx.as_ref(),
-            ));
+            let logical_plan =
+                sresult_return!(logical_plan_from_bytes_with_extension_codec(
+                    logical_plan_serialized.as_slice(),
+                    task_ctx.as_ref(),
+                    logical_codec.as_ref(),
+                ));
 
             let physical_plan = session.create_physical_plan(&logical_plan).await;
 
@@ -371,7 +375,7 @@ unsafe extern "C" fn task_ctx_fn_wrapper(session: &FFI_SessionRef) -> FFI_TaskCo
 unsafe extern "C" fn physical_optimizers_fn_wrapper(
     session: &FFI_SessionRef,
 ) -> SVec<FFI_PhysicalOptimizerRule> {
-    let runtime = unsafe { session.runtime().clone() };
+    let runtime = unsafe { session.runtime().cloned() };
     session
         .inner()
         .physical_optimizers()
@@ -383,7 +387,7 @@ unsafe extern "C" fn physical_optimizers_fn_wrapper(
 unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_SessionRef) {
     unsafe {
         let private_data =
-            Box::from_raw(provider.private_data as *mut SessionPrivateData);
+            Box::from_raw(provider.private_data.cast::<SessionPrivateData>());
         drop(private_data);
     }
 }
@@ -395,7 +399,8 @@ unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_SessionRef) -> FFI_SessionR
         let private_data = Box::into_raw(Box::new(SessionPrivateData {
             session: (*old_private_data).session,
             runtime: (*old_private_data).runtime.clone(),
-        })) as *mut c_void;
+        }))
+        .cast::<c_void>();
 
         FFI_SessionRef {
             session_id: session_id_fn_wrapper,
@@ -510,7 +515,7 @@ impl FFI_SessionRef {
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: super::version,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
         }
     }
@@ -655,7 +660,7 @@ fn table_options_from_rhashmap(options: SVec<(SString, SString)>) -> TableOption
         let format_options: HashMap<String, String> = options
             .iter()
             .filter_map(|(k, v)| {
-                let (prefix, key) = k.split_once(".")?;
+                let (prefix, key) = k.split_once('.')?;
                 if prefix == format_name {
                     Some((format!("format.{key}"), v.to_owned()))
                 } else {
@@ -673,7 +678,7 @@ fn table_options_from_rhashmap(options: SVec<(SString, SString)>) -> TableOption
     let extension_options: HashMap<String, String> = options
         .iter()
         .filter_map(|(k, v)| {
-            let (prefix, _) = k.split_once(".")?;
+            let (prefix, _) = k.split_once('.')?;
             if !["json", "parquet", "csv"].contains(&prefix) {
                 Some((k.to_owned(), v.to_owned()))
             } else {
@@ -746,7 +751,10 @@ impl Session for ForeignSession {
         logical_plan: &LogicalPlan,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
         unsafe {
-            let logical_plan = logical_plan_to_bytes(logical_plan)?;
+            let codec: Arc<dyn LogicalExtensionCodec> =
+                (&self.session.logical_codec).into();
+            let logical_plan =
+                logical_plan_to_bytes_with_extension_codec(logical_plan, codec.as_ref())?;
             let physical_plan = df_result!(
                 (self.session.create_physical_plan)(
                     &self.session,
@@ -851,8 +859,9 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use arrow::array::record_batch;
     use arrow_schema::{DataType, Field, Schema};
-    use datafusion::catalog::MemoryCatalogProvider;
+    use datafusion::catalog::{MemTable, MemoryCatalogProvider};
     use datafusion::execution::SessionStateBuilder;
     use datafusion_common::DataFusionError;
     use datafusion_expr::col;
@@ -860,6 +869,7 @@ mod tests {
     use datafusion_proto::logical_plan::DefaultLogicalExtensionCodec;
 
     use super::*;
+    use crate::proto::physical_extension_codec::tests::TestExtensionCodec;
 
     static QUERY_PLANNER_CALLS: AtomicUsize = AtomicUsize::new(0);
     static PHYSICAL_OPTIMIZER_CALLS: AtomicUsize = AtomicUsize::new(0);
@@ -1001,6 +1011,38 @@ mod tests {
         for udwf in foreign_session.window_functions().keys() {
             assert!(local_udwfs.contains(udwf));
         }
+
+        Ok(())
+    }
+
+    /// `create_physical_plan` must serialize with the session's logical codec on
+    /// both sides of the boundary. A plan that scans a custom table provider is
+    /// unserializable without it.
+    #[tokio::test]
+    async fn test_create_physical_plan_uses_logical_codec() -> Result<(), DataFusionError>
+    {
+        let (ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let batch = record_batch!(("a", Int32, [1, 2, 3]))?;
+        let table = MemTable::try_new(schema, vec![vec![batch]])?;
+        ctx.register_table("test_table", Arc::new(table))?;
+
+        let logical_codec = FFI_LogicalExtensionCodec::new(
+            Arc::new(TestExtensionCodec),
+            None,
+            task_ctx_provider,
+        );
+
+        let state = ctx.state();
+        let local_session = FFI_SessionRef::new(&state, None, logical_codec);
+        let foreign_session = ForeignSession::try_from(&local_session)?;
+
+        let logical_plan = ctx.table("test_table").await?.into_optimized_plan()?;
+        let physical_plan = foreign_session.create_physical_plan(&logical_plan).await?;
+
+        assert_eq!(physical_plan.name(), "DataSourceExec");
+        assert_eq!(physical_plan.schema().field(0).name(), "a");
 
         Ok(())
     }

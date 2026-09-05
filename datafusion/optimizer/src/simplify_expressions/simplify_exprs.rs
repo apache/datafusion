@@ -1026,7 +1026,7 @@ mod tests {
         ]);
         let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
 
-        // Test `~ ".*"` transforms to true for any non-NULL string
+        // Test `~ ".*"` is TRUE for any non-NULL string and NULL for a NULL input
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .filter(binary_expr(col("a"), Operator::RegexMatch, lit(".*")))?
             .build()?;
@@ -1034,7 +1034,7 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Filter: test.a IS NOT NULL
+        Filter: test.a IS NOT NULL OR Boolean(NULL)
           TableScan: test
         "
         )?;
