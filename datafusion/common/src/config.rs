@@ -1999,9 +1999,39 @@ config_namespace! {
     }
 }
 
+/// Checks that `format` is a valid `strftime` specification.
+///
+/// The arrow formatter only discovers an invalid specification while it is
+/// rendering a value, where the failure surfaces as a `fmt::Error` that most
+/// callers (`format!`, `to_string`) turn into a panic. Rejecting it up front
+/// gives a configuration error that names the option instead.
+fn validate_strftime_format(option: &str, format: Option<&str>) -> Result<()> {
+    if let Some(format) = format {
+        chrono::format::StrftimeItems::new(format)
+            .parse()
+            .map_err(|e| {
+                DataFusionError::Configuration(format!(
+                    "Invalid strftime format {format:?} for datafusion.format.{option}: {e}"
+                ))
+            })?;
+    }
+    Ok(())
+}
+
 impl<'a> TryFrom<&'a FormatOptions> for arrow::util::display::FormatOptions<'a> {
     type Error = DataFusionError;
     fn try_from(options: &'a FormatOptions) -> Result<Self> {
+        validate_strftime_format("date_format", options.date_format.as_deref())?;
+        validate_strftime_format("datetime_format", options.datetime_format.as_deref())?;
+        validate_strftime_format(
+            "timestamp_format",
+            options.timestamp_format.as_deref(),
+        )?;
+        validate_strftime_format(
+            "timestamp_tz_format",
+            options.timestamp_tz_format.as_deref(),
+        )?;
+        validate_strftime_format("time_format", options.time_format.as_deref())?;
         Ok(Self::new()
             .with_display_error(options.safe)
             .with_null(&options.null)
@@ -4546,6 +4576,78 @@ mod tests {
         let parsed_metadata = table_config.parquet.key_value_metadata;
         assert_eq!(parsed_metadata.get("key_dupe"), Some(&Some("B".into())));
     }
+    #[test]
+    fn test_invalid_strftime_format_is_rejected() {
+        use crate::config::FormatOptions;
+
+        fn err(options: FormatOptions) -> String {
+            arrow::util::display::FormatOptions::try_from(&options)
+                .expect_err("expected a configuration error")
+                .to_string()
+        }
+
+        // A trailing `%` is not a valid strftime specification. The arrow
+        // formatter used to hit this only while rendering a value, where the
+        // failure surfaced as a panic in callers using `to_string`.
+        for (name, options) in [
+            (
+                "date_format",
+                FormatOptions {
+                    date_format: Some("%".into()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "datetime_format",
+                FormatOptions {
+                    datetime_format: Some("%".into()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "timestamp_format",
+                FormatOptions {
+                    timestamp_format: Some("%".into()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "timestamp_tz_format",
+                FormatOptions {
+                    timestamp_tz_format: Some("%".into()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "time_format",
+                FormatOptions {
+                    time_format: Some("%".into()),
+                    ..Default::default()
+                },
+            ),
+        ] {
+            let message = err(options);
+            assert!(message.contains(name), "{message}");
+            assert!(message.contains("Invalid strftime format"), "{message}");
+        }
+
+        // The defaults and unset formats are accepted.
+        assert!(
+            arrow::util::display::FormatOptions::try_from(&FormatOptions::default())
+                .is_ok()
+        );
+        assert!(
+            arrow::util::display::FormatOptions::try_from(&FormatOptions {
+                date_format: None,
+                datetime_format: None,
+                timestamp_format: None,
+                time_format: None,
+                ..Default::default()
+            })
+            .is_ok()
+        );
+    }
+
     #[cfg(feature = "parquet")]
     #[test]
     fn test_parquet_writer_version_validation() {
