@@ -42,7 +42,7 @@ statement error
 SELECT sin(c1) FROM aggregate_test_100
 
 # cast_expressions_error
-statement error DataFusion error: Arrow error: Cast error: Cannot cast string 'c' to value of Int32 type
+statement error DataFusion error: Failed to cast field 'c1' from Utf8View to Int32\ncaused by\nArrow error: Cast error: Cannot cast string 'c' to value of Int32 type
 SELECT CAST(c1 AS INT) FROM aggregate_test_100
 
 # aggregation_with_bad_arguments
