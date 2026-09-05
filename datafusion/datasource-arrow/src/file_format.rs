@@ -291,7 +291,8 @@ impl FileSink for ArrowFileSink {
                     .session_config()
                     .options()
                     .execution
-                    .objectstore_writer_buffer_size,
+                    .objectstore_writer_buffer_size
+                    .get(),
             ))
             .build()?;
             file_write_tasks.spawn(async move {

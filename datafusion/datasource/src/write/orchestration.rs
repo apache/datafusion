@@ -272,7 +272,8 @@ pub async fn spawn_writer_tasks_and_join(
                         .session_config()
                         .options()
                         .execution
-                        .objectstore_writer_buffer_size,
+                        .objectstore_writer_buffer_size
+                        .get(),
                 ))
                 .with_compression_level(compression_level)
                 .build()?;

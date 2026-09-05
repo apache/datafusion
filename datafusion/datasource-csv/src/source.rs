@@ -510,7 +510,8 @@ pub async fn plan_to_csv(
         .session_config()
         .options()
         .execution
-        .objectstore_writer_buffer_size;
+        .objectstore_writer_buffer_size
+        .get();
     let mut join_set = JoinSet::new();
     for i in 0..plan.output_partitioning().partition_count() {
         let storeref = Arc::clone(&store);
