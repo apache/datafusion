@@ -22,11 +22,12 @@ use arrow::{
         GenericListViewArray, MapArray, RecordBatch, StructArray, UInt64Array,
         UnionArray, downcast_integer, make_array, new_null_array,
     },
-    buffer::NullBuffer,
+    buffer::{NullBuffer, ScalarBuffer},
     compute::{CastOptions, can_cast_types, cast_with_options, take},
     datatypes::{
         DataType, DataType::Struct, Field, FieldRef, SchemaRef, UnionFields, UnionMode,
     },
+    error::ArrowError,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -311,6 +312,18 @@ fn cast_list_column<O: arrow::array::OffsetSizeTrait>(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
     let source_list = source_col.as_list::<O>();
+    let offsets = source_list.value_offsets();
+    let needs_compaction = offsets[0] != O::usize_as(0)
+        || offsets[offsets.len() - 1].as_usize() != source_list.values().len()
+        || source_list
+            .offsets()
+            .has_non_empty_nulls(source_list.nulls());
+    let compacted_list = if needs_compaction {
+        Some(compact_list_values(source_list)?)
+    } else {
+        None
+    };
+    let source_list = compacted_list.as_ref().unwrap_or(source_list);
 
     let cast_values = cast_column(
         source_list.values(),
@@ -333,21 +346,125 @@ fn cast_list_view_column<O: arrow::array::OffsetSizeTrait>(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
     let source_list = source_col.as_list_view::<O>();
+    let compacted_values = compact_list_view_values(source_list)?;
+    let (offsets, sizes, values) = match compacted_values.as_ref() {
+        Some((offsets, sizes, values)) => (offsets, sizes, values),
+        None => (
+            source_list.offsets(),
+            source_list.sizes(),
+            source_list.values(),
+        ),
+    };
 
-    let cast_values = cast_column(
-        source_list.values(),
-        target_inner_field.data_type(),
-        cast_options,
-    )?;
+    let cast_values = cast_column(values, target_inner_field.data_type(), cast_options)?;
 
     let result = GenericListViewArray::<O>::try_new(
         Arc::clone(target_inner_field),
-        source_list.offsets().clone(),
-        source_list.sizes().clone(),
+        offsets.clone(),
+        sizes.clone(),
         cast_values,
         source_list.nulls().cloned(),
     )?;
     Ok(Arc::new(result))
+}
+
+fn compact_list_values<O: arrow::array::OffsetSizeTrait>(
+    list: &GenericListArray<O>,
+) -> Result<GenericListArray<O>> {
+    let indices = UInt64Array::from_iter_values(0..list.len() as u64);
+    Ok(take(list, &indices, None)?.as_list::<O>().clone())
+}
+
+type CompactedListView<O> = (ScalarBuffer<O>, ScalarBuffer<O>, ArrayRef);
+
+/// Selects the union of child ranges reachable from valid ListView rows.
+///
+/// ListView ranges may overlap or appear in any order, so selecting each row
+/// independently could duplicate a large number of child values. Merging the
+/// ranges first preserves sharing while excluding unreachable values.
+fn compact_list_view_values<O: arrow::array::OffsetSizeTrait>(
+    list: &GenericListViewArray<O>,
+) -> Result<Option<CompactedListView<O>>> {
+    let mut dense_end = 0;
+    let mut is_dense = true;
+    for row in 0..list.len() {
+        if list.is_null(row) || list.value_sizes()[row] == O::usize_as(0) {
+            continue;
+        }
+        let start = list.value_offsets()[row].as_usize();
+        if start != dense_end {
+            is_dense = false;
+            break;
+        }
+        dense_end = start + list.value_sizes()[row].as_usize();
+    }
+    if is_dense && dense_end == list.values().len() {
+        return Ok(None);
+    }
+
+    let mut ranges = list
+        .value_offsets()
+        .iter()
+        .zip(list.value_sizes())
+        .enumerate()
+        .filter(|(row, (_, size))| list.is_valid(*row) && **size != O::usize_as(0))
+        .map(|(_, (offset, size))| {
+            let start = offset.as_usize();
+            (start, start + size.as_usize())
+        })
+        .collect::<Vec<_>>();
+    ranges.sort_unstable_by_key(|range| range.0);
+
+    let mut merged_ranges: Vec<(usize, usize)> = Vec::with_capacity(ranges.len());
+    for (start, end) in ranges {
+        if let Some((_, previous_end)) = merged_ranges.last_mut()
+            && start <= *previous_end
+        {
+            *previous_end = (*previous_end).max(end);
+        } else {
+            merged_ranges.push((start, end));
+        }
+    }
+
+    if merged_ranges.as_slice() == [(0, list.values().len())] {
+        return Ok(None);
+    }
+
+    let mut range_bases = Vec::with_capacity(merged_ranges.len());
+    let mut selected_len = 0;
+    for &(start, end) in &merged_ranges {
+        range_bases.push(selected_len);
+        selected_len += end - start;
+    }
+
+    let mut offsets = Vec::with_capacity(list.len());
+    let mut sizes = Vec::with_capacity(list.len());
+    for row in 0..list.len() {
+        let size = list.value_sizes()[row];
+        if list.is_null(row) || size == O::usize_as(0) {
+            offsets.push(O::usize_as(0));
+            sizes.push(O::usize_as(0));
+            continue;
+        }
+
+        let source_offset = list.value_offsets()[row].as_usize();
+        let range_index =
+            merged_ranges.partition_point(|range| range.0 <= source_offset) - 1;
+        let new_offset =
+            range_bases[range_index] + source_offset - merged_ranges[range_index].0;
+        offsets.push(O::from_usize(new_offset).ok_or_else(|| {
+            ArrowError::ComputeError("ListView offset overflow during compaction".into())
+        })?);
+        sizes.push(size);
+    }
+
+    let child_indices = UInt64Array::from_iter_values(
+        merged_ranges
+            .iter()
+            .flat_map(|&(start, end)| (start..end).map(|index| index as u64)),
+    );
+    let values = take(list.values(), &child_indices, None)?;
+    Ok(Some((offsets.into(), sizes.into(), values)))
 }
 
 fn cast_fixed_size_list_column(
@@ -2603,6 +2720,266 @@ mod tests {
         assert_eq!(a_col.values(), &[1, 2, 3]);
         let b_col = get_column_as!(&struct_values, "b", StringArray);
         assert!(b_col.iter().all(|v| v.is_none()));
+    }
+
+    fn list_struct_values(values: Vec<&str>) -> ArrayRef {
+        Arc::new(StructArray::from(vec![(
+            arc_field("value", DataType::Utf8),
+            Arc::new(StringArray::from(values)) as ArrayRef,
+        )]))
+    }
+
+    fn list_struct_fields() -> (FieldRef, FieldRef) {
+        (
+            arc_field("item", struct_type(vec![field("value", DataType::Utf8)])),
+            arc_field("item", struct_type(vec![field("value", DataType::Int32)])),
+        )
+    }
+
+    fn assert_visible_list_value(list: &ArrayRef, row: usize, expected: i32) {
+        let values = list.as_list::<i32>().value(row);
+        let values = values.as_struct();
+        assert_eq!(
+            get_column_as!(values, "value", Int32Array).value(0),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_sliced_list_ignores_unreachable_invalid_nested_value() {
+        let (source_field, target_field) = list_struct_fields();
+        let source_col: ArrayRef = Arc::new(
+            ListArray::new(
+                source_field,
+                OffsetBuffer::new(vec![0, 1, 2].into()),
+                list_struct_values(vec!["bad", "2"]),
+                None,
+            )
+            .slice(1, 1),
+        );
+        let target_type = DataType::List(target_field);
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+
+        assert_eq!(result.data_type(), &target_type);
+        assert_visible_list_value(&result, 0, 2);
+    }
+
+    #[test]
+    fn test_null_list_parent_hides_invalid_nested_value() {
+        let (source_field, target_field) = list_struct_fields();
+        let source_col: ArrayRef = Arc::new(ListArray::new(
+            source_field,
+            OffsetBuffer::new(vec![0, 1, 2].into()),
+            list_struct_values(vec!["bad", "2"]),
+            Some(NullBuffer::from(vec![false, true])),
+        ));
+        let target_type = DataType::List(target_field);
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+
+        assert_eq!(result.data_type(), &target_type);
+        assert!(result.is_null(0));
+        assert_visible_list_value(&result, 1, 2);
+    }
+
+    #[test]
+    fn test_sliced_large_list_ignores_unreachable_invalid_nested_value() {
+        let (source_field, target_field) = list_struct_fields();
+        let source_col: ArrayRef = Arc::new(
+            GenericListArray::<i64>::new(
+                source_field,
+                OffsetBuffer::new(vec![0, 1, 2].into()),
+                list_struct_values(vec!["bad", "2"]),
+                None,
+            )
+            .slice(1, 1),
+        );
+        let target_type = DataType::LargeList(target_field);
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let values = result.as_list::<i64>().value(0);
+
+        assert_eq!(result.data_type(), &target_type);
+        assert_eq!(
+            get_column_as!(values.as_struct(), "value", Int32Array).value(0),
+            2
+        );
+    }
+
+    #[test]
+    fn test_list_view_ignores_unreachable_invalid_nested_values() {
+        let (source_field, target_field) = list_struct_fields();
+        let source_col: ArrayRef = Arc::new(ListViewArray::new(
+            source_field,
+            ScalarBuffer::from(vec![0i32, 1, 2]),
+            ScalarBuffer::from(vec![1i32, 1, 1]),
+            list_struct_values(vec!["bad", "2", "bad"]),
+            Some(NullBuffer::from(vec![false, true, true])),
+        ));
+        let source_col = source_col.slice(0, 2);
+        let target_type = DataType::ListView(target_field);
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let result = result.as_list_view::<i32>();
+        let values = result.value(1);
+
+        assert_eq!(result.data_type(), &target_type);
+        assert!(result.is_null(0));
+        assert_eq!(result.value_sizes(), &[0, 1]);
+        assert_eq!(
+            get_column_as!(values.as_struct(), "value", Int32Array).value(0),
+            2
+        );
+    }
+
+    #[test]
+    fn test_all_null_list_view_ignores_invalid_backing_values() {
+        let (source_field, target_field) = list_struct_fields();
+        let source_col: ArrayRef = Arc::new(ListViewArray::new(
+            source_field,
+            ScalarBuffer::from(vec![0i32, 1]),
+            ScalarBuffer::from(vec![1i32, 1]),
+            list_struct_values(vec!["bad", "also_bad"]),
+            Some(NullBuffer::from(vec![false, false])),
+        ));
+        let target_type = DataType::ListView(target_field);
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let result = result.as_list_view::<i32>();
+
+        assert_eq!(result.data_type(), &target_type);
+        assert_eq!(result.null_count(), 2);
+        assert_eq!(result.value_offsets(), &[0, 0]);
+        assert_eq!(result.value_sizes(), &[0, 0]);
+        assert!(result.values().is_empty());
+    }
+
+    #[test]
+    fn test_list_view_compacts_overlapping_out_of_order_ranges() {
+        let (source_field, target_field) = list_struct_fields();
+        let source_col: ArrayRef = Arc::new(ListViewArray::new(
+            source_field,
+            ScalarBuffer::from(vec![2i32, 0, 2]),
+            ScalarBuffer::from(vec![2i32, 1, 1]),
+            list_struct_values(vec!["1", "bad", "2", "3", "bad"]),
+            None,
+        ));
+        let target_type = DataType::ListView(target_field);
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let result = result.as_list_view::<i32>();
+        let first = result.value(0);
+        let second = result.value(1);
+
+        assert_eq!(result.value_offsets(), &[1, 0, 1]);
+        assert_eq!(result.value_sizes(), &[2, 1, 1]);
+        assert_eq!(
+            get_column_as!(first.as_struct(), "value", Int32Array).values(),
+            &[2, 3]
+        );
+        assert_eq!(
+            get_column_as!(second.as_struct(), "value", Int32Array).values(),
+            &[1]
+        );
+    }
+
+    #[test]
+    fn test_nested_sparse_list_view_compacts_backing_once() {
+        let (source_inner_field, target_inner_field) = list_struct_fields();
+        let inner = ListViewArray::new(
+            source_inner_field,
+            ScalarBuffer::from(vec![0i32, 1, 2, 3, 5]),
+            ScalarBuffer::from(vec![1i32, 1, 1, 2, 1]),
+            list_struct_values(vec!["bad", "1", "bad", "2", "3", "bad"]),
+            None,
+        );
+        let source_outer_field = arc_field("item", inner.data_type().clone());
+        let target_outer_field =
+            arc_field("item", DataType::ListView(Arc::clone(&target_inner_field)));
+        let source_col: ArrayRef = Arc::new(ListViewArray::new(
+            source_outer_field,
+            ScalarBuffer::from(vec![1i32, 3]),
+            ScalarBuffer::from(vec![1i32, 1]),
+            Arc::new(inner),
+            None,
+        ));
+        let target_type = DataType::ListView(target_outer_field);
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let outer = result.as_list_view::<i32>();
+        let inner = outer.values().as_list_view::<i32>();
+
+        assert_eq!(outer.value_offsets(), &[0, 1]);
+        assert_eq!(outer.value_sizes(), &[1, 1]);
+        assert_eq!(inner.len(), 2);
+        assert_eq!(inner.value_offsets(), &[0, 1]);
+        assert_eq!(inner.value_sizes(), &[1, 2]);
+        assert_eq!(inner.values().len(), 3);
+
+        let first = outer.value(0);
+        let first = first.as_list_view::<i32>().value(0);
+        assert_eq!(
+            get_column_as!(first.as_struct(), "value", Int32Array).values(),
+            &[1]
+        );
+        let second = outer.value(1);
+        let second = second.as_list_view::<i32>().value(0);
+        assert_eq!(
+            get_column_as!(second.as_struct(), "value", Int32Array).values(),
+            &[2, 3]
+        );
+    }
+
+    #[test]
+    fn test_sliced_large_list_view_ignores_unreachable_invalid_nested_value() {
+        let (source_field, target_field) = list_struct_fields();
+        let source_col: ArrayRef = Arc::new(
+            GenericListViewArray::<i64>::new(
+                source_field,
+                ScalarBuffer::from(vec![0i64, 1]),
+                ScalarBuffer::from(vec![1i64, 1]),
+                list_struct_values(vec!["bad", "2"]),
+                None,
+            )
+            .slice(1, 1),
+        );
+        let target_type = DataType::LargeListView(target_field);
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let result = result.as_list_view::<i64>();
+        let values = result.value(0);
+
+        assert_eq!(result.data_type(), &target_type);
+        assert_eq!(result.value_offsets(), &[0]);
+        assert_eq!(result.value_sizes(), &[1]);
+        assert_eq!(
+            get_column_as!(values.as_struct(), "value", Int32Array).value(0),
+            2
+        );
+    }
+
+    #[test]
+    fn test_large_list_view_visible_invalid_nested_value_returns_error() {
+        let (source_field, target_field) = list_struct_fields();
+        let source_col: ArrayRef = Arc::new(GenericListViewArray::<i64>::new(
+            source_field,
+            ScalarBuffer::from(vec![0i64]),
+            ScalarBuffer::from(vec![1i64]),
+            list_struct_values(vec!["bad"]),
+            None,
+        ));
+        let target_type = DataType::LargeListView(target_field);
+
+        assert!(cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).is_err());
     }
 
     fn fixed_size_list_struct_field(fields: Vec<(&str, DataType)>) -> FieldRef {

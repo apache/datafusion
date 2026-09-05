@@ -1523,7 +1523,7 @@ impl DisplayAs for RepartitionExec {
                 Ok(())
             }
             DisplayFormatType::TreeRender => {
-                writeln!(f, "partitioning_scheme={}", self.partitioning(),)?;
+                writeln!(f, "partitioning_scheme={}", self.partitioning())?;
                 let output_partition_count = self.partitioning().partition_count();
                 let input_to_output_partition_str =
                     format!("{input_partition_count} -> {output_partition_count}");
@@ -2410,7 +2410,6 @@ impl PerPartitionStream {
                                 // We must block on spill stream until we get the batch
                                 // to preserve ordering
                                 self.state = StreamState::ReadingSpilled;
-                                continue;
                             }
                             Err(e) => {
                                 return Poll::Ready(Some(Err(e)));
@@ -2423,8 +2422,7 @@ impl PerPartitionStream {
                                 // All input partitions finished
                                 return Poll::Ready(None);
                             }
-                            // Continue to poll for more data from other partitions
-                            continue;
+                            // Otherwise poll for more data from the other partitions
                         }
                         None => {
                             // Channel closed unexpectedly

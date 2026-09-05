@@ -21,12 +21,13 @@ use crate::aggregates::group_values::multi_group_by::{
 use crate::aggregates::group_values::null_builder::NullBufferBuilderExt;
 use arrow::array::{
     Array, ArrayRef, AsArray, BooleanBufferBuilder, ByteView, GenericByteViewArray,
-    NullBufferBuilder,
+    NullBufferBuilder, make_view,
 };
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::ByteViewType;
 use datafusion_common::Result;
 use datafusion_common::utils::split_vec_min_alloc;
+use datafusion_expr::GroupSelection;
 use std::marker::PhantomData;
 use std::mem::{replace, size_of};
 use std::sync::Arc;
@@ -328,6 +329,51 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         }
     }
 
+    /// Returns the bytes stored at `index`, irrespective of nullness.
+    fn value(&self, index: usize) -> &[u8] {
+        let view = &self.views[index];
+        let byte_view = ByteView::from(*view);
+        let length = byte_view.length as usize;
+        if length <= 12 {
+            // SAFETY: `view` is a valid inline view with `length` bytes.
+            unsafe { GenericByteViewArray::<B>::inline_value(view, length) }
+        } else {
+            let buffer_index = byte_view.buffer_index as usize;
+            let offset = byte_view.offset as usize;
+            if buffer_index < self.completed.len() {
+                &self.completed[buffer_index][offset..offset + length]
+            } else {
+                &self.in_progress[offset..offset + length]
+            }
+        }
+    }
+
+    fn values_preserving_inner(&self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
+        selection.validate_num_groups(self.len())?;
+        let mut selected = Self::new().with_max_block_size(self.max_block_size);
+        for index in selection.iter() {
+            let is_null = self.nulls.is_null(index);
+            selected.nulls.append(!is_null);
+            if is_null {
+                selected.views.push(0);
+                continue;
+            }
+
+            let value = self.value(index);
+            let view = if value.len() <= 12 {
+                make_view(value, 0, 0)
+            } else {
+                selected.ensure_in_progress_big_enough(value.len());
+                let buffer_index = selected.completed.len() as u32;
+                let offset = selected.in_progress.len() as u32;
+                selected.in_progress.extend_from_slice(value);
+                make_view(value, buffer_index, offset)
+            };
+            selected.views.push(view);
+        }
+        Ok(selected.build_inner())
+    }
+
     fn build_inner(self) -> ArrayRef {
         let Self {
             views,
@@ -600,6 +646,10 @@ impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
 
     fn build(self: Box<Self>) -> ArrayRef {
         Self::build_inner(*self)
+    }
+
+    fn values_preserving(&self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
+        self.values_preserving_inner(selection)
     }
 
     fn take_n(&mut self, n: usize) -> ArrayRef {

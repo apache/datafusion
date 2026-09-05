@@ -1280,6 +1280,10 @@ message ParquetScanExecNode {
   PhysicalExprNode predicate = 3;
 
   datafusion_common.TableParquetOptions parquet_options = 4;
+
+  PhysicalSortExprNodeCollection sort_order_for_reorder = 5;
+
+  bool reverse_row_groups = 6;
 }
 
 message CsvScanExecNode {
@@ -1405,6 +1409,10 @@ message AnalyzeExecNode {
   bool has_metric_categories = 5;
   repeated string metric_categories = 6;
   datafusion_common.ExplainFormat format = 7;
+  // Whether metric_types is present. False means use SUMMARY and DEV.
+  bool has_metric_types = 8;
+  // Types of metrics to display.
+  repeated datafusion_common.MetricType metric_types = 9;
 }
 
 message CrossJoinExecNode {

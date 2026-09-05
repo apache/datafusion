@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{cmp::Ordering, sync::Arc, vec};
+use std::{cmp::Ordering, str::FromStr, sync::Arc, vec};
 
 use super::{
     Unparser, dialect::CharacterLengthStyle, dialect::DateFieldExtractStyle,
@@ -31,6 +31,7 @@ use datafusion_expr::{
     Window, expr, utils::grouping_set_to_exprlist,
 };
 
+use arrow::compute::DatePart;
 use indexmap::IndexSet;
 use sqlparser::ast;
 use sqlparser::tokenizer::Span;
@@ -455,13 +456,13 @@ pub(crate) fn date_part_to_sql(
         (DateFieldExtractStyle::Extract, 2) => {
             let date_expr = unparser.expr_to_sql_with_nesting(&date_part_args[1])?;
             if let Expr::Literal(ScalarValue::Utf8(Some(field)), _) = &date_part_args[0] {
-                let field = match field.to_lowercase().as_str() {
-                    "year" => ast::DateTimeField::Year,
-                    "month" => ast::DateTimeField::Month,
-                    "day" => ast::DateTimeField::Day,
-                    "hour" => ast::DateTimeField::Hour,
-                    "minute" => ast::DateTimeField::Minute,
-                    "second" => ast::DateTimeField::Second,
+                let field = match DatePart::from_str(field) {
+                    Ok(DatePart::Year) => ast::DateTimeField::Year,
+                    Ok(DatePart::Month) => ast::DateTimeField::Month,
+                    Ok(DatePart::Day) => ast::DateTimeField::Day,
+                    Ok(DatePart::Hour) => ast::DateTimeField::Hour,
+                    Ok(DatePart::Minute) => ast::DateTimeField::Minute,
+                    Ok(DatePart::Second) => ast::DateTimeField::Second,
                     _ => return Ok(None),
                 };
 
@@ -476,13 +477,13 @@ pub(crate) fn date_part_to_sql(
             let column = unparser.expr_to_sql_with_nesting(&date_part_args[1])?;
 
             if let Expr::Literal(ScalarValue::Utf8(Some(field)), _) = &date_part_args[0] {
-                let field = match field.to_lowercase().as_str() {
-                    "year" => "%Y",
-                    "month" => "%m",
-                    "day" => "%d",
-                    "hour" => "%H",
-                    "minute" => "%M",
-                    "second" => "%S",
+                let field = match DatePart::from_str(field) {
+                    Ok(DatePart::Year) => "%Y",
+                    Ok(DatePart::Month) => "%m",
+                    Ok(DatePart::Day) => "%d",
+                    Ok(DatePart::Hour) => "%H",
+                    Ok(DatePart::Minute) => "%M",
+                    Ok(DatePart::Second) => "%S",
                     _ => return Ok(None),
                 };
 
@@ -519,7 +520,7 @@ pub(crate) fn date_part_to_sql(
             ));
         }
         _ => {}
-    };
+    }
 
     Ok(None)
 }

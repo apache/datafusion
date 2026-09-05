@@ -21,6 +21,7 @@ use crate::{
     EquivalenceProperties, PhysicalExpr, equivalence::ProjectionMapping,
     expressions::UnKnownColumn, physical_exprs_contains, physical_exprs_equal,
 };
+use arrow::datatypes::Schema;
 pub use datafusion_common::SplitPoint;
 use datafusion_common::{Result, validate_range_split_points};
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
@@ -353,6 +354,54 @@ impl RangePartitioning {
             partition_count: self.partition_count,
         })
     }
+
+    /// Checks whether the types of the given expressions match the data types of the split points in this range partitioning.
+    pub fn is_compatible_with_expressions(
+        &self,
+        exprs: &[Arc<dyn PhysicalExpr>],
+        schema: &Schema,
+    ) -> bool {
+        if self.ordering.len() != exprs.len() {
+            return false;
+        }
+        if let Some(first_split) = self.split_points.first() {
+            exprs.iter().zip(first_split.values()).all(|(expr, val)| {
+                expr.data_type(schema)
+                    .map(|dt| dt == val.data_type())
+                    .unwrap_or(false)
+            })
+        } else {
+            true
+        }
+    }
+
+    /// Adapts this range partitioning to the given expressions, preserving split points and sort options.
+    /// Returns `None` if `exprs` count doesn't match ordering length or expression types don't match split points.
+    pub fn adapt(
+        &self,
+        exprs: &[Arc<dyn PhysicalExpr>],
+        schema: &Schema,
+    ) -> Option<Self> {
+        if !self.is_compatible_with_expressions(exprs, schema) {
+            return None;
+        }
+        let new_ordering = LexOrdering::new(
+            exprs
+                .iter()
+                .zip(&self.ordering)
+                .map(|(expr, sort_expr)| PhysicalSortExpr {
+                    expr: Arc::clone(expr),
+                    options: sort_expr.options,
+                })
+                .collect::<Vec<_>>(),
+        )?;
+        Some(Self {
+            ordering: new_ordering,
+            samples: Arc::clone(&self.samples),
+            split_points: Arc::clone(&self.split_points),
+            partition_count: self.partition_count,
+        })
+    }
 }
 
 impl PartialEq for RangePartitioning {
@@ -635,6 +684,37 @@ impl Partitioning {
             Partitioning::RoundRobinBatch(_) | Partitioning::UnknownPartitioning(_) => {
                 self.clone()
             }
+        }
+    }
+
+    /// Adapts this partitioning scheme to satisfy a required [`Distribution`] on the given schema.
+    ///
+    /// - For `Partitioning::Hash`: creates `Partitioning::Hash(exprs, partition_count)`.
+    /// - For `Partitioning::Range`: adapts the range partitioning to the requirement's expressions using [`RangePartitioning::adapt`].
+    /// - For other partitioning schemes: returns `None`.
+    #[expect(
+        deprecated,
+        reason = "HashPartitioned is accepted during the KeyPartitioned migration"
+    )]
+    pub fn adapt(
+        &self,
+        child_requirement: &Distribution,
+        child_schema: &Schema,
+    ) -> Option<Self> {
+        let (Distribution::HashPartitioned(exprs) | Distribution::KeyPartitioned(exprs)) =
+            child_requirement
+        else {
+            return None;
+        };
+
+        match self {
+            Partitioning::Range(ref_range) => ref_range
+                .adapt(exprs, child_schema)
+                .map(Partitioning::Range),
+            Partitioning::Hash(_, ref_count) => {
+                Some(Partitioning::Hash(exprs.to_vec(), *ref_count))
+            }
+            _ => None,
         }
     }
 }
@@ -1511,6 +1591,122 @@ mod tests {
             PartitioningSatisfaction::Exact,
             PartitioningSatisfaction::Exact,
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_range_partitioning_adapt() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![
+            ("a", DataType::Int32),
+            ("b", DataType::Int64),
+            ("c", DataType::Int32),
+        ])?;
+
+        let range = RangePartitioning::try_new_with_samples(
+            fixture.range_ordering([0]),
+            vec![
+                SplitPoint::new(vec![ScalarValue::Int32(Some(10))]),
+                SplitPoint::new(vec![ScalarValue::Int32(Some(15))]),
+                SplitPoint::new(vec![ScalarValue::Int32(Some(20))]),
+                SplitPoint::new(vec![ScalarValue::Int32(Some(25))]),
+            ],
+            3,
+        )?;
+
+        // Adapting to col_c (same type Int32) succeeds
+        let adapted = range.adapt(&[fixture.col(2)], &fixture.schema).unwrap();
+        assert_eq!(adapted.ordering().len(), 1);
+        assert!(adapted.ordering()[0].expr.eq(&fixture.col(2)));
+        assert_eq!(adapted.partition_count(), 3);
+        assert_eq!(adapted.max_partition_count(), 5);
+        assert_eq!(adapted.scale(5)?.partition_count(), 5);
+
+        // Adapting to col_b (different type Int64) fails
+        assert!(range.adapt(&[fixture.col(1)], &fixture.schema).is_none());
+
+        // Adapting to empty or mismatch count fails
+        assert!(range.adapt(&[], &fixture.schema).is_none());
+        assert!(
+            range
+                .adapt(&fixture.cols([0, 2]), &fixture.schema)
+                .is_none()
+        );
+
+        // Partitioning::adapt works with Distribution::KeyPartitioned
+        let part = Partitioning::Range(range);
+        assert!(
+            part.adapt(&fixture.key_distribution([1]), &fixture.schema)
+                .is_none()
+        );
+
+        let adapted_part = part
+            .adapt(&fixture.key_distribution([2]), &fixture.schema)
+            .unwrap();
+        match adapted_part {
+            Partitioning::Range(r) => assert!(r.ordering()[0].expr.eq(&fixture.col(2))),
+            _ => panic!("expected Range partitioning"),
+        }
+
+        // Partitioning::Hash adaptation
+        let hash_part = fixture.hash_partitioning([1], 4);
+        let adapted_hash = hash_part
+            .adapt(&fixture.key_distribution([2]), &fixture.schema)
+            .unwrap();
+        match adapted_hash {
+            Partitioning::Hash(exprs, count) => {
+                assert_eq!(count, 4);
+                assert_eq!(exprs.len(), 1);
+                assert!(exprs[0].eq(&fixture.col(2)));
+            }
+            _ => panic!("expected Hash partitioning"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_range_partitioning_adapt_multi_key() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![
+            ("k1", DataType::Int32),
+            ("k2", DataType::Utf8),
+            ("t1", DataType::Int32),
+            ("t2", DataType::Utf8),
+        ])?;
+
+        let opt_k1 = SortOptions {
+            descending: true,
+            nulls_first: false,
+        };
+        let opt_k2 = SortOptions {
+            descending: false,
+            nulls_first: true,
+        };
+
+        let ordering = LexOrdering::new(vec![
+            fixture.range_sort_expr(0, opt_k1),
+            fixture.range_sort_expr(1, opt_k2),
+        ])
+        .unwrap();
+
+        let split_points = vec![
+            SplitPoint::new(vec![ScalarValue::Int32(Some(20)), ScalarValue::Utf8(None)]),
+            SplitPoint::new(vec![
+                ScalarValue::Int32(Some(10)),
+                ScalarValue::Utf8(Some("foo".to_string())),
+            ]),
+        ];
+
+        let range = RangePartitioning::try_new(ordering, split_points.clone())?;
+        let adapted = range.adapt(&fixture.cols([2, 3]), &fixture.schema).unwrap();
+
+        assert_eq!(adapted.ordering().len(), 2);
+        assert!(adapted.ordering()[0].expr.eq(&fixture.col(2)));
+        assert_eq!(adapted.ordering()[0].options, opt_k1);
+        assert!(adapted.ordering()[1].expr.eq(&fixture.col(3)));
+        assert_eq!(adapted.ordering()[1].options, opt_k2);
+        assert_eq!(adapted.split_points(), &split_points);
+        assert_eq!(adapted.partition_count(), 3);
 
         Ok(())
     }

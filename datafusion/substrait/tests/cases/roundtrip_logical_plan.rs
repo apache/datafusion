@@ -344,10 +344,59 @@ async fn aggregate_multiple_keys() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_grouping_sets() -> Result<()> {
-    roundtrip(
-        "SELECT a, c, d, avg(b) FROM data GROUP BY GROUPING SETS ((a, c), (a), (d), ())",
+    let ctx = create_context().await?;
+    let proto = roundtrip_with_ctx(
+        "SELECT a, c, d, avg(b), sum(e) FROM data GROUP BY GROUPING SETS ((a, c), (a), (d), ())",
+        ctx.clone(),
     )
-    .await
+    .await?;
+
+    let Some(plan_rel::RelType::Root(root)) = &proto.relations[0].rel_type else {
+        panic!("expected root relation");
+    };
+    let Some(RelType::Project(project)) = &root.input.as_ref().unwrap().rel_type else {
+        panic!("expected project relation");
+    };
+    let Some(RelType::Aggregate(aggregate)) = &project.input.as_ref().unwrap().rel_type
+    else {
+        panic!("expected aggregate relation");
+    };
+
+    assert_eq!(aggregate.grouping_expressions.len(), 3);
+    assert_eq!(aggregate.groupings[0].expression_references, [0, 1]);
+    assert_eq!(aggregate.groupings[1].expression_references, [0]);
+    assert_eq!(aggregate.groupings[2].expression_references, [2]);
+    assert!(aggregate.groupings[3].expression_references.is_empty());
+    let output_mapping = match aggregate
+        .common
+        .as_ref()
+        .and_then(|common| common.emit_kind.as_ref())
+    {
+        Some(substrait::proto::rel_common::EmitKind::Emit(emit)) => &emit.output_mapping,
+        _ => panic!("expected aggregate output mapping"),
+    };
+    assert_eq!(output_mapping, &[0, 1, 2, 5, 3, 4]);
+
+    let plan = from_substrait_plan(&ctx.state(), &proto).await?;
+    let results = DataFrame::new(ctx.state(), plan).collect().await?;
+    datafusion::assert_batches_sorted_eq!(
+        [
+            "+---+------------+-------+-------------+-------------+",
+            "| a | c          | d     | avg(data.b) | sum(data.e) |",
+            "+---+------------+-------+-------------+-------------+",
+            "|   |            |       | 3.250000    | 6442450943  |",
+            "|   |            | false | 2.000000    | 4294967295  |",
+            "|   |            | true  | 4.500000    | 2147483648  |",
+            "| 1 |            |       | 2.000000    | 4294967295  |",
+            "| 1 | 2020-01-01 |       | 2.000000    | 4294967295  |",
+            "| 3 |            |       | 4.500000    | 2147483648  |",
+            "| 3 | 2020-01-01 |       | 4.500000    | 2147483648  |",
+            "+---+------------+-------+-------------+-------------+",
+        ],
+        &results
+    );
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -1588,6 +1637,45 @@ async fn window_with_rows() -> Result<()> {
 }
 
 #[tokio::test]
+async fn window_distinct() -> Result<()> {
+    roundtrip(
+        "SELECT count(DISTINCT a) OVER (ORDER BY a ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM data;",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn unsupported_window_semantics_are_rejected() -> Result<()> {
+    let ctx = create_context().await?;
+    for (sql, expected_error) in [
+        (
+            "SELECT first_value(a) IGNORE NULLS OVER (ORDER BY a) FROM data;",
+            "IGNORE NULLS",
+        ),
+        (
+            "SELECT first_value(a) RESPECT NULLS OVER (ORDER BY a) FROM data;",
+            "RESPECT NULLS",
+        ),
+        (
+            "SELECT sum(a) FILTER (WHERE a > 0) OVER (PARTITION BY d) FROM data;",
+            "FILTER",
+        ),
+        (
+            "SELECT count(*) OVER (ORDER BY c RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND CURRENT ROW) FROM data;",
+            "Unsupported Substrait window frame offset",
+        ),
+    ] {
+        let plan = ctx.sql(sql).await?.into_optimized_plan()?;
+        let err = to_substrait_plan(&plan, &ctx.state()).unwrap_err();
+        assert!(
+            err.to_string().contains(expected_error),
+            "expected error containing '{expected_error}', got '{err}'"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn qualified_schema_table_reference() -> Result<()> {
     roundtrip("SELECT * FROM public.data;").await
 }
@@ -2401,10 +2489,7 @@ fn check_post_join_filters(rel: &Rel) -> Result<()> {
         }
         Some(RelType::Set(set)) => {
             for input in &set.inputs {
-                match check_post_join_filters(input) {
-                    Err(e) => return Err(e),
-                    Ok(_) => continue,
-                }
+                check_post_join_filters(input)?;
             }
             Ok(())
         }
@@ -2413,10 +2498,7 @@ fn check_post_join_filters(rel: &Rel) -> Result<()> {
         }
         Some(RelType::ExtensionMulti(ext)) => {
             for input in &ext.inputs {
-                match check_post_join_filters(input) {
-                    Err(e) => return Err(e),
-                    Ok(_) => continue,
-                }
+                check_post_join_filters(input)?;
             }
             Ok(())
         }
@@ -2432,15 +2514,9 @@ fn verify_post_join_filter_value(proto: &Plan) -> Result<()> {
     for relation in &proto.relations {
         match relation.rel_type.as_ref() {
             Some(rt) => match rt {
-                plan_rel::RelType::Rel(rel) => match check_post_join_filters(rel) {
-                    Err(e) => return Err(e),
-                    Ok(_) => continue,
-                },
+                plan_rel::RelType::Rel(rel) => check_post_join_filters(rel)?,
                 plan_rel::RelType::Root(root) => {
-                    match check_post_join_filters(root.input.as_ref().unwrap()) {
-                        Err(e) => return Err(e),
-                        Ok(_) => continue,
-                    }
+                    check_post_join_filters(root.input.as_ref().unwrap())?
                 }
             },
             None => return plan_err!("Cannot parse plan relation: None"),
@@ -2473,19 +2549,10 @@ fn assert_read_filter_count(proto: &Plan, expected_filter_count: u32) -> Result<
         match relation.rel_type.as_ref() {
             Some(rt) => match rt {
                 plan_rel::RelType::Rel(rel) => {
-                    match count_read_filters(rel, &mut filter_count) {
-                        Err(e) => return Err(e),
-                        Ok(_) => continue,
-                    }
+                    count_read_filters(rel, &mut filter_count)?
                 }
                 plan_rel::RelType::Root(root) => {
-                    match count_read_filters(
-                        root.input.as_ref().unwrap(),
-                        &mut filter_count,
-                    ) {
-                        Err(e) => return Err(e),
-                        Ok(_) => continue,
-                    }
+                    count_read_filters(root.input.as_ref().unwrap(), &mut filter_count)?
                 }
             },
             None => return plan_err!("Cannot parse plan relation: None"),

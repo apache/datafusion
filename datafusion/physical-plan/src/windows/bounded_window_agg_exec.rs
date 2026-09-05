@@ -1846,7 +1846,7 @@ mod tests {
             .is_ok()
         {
             return Err(exec_datafusion_err!("shouldn't have completed"));
-        };
+        }
 
         Ok(results)
     }

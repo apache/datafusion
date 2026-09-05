@@ -876,7 +876,6 @@ impl Stream for OrderedFinalAggregateStream {
             match next_state {
                 ControlFlow::Continue(next_state) => {
                     self.state = Some(next_state);
-                    continue;
                 }
                 ControlFlow::Break((Poll::Ready(Some(Err(e))), next_state)) => {
                     // Errors are terminal: discard all operator state and release

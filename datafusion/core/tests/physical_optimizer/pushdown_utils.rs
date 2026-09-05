@@ -43,6 +43,7 @@ use datafusion_physical_plan::{
 use futures::StreamExt;
 use futures::{FutureExt, Stream};
 use object_store::ObjectStore;
+use std::fmt::Write as _;
 use std::{
     fmt::{Display, Formatter},
     pin::Pin,
@@ -440,7 +441,7 @@ fn format_lines(s: &str) -> Vec<String> {
 pub fn format_plan_for_test(plan: &Arc<dyn ExecutionPlan>) -> String {
     let mut out = String::new();
     for line in format_execution_plan(plan) {
-        out.push_str(&format!("  - {line}\n"));
+        writeln!(out, "  - {line}").ok();
     }
     out.push('\n');
     out
