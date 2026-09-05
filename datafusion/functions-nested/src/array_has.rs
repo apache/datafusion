@@ -128,7 +128,7 @@ impl ScalarUDFImpl for ArrayHas {
     fn simplify(
         &self,
         mut args: Vec<Expr>,
-        _info: &datafusion_expr::simplify::SimplifyContext,
+        info: &datafusion_expr::simplify::SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         let [haystack, needle] = take_function_args(self.name(), &mut args)?;
 
@@ -150,11 +150,19 @@ impl ScalarUDFImpl for ArrayHas {
                     ScalarValue::convert_array_to_scalar_vec(&scalar.to_array()?)
                 {
                     assert_eq!(scalar_values.len(), 1);
-                    let list = scalar_values
+                    let values = scalar_values
                         .into_iter()
                         .flatten()
                         .flatten()
-                        .map(|v| Expr::Literal(v, None))
+                        .collect::<Vec<_>>();
+
+                    if values.iter().any(ScalarValue::is_null) {
+                        return Ok(ExprSimplifyResult::Original(args));
+                    }
+
+                    let list = values
+                        .into_iter()
+                        .map(|value| Expr::Literal(value, None))
                         .collect();
 
                     return Ok(ExprSimplifyResult::Simplified(in_list(
@@ -167,12 +175,27 @@ impl ScalarUDFImpl for ArrayHas {
             Expr::ScalarFunction(ScalarFunction { func, args })
                 if func == &make_array_udf() =>
             {
-                // make_array has a static set of arguments, so we can pull the arguments out from it
-                return Ok(ExprSimplifyResult::Simplified(in_list(
-                    std::mem::take(needle),
-                    std::mem::take(args),
-                    false,
-                )));
+                let mut has_unsafe_nullable_element = false;
+                for arg in args.iter() {
+                    // `needle IN (needle)` preserves NULL semantics. A different
+                    // nullable element does not: array_has([NULL], value) is false,
+                    // while value IN (NULL) is NULL. Volatile expressions are
+                    // evaluated separately, so syntactic equality is insufficient.
+                    let safe_same_expr = arg == &*needle && !arg.is_volatile();
+                    if info.nullable(arg)? && !safe_same_expr {
+                        has_unsafe_nullable_element = true;
+                        break;
+                    }
+                }
+
+                if !has_unsafe_nullable_element {
+                    // make_array has a static set of arguments, so we can pull the arguments out from it
+                    return Ok(ExprSimplifyResult::Simplified(in_list(
+                        std::mem::take(needle),
+                        std::mem::take(args),
+                        false,
+                    )));
+                }
             }
             _ => {}
         }
@@ -1196,10 +1219,10 @@ mod tests {
             create_array,
         },
         buffer::OffsetBuffer,
-        datatypes::{DataType, Field},
+        datatypes::{DataType, Field, Schema},
     };
     use datafusion_common::{
-        DataFusionError, ScalarValue, config::ConfigOptions,
+        DataFusionError, ScalarValue, ToDFSchema, config::ConfigOptions,
         utils::SingleRowListArrayBuilder,
     };
     use datafusion_expr::simplify::SimplifyContext;
@@ -1260,6 +1283,78 @@ mod tests {
                 negated: false,
             }
         );
+    }
+
+    #[test]
+    fn test_simplify_array_has_with_nullable_make_array_is_unchanged() {
+        let haystack = make_array(vec![col("c"), lit(1)]);
+        let needle = lit(2);
+        let original = vec![haystack, needle];
+        let context = SimplifyContext::builder()
+            .with_schema(
+                Schema::new(vec![Field::new("c", DataType::Int32, true)])
+                    .to_dfschema_ref()
+                    .unwrap(),
+            )
+            .build();
+
+        let result = ArrayHas::new()
+            .simplify(original.clone(), &context)
+            .unwrap();
+
+        let ExprSimplifyResult::Original(args) = result else {
+            panic!("Expected ExprSimplifyResult::Original")
+        };
+        assert_eq!(args, original);
+    }
+
+    #[test]
+    fn test_simplify_array_has_with_same_nullable_element() {
+        let needle = col("c");
+        let haystack = make_array(vec![needle.clone()]);
+        let context = SimplifyContext::builder()
+            .with_schema(
+                Schema::new(vec![Field::new("c", DataType::Int32, true)])
+                    .to_dfschema_ref()
+                    .unwrap(),
+            )
+            .build();
+
+        let result = ArrayHas::new()
+            .simplify(vec![haystack, needle.clone()], &context)
+            .unwrap();
+
+        let ExprSimplifyResult::Simplified(Expr::InList(in_list)) = result else {
+            panic!("Expected simplified expression")
+        };
+        assert_eq!(
+            in_list,
+            datafusion_expr::expr::InList {
+                expr: Box::new(needle.clone()),
+                list: vec![needle],
+                negated: false,
+            }
+        );
+    }
+
+    #[test]
+    fn test_simplify_array_has_with_null_list_item_is_unchanged() {
+        let haystack = lit(SingleRowListArrayBuilder::new(create_array!(
+            Int32,
+            [Some(1), None]
+        ))
+        .build_list_scalar());
+        let needle = lit(2);
+        let original = vec![haystack, needle];
+
+        let result = ArrayHas::new()
+            .simplify(original.clone(), &SimplifyContext::default())
+            .unwrap();
+
+        let ExprSimplifyResult::Original(args) = result else {
+            panic!("Expected ExprSimplifyResult::Original")
+        };
+        assert_eq!(args, original);
     }
 
     #[test]

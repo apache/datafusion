@@ -97,9 +97,9 @@ explain select * from t1 left join t2 on t1.a = t2.x where t2.x in (1, 2, null);
 ----
 logical_plan
 01)Inner Join: t1.a = t2.x
-02)--Filter: t1.a = Int32(1) OR t1.a = Int32(2) OR Boolean(NULL)
+02)--Filter: t1.a = Int32(1) OR t1.a = Int32(2)
 03)----TableScan: t1 projection=[a, b, c]
-04)--Filter: t2.x = Int32(1) OR t2.x = Int32(2) OR Boolean(NULL)
+04)--Filter: t2.x = Int32(1) OR t2.x = Int32(2)
 05)----TableScan: t2 projection=[x, y, z]
 
 query IITIIT rowsort

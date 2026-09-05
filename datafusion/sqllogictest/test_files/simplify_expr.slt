@@ -34,21 +34,17 @@ query TT
 explain select b from t where b ~ '.*'
 ----
 logical_plan
-01)Filter: t.b IS NOT NULL OR Boolean(NULL)
+01)Filter: t.b IS NOT NULL
 02)--TableScan: t projection=[b]
 physical_plan
-01)FilterExec: b@0 IS NOT NULL OR NULL
+01)FilterExec: b@0 IS NOT NULL
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
 explain select b from t where b !~ '.*'
 ----
-logical_plan
-01)Filter: t.b IS NULL AND Boolean(NULL)
-02)--TableScan: t projection=[b]
-physical_plan
-01)FilterExec: b@0 IS NULL AND NULL
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
+logical_plan EmptyRelation: rows=0
+physical_plan EmptyExec
 
 # `col ~ '.*'` is TRUE for any non-NULL string and NULL for a NULL input.
 # The `.*` -> IS NOT NULL simplification must preserve that NULL (returning
@@ -97,10 +93,10 @@ query TT
 explain select * from t where a = a;
 ----
 logical_plan
-01)Filter: t.a IS NOT NULL OR Boolean(NULL)
+01)Filter: t.a IS NOT NULL
 02)--TableScan: t projection=[a, b]
 physical_plan
-01)FilterExec: a@0 IS NOT NULL OR NULL
+01)FilterExec: a@0 IS NOT NULL
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
@@ -503,3 +499,22 @@ select id from date_unwrap where cast(d64 as date) = DATE '1970-01-01' order by 
 
 statement ok
 drop table date_unwrap;
+
+# IN-list and array_has simplifications must preserve SQL NULL semantics.
+query BBB
+SELECT
+  i IN (1) AND i IN (2),
+  i NOT IN (1) OR i NOT IN (2),
+  array_has([i, 1], 2)
+FROM (VALUES (NULL::INT)) AS t(i);
+----
+NULL NULL false
+
+# Nullable IN-list items also prevent set-algebra rewrites.
+query BB
+SELECT
+  i IN (n, 1) AND i IN (2),
+  i NOT IN (n, 1) OR i NOT IN (2)
+FROM (VALUES (2, NULL::INT)) AS t(i, n);
+----
+NULL NULL
