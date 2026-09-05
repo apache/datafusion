@@ -178,16 +178,17 @@ cargo run --example dataframe -- dataframe
 
 #### Category: Single Process
 
-| Subcommand     | File Path                                                                       | Description                                            |
-| -------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| analyzer_rule  | [`query_planning/analyzer_rule.rs`](examples/query_planning/analyzer_rule.rs)   | Custom AnalyzerRule to change query semantics          |
-| expr_api       | [`query_planning/expr_api.rs`](examples/query_planning/expr_api.rs)             | Create, execute, analyze, and coerce Exprs             |
-| optimizer_rule | [`query_planning/optimizer_rule.rs`](examples/query_planning/optimizer_rule.rs) | Replace predicates via a custom OptimizerRule          |
-| parse_sql_expr | [`query_planning/parse_sql_expr.rs`](examples/query_planning/parse_sql_expr.rs) | Parse SQL into DataFusion Expr                         |
-| plan_to_sql    | [`query_planning/plan_to_sql.rs`](examples/query_planning/plan_to_sql.rs)       | Generate SQL from expressions or plans                 |
-| planner_api    | [`query_planning/planner_api.rs`](examples/query_planning/planner_api.rs)       | APIs for logical and physical plan manipulation        |
-| pruning        | [`query_planning/pruning.rs`](examples/query_planning/pruning.rs)               | Use pruning to skip irrelevant files                   |
-| thread_pools   | [`query_planning/thread_pools.rs`](examples/query_planning/thread_pools.rs)     | Configure custom thread pools for DataFusion execution |
+| Subcommand               | File Path                                                                                           | Description                                            |
+| ------------------------ | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| analyzer_rule            | [`query_planning/analyzer_rule.rs`](examples/query_planning/analyzer_rule.rs)                       | Custom AnalyzerRule to change query semantics          |
+| expr_api                 | [`query_planning/expr_api.rs`](examples/query_planning/expr_api.rs)                                 | Create, execute, analyze, and coerce Exprs             |
+| optimizer_rule           | [`query_planning/optimizer_rule.rs`](examples/query_planning/optimizer_rule.rs)                     | Replace predicates via a custom OptimizerRule          |
+| parse_sql_expr           | [`query_planning/parse_sql_expr.rs`](examples/query_planning/parse_sql_expr.rs)                     | Parse SQL into DataFusion Expr                         |
+| plan_to_sql              | [`query_planning/plan_to_sql.rs`](examples/query_planning/plan_to_sql.rs)                           | Generate SQL from expressions or plans                 |
+| planner_api              | [`query_planning/planner_api.rs`](examples/query_planning/planner_api.rs)                           | APIs for logical and physical plan manipulation        |
+| pruning                  | [`query_planning/pruning.rs`](examples/query_planning/pruning.rs)                                   | Use pruning to skip irrelevant files                   |
+| streaming_shared_subplan | [`query_planning/streaming_shared_subplan.rs`](examples/query_planning/streaming_shared_subplan.rs) | Stream one subplan into multiple consumers             |
+| thread_pools             | [`query_planning/thread_pools.rs`](examples/query_planning/thread_pools.rs)                         | Configure custom thread pools for DataFusion execution |
 
 ## Relation Planner Examples
 
