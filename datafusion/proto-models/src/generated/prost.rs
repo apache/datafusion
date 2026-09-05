@@ -1959,6 +1959,10 @@ pub struct FileScanExecConf {
         tag = "16"
     )]
     pub file_compression_type: ::core::option::Option<i32>,
+    /// Whether file processing order must be preserved. Absent payloads retain the
+    /// legacy behavior of deriving this from output_ordering.
+    #[prost(bool, optional, tag = "17")]
+    pub preserve_order: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ParquetScanExecNode {

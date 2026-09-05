@@ -908,7 +908,7 @@ async fn roundtrip_memory_source() -> Result<()> {
 }
 
 #[tokio::test]
-async fn roundtrip_memory_source_sort_information_and_fetch() -> Result<()> {
+async fn roundtrip_memory_source_projected_sort_information_and_fetch() -> Result<()> {
     use datafusion::datasource::memory::MemorySourceConfig;
     use datafusion::datasource::source::DataSource as _;
 
@@ -931,10 +931,11 @@ async fn roundtrip_memory_source_sort_information_and_fetch() -> Result<()> {
         },
     )])
     .unwrap();
-    let source = MemorySourceConfig::try_new(&[vec![batch]], Arc::clone(&schema), None)?
-        .with_limit(Some(1))
-        .with_show_sizes(false)
-        .try_with_sort_information(vec![ordering])?;
+    let source =
+        MemorySourceConfig::try_new(&[vec![batch]], Arc::clone(&schema), Some(vec![1]))?
+            .with_limit(Some(1))
+            .with_show_sizes(false)
+            .try_with_sort_information(vec![ordering])?;
     let exec_plan = DataSourceExec::from_data_source(source.clone());
 
     let ctx = SessionContext::new();

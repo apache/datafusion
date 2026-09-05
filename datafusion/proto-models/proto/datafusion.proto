@@ -1269,6 +1269,9 @@ message FileScanExecConf {
   // Compression used by formats such as CSV and JSON. Absent means uncompressed
   // for compatibility with payloads written before this field existed.
   optional datafusion_common.CompressionTypeVariant file_compression_type = 16;
+  // Whether file processing order must be preserved. Absent payloads retain the
+  // legacy behavior of deriving this from output_ordering.
+  optional bool preserve_order = 17;
 }
 
 message ParquetScanExecNode {
