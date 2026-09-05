@@ -32,8 +32,8 @@ use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::joins::SharedBitmapBuilder;
 use crate::joins::utils::{
     BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceAsync, OnceFut,
-    build_join_schema, check_join_is_valid, estimate_join_statistics,
-    need_produce_right_in_final,
+    boolean_mask_from_filter, build_join_schema, check_join_is_valid,
+    estimate_join_statistics, need_produce_right_in_final,
 };
 use crate::metrics::{
     Count, ExecutionPlanMetricsSet, MetricBuilder, MetricType, MetricsSet, RatioMetrics,
@@ -3007,20 +3007,6 @@ fn apply_filter_to_row_join_batch(
     let bitmap_combined = boolean_mask_from_filter(filter_arr);
 
     Ok(bitmap_combined)
-}
-
-/// Convert a boolean filter array into a unified mask bitmap.
-///
-/// Caution: The filter result is NOT a bitmap; it contains true/false/null values.
-/// For example, `1 < NULL` evaluates to NULL. Therefore, we must combine (AND)
-/// the boolean array with its null bitmap to construct a unified bitmap.
-#[inline]
-fn boolean_mask_from_filter(filter_arr: &BooleanArray) -> BooleanArray {
-    let (values, nulls) = filter_arr.clone().into_parts();
-    match nulls {
-        Some(nulls) => BooleanArray::new(nulls.inner() & &values, None),
-        None => BooleanArray::new(values, None),
-    }
 }
 
 /// This function performs the following steps:

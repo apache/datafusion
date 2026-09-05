@@ -866,17 +866,10 @@ fn piecewise_merge_join_rejects_unsupported_join_type_on_the_wire() -> Result<()
         .expect("a plan just encoded by try_to_proto must decode as a PhysicalPlanNode");
 
     // (wire value, description, expected error fragment)
-    let cases: [(i32, &str, &str); 5] = [
-        (
-            protobuf::JoinType::Rightsemi as i32,
-            "RightSemi",
-            "Existence join RightSemi is currently not supported",
-        ),
-        (
-            protobuf::JoinType::Rightanti as i32,
-            "RightAnti",
-            "Existence join RightAnti is currently not supported",
-        ),
+    // RightSemi/RightAnti are supported (see `piecewise_merge_join_existence_wire_layout`
+    // and `right_existence_join.rs`); only the Mark joins and unknown variants remain
+    // unsupported on the wire.
+    let cases: [(i32, &str, &str); 3] = [
         (
             protobuf::JoinType::Leftmark as i32,
             "LeftMark",
