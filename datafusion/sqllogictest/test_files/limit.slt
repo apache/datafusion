@@ -444,6 +444,33 @@ SELECT i FROM t1000 ORDER BY i LIMIT 3;
 2
 3
 
+# Regression test for https://github.com/apache/datafusion/issues/24927
+# The TopK fetch must not be pushed below the final DISTINCT aggregation.
+statement ok
+SET datafusion.execution.target_partitions = 2;
+
+query I
+WITH s(x) AS (
+  VALUES (0), (1), (2)
+  ORDER BY 1
+  LIMIT 3
+),
+t AS (
+  SELECT * FROM s
+  UNION ALL
+  SELECT * FROM s
+  UNION ALL
+  SELECT * FROM s
+)
+SELECT DISTINCT x FROM t ORDER BY x LIMIT 3;
+----
+0
+1
+2
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
 query I
 SELECT COUNT(*) FROM (SELECT i FROM t1000 LIMIT 3);
 ----
