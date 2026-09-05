@@ -1877,9 +1877,10 @@ impl ExecutionPlan for RepartitionExec {
                     );
                 };
 
-                Partitioning::Range(RangePartitioning::try_new(
+                Partitioning::Range(RangePartitioning::try_new_with_samples(
                     ordering,
-                    range_partitioning.split_points().to_vec(),
+                    range_partitioning.samples().to_vec(),
+                    range_partitioning.partition_count(),
                 )?)
             }
             others => others.clone(),
@@ -3021,9 +3022,18 @@ mod tests {
             Field::new("region", DataType::Utf8, false),
             Field::new("payload", DataType::UInt32, false),
         ]));
+        let ordering =
+            LexOrdering::new([PhysicalSortExpr::new_default(col("id", &schema)?)])
+                .expect("non-empty ordering");
+        let samples = [10, 20, 30, 40, 50]
+            .into_iter()
+            .map(|value| SplitPoint::new(vec![ScalarValue::UInt32(Some(value))]))
+            .collect();
         let repartition = Arc::new(RepartitionExec::try_new(
             Arc::new(EmptyExec::new(Arc::clone(&schema))),
-            range_partitioning_on_columns(&schema, &["id"], vec![vec![10]])?,
+            Partitioning::Range(RangePartitioning::try_new_with_samples(
+                ordering, samples, 2,
+            )?),
         )?);
 
         let projection =
@@ -3039,9 +3049,10 @@ mod tests {
         assert!(swapped_repartition.input().is::<ProjectionExec>());
         let range = expect_range_partitioning(swapped_repartition.partitioning());
         assert_eq!(range.ordering()[0].to_string(), "id@1 ASC");
+        assert_eq!(range.max_partition_count(), 6);
         assert_eq!(
             range.split_points(),
-            &[SplitPoint::new(vec![ScalarValue::UInt32(Some(10))])]
+            &[SplitPoint::new(vec![ScalarValue::UInt32(Some(30))])]
         );
 
         Ok(())
