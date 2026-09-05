@@ -269,6 +269,12 @@ fn closest_valid_field<'a>(
     best_match.map(|(_, _, _, valid_field)| valid_field)
 }
 
+/// Maximum number of field names listed in a [`SchemaError::FieldNotFound`]
+/// message. Schemas with hundreds or thousands of columns are ordinary in
+/// analytics workloads, and listing all of them produced error messages
+/// thousands of characters long that pushed the actual error off screen.
+const MAX_LISTED_VALID_FIELDS: usize = 20;
+
 impl Display for SchemaError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -297,15 +303,24 @@ impl Display for SchemaError {
                 }
 
                 if !valid_fields.is_empty() {
-                    write!(
-                        f,
-                        "\nValid fields are {}.",
-                        valid_fields
-                            .iter()
-                            .map(|field| field.quoted_flat_name())
-                            .collect::<Vec<String>>()
-                            .join(", ")
-                    )
+                    // Wide schemas are common, and listing every field turns a
+                    // one-line mistake into a screenful of output. The "Did you
+                    // mean" hint above is the actionable part; the list is just
+                    // context, so cap it.
+                    let listed = valid_fields
+                        .iter()
+                        .take(MAX_LISTED_VALID_FIELDS)
+                        .map(|field| field.quoted_flat_name())
+                        .collect::<Vec<String>>()
+                        .join(", ");
+                    match valid_fields.len().saturating_sub(MAX_LISTED_VALID_FIELDS) {
+                        0 => write!(f, "\nValid fields are {listed}."),
+                        remaining => write!(
+                            f,
+                            "\nValid fields are {listed} and {remaining} other{}.",
+                            if remaining == 1 { "" } else { "s" }
+                        ),
+                    }
                 } else {
                     Ok(())
                 }
@@ -1195,6 +1210,59 @@ pub fn add_possible_columns_to_diag(
 
 #[cfg(test)]
 mod test {
+    use crate::error::{Column, MAX_LISTED_VALID_FIELDS, SchemaError};
+
+    fn field_not_found_message(num_fields: usize) -> String {
+        let valid_fields = (0..num_fields)
+            .map(|i| Column::new_unqualified(format!("col_{i}")))
+            .collect::<Vec<_>>();
+        SchemaError::FieldNotFound {
+            field: Box::new(Column::new_unqualified("nope")),
+            valid_fields,
+        }
+        .to_string()
+    }
+
+    #[test]
+    fn field_not_found_lists_every_field_for_a_narrow_schema() {
+        let message = field_not_found_message(3);
+        assert!(
+            message.contains("Valid fields are col_0, col_1, col_2."),
+            "{message}"
+        );
+        assert!(!message.contains("other"), "{message}");
+    }
+
+    #[test]
+    fn field_not_found_lists_every_field_at_the_cap() {
+        let message = field_not_found_message(MAX_LISTED_VALID_FIELDS);
+        assert!(
+            message.contains(&format!("col_{}.", MAX_LISTED_VALID_FIELDS - 1)),
+            "{message}"
+        );
+        assert!(!message.contains("other"), "{message}");
+    }
+
+    #[test]
+    fn field_not_found_truncates_a_wide_schema() {
+        let message = field_not_found_message(200);
+        // The remaining fields are summarised rather than listed.
+        assert!(message.contains("and 180 others."), "{message}");
+        assert!(message.contains("col_0"), "{message}");
+        assert!(
+            !message.contains(&format!("col_{MAX_LISTED_VALID_FIELDS}")),
+            "{message}"
+        );
+        // A 200 column schema used to produce roughly 2.8k characters.
+        assert!(message.len() < 500, "message was {} chars", message.len());
+    }
+
+    #[test]
+    fn field_not_found_uses_singular_for_one_extra_field() {
+        let message = field_not_found_message(MAX_LISTED_VALID_FIELDS + 1);
+        assert!(message.contains("and 1 other."), "{message}");
+    }
+
     use super::*;
 
     use std::mem::size_of;
