@@ -543,11 +543,7 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     ///
     /// See [`Expr::schema_name`] for details
     fn schema_name(&self, args: &[Expr]) -> Result<String> {
-        Ok(format!(
-            "{}({})",
-            self.name(),
-            schema_name_from_exprs_comma_separated_without_space(args)?
-        ))
+        udf_default_schema_name(self.name(), args)
     }
 
     /// Returns a [`Signature`] describing the argument types for which this
@@ -1044,6 +1040,17 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
 /// Extracted to a free-standing function to reduce binary size by avoiding instantiating code per ScalarUDFImpl impl.
 fn coerce_types_not_implemented(name: &str) -> Result<Vec<DataType>> {
     not_impl_err!("Function {name} does not implement coerce_types")
+}
+
+/// Default implementation of [`ScalarUDFImpl::schema_name`]:
+/// `name(arg1,arg2,..)`
+/// Extracted to a free-standing function to reduce binary size by avoiding instantiating code per ScalarUDFImpl impl.
+fn udf_default_schema_name(name: &str, args: &[Expr]) -> Result<String> {
+    Ok(format!(
+        "{}({})",
+        name,
+        schema_name_from_exprs_comma_separated_without_space(args)?
+    ))
 }
 impl dyn ScalarUDFImpl {
     /// Returns `true` if the implementation is of type `T`.
