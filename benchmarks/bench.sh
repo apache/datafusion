@@ -163,6 +163,8 @@ cancellation:           How long cancelling a query takes
 nlj:                    Benchmark for simple nested loop joins, testing various join scenarios
 hj:                     Benchmark for simple hash joins, testing various join scenarios
 smj:                    Benchmark for simple sort merge joins, testing various join scenarios
+join_mem:               One join workload through a fixed memory budget (default 300M), in each configuration a user can pick today.
+                          Rows failing with 'Resources exhausted' are the recorded baseline (hash join cannot spill), not a broken run
 dict:                   Benchmark for dictionary-encoded group-by scenarios
 compile_profile:        Compile and execute TPC-H across selected Cargo profiles, reporting timing and binary size
 
@@ -399,6 +401,10 @@ main() {
                 smj)
                     # smj uses range() function, no data generation needed
                     echo "SMJ benchmark does not require data generation"
+                    ;;
+                join_mem)
+                    # join_mem generates its own parquet file on first run
+                    echo "join_mem benchmark generates its data on first run"
                     ;;
                 dict)
                     # dict generates in-memory data, no data generation needed
@@ -647,6 +653,9 @@ main() {
                     ;;
                 smj)
                     run_smj
+                    ;;
+                join_mem)
+                    run_join_mem
                     ;;
                 dict)
                     run_dict
@@ -1651,6 +1660,15 @@ run_smj() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running smj benchmark..."
     debug_run $CARGO_COMMAND --bin dfbench -- smj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Runs the memory-limited join benchmark (the join failure matrix)
+run_join_mem() {
+    JOIN_MEM_DIR="${DATA_DIR}/join_mem"
+    RESULTS_FILE="${RESULTS_DIR}/join_mem.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running join_mem benchmark..."
+    debug_run $CARGO_COMMAND --bin dfbench -- join-mem --iterations 3 --path "${JOIN_MEM_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 # Runs the dict benchmark
