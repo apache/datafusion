@@ -22,7 +22,7 @@ use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::{
     Case, Expr, Like, Operator,
     expr::{Between, BinaryExpr, InList},
-    expr_fn::{and, bitwise_and, bitwise_or, or},
+    expr_fn::{and, or},
 };
 
 /// returns true if `needle` is found in a chain of search_op
@@ -193,11 +193,6 @@ pub fn is_not_of(not_expr: &Expr, expr: &Expr) -> bool {
     matches!(not_expr, Expr::Not(inner) if expr == inner.as_ref())
 }
 
-/// returns true if `not_expr` is !`expr` (bitwise not)
-pub fn is_negative_of(not_expr: &Expr, expr: &Expr) -> bool {
-    matches!(not_expr, Expr::Negative(inner) if expr == inner.as_ref())
-}
-
 /// returns the contained boolean value in `expr` as
 /// `Expr::Literal(ScalarValue::Boolean(v))`.
 pub fn as_bool_lit(expr: &Expr) -> Result<Option<bool>> {
@@ -352,45 +347,6 @@ pub fn negate_clause(expr: Expr) -> Expr {
         )),
         // use not clause
         _ => Expr::Not(Box::new(expr)),
-    }
-}
-
-/// bitwise negate a Negative clause
-/// input is the clause to be bitwise negated.(args for Negative clause)
-/// For BinaryExpr:
-///    ~(A & B) ===> ~A | ~B
-///    ~(A | B) ===> ~A & ~B
-/// For Negative:
-///    ~(~A) ===> A
-/// For others, use Negative clause
-pub fn distribute_negation(expr: Expr) -> Expr {
-    match expr {
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-            match op {
-                // ~(A & B) ===> ~A | ~B
-                Operator::BitwiseAnd => {
-                    let left = distribute_negation(*left);
-                    let right = distribute_negation(*right);
-
-                    bitwise_or(left, right)
-                }
-                // ~(A | B) ===> ~A & ~B
-                Operator::BitwiseOr => {
-                    let left = distribute_negation(*left);
-                    let right = distribute_negation(*right);
-
-                    bitwise_and(left, right)
-                }
-                // use negative clause
-                _ => Expr::Negative(Box::new(Expr::BinaryExpr(BinaryExpr::new(
-                    left, op, right,
-                )))),
-            }
-        }
-        // ~(~A) ===> A
-        Expr::Negative(expr) => *expr,
-        // use negative clause
-        _ => Expr::Negative(Box::new(expr)),
     }
 }
 
