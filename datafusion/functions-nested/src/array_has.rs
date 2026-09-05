@@ -18,9 +18,8 @@
 //! [`ScalarUDFImpl`] definitions for array_has, array_has_all and array_has_any functions.
 
 use arrow::array::{
-    Array, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, AsArray, BooleanArray,
-    BooleanBufferBuilder, Datum, MAX_INLINE_VIEW_LEN, PrimitiveArray, Scalar,
-    StringArrayType, StringViewArray,
+    Array, ArrayRef, ArrowNativeTypeOp, AsArray, BooleanArray, BooleanBufferBuilder,
+    Datum, MAX_INLINE_VIEW_LEN, Scalar, StringArrayType, StringViewArray,
 };
 use arrow::buffer::{BooleanBuffer, NullBuffer, OffsetBuffer};
 use arrow::datatypes::DataType;
@@ -176,7 +175,7 @@ impl ScalarUDFImpl for ArrayHas {
                 )));
             }
             _ => {}
-        };
+        }
         Ok(ExprSimplifyResult::Original(args))
     }
 
@@ -359,7 +358,7 @@ fn array_has_dispatch_for_array(
         None
     } else {
         downcast_primitive_array! {
-            visible_values => {
+            visible_values, needle => {
                 // The element-null path makes several passes over the values, so
                 // past a large average list length the per-row `eq` kernel is
                 // faster -- bail to it. The single-pass all-valid path has no such
@@ -371,25 +370,28 @@ fn array_has_dispatch_for_array(
                 {
                     None
                 } else {
-                    Some(array_has_array_primitive(
-                        visible_values, needle, &offsets,
+                    Some(array_has_array_native(
+                        visible_values.values(),
+                        visible_values.nulls(),
+                        needle.values(),
+                        &offsets,
                         combined_nulls.as_ref(),
                     ))
                 }
-            },
-            DataType::Utf8 => Some(array_has_array_string(
+            }
+            (DataType::Utf8, _) => Some(array_has_array_string(
                 visible_values.as_string::<i32>(),
                 needle.as_string::<i32>(),
                 &offsets,
                 combined_nulls.as_ref(),
             )),
-            DataType::LargeUtf8 => Some(array_has_array_string(
+            (DataType::LargeUtf8, _) => Some(array_has_array_string(
                 visible_values.as_string::<i64>(),
                 needle.as_string::<i64>(),
                 &offsets,
                 combined_nulls.as_ref(),
             )),
-            DataType::Utf8View => Some(array_has_array_string_view(
+            (DataType::Utf8View, _) => Some(array_has_array_string_view(
                 visible_values.as_string_view(),
                 needle.as_string_view(),
                 &offsets,
@@ -430,21 +432,20 @@ const NULL_FAST_PATH_MAX_LEN: usize = 512;
 /// 2. Nulls: AND the equality bitmap with validity (a null slot's value is
 ///    arbitrary), then reduce each row to "any bit set". Chunked to bound the
 ///    expanded needle.
-fn array_has_array_primitive<T: ArrowPrimitiveType>(
-    values: &PrimitiveArray<T>,
-    needle: &dyn Array,
+///
+/// Generic over the native type alone -- the caller's `downcast_primitive_array!`
+/// peels off the Arrow type -- so `Int32`, `Date32` and `Time32` share a single
+/// instantiation instead of getting one each.
+fn array_has_array_native<N: ArrowNativeTypeOp>(
+    value_slice: &[N],
+    element_nulls: Option<&NullBuffer>,
+    needle_slice: &[N],
     offsets: &[usize],
     combined_nulls: Option<&NullBuffer>,
-) -> BooleanBuffer
-where
-    T::Native: ArrowNativeTypeOp,
-{
-    let needle = needle.as_primitive::<T>();
+) -> BooleanBuffer {
     let num_rows = offsets.len() - 1;
-    let value_slice = values.values();
-    let needle_slice = needle.values();
 
-    let Some(element_nulls) = values.nulls() else {
+    let Some(element_nulls) = element_nulls else {
         return BooleanBuffer::collect_bool(num_rows, |i| {
             if combined_nulls.is_some_and(|n| n.is_null(i)) {
                 return false;
@@ -461,7 +462,7 @@ where
 
     // Case 2 (see fn doc), chunked like the all/any kernels.
     let mut result = BooleanBufferBuilder::new(num_rows);
-    let mut needle_expanded: Vec<T::Native> = Vec::new();
+    let mut needle_expanded: Vec<N> = Vec::new();
     for chunk_start in (0..num_rows).step_by(ROW_CONVERSION_CHUNK_SIZE) {
         let chunk_end = (chunk_start + ROW_CONVERSION_CHUNK_SIZE).min(num_rows);
         let elem_start = offsets[chunk_start];
@@ -1066,11 +1067,11 @@ impl ScalarUDFImpl for ArrayHasAll {
     syntax_example = "array_has_any(array1, array2)",
     sql_example = r#"```sql
 > select array_has_any([1, 2, 3], [3, 4]);
-+------------------------------------------+
++-------------------------------------------+
 | array_has_any(List([1,2,3]), List([3,4])) |
-+------------------------------------------+
-| true                                     |
-+------------------------------------------+
++-------------------------------------------+
+| true                                      |
++-------------------------------------------+
 ```"#,
     argument(
         name = "array1",

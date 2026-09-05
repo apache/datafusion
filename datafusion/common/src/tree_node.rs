@@ -2454,9 +2454,9 @@ pub(crate) mod tests {
     #[test]
     fn box_map_elements_reuses_allocation() {
         let boxed = Box::new(TestTreeNode::new_leaf(42i32));
-        let before: *const TestTreeNode<i32> = &*boxed;
+        let before: *const TestTreeNode<i32> = &raw const *boxed;
         let out = boxed.map_elements(|n| Ok(Transformed::no(n))).unwrap();
-        let after: *const TestTreeNode<i32> = &*out.data;
+        let after: *const TestTreeNode<i32> = &raw const *out.data;
         assert_eq!(after, before);
     }
 

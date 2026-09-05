@@ -59,7 +59,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y graphviz
       - name: Install cargo-depgraph
-        uses: taiki-e/install-action@288e746965032cfcc232e09af2daf5f23c14d780  # v2.86.1
+        uses: taiki-e/install-action@742a3317eac7bd62f91cd888b4eead5e784ba833  # v2.87.1
         with:
           tool: cargo-depgraph@1.6
       - name: Build docs html and check for warnings

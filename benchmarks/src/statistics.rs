@@ -28,6 +28,7 @@ use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::operator_statistics::StatisticsRegistry;
+use datafusion::physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 use datafusion::physical_plan::{ExecutionPlan, collect};
 use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
 use datafusion::sql::parser::{DFParserBuilder, Statement};
@@ -246,7 +247,8 @@ fn capture_statistics_inner(
     path: &str,
     result: &mut Vec<CapturedStatistics>,
 ) -> Result<()> {
-    let statistics = statistics_context.compute_base(plan)?;
+    let statistics = StatisticsContext::new_with_registry(statistics_context.clone())
+        .compute(plan, &StatisticsArgs::new())?;
     result.push(CapturedStatistics {
         path: path.to_string(),
         name: plan.name().to_string(),

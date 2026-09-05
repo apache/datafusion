@@ -242,11 +242,11 @@ fn groups_accumulator_supported(args: &AccumulatorArgs) -> bool {
     syntax_example = "first_value(expression [ORDER BY expression])",
     sql_example = r#"```sql
 > SELECT first_value(column_name ORDER BY other_column) FROM table_name;
-+-----------------------------------------------+
-| first_value(column_name ORDER BY other_column)|
-+-----------------------------------------------+
-| first_element                                 |
-+-----------------------------------------------+
++------------------------------------------------+
+| first_value(column_name ORDER BY other_column) |
++------------------------------------------------+
+| first_element                                  |
++------------------------------------------------+
 ```"#,
     standard_argument(name = "expression",)
 )]

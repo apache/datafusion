@@ -567,16 +567,28 @@ impl ParquetAccessPlan {
 
     /// Prepare this plan and resolve to the final `PreparedAccessPlan`
     pub(crate) fn prepare(
-        self,
+        mut self,
         row_group_meta_data: &[RowGroupMetaData],
     ) -> Result<PreparedAccessPlan> {
         let row_group_indexes = self.row_group_indexes();
+        // `fully_matched` is indexed by absolute row-group index; take it out
+        // before `into_overall_row_selection` consumes `self`.
+        let fully_matched_by_index = std::mem::take(&mut self.fully_matched);
         let row_selection = self.into_overall_row_selection(row_group_meta_data)?;
 
         let (row_group_indexes, row_selection) =
             strip_empty_row_groups(row_group_indexes, row_selection, row_group_meta_data);
 
-        PreparedAccessPlan::new(row_group_indexes, row_selection)
+        // Carry `fully_matched` flags in the same order as the *surviving*
+        // `row_group_indexes` so downstream code (per-RG `RowFilter` skip) can
+        // look them up positionally. Mapping after the strip keeps
+        // `strip_empty_row_groups` generic (no `fully_matched` parameter).
+        let fully_matched: Vec<bool> = row_group_indexes
+            .iter()
+            .map(|&idx| fully_matched_by_index[idx])
+            .collect();
+
+        PreparedAccessPlan::new(row_group_indexes, fully_matched, row_selection)
     }
 }
 
@@ -660,6 +672,11 @@ fn strip_empty_row_groups(
 pub(crate) struct PreparedAccessPlan {
     /// Row group indexes to read
     pub(crate) row_group_indexes: Vec<usize>,
+    /// Per-RG `fully_matched` flag, positionally aligned with
+    /// [`Self::row_group_indexes`]. A `true` entry means stats already
+    /// proved every row of this RG passes the predicate, so the per-row
+    /// `RowFilter` can be skipped for it.
+    pub(crate) fully_matched: Vec<bool>,
     /// Optional row selection for filtering within row groups
     pub(crate) row_selection: Option<RowSelection>,
 }
@@ -668,10 +685,13 @@ impl PreparedAccessPlan {
     /// Create a new prepared access plan
     fn new(
         row_group_indexes: Vec<usize>,
+        fully_matched: Vec<bool>,
         row_selection: Option<RowSelection>,
     ) -> Result<Self> {
+        debug_assert_eq!(row_group_indexes.len(), fully_matched.len());
         Ok(Self {
             row_group_indexes,
+            fully_matched,
             row_selection,
         })
     }
@@ -825,13 +845,18 @@ impl PreparedAccessPlan {
             }
         };
 
-        // Apply the reordering
+        // Apply the reordering — `fully_matched` must be permuted alongside
+        // `row_group_indexes` so the two stay positionally aligned for the
+        // per-RG `RowFilter` skip path.
         let original_indexes = self.row_group_indexes.clone();
-        self.row_group_indexes = sorted_indices
+        let original_fully_matched = self.fully_matched.clone();
+        let order: Vec<usize> = sorted_indices
             .values()
             .iter()
-            .map(|&i| original_indexes[i as usize])
+            .map(|&i| i as usize)
             .collect();
+        self.row_group_indexes = order.iter().map(|&i| original_indexes[i]).collect();
+        self.fully_matched = order.iter().map(|&i| original_fully_matched[i]).collect();
 
         Ok(self)
     }
@@ -841,8 +866,9 @@ impl PreparedAccessPlan {
         // Get the row group indexes before reversing
         let row_groups_to_scan = self.row_group_indexes.clone();
 
-        // Reverse the row group indexes
+        // Reverse the row group indexes (and the parallel `fully_matched`)
         self.row_group_indexes = self.row_group_indexes.into_iter().rev().collect();
+        self.fully_matched = self.fully_matched.into_iter().rev().collect();
 
         // If we have a row selection, reverse it to match the new row group order
         if let Some(row_selection) = self.row_selection {
@@ -1233,7 +1259,7 @@ mod test {
     #[test]
     fn reorder_by_statistics_sorts_row_groups_asc_by_min() {
         let metadata = parquet_metadata_with_int_mins(&[50, 10, 100]);
-        let plan = PreparedAccessPlan::new(vec![0, 1, 2], None).unwrap();
+        let plan = PreparedAccessPlan::new(vec![0, 1, 2], vec![false; 3], None).unwrap();
 
         let result = plan
             .reorder_by_statistics(
@@ -1252,7 +1278,8 @@ mod test {
     fn reorder_by_statistics_skips_when_row_selection_present() {
         let metadata = parquet_metadata_with_int_mins(&[50, 10]);
         let selection = RowSelection::from(vec![RowSelector::select(100)]);
-        let plan = PreparedAccessPlan::new(vec![0, 1], Some(selection)).unwrap();
+        let plan =
+            PreparedAccessPlan::new(vec![0, 1], vec![false; 2], Some(selection)).unwrap();
 
         let result = plan
             .reorder_by_statistics(
@@ -1269,7 +1296,7 @@ mod test {
     #[test]
     fn reorder_by_statistics_skips_when_at_most_one_row_group() {
         let metadata = parquet_metadata_with_int_mins(&[50]);
-        let plan = PreparedAccessPlan::new(vec![0], None).unwrap();
+        let plan = PreparedAccessPlan::new(vec![0], vec![false; 1], None).unwrap();
 
         let result = plan
             .reorder_by_statistics(
@@ -1288,7 +1315,7 @@ mod test {
     #[test]
     fn reorder_by_statistics_skips_for_non_column_sort_expr() {
         let metadata = parquet_metadata_with_int_mins(&[50, 10]);
-        let plan = PreparedAccessPlan::new(vec![0, 1], None).unwrap();
+        let plan = PreparedAccessPlan::new(vec![0, 1], vec![false; 2], None).unwrap();
         let arrow_schema = arrow_schema_a_int();
         let order = LexOrdering::new(vec![PhysicalSortExpr {
             expr: Arc::new(BinaryExpr::new(
@@ -1317,7 +1344,7 @@ mod test {
     #[test]
     fn reorder_by_statistics_skips_when_column_not_in_arrow_schema() {
         let metadata = parquet_metadata_with_int_mins(&[50, 10]);
-        let plan = PreparedAccessPlan::new(vec![0, 1], None).unwrap();
+        let plan = PreparedAccessPlan::new(vec![0, 1], vec![false; 2], None).unwrap();
         // Arrow schema only has "a"; the sort references "b".
         let arrow_schema = arrow_schema_a_int();
         let order = LexOrdering::new(vec![PhysicalSortExpr {
@@ -1420,7 +1447,7 @@ mod test {
     fn reorder_by_statistics_breaks_leading_ties_with_secondary_column() {
         let metadata =
             parquet_metadata_with_two_col_mins(&[(1, 300), (1, 100), (1, 200)]);
-        let plan = PreparedAccessPlan::new(vec![0, 1, 2], None).unwrap();
+        let plan = PreparedAccessPlan::new(vec![0, 1, 2], vec![false; 3], None).unwrap();
         let order =
             LexOrdering::new(vec![sort_expr("a", 0, false), sort_expr("b", 1, false)])
                 .unwrap();
@@ -1439,7 +1466,7 @@ mod test {
     fn reorder_by_statistics_honors_secondary_direction() {
         let metadata =
             parquet_metadata_with_two_col_mins(&[(1, 100), (1, 300), (0, 500)]);
-        let plan = PreparedAccessPlan::new(vec![0, 1, 2], None).unwrap();
+        let plan = PreparedAccessPlan::new(vec![0, 1, 2], vec![false; 3], None).unwrap();
         let order =
             LexOrdering::new(vec![sort_expr("a", 0, false), sort_expr("b", 1, true)])
                 .unwrap();
@@ -1459,7 +1486,7 @@ mod test {
     fn reorder_by_statistics_normalizes_desc_desc_for_reverse() {
         let metadata =
             parquet_metadata_with_two_col_mins(&[(1, 300), (2, 100), (1, 100)]);
-        let plan = PreparedAccessPlan::new(vec![0, 1, 2], None).unwrap();
+        let plan = PreparedAccessPlan::new(vec![0, 1, 2], vec![false; 3], None).unwrap();
         let order =
             LexOrdering::new(vec![sort_expr("a", 0, true), sort_expr("b", 1, true)])
                 .unwrap();
@@ -1479,7 +1506,7 @@ mod test {
     fn reorder_by_statistics_keeps_leading_prefix_on_non_column_secondary() {
         let metadata =
             parquet_metadata_with_two_col_mins(&[(5, 300), (3, 100), (4, 200)]);
-        let plan = PreparedAccessPlan::new(vec![0, 1, 2], None).unwrap();
+        let plan = PreparedAccessPlan::new(vec![0, 1, 2], vec![false; 3], None).unwrap();
         let order = LexOrdering::new(vec![
             sort_expr("a", 0, false),
             PhysicalSortExpr {

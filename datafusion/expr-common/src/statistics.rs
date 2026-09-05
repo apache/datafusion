@@ -753,7 +753,7 @@ pub fn create_bernoulli_from_comparison(
                                     &p_value,
                                     |lhs, rhs| lhs.sub_checked(rhs),
                                 )?;
-                            };
+                            }
                             return Distribution::new_bernoulli(p_value);
                         }
                     } else if op == &Operator::Eq {

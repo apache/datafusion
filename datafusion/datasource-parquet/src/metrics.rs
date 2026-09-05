@@ -396,3 +396,54 @@ impl ParquetFileMetrics {
         count.add(n);
     }
 }
+
+/// Lazily-registered counter for `row_filter_skipped_fully_matched`: the
+/// number of times the per-row
+/// [`RowFilter`](parquet::arrow::arrow_reader::RowFilter) was suppressed
+/// because static stats proved every row of the upcoming row group(s)
+/// satisfies the predicate.
+///
+/// Like [`ParquetFileMetrics::add_page_index_pages_skipped_by_fully_matched`],
+/// the counter is only registered when it first fires, so scans that never
+/// suppress a row filter don't carry a zero-valued counter in
+/// `EXPLAIN ANALYZE` (and `ParquetFileMetrics` keeps no public field for it).
+/// Unlike that fire-once helper, the decode stream records suppressions as
+/// they happen, so this holder keeps a live [`Count`] handle after the first
+/// registration.
+///
+/// Note this counts *suppression events*, not row groups: a run of
+/// consecutive fully-matched row groups shares a single toggle (the filter
+/// stays off across the run with no further rebuilds).
+pub(crate) struct RowFilterSkippedFullyMatchedMetric {
+    metrics: ExecutionPlanMetricsSet,
+    partition: usize,
+    filename: String,
+    count: Option<Count>,
+}
+
+impl RowFilterSkippedFullyMatchedMetric {
+    pub(crate) fn new(
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+        filename: &str,
+    ) -> Self {
+        Self {
+            metrics: metrics.clone(),
+            partition,
+            filename: filename.to_string(),
+            count: None,
+        }
+    }
+
+    /// Record one suppression, registering the counter on first use.
+    pub(crate) fn add_one(&mut self) {
+        let count = self.count.get_or_insert_with(|| {
+            MetricBuilder::new(&self.metrics)
+                .with_new_label("filename", self.filename.clone())
+                .with_type(MetricType::Summary)
+                .with_category(MetricCategory::Rows)
+                .counter("row_filter_skipped_fully_matched", self.partition)
+        });
+        count.add(1);
+    }
+}

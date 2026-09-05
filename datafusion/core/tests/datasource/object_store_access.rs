@@ -1069,7 +1069,7 @@ impl Test {
             );
             self = self
                 .with_bytes(
-                    &format!("/data/a={i}/b={}/c={}/file_{i}.csv", i * 10, i * 100,),
+                    &format!("/data/a={i}/b={}/c={}/file_{i}.csv", i * 10, i * 100),
                     csv_data1,
                 )
                 .await;

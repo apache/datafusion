@@ -154,7 +154,7 @@ pub fn plan_with_order_preserving_variants(
                         Some(coalesce_fetch)
                     }
                 };
-            };
+            }
             // When the input of a `CoalescePartitionsExec` has an ordering,
             // replace it with a `SortPreservingMergeExec` if appropriate:
             let spm = SortPreservingMergeExec::new(ordering.clone(), Arc::clone(child))

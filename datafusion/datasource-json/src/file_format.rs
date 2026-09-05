@@ -423,7 +423,7 @@ impl DisplayAs for JsonSink {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "JsonSink(file_groups=",)?;
+                write!(f, "JsonSink(file_groups=")?;
                 FileGroupDisplay(&self.config.file_group).fmt_as(t, f)?;
                 write!(f, ")")
             }
@@ -618,7 +618,7 @@ impl Decoder for JsonDecoder {
 
 /// Encode a [`JsonFormatFactory`]'s options as their protobuf form.
 ///
-/// The reverse direction is `From<&protobuf::JsonOptions> for JsonOptions` in
+/// The reverse direction is `TryFrom<&protobuf::JsonOptions> for JsonOptions` in
 /// `datafusion-proto-models`: `JsonOptions` is a `datafusion-common` type, so
 /// that half cannot live here.
 #[cfg(feature = "proto")]

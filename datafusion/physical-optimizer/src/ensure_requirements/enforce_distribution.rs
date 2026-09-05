@@ -619,7 +619,7 @@ fn try_reorder(
 }
 
 /// Return the expected expressions positions.
-/// For example, the current expressions are ['c', 'a', 'a', b'], the expected expressions are ['b', 'c', 'a', 'a'],
+/// For example, the current expressions are `['c', 'a', 'a', 'b']`, the expected expressions are `['b', 'c', 'a', 'a']`,
 ///
 /// This method will return a Vec [3, 0, 1, 2]
 fn expected_expr_positions(
@@ -1039,14 +1039,67 @@ fn get_repartition_requirement_status(
         .collect())
 }
 
+/// Helper to rank execution plans by estimated data size (bytes, then rows)
+/// when selecting a reference candidate for co-partitioning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct PlanSize {
+    byte_size: Option<usize>,
+    num_rows: Option<usize>,
+}
+
+impl PlanSize {
+    fn from_plan(plan: &dyn ExecutionPlan) -> Self {
+        let stats = StatisticsContext::new()
+            .compute(plan, &StatisticsArgs::new())
+            .ok();
+        Self {
+            byte_size: stats
+                .as_ref()
+                .and_then(|s| s.total_byte_size.get_value().copied()),
+            num_rows: stats.as_ref().and_then(|s| s.num_rows.get_value().copied()),
+        }
+    }
+
+    fn is_known(&self) -> bool {
+        self.byte_size.is_some() || self.num_rows.is_some()
+    }
+}
+
+impl PartialOrd for PlanSize {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        // 1. Compare byte_size if present on both sides
+        if let (Some(a), Some(b)) = (self.byte_size, other.byte_size) {
+            match a.cmp(&b) {
+                std::cmp::Ordering::Equal => {}
+                ord => return Some(ord),
+            }
+        }
+
+        // 2. Compare num_rows if present on both sides
+        if let (Some(a), Some(b)) = (self.num_rows, other.num_rows) {
+            match a.cmp(&b) {
+                std::cmp::Ordering::Equal => {}
+                ord => return Some(ord),
+            }
+        }
+
+        // 3. If any metric was present and equal on both, return Equal
+        if (self.byte_size.is_some() && self.byte_size == other.byte_size)
+            || (self.num_rows.is_some() && self.num_rows == other.num_rows)
+        {
+            return Some(std::cmp::Ordering::Equal);
+        }
+
+        // Incomparable (no metric present on both sides)
+        None
+    }
+}
+
 /// Enforce cross-child distribution relationships after each child has already
 /// satisfied its own distribution requirement.
 ///
 /// See [`InputDistributionRequirements`] for the distinction between
 /// independent per-child requirements and co-partitioned child relationships.
-///
-/// Currently, unsatisfied co-partitioning is repaired by hash repartitioning
-/// key-partitioned children and other relationship kinds are rejected.
 #[expect(
     deprecated,
     reason = "HashPartitioned is accepted during the KeyPartitioned migration"
@@ -1071,9 +1124,106 @@ fn enforce_distribution_relationships(
             return Ok(());
         }
 
+        // Check if any co-partitioned child already satisfies its distribution requirement
+        // and can serve as a reference partitioning.
+        let mut satisfied_children = Vec::new();
+        for &i in &unsatisfied_children {
+            let child = &children[i];
+            let plan = child.context.plan.as_ref();
+            if let Ok(satisfaction) = input_distributions.child_satisfaction(
+                i,
+                plan,
+                ChildSatisfactionOptions::new(),
+            ) && satisfaction.is_satisfied()
+            {
+                let partitioning = plan.output_partitioning();
+                match partitioning {
+                    Partitioning::Range(_) | Partitioning::Hash(_, _) => {
+                        let is_native = !plan.is::<RepartitionExec>();
+                        satisfied_children.push((i, partitioning.clone(), is_native));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let best_satisfied_child: Option<(usize, Partitioning)> = match satisfied_children
+            .len()
+        {
+            0 => None,
+            1 => satisfied_children
+                .into_iter()
+                .next()
+                .map(|(i, p, _)| (i, p)),
+            _ => {
+                // Prefer native partitioned children over newly repartitioned ones
+                let native_children: Vec<_> = satisfied_children
+                    .iter()
+                    .filter(|(_, _, is_native)| *is_native)
+                    .collect();
+                if native_children.len() == 1 {
+                    let (i, p, _) = native_children[0];
+                    Some((*i, p.clone()))
+                } else {
+                    let pool = if !native_children.is_empty() {
+                        native_children
+                    } else {
+                        satisfied_children.iter().collect()
+                    };
+                    let candidates: Vec<_> = pool
+                        .into_iter()
+                        .map(|(idx, part, _)| {
+                            let size =
+                                PlanSize::from_plan(children[*idx].context.plan.as_ref());
+                            (size, *idx, part.clone())
+                        })
+                        .collect();
+
+                    // Only select a reference candidate if there is a unique, strictly
+                    // larger winner (`size_a > size_b`). If candidates have equal or
+                    // incomparable sizes (e.g. non-overlapping metrics), return None
+                    // so the optimizer avoids arbitrary tie-breaking and falls back to
+                    // standard distribution.
+                    candidates
+                        .iter()
+                        .find(|(size_a, idx_a, _)| {
+                            size_a.is_known()
+                                && candidates.iter().all(|(size_b, idx_b, _)| {
+                                    idx_a == idx_b || size_a > size_b
+                                })
+                        })
+                        .map(|(_, idx, part)| (*idx, part.clone()))
+                }
+            }
+        };
+
+        // Validate that best_satisfied_child can be adapted across all unsatisfied children in the group
+        let best_satisfied_child =
+            best_satisfied_child.filter(|(ref_idx, ref_partitioning)| {
+                unsatisfied_children.iter().all(|&child_idx| {
+                    if child_idx == *ref_idx {
+                        true
+                    } else {
+                        ref_partitioning
+                            .adapt(
+                                &children[child_idx].requirement,
+                                &children[child_idx].context.plan.schema(),
+                            )
+                            .is_some()
+                    }
+                })
+            });
+
         let mut changed = false;
         for child_idx in unsatisfied_children {
             if repartitioned_for_relationship[child_idx] {
+                continue;
+            }
+
+            // If this child is the reference child that we are matching against, do not repartition it.
+            if let Some((ref_idx, _)) = &best_satisfied_child
+                && *ref_idx == child_idx
+            {
                 continue;
             }
 
@@ -1083,34 +1233,70 @@ fn enforce_distribution_relationships(
                 continue;
             };
 
-            let already_target_hash = matches!(
-                children[child_idx].context.plan.output_partitioning(),
-                Partitioning::Hash(_, partition_count) if *partition_count == target_partitions
-            ) && input_distributions
-                .child_satisfaction(
-                    child_idx,
-                    children[child_idx].context.plan.as_ref(),
-                    ChildSatisfactionOptions::new(),
-                )?
-                .is_satisfied();
+            // If a satisfied reference child exists, adapt its partitioning to match.
+            let target_partitioning =
+                if let Some((ref_idx, ref_partitioning)) = &best_satisfied_child {
+                    if *ref_idx == child_idx {
+                        None
+                    } else {
+                        ref_partitioning.adapt(
+                            &children[child_idx].requirement,
+                            &children[child_idx].context.plan.schema(),
+                        )
+                    }
+                } else {
+                    None
+                };
 
-            if already_target_hash {
+            let partitioning = target_partitioning.unwrap_or_else(|| {
+                Distribution::KeyPartitioned(exprs.to_vec())
+                    .create_partitioning(target_partitions)
+            });
+
+            let already_satisfied = match (
+                &partitioning,
+                children[child_idx].context.plan.output_partitioning(),
+            ) {
+                (Partitioning::Hash(_, p1), Partitioning::Hash(_, p2)) if p1 == p2 => {
+                    input_distributions
+                        .child_satisfaction(
+                            child_idx,
+                            children[child_idx].context.plan.as_ref(),
+                            ChildSatisfactionOptions::new(),
+                        )
+                        .map(|s| s.is_satisfied())
+                        .unwrap_or(false)
+                }
+                (Partitioning::Range(r1), Partitioning::Range(r2)) if r1 == r2 => true,
+                _ => false,
+            };
+
+            if already_satisfied {
                 continue;
             }
 
-            let partitioning = Distribution::KeyPartitioned(exprs.to_vec())
-                .create_partitioning(target_partitions);
-            let repartition = RepartitionExec::try_new(
-                Arc::clone(&children[child_idx].context.plan),
-                partitioning,
-            )?
-            .with_preserve_order();
+            let (input, original_child) = if let Some(repart) = children[child_idx]
+                .context
+                .plan
+                .downcast_ref::<RepartitionExec>()
+                && !children[child_idx].context.children.is_empty()
+            {
+                let orig = children[child_idx].context.children.pop().unwrap();
+                (Arc::clone(repart.input()), orig)
+            } else {
+                let current_plan = Arc::clone(&children[child_idx].context.plan);
+                let orig = std::mem::replace(
+                    &mut children[child_idx].context,
+                    DistributionContext::new(current_plan, true, vec![]),
+                );
+                (Arc::clone(&orig.plan), orig)
+            };
+
+            let repartition =
+                RepartitionExec::try_new(input, partitioning)?.with_preserve_order();
             let plan = Arc::new(repartition) as _;
-            let original_child = std::mem::replace(
-                &mut children[child_idx].context,
-                DistributionContext::new(plan, true, vec![]),
-            );
-            children[child_idx].context.children = vec![original_child];
+            children[child_idx].context =
+                DistributionContext::new(plan, true, vec![original_child]);
             repartitioned_for_relationship[child_idx] = true;
             changed = true;
         }
@@ -1196,7 +1382,7 @@ pub fn ensure_distribution(
         )?
     {
         plan = updated_window;
-    };
+    }
 
     // For joins in partitioned mode, we need exact hash matching between
     // both sides, so subset partitioning logic must be disabled.
@@ -1392,7 +1578,7 @@ pub fn ensure_distribution(
                         child = add_roundrobin_on_top(child, target_partitions)?;
                     }
                 }
-            };
+            }
 
             Ok(DistributionChildState {
                 context: child,

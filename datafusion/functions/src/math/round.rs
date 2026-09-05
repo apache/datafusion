@@ -162,11 +162,11 @@ fn decimal_places_from_scalar(scalar: &ScalarValue) -> Result<i32> {
     ),
     sql_example = r#"```sql
 > SELECT round(3.14159);
-+--------------+
-| round(3.14159)|
-+--------------+
-| 3.0          |
-+--------------+
++----------------+
+| round(3.14159) |
++----------------+
+| 3.0            |
++----------------+
 ```"#
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -241,9 +241,6 @@ impl ScalarUDFImpl for RoundFunc {
 
         // If decimal_places is a scalar literal, we can incorporate it into the output type
         // (scale reduction). Otherwise, keep the input scale as we can't pick a per-row scale.
-        //
-        // Note: `scalar_arguments` contains the original literal values (pre-coercion), so
-        // integer literals may appear as Int64 even though the signature coerces them to Int32.
         let decimal_places: Option<i32> = match args.scalar_arguments.get(1) {
             None => Some(0),    // No dp argument means default to 0
             Some(None) => None, // dp is not a literal (e.g. column)
