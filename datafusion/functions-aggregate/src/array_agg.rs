@@ -17,14 +17,14 @@
 
 //! `ARRAY_AGG` aggregate implementation: [`ArrayAgg`]
 
-use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::mem::{size_of, size_of_val, take};
+use std::ops::Range;
 use std::sync::Arc;
 
 use arrow::array::{
     Array, ArrayRef, AsArray, BooleanArray, ListArray, NullBufferBuilder, StructArray,
-    UInt32Array, new_empty_array,
+    UInt32Array, make_array, new_empty_array,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::compute::{SortOptions, cast, filter};
@@ -33,10 +33,9 @@ use arrow::row::{OwnedRow, Row, RowConverter, Rows, SortField};
 
 use datafusion_common::cast::as_list_array;
 use datafusion_common::hash_utils::{RandomState, create_hashes};
+use datafusion_common::scalar::copy_array_data;
+use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::utils::proxy::HashTableAllocExt;
-use datafusion_common::utils::{
-    SingleRowListArrayBuilder, compare_rows, get_row_at_idx, take_function_args,
-};
 use datafusion_common::{
     Result, ScalarValue, assert_eq_or_internal_err, exec_err, internal_err,
 };
@@ -47,12 +46,12 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filter_to_nulls;
-use datafusion_functions_aggregate_common::merge_arrays::merge_ordered_arrays;
 use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
 use datafusion_functions_aggregate_common::utils::ordering_fields;
 use datafusion_macros::user_doc;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use hashbrown::hash_table::HashTable;
+use itertools::{Either, Itertools};
 
 make_udaf_expr_and_func!(
     ArrayAgg,
@@ -222,7 +221,7 @@ impl AggregateUDFImpl for ArrayAgg {
         OrderSensitiveArrayAggAccumulator::try_new(
             data_type,
             &ordering_dtypes,
-            ordering,
+            &ordering,
             self.is_input_pre_ordered,
             acc_args.is_reversed,
             ignore_nulls,
@@ -1193,26 +1192,38 @@ impl Accumulator for DistinctArrayAggAccumulator {
 /// Accumulator for a `ARRAY_AGG(... ORDER BY ..., ...)` aggregation. In a multi
 /// partition setting, partial aggregations are computed for every partition,
 /// and then their results are merged.
+#[derive(Debug, Clone, Copy)]
+struct OrderedArrayAggEntry {
+    batch_idx: usize,
+    row_idx: usize,
+}
+
 #[derive(Debug)]
 pub(crate) struct OrderSensitiveArrayAggAccumulator {
-    /// Stores entries in the `ARRAY_AGG` result.
-    values: Vec<ScalarValue>,
-    /// Stores values of ordering requirement expressions corresponding to each
-    /// entry in `values`. This information is used when merging results from
-    /// different partitions. For detailed information how merging is done, see
-    /// [`merge_ordered_arrays`].
-    ordering_values: Vec<Vec<ScalarValue>>,
-    /// Stores datatypes of expressions inside values and ordering requirement
-    /// expressions.
-    datatypes: Vec<DataType>,
-    /// Stores the ordering requirement of the `Accumulator`.
-    ordering_req: LexOrdering,
+    /// Arrow payload arrays. Entries refer to rows in these batches.
+    batches: Vec<ArrayRef>,
+    /// One compact payload location per retained result element.
+    entries: Vec<OrderedArrayAggEntry>,
+    /// Ordering keys encoded with the complete sort options. Row `i` always
+    /// corresponds to entry `i`.
+    ordering_rows: Rows,
+    /// Input ranges already known to be sorted, such as preordered raw input
+    /// and individual partial-state rows.
+    sorted_runs: Vec<Range<usize>>,
+    /// Lazily computed sorted permutation shared by state/evaluate.
+    sorted_entry_indices: Option<Vec<usize>>,
+    ordering_converter: RowConverter,
+    value_type: DataType,
+    ordering_fields: Fields,
     /// Whether the input is known to be pre-ordered
     is_input_pre_ordered: bool,
     /// Whether the aggregation is running in reverse.
     reverse: bool,
     /// Whether the aggregation should ignore null values.
     ignore_nulls: bool,
+    /// A partial state breaks continuity even when subsequent raw input is
+    /// itself known to be preordered.
+    can_extend_preordered_run: bool,
 }
 
 impl OrderSensitiveArrayAggAccumulator {
@@ -1221,75 +1232,265 @@ impl OrderSensitiveArrayAggAccumulator {
     pub fn try_new(
         datatype: &DataType,
         ordering_dtypes: &[DataType],
-        ordering_req: LexOrdering,
+        ordering_req: &LexOrdering,
         is_input_pre_ordered: bool,
         reverse: bool,
         ignore_nulls: bool,
     ) -> Result<Self> {
-        let mut datatypes = vec![datatype.clone()];
-        datatypes.extend(ordering_dtypes.iter().cloned());
+        assert_eq_or_internal_err!(
+            ordering_dtypes.len(),
+            ordering_req.len(),
+            "ordered array_agg requires one datatype per ordering expression"
+        );
+        let ordering_fields =
+            Fields::from(ordering_fields(ordering_req, ordering_dtypes));
+        let sort_fields = ordering_dtypes
+            .iter()
+            .zip(ordering_req.iter())
+            .map(|(data_type, sort_expr)| {
+                SortField::new_with_options(data_type.clone(), sort_expr.options)
+            })
+            .collect();
+        let ordering_converter = RowConverter::new(sort_fields)?;
+        let ordering_rows = ordering_converter.empty_rows(0, 0);
         Ok(Self {
-            values: vec![],
-            ordering_values: vec![],
-            datatypes,
-            ordering_req,
+            batches: vec![],
+            entries: vec![],
+            ordering_rows,
+            sorted_runs: vec![],
+            sorted_entry_indices: None,
+            ordering_converter,
+            value_type: datatype.clone(),
+            ordering_fields,
             is_input_pre_ordered,
             reverse,
             ignore_nulls,
+            can_extend_preordered_run: false,
         })
     }
 
-    fn sort(&mut self) {
-        let sort_options = self
-            .ordering_req
-            .iter()
-            .map(|sort_expr| sort_expr.options)
-            .collect::<Vec<_>>();
-        let mut values = take(&mut self.values)
-            .into_iter()
-            .zip(take(&mut self.ordering_values))
-            .collect::<Vec<_>>();
-        let mut delayed_cmp_err = Ok(());
-        values.sort_by(|(_, left_ordering), (_, right_ordering)| {
-            compare_rows(left_ordering, right_ordering, &sort_options).unwrap_or_else(
-                |err| {
-                    delayed_cmp_err = Err(err);
-                    Ordering::Equal
-                },
-            )
-        });
-        (self.values, self.ordering_values) = values.into_iter().unzip();
+    fn append_input_batch(
+        &mut self,
+        values: &ArrayRef,
+        ordering_values: &[ArrayRef],
+    ) -> Result<()> {
+        let Some(entry_range) =
+            self.store_batch(values, ordering_values, self.ignore_nulls)?
+        else {
+            return Ok(());
+        };
+        if self.is_input_pre_ordered {
+            if self.can_extend_preordered_run {
+                self.sorted_runs
+                    .last_mut()
+                    .expect("an extendable preordered run must exist")
+                    .end = entry_range.end;
+            } else {
+                self.sorted_runs.push(entry_range);
+            }
+        }
+        self.can_extend_preordered_run = self.is_input_pre_ordered;
+        Ok(())
     }
 
-    fn evaluate_orderings(&self) -> Result<ScalarValue> {
-        let fields = ordering_fields(&self.ordering_req, &self.datatypes[1..]);
+    fn append_sorted_run(
+        &mut self,
+        values: &ArrayRef,
+        ordering_values: &[ArrayRef],
+    ) -> Result<()> {
+        if let Some(entry_range) = self.store_batch(values, ordering_values, false)?
+            && entry_range
+                .clone()
+                .zip(entry_range.start + 1..entry_range.end)
+                .all(|(left, right)| self.ordering_row(left) <= self.ordering_row(right))
+        {
+            self.sorted_runs.push(entry_range);
+        }
+        self.can_extend_preordered_run = false;
+        Ok(())
+    }
 
-        let column_wise_ordering_values = if self.ordering_values.is_empty() {
-            fields
+    fn ordering_row(&self, entry_idx: usize) -> Row<'_> {
+        self.ordering_rows.row(entry_idx)
+    }
+
+    fn merge_sorted_runs(&self, unsorted_indices: Vec<usize>) -> Vec<usize> {
+        let unsorted_run = (!unsorted_indices.is_empty())
+            .then(|| Either::Right(unsorted_indices.into_iter()));
+        self.sorted_runs
+            .iter()
+            .cloned()
+            .map(Either::Left)
+            .chain(unsorted_run)
+            .kmerge_by(|left, right| {
+                self.ordering_row(*left)
+                    .cmp(&self.ordering_row(*right))
+                    .then_with(|| left.cmp(right))
+                    .is_lt()
+            })
+            .collect()
+    }
+
+    fn ensure_sorted_indices(&mut self) {
+        if self.sorted_entry_indices.is_some() {
+            return;
+        }
+
+        let sorted_len = self.sorted_runs.iter().map(|run| run.len()).sum::<usize>();
+        let mut unsorted_indices = Vec::with_capacity(self.entries.len() - sorted_len);
+        let mut next_unsorted = 0;
+        for run in &self.sorted_runs {
+            debug_assert!(run.start >= next_unsorted);
+            debug_assert!(run.end <= self.entries.len());
+            unsorted_indices.extend(next_unsorted..run.start);
+            next_unsorted = run.end;
+        }
+        unsorted_indices.extend(next_unsorted..self.entries.len());
+        unsorted_indices.sort_by(|left, right| {
+            self.ordering_row(*left)
+                .cmp(&self.ordering_row(*right))
+                .then_with(|| left.cmp(right))
+        });
+        self.sorted_entry_indices = Some(self.merge_sorted_runs(unsorted_indices));
+    }
+
+    fn select_values(&self, sorted_indices: &[usize], reverse: bool) -> Result<ArrayRef> {
+        if sorted_indices.is_empty() {
+            return Ok(new_empty_array(&self.value_type));
+        }
+
+        // A common preordered case is a consecutive range in one input batch.
+        // Return a zero-copy slice instead of invoking interleave.
+        if !reverse {
+            let first = self.entries[sorted_indices[0]];
+            let is_contiguous = sorted_indices.iter().enumerate().all(|(offset, idx)| {
+                let entry = self.entries[*idx];
+                entry.batch_idx == first.batch_idx
+                    && entry.row_idx == first.row_idx + offset
+            });
+            if is_contiguous {
+                return Ok(self.batches[first.batch_idx]
+                    .slice(first.row_idx, sorted_indices.len()));
+            }
+        }
+
+        let sources = self
+            .batches
+            .iter()
+            .map(|batch| batch.as_ref())
+            .collect::<Vec<_>>();
+        let indices = if reverse {
+            sorted_indices
                 .iter()
-                .map(|f| new_empty_array(f.data_type()))
+                .rev()
+                .map(|idx| {
+                    let entry = self.entries[*idx];
+                    (entry.batch_idx, entry.row_idx)
+                })
                 .collect::<Vec<_>>()
         } else {
-            (0..fields.len())
-                .map(|i| {
-                    let column_values: Box<dyn Iterator<Item = ScalarValue>> = if self
-                        .reverse
-                    {
-                        Box::new(self.ordering_values.iter().rev().map(|x| x[i].clone()))
-                    } else {
-                        Box::new(self.ordering_values.iter().map(|x| x[i].clone()))
-                    };
-                    ScalarValue::iter_to_array(column_values)
+            sorted_indices
+                .iter()
+                .map(|idx| {
+                    let entry = self.entries[*idx];
+                    (entry.batch_idx, entry.row_idx)
                 })
-                .collect::<Result<_>>()?
+                .collect::<Vec<_>>()
         };
+        Ok(arrow::compute::interleave(&sources, &indices)?)
+    }
 
-        let ordering_array = StructArray::try_new(
-            Fields::from(fields),
-            column_wise_ordering_values,
-            None,
-        )?;
+    fn evaluate_orderings(
+        &self,
+        sorted_indices: &[usize],
+        reverse: bool,
+    ) -> Result<ScalarValue> {
+        let indices = if reverse {
+            Either::Left(sorted_indices.iter().rev())
+        } else {
+            Either::Right(sorted_indices.iter())
+        };
+        let mut columns = self
+            .ordering_converter
+            .convert_rows(indices.map(|idx| self.ordering_row(*idx)))?;
+
+        // RowConverter decodes dictionary values to their physical type. State
+        // fields, however, are required to retain their declared logical type.
+        for (column, field) in columns.iter_mut().zip(&self.ordering_fields) {
+            if column.data_type() != field.data_type() {
+                *column = cast(column.as_ref(), field.data_type())?;
+            }
+        }
+
+        let ordering_array =
+            StructArray::try_new(self.ordering_fields.clone(), columns, None)?;
         Ok(SingleRowListArrayBuilder::new(Arc::new(ordering_array)).build_list_scalar())
+    }
+
+    fn store_batch(
+        &mut self,
+        values: &ArrayRef,
+        ordering_values: &[ArrayRef],
+        ignore_nulls: bool,
+    ) -> Result<Option<Range<usize>>> {
+        let values = if values.data_type() == &self.value_type {
+            Arc::clone(values)
+        } else if self.value_type.contains(values.data_type()) {
+            cast(values.as_ref(), &self.value_type)?
+        } else {
+            return exec_err!(
+                "ordered array_agg payload has type {}, expected {}",
+                values.data_type(),
+                self.value_type
+            );
+        };
+        if let Some(column) = ordering_values.first() {
+            assert_eq_or_internal_err!(
+                column.len(),
+                values.len(),
+                "ordered array_agg payload and ordering columns must have equal lengths"
+            );
+        }
+
+        let nulls = ignore_nulls
+            .then(|| values.logical_nulls())
+            .flatten()
+            .filter(|nulls| nulls.null_count() > 0);
+        let (values, filtered_ordering_values) = if let Some(nulls) = nulls {
+            let mask: BooleanArray = nulls.iter().map(Some).collect();
+            let values = filter(values.as_ref(), &mask)?;
+            let ordering_values = ordering_values
+                .iter()
+                .map(|column| filter(column.as_ref(), &mask))
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            (values, Some(ordering_values))
+        } else {
+            (values, None)
+        };
+        let ordering_values = filtered_ordering_values
+            .as_deref()
+            .unwrap_or(ordering_values);
+        // Detach the stored payload from potentially oversized backing buffers.
+        let values = make_array(copy_array_data(&values.to_data()));
+
+        let row_count = values.len();
+        // RowConverter validates the number, lengths, and types of ordering columns.
+        self.ordering_converter
+            .append(&mut self.ordering_rows, ordering_values)?;
+        if row_count == 0 {
+            return Ok(None);
+        }
+
+        let start = self.entries.len();
+        let batch_idx = self.batches.len();
+        self.batches.push(values);
+        self.entries.extend(
+            (0..row_count).map(|row_idx| OrderedArrayAggEntry { batch_idx, row_idx }),
+        );
+        self.sorted_entry_indices = None;
+
+        debug_assert_eq!(self.entries.len(), self.ordering_rows.num_rows());
+        Ok(Some(start..self.entries.len()))
     }
 }
 
@@ -1298,32 +1499,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         if values.is_empty() {
             return Ok(());
         }
-
-        let val = &values[0];
-        let ord = &values[1..];
-        let nulls = if self.ignore_nulls {
-            val.logical_nulls()
-        } else {
-            None
-        };
-
-        let nulls = nulls.as_ref();
-        if nulls.is_none_or(|nulls| nulls.null_count() < val.len()) {
-            for i in 0..val.len() {
-                if nulls.is_none_or(|nulls| nulls.is_valid(i)) {
-                    self.values
-                        .push(ScalarValue::try_from_array(val, i)?.compacted());
-                    self.ordering_values.push(
-                        get_row_at_idx(ord, i)?
-                            .into_iter()
-                            .map(|v| v.compacted())
-                            .collect(),
-                    )
-                }
-            }
-        }
-
-        Ok(())
+        self.append_input_batch(&values[0], &values[1..])
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
@@ -1331,136 +1507,107 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
             return Ok(());
         }
 
-        // First entry in the state is the aggregation result. Second entry
-        // stores values received for ordering requirement columns for each
-        // aggregation value inside `ARRAY_AGG` list. For each `StructArray`
-        // inside `ARRAY_AGG` list, we will receive an `Array` that stores values
-        // received from its ordering requirement expression. (This information
-        // is necessary for during merging).
-        let [array_agg_values, agg_orderings] =
-            take_function_args("OrderSensitiveArrayAggAccumulator::merge_batch", states)?;
-        let Some(agg_orderings) = agg_orderings.as_list_opt::<i32>() else {
-            return exec_err!("Expects to receive a list array");
+        let [array_agg_values, agg_orderings] = states else {
+            return exec_err!("ordered array_agg expects two state arrays");
         };
-
-        // Stores ARRAY_AGG results coming from each partition
-        let mut partition_values = vec![];
-        // Stores ordering requirement expression results coming from each partition
-        let mut partition_ordering_values = vec![];
-
-        // Existing values should be merged also.
-        if !self.is_input_pre_ordered {
-            self.sort();
-        }
-        partition_values.push(take(&mut self.values).into());
-        partition_ordering_values.push(take(&mut self.ordering_values).into());
-
-        // Convert array to Scalars to sort them easily. Convert back to array at evaluation.
-        let array_agg_res = ScalarValue::convert_array_to_scalar_vec(array_agg_values)?;
-        for maybe_v in array_agg_res.into_iter() {
-            if let Some(v) = maybe_v {
-                partition_values.push(v.into());
+        let array_agg_values = as_list_array(array_agg_values.as_ref())?;
+        let agg_orderings = as_list_array(agg_orderings.as_ref())?;
+        assert_eq_or_internal_err!(
+            array_agg_values.len(),
+            agg_orderings.len(),
+            "ordered array_agg payload and ordering states must have equal outer lengths"
+        );
+        let ordering_struct = agg_orderings
+            .values()
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| {
+                datafusion_common::internal_datafusion_err!(
+                    "ordered array_agg ordering state must contain Struct values"
+                )
+            })?;
+        for row_idx in 0..array_agg_values.len() {
+            let payload_len = if array_agg_values.is_null(row_idx) {
+                0
             } else {
-                partition_values.push(vec![].into());
+                array_agg_values.value_length(row_idx) as usize
+            };
+            let ordering_len = if agg_orderings.is_null(row_idx) {
+                0
+            } else {
+                agg_orderings.value_length(row_idx) as usize
+            };
+            if payload_len != ordering_len {
+                return exec_err!(
+                    "ordered array_agg payload and ordering state lengths differ at row {row_idx}: {payload_len} vs {ordering_len}"
+                );
             }
+            let payload = array_agg_values.value(row_idx);
+            let ordering_start = agg_orderings.value_offsets()[row_idx] as usize;
+            let len = payload.len();
+            let ordering_columns = ordering_struct
+                .columns()
+                .iter()
+                .map(|column| column.slice(ordering_start, len))
+                .collect::<Vec<_>>();
+            self.append_sorted_run(&payload, &ordering_columns)?;
         }
+        self.can_extend_preordered_run = false;
 
-        let orderings = ScalarValue::convert_array_to_scalar_vec(agg_orderings)?;
-        for partition_ordering_rows in orderings.into_iter().flatten() {
-            // Extract value from struct to ordering_rows for each group/partition
-            let ordering_value = partition_ordering_rows.into_iter().map(|ordering_row| {
-                    if let ScalarValue::Struct(s) = ordering_row {
-                        let mut ordering_columns_per_row = vec![];
-
-                        for column in s.columns() {
-                            let sv = ScalarValue::try_from_array(column, 0)?;
-                            ordering_columns_per_row.push(sv);
-                        }
-
-                        Ok(ordering_columns_per_row)
-                    } else {
-                        exec_err!(
-                            "Expects to receive ScalarValue::Struct(Arc<StructArray>) but got:{:?}",
-                            ordering_row.data_type()
-                        )
-                    }
-                }).collect::<Result<VecDeque<_>>>()?;
-
-            partition_ordering_values.push(ordering_value);
-        }
-
-        let sort_options = self
-            .ordering_req
-            .iter()
-            .map(|sort_expr| sort_expr.options)
-            .collect::<Vec<_>>();
-
-        (self.values, self.ordering_values) = merge_ordered_arrays(
-            &mut partition_values,
-            &mut partition_ordering_values,
-            &sort_options,
-        )?;
-
+        debug_assert_eq!(self.entries.len(), self.ordering_rows.num_rows());
         Ok(())
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        if !self.is_input_pre_ordered {
-            self.sort();
-        }
-
-        let mut result = vec![self.evaluate()?];
-        result.push(self.evaluate_orderings()?);
-
-        Ok(result)
+        self.ensure_sorted_indices();
+        let sorted_indices = self.sorted_entry_indices.as_deref().unwrap();
+        let payload = if sorted_indices.is_empty() {
+            ScalarValue::new_null_list(self.value_type.clone(), true, 1)
+        } else {
+            SingleRowListArrayBuilder::new(
+                self.select_values(sorted_indices, self.reverse)?,
+            )
+            .build_list_scalar()
+        };
+        let orderings = self.evaluate_orderings(sorted_indices, self.reverse)?;
+        Ok(vec![payload, orderings])
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        if !self.is_input_pre_ordered {
-            self.sort();
+        self.ensure_sorted_indices();
+        let sorted_indices = self.sorted_entry_indices.as_deref().unwrap();
+        if sorted_indices.is_empty() {
+            return Ok(ScalarValue::new_null_list(self.value_type.clone(), true, 1));
         }
 
-        if self.values.is_empty() {
-            return Ok(ScalarValue::new_null_list(
-                self.datatypes[0].clone(),
-                true,
-                1,
-            ));
-        }
-
-        let values = self.values.clone();
-        let array = if self.reverse {
-            ScalarValue::new_list_from_iter(
-                values.into_iter().rev(),
-                &self.datatypes[0],
-                true,
-            )
-        } else {
-            ScalarValue::new_list_from_iter(values.into_iter(), &self.datatypes[0], true)
-        };
-        Ok(ScalarValue::List(array))
+        Ok(SingleRowListArrayBuilder::new(
+            self.select_values(sorted_indices, self.reverse)?,
+        )
+        .build_list_scalar())
     }
 
     fn size(&self) -> usize {
-        let mut total = size_of_val(self) + ScalarValue::size_of_vec(&self.values)
-            - size_of_val(&self.values);
+        let mut total = size_of_val(self)
+            + self
+                .batches
+                .iter()
+                .map(|batch| batch.get_array_memory_size())
+                .sum::<usize>()
+            + self.batches.capacity() * size_of::<ArrayRef>()
+            + self.entries.capacity() * size_of::<OrderedArrayAggEntry>()
+            + self.ordering_rows.size()
+            - size_of_val(&self.ordering_rows)
+            + self.ordering_converter.size()
+            - size_of_val(&self.ordering_converter)
+            + self.sorted_runs.capacity() * size_of::<Range<usize>>()
+            + self
+                .sorted_entry_indices
+                .as_ref()
+                .map(|indices| indices.capacity() * size_of::<usize>())
+                .unwrap_or_default();
 
-        // Add size of the `self.ordering_values`
-        total += size_of::<Vec<ScalarValue>>() * self.ordering_values.capacity();
-        for row in &self.ordering_values {
-            total += ScalarValue::size_of_vec(row) - size_of_val(row);
-        }
-
-        // Add size of the `self.datatypes`
-        total += size_of::<DataType>() * self.datatypes.capacity();
-        for dtype in &self.datatypes {
-            total += dtype.size() - size_of_val(dtype);
-        }
-
-        // Add size of the `self.ordering_req`
-        total += size_of::<PhysicalSortExpr>() * self.ordering_req.capacity();
-        // TODO: Calculate size of each `PhysicalSortExpr` more accurately.
-        total
+        total += self.value_type.size() - size_of_val(&self.value_type);
+        total + self.ordering_fields.size()
     }
 }
 
@@ -1473,6 +1620,7 @@ mod tests {
     use datafusion_common::internal_err;
     use datafusion_physical_expr::PhysicalExpr;
     use datafusion_physical_expr::expressions::Column;
+    use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
     #[test]
     fn no_duplicates_no_distinct() -> Result<()> {
@@ -1773,14 +1921,14 @@ mod tests {
         .order_by_col("col", SortOptions::new(false, false))
         .build()?;
 
-        acc.update_batch(&[string_list_data([
+        let input = string_list_data([
             vec!["a", "b", "c"],
             vec!["c", "d", "e"],
             vec!["b", "c", "d"],
-        ])])?;
+        ]);
+        acc.update_batch(&[Arc::clone(&input), input])?;
 
-        // without compaction, the size is 17112
-        assert_eq!(acc.size(), 2224);
+        assert_eq!(acc.size(), 2295);
 
         Ok(())
     }
@@ -1816,7 +1964,7 @@ mod tests {
         let mut acc = OrderSensitiveArrayAggAccumulator::try_new(
             &requested_element_type,
             std::slice::from_ref(&ordering_dtype),
-            asc_ordering,
+            &asc_ordering,
             /*is_input_pre_ordered=*/ true,
             /*reverse=*/ false,
             /*ignore_nulls=*/ false,
@@ -1909,104 +2057,590 @@ mod tests {
     #[test]
     fn desc_order_partial_final_merge_correct() -> Result<()> {
         use arrow::array::Int64Array;
-        use datafusion_physical_expr::expressions::Column;
 
+        // The optimizer can feed ASC preordered input into reversed partial
+        // accumulators even though the final accumulator requires DESC.
+        let mut partial_states = vec![];
+        for values in [vec![0, 1, 2], vec![3, 4, 5]] {
+            let mut partial = ordered_accumulator(
+                DataType::Int64,
+                DataType::Int64,
+                SortOptions::new(false, false),
+                true,
+                true,
+            )?;
+            let values = Arc::new(Int64Array::from(values)) as ArrayRef;
+            partial.update_batch(&[Arc::clone(&values), values])?;
+            partial_states.push(accumulator_state(&mut partial)?);
+        }
+
+        let mut final_acc = ordered_accumulator(
+            DataType::Int64,
+            DataType::Int64,
+            SortOptions::new(true, false),
+            false,
+            false,
+        )?;
+        for state in partial_states {
+            final_acc.merge_batch(&state)?;
+        }
+
+        let ScalarValue::List(result) = final_acc.evaluate()? else {
+            return internal_err!("expected List");
+        };
+        assert_eq!(
+            result
+                .values()
+                .as_primitive::<arrow::datatypes::Int64Type>()
+                .values(),
+            &[5, 4, 3, 2, 1, 0]
+        );
+        Ok(())
+    }
+
+    fn ordered_accumulator(
+        payload_type: DataType,
+        ordering_type: DataType,
+        sort_options: SortOptions,
+        is_input_pre_ordered: bool,
+        reverse: bool,
+    ) -> Result<OrderSensitiveArrayAggAccumulator> {
         let schema = Schema::new(vec![
-            Field::new("val", DataType::Int64, true),
-            Field::new("ord", DataType::Int64, true),
+            Field::new("val", payload_type.clone(), true),
+            Field::new("ord", ordering_type.clone(), true),
         ]);
         let ord_expr = Arc::new(
             Column::new_with_schema("ord", &schema).expect("column not in schema"),
         ) as Arc<dyn PhysicalExpr>;
+        let ordering =
+            LexOrdering::new(vec![PhysicalSortExpr::new(ord_expr, sort_options)])
+                .unwrap();
 
-        // ordering_req for partial = [ord ASC] (reversed, because input is pre-sorted ASC
-        // and the user wants DESC — the optimizer reverses the requirement)
-        let asc_opts = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
-        let desc_opts = SortOptions {
-            descending: true,
-            nulls_first: false,
-        };
+        OrderSensitiveArrayAggAccumulator::try_new(
+            &payload_type,
+            &[ordering_type],
+            &ordering,
+            is_input_pre_ordered,
+            reverse,
+            false,
+        )
+    }
 
-        let asc_ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
-            Arc::clone(&ord_expr),
-            asc_opts,
-        )])
-        .unwrap();
-        let desc_ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
-            Arc::clone(&ord_expr),
-            desc_opts,
-        )])
-        .unwrap();
-
-        let ordering_dtype = DataType::Int64;
-
-        // Partial acc A: sees rows [0,1,2] arriving in ASC order (pre-ordered).
-        // is_input_pre_ordered=true, reverse=true, ordering_req=[ASC].
-        let mut partial_a = OrderSensitiveArrayAggAccumulator::try_new(
-            &DataType::Int64,
-            std::slice::from_ref(&ordering_dtype),
-            asc_ordering.clone(),
-            /*is_input_pre_ordered=*/ true,
-            /*reverse=*/ true,
-            /*ignore_nulls=*/ false,
-        )?;
-        let vals_a = Arc::new(Int64Array::from(vec![0i64, 1, 2])) as ArrayRef;
-        let ords_a = Arc::new(Int64Array::from(vec![0i64, 1, 2])) as ArrayRef;
-        partial_a.update_batch(&[vals_a, ords_a])?;
-        let state_a = partial_a
-            .state()?
+    fn accumulator_state(
+        acc: &mut OrderSensitiveArrayAggAccumulator,
+    ) -> Result<Vec<ArrayRef>> {
+        acc.state()?
             .iter()
-            .map(|v| v.to_array())
-            .collect::<Result<Vec<_>>>()?;
+            .map(ScalarValue::to_array)
+            .collect::<Result<Vec<_>>>()
+    }
 
-        // Partial acc B: sees rows [3,4,5] arriving in ASC order.
-        let mut partial_b = OrderSensitiveArrayAggAccumulator::try_new(
-            &DataType::Int64,
-            std::slice::from_ref(&ordering_dtype),
-            asc_ordering,
-            /*is_input_pre_ordered=*/ true,
-            /*reverse=*/ true,
-            /*ignore_nulls=*/ false,
+    #[test]
+    fn input_batches_register_expected_runs() -> Result<()> {
+        use arrow::array::Int64Array;
+
+        for (is_input_pre_ordered, batches, expected_run) in [
+            (false, [vec![4, 2], vec![3, 1]], None),
+            (true, [vec![1, 2], vec![3, 4]], Some(0..4)),
+        ] {
+            let mut acc = ordered_accumulator(
+                DataType::Int64,
+                DataType::Int64,
+                SortOptions::new(false, false),
+                is_input_pre_ordered,
+                false,
+            )?;
+            for values in batches {
+                acc.update_batch(&[
+                    Arc::new(Int64Array::from(values.clone())),
+                    Arc::new(Int64Array::from(values)),
+                ])?;
+            }
+
+            assert_eq!(
+                acc.sorted_runs,
+                expected_run.into_iter().collect::<Vec<_>>()
+            );
+            let ScalarValue::List(result) = acc.evaluate()? else {
+                return internal_err!("expected List");
+            };
+            assert_eq!(
+                result
+                    .values()
+                    .as_primitive::<arrow::datatypes::Int64Type>()
+                    .values(),
+                &[1, 2, 3, 4]
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn partial_state_breaks_preordered_run_continuity() -> Result<()> {
+        use arrow::array::Int64Array;
+
+        let mut partial = ordered_accumulator(
+            DataType::Int64,
+            DataType::Int64,
+            SortOptions::new(true, false),
+            true,
+            true,
         )?;
-        let vals_b = Arc::new(Int64Array::from(vec![3i64, 4, 5])) as ArrayRef;
-        let ords_b = Arc::new(Int64Array::from(vec![3i64, 4, 5])) as ArrayRef;
-        partial_b.update_batch(&[vals_b, ords_b])?;
-        let state_b = partial_b
-            .state()?
-            .iter()
-            .map(|v| v.to_array())
-            .collect::<Result<Vec<_>>>()?;
+        partial.update_batch(&[
+            Arc::new(Int64Array::from(vec![3, 2])),
+            Arc::new(Int64Array::from(vec![3, 2])),
+        ])?;
+        let state = accumulator_state(&mut partial)?;
 
-        // Final acc: not optimized — ordering_req=[DESC], reverse=false.
-        let mut final_acc = OrderSensitiveArrayAggAccumulator::try_new(
-            &DataType::Int64,
-            std::slice::from_ref(&ordering_dtype),
-            desc_ordering,
-            /*is_input_pre_ordered=*/ false,
-            /*reverse=*/ false,
-            /*ignore_nulls=*/ false,
+        let mut final_acc = ordered_accumulator(
+            DataType::Int64,
+            DataType::Int64,
+            SortOptions::new(false, false),
+            true,
+            false,
+        )?;
+        final_acc.update_batch(&[
+            Arc::new(Int64Array::from(vec![1, 4])),
+            Arc::new(Int64Array::from(vec![1, 4])),
+        ])?;
+        final_acc.merge_batch(&state)?;
+        final_acc.update_batch(&[
+            Arc::new(Int64Array::from(vec![0, 5])),
+            Arc::new(Int64Array::from(vec![0, 5])),
+        ])?;
+
+        assert_eq!(final_acc.sorted_runs, vec![0..2, 2..4, 4..6]);
+        let ScalarValue::List(result) = final_acc.evaluate()? else {
+            return internal_err!("expected List");
+        };
+        assert_eq!(
+            result
+                .values()
+                .as_primitive::<arrow::datatypes::Int64Type>()
+                .values(),
+            &[0, 1, 2, 3, 4, 5]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn equal_ordering_keys_preserve_partial_append_order() -> Result<()> {
+        use arrow::array::{Int64Array, StringArray};
+
+        let options = SortOptions::new(false, false);
+        let mut partial_a =
+            ordered_accumulator(DataType::Utf8, DataType::Int64, options, false, false)?;
+        partial_a.update_batch(&[
+            Arc::new(StringArray::from(vec!["a1", "a2"])),
+            Arc::new(Int64Array::from(vec![1, 1])),
+        ])?;
+        let state_a = accumulator_state(&mut partial_a)?;
+
+        let mut partial_b =
+            ordered_accumulator(DataType::Utf8, DataType::Int64, options, false, false)?;
+        partial_b.update_batch(&[
+            Arc::new(StringArray::from(vec!["b1", "b2"])),
+            Arc::new(Int64Array::from(vec![1, 1])),
+        ])?;
+        let state_b = accumulator_state(&mut partial_b)?;
+
+        let mut final_acc =
+            ordered_accumulator(DataType::Utf8, DataType::Int64, options, false, false)?;
+        final_acc.merge_batch(&state_a)?;
+        final_acc.merge_batch(&state_b)?;
+
+        let result = print_nulls(str_arr(final_acc.evaluate()?)?);
+        assert_eq!(result, vec!["a1", "a2", "b1", "b2"]);
+        Ok(())
+    }
+
+    #[test]
+    fn ordered_state_lifecycle_applies_reverse_and_is_repeatable() -> Result<()> {
+        use arrow::array::Int64Array;
+
+        let mut acc = ordered_accumulator(
+            DataType::Int64,
+            DataType::Int64,
+            SortOptions::new(false, false),
+            true,
+            true,
+        )?;
+
+        let empty_state = accumulator_state(&mut acc)?;
+        let empty_payload = empty_state[0].as_list::<i32>();
+        let empty_orderings = empty_state[1].as_list::<i32>();
+        assert!(empty_payload.is_null(0));
+        assert_eq!(empty_payload.values().len(), 0);
+        assert_eq!(empty_orderings.value_length(0), 0);
+        assert_eq!(empty_orderings.values().len(), 0);
+
+        let mut empty_final = ordered_accumulator(
+            DataType::Int64,
+            DataType::Int64,
+            SortOptions::new(false, false),
+            false,
+            false,
+        )?;
+        empty_final.merge_batch(&empty_state)?;
+        let ScalarValue::List(empty_result) = empty_final.evaluate()? else {
+            return internal_err!("expected List");
+        };
+        assert!(empty_result.is_null(0));
+        assert_eq!(empty_result.values().len(), 0);
+
+        acc.update_batch(&[
+            Arc::new(Int64Array::from(vec![0, 1, 2])),
+            Arc::new(Int64Array::from(vec![0, 1, 2])),
+        ])?;
+
+        let state = accumulator_state(&mut acc)?;
+        let payload_state = state[0].as_list::<i32>().value(0);
+        assert_eq!(
+            payload_state
+                .as_primitive::<arrow::datatypes::Int64Type>()
+                .values(),
+            &[2, 1, 0]
+        );
+        let ordering_state = state[1].as_list::<i32>().value(0);
+        let ordering_state = ordering_state.as_struct();
+        assert_eq!(
+            ordering_state
+                .column(0)
+                .as_primitive::<arrow::datatypes::Int64Type>()
+                .values(),
+            &[2, 1, 0]
+        );
+
+        let first = acc.evaluate()?;
+        let second = acc.evaluate()?;
+        assert_eq!(first, second);
+        let ScalarValue::List(result) = first else {
+            return internal_err!("expected List");
+        };
+        assert_eq!(
+            result
+                .values()
+                .as_primitive::<arrow::datatypes::Int64Type>()
+                .values(),
+            &[2, 1, 0]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn merge_batch_treats_each_partial_row_as_a_sorted_run() -> Result<()> {
+        use arrow::array::Int64Array;
+
+        let options = SortOptions::new(false, false);
+        let mut partial_a =
+            ordered_accumulator(DataType::Int64, DataType::Int64, options, true, false)?;
+        partial_a.update_batch(&[
+            Arc::new(Int64Array::from(vec![1, 3, 5])),
+            Arc::new(Int64Array::from(vec![1, 3, 5])),
+        ])?;
+        let state_a = accumulator_state(&mut partial_a)?;
+
+        let mut partial_b =
+            ordered_accumulator(DataType::Int64, DataType::Int64, options, true, false)?;
+        partial_b.update_batch(&[
+            Arc::new(Int64Array::from(vec![2, 4, 6])),
+            Arc::new(Int64Array::from(vec![2, 4, 6])),
+        ])?;
+        let state_b = accumulator_state(&mut partial_b)?;
+
+        let payload_states =
+            arrow::compute::concat(&[state_a[0].as_ref(), state_b[0].as_ref()])?;
+        let ordering_states =
+            arrow::compute::concat(&[state_a[1].as_ref(), state_b[1].as_ref()])?;
+
+        let mut final_acc =
+            ordered_accumulator(DataType::Int64, DataType::Int64, options, false, false)?;
+        final_acc.merge_batch(&[payload_states, ordering_states])?;
+
+        let ScalarValue::List(result) = final_acc.evaluate()? else {
+            return internal_err!("expected List");
+        };
+        assert_eq!(
+            result
+                .values()
+                .as_primitive::<arrow::datatypes::Int64Type>()
+                .values(),
+            &[1, 2, 3, 4, 5, 6]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ordering_state_preserves_declared_types() -> Result<()> {
+        use arrow::array::{
+            DictionaryArray, Int32Array, Int64Array, PrimitiveArray, RunArray,
+            StringArray,
+        };
+        use arrow::datatypes::Int32Type;
+
+        let dictionary_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let dictionary: ArrayRef = Arc::new(DictionaryArray::new(
+            Int32Array::from(vec![1, 0]),
+            Arc::new(StringArray::from(vec!["a", "b"])),
+        ));
+
+        let nested: ArrayRef = Arc::new(StructArray::new(
+            Fields::from(vec![Arc::new(Field::new(
+                "dict",
+                dictionary_type.clone(),
+                true,
+            ))]),
+            vec![Arc::new(DictionaryArray::new(
+                Int32Array::from(vec![1, 0]),
+                Arc::new(StringArray::from(vec!["a", "b"])),
+            ))],
+            None,
+        ));
+
+        let run_ends = PrimitiveArray::<Int32Type>::from(vec![1, 3]);
+        let run_values = Int64Array::from(vec![2, 1]);
+        let run_end_encoded: ArrayRef =
+            Arc::new(RunArray::<Int32Type>::try_new(&run_ends, &run_values)?);
+
+        for (name, ordering, payload, expected) in [
+            ("dictionary", dictionary, vec![20, 10], vec![10, 20]),
+            ("nested dictionary", nested, vec![20, 10], vec![10, 20]),
+            (
+                "run-end encoded",
+                run_end_encoded,
+                vec![20, 10, 11],
+                vec![10, 11, 20],
+            ),
+        ] {
+            let ordering_type = ordering.data_type().clone();
+            let mut partial = ordered_accumulator(
+                DataType::Int64,
+                ordering_type.clone(),
+                SortOptions::new(false, false),
+                false,
+                false,
+            )?;
+            partial.update_batch(&[Arc::new(Int64Array::from(payload)), ordering])?;
+
+            let state = accumulator_state(&mut partial)?;
+            let ordering_state = state[1].as_list::<i32>().value(0);
+            assert_eq!(
+                ordering_state.as_struct().column(0).data_type(),
+                &ordering_type,
+                "{name}"
+            );
+
+            let mut final_acc = ordered_accumulator(
+                DataType::Int64,
+                ordering_type,
+                SortOptions::new(false, false),
+                false,
+                false,
+            )?;
+            final_acc.merge_batch(&state)?;
+            let ScalarValue::List(result) = final_acc.evaluate()? else {
+                return internal_err!("expected List");
+            };
+            assert_eq!(
+                result
+                    .values()
+                    .as_primitive::<arrow::datatypes::Int64Type>()
+                    .values(),
+                expected.as_slice(),
+                "{name}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn payload_types_roundtrip() -> Result<()> {
+        use arrow::array::{DictionaryArray, Int32Array, Int64Array, StringArray};
+
+        let dictionary_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let mut partial_a = ordered_accumulator(
+            dictionary_type.clone(),
+            DataType::Int64,
+            SortOptions::new(false, false),
+            true,
+            false,
+        )?;
+        partial_a.update_batch(&[
+            Arc::new(DictionaryArray::new(
+                Int32Array::from(vec![0, 1]),
+                Arc::new(StringArray::from(vec!["a", "c"])),
+            )),
+            Arc::new(Int64Array::from(vec![1, 3])),
+        ])?;
+        let state_a = accumulator_state(&mut partial_a)?;
+
+        let mut partial_b = ordered_accumulator(
+            dictionary_type.clone(),
+            DataType::Int64,
+            SortOptions::new(false, false),
+            true,
+            false,
+        )?;
+        partial_b.update_batch(&[
+            Arc::new(DictionaryArray::new(
+                Int32Array::from(vec![1, 0]),
+                Arc::new(StringArray::from(vec!["d", "b"])),
+            )),
+            Arc::new(Int64Array::from(vec![2, 4])),
+        ])?;
+        let state_b = accumulator_state(&mut partial_b)?;
+
+        let mut final_acc = ordered_accumulator(
+            dictionary_type.clone(),
+            DataType::Int64,
+            SortOptions::new(false, false),
+            false,
+            false,
         )?;
         final_acc.merge_batch(&state_a)?;
         final_acc.merge_batch(&state_b)?;
-        let result = final_acc.evaluate()?;
-
-        let ScalarValue::List(list) = result else {
-            return datafusion_common::internal_err!("expected List");
+        let ScalarValue::List(result) = final_acc.evaluate()? else {
+            return internal_err!("expected List");
         };
-        let result_vals: Vec<i64> = list
-            .values()
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap()
-            .iter()
-            .map(|v| v.unwrap())
-            .collect();
+        assert_eq!(result.values().data_type(), &dictionary_type);
+        let strings = cast(result.values().as_ref(), &DataType::Utf8)?;
+        assert_eq!(
+            strings.as_string::<i32>().iter().collect::<Vec<_>>(),
+            vec![Some("a"), Some("b"), Some("c"), Some("d")]
+        );
 
-        // Expected DESC: [5, 4, 3, 2, 1, 0]
-        assert_eq!(result_vals, vec![5i64, 4, 3, 2, 1, 0]);
+        let payload = string_list_data([vec!["b"], vec!["a"]]);
+        let payload_type = payload.data_type().clone();
+        let mut acc = ordered_accumulator(
+            payload_type.clone(),
+            DataType::Int64,
+            SortOptions::new(false, false),
+            false,
+            false,
+        )?;
+        acc.update_batch(&[payload, Arc::new(Int64Array::from(vec![2, 1]))])?;
+
+        let state = accumulator_state(&mut acc)?;
+        let mut final_acc = ordered_accumulator(
+            payload_type.clone(),
+            DataType::Int64,
+            SortOptions::new(false, false),
+            false,
+            false,
+        )?;
+        final_acc.merge_batch(&state)?;
+
+        let ScalarValue::List(result) = final_acc.evaluate()? else {
+            return internal_err!("expected List");
+        };
+        assert_eq!(result.values().data_type(), &payload_type);
+        let nested = result.values().as_list::<i32>();
+        assert_eq!(nested.value(0).as_string::<i32>().value(0), "a");
+        assert_eq!(nested.value(1).as_string::<i32>().value(0), "b");
+        Ok(())
+    }
+
+    #[test]
+    fn ordered_ignore_nulls_keeps_payload_and_ordering_state_aligned() -> Result<()> {
+        use arrow::array::{Int64Array, StringArray};
+
+        let mut acc = ordered_accumulator(
+            DataType::Utf8,
+            DataType::Int64,
+            SortOptions::new(false, false),
+            false,
+            false,
+        )?;
+        acc.ignore_nulls = true;
+        acc.update_batch(&[
+            Arc::new(StringArray::from(vec![Some("b"), None, Some("a")])),
+            Arc::new(Int64Array::from(vec![2, 0, 1])),
+        ])?;
+
+        assert_eq!(acc.batches.len(), 1);
+        assert_eq!(acc.batches[0].len(), 2);
+        assert_eq!(
+            acc.entries
+                .iter()
+                .map(|entry| entry.row_idx)
+                .collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+
+        let state = accumulator_state(&mut acc)?;
+        let payload_state = state[0].as_list::<i32>().value(0);
+        assert_eq!(
+            payload_state.as_string::<i32>().iter().collect::<Vec<_>>(),
+            vec![Some("a"), Some("b")]
+        );
+        let ordering_state = state[1].as_list::<i32>().value(0);
+        assert_eq!(
+            ordering_state
+                .as_struct()
+                .column(0)
+                .as_primitive::<arrow::datatypes::Int64Type>()
+                .values(),
+            &[1, 2]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn merge_rejects_malformed_state() -> Result<()> {
+        use arrow::array::{Int64Array, StringArray};
+
+        let mut source = ordered_accumulator(
+            DataType::Utf8,
+            DataType::Int64,
+            SortOptions::new(false, false),
+            false,
+            false,
+        )?;
+        source.update_batch(&[
+            Arc::new(StringArray::from(vec!["a"])),
+            Arc::new(Int64Array::from(vec![1])),
+        ])?;
+        let state = accumulator_state(&mut source)?;
+
+        let mut acc = ordered_accumulator(
+            DataType::Int64,
+            DataType::Int64,
+            SortOptions::new(false, false),
+            false,
+            false,
+        )?;
+        let err = acc.merge_batch(&state).unwrap_err();
+        assert!(err.to_string().contains("payload has type"));
+
+        let options = SortOptions::new(false, false);
+        let mut nonempty =
+            ordered_accumulator(DataType::Int64, DataType::Int64, options, false, false)?;
+        nonempty.update_batch(&[
+            Arc::new(Int64Array::from(vec![1])),
+            Arc::new(Int64Array::from(vec![1])),
+        ])?;
+        let nonempty_state = accumulator_state(&mut nonempty)?;
+
+        let mut empty =
+            ordered_accumulator(DataType::Int64, DataType::Int64, options, false, false)?;
+        let empty_state = accumulator_state(&mut empty)?;
+
+        let mut final_acc =
+            ordered_accumulator(DataType::Int64, DataType::Int64, options, false, false)?;
+        let payload_states = arrow::compute::concat(&[
+            nonempty_state[0].as_ref(),
+            nonempty_state[0].as_ref(),
+        ])?;
+        let ordering_states = arrow::compute::concat(&[
+            nonempty_state[1].as_ref(),
+            empty_state[1].as_ref(),
+        ])?;
+        let err = final_acc
+            .merge_batch(&[payload_states, ordering_states])
+            .unwrap_err();
+        assert!(err.to_string().contains("state lengths differ"));
         Ok(())
     }
 

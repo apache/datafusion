@@ -2280,6 +2280,7 @@ dependencies = [
  "datafusion-physical-expr-common",
  "half",
  "hashbrown 0.17.1",
+ "itertools 0.15.0",
  "log",
  "num-traits",
  "rand 0.9.4",
