@@ -136,7 +136,6 @@ pub fn spark_pmod(
     // A null argument is passed through uncoerced by `Coercible` (#19458), so
     // it still carries `DataType::Null` here. Every operation below needs a
     // concrete numeric type, and the answer is null regardless.
-    // Need to handle nulls separately as they are pass through by the signature
     if args.iter().any(|arg| arg.data_type() == &DataType::Null) {
         return Ok(ColumnarValue::Scalar(ScalarValue::try_new_null(
             result_type,
