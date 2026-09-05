@@ -1879,6 +1879,7 @@ dependencies = [
  "rstest",
  "rustyline",
  "serde_json",
+ "tempfile",
  "testcontainers-modules",
  "tokio",
  "url",
