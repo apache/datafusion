@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Partial aggregate stream for ordered group input.
+//! Partial aggregate stream for input with group-completion guarantees.
 
 use std::sync::Arc;
 
@@ -29,13 +29,13 @@ use futures::stream::{Stream, StreamExt};
 use super::AggregateExec;
 use super::aggregate_hash_table::{OrderedAggregateTable, PartialMarker};
 use crate::aggregates::AggregateMode;
-use crate::aggregates::order::GroupOrdering;
+use crate::aggregates::order::{GroupCompletionMode, GroupOrdering};
 use crate::metrics::{BaselineMetrics, MetricBuilder, SpillMetrics};
 use crate::stream::{EmptyRecordBatchStream, ObservedStream, RecordBatchStreamAdapter};
-use crate::{InputOrderMode, SendableRecordBatchStream, metrics};
+use crate::{SendableRecordBatchStream, metrics};
 
-/// Partial aggregate stream for `InputOrderMode::Sorted` and
-/// `InputOrderMode::PartiallySorted`.
+/// Partial aggregate stream for [`GroupCompletionMode::Partial`] and
+/// [`GroupCompletionMode::Full`].
 ///
 /// # Example
 ///
@@ -59,20 +59,21 @@ use crate::{InputOrderMode, SendableRecordBatchStream, metrics};
 /// Output: results for all groups (for example, `AVG(x)` calculated from the
 /// state)
 ///
-/// # Order-based Optimization
+/// # Group Completion Optimization
 ///
 /// For the aggregation work, the hash aggregation implementation is reused.
 ///
-/// After each input batch, check whether any groups can be emitted eagerly to
-/// improve memory efficiency. For example, if the last group key seen is
-/// `k = 100`, it is safe to emit all groups with keys less than 100 because the
-/// input is ordered.
+/// After each input batch, the group-completion mode determines whether any
+/// groups can be emitted eagerly to improve memory efficiency. For example, if
+/// the input is ordered by `k` and the last group key seen is `k = 100`, all
+/// groups with keys less than 100 are complete.
 ///
 /// # Memory Pressure and Spilling
 ///
-/// ## Fully ordered case
+/// ## Full group completion
 ///
-/// If the input is ordered by every group key, for example:
+/// Every complete grouping tuple is contiguous. Ordering by every group key is
+/// one way to establish this mode, for example:
 ///
 /// - Input order: `a, b`
 /// - `GROUP BY`: `a, b`
@@ -84,9 +85,10 @@ use crate::{InputOrderMode, SendableRecordBatchStream, metrics};
 /// If a memory reservation nevertheless fails, the stream returns the error
 /// directly, indicating an unexpected behavior.
 ///
-/// ## Partially ordered case
+/// ## Partial group completion
 ///
-/// If the input is ordered by only a subset of the group keys, for example:
+/// Rows are contiguous for a subset of the group keys. Ordering by that subset
+/// is one way to establish this mode, for example:
 ///
 /// - Input order: `a`
 /// - `GROUP BY`: `a, b`
@@ -126,7 +128,7 @@ impl OrderedPartialAggregateStream {
         partition: usize,
     ) -> Result<Self> {
         debug_assert_eq!(agg.mode, AggregateMode::Partial);
-        debug_assert_ne!(agg.input_order_mode, InputOrderMode::Linear);
+        debug_assert_ne!(agg.group_completion_mode, GroupCompletionMode::None);
 
         let schema = Arc::clone(&agg.schema);
         let input = agg.input.execute(partition, Arc::clone(context))?;
