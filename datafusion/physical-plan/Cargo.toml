@@ -161,3 +161,7 @@ name = "bounded_window"
 [[bench]]
 harness = false
 name = "window_filter"
+
+[[bench]]
+harness = false
+name = "range_repartition"
