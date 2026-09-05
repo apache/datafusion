@@ -85,9 +85,19 @@ impl CommonSubexprEliminate {
             schema,
             ..
         } = projection;
+        let name_preserver = NamePreserver::new_for_projection();
+        let saved_names = expr
+            .iter()
+            .map(|expr| name_preserver.save(expr))
+            .collect::<Vec<_>>();
         let input = Arc::unwrap_or_clone(input);
         self.try_unary_plan(expr, input, config)?
             .map_data(|(new_expr, new_input)| {
+                let new_expr = new_expr
+                    .into_iter()
+                    .zip(saved_names)
+                    .map(|(expr, saved_name)| saved_name.restore(expr))
+                    .collect();
                 Projection::try_new_with_schema(new_expr, Arc::new(new_input), schema)
                     .map(LogicalPlan::Projection)
             })
@@ -853,6 +863,7 @@ mod test {
 
     use super::*;
     use crate::assert_optimized_plan_eq_snapshot;
+    use crate::optimize_projections::OptimizeProjections;
     use crate::optimizer::OptimizerContext;
     use crate::test::udfs::leaf_udf_expr;
     use crate::test::*;
@@ -913,7 +924,7 @@ mod test {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS test.a * Int32(1) - test.b), sum(__common_expr_1 AS test.a * Int32(1) - test.b * (Int32(1) + test.c))]]
+        Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS test.a * (Int32(1) - test.b)), sum(__common_expr_1 AS test.a * (Int32(1) - test.b) * (Int32(1) + test.c))]]
           Projection: test.a * (Int32(1) - test.b) AS __common_expr_1, test.a, test.b, test.c
             TableScan: test
         "
@@ -934,9 +945,35 @@ mod test {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Projection: __common_expr_1 - test.c AS alias1 * __common_expr_1 AS test.a + test.b, __common_expr_1 AS test.a + test.b
+        Projection: __common_expr_1 - test.c AS alias1 * __common_expr_1 AS test.a + test.b AS alias1 * (test.a + test.b), __common_expr_1 AS test.a + test.b
           Projection: test.a + test.b AS __common_expr_1, test.a, test.b, test.c
             TableScan: test
+        "
+        )
+    }
+
+    #[test]
+    fn projection_name_preserved_for_nested_common_expression() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let common_expr = col("a") * col("b");
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![
+                common_expr.clone() + Expr::Negative(Box::new(common_expr)),
+            ])?
+            .build()?;
+
+        let rules: Vec<Arc<dyn OptimizerRule + Send + Sync>> = vec![
+            Arc::new(CommonSubexprEliminate::new()),
+            Arc::new(OptimizeProjections::new()),
+        ];
+        assert_optimized_plan_eq_snapshot!(
+            OptimizerContext::new(),
+            rules,
+            plan,
+            @ r"
+        Projection: __common_expr_1 AS test.a * test.b + (- __common_expr_1 AS test.a * test.b) AS test.a * test.b + (- (test.a * test.b))
+          Projection: test.a * test.b AS __common_expr_1
+            TableScan: test projection=[a, b]
         "
         )
     }
@@ -1771,8 +1808,8 @@ mod test {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Projection: __common_expr_1 AS NOT test.a = test.b, __common_expr_1 AS NOT test.b = test.a
-          Projection: NOT test.a = test.b AS __common_expr_1, test.a, test.b, test.c
+        Projection: __common_expr_1 AS NOT (test.a = test.b), __common_expr_1 AS NOT (test.b = test.a)
+          Projection: NOT (test.a = test.b) AS __common_expr_1, test.a, test.b, test.c
             TableScan: test
         "
         )?;
