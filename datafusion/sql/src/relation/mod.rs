@@ -29,7 +29,9 @@ use datafusion_expr::planner::{
 };
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, expr::Unnest};
 use datafusion_expr::{Subquery, SubqueryAlias};
-use sqlparser::ast::{FunctionArg, FunctionArgExpr, Spanned, TableFactor};
+use sqlparser::ast::{
+    FunctionArg, FunctionArgExpr, Spanned, TableFactor, TableFunctionArgs,
+};
 
 mod join;
 
@@ -148,13 +150,69 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let relation_span = relation.span();
         let (plan, alias) = match relation {
             TableFactor::Table {
-                name, alias, args, ..
+                name,
+                alias,
+                args,
+                with_hints,
+                version,
+                with_ordinality,
+                partitions,
+                json_path,
+                sample,
+                index_hints,
             } => {
+                // Falling back must not turn a modified relation into an
+                // ordinary scan. Extension planners may consume these
+                // modifiers, but the default planner should fail closed.
+                if !with_hints.is_empty() {
+                    return not_impl_err!(
+                        "Table hints are not supported by the default relation planner"
+                    );
+                }
+                if version.is_some() {
+                    return not_impl_err!(
+                        "Table version qualifiers are not supported by the default relation planner"
+                    );
+                }
+                if with_ordinality {
+                    return not_impl_err!(
+                        "WITH ORDINALITY is not supported by the default relation planner"
+                    );
+                }
+                if !partitions.is_empty() {
+                    return not_impl_err!(
+                        "Table partition selection is not supported by the default relation planner"
+                    );
+                }
+                if json_path.is_some() {
+                    return not_impl_err!(
+                        "Table JSON paths are not supported by the default relation planner"
+                    );
+                }
+                if sample.is_some() {
+                    return not_impl_err!(
+                        "TABLESAMPLE is not supported by the default relation planner"
+                    );
+                }
+                if !index_hints.is_empty() {
+                    return not_impl_err!(
+                        "Table index hints are not supported by the default relation planner"
+                    );
+                }
+
                 if let Some(func_args) = args {
+                    // Keep this exhaustive for the same reason as the
+                    // `TableFactor::Table` pattern: new table-function modifiers
+                    // should require an explicit planning decision.
+                    let TableFunctionArgs { args, settings } = func_args;
+                    if settings.is_some() {
+                        return not_impl_err!(
+                            "Table function SETTINGS are not supported by the default relation planner"
+                        );
+                    }
                     let tbl_func_name =
                         name.0.first().unwrap().as_ident().unwrap().to_string();
-                    let args = func_args
-                        .args
+                    let args = args
                         .into_iter()
                         .map(|arg| {
                             if let FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) = arg
@@ -211,8 +269,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
             }
             TableFactor::Derived {
-                subquery, alias, ..
+                lateral: _,
+                subquery,
+                alias,
+                sample,
             } => {
+                if sample.is_some() {
+                    return not_impl_err!(
+                        "TABLESAMPLE on derived tables is not supported by the default relation planner"
+                    );
+                }
                 let logical_plan = self.query_to_plan(*subquery, planner_context)?;
                 (logical_plan, alias)
             }
@@ -263,8 +329,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 );
             }
             TableFactor::Function {
-                name, args, alias, ..
+                lateral: _,
+                name,
+                args,
+                with_ordinality,
+                alias,
             } => {
+                if with_ordinality {
+                    return not_impl_err!(
+                        "WITH ORDINALITY is not supported by the default relation planner"
+                    );
+                }
                 let tbl_func_ref = self.object_name_to_table_reference(name)?;
                 let schema = planner_context
                     .outer_queries_schemas()
