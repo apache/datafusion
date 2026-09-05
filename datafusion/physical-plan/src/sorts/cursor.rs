@@ -173,15 +173,34 @@ impl<T: CursorValues> Ord for Cursor<T> {
 
 /// Implements [`CursorValues`] for [`Rows`]
 ///
-/// Used for sorting when there are multiple columns in the sort key
+/// Used for sorting when there are multiple columns in the sort key.
+///
+/// Caches `(ptr, len)` for the current row's serialized bytes so the merge hot
+/// path compares two `&[u8]` slices directly rather than paying a
+/// `Rows::row(idx)` offset lookup for each side of each compare. The pointer
+/// is into `rows`'s Arc-owned buffer heap, so it stays valid even when this
+/// struct is moved (e.g. written into a `Vec<Option<Cursor<..>>>` slot).
 #[derive(Debug)]
 pub struct RowValues {
     rows: Arc<Rows>,
+
+    /// Number of rows — snapshot of `rows.num_rows()`. Read on every
+    /// `Cursor::is_finished` / `advance` call.
+    len: usize,
+    /// Cached byte slice pointer for the current row.
+    current_ptr: *const u8,
+    /// Cached byte length for the current row.
+    current_len: usize,
 
     /// Tracks for the memory used by in the `Rows` of this
     /// cursor. Freed on drop
     _reservation: MemoryReservation,
 }
+
+// SAFETY: `current_ptr` points into `rows`'s Arc-owned buffer heap. `Rows`
+// is `Send + Sync`; the referenced bytes are read-only after construction.
+unsafe impl Send for RowValues {}
+unsafe impl Sync for RowValues {}
 
 impl RowValues {
     /// Create a new [`RowValues`] from `rows` and a `reservation`
@@ -195,11 +214,30 @@ impl RowValues {
             reservation.size(),
             "memory reservation mismatch"
         );
-        assert!(rows.num_rows() > 0);
+        let len = rows.num_rows();
+        assert!(len > 0);
+        // Extract raw ptr + length while the temporary `Row` is still alive.
+        // The pointer is into `rows`'s Arc buffer heap and stays valid.
+        let (current_ptr, current_len) = {
+            let row = rows.row(0);
+            let bytes: &[u8] = row.as_ref();
+            (bytes.as_ptr(), bytes.len())
+        };
         Self {
             rows,
+            len,
+            current_ptr,
+            current_len,
             _reservation: reservation,
         }
+    }
+
+    #[inline(always)]
+    fn current_slice(&self) -> &[u8] {
+        // SAFETY: `set_offset` (or `new` for offset 0) populated `current_ptr`
+        // / `current_len` from `rows.row(offset).as_ref()`, and the ptr is
+        // into `rows`'s Arc heap that stays alive as long as `self` does.
+        unsafe { std::slice::from_raw_parts(self.current_ptr, self.current_len) }
     }
 }
 
@@ -211,13 +249,15 @@ impl CursorValues for RowValues {
 
     #[inline]
     fn len(&self) -> usize {
-        self.rows.num_rows()
+        self.len
     }
 
     // No inline hint on purpose: for the heavyweight `Rows` byte comparison the
     // compiler's own choice wins — both `#[inline]` and `#[inline(never)]`
     // measurably regress the multi-column merge path.
     fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool {
+        // Arbitrary indices (cross-batch); can't use the cache which only
+        // holds the current offset.
         l.rows.row(l_idx) == r.rows.row(r_idx)
     }
 
@@ -227,7 +267,26 @@ impl CursorValues for RowValues {
     }
 
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
-        l.rows.row(l_idx).cmp(&r.rows.row(r_idx))
+        // Merge callers always compare at current offsets; the cache is up
+        // to date. (Debug-only: verify the invariant.)
+        debug_assert!(l_idx < l.len && r_idx < r.len);
+        let _ = (l_idx, r_idx);
+        l.current_slice().cmp(r.current_slice())
+    }
+
+    #[inline(always)]
+    fn set_offset(&mut self, offset: usize) {
+        // Refresh the cached byte-slice for the new row. Caller guarantees
+        // `offset < len`. `Rows::row(idx).as_ref()` returns `&[u8]` into the
+        // Arc-owned buffer heap, so the pointer we stow stays valid after
+        // the temporary `Row` drops.
+        let (ptr, len) = {
+            let row = self.rows.row(offset);
+            let bytes: &[u8] = row.as_ref();
+            (bytes.as_ptr(), bytes.len())
+        };
+        self.current_ptr = ptr;
+        self.current_len = len;
     }
 
     fn get_value(&self, idx: usize) -> OwnedRow {
@@ -636,6 +695,65 @@ mod tests {
         };
 
         Cursor::new(values)
+    }
+
+    /// Builds a `RowValues` cursor from a single string column, so tests can
+    /// drive the multi-column `Rows` path with concrete data.
+    fn new_row_values(strings: &[&str]) -> Cursor<RowValues> {
+        use arrow::array::{ArrayRef, StringArray};
+        use arrow::datatypes::DataType;
+        use arrow::row::{RowConverter, SortField};
+
+        let array: ArrayRef = Arc::new(StringArray::from(strings.to_vec()));
+        let converter = RowConverter::new(vec![SortField::new(DataType::Utf8)]).unwrap();
+        let rows = converter.convert_columns(&[array]).unwrap();
+
+        let memory_pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1_000_000));
+        let consumer = MemoryConsumer::new("test");
+        let reservation = consumer.register(&memory_pool);
+        reservation.grow(rows.size());
+
+        Cursor::new(RowValues::new(Arc::new(rows), reservation))
+    }
+
+    /// The `(current_ptr, current_len)` cache refreshed on `advance` must yield
+    /// exactly the same ordering as indexing the underlying `Rows` per compare.
+    /// Drives the cache across every offset of a multi-row batch.
+    #[test]
+    fn test_row_values_cache_matches_rows_index() {
+        // Deliberately unsorted so the comparisons exercise <, >, and ==.
+        let a = new_row_values(&["banana", "apple", "cherry", "apple"]);
+        let b = new_row_values(&["apricot", "apple", "blueberry", "date"]);
+
+        // Reference comparison straight off the arrow `Rows`, no cache.
+        let expected: Vec<Ordering> = (0..4)
+            .map(|i| a.values.rows.row(i).cmp(&b.values.rows.row(i)))
+            .collect();
+
+        let mut a = a;
+        let mut b = b;
+        let mut got = Vec::with_capacity(4);
+        for _ in 0..4 {
+            got.push(a.cmp(&b));
+            a.advance();
+            b.advance();
+        }
+        assert_eq!(got, expected);
+
+        // "apple" appears at index 1 in both and index 3 in `a`: the cross-batch
+        // `eq` path (arbitrary indices, bypasses the cache) must still hold.
+        assert!(RowValues::eq(&a.values, 1, &b.values, 1));
+        assert!(RowValues::eq(&a.values, 3, &b.values, 1));
+        assert!(!RowValues::eq(&a.values, 0, &b.values, 0));
+    }
+
+    /// A single-row `Rows` batch: `new` caches row 0 up front, and it must not
+    /// index past the end.
+    #[test]
+    fn test_row_values_single_row_batch() {
+        let cursor = new_row_values(&["solo"]);
+        assert_eq!(cursor.values.len(), 1);
+        assert!(!cursor.is_finished());
     }
 
     #[test]
