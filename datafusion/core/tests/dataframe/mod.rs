@@ -1336,6 +1336,69 @@ async fn window_aggregates_with_filter() -> Result<()> {
     Ok(())
 }
 
+// Test issue: https://github.com/apache/datafusion/issues/24884
+//
+// When the physical optimizer reverses a window expression to avoid an extra
+// sort, the reversed expression must keep its output field name. Otherwise the
+// window exec's schema changes while the parent projection still references the
+// old column name, and planning fails.
+//
+// Note this only asserts on planning: executing the plan currently hits a
+// separate gap (missing `retract_batch` on the reversed sliding frame), tracked
+// by https://github.com/apache/datafusion/issues/24885. Once that is fixed, this
+// test can be extended to collect results.
+#[tokio::test]
+async fn window_reversal_preserves_output_field_names() -> Result<()> {
+    fn last_value_over(ascending: bool) -> Expr {
+        Expr::from(WindowFunction::new(
+            datafusion_functions_aggregate::first_last::last_value_udaf(),
+            vec![col("v")],
+        ))
+        .order_by(vec![col("t").sort(ascending, false)])
+        .build()
+        .unwrap()
+    }
+
+    // `t` must be non-nullable for the ordering equivalence that makes the
+    // optimizer reverse the second window instead of adding a second sort.
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("t", DataType::Int64, false),
+        Field::new("v", DataType::Int64, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int64Array::from(vec![1, 2])),
+            Arc::new(Int64Array::from(vec![None, Some(10)])),
+        ],
+    )?;
+
+    let ctx = SessionContext::new();
+    let df = ctx
+        .read_batch(batch)?
+        .with_column("asc_win", last_value_over(true))?
+        .with_column("desc_win", last_value_over(false))?;
+
+    let logical_schema = df.schema().clone();
+    // Planning used to fail here with an internal error from `EnsureRequirements`.
+    let physical_plan = df.create_physical_plan().await?;
+
+    let physical_names = physical_plan
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .collect::<Vec<_>>();
+    let logical_names = logical_schema
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .collect::<Vec<_>>();
+    assert_eq!(physical_names, logical_names);
+
+    Ok(())
+}
+
 // Test issue: https://github.com/apache/datafusion/issues/10346
 #[tokio::test]
 async fn test_select_over_aggregate_schema() -> Result<()> {

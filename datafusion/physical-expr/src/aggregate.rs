@@ -933,24 +933,44 @@ impl AggregateFunctionExpr {
     /// For aggregates that do not support calculation in reverse,
     /// returns None (which is the default value).
     pub fn reverse_expr(&self) -> Option<AggregateFunctionExpr> {
+        self.reverse_expr_inner(false)
+    }
+
+    /// Same as [`Self::reverse_expr`], but the output `name` is always carried
+    /// over unchanged.
+    ///
+    /// Window execs derive their output schema from `WindowExpr::field()`, which
+    /// for aggregate-backed window expressions is this expression's `name`. If
+    /// reversal renamed it, the rebuilt window exec would expose a differently
+    /// named column while parent plan nodes still reference the old one. This
+    /// mirrors `WindowUDFExpr::reverse_expr`, which preserves its name for the
+    /// same reason. `AggregateExec`, by contrast, pins its schema at
+    /// construction, so it can use [`Self::reverse_expr`] and let the name
+    /// reflect the function actually being evaluated.
+    pub fn reverse_expr_preserving_name(&self) -> Option<AggregateFunctionExpr> {
+        self.reverse_expr_inner(true)
+    }
+
+    fn reverse_expr_inner(&self, preserve_name: bool) -> Option<AggregateFunctionExpr> {
         match self.fun.reverse_udf() {
             ReversedUDAF::NotSupported => None,
             ReversedUDAF::Identical => Some(self.clone()),
             ReversedUDAF::Reversed(reverse_udf) => {
-                let was_aliased = self.human_display_alias().is_some();
+                let keep_name = preserve_name || self.human_display_alias().is_some();
                 let mut name = self.name().to_string();
                 let mut human_display = self.human_display.clone();
                 // Reversing display follows two paths:
-                // - aliased display keeps the output `name` unchanged and rewrites only
-                //   the lowered expression in `human_display`.
+                // - aliased display (or an explicit request to keep the name) keeps
+                //   the output `name` unchanged and rewrites only the lowered
+                //   expression in `human_display`.
                 // - non-aliased display rewrites the canonical `name`, and rewrites
                 //   `human_display` only when present.
                 // If the function is changed, we need to reverse order_by clause as well
                 // i.e. First(a order by b asc null first) -> Last(a order by b desc null last)
-                if !was_aliased && self.fun().name() != reverse_udf.name() {
+                if !keep_name && self.fun().name() != reverse_udf.name() {
                     replace_order_by_clause(&mut name);
                 }
-                if !was_aliased {
+                if !keep_name {
                     replace_fn_name_clause(
                         &mut name,
                         self.fun.name(),
