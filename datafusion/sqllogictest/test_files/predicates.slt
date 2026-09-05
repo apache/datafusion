@@ -1022,6 +1022,27 @@ WHERE NULL NOT IN (SELECT * FROM empty); -- all rows should be returned
 ----
 1
 
+# Different non-null list expressions can evaluate to the same value.
+statement ok
+CREATE TABLE in_list_values(x INT NOT NULL, a INT NOT NULL, b INT NOT NULL)
+AS VALUES (1, 1, 1), (2, 1, 2), (3, 3, 4);
+
+query I rowsort
+SELECT x FROM in_list_values
+WHERE x IN (a, 2, 10, 11) AND x IN (b, 5, 12, 13);
+----
+1
+2
+
+query I
+SELECT x FROM in_list_values
+WHERE x IN (a, 2, 10, 11) AND x NOT IN (b, 5, 12, 13);
+----
+3
+
+statement ok
+DROP TABLE in_list_values;
+
 # Config reset
 statement ok
 RESET datafusion.catalog.information_schema;
