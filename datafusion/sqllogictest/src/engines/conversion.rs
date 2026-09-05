@@ -41,6 +41,12 @@ pub(crate) fn varchar_to_str(value: &str) -> String {
     }
 }
 
+/// Decimal places to keep in floats for string representation.
+const FLOAT_ROUND_DIGITS: i64 = 12;
+
+/// Decimal places to keep in floats for Spark (derived from expm1 behaviour)
+const SPARK_FLOAT_ROUND_DIGITS: i64 = 15;
+
 pub(crate) fn float_to_str<T: Float + ToString>(value: T, round_digits: i64) -> String {
     if value.is_nan() {
         // The sign of NaN can be different depending on platform.
@@ -56,20 +62,20 @@ pub(crate) fn float_to_str<T: Float + ToString>(value: T, round_digits: i64) -> 
 }
 
 pub(crate) fn f16_to_str(value: f16) -> String {
-    float_to_str(value, 12)
+    float_to_str(value, FLOAT_ROUND_DIGITS)
 }
 
 pub(crate) fn f32_to_str(value: f32) -> String {
-    float_to_str(value, 12)
+    float_to_str(value, FLOAT_ROUND_DIGITS)
 }
 
 pub(crate) fn f64_to_str(value: f64) -> String {
-    float_to_str(value, 12)
+    float_to_str(value, FLOAT_ROUND_DIGITS)
 }
 
 pub(crate) fn spark_f64_to_str(value: f64) -> String {
     // Spark uses 15 decimal places for doubles
-    float_to_str(value, 15)
+    float_to_str(value, SPARK_FLOAT_ROUND_DIGITS)
 }
 
 /// Converts a float to its plain string representation, rounding to a specified number of decimal places.
@@ -81,13 +87,12 @@ fn float_decimal_to_str<T: Float + ToString>(value: T, round_digits: i64) -> Str
     value.to_plain_string()
 }
 
-/// Converts a decimal to its plain string representation, usint the given scale
+/// Converts a decimal to its plain string representation, using the given scale
 pub(crate) fn arrow_decimal_to_str<T: DecimalType>(
     value: T::Native,
     scale: i8,
 ) -> String {
-    let precision = u8::MAX; // does not matter
-    T::format_decimal(value, precision, scale)
+    T::format_decimal(value, u8::MAX, scale)
 }
 
 #[cfg(feature = "postgres")]
@@ -99,25 +104,26 @@ pub(crate) fn decimal_to_str(value: BigDecimal) -> String {
 mod tests {
     use super::*;
     use arrow::datatypes::{
-        Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, i256,
+        DECIMAL128_MAX_SCALE, Decimal32Type, Decimal64Type, Decimal128Type,
+        Decimal256Type, i256,
     };
 
     #[test]
     fn test_float_decimal_to_str() {
-        assert_eq!(float_decimal_to_str(0.11, 12), "0.11");
-        assert_eq!(float_decimal_to_str(0.011, 12), "0.011");
-        assert_eq!(float_decimal_to_str(1.1, 12), "1.1");
-        assert_eq!(float_decimal_to_str(11.0, 12), "11");
-        assert_eq!(float_decimal_to_str(-0.11, 12), "-0.11");
-        assert_eq!(float_decimal_to_str(-0.011, 12), "-0.011");
-        assert_eq!(float_decimal_to_str(-1.1, 12), "-1.1");
-        assert_eq!(float_decimal_to_str(-11.0, 12), "-11");
+        assert_eq!(f64_to_str(0.11), "0.11");
+        assert_eq!(f64_to_str(0.011), "0.011");
+        assert_eq!(f64_to_str(1.1), "1.1");
+        assert_eq!(f64_to_str(11.0), "11");
+        assert_eq!(f64_to_str(-0.11), "-0.11");
+        assert_eq!(f64_to_str(-0.011), "-0.011");
+        assert_eq!(f64_to_str(-1.1,), "-1.1");
+        assert_eq!(f64_to_str(-11.0), "-11");
+        // Keep 12 decimal places
+        assert_eq!(f64_to_str(0.12345678901234567), "0.123456789012");
 
-        assert_eq!(float_decimal_to_str(-0.011, 15), "-0.011");
-        assert_eq!(
-            float_decimal_to_str(0.12345678901234567, 15),
-            "0.123456789012346"
-        );
+        assert_eq!(spark_f64_to_str(-0.011), "-0.011");
+        // Keep 15 decimal places for Spark
+        assert_eq!(spark_f64_to_str(0.12345678901234567), "0.123456789012346");
     }
 
     #[test]
@@ -151,7 +157,7 @@ mod tests {
         assert_eq!(
             arrow_decimal_to_str::<Decimal128Type>(
                 12345678901234567890123456789012345678_i128,
-                38
+                DECIMAL128_MAX_SCALE
             ),
             "0.12345678901234567890123456789012345678"
         );
