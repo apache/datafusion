@@ -59,6 +59,7 @@ use crate::scalar::consts::{
 };
 use crate::utils::SingleRowListArrayBuilder;
 use crate::{_internal_datafusion_err, arrow_datafusion_err};
+use arrow::array::make_comparator;
 use arrow::array::{
     Array, ArrayData, ArrayDataBuilder, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType,
     AsArray, BinaryArray, BinaryViewArray, BinaryViewBuilder, BooleanArray, Date32Array,
@@ -77,6 +78,7 @@ use arrow::array::{
     downcast_run_array, new_empty_array, new_null_array,
 };
 use arrow::buffer::{BooleanBuffer, ScalarBuffer};
+use arrow::compute::SortOptions;
 use arrow::compute::kernels::cast::{CastOptions, cast_with_options};
 use arrow::compute::kernels::numeric::{
     add, add_wrapping, div, mul, mul_wrapping, rem, sub, sub_wrapping,
@@ -835,29 +837,28 @@ fn partial_cmp_list(arr1: &dyn Array, arr2: &dyn Array) -> Option<Ordering> {
     let arr1_trimmed = arr1.slice(0, min_length);
     let arr2_trimmed = arr2.slice(0, min_length);
 
-    let lt_res = arrow::compute::kernels::cmp::lt(&arr1_trimmed, &arr2_trimmed).ok()?;
-    let eq_res = arrow::compute::kernels::cmp::eq(&arr1_trimmed, &arr2_trimmed).ok()?;
+    // Compare the elements with a dynamic comparator rather than the `lt` /
+    // `eq` kernels: it covers nested lists, structs and the other nested
+    // element types the kernels reject, and `nulls_first: false` gives the
+    // Postgres semantics kept here, where a NULL element is greater than a
+    // non-NULL one:
+    //
+    // $ SELECT ARRAY[NULL]::integer[] > ARRAY[1]
+    // true
+    let cmp = make_comparator(
+        &arr1_trimmed,
+        &arr2_trimmed,
+        SortOptions {
+            descending: false,
+            nulls_first: false,
+        },
+    )
+    .ok()?;
 
-    for j in 0..lt_res.len() {
-        // In Postgres, NULL values in lists are always considered to be greater than non-NULL values:
-        //
-        // $ SELECT ARRAY[NULL]::integer[] > ARRAY[1]
-        // true
-        //
-        // These next two if statements are introduced for replicating Postgres behavior, as
-        // arrow::compute does not account for this.
-        if arr1_trimmed.is_null(j) && !arr2_trimmed.is_null(j) {
-            return Some(Ordering::Greater);
-        }
-        if !arr1_trimmed.is_null(j) && arr2_trimmed.is_null(j) {
-            return Some(Ordering::Less);
-        }
-
-        if lt_res.is_valid(j) && lt_res.value(j) {
-            return Some(Ordering::Less);
-        }
-        if eq_res.is_valid(j) && !eq_res.value(j) {
-            return Some(Ordering::Greater);
+    for j in 0..min_length {
+        let ordering = cmp(j, j);
+        if ordering != Ordering::Equal {
+            return Some(ordering);
         }
     }
 
@@ -7227,6 +7228,68 @@ mod tests {
         assert_eq!(
             ScalarValue::new_negative_one(&DataType::Decimal128(5, 2)).unwrap(),
             ScalarValue::Decimal128(Some(-100), 5, 2)
+        );
+    }
+
+    #[test]
+    fn test_nested_list_partial_cmp() {
+        // Lists whose elements are lists or structs used to be uncomparable
+        // because the element comparison went through the `lt` / `eq`
+        // kernels, which reject nested types.
+        fn nested(values: Vec<Vec<i64>>) -> ScalarValue {
+            let inner: ArrayRef =
+                Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(
+                    values
+                        .into_iter()
+                        .map(|v| Some(v.into_iter().map(Some).collect::<Vec<_>>())),
+                ));
+            ScalarValue::List(Arc::new(
+                SingleRowListArrayBuilder::new(inner).build_list_array(),
+            ))
+        }
+
+        assert_eq!(
+            nested(vec![vec![1, 2]]).partial_cmp(&nested(vec![vec![1, 2]])),
+            Some(Ordering::Equal)
+        );
+        assert_eq!(
+            nested(vec![vec![1, 2]]).partial_cmp(&nested(vec![vec![1, 3]])),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            nested(vec![vec![2]]).partial_cmp(&nested(vec![vec![1, 9]])),
+            Some(Ordering::Greater)
+        );
+        // a shorter prefix sorts first, at both levels
+        assert_eq!(
+            nested(vec![vec![1]]).partial_cmp(&nested(vec![vec![1, 2]])),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            nested(vec![vec![1, 2]]).partial_cmp(&nested(vec![vec![1, 2], vec![0]])),
+            Some(Ordering::Less)
+        );
+
+        let a = ScalarValue::Struct(Arc::new(StructArray::from(vec![(
+            Arc::new(Field::new("a", DataType::Int64, true)),
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+        )])));
+        let b = ScalarValue::Struct(Arc::new(StructArray::from(vec![(
+            Arc::new(Field::new("a", DataType::Int64, true)),
+            Arc::new(Int64Array::from(vec![2])) as ArrayRef,
+        )])));
+        let list_of_structs = |s: &ScalarValue| {
+            ScalarValue::List(Arc::new(
+                SingleRowListArrayBuilder::new(s.to_array().unwrap()).build_list_array(),
+            ))
+        };
+        assert_eq!(
+            list_of_structs(&a).partial_cmp(&list_of_structs(&b)),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            list_of_structs(&b).partial_cmp(&list_of_structs(&a)),
+            Some(Ordering::Greater)
         );
     }
 
