@@ -1372,15 +1372,16 @@ impl GroupedHashAggregateStream {
 
             // Recreate `group_values` for streaming merge so group ids are assigned
             // in first-seen order, as required by `GroupOrderingFull`.
-            // The pre-spill multi-column collector may use `vectorized_intern`, which
-            // can assign new group ids out of input order under hash collisions.
+            // The pre-spill collector may use `vectorized_intern`, which can assign
+            // new group ids out of input order under hash collisions. That is the
+            // multi-column collector, which also serves a single group column
+            // whose type has no specialized single-column collector (for example
+            // `Struct` or `Map`), so recreate unconditionally.
             let group_schema = self
                 .spill_state
                 .merging_group_by
                 .group_schema(&self.spill_state.spill_schema)?;
-            if group_schema.fields().len() > 1 {
-                self.group_values = new_group_values(group_schema, &self.group_ordering)?;
-            }
+            self.group_values = new_group_values(group_schema, &self.group_ordering)?;
 
             // Use `OutOfMemoryMode::ReportError` from this point on
             // to ensure we don't spill the spilled data to disk again.
