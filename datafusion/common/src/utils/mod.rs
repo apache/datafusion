@@ -25,7 +25,9 @@ pub mod proxy;
 pub mod string_utils;
 
 use crate::assert_or_internal_err;
-use crate::error::{_exec_datafusion_err, _exec_err, _internal_datafusion_err};
+use crate::error::{
+    _exec_datafusion_err, _exec_err, _internal_datafusion_err, _plan_datafusion_err,
+};
 use crate::{Result, ScalarValue};
 use arrow::array::{
     Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray, OffsetSizeTrait,
@@ -1142,6 +1144,32 @@ pub fn combine_limit(
     (combined_skip, combined_fetch)
 }
 
+/// Converts a wire integer to `usize`, rejecting out-of-range values.
+/// `context` and `field` identify the value in the error message.
+pub fn usize_from_wire<T>(value: T, context: &str, field: &str) -> Result<usize>
+where
+    T: TryInto<usize> + std::fmt::Display + Copy,
+{
+    value.try_into().map_err(|_| {
+        _plan_datafusion_err!(
+            "{context}: {field} wire value {value} is out of range for usize"
+        )
+    })
+}
+
+/// Converts a `usize` to a wire integer, rejecting out-of-range values.
+pub fn usize_to_wire<T: TryFrom<usize>>(
+    value: usize,
+    context: &str,
+    field: &str,
+) -> Result<T> {
+    T::try_from(value).map_err(|_| {
+        _plan_datafusion_err!(
+            "{context}: {field} value {value} is out of range for the plan wire format"
+        )
+    })
+}
+
 /// Returns the estimated number of threads available for parallel execution.
 ///
 /// This is a wrapper around `std::thread::available_parallelism`, providing a default value
@@ -1481,6 +1509,30 @@ mod tests {
     };
     #[cfg(feature = "sql")]
     use sqlparser::ast::Ident;
+
+    #[test]
+    fn test_usize_wire_conversions() {
+        assert_eq!(usize_from_wire(42_u64, "SomeExec", "fetch").unwrap(), 42);
+        let err = usize_from_wire(-1_i64, "SomeExec", "skip").unwrap_err();
+        assert_eq!(
+            err.strip_backtrace(),
+            "Error during planning: SomeExec: skip wire value -1 is out of range for usize"
+        );
+
+        assert_eq!(usize_to_wire::<u32>(42, "SomeExec", "fetch").unwrap(), 42);
+        let err = usize_to_wire::<u8>(256, "SomeExec", "fetch").unwrap_err();
+        assert_eq!(
+            err.strip_backtrace(),
+            "Error during planning: SomeExec: fetch value 256 is out of range for the plan wire format"
+        );
+
+        let max = usize_from_wire(u64::MAX, "SomeExec", "fetch");
+        if usize::BITS >= u64::BITS {
+            assert_eq!(max.unwrap(), usize::MAX);
+        } else {
+            assert!(max.is_err());
+        }
+    }
 
     #[test]
     fn test_bisect_linear_left_and_right() -> Result<()> {

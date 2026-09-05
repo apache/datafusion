@@ -34,8 +34,8 @@ use crate::joins::utils::{
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet, SpillMetrics};
 use crate::projection::{
-    EmbeddedProjection, ProjectionExec, join_allows_pushdown, join_table_borders,
-    new_join_children, physical_to_column_exprs, try_embed_projection, update_join_on,
+    EmbeddedProjection, JoinData, ProjectionExec, try_embed_projection,
+    try_pushdown_through_join_with_column_indices,
 };
 use crate::spill::spill_manager::SpillManager;
 use crate::statistics::{ChildStats, StatisticsArgs};
@@ -706,9 +706,9 @@ impl ExecutionPlan for SortMergeJoinExec {
         }))
     }
 
-    /// Tries to swap the projection with its input [`SortMergeJoinExec`]. If it can be done,
-    /// it returns the new swapped version having the [`SortMergeJoinExec`] as the top plan.
-    /// Otherwise, it returns None.
+    /// Tries to push `projection` down through this join. If possible, returns a
+    /// new [`SortMergeJoinExec`] whose children are the projected inputs. Otherwise
+    /// the join applies the projection itself (see [`EmbeddedProjection`]).
     fn try_swapping_with_projection(
         &self,
         projection: &ProjectionExec,
@@ -716,54 +716,43 @@ impl ExecutionPlan for SortMergeJoinExec {
         if self.projection.is_some() {
             return Ok(None);
         }
-        // Convert projected PhysicalExpr's to columns. If not possible, we cannot proceed.
-        let Some(projection_as_columns) = physical_to_column_exprs(projection.expr())
-        else {
-            return Ok(None);
-        };
 
-        let (far_right_left_col_ind, far_left_right_col_ind) = join_table_borders(
-            self.left().schema().fields().len(),
-            &projection_as_columns,
+        let schema = self.schema();
+        let (_, column_indices) = build_join_schema(
+            &self.left().schema(),
+            &self.right().schema(),
+            &self.join_type,
         );
 
-        // Pushing into the children needs each side's columns to stay together, which
-        // an arbitrary projection does not. The join can apply that one itself.
-        if !join_allows_pushdown(
-            &projection_as_columns,
-            &self.schema(),
-            far_right_left_col_ind,
-            far_left_right_col_ind,
-        ) {
-            return try_embed_projection(projection, self);
-        }
-
-        let Some(new_on) = update_join_on(
-            &projection_as_columns[0..=far_right_left_col_ind as _],
-            &projection_as_columns[far_left_right_col_ind as _..],
+        // Remaps the join keys and the filter's column indices to the
+        // projected children, and declines the pushdown if the projection
+        // drops a column the filter needs.
+        if let Some(JoinData {
+            projected_left_child,
+            projected_right_child,
+            join_filter,
+            join_on,
+        }) = try_pushdown_through_join_with_column_indices(
+            projection,
+            self.left(),
+            self.right(),
             self.on(),
-            self.left().schema().fields().len(),
-        ) else {
-            return try_embed_projection(projection, self);
-        };
-
-        let (new_left, new_right) = new_join_children(
-            &projection_as_columns,
-            far_right_left_col_ind,
-            far_left_right_col_ind,
-            self.children()[0],
-            self.children()[1],
-        )?;
-
-        Ok(Some(Arc::new(SortMergeJoinExec::try_new(
-            Arc::new(new_left),
-            Arc::new(new_right),
-            new_on,
-            self.filter.clone(),
-            self.join_type,
-            self.sort_options.clone(),
-            self.null_equality,
-        )?)))
+            &schema,
+            self.filter().as_ref(),
+            &column_indices,
+        )? {
+            Ok(Some(Arc::new(SortMergeJoinExec::try_new(
+                Arc::new(projected_left_child),
+                Arc::new(projected_right_child),
+                join_on,
+                join_filter,
+                self.join_type,
+                self.sort_options.clone(),
+                self.null_equality,
+            )?)))
+        } else {
+            try_embed_projection(projection, self)
+        }
     }
 
     #[cfg(feature = "proto")]

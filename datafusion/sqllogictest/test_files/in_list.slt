@@ -579,3 +579,191 @@ nulls NULL NULL
 # Cleanup
 statement ok
 DROP TABLE in_list_interval
+
+####
+## FixedSizeBinary IN List Specializations
+##
+## Widths that are commonly special cased: 1, 2, 4, 8, and 16
+## Width that likely uses general path: 3
+####
+
+statement ok
+CREATE TABLE in_list_fsb AS
+SELECT
+  label,
+  arrow_cast(b1,  'FixedSizeBinary(1)')  AS fsb1,
+  arrow_cast(b2,  'FixedSizeBinary(2)')  AS fsb2,
+  arrow_cast(b3,  'FixedSizeBinary(3)')  AS fsb3,
+  arrow_cast(b4,  'FixedSizeBinary(4)')  AS fsb4,
+  arrow_cast(b8,  'FixedSizeBinary(8)')  AS fsb8,
+  arrow_cast(b16, 'FixedSizeBinary(16)') AS fsb16
+FROM (VALUES
+  ('match',    X'0B', X'000B', X'00000B', X'0000000B', X'000000000000000B', X'0000000000000000000000000000000B'),
+  ('no_match', X'07', X'0007', X'000007', X'00000007', X'0000000000000007', X'00000000000000000000000000000007'),
+  ('nulls',    NULL,  NULL,    NULL,      NULL,        NULL,                NULL)
+) AS t(label, b1, b2, b3, b4, b8, b16);
+
+query TTTTTT
+SELECT
+  arrow_typeof(fsb1),
+  arrow_typeof(fsb2),
+  arrow_typeof(fsb3),
+  arrow_typeof(fsb4),
+  arrow_typeof(fsb8),
+  arrow_typeof(fsb16)
+FROM in_list_fsb
+LIMIT 1
+----
+FixedSizeBinary(1) FixedSizeBinary(2) FixedSizeBinary(3) FixedSizeBinary(4) FixedSizeBinary(8) FixedSizeBinary(16)
+
+# Eight element lists, all matching or none matching
+query TBBBBBB
+SELECT
+  label,
+  fsb1 IN (arrow_cast(X'03', 'FixedSizeBinary(1)'), arrow_cast(X'04', 'FixedSizeBinary(1)'), arrow_cast(X'05', 'FixedSizeBinary(1)'), arrow_cast(X'06', 'FixedSizeBinary(1)'),
+      arrow_cast(X'08', 'FixedSizeBinary(1)'), arrow_cast(X'09', 'FixedSizeBinary(1)'), arrow_cast(X'0A', 'FixedSizeBinary(1)'), arrow_cast(X'0B', 'FixedSizeBinary(1)')),
+  fsb2 IN (arrow_cast(X'0003', 'FixedSizeBinary(2)'), arrow_cast(X'0004', 'FixedSizeBinary(2)'), arrow_cast(X'0005', 'FixedSizeBinary(2)'), arrow_cast(X'0006', 'FixedSizeBinary(2)'),
+      arrow_cast(X'0008', 'FixedSizeBinary(2)'), arrow_cast(X'0009', 'FixedSizeBinary(2)'), arrow_cast(X'000A', 'FixedSizeBinary(2)'), arrow_cast(X'000B', 'FixedSizeBinary(2)')),
+  fsb3 IN (arrow_cast(X'000003', 'FixedSizeBinary(3)'), arrow_cast(X'000004', 'FixedSizeBinary(3)'), arrow_cast(X'000005', 'FixedSizeBinary(3)'), arrow_cast(X'000006', 'FixedSizeBinary(3)'),
+      arrow_cast(X'000008', 'FixedSizeBinary(3)'), arrow_cast(X'000009', 'FixedSizeBinary(3)'), arrow_cast(X'00000A', 'FixedSizeBinary(3)'), arrow_cast(X'00000B', 'FixedSizeBinary(3)')),
+  fsb4 IN (arrow_cast(X'00000003', 'FixedSizeBinary(4)'), arrow_cast(X'00000004', 'FixedSizeBinary(4)'), arrow_cast(X'00000005', 'FixedSizeBinary(4)'), arrow_cast(X'00000006', 'FixedSizeBinary(4)'),
+      arrow_cast(X'00000008', 'FixedSizeBinary(4)'), arrow_cast(X'00000009', 'FixedSizeBinary(4)'), arrow_cast(X'0000000A', 'FixedSizeBinary(4)'), arrow_cast(X'0000000B', 'FixedSizeBinary(4)')),
+  fsb8 IN (arrow_cast(X'0000000000000003', 'FixedSizeBinary(8)'), arrow_cast(X'0000000000000004', 'FixedSizeBinary(8)'), arrow_cast(X'0000000000000005', 'FixedSizeBinary(8)'), arrow_cast(X'0000000000000006', 'FixedSizeBinary(8)'),
+      arrow_cast(X'0000000000000008', 'FixedSizeBinary(8)'), arrow_cast(X'0000000000000009', 'FixedSizeBinary(8)'), arrow_cast(X'000000000000000A', 'FixedSizeBinary(8)'), arrow_cast(X'000000000000000B', 'FixedSizeBinary(8)')),
+  fsb16 IN (arrow_cast(X'00000000000000000000000000000003', 'FixedSizeBinary(16)'), arrow_cast(X'00000000000000000000000000000004', 'FixedSizeBinary(16)'), arrow_cast(X'00000000000000000000000000000005', 'FixedSizeBinary(16)'), arrow_cast(X'00000000000000000000000000000006', 'FixedSizeBinary(16)'),
+      arrow_cast(X'00000000000000000000000000000008', 'FixedSizeBinary(16)'), arrow_cast(X'00000000000000000000000000000009', 'FixedSizeBinary(16)'), arrow_cast(X'0000000000000000000000000000000A', 'FixedSizeBinary(16)'), arrow_cast(X'0000000000000000000000000000000B', 'FixedSizeBinary(16)'))
+FROM in_list_fsb
+ORDER BY label
+----
+match true true true true true true
+no_match false false false false false false
+nulls NULL NULL NULL NULL NULL NULL
+
+# The same lists with NOT IN.
+query TBBBBBB
+SELECT
+  label,
+  fsb1 NOT IN (arrow_cast(X'03', 'FixedSizeBinary(1)'), arrow_cast(X'04', 'FixedSizeBinary(1)'), arrow_cast(X'05', 'FixedSizeBinary(1)'), arrow_cast(X'06', 'FixedSizeBinary(1)'),
+      arrow_cast(X'08', 'FixedSizeBinary(1)'), arrow_cast(X'09', 'FixedSizeBinary(1)'), arrow_cast(X'0A', 'FixedSizeBinary(1)'), arrow_cast(X'0B', 'FixedSizeBinary(1)')),
+  fsb2 NOT IN (arrow_cast(X'0003', 'FixedSizeBinary(2)'), arrow_cast(X'0004', 'FixedSizeBinary(2)'), arrow_cast(X'0005', 'FixedSizeBinary(2)'), arrow_cast(X'0006', 'FixedSizeBinary(2)'),
+      arrow_cast(X'0008', 'FixedSizeBinary(2)'), arrow_cast(X'0009', 'FixedSizeBinary(2)'), arrow_cast(X'000A', 'FixedSizeBinary(2)'), arrow_cast(X'000B', 'FixedSizeBinary(2)')),
+  fsb3 NOT IN (arrow_cast(X'000003', 'FixedSizeBinary(3)'), arrow_cast(X'000004', 'FixedSizeBinary(3)'), arrow_cast(X'000005', 'FixedSizeBinary(3)'), arrow_cast(X'000006', 'FixedSizeBinary(3)'),
+      arrow_cast(X'000008', 'FixedSizeBinary(3)'), arrow_cast(X'000009', 'FixedSizeBinary(3)'), arrow_cast(X'00000A', 'FixedSizeBinary(3)'), arrow_cast(X'00000B', 'FixedSizeBinary(3)')),
+  fsb4 NOT IN (arrow_cast(X'00000003', 'FixedSizeBinary(4)'), arrow_cast(X'00000004', 'FixedSizeBinary(4)'), arrow_cast(X'00000005', 'FixedSizeBinary(4)'), arrow_cast(X'00000006', 'FixedSizeBinary(4)'),
+      arrow_cast(X'00000008', 'FixedSizeBinary(4)'), arrow_cast(X'00000009', 'FixedSizeBinary(4)'), arrow_cast(X'0000000A', 'FixedSizeBinary(4)'), arrow_cast(X'0000000B', 'FixedSizeBinary(4)')),
+  fsb8 NOT IN (arrow_cast(X'0000000000000003', 'FixedSizeBinary(8)'), arrow_cast(X'0000000000000004', 'FixedSizeBinary(8)'), arrow_cast(X'0000000000000005', 'FixedSizeBinary(8)'), arrow_cast(X'0000000000000006', 'FixedSizeBinary(8)'),
+      arrow_cast(X'0000000000000008', 'FixedSizeBinary(8)'), arrow_cast(X'0000000000000009', 'FixedSizeBinary(8)'), arrow_cast(X'000000000000000A', 'FixedSizeBinary(8)'), arrow_cast(X'000000000000000B', 'FixedSizeBinary(8)')),
+  fsb16 NOT IN (arrow_cast(X'00000000000000000000000000000003', 'FixedSizeBinary(16)'), arrow_cast(X'00000000000000000000000000000004', 'FixedSizeBinary(16)'), arrow_cast(X'00000000000000000000000000000005', 'FixedSizeBinary(16)'), arrow_cast(X'00000000000000000000000000000006', 'FixedSizeBinary(16)'),
+      arrow_cast(X'00000000000000000000000000000008', 'FixedSizeBinary(16)'), arrow_cast(X'00000000000000000000000000000009', 'FixedSizeBinary(16)'), arrow_cast(X'0000000000000000000000000000000A', 'FixedSizeBinary(16)'), arrow_cast(X'0000000000000000000000000000000B', 'FixedSizeBinary(16)'))
+FROM in_list_fsb
+ORDER BY label
+----
+match false false false false false false
+no_match true true true true true true
+nulls NULL NULL NULL NULL NULL NULL
+
+# Longer lists: 17, 9, 33, 17, and 5 elements for widths 1, 2, 4, 8, and 16
+query TBBBBB
+SELECT
+  label,
+  fsb1 IN (arrow_cast(X'0B', 'FixedSizeBinary(1)'), arrow_cast(X'10', 'FixedSizeBinary(1)'), arrow_cast(X'11', 'FixedSizeBinary(1)'), arrow_cast(X'12', 'FixedSizeBinary(1)'),
+      arrow_cast(X'13', 'FixedSizeBinary(1)'), arrow_cast(X'14', 'FixedSizeBinary(1)'), arrow_cast(X'15', 'FixedSizeBinary(1)'), arrow_cast(X'16', 'FixedSizeBinary(1)'),
+      arrow_cast(X'17', 'FixedSizeBinary(1)'), arrow_cast(X'18', 'FixedSizeBinary(1)'), arrow_cast(X'19', 'FixedSizeBinary(1)'), arrow_cast(X'1A', 'FixedSizeBinary(1)'),
+      arrow_cast(X'1B', 'FixedSizeBinary(1)'), arrow_cast(X'1C', 'FixedSizeBinary(1)'), arrow_cast(X'1D', 'FixedSizeBinary(1)'), arrow_cast(X'1E', 'FixedSizeBinary(1)'),
+      arrow_cast(X'1F', 'FixedSizeBinary(1)')),
+  fsb2 IN (arrow_cast(X'000B', 'FixedSizeBinary(2)'), arrow_cast(X'0010', 'FixedSizeBinary(2)'), arrow_cast(X'0011', 'FixedSizeBinary(2)'), arrow_cast(X'0012', 'FixedSizeBinary(2)'),
+      arrow_cast(X'0013', 'FixedSizeBinary(2)'), arrow_cast(X'0014', 'FixedSizeBinary(2)'), arrow_cast(X'0015', 'FixedSizeBinary(2)'), arrow_cast(X'0016', 'FixedSizeBinary(2)'),
+      arrow_cast(X'0017', 'FixedSizeBinary(2)')),
+  fsb4 IN (arrow_cast(X'0000000B', 'FixedSizeBinary(4)'), arrow_cast(X'00000010', 'FixedSizeBinary(4)'), arrow_cast(X'00000011', 'FixedSizeBinary(4)'), arrow_cast(X'00000012', 'FixedSizeBinary(4)'),
+      arrow_cast(X'00000013', 'FixedSizeBinary(4)'), arrow_cast(X'00000014', 'FixedSizeBinary(4)'), arrow_cast(X'00000015', 'FixedSizeBinary(4)'), arrow_cast(X'00000016', 'FixedSizeBinary(4)'),
+      arrow_cast(X'00000017', 'FixedSizeBinary(4)'), arrow_cast(X'00000018', 'FixedSizeBinary(4)'), arrow_cast(X'00000019', 'FixedSizeBinary(4)'), arrow_cast(X'0000001A', 'FixedSizeBinary(4)'),
+      arrow_cast(X'0000001B', 'FixedSizeBinary(4)'), arrow_cast(X'0000001C', 'FixedSizeBinary(4)'), arrow_cast(X'0000001D', 'FixedSizeBinary(4)'), arrow_cast(X'0000001E', 'FixedSizeBinary(4)'),
+      arrow_cast(X'0000001F', 'FixedSizeBinary(4)'), arrow_cast(X'00000020', 'FixedSizeBinary(4)'), arrow_cast(X'00000021', 'FixedSizeBinary(4)'), arrow_cast(X'00000022', 'FixedSizeBinary(4)'),
+      arrow_cast(X'00000023', 'FixedSizeBinary(4)'), arrow_cast(X'00000024', 'FixedSizeBinary(4)'), arrow_cast(X'00000025', 'FixedSizeBinary(4)'), arrow_cast(X'00000026', 'FixedSizeBinary(4)'),
+      arrow_cast(X'00000027', 'FixedSizeBinary(4)'), arrow_cast(X'00000028', 'FixedSizeBinary(4)'), arrow_cast(X'00000029', 'FixedSizeBinary(4)'), arrow_cast(X'0000002A', 'FixedSizeBinary(4)'),
+      arrow_cast(X'0000002B', 'FixedSizeBinary(4)'), arrow_cast(X'0000002C', 'FixedSizeBinary(4)'), arrow_cast(X'0000002D', 'FixedSizeBinary(4)'), arrow_cast(X'0000002E', 'FixedSizeBinary(4)'),
+      arrow_cast(X'0000002F', 'FixedSizeBinary(4)')),
+  fsb8 IN (arrow_cast(X'000000000000000B', 'FixedSizeBinary(8)'), arrow_cast(X'0000000000000010', 'FixedSizeBinary(8)'), arrow_cast(X'0000000000000011', 'FixedSizeBinary(8)'), arrow_cast(X'0000000000000012', 'FixedSizeBinary(8)'),
+      arrow_cast(X'0000000000000013', 'FixedSizeBinary(8)'), arrow_cast(X'0000000000000014', 'FixedSizeBinary(8)'), arrow_cast(X'0000000000000015', 'FixedSizeBinary(8)'), arrow_cast(X'0000000000000016', 'FixedSizeBinary(8)'),
+      arrow_cast(X'0000000000000017', 'FixedSizeBinary(8)'), arrow_cast(X'0000000000000018', 'FixedSizeBinary(8)'), arrow_cast(X'0000000000000019', 'FixedSizeBinary(8)'), arrow_cast(X'000000000000001A', 'FixedSizeBinary(8)'),
+      arrow_cast(X'000000000000001B', 'FixedSizeBinary(8)'), arrow_cast(X'000000000000001C', 'FixedSizeBinary(8)'), arrow_cast(X'000000000000001D', 'FixedSizeBinary(8)'), arrow_cast(X'000000000000001E', 'FixedSizeBinary(8)'),
+      arrow_cast(X'000000000000001F', 'FixedSizeBinary(8)')),
+  fsb16 IN (arrow_cast(X'0000000000000000000000000000000B', 'FixedSizeBinary(16)'), arrow_cast(X'00000000000000000000000000000010', 'FixedSizeBinary(16)'), arrow_cast(X'00000000000000000000000000000011', 'FixedSizeBinary(16)'), arrow_cast(X'00000000000000000000000000000012', 'FixedSizeBinary(16)'),
+      arrow_cast(X'00000000000000000000000000000013', 'FixedSizeBinary(16)'))
+FROM in_list_fsb
+ORDER BY label
+----
+match true true true true true
+no_match false false false false false
+nulls NULL NULL NULL NULL NULL
+
+# The same lists with NOT IN.
+query TBBBBB
+SELECT
+  label,
+  fsb1 NOT IN (arrow_cast(X'0B', 'FixedSizeBinary(1)'), arrow_cast(X'10', 'FixedSizeBinary(1)'), arrow_cast(X'11', 'FixedSizeBinary(1)'), arrow_cast(X'12', 'FixedSizeBinary(1)'),
+      arrow_cast(X'13', 'FixedSizeBinary(1)'), arrow_cast(X'14', 'FixedSizeBinary(1)'), arrow_cast(X'15', 'FixedSizeBinary(1)'), arrow_cast(X'16', 'FixedSizeBinary(1)'),
+      arrow_cast(X'17', 'FixedSizeBinary(1)'), arrow_cast(X'18', 'FixedSizeBinary(1)'), arrow_cast(X'19', 'FixedSizeBinary(1)'), arrow_cast(X'1A', 'FixedSizeBinary(1)'),
+      arrow_cast(X'1B', 'FixedSizeBinary(1)'), arrow_cast(X'1C', 'FixedSizeBinary(1)'), arrow_cast(X'1D', 'FixedSizeBinary(1)'), arrow_cast(X'1E', 'FixedSizeBinary(1)'),
+      arrow_cast(X'1F', 'FixedSizeBinary(1)')),
+  fsb2 NOT IN (arrow_cast(X'000B', 'FixedSizeBinary(2)'), arrow_cast(X'0010', 'FixedSizeBinary(2)'), arrow_cast(X'0011', 'FixedSizeBinary(2)'), arrow_cast(X'0012', 'FixedSizeBinary(2)'),
+      arrow_cast(X'0013', 'FixedSizeBinary(2)'), arrow_cast(X'0014', 'FixedSizeBinary(2)'), arrow_cast(X'0015', 'FixedSizeBinary(2)'), arrow_cast(X'0016', 'FixedSizeBinary(2)'),
+      arrow_cast(X'0017', 'FixedSizeBinary(2)')),
+  fsb4 NOT IN (arrow_cast(X'0000000B', 'FixedSizeBinary(4)'), arrow_cast(X'00000010', 'FixedSizeBinary(4)'), arrow_cast(X'00000011', 'FixedSizeBinary(4)'), arrow_cast(X'00000012', 'FixedSizeBinary(4)'),
+      arrow_cast(X'00000013', 'FixedSizeBinary(4)'), arrow_cast(X'00000014', 'FixedSizeBinary(4)'), arrow_cast(X'00000015', 'FixedSizeBinary(4)'), arrow_cast(X'00000016', 'FixedSizeBinary(4)'),
+      arrow_cast(X'00000017', 'FixedSizeBinary(4)'), arrow_cast(X'00000018', 'FixedSizeBinary(4)'), arrow_cast(X'00000019', 'FixedSizeBinary(4)'), arrow_cast(X'0000001A', 'FixedSizeBinary(4)'),
+      arrow_cast(X'0000001B', 'FixedSizeBinary(4)'), arrow_cast(X'0000001C', 'FixedSizeBinary(4)'), arrow_cast(X'0000001D', 'FixedSizeBinary(4)'), arrow_cast(X'0000001E', 'FixedSizeBinary(4)'),
+      arrow_cast(X'0000001F', 'FixedSizeBinary(4)'), arrow_cast(X'00000020', 'FixedSizeBinary(4)'), arrow_cast(X'00000021', 'FixedSizeBinary(4)'), arrow_cast(X'00000022', 'FixedSizeBinary(4)'),
+      arrow_cast(X'00000023', 'FixedSizeBinary(4)'), arrow_cast(X'00000024', 'FixedSizeBinary(4)'), arrow_cast(X'00000025', 'FixedSizeBinary(4)'), arrow_cast(X'00000026', 'FixedSizeBinary(4)'),
+      arrow_cast(X'00000027', 'FixedSizeBinary(4)'), arrow_cast(X'00000028', 'FixedSizeBinary(4)'), arrow_cast(X'00000029', 'FixedSizeBinary(4)'), arrow_cast(X'0000002A', 'FixedSizeBinary(4)'),
+      arrow_cast(X'0000002B', 'FixedSizeBinary(4)'), arrow_cast(X'0000002C', 'FixedSizeBinary(4)'), arrow_cast(X'0000002D', 'FixedSizeBinary(4)'), arrow_cast(X'0000002E', 'FixedSizeBinary(4)'),
+      arrow_cast(X'0000002F', 'FixedSizeBinary(4)')),
+  fsb8 NOT IN (arrow_cast(X'000000000000000B', 'FixedSizeBinary(8)'), arrow_cast(X'0000000000000010', 'FixedSizeBinary(8)'), arrow_cast(X'0000000000000011', 'FixedSizeBinary(8)'), arrow_cast(X'0000000000000012', 'FixedSizeBinary(8)'),
+      arrow_cast(X'0000000000000013', 'FixedSizeBinary(8)'), arrow_cast(X'0000000000000014', 'FixedSizeBinary(8)'), arrow_cast(X'0000000000000015', 'FixedSizeBinary(8)'), arrow_cast(X'0000000000000016', 'FixedSizeBinary(8)'),
+      arrow_cast(X'0000000000000017', 'FixedSizeBinary(8)'), arrow_cast(X'0000000000000018', 'FixedSizeBinary(8)'), arrow_cast(X'0000000000000019', 'FixedSizeBinary(8)'), arrow_cast(X'000000000000001A', 'FixedSizeBinary(8)'),
+      arrow_cast(X'000000000000001B', 'FixedSizeBinary(8)'), arrow_cast(X'000000000000001C', 'FixedSizeBinary(8)'), arrow_cast(X'000000000000001D', 'FixedSizeBinary(8)'), arrow_cast(X'000000000000001E', 'FixedSizeBinary(8)'),
+      arrow_cast(X'000000000000001F', 'FixedSizeBinary(8)')),
+  fsb16 NOT IN (arrow_cast(X'0000000000000000000000000000000B', 'FixedSizeBinary(16)'), arrow_cast(X'00000000000000000000000000000010', 'FixedSizeBinary(16)'), arrow_cast(X'00000000000000000000000000000011', 'FixedSizeBinary(16)'), arrow_cast(X'00000000000000000000000000000012', 'FixedSizeBinary(16)'),
+      arrow_cast(X'00000000000000000000000000000013', 'FixedSizeBinary(16)'))
+FROM in_list_fsb
+ORDER BY label
+----
+match false false false false false
+no_match true true true true true
+nulls NULL NULL NULL NULL NULL
+
+# A NULL in the list: matches return true, non-matches return NULL
+query TBBB
+SELECT
+  label,
+  fsb1 IN (NULL, arrow_cast(X'03', 'FixedSizeBinary(1)'), arrow_cast(X'04', 'FixedSizeBinary(1)'), arrow_cast(X'05', 'FixedSizeBinary(1)'),
+      arrow_cast(X'06', 'FixedSizeBinary(1)'), arrow_cast(X'09', 'FixedSizeBinary(1)'), arrow_cast(X'0A', 'FixedSizeBinary(1)'), arrow_cast(X'0B', 'FixedSizeBinary(1)')),
+  fsb3 IN (NULL, arrow_cast(X'000003', 'FixedSizeBinary(3)'), arrow_cast(X'000004', 'FixedSizeBinary(3)'), arrow_cast(X'000005', 'FixedSizeBinary(3)'),
+      arrow_cast(X'000006', 'FixedSizeBinary(3)'), arrow_cast(X'000009', 'FixedSizeBinary(3)'), arrow_cast(X'00000A', 'FixedSizeBinary(3)'), arrow_cast(X'00000B', 'FixedSizeBinary(3)')),
+  fsb16 IN (NULL, arrow_cast(X'00000000000000000000000000000003', 'FixedSizeBinary(16)'), arrow_cast(X'00000000000000000000000000000004', 'FixedSizeBinary(16)'), arrow_cast(X'00000000000000000000000000000005', 'FixedSizeBinary(16)'),
+      arrow_cast(X'00000000000000000000000000000006', 'FixedSizeBinary(16)'), arrow_cast(X'00000000000000000000000000000009', 'FixedSizeBinary(16)'), arrow_cast(X'0000000000000000000000000000000A', 'FixedSizeBinary(16)'), arrow_cast(X'0000000000000000000000000000000B', 'FixedSizeBinary(16)'))
+FROM in_list_fsb
+ORDER BY label
+----
+match true true true
+no_match NULL NULL NULL
+nulls NULL NULL NULL
+
+# Dictionary encoded input column
+query TBB
+SELECT
+  label,
+  arrow_cast(fsb16, 'Dictionary(Int32, FixedSizeBinary(16))') IN
+    (arrow_cast(X'00000000000000000000000000000003', 'FixedSizeBinary(16)'), arrow_cast(X'00000000000000000000000000000004', 'FixedSizeBinary(16)'), arrow_cast(X'00000000000000000000000000000005', 'FixedSizeBinary(16)'), arrow_cast(X'0000000000000000000000000000000B', 'FixedSizeBinary(16)')),
+  arrow_cast(fsb16, 'Dictionary(Int32, FixedSizeBinary(16))') NOT IN
+    (arrow_cast(X'00000000000000000000000000000003', 'FixedSizeBinary(16)'), arrow_cast(X'00000000000000000000000000000004', 'FixedSizeBinary(16)'), arrow_cast(X'00000000000000000000000000000005', 'FixedSizeBinary(16)'), arrow_cast(X'0000000000000000000000000000000B', 'FixedSizeBinary(16)'))
+FROM in_list_fsb
+ORDER BY label
+----
+match true false
+no_match false true
+nulls NULL NULL
+
+# Cleanup
+statement ok
+DROP TABLE in_list_fsb

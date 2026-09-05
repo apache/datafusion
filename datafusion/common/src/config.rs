@@ -1368,13 +1368,17 @@ config_namespace! {
         /// parquet reader setting. 0 means no caching.
         pub max_predicate_cache_size: Option<usize>, default = None
 
-        /// Maximum number of values in an `IN (...)` list for which pruning will
-        /// occur. Longer lists will not be used to prune files, row groups, or
-        /// data pages.
+        /// Maximum number of input values in an `IN (...)` list eligible for
+        /// min/max pruning. Lists above this cap, or a cap of 0, skip this
+        /// rewrite; other predicates and Bloom-filter pruning remain available.
         ///
-        /// Higher values help in cases such as filtering on a list of
-        /// ~25-100 identifiers, but also make the predicate more expensive to
-        /// evaluate. Set to 0 to disable `IN (...)` list pruning entirely.
+        /// Within the cap, nonempty lists of at most 20 values use the existing
+        /// per-value rewrite. Larger literal string lists on a string column use
+        /// a compact representation, for both `IN` and `NOT IN`, including lists
+        /// with NULL members. `NOT IN` with NULL and all-NULL `IN` lists cannot
+        /// match any rows. Other lists retain the existing per-value rewrite, so
+        /// raising the cap can make those predicates expensive to build and
+        /// evaluate.
         ///
         /// Defaults to 20.
         pub max_in_list_size: usize, default = 20
@@ -1758,11 +1762,10 @@ config_namespace! {
         /// query is used.
         pub join_reordering: bool, default = true
 
-        /// When set to true, the physical plan optimizer uses the pluggable
-        /// `StatisticsRegistry` for statistics propagation across operators.
-        /// This enables more accurate cardinality estimates compared to each
-        /// operator's built-in `partition_statistics`.
-        pub use_statistics_registry: bool, default = false
+        /// (Deprecated) Ignored: the physical plan optimizer always consults the
+        /// session's pluggable `StatisticsRegistry` (register providers on the
+        /// `SessionState`; with none it is a no-op).
+        pub use_statistics_registry: bool, warn = "`use_statistics_registry` is deprecated and ignored; the StatisticsRegistry is always consulted, register providers on the SessionState", default = false
 
         /// When set to true, the physical plan optimizer will prefer HashJoin over SortMergeJoin.
         /// HashJoin can work more efficiently than SortMergeJoin but consumes more memory
@@ -3417,7 +3420,7 @@ impl ConfigField for ConfigFileEncryptionProperties {
         if key.contains("::") {
             // Handle any column specific properties
             return self.column_encryption_properties.set(key, value);
-        };
+        }
 
         let (key, rem) = key.split_once('.').unwrap_or((key, ""));
         match key {
@@ -3597,7 +3600,7 @@ impl ConfigField for ConfigFileDecryptionProperties {
         if key.contains("::") {
             // Handle any column specific properties
             return self.column_decryption_properties.set(key, value);
-        };
+        }
 
         let (key, rem) = key.split_once('.').unwrap_or((key, ""));
         match key {

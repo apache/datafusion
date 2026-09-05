@@ -20,6 +20,8 @@
 mod builder;
 mod cursor;
 mod merge;
+#[cfg(test)]
+mod merge_trace;
 mod multi_level_merge;
 pub mod partial_sort;
 pub mod partitioned_topk;

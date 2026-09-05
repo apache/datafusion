@@ -21,11 +21,13 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
 
+use super::aggregate_hash_table::accumulator_phases;
 use super::order::GroupOrdering;
 use super::skip_partial::SkipAggregationProbe;
 use super::{AggregateExec, format_human_display};
 use crate::aggregates::group_values::{
-    AggregateArgumentMetrics, GroupByMetrics, GroupValues, new_group_values,
+    AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
+    GroupByMetrics, GroupValues, new_group_values,
 };
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
@@ -378,6 +380,9 @@ pub(crate) struct GroupedHashAggregateStream {
     /// Per-aggregate timing metrics for evaluating aggregate arguments.
     aggregate_argument_metrics: AggregateArgumentMetrics,
 
+    /// Per-aggregate timing metrics for accumulator phases.
+    aggregate_accumulator_metrics: AggregateAccumulatorMetrics,
+
     /// Reduction factor metric, calculated as `output_rows/input_rows` (only for partial aggregation)
     reduction_factor: Option<metrics::RatioMetrics>,
 }
@@ -398,12 +403,21 @@ impl GroupedHashAggregateStream {
         let input = agg.input.execute(partition, Arc::clone(context))?;
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let group_by_metrics = GroupByMetrics::new(&agg.metrics, partition);
+        let aggregate_labels = agg
+            .aggr_expr
+            .iter()
+            .map(|agg_expr| aggregate_metric_label(agg_expr))
+            .collect::<Vec<_>>();
         let aggregate_argument_metrics = AggregateArgumentMetrics::new(
             &agg.metrics,
             partition,
-            agg.aggr_expr
-                .iter()
-                .map(|agg_expr| aggregate_metric_label(agg_expr)),
+            aggregate_labels.iter().cloned(),
+        );
+        let aggregate_accumulator_metrics = AggregateAccumulatorMetrics::new(
+            &agg.metrics,
+            partition,
+            aggregate_labels,
+            accumulator_phases(&agg.mode),
         );
 
         let timer = baseline_metrics.elapsed_compute().timer();
@@ -615,6 +629,7 @@ impl GroupedHashAggregateStream {
             baseline_metrics,
             group_by_metrics,
             aggregate_argument_metrics,
+            aggregate_accumulator_metrics,
             batch_size,
             group_ordering,
             input_done: false,
@@ -699,7 +714,7 @@ impl Stream for GroupedHashAggregateStream {
                                 if let Some(batch) = self.emit(to_emit, false)? {
                                     self.exec_state =
                                         ExecutionState::ProducingOutput(batch);
-                                };
+                                }
                                 // make sure the exec_state just set is not overwritten below
                                 break 'reading_input;
                             }
@@ -929,7 +944,7 @@ impl GroupedHashAggregateStream {
                 .zip(input_values.iter())
                 .zip(filter_values.iter());
 
-            for ((acc, values), opt_filter) in t {
+            for (idx, ((acc, values), opt_filter)) in t.enumerate() {
                 let opt_filter = opt_filter.as_ref().map(|filter| filter.as_boolean());
 
                 // Call the appropriate method on each aggregator with
@@ -937,11 +952,17 @@ impl GroupedHashAggregateStream {
                 if self.mode.input_mode() == AggregateInputMode::Raw
                     && !self.spill_state.is_stream_merging
                 {
-                    acc.update_batch(
-                        values,
-                        group_indices,
-                        opt_filter,
-                        total_num_groups,
+                    self.aggregate_accumulator_metrics.time(
+                        idx,
+                        AccumulatorPhase::Update,
+                        || {
+                            acc.update_batch(
+                                values,
+                                group_indices,
+                                opt_filter,
+                                total_num_groups,
+                            )
+                        },
                     )?;
                 } else {
                     assert_or_internal_err!(
@@ -951,12 +972,17 @@ impl GroupedHashAggregateStream {
 
                     // if aggregation is over intermediate states,
                     // use merge
-                    acc.merge_batch(values, group_indices, total_num_groups)?;
+                    self.aggregate_accumulator_metrics.time(
+                        idx,
+                        AccumulatorPhase::Merge,
+                        || acc.merge_batch(values, group_indices, total_num_groups),
+                    )?;
                 }
-                self.group_by_metrics
-                    .aggregation_time
-                    .add_elapsed(agg_start_time);
             }
+            // Recorded once per grouping set, after all its accumulators ran
+            self.group_by_metrics
+                .aggregation_time
+                .add_elapsed(agg_start_time);
         }
 
         Ok(())
@@ -1058,13 +1084,21 @@ impl GroupedHashAggregateStream {
         }
 
         // Next output each aggregate value
-        for acc in self.accumulators.iter_mut() {
+        for (idx, acc) in self.accumulators.iter_mut().enumerate() {
             if self.mode.output_mode() == AggregateOutputMode::Final && !spilling {
-                output.push(acc.evaluate(emit_to)?)
+                output.push(self.aggregate_accumulator_metrics.time(
+                    idx,
+                    AccumulatorPhase::Evaluate,
+                    || acc.evaluate(emit_to),
+                )?)
             } else {
                 // Output partial state: either because we're in a non-final mode,
                 // or because we're spilling and will merge/re-evaluate later.
-                output.extend(acc.state(emit_to)?)
+                output.extend(self.aggregate_accumulator_metrics.time(
+                    idx,
+                    AccumulatorPhase::State,
+                    || acc.state(emit_to),
+                )?)
             }
         }
         drop(timer);
@@ -1178,8 +1212,17 @@ impl GroupedHashAggregateStream {
                 })
                 .collect::<Result<Vec<_>>>()?;
             let false_filter = BooleanArray::from(vec![false]);
-            for (acc, args) in self.accumulators.iter_mut().zip(null_args.iter()) {
-                acc.update_batch(args, &[0], Some(&false_filter), total_groups)?;
+            for (idx, (acc, args)) in self
+                .accumulators
+                .iter_mut()
+                .zip(null_args.iter())
+                .enumerate()
+            {
+                self.aggregate_accumulator_metrics.time(
+                    idx,
+                    AccumulatorPhase::Update,
+                    || acc.update_batch(args, &[0], Some(&false_filter), total_groups),
+                )?;
             }
         }
 
@@ -1360,7 +1403,7 @@ impl GroupedHashAggregateStream {
             // currently spilling is not supported for Partial aggregation
             assert!(self.spill_state.spills.is_empty());
             probe.update_state(input_rows, self.group_values.len());
-        };
+        }
     }
 
     /// In case the probe indicates that aggregation may be
@@ -1375,7 +1418,7 @@ impl GroupedHashAggregateStream {
             && let Some(batch) = self.emit(EmitTo::All, false)?
         {
             return Ok(Some(ExecutionState::ProducingOutput(batch)));
-        };
+        }
 
         Ok(None)
     }
@@ -1419,9 +1462,13 @@ impl GroupedHashAggregateStream {
             .zip(input_values.iter())
             .zip(filter_values.iter());
 
-        for ((acc, values), opt_filter) in iter {
+        for (idx, ((acc, values), opt_filter)) in iter.enumerate() {
             let opt_filter = opt_filter.as_ref().map(|filter| filter.as_boolean());
-            output.extend(acc.convert_to_state(values, opt_filter)?);
+            output.extend(self.aggregate_accumulator_metrics.time(
+                idx,
+                AccumulatorPhase::ConvertToState,
+                || acc.convert_to_state(values, opt_filter),
+            )?);
         }
 
         let states_batch = RecordBatch::try_new(self.schema(), output)?;

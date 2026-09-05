@@ -136,6 +136,11 @@ impl InputDistributionRequirements {
         self.children.iter().map(|child| &child.distribution)
     }
 
+    /// Whether these requirements include a co-partitioning relationship between children.
+    pub fn is_co_partitioned(&self) -> bool {
+        self.co_partitioned.is_some()
+    }
+
     /// Return the distribution requirement for a child.
     pub fn child_distribution(&self, child_idx: usize) -> Option<&Distribution> {
         self.children

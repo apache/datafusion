@@ -1202,7 +1202,7 @@ impl Unparser<'_> {
     fn handle_timestamp<T: ArrowTemporalType>(
         &self,
         v: &ScalarValue,
-        tz: &Option<Arc<str>>,
+        tz: Option<&Arc<str>>,
     ) -> Result<ast::Expr>
     where
         i64: From<T::Native>,
@@ -1498,25 +1498,25 @@ impl Unparser<'_> {
             }
             ScalarValue::Time64Nanosecond(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::TimestampSecond(Some(_ts), tz) => {
-                self.handle_timestamp::<TimestampSecondType>(v, tz)
+                self.handle_timestamp::<TimestampSecondType>(v, tz.as_ref())
             }
             ScalarValue::TimestampSecond(None, _) => {
                 Ok(ast::Expr::value(ast::Value::Null))
             }
             ScalarValue::TimestampMillisecond(Some(_ts), tz) => {
-                self.handle_timestamp::<TimestampMillisecondType>(v, tz)
+                self.handle_timestamp::<TimestampMillisecondType>(v, tz.as_ref())
             }
             ScalarValue::TimestampMillisecond(None, _) => {
                 Ok(ast::Expr::value(ast::Value::Null))
             }
             ScalarValue::TimestampMicrosecond(Some(_ts), tz) => {
-                self.handle_timestamp::<TimestampMicrosecondType>(v, tz)
+                self.handle_timestamp::<TimestampMicrosecondType>(v, tz.as_ref())
             }
             ScalarValue::TimestampMicrosecond(None, _) => {
                 Ok(ast::Expr::value(ast::Value::Null))
             }
             ScalarValue::TimestampNanosecond(Some(_ts), tz) => {
-                self.handle_timestamp::<TimestampNanosecondType>(v, tz)
+                self.handle_timestamp::<TimestampNanosecondType>(v, tz.as_ref())
             }
             ScalarValue::TimestampNanosecond(None, _) => {
                 Ok(ast::Expr::value(ast::Value::Null))
@@ -2932,10 +2932,16 @@ mod tests {
                 "EXTRACT(MONTH FROM x)",
             ),
             (
+                DateFieldExtractStyle::Extract,
+                "MONS",
+                "EXTRACT(MONTH FROM x)",
+            ),
+            (
                 DateFieldExtractStyle::Strftime,
                 "MONTH",
                 "strftime('%m', x)",
             ),
+            (DateFieldExtractStyle::Strftime, "YRS", "strftime('%Y', x)"),
             (
                 DateFieldExtractStyle::DatePart,
                 "DAY",

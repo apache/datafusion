@@ -20,6 +20,7 @@
 use crate::Result;
 use std::env;
 use std::ffi::OsStr;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -68,10 +69,10 @@ pub(crate) fn help() -> String {
     );
     for step in CI_STEPS {
         if let Some(example) = step.help_examples.first() {
-            help.push_str(&format!("  {CI_COMMAND} {example}\n"));
+            writeln!(help, "  {CI_COMMAND} {example}").ok();
         }
     }
-    help.push_str(&format!("  {CI_COMMAND} test workspace --explain\n"));
+    writeln!(help, "  {CI_COMMAND} test workspace --explain").ok();
 
     let command_width = CI_STEPS
         .iter()
@@ -80,15 +81,17 @@ pub(crate) fn help() -> String {
         .unwrap_or_default();
     help.push_str("\nAvailable steps:\n");
     for step in CI_STEPS {
-        help.push_str(&format!(
-            "  {:command_width$}  {}\n",
+        writeln!(
+            help,
+            "  {:command_width$}  {}",
             step.command, step.help_description
-        ));
+        )
+        .ok();
     }
 
-    help.push_str(&format!(
+    write!(help,
         "\nShortcut:\n  # `{CI_SHORTCUT}` is short for `{CI_COMMAND}`.\n  {CI_SHORTCUT} check workspace\n\nFor more details:\n  {CI_COMMAND} check --help\n"
-    ));
+    ).ok();
     help
 }
 
@@ -98,12 +101,12 @@ fn step_help(step: &StepInfo) -> String {
         step.command, step.help_description, step.help_usage,
     );
     for example in step.help_examples {
-        help.push_str(&format!("  {CI_COMMAND} {example}\n"));
+        writeln!(help, "  {CI_COMMAND} {example}").ok();
     }
     if let Some(example) = step.help_examples.first() {
-        help.push_str(&format!(
+        write!(help,
             "\nUse '--explain' to show the full command:\n  {CI_COMMAND} {example} --explain\n"
-        ));
+        ).ok();
     }
     help
 }

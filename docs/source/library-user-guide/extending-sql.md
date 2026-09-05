@@ -264,14 +264,37 @@ enables you to implement SQL constructs like:
 When implementing [`RelationPlanner`], you receive a [`RelationPlannerContext`] that
 provides utilities for planning:
 
-| Method                      | Purpose                                         |
-| --------------------------- | ----------------------------------------------- |
-| `plan(relation)`            | Recursively plan a nested relation              |
-| `sql_to_expr(expr, schema)` | Convert SQL expression to DataFusion Expr       |
-| `context_provider()`        | Access session configuration, tables, functions |
+| Method                      | Purpose                                          |
+| --------------------------- | ------------------------------------------------ |
+| `plan(relation)`            | Recursively plan a nested relation               |
+| `get_cte(name)`             | Look up a CTE visible in the current query scope |
+| `sql_to_expr(expr, schema)` | Convert SQL expression to DataFusion Expr        |
+| `context_provider()`        | Access session configuration, tables, functions  |
 
 See the [RelationPlanner API documentation] for additional methods like
 `normalize_ident()` and `object_name_to_table_reference()`.
+
+Relation planners are called before DataFusion's built-in CTE and catalog lookup.
+If your planner recognizes ordinary relations by name, check `get_cte()` after
+determining the relation is an ordinary name that your planner would otherwise
+handle. Deliberately reserved names and custom syntax can keep their existing
+precedence. Return `RelationPlanning::Original` when a CTE is visible so the
+next planner can handle the relation. When every ordinary name-based planner in
+the chain performs this check, planning reaches DataFusion's built-in CTE
+resolution. Normalize the parsed name first so the lookup follows DataFusion's
+existing name matching. Only do this for a table without function arguments: a
+CTE named `numbers` shadows `numbers`, but it does not shadow a call such as
+`numbers(10)`.
+
+```rust
+// Run this after recognizing `relation` as an ordinary name handled here.
+if let TableFactor::Table { name, args: None, .. } = &relation {
+    let table_ref = ctx.object_name_to_table_reference(name.clone())?;
+    if ctx.get_cte(&table_ref).is_some() {
+        return Ok(RelationPlanning::Original(Box::new(relation)));
+    }
+}
+```
 
 #### Implementation Strategies
 

@@ -32,7 +32,7 @@ use crate::arrow_wrappers::WrappedArray;
 use crate::expr::interval::FFI_Interval;
 
 /// A stable struct for sharing [`Distribution`] across FFI boundaries.
-/// See ['Distribution'] for the meaning of each variant.
+/// See [`Distribution`] for the meaning of each variant.
 #[repr(C)]
 #[derive(Debug)]
 #[expect(clippy::large_enum_variant)]

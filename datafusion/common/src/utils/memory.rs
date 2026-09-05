@@ -19,9 +19,12 @@
 
 use crate::error::_exec_datafusion_err;
 use crate::{HashSet, Result};
-use arrow::array::types::{ByteArrayType, ByteViewType, RunEndIndexType};
+use arrow::array::types::{
+    ByteArrayType, ByteViewType, Int8Type, Int16Type, Int32Type, Int64Type,
+    RunEndIndexType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+};
 use arrow::array::{
-    Array, AsArray, GenericByteArray, GenericByteViewArray, GenericListArray,
+    Array, ArrayRef, AsArray, GenericByteArray, GenericByteViewArray, GenericListArray,
     GenericListViewArray, RunArray,
 };
 use arrow::buffer::Buffer;
@@ -30,6 +33,7 @@ use arrow::downcast_primitive_array;
 use arrow::record_batch::RecordBatch;
 use std::mem::size_of;
 use std::num::NonZero;
+use std::sync::Arc;
 
 /// Maximum number of distinct buffer IDs retained inline before promotion to
 /// a [`HashSet`]. Sixteen keeps small buffer sets allocation-free while
@@ -131,19 +135,20 @@ pub fn estimate_memory_size<T>(num_elements: usize, fixed_size: usize) -> Result
 /// For a `RecordBatch` with two columns: `col1` and `col2`, two columns are pointing
 /// to a sub-region of the same buffer.
 ///
+/// ```text
 /// {xxxxxxxxxxxxxxxxxxx} <--- buffer
 ///       ^    ^  ^    ^
 ///       |    |  |    |
 /// col1->{    }  |    |
 /// col2--------->{    }
+/// ```
 ///
 /// In the above case, `get_record_batch_memory_size` will return the size of
 /// the buffer, instead of the sum of `col1` and `col2`'s actual memory size.
 ///
-/// Note: Current `RecordBatch`.get_array_memory_size()` will double count the
-/// buffer memory size if multiple arrays within the batch are sharing the same
-/// `Buffer`. This method provides temporary fix until the issue is resolved:
-/// <https://github.com/apache/arrow-rs/issues/6439>
+/// Note: [`RecordBatch::get_array_memory_size`] double counts the buffer
+/// memory size if multiple arrays within the batch are sharing the same
+/// `Buffer`, while this function counts each `Buffer` exactly once.
 pub fn get_record_batch_memory_size(batch: &RecordBatch) -> usize {
     RecordBatchMemoryCounter::new().count_batch(batch)
 }
@@ -165,7 +170,9 @@ pub struct RecordBatchMemoryCounter {
     /// Start addresses of `Buffer`s that have already been counted (instead of
     /// actual used data region's pointer represented by current `Array`)
     counted_buffers: BufferIdSet,
-    /// Total memory of all unique buffers counted so far
+    /// Array objects already counted by [`Self::count_batch_with_array_overhead`]
+    counted_arrays: HashSet<usize>,
+    /// Total memory of all counted allocations
     memory_usage: usize,
 }
 
@@ -186,7 +193,28 @@ impl RecordBatchMemoryCounter {
         self.memory_usage - previous_memory_usage
     }
 
-    /// Total memory of the unique buffers of all batches counted so far.
+    /// Counts unique buffers and Array objects retained by `batch`.
+    ///
+    /// This is useful for accounting a sequence of batches at an operator
+    /// boundary. It counts buffers once, including buffers shared by multiple
+    /// batches. Array-object overhead is deduplicated recursively when a shared
+    /// child has the same `ArrayRef` identity; Arrow constructors that rebuild
+    /// child array objects may conservatively count their object overhead again.
+    pub fn count_batch_with_array_overhead(&mut self, batch: &RecordBatch) -> usize {
+        let mut total_size = self.count_batch(batch);
+        let mut array_overhead = 0;
+
+        for array in batch.columns() {
+            array_overhead +=
+                count_unique_array_object_memory_size(array, &mut self.counted_arrays);
+        }
+
+        total_size += array_overhead;
+        self.memory_usage += array_overhead;
+        total_size
+    }
+
+    /// Total memory of all counted allocations.
     pub fn memory_usage(&self) -> usize {
         self.memory_usage
     }
@@ -273,21 +301,9 @@ impl RecordBatchMemoryCounter {
                 self.count_array_memory_size(array.entries());
             }
             DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
-                DataType::Int16 => {
-                    self.count_run_array_memory_size::<arrow::datatypes::Int16Type>(
-                        array,
-                    );
-                }
-                DataType::Int32 => {
-                    self.count_run_array_memory_size::<arrow::datatypes::Int32Type>(
-                        array,
-                    );
-                }
-                DataType::Int64 => {
-                    self.count_run_array_memory_size::<arrow::datatypes::Int64Type>(
-                        array,
-                    );
-                }
+                DataType::Int16 => self.count_run_array_memory_size::<Int16Type>(array),
+                DataType::Int32 => self.count_run_array_memory_size::<Int32Type>(array),
+                DataType::Int64 => self.count_run_array_memory_size::<Int64Type>(array),
                 // Arrow only permits Int16, Int32, and Int64 run-end indexes. A
                 // custom Array implementation may still expose malformed data;
                 // retain correct accounting for it without panicking.
@@ -357,6 +373,86 @@ impl RecordBatchMemoryCounter {
         for child in array_data.child_data() {
             self.count_array_data_memory_size(child);
         }
+    }
+}
+
+/// Counts the unique Array object memory retained by `array` and its children.
+fn count_unique_array_object_memory_size(
+    array: &ArrayRef,
+    counted_arrays: &mut HashSet<usize>,
+) -> usize {
+    let array_ptr = Arc::as_ptr(array).cast::<()>() as usize;
+    if !counted_arrays.insert(array_ptr) {
+        return 0;
+    }
+
+    let children = array_children(array);
+    let children_overhead: usize = children
+        .iter()
+        .map(|child| child.get_array_memory_size() - child.get_buffer_memory_size())
+        .sum();
+    let own_overhead = array.get_array_memory_size()
+        - array.get_buffer_memory_size()
+        - children_overhead;
+
+    own_overhead
+        + children
+            .into_iter()
+            .map(|child| count_unique_array_object_memory_size(child, counted_arrays))
+            .sum::<usize>()
+}
+
+/// Returns the `ArrayRef` children whose object allocations may be shared.
+fn array_children(array: &ArrayRef) -> Vec<&ArrayRef> {
+    match array.data_type() {
+        DataType::Struct(_) => array.as_struct().columns().iter().collect(),
+        DataType::List(_) => vec![array.as_list::<i32>().values()],
+        DataType::LargeList(_) => vec![array.as_list::<i64>().values()],
+        DataType::ListView(_) => vec![array.as_list_view::<i32>().values()],
+        DataType::LargeListView(_) => vec![array.as_list_view::<i64>().values()],
+        DataType::FixedSizeList(_, _) => vec![array.as_fixed_size_list().values()],
+        DataType::Map(_, _) => {
+            let map = array.as_map();
+            vec![map.keys(), map.values()]
+        }
+        DataType::Union(_, _) => {
+            let union = array.as_union();
+            union
+                .fields()
+                .iter()
+                .map(|(type_id, _)| union.child(type_id))
+                .collect()
+        }
+        DataType::Dictionary(key_type, _) => match key_type.as_ref() {
+            DataType::Int8 => vec![array.as_dictionary::<Int8Type>().values()],
+            DataType::Int16 => vec![array.as_dictionary::<Int16Type>().values()],
+            DataType::Int32 => vec![array.as_dictionary::<Int32Type>().values()],
+            DataType::Int64 => vec![array.as_dictionary::<Int64Type>().values()],
+            DataType::UInt8 => vec![array.as_dictionary::<UInt8Type>().values()],
+            DataType::UInt16 => vec![array.as_dictionary::<UInt16Type>().values()],
+            DataType::UInt32 => vec![array.as_dictionary::<UInt32Type>().values()],
+            DataType::UInt64 => vec![array.as_dictionary::<UInt64Type>().values()],
+            _ => unreachable!("invalid dictionary key type: {key_type}"),
+        },
+        DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
+            DataType::Int16 => array
+                .as_any()
+                .downcast_ref::<RunArray<Int16Type>>()
+                .map(|array| vec![array.values()])
+                .unwrap_or_default(),
+            DataType::Int32 => array
+                .as_any()
+                .downcast_ref::<RunArray<Int32Type>>()
+                .map(|array| vec![array.values()])
+                .unwrap_or_default(),
+            DataType::Int64 => array
+                .as_any()
+                .downcast_ref::<RunArray<Int64Type>>()
+                .map(|array| vec![array.values()])
+                .unwrap_or_default(),
+            _ => vec![],
+        },
+        _ => vec![],
     }
 }
 
@@ -441,12 +537,14 @@ mod tests {
 mod record_batch_tests {
     use super::*;
     use arrow::array::{
-        ArrayData, ArrayRef, BinaryViewArray, Float64Array, Int16Array, Int32Array,
-        Int64Array, LargeListViewArray, ListArray, ListViewArray, RunArray, StringArray,
-        StringViewArray, new_null_array,
+        ArrayData, ArrayRef, BinaryViewArray, DictionaryArray, Float64Array, Int16Array,
+        Int32Array, Int64Array, LargeListViewArray, ListArray, ListViewArray, MapArray,
+        RunArray, StringArray, StringViewArray, StructArray, UnionArray, new_null_array,
     };
+    use arrow::buffer::OffsetBuffer;
     use arrow::datatypes::{
-        DataType, Field, Int16Type, Int32Type, Int64Type, Schema, UnionFields, UnionMode,
+        DataType, Field, Fields, Int16Type, Int32Type, Int64Type, Schema, UnionFields,
+        UnionMode,
     };
     use std::sync::Arc;
 
@@ -566,6 +664,249 @@ mod record_batch_tests {
         let size_sliced = get_record_batch_memory_size(&batch_sliced);
 
         assert_eq!(size_origin, size_sliced);
+    }
+
+    #[test]
+    fn test_record_batch_memory_counter_array_overhead_shared_across_batches() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("ints", DataType::Int32, false),
+            Field::new("floats", DataType::Float64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6])),
+                Arc::new(Float64Array::from(vec![1., 2., 3., 4., 5., 6.])),
+            ],
+        )
+        .unwrap();
+
+        let mut counter = RecordBatchMemoryCounter::new();
+        assert_eq!(
+            counter.count_batch_with_array_overhead(&batch),
+            batch.get_array_memory_size()
+        );
+        assert_eq!(counter.count_batch_with_array_overhead(&batch), 0);
+        assert_eq!(counter.memory_usage(), batch.get_array_memory_size());
+    }
+
+    #[test]
+    fn test_record_batch_memory_counter_deduplicates_shared_nested_array_overhead() {
+        let shared_child: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let fields =
+            Fields::from(vec![Arc::new(Field::new("value", DataType::Int32, false))]);
+        let first = Arc::new(StructArray::new(
+            fields.clone(),
+            vec![Arc::clone(&shared_child)],
+            None,
+        )) as _;
+        let second = Arc::new(StructArray::new(
+            fields,
+            vec![Arc::clone(&shared_child)],
+            None,
+        )) as _;
+        let batch =
+            RecordBatch::try_from_iter(vec![("first", first), ("second", second)])
+                .unwrap();
+
+        let mut counter = RecordBatchMemoryCounter::new();
+        counter.count_batch_with_array_overhead(&batch);
+
+        assert_eq!(
+            counter.memory_usage(),
+            batch.get_array_memory_size() - shared_child.get_array_memory_size()
+        );
+    }
+
+    fn assert_recursive_shared_child_memory(
+        name: &str,
+        first: ArrayRef,
+        second: ArrayRef,
+        shared_memory: usize,
+    ) {
+        let first_memory = first.get_array_memory_size();
+        let second_memory = second.get_array_memory_size();
+        let first_batch = RecordBatch::try_from_iter(vec![(name, first)]).unwrap();
+        let second_batch = RecordBatch::try_from_iter(vec![(name, second)]).unwrap();
+        let mut counter = RecordBatchMemoryCounter::new();
+
+        assert_eq!(
+            counter.count_batch_with_array_overhead(&first_batch),
+            first_memory,
+            "{name}: first batch"
+        );
+        assert_eq!(
+            counter.count_batch_with_array_overhead(&second_batch),
+            second_memory - shared_memory,
+            "{name}: shared child"
+        );
+    }
+
+    #[test]
+    fn test_record_batch_memory_counter_deduplicates_shared_list_child() {
+        let shared_child: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let list_field = Arc::new(Field::new_list_field(DataType::Int32, false));
+
+        let first = Arc::new(ListArray::new(
+            Arc::clone(&list_field),
+            OffsetBuffer::new(vec![0, 3].into()),
+            Arc::clone(&shared_child),
+            None,
+        ));
+        let second = Arc::new(ListArray::new(
+            list_field,
+            OffsetBuffer::new(vec![0, 3].into()),
+            Arc::clone(&shared_child),
+            None,
+        ));
+
+        assert_recursive_shared_child_memory(
+            "list",
+            first,
+            second,
+            shared_child.get_array_memory_size(),
+        );
+    }
+
+    fn map_with_shared_children(
+        fields: &Fields,
+        shared_key: &ArrayRef,
+        shared_value: &ArrayRef,
+    ) -> ArrayRef {
+        Arc::new(
+            MapArray::try_new(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(fields.clone()),
+                    false,
+                )),
+                OffsetBuffer::new(vec![0, 3].into()),
+                StructArray::new(
+                    fields.clone(),
+                    vec![Arc::clone(shared_key), Arc::clone(shared_value)],
+                    None,
+                ),
+                None,
+                false,
+            )
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn test_record_batch_memory_counter_deduplicates_shared_map_children() {
+        let shared_key: ArrayRef = Arc::new(Int32Array::from(vec![4, 5, 6]));
+        let shared_value: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let fields = Fields::from(vec![
+            Arc::new(Field::new("key", DataType::Int32, false)),
+            Arc::new(Field::new("value", DataType::Int32, false)),
+        ]);
+
+        let first = map_with_shared_children(&fields, &shared_key, &shared_value);
+        let second = map_with_shared_children(&fields, &shared_key, &shared_value);
+
+        assert_recursive_shared_child_memory(
+            "map",
+            first,
+            second,
+            shared_key.get_array_memory_size() + shared_value.get_array_memory_size(),
+        );
+    }
+
+    #[test]
+    fn test_record_batch_memory_counter_deduplicates_union_slice_child_overhead() {
+        let shared_child: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let fields: UnionFields =
+            std::iter::once((0, Arc::new(Field::new("value", DataType::Int32, false))))
+                .collect();
+        let first = Arc::new(
+            UnionArray::try_new(
+                fields,
+                vec![0, 0, 0].into(),
+                Some(vec![0, 1, 2].into()),
+                vec![Arc::clone(&shared_child)],
+            )
+            .unwrap(),
+        ) as ArrayRef;
+        let second = Arc::new(first.as_union().slice(1, 2)) as ArrayRef;
+        let first_batch =
+            RecordBatch::try_from_iter(vec![("union", Arc::clone(&first))]).unwrap();
+        let second_batch =
+            RecordBatch::try_from_iter(vec![("union", Arc::clone(&second))]).unwrap();
+        let child_overhead =
+            shared_child.get_array_memory_size() - shared_child.get_buffer_memory_size();
+        let second_parent_overhead = second.get_array_memory_size()
+            - second.get_buffer_memory_size()
+            - child_overhead;
+        let mut counter = RecordBatchMemoryCounter::new();
+
+        assert_eq!(
+            counter.count_batch_with_array_overhead(&first_batch),
+            first.get_array_memory_size()
+        );
+        assert_eq!(
+            counter.count_batch_with_array_overhead(&second_batch),
+            second_parent_overhead
+        );
+    }
+
+    #[test]
+    fn test_record_batch_memory_counter_deduplicates_run_end_slice_child_overhead() {
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let first = Arc::new(
+            RunArray::<Int32Type>::try_new(
+                &Int32Array::from(vec![1, 2, 3]),
+                values.as_ref(),
+            )
+            .unwrap(),
+        ) as ArrayRef;
+        let second = Arc::new(
+            first
+                .as_any()
+                .downcast_ref::<RunArray<Int32Type>>()
+                .unwrap()
+                .slice(1, 2),
+        ) as ArrayRef;
+        let first_batch =
+            RecordBatch::try_from_iter(vec![("run", Arc::clone(&first))]).unwrap();
+        let second_batch =
+            RecordBatch::try_from_iter(vec![("run", Arc::clone(&second))]).unwrap();
+        let child_overhead =
+            values.get_array_memory_size() - values.get_buffer_memory_size();
+        let second_parent_overhead = second.get_array_memory_size()
+            - second.get_buffer_memory_size()
+            - child_overhead;
+        let mut counter = RecordBatchMemoryCounter::new();
+
+        assert_eq!(
+            counter.count_batch_with_array_overhead(&first_batch),
+            first.get_array_memory_size()
+        );
+        assert_eq!(
+            counter.count_batch_with_array_overhead(&second_batch),
+            second_parent_overhead
+        );
+    }
+
+    #[test]
+    fn test_record_batch_memory_counter_deduplicates_shared_dictionary_child() {
+        let shared_child: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let make_dictionary = || {
+            Arc::new(
+                DictionaryArray::<Int32Type>::try_new(
+                    Int32Array::from(vec![0, 1, 2]),
+                    Arc::clone(&shared_child),
+                )
+                .unwrap(),
+            ) as ArrayRef
+        };
+
+        assert_recursive_shared_child_memory(
+            "dictionary",
+            make_dictionary(),
+            make_dictionary(),
+            shared_child.get_array_memory_size(),
+        );
     }
 
     #[test]

@@ -1793,6 +1793,67 @@ SELECT g, approx_distinct(arrow_cast(arrow_cast(s, 'Binary'), 'FixedSizeBinary(1
 4 1
 
 
+# Dictionary: dictionary-encoded values must hash identically to the plain
+# (non-dictionary) values, so the counts below match the Utf8 case above.
+
+# Dictionary non-grouped
+query I
+SELECT approx_distinct(arrow_cast(s, 'Dictionary(Int32, Utf8)')) FROM approx_distinct_group_test WHERE g = 2;
+----
+2
+
+# Dictionary grouped
+query II
+SELECT g, approx_distinct(arrow_cast(s, 'Dictionary(Int32, Utf8)')) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+# Dictionary with a non-string value type (Int32), also exercising a
+# larger (Int64) key type
+query I
+SELECT approx_distinct(arrow_cast(i, 'Dictionary(Int64, Int32)')) FROM approx_distinct_group_test WHERE g = 2;
+----
+2
+
+query II
+SELECT g, approx_distinct(arrow_cast(i, 'Dictionary(Int64, Int32)')) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+# Dictionary over a fixed-domain value type (Int8). The bitmap accumulator only
+# understands its native value array, so these go through the HyperLogLog groups
+# accumulator and must still match the Int32 counts above.
+query I
+SELECT approx_distinct(arrow_cast(arrow_cast(i, 'Int8'), 'Dictionary(Int32, Int8)')) FROM approx_distinct_group_test WHERE g = 2;
+----
+2
+
+query II
+SELECT g, approx_distinct(arrow_cast(arrow_cast(i, 'Int8'), 'Dictionary(Int32, Int8)')) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+# A dictionary is supported exactly when its value type is: floats are rejected
+# just like a bare Float64 is, rather than silently reaching the HLL accumulator.
+statement error DataFusion error: This feature is not implemented: Support for 'approx_distinct' for data type Float64 is not implemented
+SELECT approx_distinct(arrow_cast(i, 'Float64')) FROM approx_distinct_group_test;
+
+statement error DataFusion error: This feature is not implemented: Support for 'approx_distinct' for data type Dictionary\(Int32, Float64\) is not implemented
+SELECT approx_distinct(arrow_cast(i, 'Dictionary(Int32, Float64)')) FROM approx_distinct_group_test;
+
+statement error DataFusion error: This feature is not implemented: Support for 'approx_distinct' for data type Dictionary\(Int32, Float64\) is not implemented
+SELECT g, approx_distinct(arrow_cast(i, 'Dictionary(Int32, Float64)')) FROM approx_distinct_group_test GROUP BY g;
+
+
 # List
 statement ok
 CREATE TABLE approx_distinct_list_test (g INT, l INT[]) AS VALUES
@@ -4832,6 +4893,79 @@ FROM (VALUES (arrow_cast(10.00, 'Decimal64(18, 2)')), (arrow_cast(20.00, 'Decima
 ----
 10 Decimal64(18, 2)
 
+# Decimal overflow tests to test i32 overflows for interpolation, issued for all decimals
+statement ok
+CREATE TABLE t_percentile_series (v DECIMAL(9, 2)) AS VALUES
+    (0.00), (4009999.99), (4010000.00), (4010000.01), (4010000.02),
+    (9999999.99), (9999999.99), (9999999.99), (9999999.99), (9999999.99);
+
+query RT
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v), arrow_typeof(percentile_cont(0.5) WITHIN GROUP (ORDER BY v))
+FROM t_percentile_series
+----
+7005000 Decimal128(9, 2)
+
+query RT
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY d), arrow_typeof(percentile_cont(0.5) WITHIN GROUP (ORDER BY d))
+FROM (SELECT arrow_cast(v, 'Decimal32(9, 2)') AS d FROM t_percentile_series)
+----
+7005000 Decimal32(9, 2)
+
+query RT
+SELECT percentile_cont(0.01) WITHIN GROUP (ORDER BY d), arrow_typeof(percentile_cont(0.01) WITHIN GROUP (ORDER BY d))
+FROM (SELECT arrow_cast(v, 'Decimal32(9, 2)') AS d FROM t_percentile_series)
+----
+360899.99 Decimal32(9, 2)
+
+# Decimal64 and Decimal256 agree on the harder p = 0.01 case as well
+query RT
+SELECT percentile_cont(0.01) WITHIN GROUP (ORDER BY d), arrow_typeof(percentile_cont(0.01) WITHIN GROUP (ORDER BY d))
+FROM (SELECT arrow_cast(v, 'Decimal64(18, 2)') AS d FROM t_percentile_series)
+----
+360899.99 Decimal64(18, 2)
+
+query RT
+SELECT percentile_cont(0.01) WITHIN GROUP (ORDER BY v), arrow_typeof(percentile_cont(0.01) WITHIN GROUP (ORDER BY v))
+FROM t_percentile_series
+----
+360899.99 Decimal128(9, 2)
+
+query RT
+SELECT percentile_cont(0.01) WITHIN GROUP (ORDER BY d), arrow_typeof(percentile_cont(0.01) WITHIN GROUP (ORDER BY d))
+FROM (SELECT arrow_cast(v, 'Decimal256(40, 2)') AS d FROM t_percentile_series)
+----
+360899.99 Decimal256(40, 2)
+
+# Sanity check with floats
+query RT
+SELECT percentile_cont(0.01) WITHIN GROUP (ORDER BY d), arrow_typeof(percentile_cont(0.01) WITHIN GROUP (ORDER BY d))
+FROM (SELECT arrow_cast(v, 'Float64') AS d FROM t_percentile_series)
+----
+360899.9991 Float64
+
+statement ok
+DROP TABLE t_percentile_series;
+
+# regressions for edge cases, verified with DuckDB
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v)
+FROM (VALUES (arrow_cast(0, 'Decimal32(9, 2)')), (arrow_cast(9999999, 'Decimal32(9, 2)'))) as t (v)
+----
+4999999.5
+
+query RT
+SELECT percentile_cont(0.00009) WITHIN GROUP (ORDER BY v),
+arrow_typeof(percentile_cont(0.00009) WITHIN GROUP (ORDER BY v))
+FROM (VALUES (arrow_cast(0, 'Decimal32(9,0)')), (arrow_cast(999999999, 'Decimal32(9,0)'))) as t (v)
+----
+89999 Decimal32(9, 0)
+
+# saniry check with floats
+query R
+SELECT percentile_cont(0.00009) WITHIN GROUP (ORDER BY v)
+FROM (VALUES (0), (999999999)) as t (v);
+----
+89999.99991
 
 
 # variance_single_value

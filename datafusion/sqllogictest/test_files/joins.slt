@@ -2857,6 +2857,86 @@ NULL 1970-01-04T00:00:00 789 ghi 1970-01-04 NULL 789 qwe
 NULL NULL NULL NULL NULL 1970-01-04T00:00:00 0 qwerty
 NULL NULL NULL NULL NULL NULL 100000 abcdefg
 
+# Pushing the projection below the sort merge join must not drop a column that
+# the join filter still needs (t2.c2 here). Instead the join applies the
+# projection itself.
+query TT
+explain select t1.c1, t2.c1, t2.c3 from hashjoin_datatype_table_t1 t1 right join hashjoin_datatype_table_t2 t2 on t1.c1 = t2.c1 and t1.c2 < t2.c2
+----
+logical_plan
+01)Projection: t1.c1, t2.c1, t2.c3
+02)--Right Join: t1.c1 = t2.c1 Filter: t1.c2 < t2.c2
+03)----SubqueryAlias: t1
+04)------TableScan: hashjoin_datatype_table_t1 projection=[c1, c2]
+05)----SubqueryAlias: t2
+06)------TableScan: hashjoin_datatype_table_t2 projection=[c1, c2, c3]
+physical_plan
+01)SortMergeJoinExec: join_type=Right, on=[(c1@0, c1@0)], filter=c2@0 < c2@1, projection=[c1@0, c1@2, c3@4]
+02)--SortExec: expr=[c1@0 ASC], preserve_partitioning=[true]
+03)----RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=1
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)--SortExec: expr=[c1@0 ASC], preserve_partitioning=[true]
+06)----RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=1
+07)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query DDR rowsort
+select t1.c1, t2.c1, t2.c3 from hashjoin_datatype_table_t1 t1 right join hashjoin_datatype_table_t2 t2 on t1.c1 = t2.c1 and t1.c2 < t2.c2
+----
+NULL 1970-01-02 -123.12
+NULL 1970-01-04 789
+NULL NULL 0
+NULL NULL 100000
+
+# Regression test: projection optimization through SortMergeJoinExec must keep
+# JoinFilter columns available when the output projection does not select them.
+statement ok
+set datafusion.optimizer.repartition_joins = true;
+
+query TT
+explain
+select t1.column2 as left_b1, t2.column2 as right_b1
+from (values (100, 1, 0)) t1
+join (values (10, 1)) t2
+  on t1.column2 = t2.column2
+ and t1.column1 > t2.column1;
+----
+logical_plan
+01)Projection: t1.column2 AS left_b1, t2.column2 AS right_b1
+02)--Inner Join: t1.column2 = t2.column2 Filter: t1.column1 > t2.column1
+03)----SubqueryAlias: t1
+04)------Projection: column1, column2
+05)--------Values: (Int64(100), Int64(1), Int64(0))
+06)----SubqueryAlias: t2
+07)------Values: (Int64(10), Int64(1))
+physical_plan
+01)ProjectionExec: expr=[column2@0 as left_b1, column2@1 as right_b1]
+02)--SortMergeJoinExec: join_type=Inner, on=[(column2@1, column2@1)], filter=column1@0 > column1@1, projection=[column2@1, column2@3]
+03)----SortExec: expr=[column2@1 ASC], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)----SortExec: expr=[column2@1 ASC], preserve_partitioning=[false]
+06)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+select t1.column2 as left_b1, t2.column2 as right_b1
+from (values (100, 1, 0)) t1
+join (values (10, 1)) t2
+  on t1.column2 = t2.column2
+ and t1.column1 > t2.column1;
+----
+1 1
+
+# A filter-rejected match in a left join must produce a null-extended row after
+# the filter columns have been projected away.
+query II rowsort
+select t1.column2 as left_b1, t2.column2 as right_b1
+from (values (100, 1, 0), (5, 2, 0)) t1
+left join (values (10, 1), (20, 2)) t2
+  on t1.column2 = t2.column2
+ and t1.column1 > t2.column1;
+----
+1 1
+2 NULL
+
 ####
 # Config teardown
 ####

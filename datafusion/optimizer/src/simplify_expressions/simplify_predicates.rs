@@ -52,27 +52,45 @@ pub fn simplify_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
     let mut other_predicates = Vec::new();
 
     for pred in predicates {
-        match &pred {
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op:
+        match pred {
+            Expr::BinaryExpr(BinaryExpr { left, op, right })
+                if matches!(
+                    op,
                     Operator::Gt
-                    | Operator::GtEq
-                    | Operator::Lt
-                    | Operator::LtEq
-                    | Operator::Eq,
-                right,
-            }) => {
+                        | Operator::GtEq
+                        | Operator::Lt
+                        | Operator::LtEq
+                        | Operator::Eq
+                ) =>
+            {
                 if let (Some(col), Some(_)) =
-                    (extract_column_from_expr(left), right.as_literal())
+                    (extract_column_from_expr(&left), right.as_literal())
                 {
-                    column_predicates.entry(col).or_default().push(pred);
-                } else if let (Some(_), Some(col)) =
-                    (left.as_literal(), extract_column_from_expr(right))
-                {
-                    column_predicates.entry(col).or_default().push(pred);
+                    column_predicates
+                        .entry(col)
+                        .or_default()
+                        .push(Expr::BinaryExpr(BinaryExpr { left, op, right }));
+                } else if let (Some(_), Some(col), Some(swapped_op)) = (
+                    left.as_literal(),
+                    extract_column_from_expr(&right),
+                    op.swap(),
+                ) {
+                    // Put the literal on the right so that predicates differing only in
+                    // operand order compare equal below
+                    column_predicates
+                        .entry(col)
+                        .or_default()
+                        .push(Expr::BinaryExpr(BinaryExpr {
+                            left: right,
+                            op: swapped_op,
+                            right: left,
+                        }));
                 } else {
-                    other_predicates.push(pred);
+                    other_predicates.push(Expr::BinaryExpr(BinaryExpr {
+                        left,
+                        op,
+                        right,
+                    }));
                 }
             }
             _ => other_predicates.push(pred),
@@ -114,20 +132,12 @@ fn simplify_column_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
 
     for pred in predicates {
         match &pred {
-            Expr::BinaryExpr(BinaryExpr { left: _, op, right }) => {
-                match (op, right.as_literal().is_some()) {
-                    (Operator::Gt, true)
-                    | (Operator::Lt, false)
-                    | (Operator::GtEq, true)
-                    | (Operator::LtEq, false) => greater_predicates.push(pred),
-                    (Operator::Lt, true)
-                    | (Operator::Gt, false)
-                    | (Operator::LtEq, true)
-                    | (Operator::GtEq, false) => less_predicates.push(pred),
-                    (Operator::Eq, _) => eq_predicates.push(pred),
-                    _ => unreachable!("Unexpected operator: {}", op),
-                }
-            }
+            Expr::BinaryExpr(BinaryExpr { op, .. }) => match op {
+                Operator::Gt | Operator::GtEq => greater_predicates.push(pred),
+                Operator::Lt | Operator::LtEq => less_predicates.push(pred),
+                Operator::Eq => eq_predicates.push(pred),
+                _ => unreachable!("Unexpected operator: {}", op),
+            },
             _ => unreachable!("Unexpected predicate {}", pred.to_string()),
         }
     }
@@ -303,6 +313,26 @@ mod tests {
         // Test that it still extracts from direct column references
         let col_expr = col("a");
         assert_eq!(extract_column_from_expr(&col_expr), Some(Column::from("a")));
+    }
+
+    #[test]
+    fn test_eq_predicates_are_matched_regardless_of_operand_order() {
+        // a = 5 AND 5 = a is a single condition, not a contradiction
+        let predicates = vec![col("a").eq(lit(5i32)), lit(5i32).eq(col("a"))];
+
+        let result = simplify_predicates(predicates).unwrap();
+
+        assert_eq!(result, vec![col("a").eq(lit(5i32))]);
+    }
+
+    #[test]
+    fn test_strict_bound_wins_when_literal_is_on_the_left() {
+        // a >= 5 AND 5 < a is a > 5; keeping a >= 5 would let a = 5 through
+        let predicates = vec![col("a").gt_eq(lit(5i32)), lit(5i32).lt(col("a"))];
+
+        let result = simplify_predicates(predicates).unwrap();
+
+        assert_eq!(result, vec![col("a").gt(lit(5i32))]);
     }
 
     #[test]

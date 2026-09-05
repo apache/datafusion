@@ -899,6 +899,7 @@ message PhysicalPlanNode {
     BufferExecNode buffer = 37;
     ArrowScanExecNode arrow_scan = 38;
     ScalarSubqueryExecNode scalar_subquery = 39;
+    PiecewiseMergeJoinExecNode piecewise_merge_join = 40;
   }
 }
 
@@ -1265,6 +1266,9 @@ message FileScanExecConf {
   reserved 14;
   reserved "partitioned_by_file_group";
   optional Partitioning output_partitioning = 15;
+  // Compression used by formats such as CSV and JSON. Absent means uncompressed
+  // for compatibility with payloads written before this field existed.
+  optional datafusion_common.CompressionTypeVariant file_compression_type = 16;
 }
 
 message ParquetScanExecNode {
@@ -1276,6 +1280,10 @@ message ParquetScanExecNode {
   PhysicalExprNode predicate = 3;
 
   datafusion_common.TableParquetOptions parquet_options = 4;
+
+  PhysicalSortExprNodeCollection sort_order_for_reorder = 5;
+
+  bool reverse_row_groups = 6;
 }
 
 message CsvScanExecNode {
@@ -1291,10 +1299,14 @@ message CsvScanExecNode {
   }
   bool newlines_in_values = 7;
   bool truncate_rows = 8;
+  // Custom one-byte line terminator. Absent means the default newline terminator.
+  optional bytes terminator = 9;
 }
 
 message JsonScanExecNode {
   FileScanExecConf base_conf = 1;
+  // Absent means newline-delimited JSON for compatibility with older payloads.
+  optional bool newline_delimited = 2;
 }
 
 message AvroScanExecNode {
@@ -1397,6 +1409,10 @@ message AnalyzeExecNode {
   bool has_metric_categories = 5;
   repeated string metric_categories = 6;
   datafusion_common.ExplainFormat format = 7;
+  // Whether metric_types is present. False means use SUMMARY and DEV.
+  bool has_metric_types = 8;
+  // Types of metrics to display.
+  repeated datafusion_common.MetricType metric_types = 9;
 }
 
 message CrossJoinExecNode {
@@ -1692,6 +1708,18 @@ message SortMergeJoinExecNode {
   repeated SortExprNode sort_options = 6;
   datafusion_common.NullEquality null_equality = 7;
   repeated uint32 projection = 8;
+}
+
+message PiecewiseMergeJoinExecNode {
+  PhysicalPlanNode buffered = 1;
+  PhysicalPlanNode streamed = 2;
+  // The buffered-side and streamed-side halves of the single range predicate.
+  PhysicalExprNode on_buffered = 3;
+  PhysicalExprNode on_streamed = 4;
+  // `Operator` variant name, e.g. "Lt". Must be one of Lt/LtEq/Gt/GtEq.
+  string operator = 5;
+  datafusion_common.JoinType join_type = 6;
+  uint64 num_partitions = 7;
 }
 
 message AsyncFuncExecNode {

@@ -314,11 +314,11 @@ first_value(expression [ORDER BY expression])
 
 ```sql
 > SELECT first_value(column_name ORDER BY other_column) FROM table_name;
-+-----------------------------------------------+
-| first_value(column_name ORDER BY other_column)|
-+-----------------------------------------------+
-| first_element                                 |
-+-----------------------------------------------+
++------------------------------------------------+
+| first_value(column_name ORDER BY other_column) |
++------------------------------------------------+
+| first_element                                  |
++------------------------------------------------+
 ```
 
 ### `grouping`

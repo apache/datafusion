@@ -106,6 +106,17 @@ impl Stream for MemoryStream {
             None => batch.clone(),
         };
 
+        // MemoryStream advertises `self.schema`, therefore emitted RecordBatches
+        // must conform to it when batches were provided with stricter nested types
+        // (e.g. MemTable accepts stricter batches via Schema::contains).
+        let batch = if batch.schema().as_ref() != self.schema.as_ref()
+            && self.schema.contains(batch.schema().as_ref())
+        {
+            datafusion_common::nested_struct::adapt_batch_to_schema(batch, &self.schema)?
+        } else {
+            batch
+        };
+
         let Some(&fetch) = self.fetch.as_ref() else {
             return Poll::Ready(Some(Ok(batch)));
         };
@@ -670,6 +681,130 @@ mod lazy_memory_tests {
 
         // if the reset_state is not correct, the batches_reset will be empty
         assert_eq!(batches, batches_reset);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_memory_stream_emitted_batch_matches_declared_schema() -> Result<()> {
+        use arrow::array::{ArrayRef, BooleanArray, StructArray};
+        use arrow::datatypes::{DataType, Field, Fields, Schema};
+        use futures::StreamExt;
+
+        // Declared schema expects nullable struct field colA
+        let declared_fields =
+            Fields::from(vec![Field::new("colA", DataType::Boolean, true)]);
+        let declared_schema = Arc::new(Schema::new(vec![Field::new(
+            "b",
+            DataType::Struct(declared_fields),
+            false,
+        )]));
+
+        // Runtime batch has stricter non-nullable struct field colA
+        let source_fields =
+            Fields::from(vec![Field::new("colA", DataType::Boolean, false)]);
+        let source_schema = Arc::new(Schema::new(vec![Field::new(
+            "b",
+            DataType::Struct(source_fields.clone()),
+            false,
+        )]));
+
+        let struct_array: ArrayRef = Arc::new(StructArray::new(
+            source_fields,
+            vec![Arc::new(BooleanArray::from(vec![true, false]))],
+            None,
+        ));
+        let stricter_batch = RecordBatch::try_new(source_schema, vec![struct_array])?;
+
+        let mut stream = MemoryStream::try_new(
+            vec![stricter_batch],
+            Arc::clone(&declared_schema),
+            None,
+        )?;
+
+        assert_eq!(stream.schema(), declared_schema);
+
+        let emitted_batch = stream.next().await.unwrap()?;
+        assert_eq!(emitted_batch.schema(), declared_schema);
+
+        let struct_col = emitted_batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        assert!(struct_col.fields()[0].is_nullable());
+        let bool_child = struct_col
+            .column(0)
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
+        assert!(bool_child.value(0));
+        assert!(!bool_child.value(1));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_memory_stream_emitted_batch_matches_declared_schema_with_projection()
+    -> Result<()> {
+        use arrow::array::{ArrayRef, BooleanArray, Int32Array, StructArray};
+        use arrow::datatypes::{DataType, Field, Fields, Schema};
+        use futures::StreamExt;
+
+        // Declared full schema: col a (Int32), col b (Struct<colA: nullable Boolean>)
+        let declared_fields =
+            Fields::from(vec![Field::new("colA", DataType::Boolean, true)]);
+        let full_declared_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Struct(declared_fields), false),
+        ]));
+
+        // Projected schema for column "b" (projection = [1])
+        let projected_schema = Arc::new(full_declared_schema.project(&[1])?);
+
+        // Runtime batch has stricter struct
+        let source_fields =
+            Fields::from(vec![Field::new("colA", DataType::Boolean, false)]);
+        let source_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Struct(source_fields.clone()), false),
+        ]));
+
+        let struct_array: ArrayRef = Arc::new(StructArray::new(
+            source_fields,
+            vec![Arc::new(BooleanArray::from(vec![true, false]))],
+            None,
+        ));
+        let stricter_batch = RecordBatch::try_new(
+            source_schema,
+            vec![Arc::new(Int32Array::from(vec![10, 20])), struct_array],
+        )?;
+
+        let mut stream = MemoryStream::try_new(
+            vec![stricter_batch],
+            Arc::clone(&projected_schema),
+            Some(vec![1]),
+        )?;
+
+        assert_eq!(stream.schema(), projected_schema);
+
+        let emitted_batch = stream.next().await.unwrap()?;
+        assert_eq!(emitted_batch.schema(), projected_schema);
+        assert_eq!(emitted_batch.num_columns(), 1);
+
+        let struct_col = emitted_batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        assert!(struct_col.fields()[0].is_nullable());
+        let bool_child = struct_col
+            .column(0)
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
+        assert!(bool_child.value(0));
+        assert!(!bool_child.value(1));
 
         Ok(())
     }

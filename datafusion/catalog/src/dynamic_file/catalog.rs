@@ -138,7 +138,7 @@ impl SchemaProvider for DynamicFileSchemaProvider {
     ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>> {
         if let Some(table) = self.inner.table(name).await? {
             return Ok(Some(table));
-        };
+        }
 
         self.factory.try_new(name).await
     }

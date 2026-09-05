@@ -6948,6 +6948,76 @@ ORDER BY x
 62 2
 62 2
 
+# RANGE window frame over a time ORDER BY key. Time is orderable, so free
+# frames can locate peer groups by comparison even though finite offsets do not
+# have suitable frame-bound arithmetic.
+query DI
+SELECT x, COUNT(*) OVER (ORDER BY x)
+FROM (VALUES (arrow_cast('01:00:00', 'Time64(Microsecond)')),
+             (arrow_cast('02:00:00', 'Time64(Microsecond)')),
+             (arrow_cast('02:00:00', 'Time64(Microsecond)'))) t(x)
+ORDER BY x
+----
+01:00:00 1
+02:00:00 3
+02:00:00 3
+
+# A non-aggregate window function and descending order over nanosecond time.
+query DI
+SELECT x, RANK() OVER (ORDER BY x DESC)
+FROM (VALUES (arrow_cast('01:00:00', 'Time64(Nanosecond)')),
+             (arrow_cast('02:00:00', 'Time64(Nanosecond)')),
+             (arrow_cast('02:00:00', 'Time64(Nanosecond)'))) t(x)
+ORDER BY x
+----
+01:00:00 3
+02:00:00 1
+02:00:00 1
+
+# Explicit free bounds use the same comparison-only support.
+query DI
+SELECT x, COUNT(*) OVER (ORDER BY x RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
+FROM (VALUES (arrow_cast('01:00:00', 'Time32(Second)')),
+             (arrow_cast('02:00:00', 'Time32(Second)')),
+             (arrow_cast('02:00:00', 'Time32(Second)'))) t(x)
+ORDER BY x
+----
+01:00:00 3
+02:00:00 2
+02:00:00 2
+
+query DI
+SELECT x, COUNT(*) OVER (ORDER BY x)
+FROM (VALUES (arrow_cast('01:00:00.000', 'Time32(Millisecond)')),
+             (arrow_cast('02:00:00.000', 'Time32(Millisecond)')),
+             (arrow_cast('02:00:00.000', 'Time32(Millisecond)'))) t(x)
+ORDER BY x
+----
+01:00:00 1
+02:00:00 3
+02:00:00 3
+
+# A time ORDER BY key nested in a dictionary resolves through the same arm.
+query ?I
+SELECT x, COUNT(*) OVER (ORDER BY x)
+FROM (VALUES (arrow_cast(arrow_cast('01:00:00', 'Time64(Microsecond)'), 'Dictionary(Int32, Time64(Microsecond))')),
+             (arrow_cast(arrow_cast('02:00:00', 'Time64(Microsecond)'), 'Dictionary(Int32, Time64(Microsecond))')),
+             (arrow_cast(arrow_cast('02:00:00', 'Time64(Microsecond)'), 'Dictionary(Int32, Time64(Microsecond))'))) t(x)
+ORDER BY x
+----
+01:00:00 1
+02:00:00 3
+02:00:00 3
+
+# Finite offsets over time are rejected for both the start and end bound.
+query error DataFusion error: type_coercion\ncaused by\nError during planning: RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type Time64\(µs\)
+SELECT COUNT(*) OVER (ORDER BY x RANGE BETWEEN INTERVAL '1' HOUR PRECEDING AND CURRENT ROW)
+FROM (VALUES (arrow_cast('01:00:00', 'Time64(Microsecond)'))) t(x)
+
+query error DataFusion error: type_coercion\ncaused by\nError during planning: RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type Time64\(µs\)
+SELECT COUNT(*) OVER (ORDER BY x RANGE BETWEEN CURRENT ROW AND INTERVAL '1' HOUR FOLLOWING)
+FROM (VALUES (arrow_cast('01:00:00', 'Time64(Microsecond)'))) t(x)
+
 # Unsupported RANGE ORDER BY types still propagate the type-coercion error.
 query error DataFusion error: type_coercion\ncaused by\nInternal error: Cannot run range queries on datatype: Struct\("c0": Int64\)
 SELECT COUNT(*) OVER (ORDER BY x)
@@ -7014,3 +7084,12 @@ ORDER BY x
 false 3
 true 2
 true 2
+
+statement error DataFusion error: Error during planning: 'first_value' does not support zero arguments
+SELECT first_value() OVER () FROM (VALUES (1), (2), (3)) t(x)
+
+statement error DataFusion error: Error during planning: 'last_value' does not support zero arguments
+SELECT last_value() OVER () FROM (VALUES (1), (2), (3)) t(x)
+
+statement error DataFusion error: Error during planning: 'nth_value' does not support zero arguments
+SELECT nth_value() OVER () FROM (VALUES (1), (2), (3)) t(x)

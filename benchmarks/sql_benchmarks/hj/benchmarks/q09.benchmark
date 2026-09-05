@@ -1,6 +1,8 @@
 name Q09
 group hj
 
+init sql_benchmarks/hj/init/set_config.sql
+
 load sql_benchmarks/hj/init/load.sql
 
 assert I

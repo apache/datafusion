@@ -748,8 +748,7 @@ mod tests {
         ];
 
         for (reqs, expected) in test_cases {
-            let err_msg =
-                format!("error in test reqs: {reqs:?}, expected: {expected:?}",);
+            let err_msg = format!("error in test reqs: {reqs:?}, expected: {expected:?}");
             let reqs = convert_to_sort_exprs(&reqs);
             assert_eq!(eq_properties.ordering_satisfy(reqs)?, expected, "{err_msg}");
         }

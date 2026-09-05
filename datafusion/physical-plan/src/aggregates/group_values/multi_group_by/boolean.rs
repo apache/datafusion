@@ -19,9 +19,12 @@ use std::sync::Arc;
 
 use crate::aggregates::group_values::multi_group_by::Nulls;
 use crate::aggregates::group_values::multi_group_by::{GroupColumn, nulls_equal_to};
-use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
-use arrow::array::{Array as _, ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder};
+use crate::aggregates::group_values::null_builder::NullBufferBuilderExt;
+use arrow::array::{
+    Array as _, ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder, NullBufferBuilder,
+};
 use datafusion_common::Result;
+use datafusion_expr::GroupSelection;
 
 /// An implementation of [`GroupColumn`] for booleans
 ///
@@ -33,7 +36,7 @@ use datafusion_common::Result;
 #[derive(Debug)]
 pub struct BooleanGroupValueBuilder<const NULLABLE: bool> {
     buffer: BooleanBufferBuilder,
-    nulls: MaybeNullBufferBuilder,
+    nulls: NullBufferBuilder,
 }
 
 impl<const NULLABLE: bool> BooleanGroupValueBuilder<NULLABLE> {
@@ -41,7 +44,7 @@ impl<const NULLABLE: bool> BooleanGroupValueBuilder<NULLABLE> {
     pub fn new() -> Self {
         Self {
             buffer: BooleanBufferBuilder::new(0),
-            nulls: MaybeNullBufferBuilder::new(),
+            nulls: NullBufferBuilder::empty(),
         }
     }
 }
@@ -62,10 +65,10 @@ impl<const NULLABLE: bool> GroupColumn for BooleanGroupValueBuilder<NULLABLE> {
     fn append_val(&mut self, array: &ArrayRef, row: usize) -> Result<()> {
         if NULLABLE {
             if array.is_null(row) {
-                self.nulls.append(true);
+                self.nulls.append_null();
                 self.buffer.append(bool::default());
             } else {
-                self.nulls.append(false);
+                self.nulls.append_non_null();
                 self.buffer.append(array.as_boolean().value(row));
             }
         } else {
@@ -125,24 +128,24 @@ impl<const NULLABLE: bool> GroupColumn for BooleanGroupValueBuilder<NULLABLE> {
             (true, Nulls::Some) => {
                 for &row in rows {
                     if array.is_null(row) {
-                        self.nulls.append(true);
+                        self.nulls.append_null();
                         self.buffer.append(bool::default());
                     } else {
-                        self.nulls.append(false);
+                        self.nulls.append_non_null();
                         self.buffer.append(arr.value(row));
                     }
                 }
             }
 
             (true, Nulls::None) => {
-                self.nulls.append_n(rows.len(), false);
+                self.nulls.append_n_non_nulls(rows.len());
                 for &row in rows {
                     self.buffer.append(arr.value(row));
                 }
             }
 
             (true, Nulls::All) => {
-                self.nulls.append_n(rows.len(), true);
+                self.nulls.append_n_nulls(rows.len());
                 self.buffer.append_n(rows.len(), bool::default());
             }
 
@@ -175,6 +178,20 @@ impl<const NULLABLE: bool> GroupColumn for BooleanGroupValueBuilder<NULLABLE> {
         let arr = BooleanArray::new(buffer.finish(), nulls);
 
         Arc::new(arr)
+    }
+
+    fn values_preserving(&self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
+        selection.validate_num_groups(self.buffer.len())?;
+        let mut values = BooleanBufferBuilder::new(selection.len());
+        for index in selection.iter() {
+            values.append(self.buffer.get_bit(index));
+        }
+        let nulls = if NULLABLE {
+            self.nulls.build_preserving(selection)?
+        } else {
+            None
+        };
+        Ok(Arc::new(BooleanArray::new(values.finish(), nulls)))
     }
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
