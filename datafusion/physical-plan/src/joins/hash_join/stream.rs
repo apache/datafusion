@@ -47,6 +47,7 @@ use crate::{
         build_null_aware_left_mark_column, need_produce_result_in_final,
     },
 };
+use datafusion_execution::memory_pool::MemoryReservation;
 
 use arrow::array::{Array, ArrayRef, UInt32Array, UInt64Array};
 use arrow::buffer::NullBuffer;
@@ -498,12 +499,17 @@ impl HashJoinStream {
         mode: PartitionMode,
         null_aware: bool,
         fetch: Option<usize>,
-    ) -> Self {
+        reservation: MemoryReservation,
+    ) -> Result<Self> {
         // Create output buffer with coalescing and optional fetch limit.
-        let output_buffer =
-            LimitedBatchCoalescer::new(Arc::clone(&schema), batch_size, fetch);
+        let output_buffer = LimitedBatchCoalescer::new_with_reservation(
+            Arc::clone(&schema),
+            batch_size,
+            fetch,
+            reservation,
+        )?;
 
-        Self {
+        Ok(Self {
             partition,
             schema,
             on_right,
@@ -530,7 +536,7 @@ impl HashJoinStream {
             mode,
             output_buffer,
             null_aware,
-        }
+        })
     }
 
     /// Returns the next state after the build side has been fully collected

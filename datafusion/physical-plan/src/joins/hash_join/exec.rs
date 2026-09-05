@@ -1653,7 +1653,7 @@ impl ExecutionPlan for HashJoinExec {
 
         // we have the batches and the hash map with their keys. We can how create a stream
         // over the right that uses this information to issue new batches.
-        let right_stream = self.right.execute(partition, context)?;
+        let right_stream = self.right.execute(partition, Arc::clone(&context))?;
 
         // update column indices to reflect the projection
         let column_indices_after_projection = match self.projection.as_ref() {
@@ -1669,6 +1669,10 @@ impl ExecutionPlan for HashJoinExec {
             .iter()
             .map(|(_, right_expr)| Arc::clone(right_expr))
             .collect::<Vec<_>>();
+
+        let output_reservation =
+            MemoryConsumer::new(format!("HashJoinOutput[{partition}]"))
+                .register(context.memory_pool());
 
         Ok(Box::pin(HashJoinStream::new(
             partition,
@@ -1690,7 +1694,8 @@ impl ExecutionPlan for HashJoinExec {
             self.mode,
             self.null_aware,
             self.fetch,
-        )))
+            output_reservation,
+        )?))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -6511,7 +6516,8 @@ mod tests {
 
         for join_type in join_types {
             let runtime = RuntimeEnvBuilder::new()
-                .with_memory_limit(100, 1.0)
+                // Enough for the output coalescer baseline, but not the build batch.
+                .with_memory_limit(150, 1.0)
                 .build_arc()?;
             let task_ctx = TaskContext::default().with_runtime(runtime);
             let task_ctx = Arc::new(task_ctx);
@@ -6527,10 +6533,12 @@ mod tests {
             let stream = join.execute(0, task_ctx)?;
             let err = common::collect(stream).await.unwrap_err();
 
-            // Asserting that operator-level reservation attempting to overallocate
+            // Asserting that operator-level reservation attempting to overallocate.
+            // The output coalescer's `HashJoinOutput` consumer holds its idle
+            // baseline at failure time, so it ranks above the failing consumer.
             assert_contains!(
                 err.to_string(),
-                "Resources exhausted: Additional allocation failed for HashJoinInput with top memory consumers (across reservations) as:\n  HashJoinInput"
+                "Resources exhausted: Additional allocation failed for HashJoinInput with top memory consumers (across reservations) as:\n  HashJoinOutput"
             );
 
             assert_contains!(
@@ -6641,7 +6649,8 @@ mod tests {
 
         for join_type in join_types {
             let runtime = RuntimeEnvBuilder::new()
-                .with_memory_limit(100, 1.0)
+                // Enough for the output coalescer baseline, but not the build batch.
+                .with_memory_limit(150, 1.0)
                 .build_arc()?;
             let session_config = SessionConfig::default().with_batch_size(50);
             let task_ctx = TaskContext::default()
@@ -6664,10 +6673,12 @@ mod tests {
             let stream = join.execute(1, task_ctx)?;
             let err = common::collect(stream).await.unwrap_err();
 
-            // Asserting that stream-level reservation attempting to overallocate
+            // Asserting that stream-level reservation attempting to overallocate.
+            // The output coalescer's `HashJoinOutput` consumer holds its idle
+            // baseline at failure time, so it ranks above the failing consumer.
             assert_contains!(
                 err.to_string(),
-                "Resources exhausted: Additional allocation failed for HashJoinInput[1] with top memory consumers (across reservations) as:\n  HashJoinInput[1]"
+                "Resources exhausted: Additional allocation failed for HashJoinInput[1] with top memory consumers (across reservations) as:\n  HashJoinOutput[1]"
             );
 
             assert_contains!(
