@@ -60,8 +60,8 @@ use datafusion_common::{internal_err, tree_node::Transformed};
 use datafusion_expr::{BinaryExpr, lit};
 use datafusion_expr::{Cast, Expr, Operator, TryCast, simplify::SimplifyContext};
 use datafusion_expr_common::casts::{
-    is_date_narrowing_cast, is_supported_type, is_timestamp_precision_narrowing_cast,
-    try_cast_literal_to_type,
+    is_date_narrowing_cast, is_integer_narrowing_cast, is_supported_type,
+    is_timestamp_precision_narrowing_cast, try_cast_literal_to_type,
 };
 
 pub(super) fn unwrap_cast_in_comparison_for_binary(
@@ -113,18 +113,20 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary(
     op: Operator,
     literal: &Expr,
 ) -> bool {
-    match (expr, literal) {
-        (
-            Expr::TryCast(TryCast {
-                expr: left_expr,
-                field,
-            })
-            | Expr::Cast(Cast {
-                expr: left_expr,
-                field,
-            }),
-            Expr::Literal(lit_val, _),
-        ) => {
+    let (left_expr, field, is_try_cast) = match expr {
+        Expr::TryCast(TryCast {
+            expr: left_expr,
+            field,
+        }) => (left_expr, field, true),
+        Expr::Cast(Cast {
+            expr: left_expr,
+            field,
+        }) => (left_expr, field, false),
+        _ => return false,
+    };
+
+    match literal {
+        Expr::Literal(lit_val, _) => {
             let Ok(expr_type) = info.get_data_type(left_expr) else {
                 return false;
             };
@@ -135,6 +137,8 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary(
 
             if is_timestamp_precision_narrowing_cast(&expr_type, field.data_type())
                 || is_date_narrowing_cast(&expr_type, field.data_type())
+                || (is_try_cast
+                    && is_integer_narrowing_cast(&expr_type, field.data_type()))
             {
                 return false;
             }
@@ -156,16 +160,16 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist(
     expr: &Expr,
     list: &[Expr],
 ) -> bool {
-    let (Expr::TryCast(TryCast {
-        expr: left_expr,
-        field,
-    })
-    | Expr::Cast(Cast {
-        expr: left_expr,
-        field,
-    })) = expr
-    else {
-        return false;
+    let (left_expr, field, is_try_cast) = match expr {
+        Expr::TryCast(TryCast {
+            expr: left_expr,
+            field,
+        }) => (left_expr, field, true),
+        Expr::Cast(Cast {
+            expr: left_expr,
+            field,
+        }) => (left_expr, field, false),
+        _ => return false,
     };
 
     let Ok(expr_type) = info.get_data_type(left_expr) else {
@@ -178,6 +182,7 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist(
 
     if is_timestamp_precision_narrowing_cast(&expr_type, field.data_type())
         || is_date_narrowing_cast(&expr_type, field.data_type())
+        || (is_try_cast && is_integer_narrowing_cast(&expr_type, field.data_type()))
     {
         return false;
     }
@@ -334,6 +339,21 @@ mod tests {
         let expr_input = cast(col("c1"), DataType::Utf8).eq(lit(ScalarValue::Utf8(None)));
         let expected = null_bool();
         assert_eq!(optimize_test(expr_input, &schema), expected);
+    }
+
+    #[test]
+    fn test_not_unwrap_narrowing_integer_try_cast() {
+        let schema = expr_test_schema();
+
+        let comparison = try_cast(col("c2"), DataType::Int32).gt(lit(1i32));
+        assert_eq!(optimize_test(comparison.clone(), &schema), comparison);
+
+        let in_list_expr = in_list(
+            try_cast(col("c2"), DataType::Int32),
+            vec![lit(1i32), lit(2i32), lit(3i32), lit(4i32), lit(5i32)],
+            true,
+        );
+        assert_eq!(optimize_test(in_list_expr.clone(), &schema), in_list_expr);
     }
 
     #[test]
