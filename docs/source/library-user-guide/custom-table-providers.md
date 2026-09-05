@@ -792,6 +792,141 @@ that a `FilterExec` is unnecessary for the `date` predicate, and the second
 ensures that only the relevant directories are scanned. The actual file reading
 happens later, in the stream produced by `execute()`.
 
+## Row-Level DML: DELETE and UPDATE
+
+`TableProvider` has two optional hooks for row-level Data Manipulation Language (DML) statements:
+
+- `delete_from(state, filters)` serves `DELETE FROM t [WHERE ...]`.
+- `update(state, assignments, filters)` serves `UPDATE t SET ... [WHERE ...]`.
+
+Both hooks have a default implementation that returns a "not implemented" error. A provider that does not override them keeps its previous read-only behaviour, and DataFusion reports the statement as unsupported for that table.
+
+The physical planner calls the hook instead of building a plan of its own. Your provider therefore owns the whole row change: which rows change, how to make the change durable, and how many rows the statement affected.
+
+### What the Planner Passes to the Hooks
+
+`filters` holds the `WHERE` predicates as logical `Expr` values, after three transformations:
+
+- The planner splits `AND` conjunctions into separate elements.
+- The planner strips table qualifiers, so `t.id = 1` arrives as `id = 1` and matches your schema.
+- The planner keeps only the predicates on the target table, and collects them both from `Filter` nodes and from the pushed-down filters of the target `TableScan`.
+
+An empty `filters` vector means the statement has no `WHERE` clause. Then the statement applies to every row.
+
+`assignments` holds the `SET` clause as `(column_name, Expr)` pairs. The planner removes identity assignments, so the vector contains only the columns that the statement changes.
+
+### What the Hooks Must Return
+
+Each hook returns an [ExecutionPlan] that produces one row in a single non-null `UInt64` column named `count`. The value is the number of affected rows. `INSERT` uses the same convention, which is why `datafusion-cli` prints the same shape of result for all three statements:
+
+```text
++-------+
+| count |
++-------+
+| 2     |
++-------+
+```
+
+To evaluate the filters and the assignments, convert each `Expr` with `create_physical_expr()`, then pass your table schema and `state.execution_props()`. Reject an unknown column with a plan error rather than an internal error.
+
+Two semantic rules keep your provider consistent with the rest of SQL:
+
+- Apply SQL three-valued logic. Change a row only if the predicate is true for that row. A predicate that evaluates to `NULL` must leave the row alone.
+- Evaluate every assignment against the values from before the statement. `SET a = b, b = a` then exchanges the two values.
+
+The following example shows the shape of both implementations. The row-level work is in the two private methods. The example counts the rows in the hook, as [MemTable] does; see [When the Work Happens](#when-the-work-happens) for the alternative:
+
+```rust
+# use std::sync::Arc;
+# use arrow::array::{ArrayRef, RecordBatch, UInt64Array};
+# use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+# use datafusion::catalog::{Session, TableProvider};
+# use datafusion::common::Result;
+# use datafusion::datasource::TableType;
+# use datafusion::datasource::memory::MemorySourceConfig;
+# use datafusion::logical_expr::Expr;
+# use datafusion::physical_plan::ExecutionPlan;
+#
+# #[derive(Debug)]
+# struct MyMutableTable {
+#     schema: SchemaRef,
+# }
+#
+# impl MyMutableTable {
+#     fn remove_rows(&self, _state: &dyn Session, _filters: &[Expr]) -> Result<u64> {
+#         Ok(0)
+#     }
+#
+#     fn change_rows(
+#         &self,
+#         _state: &dyn Session,
+#         _assignments: &[(String, Expr)],
+#         _filters: &[Expr],
+#     ) -> Result<u64> {
+#         Ok(0)
+#     }
+# }
+#
+/// Build the single-row `count` plan that both hooks must return.
+fn count_plan(rows_affected: u64) -> Result<Arc<dyn ExecutionPlan>> {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "count",
+        DataType::UInt64,
+        false,
+    )]));
+    let count = Arc::new(UInt64Array::from(vec![rows_affected])) as ArrayRef;
+    let batch = RecordBatch::try_new(Arc::clone(&schema), vec![count])?;
+    Ok(MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None)?)
+}
+
+#[async_trait::async_trait]
+impl TableProvider for MyMutableTable {
+#     fn schema(&self) -> SchemaRef { Arc::clone(&self.schema) }
+#     fn table_type(&self) -> TableType { TableType::Base }
+#     async fn scan(&self, _: &dyn Session, _: Option<&[usize]>, _: &[Expr], _: Option<usize>) -> Result<Arc<dyn ExecutionPlan>> { todo!() }
+    async fn delete_from(
+        &self,
+        state: &dyn Session,
+        filters: Vec<Expr>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        // An empty `filters` means `DELETE FROM t` with no `WHERE` clause.
+        let rows_affected = self.remove_rows(state, &filters)?;
+        count_plan(rows_affected)
+    }
+
+    async fn update(
+        &self,
+        state: &dyn Session,
+        assignments: Vec<(String, Expr)>,
+        filters: Vec<Expr>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let rows_affected = self.change_rows(state, &assignments, &filters)?;
+        count_plan(rows_affected)
+    }
+}
+```
+
+### What the Hooks Do Not Receive
+
+The planner drops some clauses before it calls a hook, so do not expect them:
+
+- A `LIMIT` clause on a `DELETE` has no effect. Your hook sees only the filters.
+- A scalar subquery in a `WHERE` clause or in a `SET` clause fails during physical planning, before the hook runs.
+- An `IN` or an `EXISTS` subquery reaches your hook with an empty `filters` vector, because the optimizer rewrites the subquery into a join. Your hook then changes every row, which is the wrong answer. DataFusion does not yet protect a provider against this case.
+- `UPDATE ... FROM`, which reads new values from a second table, returns a "not implemented" error.
+
+### When the Work Happens
+
+The hooks run during physical planning, like `scan()`. A hook that changes rows before it returns its plan therefore changes them during planning, and `EXPLAIN DELETE` or `EXPLAIN UPDATE` also changes them. [MemTable] works this way.
+
+For a provider that writes to durable storage, do the work in the `execute()` method of the plan that you return instead. The hook then stays lightweight, and `EXPLAIN` shows the plan without a side effect.
+
+### Reference Implementation
+
+[MemTable] implements both hooks over its in-memory batches, and is the best code to read next. It shows how to build the boolean mask for the filters, how to keep the rows where the predicate is false or `NULL`, and how to evaluate an assignment only on the matching rows. That last detail matters: it stops an expression such as `100 / divisor` from failing on rows that the `WHERE` clause excludes.
+
+The user-facing behaviour of the two statements is in the [DML section](../user-guide/sql/dml.md) of the user guide.
+
 ## Putting It All Together
 
 Here is a minimal but complete example of a custom table provider that generates
