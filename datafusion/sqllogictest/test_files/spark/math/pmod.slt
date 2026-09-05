@@ -98,6 +98,10 @@ SELECT pmod(10.5::float8, 0.0::float8);
 statement error DataFusion error: Arrow error: Divide by zero error
 SELECT pmod(10.5::float8, -0.0::float8);
 
+# A decimal result that does not fit raises instead of returning NULL
+statement error DataFusion error: Arrow error: Invalid argument error: 9999\.8 is too large to store in a Decimal128 of precision 3
+SELECT pmod(-0.1::decimal(3,1), 9999.9::decimal(5,1));
+
 # A NULL dividend short-circuits to NULL before the divisor is validated
 query I
 SELECT pmod(NULL::int, 0::int) as pmod_null_dividend_ansi;
@@ -127,6 +131,21 @@ query I
 SELECT pmod(NULL::int, NULL::int) as pmod_null_3;
 ----
 NULL
+
+query T
+SELECT arrow_typeof(pmod(NULL, NULL));
+----
+Float64
+
+query T
+SELECT arrow_typeof(pmod(2.5::decimal(3,1), NULL));
+----
+Decimal128(3, 1)
+
+# An untyped NULL beside a typed non-decimal argument takes the Numeric path,
+# which cannot coerce the pair. `mod` rejects it the same way.
+statement error DataFusion error: Error during planning: Internal error: Function 'pmod' failed to match any signature
+SELECT pmod(NULL, 3::int);
 
 # PMOD tests with large integers
 query I
@@ -304,6 +323,53 @@ query R
 SELECT pmod(-10.0::decimal(3,1), 3.0::decimal(2,1)) as pmod_decimal_4;
 ----
 2
+
+# The decimal result type follows Spark's Pmod.resultDecimalType, which applies
+# the Remainder rule to the declared argument types:
+#   scale     = max(s1, s2)
+#   precision = min(p1 - s1, p2 - s2) + scale
+query T
+SELECT arrow_typeof(pmod(2.5::decimal(3,1), 1.2::decimal(2,1)));
+----
+Decimal128(2, 1)
+
+# The divisor bounds the result, so the narrower argument decides the precision
+query T
+SELECT arrow_typeof(pmod(10.0::decimal(5,2), 3.0::decimal(4,1)));
+----
+Decimal128(5, 2)
+
+# Differing scales: the wider scale wins
+query T
+SELECT arrow_typeof(pmod(1.234::decimal(6,3), 2.1::decimal(4,1)));
+----
+Decimal128(6, 3)
+
+# The dividend does not fit the result type, so it must not be narrowed before
+# the remainder is taken
+query T
+SELECT arrow_typeof(pmod(99.9::decimal(3,1), 2.5::decimal(2,1)));
+----
+Decimal128(2, 1)
+
+query R
+SELECT pmod(99.9::decimal(3,1), 2.5::decimal(2,1));
+----
+2.4
+
+# A remainder is bounded by the divisor, not by the result type, so a divisor
+# wider than the dividend can produce a value the result type cannot hold. Spark
+# wraps decimal arithmetic in CheckOverflow(nullOnOverflow = !ansiEnabled), so
+# this is NULL in legacy mode; the ANSI error is asserted in the ANSI block above.
+query T
+SELECT arrow_typeof(pmod(-0.1::decimal(3,1), 9999.9::decimal(5,1)));
+----
+Decimal128(3, 1)
+
+query R
+SELECT pmod(-0.1::decimal(3,1), 9999.9::decimal(5,1));
+----
+NULL
 
 # PMOD tests with different integer types
 query I
