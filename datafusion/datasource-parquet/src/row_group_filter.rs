@@ -395,6 +395,11 @@ impl RowGroupAccessPlanFilter {
         if candidate_row_group_indices.is_empty() {
             return;
         }
+        // Some pruning rewrites preserve only whether rows can be TRUE, while
+        // full-match inference must distinguish FALSE from UNKNOWN.
+        if !predicate.can_be_inverted_for_full_match() {
+            return;
+        }
         let arrow_schema = pruning_stats.arrow_schema;
 
         let mut inverted_expr: Arc<dyn PhysicalExpr> =
@@ -432,6 +437,7 @@ impl RowGroupAccessPlanFilter {
 
         let Ok(inverted_predicate) = PruningPredicateBuilder::new()
             .with_file_schema(Arc::clone(predicate.schema()))
+            .with_max_in_list_size(predicate.max_in_list_size())
             .try_build(inverted_expr)
         else {
             return;

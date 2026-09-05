@@ -1373,10 +1373,12 @@ config_namespace! {
         /// rewrite; other predicates and Bloom-filter pruning remain available.
         ///
         /// Within the cap, nonempty lists of at most 20 values use the existing
-        /// per-value rewrite. Larger non-null literal string lists on a string
-        /// column use a compact sorted domain, for both `IN` and `NOT IN`.
-        /// Other lists retain the existing per-value rewrite, so raising the cap
-        /// can make those predicates expensive to build and evaluate.
+        /// per-value rewrite. Larger literal string lists on a string column use
+        /// a compact representation, for both `IN` and `NOT IN`, including lists
+        /// with NULL members. `NOT IN` with NULL and all-NULL `IN` lists cannot
+        /// match any rows. Other lists retain the existing per-value rewrite, so
+        /// raising the cap can make those predicates expensive to build and
+        /// evaluate.
         ///
         /// Defaults to 20.
         pub max_in_list_size: usize, default = 20

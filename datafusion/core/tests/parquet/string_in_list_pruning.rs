@@ -440,23 +440,24 @@ async fn string_not_in_list_with_truncated_bounds() {
 }
 
 #[tokio::test]
-async fn string_not_in_list_with_null_does_not_bypass_row_filter() {
+async fn string_in_list_with_null_preserves_filter_semantics() {
     let mut file = tempfile::Builder::new()
-        .prefix("string_not_in_list_pruning")
+        .prefix("string_in_list_null_pruning")
         .suffix(".parquet")
         .tempfile()
         .unwrap();
     let schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)]));
     // The first row group has a known zero null count, and every value lies
-    // in a gap in the IN list. Dropping the NULL list member while inverting
-    // NOT IN would incorrectly prove that this entire row group matches.
+    // in a gap in the IN list. The matching value in the second row group is
+    // deliberately not first, so incorrectly bypassing the row filter changes
+    // the result when the scan has a limit.
     let values = vec![
         Some("v000001"),
         Some("v000001"),
         Some("v000001"),
         Some("v000001"),
-        Some("v000000"),
         Some("v000001"),
+        Some("v000000"),
         None,
         Some("v999999"),
     ];
@@ -475,13 +476,11 @@ async fn string_not_in_list_with_null_does_not_bypass_row_filter() {
     assert_eq!(writer.close().unwrap().num_row_groups(), 2);
 
     // Build the physical source directly so a logical optimizer cannot fold
-    // the SQL NOT IN (..., NULL) filter to an empty relation before the scan.
+    // NOT IN (..., NULL) to an empty relation before the scan.
     let mut list = (0..21)
         .map(|index| lit(format!("v{:06}", index * 10)))
         .collect::<Vec<_>>();
     list.push(lit(ScalarValue::Utf8(None)));
-    let predicate =
-        in_list(col("value", &schema).unwrap(), list, &true, &schema).unwrap();
     let location = Path::from_filesystem_path(file.path()).unwrap();
     let partitioned_file = PartitionedFile::new(
         location.to_string(),
@@ -490,48 +489,79 @@ async fn string_not_in_list_with_null_does_not_bypass_row_filter() {
     let ctx =
         SessionContext::new_with_config(SessionConfig::new().with_target_partitions(1));
 
-    for max_in_list_size in [0, 32] {
-        let mut options = TableParquetOptions::default();
-        options.global.max_in_list_size = max_in_list_size;
-        let source = Arc::new(
-            ParquetSource::new(Arc::clone(&schema))
-                .with_table_parquet_options(options)
-                .with_predicate(Arc::clone(&predicate))
-                .with_pushdown_filters(true)
-                .with_enable_page_index(false)
-                .with_bloom_filter_on_read(false),
-        );
-        let config =
-            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
-                .with_file(partitioned_file.clone())
-                .with_limit(Some(1))
-                .build();
-        let plan: Arc<dyn ExecutionPlan> =
-            Arc::new(DataSourceExec::new(Arc::new(config)));
-        let plan_text = displayable(plan.as_ref()).indent(true).to_string();
-        assert!(plan_text.contains("NOT IN"), "{plan_text}");
-        let batches = collect(Arc::clone(&plan), ctx.task_ctx()).await.unwrap();
-        let output = ScanOutput {
-            batches,
-            plan: plan_text,
-            metrics: MetricsFinder::find_metrics(plan.as_ref()).unwrap(),
-        };
+    for negated in [false, true] {
+        let predicate = in_list(
+            col("value", &schema).unwrap(),
+            list.clone(),
+            &negated,
+            &schema,
+        )
+        .unwrap();
+        for max_in_list_size in [0, 32] {
+            let mut options = TableParquetOptions::default();
+            options.global.max_in_list_size = max_in_list_size;
+            let source = Arc::new(
+                ParquetSource::new(Arc::clone(&schema))
+                    .with_table_parquet_options(options)
+                    .with_predicate(Arc::clone(&predicate))
+                    .with_pushdown_filters(true)
+                    .with_enable_page_index(false)
+                    .with_bloom_filter_on_read(false),
+            );
+            let config =
+                FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+                    .with_file(partitioned_file.clone())
+                    .with_limit(Some(1))
+                    .build();
+            let plan: Arc<dyn ExecutionPlan> =
+                Arc::new(DataSourceExec::new(Arc::new(config)));
+            let plan_text = displayable(plan.as_ref()).indent(true).to_string();
+            assert!(plan_text.contains("IN"), "{plan_text}");
+            let batches = collect(Arc::clone(&plan), ctx.task_ctx()).await.unwrap();
+            let output = ScanOutput {
+                batches,
+                plan: plan_text,
+                metrics: MetricsFinder::find_metrics(plan.as_ref()).unwrap(),
+            };
 
-        assert_eq!(
-            output
-                .batches
-                .iter()
-                .map(RecordBatch::num_rows)
-                .sum::<usize>(),
-            0,
-            "cap={max_in_list_size}, plan={}, metrics={}",
-            output.plan,
-            output.metrics
-        );
-        assert_eq!(output.fully_matched("row_groups_pruned_statistics"), 0);
-        assert_eq!(output.pruned("row_groups_pruned_statistics"), 0);
-        assert_eq!(output.pruned("limit_pruned_row_groups"), 0);
-        assert_eq!(output.counter("pushdown_rows_pruned"), 8);
-        assert_eq!(output.counter("predicate_evaluation_errors"), 0);
+            if negated {
+                assert!(output.batches.iter().all(|batch| batch.num_rows() == 0));
+            } else {
+                assert_batches_eq!(
+                    [
+                        "+---------+",
+                        "| value   |",
+                        "+---------+",
+                        "| v000000 |",
+                        "+---------+",
+                    ],
+                    &output.batches
+                );
+            }
+            assert_eq!(
+                output.counter("pushdown_rows_pruned"),
+                match (negated, max_in_list_size) {
+                    (false, 0) => 7,
+                    (false, _) => 3,
+                    (true, 0) => 8,
+                    (true, _) => 0,
+                }
+            );
+            assert_eq!(output.fully_matched("row_groups_pruned_statistics"), 0);
+            assert_eq!(
+                output.pruned("row_groups_pruned_statistics"),
+                if max_in_list_size == 0 {
+                    0
+                } else if negated {
+                    2
+                } else {
+                    1
+                },
+                "negated={negated}, cap={max_in_list_size}, metrics={}",
+                output.metrics
+            );
+            assert_eq!(output.pruned("limit_pruned_row_groups"), 0);
+            assert_eq!(output.counter("predicate_evaluation_errors"), 0);
+        }
     }
 }

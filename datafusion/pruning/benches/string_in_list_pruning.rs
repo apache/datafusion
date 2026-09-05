@@ -24,9 +24,10 @@
 //! without making the baseline depend on a deeply nested expression.
 //!
 //! The main cases alternate intervals pinned to a domain member with intervals
-//! that span a sparse gap. Supplemental `NOT IN` cases measure uniform singleton
-//! containers, long bounds, and long literals that share bounds' prefixes. Bloom
-//! filters are not involved.
+//! that span a sparse gap. NULL-containing variants cover the optimized
+//! filter-semantics paths, including the constant-false `NOT IN` rewrite.
+//! Supplemental `NOT IN` cases measure uniform singleton containers, long bounds,
+//! and long literals that share bounds' prefixes. Bloom filters are not involved.
 //!
 //! Run with `cargo bench -p datafusion-pruning --bench string_in_list_pruning`.
 //! The construction benchmarks reuse their input physical expressions; the
@@ -188,12 +189,16 @@ struct BenchmarkCase {
     size: usize,
     schema: SchemaRef,
     in_list: PhysicalExprRef,
+    in_list_with_null: PhysicalExprRef,
     expanded_or: PhysicalExprRef,
     not_in_list: PhysicalExprRef,
+    not_in_list_with_null: PhysicalExprRef,
     expanded_and: PhysicalExprRef,
     in_list_predicate: PruningPredicate,
+    in_list_with_null_predicate: PruningPredicate,
     expanded_or_predicate: PruningPredicate,
     not_in_list_predicate: PruningPredicate,
+    not_in_list_with_null_predicate: PruningPredicate,
     expanded_and_predicate: PruningPredicate,
     statistics: IntervalStatistics,
 }
@@ -209,15 +214,30 @@ impl BenchmarkCase {
         let values = (0..size)
             .map(|index| lit(ScalarValue::new_utf8view(value(index * 10))))
             .collect::<Vec<_>>();
+        let mut values_with_null = values.clone();
+        values_with_null.push(lit(ScalarValue::Utf8View(None)));
         let not_in_list =
             in_list(Arc::clone(&column), values.clone(), &true, &schema).unwrap();
+        let not_in_list_with_null = in_list(
+            Arc::clone(&column),
+            values_with_null.clone(),
+            &true,
+            &schema,
+        )
+        .unwrap();
+        let in_list_with_null =
+            in_list(Arc::clone(&column), values_with_null, &false, &schema).unwrap();
         let in_list =
             in_list(Arc::clone(&column), values.clone(), &false, &schema).unwrap();
         let expanded_or = expanded(&column, &values, Operator::Eq, Operator::Or);
         let expanded_and = expanded(&column, &values, Operator::NotEq, Operator::And);
         let in_list_predicate = build_predicate(&in_list, &schema, size);
+        let in_list_with_null_predicate =
+            build_predicate(&in_list_with_null, &schema, size + 1);
         let expanded_or_predicate = build_predicate(&expanded_or, &schema, size);
         let not_in_list_predicate = build_predicate(&not_in_list, &schema, size);
+        let not_in_list_with_null_predicate =
+            build_predicate(&not_in_list_with_null, &schema, size + 1);
         let expanded_and_predicate = build_predicate(&expanded_and, &schema, size);
         eprintln!(
             "string_in_list_pruning: {size} values, compact in={}, compact not in={}",
@@ -239,6 +259,10 @@ impl BenchmarkCase {
             .collect::<Vec<_>>();
         let negated_kept = kept.iter().map(|keep| !keep).collect::<Vec<_>>();
         assert_eq!(in_list_predicate.prune(&statistics).unwrap(), kept);
+        assert_eq!(
+            in_list_with_null_predicate.prune(&statistics).unwrap(),
+            kept
+        );
         assert_eq!(expanded_or_predicate.prune(&statistics).unwrap(), kept);
         assert_eq!(
             not_in_list_predicate.prune(&statistics).unwrap(),
@@ -248,17 +272,28 @@ impl BenchmarkCase {
             expanded_and_predicate.prune(&statistics).unwrap(),
             negated_kept
         );
+        assert!(
+            not_in_list_with_null_predicate
+                .prune(&statistics)
+                .unwrap()
+                .iter()
+                .all(|keep| !keep)
+        );
 
         Self {
             size,
             schema,
             in_list,
+            in_list_with_null,
             expanded_or,
             not_in_list,
+            not_in_list_with_null,
             expanded_and,
             in_list_predicate,
+            in_list_with_null_predicate,
             expanded_or_predicate,
             not_in_list_predicate,
+            not_in_list_with_null_predicate,
             expanded_and_predicate,
             statistics,
         }
@@ -269,22 +304,28 @@ fn criterion_benchmark(criterion: &mut Criterion) {
     let cases = DOMAIN_SIZES.map(BenchmarkCase::new);
     let mut construction = criterion.benchmark_group("string_in_list_pruning/construct");
     for case in &cases {
-        construction.throughput(Throughput::Elements(case.size as u64));
-        for (name, expression) in [
-            ("in_list", &case.in_list),
-            ("expanded_or", &case.expanded_or),
-            ("not_in_list", &case.not_in_list),
-            ("expanded_and", &case.expanded_and),
+        for (name, expression, max_in_list_size) in [
+            ("in_list", &case.in_list, case.size),
+            ("in_list_with_null", &case.in_list_with_null, case.size + 1),
+            ("expanded_or", &case.expanded_or, case.size),
+            ("not_in_list", &case.not_in_list, case.size),
+            (
+                "not_in_list_with_null_constant_false",
+                &case.not_in_list_with_null,
+                case.size + 1,
+            ),
+            ("expanded_and", &case.expanded_and, case.size),
         ] {
+            construction.throughput(Throughput::Elements(max_in_list_size as u64));
             construction.bench_with_input(
-                BenchmarkId::new(name, case.size),
+                BenchmarkId::new(name, max_in_list_size),
                 expression,
                 |bencher, expression| {
                     bencher.iter(|| {
                         black_box(build_predicate(
                             black_box(expression),
                             &case.schema,
-                            case.size,
+                            max_in_list_size,
                         ))
                     });
                 },
@@ -296,14 +337,24 @@ fn criterion_benchmark(criterion: &mut Criterion) {
     let mut evaluation = criterion.benchmark_group("string_in_list_pruning/evaluate");
     evaluation.throughput(Throughput::Elements(CONTAINERS as u64));
     for case in &cases {
-        for (name, predicate) in [
-            ("in_list", &case.in_list_predicate),
-            ("expanded_or", &case.expanded_or_predicate),
-            ("not_in_list", &case.not_in_list_predicate),
-            ("expanded_and", &case.expanded_and_predicate),
+        for (name, predicate, list_size) in [
+            ("in_list", &case.in_list_predicate, case.size),
+            (
+                "in_list_with_null",
+                &case.in_list_with_null_predicate,
+                case.size + 1,
+            ),
+            ("expanded_or", &case.expanded_or_predicate, case.size),
+            ("not_in_list", &case.not_in_list_predicate, case.size),
+            (
+                "not_in_list_with_null_constant_false",
+                &case.not_in_list_with_null_predicate,
+                case.size + 1,
+            ),
+            ("expanded_and", &case.expanded_and_predicate, case.size),
         ] {
             evaluation.bench_with_input(
-                BenchmarkId::new(name, case.size),
+                BenchmarkId::new(name, list_size),
                 predicate,
                 |bencher, predicate| {
                     bencher.iter(|| {
