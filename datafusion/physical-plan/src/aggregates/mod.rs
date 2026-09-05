@@ -3637,7 +3637,7 @@ mod tests {
 
         let task_ctx = if spill {
             // set to an appropriate value to trigger spill
-            new_spill_ctx(2, 1600)
+            new_spill_ctx(2, 200)
         } else {
             Arc::new(TaskContext::default())
         };
@@ -3703,7 +3703,7 @@ mod tests {
 
         let task_ctx = if spill {
             // enlarge memory limit to let the final aggregation finish
-            new_spill_ctx(2, 4640)
+            new_spill_ctx(2, 900)
         } else {
             Arc::clone(&task_ctx)
         };
