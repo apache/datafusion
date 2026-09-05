@@ -28,14 +28,13 @@ use datafusion_common::assert_or_internal_err;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
 
-use crate::InputOrderMode;
 use crate::PhysicalExpr;
 use crate::aggregates::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
     GroupByMetrics, GroupValues, new_group_values,
 };
 use crate::aggregates::grouped_hash_stream::create_group_accumulator;
-use crate::aggregates::order::GroupOrdering;
+use crate::aggregates::order::{GroupCompletionMode, GroupOrdering};
 use crate::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy, aggregate_expressions,
     evaluate_group_by,
@@ -113,7 +112,7 @@ impl OrderedAggregateTableMetrics {
 /// `OrderedAggrMode` selects the aggregate semantics. For example,
 /// `OrderedAggregateTable::<PartialMarker>::new(...)` consumes raw rows
 /// and emits partial states, while
-/// `OrderedAggregateTable::<FinalMarker>::new_with_input_order(...)`
+/// `OrderedAggregateTable::<FinalMarker>::new_with_group_completion(...)`
 /// consumes partial states and emits final values.
 ///
 /// Shared methods live on `impl<T>`; single/partial/final behavior lives on
@@ -184,7 +183,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         output_schema: SchemaRef,
         state_schema: SchemaRef,
         batch_size: usize,
-        input_order_mode: &InputOrderMode,
+        group_completion_mode: &GroupCompletionMode,
         aggregate_mode: &AggregateMode,
         filters: Vec<Option<Arc<dyn PhysicalExpr>>>,
         metrics: OrderedAggregateTableMetrics,
@@ -194,7 +193,8 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             "OrderedAggregateTable requires config batch_size >= 1"
         );
 
-        let group_ordering = GroupOrdering::try_new(input_order_mode)?;
+        let group_ordering =
+            GroupOrdering::try_new_for_group_completion(group_completion_mode)?;
         let group_schema = agg.group_by.group_schema(input_schema)?;
         let group_values = new_group_values(group_schema, &group_ordering)?;
         let aggregate_arguments = aggregate_expressions(
