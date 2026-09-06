@@ -65,8 +65,8 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     JoinSide, NullEquality, Result, ScalarValue, Statistics, arrow_err,
-    assert_eq_or_internal_err, internal_datafusion_err, internal_err, project_schema,
-    unwrap_or_internal_err,
+    assert_eq_or_internal_err, exec_err, internal_datafusion_err, internal_err,
+    project_schema, unwrap_or_internal_err,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::{SpillFile, TaskContext};
@@ -1338,17 +1338,6 @@ enum NLJState {
     /// has to guard against decrementing twice.
     ProbeEnd,
     EmitLeftUnmatched,
-    /// Drives the final chunk's `release_chunk` future to completion.
-    ///
-    /// Non-final chunks get released on the way back through
-    /// `BufferingLeft`, but after the last chunk the stream goes straight to
-    /// `Done` or `EmitGlobalRightUnmatched`, and neither polls
-    /// `chunk_release_in_flight`. Since the coordinator hangs off the exec
-    /// rather than off this stream, leaving that future unpolled keeps the
-    /// final chunk's batch, bitmap and reservation accounted for as long as
-    /// the plan is alive. This state exists to poll it exactly once, then
-    /// continue to whichever state would have followed.
-    ReleasingFinalChunk,
     /// Emit unmatched right rows using the global bitmap accumulated across
     /// all left chunks. Only used in memory-limited mode for join types that
     /// require tracking right-side matches in the final output (RIGHT, FULL,
@@ -1425,6 +1414,16 @@ struct FallbackCoordinatorInner {
     /// True while a partition has claimed leader role for the next
     /// chunk and is loading it; prevents two partitions from racing.
     loader_in_flight: bool,
+    /// Set when a stream is dropped before finishing, which cancels the whole
+    /// coordinated fallback.
+    ///
+    /// The partitions of a coordinated fallback are not independent: chunk
+    /// advancement requires every one of them to report, so a partition that
+    /// disappears mid-probe would otherwise leave the survivors waiting on a
+    /// release nobody will ever make. Once set, chunk state is dropped, waiters
+    /// are woken with an error, and a loader that is still reading must discard
+    /// its result instead of publishing it.
+    cancelled: bool,
 }
 
 /// Plan-level shared coordinator for the memory-limited fallback path.
@@ -1441,7 +1440,7 @@ pub(crate) struct FallbackCoordinator {
     /// Whether `JoinLeftData` should carry a left visited bitmap (for
     /// join types that emit unmatched left rows in the final output).
     with_visited_bitmap: bool,
-    inner: tokio::sync::Mutex<FallbackCoordinatorInner>,
+    inner: Mutex<FallbackCoordinatorInner>,
     /// Notified when a new chunk becomes available, when the left stream
     /// is exhausted, or when a chunk is released.
     notify: tokio::sync::Notify,
@@ -1452,7 +1451,7 @@ impl FallbackCoordinator {
         Self {
             right_partition_count,
             with_visited_bitmap,
-            inner: tokio::sync::Mutex::new(FallbackCoordinatorInner {
+            inner: Mutex::new(FallbackCoordinatorInner {
                 reservation: None,
                 left_stream: None,
                 left_schema: None,
@@ -1461,6 +1460,7 @@ impl FallbackCoordinator {
                 next_chunk_index: 0,
                 current: None,
                 loader_in_flight: false,
+                cancelled: false,
             }),
             notify: tokio::sync::Notify::new(),
         }
@@ -1469,17 +1469,40 @@ impl FallbackCoordinator {
     /// After the last partition finishes processing chunk
     /// `released_chunk_index`, drop the slot so the next leader can
     /// load chunk `released_chunk_index + 1`.
-    async fn release_chunk(self: &Arc<Self>, released_chunk_index: usize) {
-        let mut inner = self.inner.lock().await;
-        if let Some(cur) = &inner.current
-            && cur.chunk_index == released_chunk_index
+    fn release_chunk(self: &Arc<Self>, released_chunk_index: usize) {
         {
-            inner.current = None;
-            inner.next_chunk_index = released_chunk_index + 1;
+            let mut inner = self.inner.lock();
+            if let Some(cur) = &inner.current
+                && cur.chunk_index == released_chunk_index
+            {
+                inner.current = None;
+                inner.next_chunk_index = released_chunk_index + 1;
+            }
         }
         // Always notify: waiters may be blocked because they couldn't
         // become leader while a previous chunk was current.
-        drop(inner);
+        self.notify.notify_waiters();
+    }
+
+    /// Cancels the coordinated fallback and drops everything the coordinator
+    /// holds, synchronously.
+    ///
+    /// Called from a stream's drop guard when it goes away without finishing.
+    /// Chunks other partitions still hold stay accounted until they release
+    /// them; what this drops is the coordinator's own state, which nothing will
+    /// come back for.
+    fn cancel(self: &Arc<Self>) {
+        {
+            let mut inner = self.inner.lock();
+            if inner.cancelled {
+                return;
+            }
+            inner.cancelled = true;
+            inner.current = None;
+            inner.carryover = None;
+            inner.left_stream = None;
+            inner.reservation = None;
+        }
         self.notify.notify_waiters();
     }
 
@@ -1497,135 +1520,174 @@ impl FallbackCoordinator {
         // `spill_data` is already resolved: every partition receives the
         // same `Arc<LeftSpillData>` from the shared `OnceAsync<LeftLoad>`,
         // so the left child is executed and spilled exactly once.
-
         loop {
-            let mut inner = self.inner.lock().await;
+            // Decide what to do with the lock held, then act on that decision
+            // after releasing it. The guard must not survive into the `.await`
+            // below -- it is not `Send`, and holding it across the load would
+            // serialize every partition behind the leader's disk reads.
+            let decision = {
+                let mut inner = self.inner.lock();
 
-            // Case 1: requested chunk is already loaded.
-            if let Some(cur) = &inner.current
-                && cur.chunk_index == expected_chunk_index
-            {
-                return Ok(Some((Arc::clone(&cur.data), cur.is_last)));
-            }
+                if inner.cancelled {
+                    Decision::Cancelled
+                } else if let Some(cur) = &inner.current
+                    && cur.chunk_index == expected_chunk_index
+                {
+                    // Case 1: requested chunk is already loaded.
+                    Decision::Serve(Arc::clone(&cur.data), cur.is_last)
+                } else if inner.left_exhausted
+                    && inner.current.is_none()
+                    && inner.carryover.is_none()
+                {
+                    // Case 2: left side finished and nothing left to deliver.
+                    Decision::Finished
+                } else if inner.current.is_none() && !inner.loader_in_flight {
+                    // Case 3: claim the leader role and take the shared
+                    // resources out so the load can run without the lock.
+                    inner.loader_in_flight = true;
+                    let stream = inner.left_stream.take();
+                    let reservation = inner.reservation.take();
+                    let carryover = inner.carryover.take();
+                    let chunk_index_to_load = inner.next_chunk_index;
+                    debug_assert_eq!(chunk_index_to_load, expected_chunk_index);
+                    Decision::Load {
+                        stream,
+                        reservation,
+                        carryover,
+                        chunk_index: chunk_index_to_load,
+                    }
+                } else {
+                    // Case 4: someone else is loading, or this chunk index has
+                    // already been passed -- wait to be notified.
+                    Decision::Wait(self.notify.notified())
+                }
+            };
 
-            // Case 2: left stream exhausted and no current chunk to
-            // deliver — caller is past the last chunk.
-            if inner.left_exhausted
-                && inner.current.is_none()
-                && inner.carryover.is_none()
-            {
-                return Ok(None);
-            }
-
-            // Case 3: no chunk loaded and no leader yet — claim leader.
-            if inner.current.is_none() && !inner.loader_in_flight {
-                inner.loader_in_flight = true;
-                // Lazily initialize the shared left stream, schema, and
-                // chunk reservation. Only the leader does this (under the
-                // `loader_in_flight` guard), so waiters never open a
-                // throwaway spill stream that the leader would overwrite.
-                let mut left_stream = match inner.left_stream.take() {
-                    Some(stream) => stream,
-                    None => {
-                        // Construct the spill stream. If this ever fails,
-                        // clear the leader flag and wake waiters before
-                        // returning, so they don't block forever on a
-                        // release that the failed leader will never make.
-                        match spill_data.spill_manager.read_spill_as_stream(
-                            Arc::clone(&spill_data.spill_file),
-                            None,
-                        ) {
-                            Ok(stream) => {
-                                inner.left_schema = Some(Arc::clone(&spill_data.schema));
-                                stream
-                            }
-                            Err(e) => {
-                                inner.loader_in_flight = false;
-                                drop(inner);
-                                self.notify.notify_waiters();
-                                return Err(e);
+            match decision {
+                Decision::Cancelled => {
+                    return exec_err!(
+                        "NestedLoopJoin coordinated fallback was cancelled because a \
+                         partition was dropped before finishing"
+                    );
+                }
+                Decision::Serve(data, is_last) => return Ok(Some((data, is_last))),
+                Decision::Finished => return Ok(None),
+                Decision::Wait(notified) => {
+                    notified.await;
+                }
+                Decision::Load {
+                    stream,
+                    reservation,
+                    carryover,
+                    chunk_index,
+                } => {
+                    // Build whatever the slot did not already have. A failure
+                    // here must clear the leader flag and wake waiters, or they
+                    // block on a release the failed leader never makes.
+                    let (mut left_stream, left_schema) = match stream {
+                        Some(stream) => {
+                            let schema = {
+                                let inner = self.inner.lock();
+                                inner.left_schema.clone()
+                            };
+                            let schema = match schema {
+                                Some(schema) => schema,
+                                None => Arc::clone(&spill_data.schema),
+                            };
+                            (stream, schema)
+                        }
+                        None => {
+                            match spill_data.spill_manager.read_spill_as_stream(
+                                Arc::clone(&spill_data.spill_file),
+                                None,
+                            ) {
+                                Ok(stream) => {
+                                    let mut inner = self.inner.lock();
+                                    inner.left_schema =
+                                        Some(Arc::clone(&spill_data.schema));
+                                    drop(inner);
+                                    (stream, Arc::clone(&spill_data.schema))
+                                }
+                                Err(e) => {
+                                    {
+                                        let mut inner = self.inner.lock();
+                                        inner.loader_in_flight = false;
+                                    }
+                                    self.notify.notify_waiters();
+                                    return Err(e);
+                                }
                             }
                         }
-                    }
-                };
-                let mut reservation = match inner.reservation.take() {
-                    Some(reservation) => reservation,
-                    None => {
-                        MemoryConsumer::new("NestedLoopJoinFallbackChunk".to_string())
-                            .with_can_spill(true)
-                            .register(task_context.memory_pool())
-                    }
-                };
-                let left_schema = Arc::clone(
-                    inner
-                        .left_schema
-                        .as_ref()
-                        .expect("left_schema installed above"),
-                );
-                let carryover = inner.carryover.take();
-                let chunk_index_to_load = inner.next_chunk_index;
-                debug_assert_eq!(chunk_index_to_load, expected_chunk_index);
-                drop(inner);
-
-                let load_result = Arc::clone(&self)
-                    .load_one_chunk(
-                        chunk_index_to_load,
-                        &mut left_stream,
-                        &mut reservation,
-                        carryover,
-                        Arc::clone(&left_schema),
-                        build_time.clone(),
-                    )
-                    .await;
-
-                // Re-acquire lock and publish the result.
-                let mut inner = self.inner.lock().await;
-                inner.left_stream = Some(left_stream);
-                inner.reservation = Some(reservation);
-                inner.loader_in_flight = false;
-
-                match load_result {
-                    Ok(LoadOutcome::Chunk {
-                        data,
-                        is_last,
-                        carryover,
-                    }) => {
-                        inner.carryover = carryover;
-                        if is_last {
-                            inner.left_exhausted = true;
+                    };
+                    let mut reservation = match reservation {
+                        Some(reservation) => reservation,
+                        None => {
+                            MemoryConsumer::new("NestedLoopJoinFallbackChunk".to_string())
+                                .with_can_spill(true)
+                                .register(task_context.memory_pool())
                         }
-                        let arc_data = Arc::new(data);
-                        inner.current = Some(CurrentChunk {
-                            chunk_index: chunk_index_to_load,
-                            data: Arc::clone(&arc_data),
-                            is_last,
-                        });
-                        drop(inner);
-                        self.notify.notify_waiters();
-                        return Ok(Some((arc_data, is_last)));
-                    }
-                    Ok(LoadOutcome::Empty) => {
-                        // No data at all. Mark exhausted; let other
-                        // partitions observe and exit.
-                        inner.left_exhausted = true;
-                        drop(inner);
-                        self.notify.notify_waiters();
-                        return Ok(None);
-                    }
-                    Err(e) => {
-                        drop(inner);
-                        self.notify.notify_waiters();
-                        return Err(e);
+                    };
+
+                    let load_result = Arc::clone(&self)
+                        .load_one_chunk(
+                            chunk_index,
+                            &mut left_stream,
+                            &mut reservation,
+                            carryover,
+                            Arc::clone(&left_schema),
+                            build_time.clone(),
+                        )
+                        .await;
+
+                    // Publish, unless the fallback was cancelled while this
+                    // load was running -- putting the stream and reservation
+                    // back would undo the cleanup `cancel` just did.
+                    let published = {
+                        let mut inner = self.inner.lock();
+                        inner.loader_in_flight = false;
+                        if inner.cancelled {
+                            None
+                        } else {
+                            inner.left_stream = Some(left_stream);
+                            inner.reservation = Some(reservation);
+                            match load_result {
+                                Ok(LoadOutcome::Chunk {
+                                    data,
+                                    is_last,
+                                    carryover,
+                                }) => {
+                                    inner.carryover = carryover;
+                                    if is_last {
+                                        inner.left_exhausted = true;
+                                    }
+                                    let arc_data = Arc::new(data);
+                                    inner.current = Some(CurrentChunk {
+                                        chunk_index,
+                                        data: Arc::clone(&arc_data),
+                                        is_last,
+                                    });
+                                    Some(Ok(Some((arc_data, is_last))))
+                                }
+                                Ok(LoadOutcome::Empty) => {
+                                    inner.left_exhausted = true;
+                                    Some(Ok(None))
+                                }
+                                Err(e) => Some(Err(e)),
+                            }
+                        }
+                    };
+                    self.notify.notify_waiters();
+                    match published {
+                        Some(result) => return result,
+                        None => {
+                            return exec_err!(
+                                "NestedLoopJoin coordinated fallback was cancelled \
+                                 while a chunk was being loaded"
+                            );
+                        }
                     }
                 }
             }
-
-            // Case 4: another partition is loading the next chunk, or
-            // the current chunk is for a previous index we've already
-            // moved past — wait to be notified.
-            let notified = self.notify.notified();
-            drop(inner);
-            notified.await;
         }
     }
 
@@ -1736,6 +1798,26 @@ impl FallbackCoordinator {
     }
 }
 
+/// What [`FallbackCoordinator::next_chunk`] decided to do while holding the
+/// lock, so the work itself can happen after the guard is released.
+enum Decision<'a> {
+    /// Chunk is loaded and can be handed straight back.
+    Serve(Arc<JoinLeftData>, bool),
+    /// Left side is finished; the caller is past the last chunk.
+    Finished,
+    /// This caller is the leader and owns the shared resources for one load.
+    Load {
+        stream: Option<SendableRecordBatchStream>,
+        reservation: Option<MemoryReservation>,
+        carryover: Option<RecordBatch>,
+        chunk_index: usize,
+    },
+    /// Someone else is loading, or this index has been passed: wait.
+    Wait(tokio::sync::futures::Notified<'a>),
+    /// A partition was dropped before finishing, so the fallback is cancelled.
+    Cancelled,
+}
+
 enum LoadOutcome {
     Chunk {
         data: JoinLeftData,
@@ -1821,9 +1903,6 @@ pub(crate) struct SpillStateActive {
     /// until it resolves to either the next chunk or `None` (left side
     /// exhausted with no chunk to deliver).
     chunk_fetch_in_flight: Option<ChunkFetchFuture>,
-    /// In-flight chunk release future. Created by `EmitLeftUnmatched`
-    /// when the last partition for a chunk has finished its work.
-    chunk_release_in_flight: Option<BoxFuture<'static, ()>>,
 }
 
 impl SpillStateActive {
@@ -2152,17 +2231,7 @@ impl Stream for NestedLoopJoinStream {
                     let join_metric = self.metrics.join_metrics.join_time.clone();
                     let _join_timer = join_metric.timer();
 
-                    match self.handle_emit_left_unmatched(cx) {
-                        ControlFlow::Continue(()) => {}
-                        ControlFlow::Break(poll) => {
-                            return self.metrics.join_metrics.baseline.record_poll(poll);
-                        }
-                    }
-                }
-
-                // Release the final chunk before finishing the stream.
-                NLJState::ReleasingFinalChunk => {
-                    match self.handle_releasing_final_chunk(cx) {
+                    match self.handle_emit_left_unmatched() {
                         ControlFlow::Continue(()) => {}
                         ControlFlow::Break(poll) => {
                             return self.metrics.join_metrics.baseline.record_poll(poll);
@@ -2207,6 +2276,29 @@ impl Stream for NestedLoopJoinStream {
 impl RecordBatchStream for NestedLoopJoinStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.output_schema)
+    }
+}
+
+/// Cancels the coordinated fallback if a stream goes away before finishing.
+///
+/// The partitions of a coordinated fallback are not independent: chunk
+/// advancement needs every one of them to report, so a partition that
+/// disappears mid-probe would leave the survivors waiting on a release nobody
+/// will ever make, and the coordinator -- owned by the plan, not the stream --
+/// would keep holding the chunk it had published. Cancelling is the honest
+/// outcome: this execution can no longer produce a complete result, so the
+/// remaining partitions are failed rather than left hanging or allowed to
+/// report success from partial input.
+///
+/// A stream that reached `Done` finished its work and does not cancel anything.
+impl Drop for NestedLoopJoinStream {
+    fn drop(&mut self) {
+        if matches!(self.state, NLJState::Done) {
+            return;
+        }
+        if let SpillState::Active(active) = &self.spill_state {
+            Arc::clone(&active.coordinator).cancel();
+        }
     }
 }
 
@@ -2311,7 +2403,6 @@ impl NestedLoopJoinStream {
             global_right_bitmaps_reservation,
             right_batch_index: 0,
             chunk_fetch_in_flight: None,
-            chunk_release_in_flight: None,
         }));
 
         // State stays BufferingLeft — next poll will enter
@@ -2375,18 +2466,6 @@ impl NestedLoopJoinStream {
                 "handle_buffering_left_memory_limited called without Active spill state"
             );
         };
-
-        // Drain any pending chunk-release future before fetching the next
-        // chunk. The coordinator slot must be released so the next leader
-        // can load the following chunk.
-        if let Some(fut) = active.chunk_release_in_flight.as_mut() {
-            match fut.poll_unpin(cx) {
-                Poll::Ready(()) => {
-                    active.chunk_release_in_flight = None;
-                }
-                Poll::Pending => return ControlFlow::Break(Poll::Pending),
-            }
-        }
 
         // Lazily start a chunk-fetch future for `active.next_chunk_index`.
         if active.chunk_fetch_in_flight.is_none() {
@@ -2655,25 +2734,10 @@ impl NestedLoopJoinStream {
     /// next chunk (if the left stream is not yet exhausted).
     fn handle_emit_left_unmatched(
         &mut self,
-        cx: &mut std::task::Context<'_>,
     ) -> ControlFlow<Poll<Option<Result<RecordBatch>>>> {
         // Return any completed batches first
         if let Some(poll) = self.maybe_flush_ready_batch() {
             return ControlFlow::Break(poll);
-        }
-
-        // First, drive any pending chunk-release future to completion so
-        // we don't transition to the next state while another partition
-        // is waiting for the slot to be freed.
-        if let SpillState::Active(active) = &mut self.spill_state
-            && let Some(fut) = active.chunk_release_in_flight.as_mut()
-        {
-            match fut.poll_unpin(cx) {
-                Poll::Ready(()) => {
-                    active.chunk_release_in_flight = None;
-                }
-                Poll::Pending => return ControlFlow::Break(Poll::Pending),
-            }
         }
 
         // Process current unmatched state
@@ -2706,14 +2770,11 @@ impl NestedLoopJoinStream {
                             // releases the coordinator slot so the next
                             // leader can load the following chunk.
                             if is_emitter {
+                                // Synchronous now, so the slot is freed before
+                                // this poll returns. It can no longer be lost by
+                                // the stream being dropped mid-release.
                                 let coordinator = Arc::clone(&active.coordinator);
-                                let released_index = active.next_chunk_index;
-                                active.chunk_release_in_flight = Some(
-                                    async move {
-                                        coordinator.release_chunk(released_index).await
-                                    }
-                                    .boxed(),
-                                );
+                                coordinator.release_chunk(active.next_chunk_index);
                             }
                             active.next_chunk_index += 1;
                         }
@@ -2722,18 +2783,7 @@ impl NestedLoopJoinStream {
                         // does not need to be reset here.
                     }
 
-                    if self.is_memory_limited()
-                        && self.left_exhausted
-                        && matches!(
-                            &self.spill_state,
-                            SpillState::Active(active)
-                                if active.chunk_release_in_flight.is_some()
-                        )
-                    {
-                        // Final chunk: hand off to `ReleasingFinalChunk`, which
-                        // drives the release future before moving on.
-                        self.state = NLJState::ReleasingFinalChunk;
-                    } else if !self.left_exhausted && self.is_memory_limited() {
+                    if !self.left_exhausted && self.is_memory_limited() {
                         // More left data to process — go back to
                         // BufferingLeft for the next chunk.
                         self.left_probe_idx = 0;
@@ -2757,39 +2807,6 @@ impl NestedLoopJoinStream {
             },
             Err(e) => ControlFlow::Break(Poll::Ready(Some(Err(e)))),
         }
-    }
-
-    /// Handle ReleasingFinalChunk state.
-    ///
-    /// Polls the final chunk's `release_chunk` future to completion, then
-    /// moves on to whichever state would have followed `EmitLeftUnmatched`.
-    /// Releasing the slot drops the coordinator's `Arc<JoinLeftData>` and lets
-    /// the coordinator reservation be reclaimed, which otherwise would not
-    /// happen until the whole plan is dropped.
-    fn handle_releasing_final_chunk(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> ControlFlow<Poll<Option<Result<RecordBatch>>>> {
-        if let SpillState::Active(active) = &mut self.spill_state
-            && let Some(fut) = active.chunk_release_in_flight.as_mut()
-        {
-            match fut.poll_unpin(cx) {
-                Poll::Ready(()) => {
-                    active.chunk_release_in_flight = None;
-                }
-                Poll::Pending => return ControlFlow::Break(Poll::Pending),
-            }
-        }
-
-        self.state = if self.should_track_unmatched_right {
-            // Drop the exhausted right stream so that
-            // EmitGlobalRightUnmatched opens a fresh replay pass.
-            self.right_data = None;
-            NLJState::EmitGlobalRightUnmatched
-        } else {
-            NLJState::Done
-        };
-        ControlFlow::Continue(())
     }
 
     /// Handle EmitGlobalRightUnmatched state.
@@ -4255,7 +4272,7 @@ pub(crate) mod tests {
                     MemoryConsumer::new("NestedLoopJoinFallbackChunk[test]".to_string())
                         .register(task_ctx.memory_pool()),
                 ));
-                let mut inner = coordinator.inner.lock().await;
+                let mut inner = coordinator.inner.lock();
                 inner.left_exhausted = true;
                 inner.current = Some(CurrentChunk {
                     chunk_index: 0,
@@ -4263,7 +4280,7 @@ pub(crate) mod tests {
                     is_last: true,
                 });
             } else {
-                let mut inner = coordinator.inner.lock().await;
+                let mut inner = coordinator.inner.lock();
                 inner.left_schema = Some(Arc::clone(&left_schema));
                 inner.left_stream = Some(left_stream);
             }
@@ -4293,7 +4310,6 @@ pub(crate) mod tests {
                 global_right_bitmaps_reservation,
                 right_batch_index: 0,
                 chunk_fetch_in_flight: None,
-                chunk_release_in_flight: None,
             };
             (
                 OnceFut::new(async { internal_err!("unused left data was polled") }),
@@ -5683,6 +5699,136 @@ pub(crate) mod tests {
         }))
     }
 
+    /// A partition dropped before finishing must cancel the coordinated
+    /// fallback rather than leave the survivors waiting forever.
+    ///
+    /// Chunk advancement needs every partition to report, so before this the
+    /// survivors fell through to the `notified()` wait in `next_chunk` and hung.
+    #[tokio::test]
+    async fn test_nlj_cancelled_partition_does_not_hang_survivors() -> Result<()> {
+        let runtime = RuntimeEnvBuilder::new().build_arc()?;
+        let task_ctx = Arc::new(TaskContext::default().with_runtime(runtime));
+
+        let coordinator = Arc::new(FallbackCoordinator::new(2, true));
+        let spill =
+            spill_left_for_test(build_left_table(), Arc::clone(&task_ctx)).await?;
+
+        let (chunk_a, _) = Arc::clone(&coordinator)
+            .next_chunk(0, Arc::clone(&spill), Arc::clone(&task_ctx), Time::new())
+            .await?
+            .expect("chunk 0");
+
+        // Partition A disappears mid-probe: it never reports completion, so no
+        // emitter is elected and nothing would ever release the slot.
+        drop(chunk_a);
+        Arc::clone(&coordinator).cancel();
+
+        // The survivor must be told the execution is over, not left waiting.
+        let survivor = tokio::time::timeout(
+            Duration::from_secs(5),
+            Arc::clone(&coordinator).next_chunk(
+                1,
+                Arc::clone(&spill),
+                Arc::clone(&task_ctx),
+                Time::new(),
+            ),
+        )
+        .await;
+        assert!(
+            survivor.is_ok(),
+            "a cancelled partition must not leave the survivors hanging"
+        );
+        assert!(
+            survivor.unwrap().is_err(),
+            "the survivor should see the cancellation as an error"
+        );
+        Ok(())
+    }
+
+    /// Cancelling drops what the coordinator holds, so the chunk's reservation
+    /// is not stranded for the lifetime of a retained plan.
+    #[tokio::test]
+    async fn test_nlj_cancel_releases_coordinator_held_memory() -> Result<()> {
+        let runtime = RuntimeEnvBuilder::new().build_arc()?;
+        let pool = Arc::clone(&runtime.memory_pool);
+        let task_ctx = Arc::new(TaskContext::default().with_runtime(runtime));
+
+        let coordinator = Arc::new(FallbackCoordinator::new(2, true));
+        let spill =
+            spill_left_for_test(build_left_table(), Arc::clone(&task_ctx)).await?;
+
+        let (chunk, _) = Arc::clone(&coordinator)
+            .next_chunk(0, Arc::clone(&spill), Arc::clone(&task_ctx), Time::new())
+            .await?
+            .expect("chunk 0");
+        assert!(pool.reserved() > 0);
+
+        // Streams go away without releasing the slot, then the drop guard
+        // cancels. The coordinator is still alive, as for a retained plan.
+        drop(chunk);
+        Arc::clone(&coordinator).cancel();
+        assert_eq!(
+            pool.reserved(),
+            0,
+            "cancelling must release what the coordinator was holding"
+        );
+        Ok(())
+    }
+
+    /// Cancelling while a loader is mid-read must not let it publish into the
+    /// coordinator it just cleaned up.
+    ///
+    /// The loader takes the shared stream and reservation out of the slot, reads
+    /// without the lock, then puts them back. Without the cancellation check on
+    /// that publish, the resources `cancel` dropped would be reinstated and the
+    /// retention would come straight back.
+    #[tokio::test]
+    async fn test_nlj_cancel_during_load_discards_the_result() -> Result<()> {
+        let runtime = RuntimeEnvBuilder::new().build_arc()?;
+        let pool = Arc::clone(&runtime.memory_pool);
+        let task_ctx = Arc::new(TaskContext::default().with_runtime(runtime));
+
+        let coordinator = Arc::new(FallbackCoordinator::new(1, true));
+        let spill =
+            spill_left_for_test(build_left_table(), Arc::clone(&task_ctx)).await?;
+
+        // Cancel first, then let a load complete: the publish must be discarded.
+        Arc::clone(&coordinator).cancel();
+        let result = Arc::clone(&coordinator)
+            .next_chunk(0, Arc::clone(&spill), Arc::clone(&task_ctx), Time::new())
+            .await;
+        assert!(
+            result.is_err(),
+            "a cancelled fallback must not serve chunks"
+        );
+        assert_eq!(
+            pool.reserved(),
+            0,
+            "a discarded load must not leave the reservation reinstated"
+        );
+        Ok(())
+    }
+
+    /// A stream that finished normally must not cancel anything on drop.
+    #[tokio::test]
+    async fn test_nlj_completed_stream_drop_does_not_cancel() -> Result<()> {
+        let runtime = RuntimeEnvBuilder::new().build_arc()?;
+        let task_ctx = Arc::new(TaskContext::default().with_runtime(runtime));
+        let coordinator = Arc::new(FallbackCoordinator::new(1, true));
+        let spill =
+            spill_left_for_test(build_left_table(), Arc::clone(&task_ctx)).await?;
+
+        // Serving a chunk still works after a completed stream would have been
+        // dropped, i.e. nothing marked the coordinator cancelled.
+        let (chunk, _) = Arc::clone(&coordinator)
+            .next_chunk(0, Arc::clone(&spill), Arc::clone(&task_ctx), Time::new())
+            .await?
+            .expect("chunk 0");
+        assert!(!coordinator.inner.lock().cancelled);
+        drop(chunk);
+        Ok(())
+    }
+
     /// The chunk's memory must be owned by the chunk's `JoinLeftData`, so it
     /// stays accounted while *any* holder still references it.
     ///
@@ -5722,7 +5868,7 @@ pub(crate) mod tests {
 
         // Release the coordinator slot while still holding the chunk. This is
         // the emitter's release: the slot is freed, but the data is alive.
-        coordinator.release_chunk(0).await;
+        coordinator.release_chunk(0);
         assert_eq!(
             pool.reserved(),
             accounted_while_held,
