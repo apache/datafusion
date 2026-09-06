@@ -1,33 +1,30 @@
-use crate::blocked_helpers::BlockedBooleanBuilder;
-use crate::groups_accumulator::{BlockedGroupSelection, BlockedIndex};
+use crate::blocked_helpers::take_n_helpers::{
+    BlockBuilder, create_adjusted_block_size_iter_for_fixed_blocks, take_n_from_blocks,
+};
+use crate::groups_accumulator::{BlockedGroupSelection, BlocksIndex};
 use arrow::array::NullBufferBuilder;
 use arrow::buffer::NullBuffer;
+use arrow::util::bit_util::apply_bitwise_binary_op;
+use datafusion_common::utils::proxy::VecDequeAllocExt;
 use std::collections::VecDeque;
-use std::iter::once;
 use std::ops::{Index, Range};
 
-/// Validity bits over one contiguous mmap'ed bitmap, see [`BlockedBooleanBuilder`].
-///
-/// A block is only materialized by its first null: until then nothing is written for
-/// it, so its pages stay untouched, and it is handed out as `None`. Materializing a block
-/// writes ones for the values it already holds, later values write their own bit.
-/// Positions are absolute value indexes
 #[derive(Debug)]
 pub struct BlockedNullsBuilder<const FIXED_BLOCK_SIZING: bool> {
-    /// Validity of the live values, flat from `head`. Bits of unmaterialized blocks are
-    /// never written and must not be read
-    bits: BlockedBooleanBuilder<false>,
-    /// Whether each block was materialized (has nulls), one entry per block
-    materialized: VecDeque<bool>,
-    /// Absolute index of the first live value
-    head: usize,
-    /// Absolute index one past the last live value
-    tail: usize,
+    /// Using `VecDeque` so we can remove the first block and reclaim memory
+    blocks: VecDeque<NullBufferBuilder>,
+
+    /// The size of each block
     block_size: usize,
-    /// Fixed sizing only: absolute index at which the current block is full
-    next_block_end: usize,
-    /// Manual sizing only: absolute start of every block, `block_starts[0] == head`
-    block_starts: VecDeque<usize>,
+
+    /// The index of the current block
+    current_block_index: usize,
+
+    len: usize,
+
+    finished_blocks_allocated_size: usize,
+
+    might_have_nulls: bool,
 }
 
 impl<const FIXED_BLOCK_SIZING: bool> BlockedNullsBuilder<FIXED_BLOCK_SIZING> {
@@ -35,35 +32,31 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedNullsBuilder<FIXED_BLOCK_SIZING> {
         if FIXED_BLOCK_SIZING {
             assert_ne!(block_size, 0, "block size must be greater than 0");
         }
-        let mut this = Self {
-            bits: BlockedBooleanBuilder::new(0),
-            materialized: VecDeque::from([false]),
-            head: 0,
-            tail: 0,
+
+        let blocks = VecDeque::from(vec![NullBufferBuilder::new(block_size)]);
+
+        BlockedNullsBuilder {
+            blocks,
             block_size,
-            next_block_end: 0,
-            block_starts: VecDeque::from([0]),
-        };
-        this.relayout_fixed();
-        this
+            current_block_index: 0,
+            len: 0,
+            finished_blocks_allocated_size: 0,
+            might_have_nulls: false,
+        }
     }
 
     pub fn len(&self) -> usize {
-        self.tail - self.head
+        self.len
     }
 
     pub fn is_empty(&self) -> bool {
-        self.head == self.tail
+        self.len == 0
     }
 
-    /// Only materialized blocks hold memory
     pub fn allocated_size(&self) -> usize {
-        (0..self.num_blocks())
-            .filter(|&b| self.materialized[b])
-            .map(|b| self.block_range(b).len().div_ceil(8))
-            .sum::<usize>()
-            + (self.materialized.capacity() + self.block_starts.capacity())
-                * size_of::<usize>()
+        self.finished_blocks_allocated_size
+            + self.blocks.allocated_size()
+            + self.blocks.back().map_or(0, |b| b.allocated_size())
     }
 
     pub fn block_size(&self) -> usize {
@@ -74,78 +67,224 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedNullsBuilder<FIXED_BLOCK_SIZING> {
         self.block_size
     }
 
-    pub fn num_blocks(&self) -> usize {
-        if FIXED_BLOCK_SIZING {
-            self.len() / self.block_size + 1
-        } else {
-            self.block_starts.len()
-        }
-    }
-
-    pub fn current_block_len(&self) -> usize {
-        self.tail - self.current_block_start()
-    }
-
     pub fn might_have_nulls(&self) -> bool {
-        self.materialized.iter().any(|&m| m)
+        self.might_have_nulls
     }
 
     pub fn start_new_block(&mut self) {
-        assert!(
-            !FIXED_BLOCK_SIZING,
-            "fixed sizing finishes blocks on its own"
-        );
-        self.block_starts.push_back(self.tail);
-        self.materialized.push_back(false);
+        self.current_block_index += 1;
+        self.finished_blocks_allocated_size +=
+            self.blocks.back().map_or(0, |b| b.allocated_size());
+        let new_block = NullBufferBuilder::new(self.block_size);
+        self.blocks.push_back(new_block);
     }
 
-    /// Extend from the null buffer
+    pub(crate) fn reserve_blocks(&mut self, n: usize) {
+        self.blocks.reserve(n);
+    }
+
+    /// Extend the null buffer
+    /// when it is guaranteed that len is less than the remaining block size
+    pub(super) fn extends_from_null_buffer_in_current_block(
+        &mut self,
+        null_buffer: &NullBuffer,
+    ) {
+        assert_ne!(null_buffer.len(), 0);
+        if FIXED_BLOCK_SIZING {
+            assert!(
+                self.current_block_remaining_len() >= null_buffer.len(),
+                "the amount to add exceed the current block size"
+            );
+        }
+        if null_buffer.null_count() == 0 {
+            self.push_n_within_block(null_buffer.len(), true);
+            return;
+        }
+
+        self.might_have_nulls = true;
+
+        let block = &mut self.blocks[self.current_block_index];
+        let prev_block_size = block.len();
+
+        // Do fast large copy
+        block.append_buffer(null_buffer);
+
+        let added_items = block.len() - prev_block_size;
+
+        self.len += added_items;
+
+        if FIXED_BLOCK_SIZING && block.len() == self.block_size {
+            self.start_new_block();
+        }
+    }
+
+    /// Extend the length from the current offsets
     pub fn extends_from_null_buffer(&mut self, null_buffer: &NullBuffer) {
         if null_buffer.null_count() == 0 {
             self.push_n(null_buffer.len(), true);
             return;
         }
-        let mut offset = 0;
-        while offset < null_buffer.len() {
-            let count = self.chunk_len(null_buffer.len() - offset);
-            let chunk = null_buffer.slice(offset, count);
-            if chunk.null_count() == 0 {
-                self.push_valid_in_block(count);
-            } else {
-                self.materialize_current_block();
-                let inner = chunk.inner();
-                self.bits.append_packed_range(
-                    inner.values(),
-                    inner.offset(),
-                    inner.len(),
-                );
-                self.advance_n(count);
+
+        if !FIXED_BLOCK_SIZING {
+            self.extends_from_null_buffer_in_current_block(null_buffer);
+            return;
+        }
+
+        let number_of_blocks_to_reserve = null_buffer
+            .len()
+            .saturating_sub(self.current_block_remaining_len())
+            .div_ceil(self.block_size);
+        self.reserve_blocks(number_of_blocks_to_reserve);
+
+        let mut len = null_buffer.len();
+        let mut index = 0;
+
+        while len > 0 {
+            let remaining_in_current_block = self.current_block_remaining_len();
+
+            let to_add = remaining_in_current_block.min(len);
+            if to_add == len {
+                // Avoid slice which does null counting
+                if index == 0 {
+                    self.extends_from_null_buffer_in_current_block(null_buffer);
+                } else {
+                    self.extends_from_null_buffer_in_current_block(
+                        &null_buffer.slice(index, len),
+                    );
+                }
+
+                break;
             }
-            offset += count;
+
+            let null_section = null_buffer.slice(index, to_add);
+            index += to_add;
+            len -= to_add;
+
+            self.extends_from_null_buffer_in_current_block(&null_section);
         }
     }
 
-    /// Extend with the validity of the values at `indexes`
-    pub fn extends_from_null_buffer_in_indexes(
+    /// Extend the length from the current offsets in the indexes
+    /// when it is guaranteed that len is less than the remaining block size
+    fn extends_from_null_buffer_in_indexes_in_current_block(
         &mut self,
         null_buffer: &NullBuffer,
         indexes: &[usize],
+    ) -> usize {
+        assert_ne!(null_buffer.len(), 0);
+        assert_ne!(indexes.len(), 0);
+
+        if FIXED_BLOCK_SIZING {
+            assert!(
+                self.current_block_remaining_len() >= indexes.len(),
+                "the amount to add exceed the current block size"
+            );
+        }
+
+        let block = &mut self.blocks[self.current_block_index];
+        let prev_block_size = block.len();
+
+        // TODO - reserve in block and set each byte without extra checks
+        for &index_to_copy in indexes {
+            block.append(null_buffer.is_valid(index_to_copy));
+        }
+
+        let added_items = block.len() - prev_block_size;
+
+        self.len += added_items;
+
+        self.might_have_nulls |= block.as_slice().is_some();
+
+        if FIXED_BLOCK_SIZING && block.len() == self.block_size {
+            self.start_new_block();
+        }
+
+        added_items
+    }
+
+    /// Extend the length from the current offsets
+    pub fn extends_from_null_buffer_in_indexes(
+        &mut self,
+        null_buffer: &NullBuffer,
+        mut indexes: &[usize],
     ) {
-        self.extend(indexes.iter().map(|&index| null_buffer.is_valid(index)));
+        if !FIXED_BLOCK_SIZING {
+            self.extends_from_null_buffer_in_indexes_in_current_block(
+                null_buffer,
+                indexes,
+            );
+            return;
+        }
+
+        let number_of_blocks_to_reserve = indexes
+            .len()
+            .saturating_sub(self.current_block_remaining_len())
+            .div_ceil(self.block_size);
+        self.reserve_blocks(number_of_blocks_to_reserve);
+
+        while !indexes.is_empty() {
+            let remaining_in_current_block = self.current_block_remaining_len();
+
+            let to_add = remaining_in_current_block.min(indexes.len());
+            let (to_copy, left) = indexes.split_at(to_add);
+            indexes = left;
+
+            self.extends_from_null_buffer_in_indexes_in_current_block(
+                null_buffer,
+                to_copy,
+            );
+        }
+    }
+
+    fn current_block_remaining_len(&self) -> usize {
+        assert!(
+            FIXED_BLOCK_SIZING,
+            "remaining block only available for manual block"
+        );
+        self.block_size - self.blocks[self.current_block_index].len()
+    }
+
+    fn push_n_within_block(&mut self, n: usize, is_valid: bool) {
+        self.len += n;
+        let block = &mut self.blocks[self.current_block_index];
+
+        if is_valid {
+            block.append_n_non_nulls(n)
+        } else {
+            block.append_n_nulls(n);
+            self.might_have_nulls = true;
+        }
+
+        assert!(
+            !FIXED_BLOCK_SIZING || block.len() <= self.block_size,
+            "overflow from block new block length: {}, block size: {}",
+            block.len(),
+            self.block_size
+        );
+
+        if FIXED_BLOCK_SIZING && block.len() == self.block_size {
+            self.start_new_block();
+        }
     }
 
     pub fn push_n(&mut self, mut n: usize, is_valid: bool) {
+        if !FIXED_BLOCK_SIZING {
+            self.push_n_within_block(n, is_valid);
+            return;
+        }
+
+        let number_of_blocks_to_reserve = n
+            .saturating_sub(self.current_block_remaining_len())
+            .div_ceil(self.block_size);
+        self.reserve_blocks(number_of_blocks_to_reserve);
+
         while n > 0 {
-            let count = self.chunk_len(n);
-            if is_valid {
-                self.push_valid_in_block(count);
-            } else {
-                // nulls are the unset bits the untouched mapping already holds
-                self.materialize_current_block();
-                self.bits.skip_n(count);
-                self.advance_n(count);
-            }
-            n -= count;
+            let remaining_in_current_block = self.current_block_remaining_len();
+
+            let to_add = remaining_in_current_block.min(n);
+            n -= to_add;
+
+            self.push_n_within_block(to_add, is_valid);
         }
     }
 
@@ -157,47 +296,78 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedNullsBuilder<FIXED_BLOCK_SIZING> {
         self.push_n(n, true);
     }
 
-    /// Push a valid value and return whether the current block is now full
-    #[inline]
-    pub fn push_non_null(&mut self) -> bool {
-        if *self.materialized.back().expect("always a block") {
-            self.bits.append(true);
-        } else {
-            self.bits.skip_n(1);
+    pub fn push_non_null(&mut self) {
+        let block = &mut self.blocks[self.current_block_index];
+
+        block.append_non_null();
+        self.len += 1;
+
+        self.might_have_nulls |= block.as_slice().is_some();
+
+        if FIXED_BLOCK_SIZING && block.len() == self.block_size {
+            self.start_new_block();
         }
-        self.advance_n(1)
     }
 
-    /// Push a null and return whether the current block is now full
-    #[inline]
-    pub fn push_null(&mut self) -> bool {
-        self.materialize_current_block();
-        self.bits.skip_n(1);
-        self.advance_n(1)
+    pub fn push_null(&mut self) {
+        let block = &mut self.blocks[self.current_block_index];
+
+        block.append_null();
+        self.len += 1;
+
+        self.might_have_nulls = true;
+
+        if FIXED_BLOCK_SIZING && block.len() == self.block_size {
+            self.start_new_block();
+        }
     }
 
-    #[inline]
-    pub fn is_null<I: BlockedIndex>(&self, index: I) -> bool {
-        let (block, offset) = if FIXED_BLOCK_SIZING {
-            (
-                index.fixed_block(self.block_size),
-                index.flat(self.block_size),
-            )
-        } else {
-            (
-                index.block_in_blocks(&self.block_starts, self.head),
-                index.flat_in_blocks(&self.block_starts, self.head),
-            )
-        };
-        self.materialized[block] && !self.bits.get_bit(offset)
+    pub fn is_null(&self, blocked_index: BlocksIndex) -> bool {
+        !self.blocks[blocked_index.block_index()].is_valid(blocked_index.index_in_block())
     }
+
+    /// Extends iterator of validity within current block
+    /// Returns how many items were added
+    ///
+    /// # Panics
+    /// Panics if the iterator length exceeds the remaining size of the current block
+    pub(super) fn extend_validity_in_block(
+        &mut self,
+        iter: impl Iterator<Item = bool>,
+    ) -> usize {
+        let block = &mut self.blocks[self.current_block_index];
+
+        let prev_block_len = block.len();
+
+        for is_valid in iter {
+            block.append(is_valid);
+        }
+
+        assert!(
+            !FIXED_BLOCK_SIZING || block.len() <= self.block_size,
+            "overflow from block new block length: {}, block size: {}",
+            block.len(),
+            self.block_size
+        );
+
+        let added_items = block.len() - prev_block_len;
+        self.len += added_items;
+
+        self.might_have_nulls |= block.as_slice().is_some();
+        if FIXED_BLOCK_SIZING && block.len() == self.block_size {
+            self.start_new_block();
+        }
+
+        added_items
+    }
+
 
     pub fn build_preserving(
         &self,
         selection: BlockedGroupSelection<'_>,
     ) -> datafusion_common::Result<Option<NullBuffer>> {
         selection.validate_num_groups(self.len())?;
-        if !self.might_have_nulls() {
+        if !self.might_have_nulls {
             return Ok(None);
         }
 
@@ -212,252 +382,225 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedNullsBuilder<FIXED_BLOCK_SIZING> {
     ///
     /// `Some(None)` means the block has no nulls
     pub fn take_block(&mut self) -> Option<Option<NullBuffer>> {
-        if self.is_empty() {
+        if self.len == 0 {
             return None;
         }
-        let n = self.block_range(0).len();
-        let materialized = self.materialized.pop_front().expect("always a block");
-        let block = self.take_first(n, materialized);
-        if !FIXED_BLOCK_SIZING {
-            self.block_starts.pop_front();
-            if self.block_starts.is_empty() {
-                self.block_starts.push_back(self.tail);
-            }
+
+        let block = self
+            .blocks
+            .pop_front()
+            .expect("len > 0 so must have a block");
+        self.len -= block.len();
+
+        // Never have empty blocks since we won't be able to add more items
+        if self.blocks.is_empty() {
+            self.might_have_nulls = false;
+            self.current_block_index = 0;
+            let empty_block = NullBufferBuilder::new(self.block_size);
+            self.blocks.push_back(empty_block);
+        } else {
+            self.current_block_index -= 1;
+
+            // Only reduce memory if not the last one since the last block is calculated separately
+            self.finished_blocks_allocated_size -= block.allocated_size();
         }
-        if self.materialized.is_empty() {
-            self.materialized.push_back(false);
-        }
-        self.relayout_fixed();
-        Some(block)
+
+        Some(block.build().filter(|b| b.null_count() > 0))
     }
 
     /// Take every non empty block, `None` entries have no nulls
     pub fn take_all(&mut self) -> Vec<Option<NullBuffer>> {
-        let mut blocks = vec![];
-        while !self.is_empty() {
-            let len_before = self.len();
-            let block = self.take_block().expect("not empty");
-            if len_before != self.len() {
-                blocks.push(block);
-            }
-        }
-        self.reset();
+        let blocks = std::mem::take(&mut self.blocks);
+        self.len = 0;
+        self.might_have_nulls = false;
+        self.finished_blocks_allocated_size = 0;
+        self.current_block_index = 0;
+
+        // Never have empty blocks since we won't be able to add more items
+        let empty_block = NullBufferBuilder::new(self.block_size);
+        self.blocks.push_back(empty_block);
+
         blocks
+            .into_iter()
+            .filter(|b| !b.is_empty())
+            .map(|item| item.build().filter(|b| b.null_count() > 0))
+            .collect()
     }
 
-    /// Take the first `n` values
-    ///
-    /// `adjusted_block_size_iter` is iterator over the number of items in each block **after** emitting `n`
-    ///
-    /// this is `None` when `FIXED_BLOCK_SIZING` is true
-    ///
-    /// The adjusted iterator must meet this requirement:
-    /// ```
-    /// assert_eq!(n + adjusted_block_size_iter.sum(), self.len);
-    /// ```
     pub fn take_n(
         &mut self,
         n: usize,
         adjusted_block_size_iter: Option<impl Iterator<Item = usize> + Clone>,
     ) -> Option<NullBuffer> {
         assert_eq!(FIXED_BLOCK_SIZING, adjusted_block_size_iter.is_none());
-        assert!(n <= self.len(), "n ({n}) must be <= len ({})", self.len());
 
-        // The new layout, absolute ranges, the taken values form the first one
-        let new_ranges: Vec<Range<usize>> = if let Some(sizes) = adjusted_block_size_iter
-        {
-            let mut start = self.head + n;
-            let mut ranges = Vec::new();
-            ranges.push(self.head..start);
-            for size in sizes {
-                ranges.push(start..start + size);
-                start += size;
-            }
-            assert_eq!(
-                start, self.tail,
-                "adjusted block sizes must equal the length of the remaining items"
-            );
-            ranges
+        let (taken, layout) = if let Some(iter) = adjusted_block_size_iter {
+            take_n_from_blocks(&mut self.blocks, self.len, n, None, iter)
         } else {
-            // every block but the last is full and the last always has room
-            let first = self.head + n;
-            let remaining = self.tail - first;
-            let mut ranges = Vec::new();
-            ranges.push(self.head..first);
-            for b in 0..=(remaining / self.block_size) {
-                let start = first + b * self.block_size;
-                ranges.push(start..(start + self.block_size).min(self.tail));
-            }
-            ranges
+            take_n_from_blocks(
+                &mut self.blocks,
+                self.len,
+                n,
+                Some(self.block_size),
+                create_adjusted_block_size_iter_for_fixed_blocks(
+                    self.len,
+                    n,
+                    self.block_size,
+                ),
+            )
         };
 
-        let new_materialized = self.relayout(&new_ranges);
-        let taken = self.take_first(n, new_materialized[0]);
+        self.len = layout.len;
+        self.current_block_index = layout.current_block_index;
+        self.finished_blocks_allocated_size = layout.finished_blocks_allocated_size;
 
-        self.materialized = new_materialized.into_iter().skip(1).collect();
-        if self.materialized.is_empty() {
-            self.materialized.push_back(false);
-        }
-        if !FIXED_BLOCK_SIZING {
-            self.block_starts = new_ranges.iter().skip(1).map(|r| r.start).collect();
-            if self.block_starts.is_empty() {
-                self.block_starts.push_back(self.head);
-            }
-        }
-        self.relayout_fixed();
-        taken
-    }
-
-    // ---- internals ----
-
-    /// Number of values that still fit the current block, capped at `n`
-    fn chunk_len(&self, n: usize) -> usize {
-        if FIXED_BLOCK_SIZING {
-            (self.next_block_end - self.tail).min(n)
-        } else {
-            n
-        }
-    }
-
-    /// Push `count` valid values that fit in the current block
-    fn push_valid_in_block(&mut self, count: usize) {
-        if *self.materialized.back().expect("always a block") {
-            self.bits.append_n(count, true);
-        } else {
-            self.bits.skip_n(count);
-        }
-        self.advance_n(count);
-    }
-
-    /// Write ones for the values the current block already holds
-    fn materialize_current_block(&mut self) {
-        let flag = self.materialized.back_mut().expect("always a block");
-        if !*flag {
-            *flag = true;
-            let start = self.current_block_start() - self.head;
-            self.bits.set_bits(start..self.len(), true);
-        }
-    }
-
-    /// Move `tail`, return whether a fixed block just got full
-    #[inline]
-    fn advance_n(&mut self, n: usize) -> bool {
-        self.tail += n;
-        if FIXED_BLOCK_SIZING && self.tail == self.next_block_end {
-            self.next_block_end += self.block_size;
-            self.materialized.push_back(false);
-            true
-        } else {
-            false
-        }
-    }
-
-    fn current_block_start(&self) -> usize {
-        if FIXED_BLOCK_SIZING {
-            self.next_block_end - self.block_size
-        } else {
-            *self.block_starts.back().expect("always at least one block")
-        }
-    }
-
-    /// Absolute range of a block
-    fn block_range(&self, block_index: usize) -> Range<usize> {
-        if FIXED_BLOCK_SIZING {
-            let start = self.head + block_index * self.block_size;
-            start..(start + self.block_size).min(self.tail)
-        } else {
-            let start = self.block_starts[block_index];
-            start
-                ..self
-                    .block_starts
-                    .get(block_index + 1)
-                    .copied()
-                    .unwrap_or(self.tail)
-        }
-    }
-
-    /// Materialization of `new_ranges`: a new block is materialized when any old block it
-    /// overlaps is, and the parts it takes from unmaterialized old blocks get their ones
-    fn relayout(&mut self, new_ranges: &[Range<usize>]) -> Vec<bool> {
-        let old: Vec<(Range<usize>, bool)> = (0..self.num_blocks())
-            .map(|b| (self.block_range(b), self.materialized[b]))
-            .collect();
-        new_ranges
-            .iter()
-            .map(|new| {
-                let overlapping = old
-                    .iter()
-                    .filter(|(range, _)| range.start < new.end && new.start < range.end);
-                let materialized = overlapping.clone().any(|(_, m)| *m);
-                if materialized {
-                    for (range, _) in overlapping.filter(|(_, m)| !*m) {
-                        let start = range.start.max(new.start) - self.head;
-                        let end = range.end.min(new.end) - self.head;
-                        self.bits.set_bits(start..end, true);
-                    }
-                }
-                materialized
-            })
-            .collect()
-    }
-
-    fn relayout_fixed(&mut self) {
-        if FIXED_BLOCK_SIZING {
-            self.next_block_end =
-                self.head + (self.len() / self.block_size + 1) * self.block_size;
-        }
-    }
-
-    fn reset(&mut self) {
-        self.bits.reset();
-        self.materialized.clear();
-        self.materialized.push_back(false);
-        self.head = 0;
-        self.tail = 0;
-        self.block_starts.clear();
-        self.block_starts.push_back(0);
-        self.relayout_fixed();
-    }
-
-    /// Hand out the first `n` values, `None` when they have no nulls
-    fn take_first(&mut self, n: usize, materialized: bool) -> Option<NullBuffer> {
-        let bits = self.bits.take_n(n, Some(once(self.len() - n)));
-        self.head += n;
-        if !materialized {
-            return None;
-        }
-        Some(NullBuffer::new(bits)).filter(|b| b.null_count() > 0)
+        // Copying bits materializes the bitmap even when every bit is valid
+        taken.filter(|b| b.null_count() > 0)
     }
 }
 
-impl<const FIXED_BLOCK_SIZING: bool> Extend<bool>
-    for BlockedNullsBuilder<FIXED_BLOCK_SIZING>
+impl BlockBuilder for NullBufferBuilder {
+    type Output = Option<NullBuffer>;
+
+    fn with_capacity(capacity: usize) -> Self {
+        NullBufferBuilder::new(capacity)
+    }
+
+    fn len(&self) -> usize {
+        self.len()
+    }
+
+    fn truncate(&mut self, len: usize) {
+        self.truncate(len)
+    }
+
+    fn append_range(&mut self, src: &Self, range: Range<usize>) {
+        let Some(src_slice) = src.as_slice() else {
+            self.append_n_non_nulls(range.len());
+            return;
+        };
+
+        let offset_write = self.len();
+        let len = range.end - range.start;
+        // allocate new bits as 0
+        self.append_n_nulls(len);
+        // copy bits from to_set into self.buffer a word at a time
+        apply_bitwise_binary_op(
+            self.as_slice_mut().expect("must be materialized"),
+            offset_write,
+            src_slice,
+            range.start,
+            len,
+            |_a, b| b, // copy bits from to_set
+        );
+    }
+
+    fn shift_down(&mut self, offset: usize, len: usize) {
+        if offset == 0 {
+            self.truncate(len);
+            return;
+        }
+
+        let byte_offset = offset / 8;
+        let bit_offset = offset % 8;
+        let dst_bytes = len.div_ceil(8);
+
+        if let Some(bytes) = self.as_slice_mut() {
+            let src_bytes = bytes.len();
+
+            if bit_offset == 0 {
+                bytes.copy_within(byte_offset..byte_offset + dst_bytes, 0);
+            } else {
+                // Destination byte is always at or below the source byte
+                // so a forward pass never reads a byte that was already overwritten
+                for dst in 0..dst_bytes {
+                    let src = dst + byte_offset;
+
+                    let low = bytes[src] >> bit_offset;
+                    let high = if src + 1 < src_bytes {
+                        bytes[src + 1] << (8 - bit_offset)
+                    } else {
+                        0
+                    };
+
+                    bytes[dst] = low | high;
+                }
+            }
+
+            // Clear the stale bits in the last byte so later appends see zeroed padding
+            let trailing = len % 8;
+            if trailing != 0 {
+                bytes[dst_bytes - 1] &= (1u8 << trailing) - 1;
+            }
+        }
+
+        // truncate is enough for both materialized (since we just shifted) and non-materialized (since all are the same value) case
+        self.truncate(len)
+    }
+
+    fn allocated_size(&self) -> usize {
+        self.allocated_size()
+    }
+
+    fn finish(self) -> Self::Output {
+        self.build()
+    }
+}
+
+impl<const MANUAL_BLOCK_SIZE: bool> Extend<bool>
+    for BlockedNullsBuilder<MANUAL_BLOCK_SIZE>
 {
     fn extend<T: IntoIterator<Item = bool>>(&mut self, iter: T) {
-        for is_valid in iter {
-            if is_valid {
-                self.push_non_null();
-            } else {
-                self.push_null();
+        let mut iter = iter.into_iter();
+
+        if !MANUAL_BLOCK_SIZE {
+            self.extend_validity_in_block(iter);
+            return;
+        }
+
+        loop {
+            let remaining_in_current_block = self.current_block_remaining_len();
+            let added_items = self
+                .extend_validity_in_block(iter.by_ref().take(remaining_in_current_block));
+
+            if added_items == 0 {
+                break;
             }
         }
     }
 }
 
-impl<const FIXED_BLOCK_SIZING: bool, I: BlockedIndex> Index<I>
+// Only when we control the blocking since otherwise each block is not the same size
+impl Index<usize> for BlockedNullsBuilder<true> {
+    type Output = bool;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        self.index(BlocksIndex::from_index_in_fixed_block_size(
+            index,
+            self.block_size,
+        ))
+    }
+}
+
+impl<const FIXED_BLOCK_SIZING: bool> Index<BlocksIndex>
     for BlockedNullsBuilder<FIXED_BLOCK_SIZING>
 {
     type Output = bool;
 
-    fn index(&self, index: I) -> &bool {
-        if self.is_null(index) { &false } else { &true }
+    fn index(&self, blocked_index: BlocksIndex) -> &Self::Output {
+        if self.blocks[blocked_index.block_index()]
+            .is_valid(blocked_index.index_in_block())
+        {
+            &true
+        } else {
+            &false
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::groups_accumulator::BlocksIndex;
 
     type Fixed = BlockedNullsBuilder<true>;
     type Manual = BlockedNullsBuilder<false>;
@@ -492,13 +635,26 @@ mod tests {
 
     fn check_fixed_layout(builder: &Fixed) {
         let block_size = builder.block_size();
+        let blocks = &builder.blocks;
         assert_eq!(
-            builder.num_blocks(),
+            blocks.len(),
             builder.len() / block_size + 1,
             "unexpected number of blocks for len {} and block size {block_size}",
             builder.len()
         );
-        assert_eq!(builder.current_block_len(), builder.len() % block_size);
+        assert_eq!(builder.current_block_index, blocks.len() - 1);
+        for block in blocks.iter().take(blocks.len() - 1) {
+            assert_eq!(block.len(), block_size);
+        }
+        assert_eq!(blocks.back().unwrap().len(), builder.len() % block_size);
+        assert_eq!(
+            builder.finished_blocks_allocated_size,
+            blocks
+                .iter()
+                .take(blocks.len() - 1)
+                .map(|b| b.allocated_size())
+                .sum::<usize>()
+        );
     }
 
     fn fixed_with(block_size: usize, values: &[bool]) -> Fixed {
@@ -557,7 +713,7 @@ mod tests {
 
         // exactly to the boundary
         let mut builder = fixed_with(4, &values[..8]);
-        assert_eq!(builder.num_blocks(), 3);
+        assert_eq!(builder.blocks.len(), 3);
         drain_and_check(&mut builder, &values[..8]);
     }
 
@@ -614,7 +770,7 @@ mod tests {
         let remaining = 5 - expected.len() % 5;
         builder.extends_from_null_buffer(&NullBuffer::from(vec![false; remaining]));
         expected.extend(vec![false; remaining]);
-        assert_eq!(builder.current_block_len(), 0);
+        assert_eq!(builder.blocks.back().unwrap().len(), 0);
         check_fixed_layout(&builder);
 
         // no nulls at all takes the fast path
@@ -696,7 +852,7 @@ mod tests {
     fn take_all_returns_only_non_empty_blocks() {
         let values = pattern(5, 6);
         let mut builder = fixed_with(3, &values);
-        assert_eq!(builder.num_blocks(), 3);
+        assert_eq!(builder.blocks.len(), 3);
         let blocks = builder.take_all();
         assert_eq!(blocks.len(), 2);
         assert_eq!(block_validity(blocks[0].as_ref(), 3), &values[..3]);
@@ -799,7 +955,7 @@ mod tests {
         builder.push_non_null();
         builder.push_n_nulls(3);
         builder.extends_from_null_buffer(&NullBuffer::from(vec![true, false]));
-        assert_eq!(builder.num_blocks(), 1);
+        assert_eq!(builder.blocks.len(), 1);
         assert_eq!(builder.len(), 27);
         let mut expected = values;
         expected.extend([false, true, false, false, false, true, false]);
@@ -814,20 +970,20 @@ mod tests {
         let b = vec![true; 2];
         let c = pattern(9, 12);
         let mut builder = manual_with_blocks(&[a.clone(), b.clone(), c.clone()]);
-        assert_eq!(builder.num_blocks(), 3);
+        assert_eq!(builder.blocks.len(), 3);
         assert_eq!(builder.len(), 19);
         assert_eq!(builder.is_null(BlocksIndex::new(2, 11)), !c[11]);
 
         let first = builder.take_block().unwrap();
         assert_eq!(block_validity(first.as_ref(), 5), a);
-        assert_eq!(builder.num_blocks(), 2);
+        assert_eq!(builder.current_block_index, 1);
         assert_eq!(builder.len(), 14);
 
         builder.push_null();
         let mut c_plus = c.clone();
         c_plus.push(false);
         assert_eq!(drain_manual(&mut builder, &[2, 13]), vec![b, c_plus]);
-        assert_eq!(builder.num_blocks(), 1);
+        assert_eq!(builder.blocks.len(), 1);
     }
 
     #[test]

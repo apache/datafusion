@@ -1,29 +1,26 @@
-use crate::blocked_helpers::CopyItemBlockedVecBuilder;
-use crate::groups_accumulator::BlockedIndex;
-use arrow::array::BooleanBufferBuilder;
+use crate::blocked_helpers::take_n_helpers::{BlockBuilder, take_n_from_blocks};
+use crate::groups_accumulator::BlocksIndex;
+use arrow::array::{AsArray, BooleanBufferBuilder, new_empty_array};
 use arrow::buffer::BooleanBuffer;
-use arrow::util::bit_util::apply_bitwise_binary_op;
+use arrow::datatypes::DataType;
+use datafusion_common::utils::proxy::VecDequeAllocExt;
 use std::collections::VecDeque;
-use std::iter::once;
-use std::ops::Index;
+use std::ops::{Index, Range};
 
-/// Bits of every block live contiguously in one mmap'ed region as `u64` words, blocks
-/// are only a layout over them, see [`CopyItemBlockedVecBuilder`]. Positions are absolute
-/// bit indexes, `words[0]` holds bit `store_base`
 #[derive(Debug)]
 pub struct BlockedBooleanBuilder<const FIXED_BLOCK_SIZING: bool> {
-    words: CopyItemBlockedVecBuilder<false, u64>,
-    /// Absolute bit index of the first live bit
-    head: usize,
-    /// Absolute bit index one past the last live bit
-    tail: usize,
-    /// Absolute bit index of `words[0]`, always a multiple of 64
-    store_base: usize,
+    /// Using `VecDeque` so we can remove the first block and reclaim memory
+    blocks: VecDeque<BooleanBufferBuilder>,
+
+    /// The size of each block
     block_size: usize,
-    /// Fixed sizing only: absolute bit index at which the current block is full
-    next_block_end: usize,
-    /// Manual sizing only: absolute start of every block, `block_starts[0] == head`
-    block_starts: VecDeque<usize>,
+
+    /// The index of the current block
+    current_block_index: usize,
+
+    len: usize,
+
+    finished_blocks_allocated_size: usize,
 }
 
 impl<const FIXED_BLOCK_SIZING: bool> BlockedBooleanBuilder<FIXED_BLOCK_SIZING> {
@@ -31,29 +28,30 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedBooleanBuilder<FIXED_BLOCK_SIZING> {
         if FIXED_BLOCK_SIZING {
             assert_ne!(block_size, 0, "block size must be greater than 0");
         }
-        let mut this = Self {
-            words: CopyItemBlockedVecBuilder::new(0),
-            head: 0,
-            tail: 0,
-            store_base: 0,
+
+        let blocks = VecDeque::from(vec![BooleanBufferBuilder::new(block_size)]);
+
+        BlockedBooleanBuilder {
+            blocks,
             block_size,
-            next_block_end: 0,
-            block_starts: VecDeque::from([0]),
-        };
-        this.relayout_fixed();
-        this
+            current_block_index: 0,
+            len: 0,
+            finished_blocks_allocated_size: 0,
+        }
     }
 
     pub fn len(&self) -> usize {
-        self.tail - self.head
+        self.len
     }
 
     pub fn is_empty(&self) -> bool {
-        self.head == self.tail
+        self.len == 0
     }
 
     pub fn allocated_size(&self) -> usize {
-        self.words.allocated_size() + self.block_starts.capacity() * size_of::<usize>()
+        self.finished_blocks_allocated_size
+            + self.blocks.allocated_size()
+            + self.blocks.back().map_or(0, allocated_size_for_builder)
     }
 
     pub fn block_size(&self) -> usize {
@@ -64,30 +62,16 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedBooleanBuilder<FIXED_BLOCK_SIZING> {
         self.block_size
     }
 
-    pub fn num_blocks(&self) -> usize {
-        if FIXED_BLOCK_SIZING {
-            self.len() / self.block_size + 1
-        } else {
-            self.block_starts.len()
-        }
-    }
-
-    /// Number of bits in the current block
-    pub fn current_block_len(&self) -> usize {
-        let start = if FIXED_BLOCK_SIZING {
-            self.next_block_end - self.block_size
-        } else {
-            *self.block_starts.back().expect("always at least one block")
-        };
-        self.tail - start
-    }
-
     pub fn start_new_block(&mut self) {
-        assert!(
-            !FIXED_BLOCK_SIZING,
-            "fixed sizing finishes blocks on its own"
-        );
-        self.block_starts.push_back(self.tail);
+        self.current_block_index += 1;
+        self.finished_blocks_allocated_size +=
+            self.blocks.back().map_or(0, allocated_size_for_builder);
+        let new_block = BooleanBufferBuilder::new(self.block_size);
+        self.blocks.push_back(new_block);
+    }
+
+    pub(crate) fn reserve_blocks(&mut self, n: usize) {
+        self.blocks.reserve(n);
     }
 
     fn current_block_remaining_len(&self) -> usize {
@@ -95,69 +79,66 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedBooleanBuilder<FIXED_BLOCK_SIZING> {
             FIXED_BLOCK_SIZING,
             "remaining block only available for manual block"
         );
-        self.block_size - self.current_block_len()
+        self.block_size - self.blocks[self.current_block_index].len()
+    }
+
+    fn push_n_within_block(&mut self, n: usize, is_set: bool) {
+        self.len += n;
+        let block = &mut self.blocks[self.current_block_index];
+
+        block.append_n(n, is_set);
+
+        assert!(
+            !FIXED_BLOCK_SIZING || block.len() <= self.block_size,
+            "overflow from block new block length: {}, block size: {}",
+            block.len(),
+            self.block_size
+        );
+
+        if FIXED_BLOCK_SIZING && block.len() == self.block_size {
+            self.start_new_block();
+        }
     }
 
     pub fn append_n(&mut self, mut n: usize, is_set: bool) {
-        // fill up the partial word, then whole words at once, then start the last one
-        let (word, bit) = self.position(self.tail);
-        if bit != 0 && n > 0 {
-            let count = n.min(64 - bit);
-            let mask = Self::mask(count) << bit;
-            if is_set {
-                self.words[word] |= mask;
-            } else {
-                self.words[word] &= !mask;
-            }
-            self.tail += count;
-            n -= count;
+        if !FIXED_BLOCK_SIZING {
+            self.push_n_within_block(n, is_set);
+            return;
         }
-        let whole_words = n / 64;
-        if whole_words > 0 {
-            self.words
-                .push_value_n(if is_set { u64::MAX } else { 0 }, whole_words);
-            self.tail += whole_words * 64;
-            n -= whole_words * 64;
-        }
-        if n > 0 {
-            self.words.push(if is_set { Self::mask(n) } else { 0 });
-            self.tail += n;
-        }
-        self.relayout_fixed();
-    }
 
-    /// Append a bit and return whether the current block is now full
-    #[inline]
-    pub fn append(&mut self, is_set: bool) -> bool {
-        let (word, bit) = self.position(self.tail);
-        if bit == 0 {
-            self.words.push(u64::from(is_set));
-        } else if is_set {
-            self.words[word] |= 1 << bit;
-        }
-        self.tail += 1;
-        if FIXED_BLOCK_SIZING && self.tail == self.next_block_end {
-            self.next_block_end += self.block_size;
-            true
-        } else {
-            false
+        let number_of_blocks_to_reserve = n
+            .saturating_sub(self.current_block_remaining_len())
+            .div_ceil(self.block_size);
+        self.reserve_blocks(number_of_blocks_to_reserve);
+
+        while n > 0 {
+            let remaining_in_current_block = self.current_block_remaining_len();
+
+            let to_add = remaining_in_current_block.min(n);
+            n -= to_add;
+
+            self.push_n_within_block(to_add, is_set);
         }
     }
 
-    #[inline]
-    pub fn get_bit<I: BlockedIndex>(&self, index: I) -> bool {
-        let (word, bit) = self.position(self.head + self.offset(index));
-        (self.words[word] >> bit) & 1 == 1
+    pub fn append(&mut self, is_set: bool) {
+        let block = &mut self.blocks[self.current_block_index];
+
+        block.append(is_set);
+        self.len += 1;
+
+        if FIXED_BLOCK_SIZING && block.len() == self.block_size {
+            self.start_new_block();
+        }
     }
 
-    #[inline]
-    pub fn set_bit<I: BlockedIndex>(&mut self, index: I, is_set: bool) {
-        let (word, bit) = self.position(self.head + self.offset(index));
-        if is_set {
-            self.words[word] |= 1 << bit;
-        } else {
-            self.words[word] &= !(1 << bit);
-        }
+    pub fn get_bit(&self, blocked_index: BlocksIndex) -> bool {
+        self.blocks[blocked_index.block_index()].get_bit(blocked_index.index_in_block())
+    }
+
+    pub fn set_bit(&mut self, blocked_index: BlocksIndex, is_set: bool) {
+        self.blocks[blocked_index.block_index()]
+            .set_bit(blocked_index.index_in_block(), is_set)
     }
 
     /// Extends iterator of validity within current block
@@ -169,102 +150,79 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedBooleanBuilder<FIXED_BLOCK_SIZING> {
         &mut self,
         iter: impl Iterator<Item = bool>,
     ) -> usize {
-        let remaining = if FIXED_BLOCK_SIZING {
-            self.current_block_remaining_len()
-        } else {
-            usize::MAX
-        };
-        let prev = self.tail;
-        for is_set in iter {
-            self.append(is_set);
+        let block = &mut self.blocks[self.current_block_index];
+
+        let prev_block_len = block.len();
+
+        for is_valid in iter {
+            block.append(is_valid);
         }
-        let added_items = self.tail - prev;
+
         assert!(
-            added_items <= remaining,
+            !FIXED_BLOCK_SIZING || block.len() <= self.block_size,
             "overflow from block new block length: {}, block size: {}",
-            remaining + added_items,
+            block.len(),
             self.block_size
         );
+
+        let added_items = block.len() - prev_block_len;
+        self.len += added_items;
+
+        if FIXED_BLOCK_SIZING && block.len() == self.block_size {
+            self.start_new_block();
+        }
+
         added_items
-    }
-
-    /// Append `n` bits without writing them, they read as unset since the untouched
-    /// mapping is zero filled
-    pub(crate) fn skip_n(&mut self, n: usize) {
-        let words_needed =
-            (self.tail + n - self.store_base).div_ceil(64) - self.words.len();
-        // SAFETY: zero is a valid u64
-        unsafe { self.words.advance_untouched(words_needed) };
-        self.tail += n;
-        self.relayout_fixed();
-    }
-
-    /// Set every bit of the flat `range`
-    pub(crate) fn set_bits(&mut self, range: std::ops::Range<usize>, is_set: bool) {
-        let mut abs = self.head + range.start;
-        let end = self.head + range.end;
-        while abs < end {
-            let (word, bit) = self.position(abs);
-            let count = (end - abs).min(64 - bit);
-            let mask = Self::mask(count) << bit;
-            if is_set {
-                self.words[word] |= mask;
-            } else {
-                self.words[word] &= !mask;
-            }
-            abs += count;
-        }
-    }
-
-    /// Append `len` bits starting at `offset` of the packed `bits`
-    pub(crate) fn append_packed_range(&mut self, bits: &[u8], offset: usize, len: usize) {
-        if len == 0 {
-            return;
-        }
-        let write_offset = self.tail - self.store_base;
-        self.append_n(len, false);
-        apply_bitwise_binary_op(
-            self.bytes_mut(),
-            write_offset,
-            bits,
-            offset,
-            len,
-            |_a, b| b,
-        );
     }
 
     /// Take the first block, `None` once there are no more items
     pub fn take_block(&mut self) -> Option<BooleanBuffer> {
-        if self.is_empty() {
+        if self.len == 0 {
             return None;
         }
-        let n = self.block_len(0);
-        let block = self.take_first(n);
-        if !FIXED_BLOCK_SIZING {
-            self.block_starts.pop_front();
-            if self.block_starts.is_empty() {
-                self.block_starts.push_back(self.tail);
-            }
+
+        let block = self
+            .blocks
+            .pop_front()
+            .expect("len > 0 so must have a block");
+        self.len -= block.len();
+
+        if self.blocks.is_empty() {
+            self.current_block_index = 0;
+            self.blocks
+                .push_back(BooleanBufferBuilder::new(self.block_size));
+        } else {
+            self.current_block_index -= 1;
+
+            // Only if not the current block reduce the memory since current block is calculated separately
+            self.finished_blocks_allocated_size -= allocated_size_for_builder(&block);
         }
-        self.relayout_fixed();
-        Some(block)
+
+        Some(block.build())
     }
 
     /// Take every non empty block
     pub fn take_all(&mut self) -> Vec<BooleanBuffer> {
-        let mut blocks = vec![];
-        while let Some(block) = self.take_block() {
-            if !block.is_empty() {
-                blocks.push(block);
-            }
-        }
-        self.reset();
+        let blocks = std::mem::take(&mut self.blocks);
+        assert_eq!(self.current_block_index, blocks.len() - 1);
+
+        // TODO - should preallocate? can be expensive for large schema
+        self.blocks
+            .push_back(BooleanBufferBuilder::new(self.block_size));
+        self.len = 0;
+        self.current_block_index = 0;
+        self.finished_blocks_allocated_size = 0;
+
         blocks
+            .into_iter()
+            .filter(|b| !b.is_empty())
+            .map(|b| b.build())
+            .collect()
     }
 
     /// Take the first `n` values
     ///
-    /// `adjusted_block_size_iter` is iterator over the number of items in each block **after** emitting `n`
+    /// `block_size_iterator` is iterator over the number of items in each block **after** emitting `n`
     ///
     /// this is `None` when `FIXED_BLOCK_SIZING` is true
     ///
@@ -272,147 +230,220 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedBooleanBuilder<FIXED_BLOCK_SIZING> {
     /// ```
     /// assert_eq!(n + adjusted_block_size_iter.sum(), self.len);
     /// ```
+    ///
+    /// TODO - shrink to fit
+    ///
+    ///
     pub fn take_n(
         &mut self,
         n: usize,
         adjusted_block_size_iter: Option<impl Iterator<Item = usize> + Clone>,
     ) -> BooleanBuffer {
         assert_eq!(FIXED_BLOCK_SIZING, adjusted_block_size_iter.is_none());
-        assert!(n <= self.len(), "n ({n}) must be <= len ({})", self.len());
-
-        let taken = self.take_first(n);
-
-        if let Some(sizes) = adjusted_block_size_iter {
-            self.block_starts.clear();
-            let mut start = self.head;
-            for size in sizes {
-                self.block_starts.push_back(start);
-                start += size;
-            }
-            assert_eq!(
-                start, self.tail,
-                "adjusted block sizes must equal the length of the remaining items"
+        if let Some(adjusted_block_size_iter) = adjusted_block_size_iter {
+            let (taken, layout) = take_n_from_blocks(
+                &mut self.blocks,
+                self.len,
+                n,
+                None,
+                adjusted_block_size_iter,
             );
-            if self.block_starts.is_empty() {
-                self.block_starts.push_back(self.head);
+
+            self.len = layout.len;
+            self.current_block_index = layout.current_block_index;
+            self.finished_blocks_allocated_size = layout.finished_blocks_allocated_size;
+
+            taken
+        } else {
+            assert!(n <= self.len, "n ({n}) must be <= len ({}) than", self.len);
+            assert!(
+                n <= self.block_size,
+                "n ({n}) must be lower than block size ({}), instead use `take_block` and take_n with the remainder",
+                self.block_size
+            );
+
+            // Not moving anything
+            if n == 0 {
+                return Self::new_empty_buffer();
             }
-        }
-        self.relayout_fixed();
-        taken
-    }
 
-    // ---- internals ----
-
-    pub(crate) fn reset(&mut self) {
-        self.words.reset();
-        self.head = 0;
-        self.tail = 0;
-        self.store_base = 0;
-        self.block_starts.clear();
-        self.block_starts.push_back(0);
-        self.relayout_fixed();
-    }
-
-    /// The lowest `count` bits set, `count <= 64`
-    #[inline]
-    fn mask(count: usize) -> u64 {
-        u64::MAX >> (64 - count)
-    }
-
-    /// Word and bit of an absolute bit index inside `words`
-    #[inline]
-    fn position(&self, abs: usize) -> (usize, usize) {
-        let rel = abs - self.store_base;
-        (rel >> 6, rel & 63)
-    }
-
-    #[inline]
-    fn offset<I: BlockedIndex>(&self, index: I) -> usize {
-        if FIXED_BLOCK_SIZING {
-            index.flat(self.block_size)
-        } else {
-            index.flat_in_blocks(&self.block_starts, self.head)
-        }
-    }
-
-    fn bytes(&self) -> &[u8] {
-        let words = self.words.as_slice();
-        // SAFETY: a u64 slice is valid to read as 8x as many bytes, arrow bit order is little endian
-        unsafe {
-            std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), words.len() * 8)
-        }
-    }
-
-    fn bytes_mut(&mut self) -> &mut [u8] {
-        let words = self.words.as_mut_slice();
-        // SAFETY: as in `bytes`
-        unsafe {
-            std::slice::from_raw_parts_mut(
-                words.as_mut_ptr().cast::<u8>(),
-                words.len() * 8,
-            )
-        }
-    }
-
-    fn block_len(&self, block_index: usize) -> usize {
-        if FIXED_BLOCK_SIZING {
-            (self.len() - block_index * self.block_size).min(self.block_size)
-        } else {
-            let start = self.block_starts[block_index];
-            self.block_starts
-                .get(block_index + 1)
-                .copied()
-                .unwrap_or(self.tail)
-                - start
-        }
-    }
-
-    fn relayout_fixed(&mut self) {
-        if FIXED_BLOCK_SIZING {
-            self.next_block_end =
-                self.head + (self.len() / self.block_size + 1) * self.block_size;
-        }
-    }
-
-    /// Hand out the first `n` bits and drop the whole words they leave behind.
-    /// Zero copy when the range ends on a word boundary, the bits are copied otherwise
-    fn take_first(&mut self, n: usize) -> BooleanBuffer {
-        let start = self.head - self.store_base;
-        let end = start + n;
-        let whole_words = end / 64;
-        let remaining_words = self.words.len() - whole_words;
-
-        let taken = if end.is_multiple_of(64) {
-            let words = self.words.take_n(whole_words, Some(once(remaining_words)));
-            BooleanBuffer::new(words.into(), start, n)
-        } else {
-            let mut copy = BooleanBufferBuilder::new(n);
-            copy.append_packed_range(start..end, self.bytes());
-            if whole_words > 0 {
-                drop(self.words.take_n(whole_words, Some(once(remaining_words))));
+            if n == self.len || n == self.block_size {
+                return self.take_block().expect("must have block");
             }
-            copy.finish()
-        };
-        self.store_base += whole_words * 64;
-        self.head += n;
-        taken
+
+            // Every block other than the last one is exactly `block_size` long and `n` is smaller
+            // than that, so the emitted values are always fully contained in the first block
+            let mut taken = BooleanBufferBuilder::new(n);
+            taken.append_packed_range(0..n, self.blocks[0].as_slice());
+
+            // Reused for swapping blocks out of the deque, `new(0)` holds no buffer
+            let mut placeholder = BooleanBufferBuilder::new(0);
+
+            // Shift every block down by `n` and refill it from the front of the next one
+            // so that all blocks but the last stay exactly `block_size` long
+            for index in 0..self.blocks.len() {
+                let block_len = self.blocks[index].len();
+
+                if block_len <= n {
+                    // Only reachable for the last block, everything it held was already
+                    // pulled into the previous block
+                    self.blocks[index].truncate(0);
+                } else {
+                    self.blocks[index].shift_down(n, block_len - n);
+                }
+
+                let next_index = index + 1;
+
+                if next_index < self.blocks.len() {
+                    // Move the next block aside so the current one can be borrowed mutably
+                    // it has not been shifted yet, so its first `n` values are the ones we want
+                    std::mem::swap(&mut self.blocks[next_index], &mut placeholder);
+
+                    let to_copy = n.min(placeholder.len());
+
+                    self.blocks[index]
+                        .append_packed_range(0..to_copy, placeholder.as_slice());
+
+                    std::mem::swap(&mut self.blocks[next_index], &mut placeholder);
+                }
+            }
+
+            self.len -= n;
+
+            // The last block is allowed to be empty, which is the state `start_new_block` leaves
+            // behind when a block fills up exactly
+            let new_blocks_count = self.len / self.block_size + 1;
+
+            while self.blocks.len() > new_blocks_count {
+                // The back block is measured separately so dropping it needs no adjustment
+                self.blocks.pop_back();
+
+                // Whatever is now at the back stopped being a finished block
+                self.finished_blocks_allocated_size -=
+                    self.blocks.back().map_or(0, allocated_size_for_builder);
+            }
+
+            self.current_block_index = self.blocks.len() - 1;
+
+            taken.build()
+        }
+    }
+
+    fn new_empty_buffer() -> BooleanBuffer {
+        let empty_array = new_empty_array(&DataType::Boolean);
+
+        empty_array.as_boolean().clone().into_parts().0
     }
 }
 
-impl<const FIXED_BLOCK_SIZING: bool, I: BlockedIndex> Index<I>
+impl BlockBuilder for BooleanBufferBuilder {
+    type Output = BooleanBuffer;
+
+    fn with_capacity(capacity: usize) -> Self {
+        BooleanBufferBuilder::new(capacity)
+    }
+
+    fn len(&self) -> usize {
+        BooleanBufferBuilder::len(self)
+    }
+
+    fn truncate(&mut self, len: usize) {
+        BooleanBufferBuilder::truncate(self, len)
+    }
+
+    fn append_range(&mut self, src: &Self, range: Range<usize>) {
+        self.append_packed_range(range, src.as_slice())
+    }
+
+    fn shift_down(&mut self, offset: usize, len: usize) {
+        if offset == 0 {
+            BooleanBufferBuilder::truncate(self, len);
+            return;
+        }
+
+        let byte_offset = offset / 8;
+        let bit_offset = offset % 8;
+        let dst_bytes = len.div_ceil(8);
+
+        {
+            let bytes = self.as_slice_mut();
+            let src_bytes = bytes.len();
+
+            if bit_offset == 0 {
+                bytes.copy_within(byte_offset..byte_offset + dst_bytes, 0);
+            } else {
+                // Destination byte is always at or below the source byte
+                // so a forward pass never reads a byte that was already overwritten
+                for dst in 0..dst_bytes {
+                    let src = dst + byte_offset;
+
+                    let low = bytes[src] >> bit_offset;
+                    let high = if src + 1 < src_bytes {
+                        bytes[src + 1] << (8 - bit_offset)
+                    } else {
+                        0
+                    };
+
+                    bytes[dst] = low | high;
+                }
+            }
+
+            // Clear the stale bits in the last byte so later appends see zeroed padding
+            let trailing = len % 8;
+            if trailing != 0 {
+                bytes[dst_bytes - 1] &= (1u8 << trailing) - 1;
+            }
+        }
+
+        BooleanBufferBuilder::truncate(self, len);
+    }
+
+    fn allocated_size(&self) -> usize {
+        allocated_size_for_builder(self)
+    }
+
+    fn finish(self) -> BooleanBuffer {
+        self.build()
+    }
+}
+
+fn allocated_size_for_builder(builder: &BooleanBufferBuilder) -> usize {
+    // capacity returns in bits
+    // once we upgrade arrow to have the allocated_size function, we can remove this function
+    builder.capacity() / 8
+}
+
+// Only when we control the blocking since otherwise each block is not the same size
+impl Index<usize> for BlockedBooleanBuilder<true> {
+    type Output = bool;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        self.index(BlocksIndex::from_index_in_fixed_block_size(
+            index,
+            self.block_size,
+        ))
+    }
+}
+
+impl<const FIXED_BLOCK_SIZING: bool> Index<BlocksIndex>
     for BlockedBooleanBuilder<FIXED_BLOCK_SIZING>
 {
     type Output = bool;
 
-    fn index(&self, index: I) -> &bool {
-        if self.get_bit(index) { &true } else { &false }
+    fn index(&self, blocked_index: BlocksIndex) -> &Self::Output {
+        if self.blocks[blocked_index.block_index()]
+            .get_bit(blocked_index.index_in_block())
+        {
+            &true
+        } else {
+            &false
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::groups_accumulator::BlocksIndex;
 
     type Fixed = BlockedBooleanBuilder<true>;
     type Manual = BlockedBooleanBuilder<false>;
@@ -440,13 +471,26 @@ mod tests {
     /// Every block but the last is exactly `block_size` long and the last always has room
     fn check_fixed_layout(builder: &Fixed) {
         let block_size = builder.block_size();
+        let blocks = &builder.blocks;
         assert_eq!(
-            builder.num_blocks(),
+            blocks.len(),
             builder.len() / block_size + 1,
             "unexpected number of blocks for len {} and block size {block_size}",
             builder.len()
         );
-        assert_eq!(builder.current_block_len(), builder.len() % block_size);
+        assert_eq!(builder.current_block_index, blocks.len() - 1);
+        for block in blocks.iter().take(blocks.len() - 1) {
+            assert_eq!(block.len(), block_size);
+        }
+        assert_eq!(blocks.back().unwrap().len(), builder.len() % block_size);
+        assert_eq!(
+            builder.finished_blocks_allocated_size,
+            blocks
+                .iter()
+                .take(blocks.len() - 1)
+                .map(allocated_size_for_builder)
+                .sum::<usize>()
+        );
     }
 
     fn fixed_with(block_size: usize, values: &[bool]) -> Fixed {
@@ -481,8 +525,8 @@ mod tests {
 
         // exactly to the boundary
         let builder = fixed_with(4, &pattern(2, 8));
-        assert_eq!(builder.num_blocks(), 3);
-        assert_eq!(builder.current_block_len(), 0);
+        assert_eq!(builder.blocks.len(), 3);
+        assert_eq!(builder.blocks.back().unwrap().len(), 0);
     }
 
     #[test]
@@ -524,7 +568,7 @@ mod tests {
             builder.extend_validity_in_block([true, true].into_iter()),
             2
         );
-        assert_eq!(builder.num_blocks(), 2);
+        assert_eq!(builder.blocks.len(), 2);
         check_fixed_layout(&builder);
         assert_eq!(bits(&builder), [true, false, true, true]);
     }
@@ -721,6 +765,13 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "must be lower than block size")]
+    fn take_n_more_than_block_size_panics() {
+        let mut builder = fixed_with(2, &pattern(0, 6));
+        builder.take_n(3, None::<std::iter::Empty<usize>>);
+    }
+
+    #[test]
     fn take_n_matches_model_and_stays_usable() {
         for block_size in [1, 2, 3, 7, 8, 9, 13, 16, 17, 31, 64, 65] {
             for total in
@@ -822,22 +873,19 @@ mod tests {
 
     #[test]
     fn allocated_size_follows_blocks() {
-        // memory is returned page by page, so make a block span a whole page
-        let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
-        let block_size = page * 8;
-        let mut builder = Fixed::new(block_size);
+        let mut builder = Fixed::new(64);
         let empty = builder.allocated_size();
 
-        builder.append_n(block_size * 3 + 1, true);
+        builder.append_n(64 * 3 + 1, true);
         let full = builder.allocated_size();
-        assert!(full >= empty + 3 * page);
+        assert!(full > empty);
 
-        let block = builder.take_block();
-        drop(block);
-        assert_eq!(builder.allocated_size(), full - page);
+        builder.take_block();
+        let after_take = builder.allocated_size();
+        assert!(after_take < full);
 
         builder.take_all();
-        assert!(builder.allocated_size() < 2 * page);
+        assert!(builder.allocated_size() < after_take);
     }
 
     // ---- manual block sizing ----
@@ -872,7 +920,7 @@ mod tests {
         }
         builder.append_n(3, true);
         builder.extend_validity_in_block([false, true].into_iter());
-        assert_eq!(builder.num_blocks(), 1);
+        assert_eq!(builder.blocks.len(), 1);
         assert_eq!(builder.len(), 25);
         let mut expected = values.clone();
         expected.extend([true, true, true, false, true]);
@@ -888,14 +936,14 @@ mod tests {
         let b = pattern(14, 2);
         let c = pattern(15, 12);
         let mut builder = manual_with_blocks(&[a.clone(), b.clone(), c.clone()]);
-        assert_eq!(builder.num_blocks(), 3);
+        assert_eq!(builder.blocks.len(), 3);
         assert_eq!(builder.len(), 19);
         assert_eq!(builder.get_bit(BlocksIndex::new(1, 1)), b[1]);
         assert_eq!(builder.get_bit(BlocksIndex::new(2, 11)), c[11]);
 
         assert_eq!(buffer_bits(&builder.take_block().unwrap()), a);
         assert_eq!(builder.len(), 14);
-        assert_eq!(builder.num_blocks(), 2);
+        assert_eq!(builder.current_block_index, 1);
         assert_eq!(builder.get_bit(BlocksIndex::new(0, 1)), b[1]);
 
         // appends go to the last block
@@ -907,7 +955,7 @@ mod tests {
         assert_eq!(drain_manual(&mut builder), vec![b, c_plus]);
         assert_eq!(builder.len(), 0);
         assert!(builder.take_block().is_none());
-        assert_eq!(builder.num_blocks(), 1);
+        assert_eq!(builder.blocks.len(), 1);
     }
 
     #[test]
