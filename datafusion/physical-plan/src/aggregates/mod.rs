@@ -1229,11 +1229,14 @@ impl AggregateExec {
         //
         // # Implementation Note
         //
-        // `GroupedHashAggregateStream` is being incrementally refactored. See the
-        // tracking issue for details.
+        // `GroupedHashAggregateStream` is the legacy implementation of all the
+        // branches below. It has been split into dedicated streams, and the
+        // `enable_migration_aggregate` config option selects between the new
+        // streams and the legacy implementation.
         //
-        // New features and improvements should go directly into the new implementation.
-        // Please coordinate through the tracking issue.
+        // The legacy implementation is deprecated. It is kept for one more
+        // release as a fallback for potential bugs in the new streams, and
+        // will be removed after that.
         //
         // Issue: <https://github.com/apache/datafusion/issues/22710>
         if context
@@ -1283,6 +1286,10 @@ impl AggregateExec {
                     self, context, partition,
                 )?));
             }
+
+            return internal_err!(
+                "All aggregate cases should be able to handle by the new path"
+            );
         }
 
         // Execution paths that have not been migrated use the fallback implementation
