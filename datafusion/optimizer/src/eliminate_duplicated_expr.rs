@@ -233,7 +233,7 @@ mod tests {
 
     #[test]
     fn unchanged_grouping_sets_reuse_schema() -> Result<()> {
-        // Repeated grouping sets must retain their multiplicity.
+        // Repeat "a" to check that this rule leaves the GroupingSet's contents unchanged.
         let grouping_set = GroupingSet::GroupingSets(vec![
             vec![col("a"), col("b")],
             vec![col("a")],
