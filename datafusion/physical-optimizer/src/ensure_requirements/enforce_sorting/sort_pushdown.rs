@@ -79,6 +79,22 @@ impl Default for ParentRequirements {
 
 pub type SortPushDown = PlanContext<ParentRequirements>;
 
+/// Number of input rows `plan` needs from its children in order to produce
+/// its own `fetch` rows. This is `plan.fetch()` for every operator except
+/// [`GlobalLimitExec`], which discards `skip` rows first and therefore needs
+/// `skip + fetch` input rows. Using the bare `fetch` there would turn
+/// `LIMIT 10 OFFSET 5` into `TopK(10)` below the limit, i.e. 5 result rows.
+///
+/// Note this is distinct from the fetch a parent imposes on `plan`'s *output*
+/// (`ParentRequirements::fetch`), for which `plan.fetch()` is the right bound.
+fn input_fetch(plan: &Arc<dyn ExecutionPlan>) -> Option<usize> {
+    let fetch = plan.fetch()?;
+    let skip = plan
+        .downcast_ref::<GlobalLimitExec>()
+        .map_or(0, |limit| limit.skip());
+    Some(fetch + skip)
+}
+
 /// Assigns the ordering requirement of the root node to the its children.
 pub fn assign_initial_requirements(sort_push_down: &mut SortPushDown) {
     let reqs = sort_push_down.plan.required_input_ordering();
@@ -364,7 +380,7 @@ fn pushdown_sorts_helper(
         // For operators that can take a sort pushdown, continue with updated
         // requirements. If this node already outputs single partition (e.g. SPM),
         // don't push SinglePartition to children.
-        let current_fetch = sort_push_down.plan.fetch();
+        let current_fetch = input_fetch(&sort_push_down.plan);
         let dists = sort_push_down
             .plan
             .input_distribution_requirements()
