@@ -142,7 +142,7 @@ SELECT MOD(2.5::decimal(3,1), 1.2::decimal(2,1)) as mod_decimal_1;
 query R
 SELECT MOD(10.0::decimal(3,1), 3.0::decimal(2,1)) as mod_decimal_2;
 ----
-1
+1.0
 
 # Division by zero returns NULL in legacy mode (ANSI off)
 query I
