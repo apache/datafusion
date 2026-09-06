@@ -1049,9 +1049,9 @@ impl AggregateExec {
             InputOrderMode::Linear
         };
 
-        // To keep the ordering optimization simple, grouping sets are not supported.
-        // See [`OrderedPartialAggregateStream`] for more details about this optimization.
-        if group_by.has_grouping_set() {
+        // Input order mode is also used to advertise plan output ordering, grouping
+        // sets handling, and partial reduce aggregation can't promise that.
+        if group_by.has_grouping_set() || mode == AggregateMode::PartialReduce {
             input_order_mode = InputOrderMode::Linear;
         }
 
