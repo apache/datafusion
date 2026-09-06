@@ -719,6 +719,22 @@ fn plan_insert_no_target_columns() {
     );
 }
 
+#[test]
+fn plan_insert_preserves_target_extension_metadata() {
+    let sql = "INSERT INTO person_with_uuid_extension \
+               SELECT id, first_name, last_name FROM person_with_binary_id";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Dml: op=[Insert Into] table=[person_with_uuid_extension]
+      Projection: CAST(person_with_binary_id.id AS FixedSizeBinary(16)<{"ARROW:extension:name": "arrow.uuid"}>) AS id, person_with_binary_id.first_name AS first_name, person_with_binary_id.last_name AS last_name
+        Projection: person_with_binary_id.id, person_with_binary_id.first_name, person_with_binary_id.last_name
+          TableScan: person_with_binary_id
+    "#
+    );
+}
+
 #[rstest]
 #[case::duplicate_columns(
     "INSERT INTO test_decimal (id, price, price) VALUES (1, 2, 3), (4, 5, 6)",
