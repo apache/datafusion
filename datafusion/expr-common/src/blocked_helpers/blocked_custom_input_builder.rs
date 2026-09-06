@@ -390,7 +390,7 @@ impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider: BlockProvider>
         adjusted_block_size_iter: Option<impl Iterator<Item = usize> + Clone>,
     ) -> <CustomBlockProvider::Block as BlockBuilder>::Output
     where
-      CustomBlockProvider::Block: BlockBuilder,
+        CustomBlockProvider::Block: BlockBuilder,
     {
         assert_eq!(FIXED_BLOCK_SIZING, adjusted_block_size_iter.is_none());
 
@@ -425,13 +425,15 @@ impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider: BlockProvider>
     }
 }
 
-
 impl<CustomBlockProvider: BlockProvider>
-BlockedCustomInputBuilder<true, CustomBlockProvider>
+    BlockedCustomInputBuilder<true, CustomBlockProvider>
 {
-    pub fn take_n_fixed(&mut self, n: usize) -> <CustomBlockProvider::Block as BlockBuilder>::Output
+    pub fn take_n_fixed(
+        &mut self,
+        n: usize,
+    ) -> <CustomBlockProvider::Block as BlockBuilder>::Output
     where
-      CustomBlockProvider::Block: BlockBuilder,
+        CustomBlockProvider::Block: BlockBuilder,
     {
         self.take_n(n, None::<std::iter::Empty<_>>)
     }
@@ -507,7 +509,8 @@ where
     type Output = <CustomBlockProvider::Block as Block>::Item;
 
     fn index(&self, index: BlocksIndex) -> &Self::Output {
-        &self.blocks[index.block_index()][index.index_in_block()]
+        &self.blocks[index.block_index(self.block_size)]
+            [index.index_in_block(self.block_size)]
     }
 }
 
@@ -521,6 +524,7 @@ where
         IndexMut<usize, Output = <CustomBlockProvider::Block as Block>::Item>,
 {
     fn index_mut(&mut self, index: BlocksIndex) -> &mut Self::Output {
-        &mut self.blocks[index.block_index()][index.index_in_block()]
+        &mut self.blocks[index.block_index(self.block_size)]
+            [index.index_in_block(self.block_size)]
     }
 }

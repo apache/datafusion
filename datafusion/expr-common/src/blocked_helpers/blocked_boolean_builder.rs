@@ -133,12 +133,13 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedBooleanBuilder<FIXED_BLOCK_SIZING> {
     }
 
     pub fn get_bit(&self, blocked_index: BlocksIndex) -> bool {
-        self.blocks[blocked_index.block_index()].get_bit(blocked_index.index_in_block())
+        self.blocks[blocked_index.block_index(self.block_size)]
+            .get_bit(blocked_index.index_in_block(self.block_size))
     }
 
     pub fn set_bit(&mut self, blocked_index: BlocksIndex, is_set: bool) {
-        self.blocks[blocked_index.block_index()]
-            .set_bit(blocked_index.index_in_block(), is_set)
+        self.blocks[blocked_index.block_index(self.block_size)]
+            .set_bit(blocked_index.index_in_block(self.block_size), is_set)
     }
 
     /// Extends iterator of validity within current block
@@ -431,8 +432,8 @@ impl<const FIXED_BLOCK_SIZING: bool> Index<BlocksIndex>
     type Output = bool;
 
     fn index(&self, blocked_index: BlocksIndex) -> &Self::Output {
-        if self.blocks[blocked_index.block_index()]
-            .get_bit(blocked_index.index_in_block())
+        if self.blocks[blocked_index.block_index(self.block_size)]
+            .get_bit(blocked_index.index_in_block(self.block_size))
         {
             &true
         } else {

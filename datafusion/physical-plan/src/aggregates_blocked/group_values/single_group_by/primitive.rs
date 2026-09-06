@@ -303,7 +303,7 @@ where
         let mut into_iter = all.into_iter();
 
         if let Some(null_idx) = self.null_group.take() {
-            for values in into_iter.by_ref().take(null_idx.block_index()) {
+            for values in into_iter.by_ref().take(null_idx.block_index(self.block_size)) {
                 blocks.push(vec![Self::build_no_nulls_primitive_arc(
                     values,
                     self.data_type.clone(),
@@ -313,7 +313,7 @@ where
             let block_with_nulls = into_iter.next().expect("must have block for nulls");
             blocks.push(vec![Self::build_with_nulls_primitive_arc(
                 block_with_nulls,
-                null_idx.index_in_block(),
+                null_idx.index_in_block(self.block_size),
                 self.data_type.clone(),
             )]);
         }
@@ -332,19 +332,20 @@ where
         let Some(values) = self.values.take_block() else {
             return Ok(None);
         };
+        let block_size = self.block_size;
 
         // If nothing left
         let null_group = if self.values.len() == 0 {
             self.map.clear();
 
-            assert_eq!(self.null_group.map_or(0, |index| index.block_index()), 0);
+            assert_eq!(self.null_group.map_or(0, |index| index.block_index(block_size)), 0);
 
             self.null_group.take()
         } else {
             self.map.retain(|entry| {
                 // Decrement group index by n
                 let group_idx = entry.0;
-                match group_idx.prev_block_checked() {
+                match group_idx.prev_block_checked(block_size) {
                     Some(new_block_index) => {
                         entry.0 = new_block_index;
                         true
@@ -354,8 +355,8 @@ where
             });
 
             match &mut self.null_group {
-                Some(v) if v.block_index() > 0 => {
-                    *v = BlocksIndex::new(v.block_index() - 1, v.index_in_block());
+                Some(v) if !v.is_in_block_0(block_size) => {
+                    *v = v.prev_block(block_size);
                     None
                 }
                 Some(_) => self.null_group.take(),
@@ -363,7 +364,7 @@ where
             }
         };
 
-        let array = Self::build_primitive(values, null_group.map(|i| i.index_in_block()));
+        let array = Self::build_primitive(values, null_group.map(|i| i.index_in_block(self.block_size)));
 
         Ok(Some(vec![Arc::new(
             array.with_data_type(self.data_type.clone()),
@@ -371,11 +372,12 @@ where
     }
 
     fn emit_first_n(&mut self, n: usize) -> Result<Vec<ArrayRef>> {
+        let block_size = self.block_size;
         let array: PrimitiveArray<T> = {
             self.map.retain(|entry| {
                 // Decrement group index by n
                 let group_idx = entry.0;
-                match group_idx.sub_flat_checked(n, self.block_size) {
+                match group_idx.sub_flat_checked(n, block_size) {
                     // Group index was >= n, shift value down
                     Some(sub) => {
                         entry.0 = sub;
@@ -386,11 +388,11 @@ where
                 }
             });
             let null_group = match &mut self.null_group {
-                Some(v) if v.block_index() > 0 || v.index_in_block() >= n => {
-                    *v = v.sub_flat(n, self.block_size);
+                Some(v) if v.gte_flat(n, block_size) => {
+                    *v = v.sub_flat(n, block_size);
                     None
                 }
-                Some(_) => self.null_group.take().map(|g| g.index_in_block()),
+                Some(_) => self.null_group.take().map(|g| g.index_in_block(self.block_size)),
                 None => None,
             };
             let first_values = self.values.take_n_fixed(n);

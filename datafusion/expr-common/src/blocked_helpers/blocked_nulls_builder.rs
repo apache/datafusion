@@ -59,6 +59,7 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedNullsBuilder<FIXED_BLOCK_SIZING> {
             + self.blocks.back().map_or(0, |b| b.allocated_size())
     }
 
+    #[inline(always)]
     pub fn block_size(&self) -> usize {
         assert!(
             FIXED_BLOCK_SIZING,
@@ -323,7 +324,28 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedNullsBuilder<FIXED_BLOCK_SIZING> {
     }
 
     pub fn is_null(&self, blocked_index: BlocksIndex) -> bool {
-        !self.blocks[blocked_index.block_index()].is_valid(blocked_index.index_in_block())
+        let (block, index_in_block) = self.locate(blocked_index);
+        !self.blocks[block].is_valid(index_in_block)
+    }
+
+    /// `(block, index in block)` of `blocked_index`
+    #[inline]
+    fn locate(&self, blocked_index: BlocksIndex) -> (usize, usize) {
+        if FIXED_BLOCK_SIZING {
+            return (
+                blocked_index.block_index(self.block_size),
+                blocked_index.index_in_block(self.block_size),
+            );
+        }
+        // ponytail: linear walk, manual sizing keeps few blocks; keep block starts if this shows up
+        let mut remaining = blocked_index.into_index_in_fixed_block_size(self.block_size);
+        for (block, nulls) in self.blocks.iter().enumerate() {
+            if remaining < nulls.len() {
+                return (block, remaining);
+            }
+            remaining -= nulls.len();
+        }
+        panic!("index {blocked_index:?} is out of bounds");
     }
 
     /// Extends iterator of validity within current block
@@ -360,7 +382,6 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedNullsBuilder<FIXED_BLOCK_SIZING> {
 
         added_items
     }
-
 
     pub fn build_preserving(
         &self,
@@ -588,9 +609,8 @@ impl<const FIXED_BLOCK_SIZING: bool> Index<BlocksIndex>
     type Output = bool;
 
     fn index(&self, blocked_index: BlocksIndex) -> &Self::Output {
-        if self.blocks[blocked_index.block_index()]
-            .is_valid(blocked_index.index_in_block())
-        {
+        let (block, index_in_block) = self.locate(blocked_index);
+        if self.blocks[block].is_valid(index_in_block) {
             &true
         } else {
             &false

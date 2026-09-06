@@ -273,9 +273,10 @@ where
 
         if update_seen {
             let mut remaining = HashSet::default();
+            let batch_size = self.batch_size();
 
             for (group_idx, value) in self.seen.drain() {
-                if let Some(group_idx) = group_idx.prev_block_checked() {
+                if let Some(group_idx) = group_idx.prev_block_checked(batch_size) {
                     // SAFETY: this is unique as it came from unique set
                     unsafe {remaining.insert_unique_unchecked((group_idx, value)); }
                 }
@@ -318,15 +319,15 @@ where
             let updated_group_idx = if IS_FIRST_N {
                 group_idx.sub_flat_checked(n, batch_size)
             } else {
-                group_idx.prev_block_checked()
+                group_idx.prev_block_checked(batch_size)
             };
             if let Some(group_idx) = updated_group_idx {
                 // SAFETY: safe as this came from unique set and all group indexes are shifted by the same amount
                 unsafe { remaining.insert_unique_unchecked((group_idx, value)) };
             } else {
-                let pos = cursors[group_idx.index_in_block()] as usize;
+                let pos = cursors[group_idx.index_in_block(batch_size)] as usize;
                 all_values[pos] = value;
-                cursors[group_idx.index_in_block()] += 1;
+                cursors[group_idx.index_in_block(batch_size)] += 1;
             }
         }
         self.seen = remaining;
@@ -350,6 +351,7 @@ where
         let mut blocks_all_values = Vec::with_capacity(counts_blocks.len());
         let mut blocks_offsets = Vec::with_capacity(counts_blocks.len());
 
+        // TODO - changed to MmapVec so will be continues memory
         #[expect(clippy::uninit_vec)]
         let mut flat_cursors = {
             let mut v = Vec::with_capacity(counts_len);
@@ -383,9 +385,10 @@ where
         }
 
         {
+            let batch_size = self.batch_size();
             for (group_idx, value) in self.seen.drain() {
                 let pos = &mut flat_cursors[group_idx.into_index_in_fixed_block_size(batch_size)];
-                blocks_all_values[group_idx.block_index()][*pos as usize] = value;
+                blocks_all_values[group_idx.block_index(batch_size)][*pos as usize] = value;
                 *pos += 1;
             }
         }
@@ -421,6 +424,7 @@ for PrimitiveDistinctCountBlockedGroupsAccumulator<T>
 where
   T::Native: Eq + Hash,
 {
+    #[inline(always)]
     fn batch_size(&self) -> usize {
         self.counts.block_size()
     }

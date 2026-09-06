@@ -23,11 +23,11 @@ pub use blocked_custom_input_builder_with_lifetime::{
 };
 // Still a stub, needs a `hashbrown` dependency and the `Block` push/extend methods
 // mod blocked_raw_hash_table_builder;
-pub mod take_n_helpers;
 mod blocked_custom_heap_allocated_input_builder;
-pub mod take_n_helpers_heap_allocated;
 mod blocked_heap_items_vec_builder;
 pub mod get_heap_allocated_size;
+pub mod take_n_helpers;
+pub mod take_n_helpers_heap_allocated;
 
 pub use blocked_heap_items_vec_builder::BlockedVecBuilder;
 pub use get_heap_allocated_size::{GetHeapAllocatedSize, OnlyOnStackSize};

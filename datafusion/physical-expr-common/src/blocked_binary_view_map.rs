@@ -438,7 +438,7 @@ where
             self.null = None;
         } else {
             self.map.retain(|entry| {
-                if let Some(index) = entry.index.prev_block_checked() {
+                if let Some(index) = entry.index.prev_block_checked(self.block_size) {
                     entry.index = index;
                     entry.start_block_index -= num_blocks;
                     true
@@ -447,7 +447,7 @@ where
                 }
             });
             self.null = self.null.and_then(|(payload, index)| {
-                index.prev_block_checked().map(|index| (payload, index))
+                index.prev_block_checked(self.block_size).map(|index| (payload, index))
             });
         }
 

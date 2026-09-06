@@ -458,7 +458,7 @@ where
                     // Need to compare the bytes in the buffer
                     // SAFETY: buffer is only appended to, and we correctly inserted values and offsets
                     let existing_value =
-                        unsafe { self.buffer.block(header.index.block_index()).get_unchecked(header.range()) };
+                        unsafe { self.buffer.block(header.index.block_index(self.block_size)).get_unchecked(header.range()) };
                     value == existing_value
                 });
 
@@ -530,8 +530,8 @@ where
         let mut into_iter = offsets.into_iter().zip(values);
 
         if let Some((_, null_index)) = self.null.take() {
-            if null_index.block_index() > 0 {
-                for (offsets, values) in into_iter.by_ref().take(null_index.block_index()) {
+            if !null_index.is_in_block_0(self.block_size) {
+                for (offsets, values) in into_iter.by_ref().take(null_index.block_index(self.block_size)) {
                     blocks.push(
                         self.new_result(offsets, values, None)
                     );
@@ -541,7 +541,7 @@ where
             let (offsets, values) = into_iter.next().expect("must have since null exists");
             let num_values = offsets.len() - 1;
             blocks.push(
-                self.new_result(offsets, values, Some(single_null_buffer(num_values, null_index.index_in_block())))
+                self.new_result(offsets, values, Some(single_null_buffer(num_values, null_index.index_in_block(self.block_size))))
             );
         }
 
@@ -569,17 +569,17 @@ where
         let nulls = if self
           .null
           .as_ref()
-          .is_some_and(|(_, block_index)| block_index.block_index() == 0)
+          .is_some_and(|(_, block_index)| block_index.is_in_block_0(self.block_size))
         {
             self.null
               .take()
               .map(|(_payload, null_index)| {
                   let num_values = offsets.len() - 1;
-                  single_null_buffer(num_values, null_index.index_in_block())
+                  single_null_buffer(num_values, null_index.index_in_block(self.block_size))
               })
         } else {
             if let Some((_, block_index)) = self.null.as_mut() {
-                *block_index = block_index.prev_block();
+                *block_index = block_index.prev_block(self.block_size);
             }
             None
         };
@@ -591,7 +591,7 @@ where
         } else {
             // Remove the element from the map that corresponds to the current emitted block
             self.map.retain(|entry| {
-                if let Some(new_block_index) = entry.index.prev_block_checked() {
+                if let Some(new_block_index) = entry.index.prev_block_checked(self.block_size) {
                     entry.index = new_block_index;
                     true
                 } else {
@@ -623,13 +623,13 @@ where
         let nulls = if self
           .null
           .as_ref()
-          .is_some_and(|(_, block_index)| block_index.block_index() == 0 && block_index.index_in_block() < n)
+          .is_some_and(|(_, block_index)| block_index.lt_flat(n, self.block_size))
         {
             self.null
               .take()
               .map(|(_payload, null_index)| {
                   let num_values = offsets.len() - 1;
-                  single_null_buffer(num_values, null_index.index_in_block())
+                  single_null_buffer(num_values, null_index.index_in_block(self.block_size))
               })
         } else {
             if let Some((_, block_index)) = self.null.as_mut() {
@@ -640,7 +640,7 @@ where
 
         // Remove the element from the map that corresponds to the current emitted block
         self.map.retain(|entry| {
-            if entry.index.block_index() > 0 || entry.index.index_in_block() >= n {
+            if entry.index.gte_flat(n, self.block_size) {
                 entry.index = entry.index.sub_flat(n, self.block_size);
                 // if not inline, need to update the offset to be in the new block or inside the block
                 if entry.len.as_usize() > SHORT_VALUE_LEN {

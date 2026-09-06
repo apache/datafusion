@@ -2920,6 +2920,9 @@ mod tests {
         if spill {
             // In spill mode, we test with the limited memory, if the mem usage exceeds,
             // we trigger the early emit rule, which turns out the partial aggregate result.
+            // Unlike the row based aggregate that keeps the trailing partial batch of
+            // groups, the blocked aggregate emits every group, so groups in both input
+            // batches show up twice.
             allow_duplicates! {
             assert_snapshot!(batches_to_sort_string(&result),
             @r"
@@ -2940,12 +2943,14 @@ mod tests {
             | 2 | 1.0 | 0             | 1               |
             | 3 |     | 1             | 1               |
             | 3 |     | 1             | 2               |
-            | 3 | 2.0 | 0             | 2               |
+            | 3 | 2.0 | 0             | 1               |
+            | 3 | 2.0 | 0             | 1               |
             | 3 | 3.0 | 0             | 1               |
             | 4 |     | 1             | 1               |
             | 4 |     | 1             | 2               |
             | 4 | 3.0 | 0             | 1               |
-            | 4 | 4.0 | 0             | 2               |
+            | 4 | 4.0 | 0             | 1               |
+            | 4 | 4.0 | 0             | 1               |
             +---+-----+---------------+-----------------+
             "
             );

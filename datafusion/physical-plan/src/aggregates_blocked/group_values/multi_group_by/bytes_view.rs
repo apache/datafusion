@@ -851,10 +851,11 @@ mod tests {
         builder.vectorized_append(&input, &[4, 5, 6, 7, 8]).unwrap();
         assert_eq!(builder.views.num_blocks(), 2);
 
-        assert!(builder.equal_to(BlocksIndex::new(1, 1), &input, 5));
-        assert!(builder.equal_to(BlocksIndex::new(1, 4), &input, 1));
+        // manual sizing: the index is flat over the items, block 0 holds 4
+        assert!(builder.equal_to(BlocksIndex::new_in_first_block(5), &input, 5));
+        assert!(builder.equal_to(BlocksIndex::new_in_first_block(8), &input, 1));
         assert_eq!(
-            String::from_utf8(builder.value(BlocksIndex::new(0, 1)).to_vec()).unwrap(),
+            String::from_utf8(builder.value(BlocksIndex::new_in_first_block(1)).to_vec()).unwrap(),
             LONG_A
         );
 

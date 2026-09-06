@@ -48,6 +48,7 @@ impl<const FIXED_BLOCK_SIZING: bool, O: OffsetSizeTrait>
     }
 
     /// Number of items per block, the internal block size has one more slot for the initial offset
+    #[inline(always)]
     pub fn block_size(&self) -> usize {
         self.slots.block_size() - 1
     }
@@ -71,6 +72,27 @@ impl<const FIXED_BLOCK_SIZING: bool, O: OffsetSizeTrait>
 
     pub fn last_offset(&self) -> O {
         self.last_offset
+    }
+
+    /// Slot of the start offset of item `index`, the item index counts `block_size`
+    /// items per block while the slots have one more (the leading zero) per block
+    #[inline]
+    fn slot(&self, index: BlocksIndex) -> usize {
+        assert!(
+            FIXED_BLOCK_SIZING,
+            "indexing by BlocksIndex is only supported for fixed block sizing"
+        );
+        let block_size = self.block_size();
+        index.block_index(block_size) * (block_size + 1)
+            + index.index_in_block(block_size)
+    }
+
+    /// `(start, end)` offsets within the block of item `index`
+    #[inline]
+    pub fn value_offsets(&self, index: BlocksIndex) -> (O, O) {
+        let slot = self.slot(index);
+        let slots = self.slots.as_slice();
+        (slots[slot], slots[slot + 1])
     }
 
     pub fn start_new_block(&mut self) {
@@ -386,7 +408,7 @@ impl<const FIXED_BLOCK_SIZING: bool, O: OffsetSizeTrait> Index<BlocksIndex>
 
     #[inline]
     fn index(&self, index: BlocksIndex) -> &Self::Output {
-        &self.slots[index]
+        &self.slots.as_slice()[self.slot(index)]
     }
 }
 

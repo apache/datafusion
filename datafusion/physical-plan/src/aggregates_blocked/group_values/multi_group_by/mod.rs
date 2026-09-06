@@ -1298,7 +1298,7 @@ impl<const STREAMING: bool> BlockedGroupValues for BlockedGroupValuesColumn<STRE
                 self.emit_group_index_list_buffer.clear();
                 let list_offset = group_idx_view.value() as usize;
                 for group_index in self.group_index_lists[list_offset].iter() {
-                    if let Some(remaining) = group_index.prev_block_checked() {
+                    if let Some(remaining) = group_index.prev_block_checked(block_size) {
                         self.emit_group_index_list_buffer.push(remaining);
                     }
                 }

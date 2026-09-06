@@ -423,8 +423,8 @@ impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider: BlockWithLifetimeProvi
         &self,
         index: BlocksIndex,
     ) -> <CustomBlockProvider::Block as BlockWithLifetime>::Item<'_> {
-        let block_index = index.block_index();
-        let item_index = index.index_in_block();
+        let block_index = index.block_index(self.block_size);
+        let item_index = index.index_in_block(self.block_size);
 
         let block = &self.blocks[block_index];
         block.index(item_index)

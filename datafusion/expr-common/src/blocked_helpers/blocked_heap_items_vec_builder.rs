@@ -1,17 +1,31 @@
+use crate::blocked_helpers::blocked_custom_heap_allocated_input_builder::{
+    BlockedCustomHeapAllocatedInputBuilder, HeapAllocatedBlock,
+    HeapAllocatedBlockProvider, HeapAllocatedBlockProviderFinish,
+    HeapAllocatedBlockWithSlice,
+};
+use crate::blocked_helpers::take_n_helpers_heap_allocated::HeapAllocatedBlockBuilder;
+use crate::blocked_helpers::{GetHeapAllocatedSize, OnlyOnStackSize};
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::ArrowNativeType;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut, Range};
-use crate::blocked_helpers::blocked_custom_heap_allocated_input_builder::{BlockedCustomHeapAllocatedInputBuilder, HeapAllocatedBlock, HeapAllocatedBlockProvider, HeapAllocatedBlockProviderFinish, HeapAllocatedBlockWithSlice};
-use crate::blocked_helpers::{GetHeapAllocatedSize, OnlyOnStackSize};
-use crate::blocked_helpers::take_n_helpers_heap_allocated::HeapAllocatedBlockBuilder;
 
 #[derive(Debug)]
-pub struct BlockedVecBuilder<const FIXED_BLOCK_SIZING: bool, T: Clone, HeapAllocatedSize: GetHeapAllocatedSize<T> = OnlyOnStackSize>(
-    BlockedCustomHeapAllocatedInputBuilder<FIXED_BLOCK_SIZING, HeapVecBlockProvider<T>, HeapAllocatedSize>,
+pub struct BlockedVecBuilder<
+    const FIXED_BLOCK_SIZING: bool,
+    T: Clone,
+    HeapAllocatedSize: GetHeapAllocatedSize<T> = OnlyOnStackSize,
+>(
+    BlockedCustomHeapAllocatedInputBuilder<
+        FIXED_BLOCK_SIZING,
+        HeapVecBlockProvider<T>,
+        HeapAllocatedSize,
+    >,
 );
 
-impl<const FIXED_BLOCK_SIZING: bool, T: Clone, HeapAllocatedSize: GetHeapAllocatedSize<T>> BlockedVecBuilder<FIXED_BLOCK_SIZING, T, HeapAllocatedSize> {
+impl<const FIXED_BLOCK_SIZING: bool, T: Clone, HeapAllocatedSize: GetHeapAllocatedSize<T>>
+    BlockedVecBuilder<FIXED_BLOCK_SIZING, T, HeapAllocatedSize>
+{
     pub fn new(block_size: usize) -> Self {
         BlockedVecBuilder(BlockedCustomHeapAllocatedInputBuilder::new(
             block_size,
@@ -20,18 +34,22 @@ impl<const FIXED_BLOCK_SIZING: bool, T: Clone, HeapAllocatedSize: GetHeapAllocat
     }
 }
 
-impl<const FIXED_BLOCK_SIZING: bool, T: Clone, HeapAllocatedSize: GetHeapAllocatedSize<T>> Deref
-    for BlockedVecBuilder<FIXED_BLOCK_SIZING, T, HeapAllocatedSize>
+impl<const FIXED_BLOCK_SIZING: bool, T: Clone, HeapAllocatedSize: GetHeapAllocatedSize<T>>
+    Deref for BlockedVecBuilder<FIXED_BLOCK_SIZING, T, HeapAllocatedSize>
 {
-    type Target = BlockedCustomHeapAllocatedInputBuilder<FIXED_BLOCK_SIZING, HeapVecBlockProvider<T>, HeapAllocatedSize>;
+    type Target = BlockedCustomHeapAllocatedInputBuilder<
+        FIXED_BLOCK_SIZING,
+        HeapVecBlockProvider<T>,
+        HeapAllocatedSize,
+    >;
 
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl<const FIXED_BLOCK_SIZING: bool, T: Clone, HeapAllocatedSize: GetHeapAllocatedSize<T>> DerefMut
-    for BlockedVecBuilder<FIXED_BLOCK_SIZING, T, HeapAllocatedSize>
+impl<const FIXED_BLOCK_SIZING: bool, T: Clone, HeapAllocatedSize: GetHeapAllocatedSize<T>>
+    DerefMut for BlockedVecBuilder<FIXED_BLOCK_SIZING, T, HeapAllocatedSize>
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
@@ -121,8 +139,16 @@ impl<T: Clone> HeapAllocatedBlockBuilder for Vec<T> {
         self.extend_from_slice(&src[range])
     }
 
-    fn calculate_memory_of_range<HeapAllocatedSize: GetHeapAllocatedSize<<Self::Output as HeapAllocatedBlock>::Item>>(&self, range: Range<usize>) -> usize {
-        self[range].iter().map(|item| HeapAllocatedSize::get_heap_allocated_size(item)).sum()
+    fn calculate_memory_of_range<
+        HeapAllocatedSize: GetHeapAllocatedSize<<Self::Output as HeapAllocatedBlock>::Item>,
+    >(
+        &self,
+        range: Range<usize>,
+    ) -> usize {
+        self[range]
+            .iter()
+            .map(|item| HeapAllocatedSize::get_heap_allocated_size(item))
+            .sum()
     }
 
     fn shift_down(&mut self, offset: usize, len: usize) {
@@ -563,12 +589,15 @@ mod tests {
     fn growing_an_item_in_a_finished_block_keeps_memory_in_sync() {
         use crate::blocked_helpers::get_heap_allocated_size::CommonHeapAllocatorSize;
 
-        let mut builder = BlockedVecBuilder::<true, Vec<i32>, CommonHeapAllocatorSize>::new(2);
+        let mut builder =
+            BlockedVecBuilder::<true, Vec<i32>, CommonHeapAllocatorSize>::new(2);
         builder.push_default_n(5);
         let before = builder.allocated_size();
 
         // group 1 is in the first block, which is already finished
-        builder.index_mut_with_size(BlocksIndex::new(0, 1), |item| Extend::extend(item, 0..1000));
+        builder.index_mut_with_size(BlocksIndex::new(0, 1), |item| {
+            Extend::extend(item, 0..1000)
+        });
         assert!(builder.allocated_size() >= before + 1000 * size_of::<i32>());
 
         // and shrink one in the current block

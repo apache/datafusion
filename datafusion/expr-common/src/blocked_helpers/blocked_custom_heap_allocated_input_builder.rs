@@ -1,15 +1,14 @@
-use crate::blocked_helpers::take_n_helpers::{
-    create_adjusted_block_size_iter_for_fixed_blocks,
+use crate::blocked_helpers::take_n_helpers::create_adjusted_block_size_iter_for_fixed_blocks;
+use crate::blocked_helpers::take_n_helpers_heap_allocated::{
+    HeapAllocatedBlockBuilder, take_n_from_heap_blocks,
 };
+use crate::blocked_helpers::{GetHeapAllocatedSize, OnlyOnStackSize};
 use crate::groups_accumulator::BlocksIndex;
 use datafusion_common::utils::proxy::VecDequeAllocExt;
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{Index, IndexMut};
-use crate::blocked_helpers::{GetHeapAllocatedSize, OnlyOnStackSize};
-use crate::blocked_helpers::take_n_helpers_heap_allocated::{take_n_from_heap_blocks, HeapAllocatedBlockBuilder};
-
 
 pub trait HeapAllocatedBlockProvider {
     type Block: HeapAllocatedBlock;
@@ -76,9 +75,16 @@ pub struct BlockedCustomHeapAllocatedInputBuilder<
     _phantom: PhantomData<HeapAllocatedSize>,
 }
 
-impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider: HeapAllocatedBlockProvider,
-    HeapAllocatedSize: GetHeapAllocatedSize<<CustomBlockProvider::Block as HeapAllocatedBlock>::Item>>
-BlockedCustomHeapAllocatedInputBuilder<FIXED_BLOCK_SIZING, CustomBlockProvider, HeapAllocatedSize>
+impl<
+    const FIXED_BLOCK_SIZING: bool,
+    CustomBlockProvider: HeapAllocatedBlockProvider,
+    HeapAllocatedSize: GetHeapAllocatedSize<<CustomBlockProvider::Block as HeapAllocatedBlock>::Item>,
+>
+    BlockedCustomHeapAllocatedInputBuilder<
+        FIXED_BLOCK_SIZING,
+        CustomBlockProvider,
+        HeapAllocatedSize,
+    >
 {
     // TODO - some want to preallocate the blocks and some don't,
     //        there should be a way while avoiding having a lot of memory used if all are prealocatting
@@ -107,7 +113,8 @@ BlockedCustomHeapAllocatedInputBuilder<FIXED_BLOCK_SIZING, CustomBlockProvider, 
 
     #[inline(always)]
     const fn should_track_blocks_heap_allocation() -> bool {
-        HeapAllocatedSize::HAS_HEAP_ALLOCATION && !CustomBlockProvider::Block::ALLOCATED_SIZE_INCLUDE_ITEMS
+        HeapAllocatedSize::HAS_HEAP_ALLOCATION
+            && !CustomBlockProvider::Block::ALLOCATED_SIZE_INCLUDE_ITEMS
     }
 
     pub fn blocks_provider(&self) -> &CustomBlockProvider {
@@ -131,7 +138,6 @@ BlockedCustomHeapAllocatedInputBuilder<FIXED_BLOCK_SIZING, CustomBlockProvider, 
     }
 
     pub fn allocated_size(&self) -> usize {
-
         self.blocks_provider.allocated_size()
           // contain both blocks allocated_size and each item heap allocated size
             + self.finished_blocks_allocated_memory
@@ -151,7 +157,7 @@ BlockedCustomHeapAllocatedInputBuilder<FIXED_BLOCK_SIZING, CustomBlockProvider, 
         self.current_block_index += 1;
         self.finished_blocks_allocated_memory +=
             self.blocks.back().map_or(0, |b| b.allocated_size())
-            + self.blocks_heap_allocated_sizes.back().map_or(0, |b| *b);
+                + self.blocks_heap_allocated_sizes.back().map_or(0, |b| *b);
 
         if Self::should_track_blocks_heap_allocation() {
             self.blocks_heap_allocated_sizes.push_back(0);
@@ -167,19 +173,27 @@ BlockedCustomHeapAllocatedInputBuilder<FIXED_BLOCK_SIZING, CustomBlockProvider, 
         }
     }
 
-    pub fn index_mut_with_size(&mut self, index: BlocksIndex, update_fn: impl FnOnce(&mut <CustomBlockProvider::Block as HeapAllocatedBlock>::Item))
-    where Self:
-    IndexMut<BlocksIndex, Output = <CustomBlockProvider::Block as HeapAllocatedBlock>::Item> {
+    pub fn index_mut_with_size(
+        &mut self,
+        index: BlocksIndex,
+        update_fn: impl FnOnce(&mut <CustomBlockProvider::Block as HeapAllocatedBlock>::Item),
+    ) where
+        Self: IndexMut<
+                BlocksIndex,
+                Output = <CustomBlockProvider::Block as HeapAllocatedBlock>::Item,
+            >,
+    {
         if Self::should_track_blocks_heap_allocation() {
             let before = HeapAllocatedSize::get_heap_allocated_size(&self[index]);
             update_fn(&mut self[index]);
             let after = HeapAllocatedSize::get_heap_allocated_size(&self[index]);
-            let mem = &mut self.blocks_heap_allocated_sizes[index.block_index()];
+            let mem =
+                &mut self.blocks_heap_allocated_sizes[index.block_index(self.block_size)];
             *mem = *mem - before + after;
 
             // Finished blocks are already counted in the total, keep it in sync
             // so that taking the block later subtracts what was added
-            if index.block_index() != self.current_block_index {
+            if index.block_index(self.block_size) != self.current_block_index {
                 self.finished_blocks_allocated_memory =
                     self.finished_blocks_allocated_memory - before + after;
             }
@@ -189,11 +203,15 @@ BlockedCustomHeapAllocatedInputBuilder<FIXED_BLOCK_SIZING, CustomBlockProvider, 
     }
 
     /// Push length and return if the current block is now full
-    pub fn push(&mut self, value: <CustomBlockProvider::Block as HeapAllocatedBlock>::Item) -> bool {
+    pub fn push(
+        &mut self,
+        value: <CustomBlockProvider::Block as HeapAllocatedBlock>::Item,
+    ) -> bool {
         let block = &mut self.blocks[self.current_block_index];
 
         if Self::should_track_blocks_heap_allocation() {
-            self.blocks_heap_allocated_sizes[self.current_block_index] += HeapAllocatedSize::get_heap_allocated_size(&value);
+            self.blocks_heap_allocated_sizes[self.current_block_index] +=
+                HeapAllocatedSize::get_heap_allocated_size(&value);
         }
 
         block.push(value);
@@ -229,7 +247,7 @@ BlockedCustomHeapAllocatedInputBuilder<FIXED_BLOCK_SIZING, CustomBlockProvider, 
 
             self.blocks_heap_allocated_sizes[self.current_block_index] += heap_allocated;
         } else {
-        block.extend(iter);
+            block.extend(iter);
         }
 
         if FIXED_BLOCK_SIZING {
@@ -270,7 +288,10 @@ BlockedCustomHeapAllocatedInputBuilder<FIXED_BLOCK_SIZING, CustomBlockProvider, 
 
         let prev_block_len = block.len();
         if Self::should_track_blocks_heap_allocation() {
-            self.blocks_heap_allocated_sizes[self.current_block_index] += slice.iter().map(|item| HeapAllocatedSize::get_heap_allocated_size(item)).sum::<usize>();
+            self.blocks_heap_allocated_sizes[self.current_block_index] += slice
+                .iter()
+                .map(|item| HeapAllocatedSize::get_heap_allocated_size(item))
+                .sum::<usize>();
         }
 
         block.extend_from_slice(slice);
@@ -378,7 +399,10 @@ BlockedCustomHeapAllocatedInputBuilder<FIXED_BLOCK_SIZING, CustomBlockProvider, 
         CustomBlockProvider::Block: HeapAllocatedBlockWithSlice,
         <CustomBlockProvider::Block as HeapAllocatedBlock>::Item: Default + Clone,
     {
-        self.push_value_n(<CustomBlockProvider::Block as HeapAllocatedBlock>::Item::default(), n);
+        self.push_value_n(
+            <CustomBlockProvider::Block as HeapAllocatedBlock>::Item::default(),
+            n,
+        );
     }
 
     pub fn push_value_n(
@@ -422,13 +446,19 @@ BlockedCustomHeapAllocatedInputBuilder<FIXED_BLOCK_SIZING, CustomBlockProvider, 
             .expect("len > 0 so must have a block");
 
         let block_heap_size = if Self::should_track_blocks_heap_allocation() {
-            self.blocks_heap_allocated_sizes.pop_front().expect("len > 0 so must have block size")
+            self.blocks_heap_allocated_sizes
+                .pop_front()
+                .expect("len > 0 so must have block size")
         } else {
             0
         };
 
         if self.blocks.is_empty() {
-            assert_eq!(self.blocks_heap_allocated_sizes.len(), 0, "if blocks are empty, heap allocated sizes should be empty as well");
+            assert_eq!(
+                self.blocks_heap_allocated_sizes.len(),
+                0,
+                "if blocks are empty, heap allocated sizes should be empty as well"
+            );
 
             self.current_block_index = 0;
             self.blocks.push_back(self.blocks_provider.new_block());
@@ -468,9 +498,9 @@ BlockedCustomHeapAllocatedInputBuilder<FIXED_BLOCK_SIZING, CustomBlockProvider, 
         self.reset();
 
         blocks
-          .into_iter()
-          .filter(|block| !block.is_empty())
-          .collect()
+            .into_iter()
+            .filter(|block| !block.is_empty())
+            .collect()
     }
 
     /// Take every non empty block
@@ -484,10 +514,10 @@ BlockedCustomHeapAllocatedInputBuilder<FIXED_BLOCK_SIZING, CustomBlockProvider, 
         self.reset();
 
         blocks
-          .into_iter()
-          .zip(blocks_mem)
-          .filter(|(block, _mem)| !block.is_empty())
-          .collect()
+            .into_iter()
+            .zip(blocks_mem)
+            .filter(|(block, _mem)| !block.is_empty())
+            .collect()
     }
 
     pub fn take_n(
@@ -503,7 +533,14 @@ BlockedCustomHeapAllocatedInputBuilder<FIXED_BLOCK_SIZING, CustomBlockProvider, 
 
         let (taken, layout) = if Self::should_track_blocks_heap_allocation() {
             if let Some(iter) = adjusted_block_size_iter {
-                take_n_from_heap_blocks::<CustomBlockProvider::Block, HeapAllocatedSize>(&mut self.blocks, &mut self.blocks_heap_allocated_sizes, self.len, n, None, iter)
+                take_n_from_heap_blocks::<CustomBlockProvider::Block, HeapAllocatedSize>(
+                    &mut self.blocks,
+                    &mut self.blocks_heap_allocated_sizes,
+                    self.len,
+                    n,
+                    None,
+                    iter,
+                )
             } else {
                 take_n_from_heap_blocks::<CustomBlockProvider::Block, HeapAllocatedSize>(
                     &mut self.blocks,
@@ -520,7 +557,14 @@ BlockedCustomHeapAllocatedInputBuilder<FIXED_BLOCK_SIZING, CustomBlockProvider, 
             }
         } else {
             if let Some(iter) = adjusted_block_size_iter {
-                take_n_from_heap_blocks::<CustomBlockProvider::Block, OnlyOnStackSize>(&mut self.blocks, &mut VecDeque::new(), self.len, n, None, iter)
+                take_n_from_heap_blocks::<CustomBlockProvider::Block, OnlyOnStackSize>(
+                    &mut self.blocks,
+                    &mut VecDeque::new(),
+                    self.len,
+                    n,
+                    None,
+                    iter,
+                )
             } else {
                 take_n_from_heap_blocks::<CustomBlockProvider::Block, OnlyOnStackSize>(
                     &mut self.blocks,
@@ -561,9 +605,11 @@ BlockedCustomHeapAllocatedInputBuilder<FIXED_BLOCK_SIZING, CustomBlockProvider, 
     }
 }
 
-impl<CustomBlockProvider: HeapAllocatedBlockProvider,
-    HeapAllocatedSize: GetHeapAllocatedSize<<CustomBlockProvider::Block as HeapAllocatedBlock>::Item>>
-BlockedCustomHeapAllocatedInputBuilder<true, CustomBlockProvider, HeapAllocatedSize> {
+impl<
+    CustomBlockProvider: HeapAllocatedBlockProvider,
+    HeapAllocatedSize: GetHeapAllocatedSize<<CustomBlockProvider::Block as HeapAllocatedBlock>::Item>,
+> BlockedCustomHeapAllocatedInputBuilder<true, CustomBlockProvider, HeapAllocatedSize>
+{
     pub fn take_n_fixed(&mut self, n: usize) -> <CustomBlockProvider::Block as HeapAllocatedBlockBuilder>::Output
     where
       CustomBlockProvider::Block: HeapAllocatedBlockBuilder,
@@ -573,13 +619,23 @@ BlockedCustomHeapAllocatedInputBuilder<true, CustomBlockProvider, HeapAllocatedS
     }
 }
 
-impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider: HeapAllocatedBlockProvider, HeapAllocatedSize>
-    Extend<<CustomBlockProvider::Block as HeapAllocatedBlock>::Item>
-    for BlockedCustomHeapAllocatedInputBuilder<FIXED_BLOCK_SIZING, CustomBlockProvider, HeapAllocatedSize>
+impl<
+    const FIXED_BLOCK_SIZING: bool,
+    CustomBlockProvider: HeapAllocatedBlockProvider,
+    HeapAllocatedSize,
+> Extend<<CustomBlockProvider::Block as HeapAllocatedBlock>::Item>
+    for BlockedCustomHeapAllocatedInputBuilder<
+        FIXED_BLOCK_SIZING,
+        CustomBlockProvider,
+        HeapAllocatedSize,
+    >
 where
-  HeapAllocatedSize: GetHeapAllocatedSize<<CustomBlockProvider::Block as HeapAllocatedBlock>::Item>,
+    HeapAllocatedSize:
+        GetHeapAllocatedSize<<CustomBlockProvider::Block as HeapAllocatedBlock>::Item>,
 {
-    fn extend<T: IntoIterator<Item = <CustomBlockProvider::Block as HeapAllocatedBlock>::Item>>(
+    fn extend<
+        T: IntoIterator<Item = <CustomBlockProvider::Block as HeapAllocatedBlock>::Item>,
+    >(
         &mut self,
         iter: T,
     ) {
@@ -604,12 +660,17 @@ where
 }
 
 impl<CustomBlockProvider, HeapAllocatedSize> Index<usize>
-    for BlockedCustomHeapAllocatedInputBuilder<true, CustomBlockProvider, HeapAllocatedSize>
+    for BlockedCustomHeapAllocatedInputBuilder<
+        true,
+        CustomBlockProvider,
+        HeapAllocatedSize,
+    >
 where
     CustomBlockProvider: HeapAllocatedBlockProvider,
     CustomBlockProvider::Block:
         Index<usize, Output = <CustomBlockProvider::Block as HeapAllocatedBlock>::Item>,
-    HeapAllocatedSize: GetHeapAllocatedSize<<CustomBlockProvider::Block as HeapAllocatedBlock>::Item>,
+    HeapAllocatedSize:
+        GetHeapAllocatedSize<<CustomBlockProvider::Block as HeapAllocatedBlock>::Item>,
 {
     type Output = <CustomBlockProvider::Block as HeapAllocatedBlock>::Item;
 
@@ -622,13 +683,16 @@ where
 }
 
 impl<CustomBlockProvider, HeapAllocatedSize> IndexMut<usize>
-    for BlockedCustomHeapAllocatedInputBuilder<true, CustomBlockProvider, HeapAllocatedSize>
+    for BlockedCustomHeapAllocatedInputBuilder<
+        true,
+        CustomBlockProvider,
+        HeapAllocatedSize,
+    >
 where
     CustomBlockProvider: HeapAllocatedBlockProvider,
-    CustomBlockProvider::Block:
-        IndexMut<usize, Output = <CustomBlockProvider::Block as HeapAllocatedBlock>::Item>,
-    HeapAllocatedSize: GetHeapAllocatedSize<<CustomBlockProvider::Block as HeapAllocatedBlock>::Item>,
-
+    CustomBlockProvider::Block: IndexMut<usize, Output = <CustomBlockProvider::Block as HeapAllocatedBlock>::Item>,
+    HeapAllocatedSize:
+        GetHeapAllocatedSize<<CustomBlockProvider::Block as HeapAllocatedBlock>::Item>,
 {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         self.index_mut(BlocksIndex::from_index_in_fixed_block_size(
@@ -638,35 +702,45 @@ where
     }
 }
 
-impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider, HeapAllocatedSize> Index<BlocksIndex>
-    for BlockedCustomHeapAllocatedInputBuilder<FIXED_BLOCK_SIZING, CustomBlockProvider, HeapAllocatedSize>
+impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider, HeapAllocatedSize>
+    Index<BlocksIndex>
+    for BlockedCustomHeapAllocatedInputBuilder<
+        FIXED_BLOCK_SIZING,
+        CustomBlockProvider,
+        HeapAllocatedSize,
+    >
 where
     CustomBlockProvider: HeapAllocatedBlockProvider,
     CustomBlockProvider::Block:
         Index<usize, Output = <CustomBlockProvider::Block as HeapAllocatedBlock>::Item>,
-    HeapAllocatedSize: GetHeapAllocatedSize<<CustomBlockProvider::Block as HeapAllocatedBlock>::Item>,
+    HeapAllocatedSize:
+        GetHeapAllocatedSize<<CustomBlockProvider::Block as HeapAllocatedBlock>::Item>,
 {
     type Output = <CustomBlockProvider::Block as HeapAllocatedBlock>::Item;
 
     fn index(&self, index: BlocksIndex) -> &Self::Output {
-        &self.blocks[index.block_index()][index.index_in_block()]
+        &self.blocks[index.block_index(self.block_size)]
+            [index.index_in_block(self.block_size)]
     }
 }
 
-impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider,
-    HeapAllocatedSize,
-> IndexMut<BlocksIndex>
-    for BlockedCustomHeapAllocatedInputBuilder<FIXED_BLOCK_SIZING, CustomBlockProvider, HeapAllocatedSize>
+impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider, HeapAllocatedSize>
+    IndexMut<BlocksIndex>
+    for BlockedCustomHeapAllocatedInputBuilder<
+        FIXED_BLOCK_SIZING,
+        CustomBlockProvider,
+        HeapAllocatedSize,
+    >
 where
     CustomBlockProvider: HeapAllocatedBlockProvider,
     CustomBlockProvider::Block:
         Index<usize, Output = <CustomBlockProvider::Block as HeapAllocatedBlock>::Item>,
-    CustomBlockProvider::Block:
-        IndexMut<usize, Output = <CustomBlockProvider::Block as HeapAllocatedBlock>::Item>,
-    HeapAllocatedSize: GetHeapAllocatedSize<<CustomBlockProvider::Block as HeapAllocatedBlock>::Item>,
-
+    CustomBlockProvider::Block: IndexMut<usize, Output = <CustomBlockProvider::Block as HeapAllocatedBlock>::Item>,
+    HeapAllocatedSize:
+        GetHeapAllocatedSize<<CustomBlockProvider::Block as HeapAllocatedBlock>::Item>,
 {
     fn index_mut(&mut self, index: BlocksIndex) -> &mut Self::Output {
-        &mut self.blocks[index.block_index()][index.index_in_block()]
+        &mut self.blocks[index.block_index(self.block_size)]
+            [index.index_in_block(self.block_size)]
     }
 }

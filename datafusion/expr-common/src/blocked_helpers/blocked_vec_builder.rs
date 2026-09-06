@@ -1,4 +1,5 @@
 use crate::blocked_helpers::take_n_helpers::BlockBuilder;
+use crate::groups_accumulator::BlocksIndex;
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::ArrowNativeType;
 use std::collections::{BTreeMap, VecDeque};
@@ -7,7 +8,6 @@ use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut, Index, IndexMut, Range};
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
-use crate::groups_accumulator::BlocksIndex;
 
 /// Virtual bytes reserved per builder up front. Untouched pages cost nothing, so this
 /// is sized to practically never fill; the live window is relocated (and doubled if
@@ -305,10 +305,12 @@ impl<const FIXED_BLOCK_SIZING: bool, T: Copy>
         self.head == self.tail
     }
 
+    #[inline(always)]
     pub fn len(&self) -> usize {
         self.tail - self.head
     }
 
+    #[inline(always)]
     pub fn block_size(&self) -> usize {
         self.block_size
     }

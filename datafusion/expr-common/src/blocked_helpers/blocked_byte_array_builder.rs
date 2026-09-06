@@ -26,8 +26,9 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteArrayType>
         }
     }
 
+    #[inline(always)]
     pub fn block_size(&self) -> usize {
-        self.blocked_offsets.block_size()
+        self.blocked_nulls.block_size()
     }
 
     pub fn len(&self) -> usize {
@@ -140,11 +141,12 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteArrayType>
 
     /// return the current value of the specified row irrespective of null
     pub fn value_bytes(&self, index: BlocksIndex) -> &[u8] {
-        let start_in_block = self.blocked_offsets[index].as_usize();
-
-        // Offset in block + 1 always exists for offsets since block size is + 1
-        let end_in_block = self.blocked_offsets[index.next_index_in_block()].as_usize();
-        let bytes_block = self.blocked_bytes.block(index.block_index());
+        let (start_in_block, end_in_block) = self.blocked_offsets.value_offsets(index);
+        let (start_in_block, end_in_block) =
+            (start_in_block.as_usize(), end_in_block.as_usize());
+        let bytes_block = self
+            .blocked_bytes
+            .block(index.block_index(self.block_size()));
 
         // Safety: the offsets are constructed correctly and never decrease
         unsafe { bytes_block.get_unchecked(start_in_block..end_in_block) }
@@ -159,10 +161,7 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteArrayType>
     }
 
     pub fn value_len(&self, index: BlocksIndex) -> usize {
-        let start_in_block = self.blocked_offsets[index];
-
-        // Offset in block + 1 always exists for offsets since block size is + 1
-        let end_in_block = self.blocked_offsets[index.next_index_in_block()];
+        let (start_in_block, end_in_block) = self.blocked_offsets.value_offsets(index);
 
         end_in_block.as_usize() - start_in_block.as_usize()
     }
@@ -229,9 +228,7 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteArrayType>
         bytes.resize_with(offsets.len(), || Buffer::from(&[]));
 
         offsets.into_iter().zip_eq(bytes).zip_eq(nulls).map(
-            |((offsets, bytes), nulls)| {
-                (Self::offsets_from_vec(offsets), bytes, nulls)
-            },
+            |((offsets, bytes), nulls)| (Self::offsets_from_vec(offsets), bytes, nulls),
         )
     }
 
