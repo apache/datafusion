@@ -290,8 +290,8 @@ impl AggregateUDFImpl for BitwiseOperation {
         }
     }
 
-    fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
-        true
+    fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
+        !args.is_distinct
     }
 
     fn create_groups_accumulator(
