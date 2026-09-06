@@ -1386,12 +1386,20 @@ struct CurrentChunk {
     is_last: bool,
 }
 
-/// Inner state of [`FallbackCoordinator`], guarded by an async mutex.
+/// Inner state of [`FallbackCoordinator`], guarded by a synchronous mutex.
+///
+/// Synchronous because cancellation and chunk release have to complete inside a
+/// single `poll_next` rather than depending on a future a dropped stream would
+/// take with it. No critical section awaits: the one slow operation, reading a
+/// chunk, runs after the guard is released.
 struct FallbackCoordinatorInner {
-    /// Reservation owned by the coordinator. Holds the memory for the
-    /// currently-loaded chunk. Reset (`resize(0)`) between chunks.
-    /// Lazily registered by the first leader, after the runtime context
-    /// becomes available via `initiate_fallback`.
+    /// Reservation the leader borrows to bound one chunk load.
+    ///
+    /// It only holds bytes while a load is in progress: on success
+    /// `load_one_chunk` moves them into the chunk's `JoinLeftData` with
+    /// `take()`, so the accounting follows the data rather than this slot.
+    /// Lazily registered by the first leader, once a runtime context is
+    /// available.
     reservation: Option<MemoryReservation>,
     /// The shared left spill stream from which chunks are read. Owned by
     /// the coordinator so only one partition reads it at a time.
@@ -2912,9 +2920,11 @@ impl NestedLoopJoinStream {
                     }
 
                     // Drop our reference to the current chunk's
-                    // `JoinLeftData` before releasing the slot. Once the
-                    // last partition does this, the `Arc` reaches zero
-                    // refcount and the per-chunk reservation is freed.
+                    // `JoinLeftData` before releasing the slot. The coordinator
+                    // slot holds a strong `Arc` too, so the reservation inside
+                    // the chunk is freed only once every probing partition *and*
+                    // the slot have let go -- which is why the slot cannot hold
+                    // the chunk weakly instead.
                     self.buffered_left_data = None;
 
                     if self.is_memory_limited() {
