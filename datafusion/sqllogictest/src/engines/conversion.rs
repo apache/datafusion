@@ -96,7 +96,7 @@ pub(crate) fn arrow_decimal_to_str<T: DecimalType>(
 }
 
 #[cfg(feature = "postgres")]
-pub(crate) fn decimal_to_str(value: BigDecimal) -> String {
+pub(crate) fn decimal_to_str(value: &BigDecimal) -> String {
     value.to_plain_string()
 }
 

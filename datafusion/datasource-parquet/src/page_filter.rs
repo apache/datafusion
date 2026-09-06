@@ -21,8 +21,9 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::metrics::ParquetFileMetrics;
-use crate::ParquetAccessPlan;
 use crate::metadata::has_untrusted_min_max_order;
+use crate::pruning::build_inverted_predicate;
+use crate::{ParquetAccessPlan, RowGroupAccess};
 
 use arrow::array::BooleanArray;
 use arrow::{
@@ -114,6 +115,9 @@ pub struct PagePruningAccessPlanFilter {
     /// single column predicates (e.g. (`col = 5`) extracted from the overall
     /// predicate. Must all be true for a row to be included in the result.
     predicates: Vec<PruningPredicate>,
+    /// Whether every original conjunct can be evaluated from one column's page
+    /// statistics. Otherwise no range can be classified as fully matched.
+    all_predicates_supported: bool,
 }
 
 /// Result of applying page-index pruning to a [`ParquetAccessPlan`].
@@ -122,16 +126,20 @@ pub(crate) struct PagePruningResult {
     /// Pages skipped because the containing row group was fully matched by
     /// row-group statistics.
     pub(crate) pages_skipped_by_fully_matched: usize,
+    /// Rows skipped by page-level limit pruning.
+    pub(crate) limit_pruned_rows: usize,
 }
 
 impl PagePruningResult {
     fn new(
         access_plan: ParquetAccessPlan,
         pages_skipped_by_fully_matched: usize,
+        limit_pruned_rows: usize,
     ) -> Self {
         Self {
             access_plan,
             pages_skipped_by_fully_matched,
+            limit_pruned_rows,
         }
     }
 }
@@ -150,36 +158,44 @@ impl PagePruningAccessPlanFilter {
         schema: &SchemaRef,
         max_in_list_size: usize,
     ) -> Self {
-        // extract any single column predicates
-        let predicates = split_conjunction(expr)
-            .into_iter()
-            .filter_map(|predicate| {
-                let pp = match PruningPredicateBuilder::new()
-                    .with_file_schema(Arc::clone(schema))
-                    .with_max_in_list_size(max_in_list_size)
-                    .try_build(Arc::clone(predicate))
-                {
-                    Ok(pp) => pp,
-                    Err(e) => {
-                        debug!("Ignoring error creating page pruning predicate: {e}");
-                        return None;
-                    }
-                };
+        let mut predicates = vec![];
+        let mut all_predicates_supported = true;
 
-                if pp.always_true() {
-                    debug!("Ignoring always true page pruning predicate: {predicate}");
-                    return None;
+        // Ordinary pruning can use any supported conjunct. Fully matched
+        // ranges require every original conjunct to be supported.
+        for predicate in split_conjunction(expr) {
+            let pp = match PruningPredicateBuilder::new()
+                .with_file_schema(Arc::clone(schema))
+                .with_max_in_list_size(max_in_list_size)
+                .try_build(Arc::clone(predicate))
+            {
+                Ok(pp) => pp,
+                Err(e) => {
+                    debug!("Ignoring error creating page pruning predicate: {e}");
+                    all_predicates_supported = false;
+                    continue;
                 }
+            };
 
-                if pp.required_columns().single_column().is_none() {
-                    debug!("Ignoring multi-column page pruning predicate: {predicate}");
-                    return None;
-                }
+            if pp.always_true() {
+                debug!("Ignoring always true page pruning predicate: {predicate}");
+                all_predicates_supported = false;
+                continue;
+            }
 
-                Some(pp)
-            })
-            .collect::<Vec<_>>();
-        Self { predicates }
+            if pp.required_columns().single_column().is_none() {
+                debug!("Ignoring multi-column page pruning predicate: {predicate}");
+                all_predicates_supported = false;
+                continue;
+            }
+
+            predicates.push(pp);
+        }
+
+        Self {
+            predicates,
+            all_predicates_supported,
+        }
     }
 
     /// Returns an updated [`ParquetAccessPlan`] by applying predicates to the
@@ -198,6 +214,7 @@ impl PagePruningAccessPlanFilter {
             parquet_schema,
             parquet_metadata,
             file_metrics,
+            None,
         )
         .access_plan
     }
@@ -211,18 +228,19 @@ impl PagePruningAccessPlanFilter {
         parquet_schema: &SchemaDescriptor,
         parquet_metadata: &ParquetMetaData,
         file_metrics: &ParquetFileMetrics,
+        limit: Option<usize>,
     ) -> PagePruningResult {
         // scoped timer updates on drop
         let _timer_guard = file_metrics.page_index_eval_time.timer();
         if self.predicates.is_empty() {
-            return PagePruningResult::new(access_plan, 0);
+            return PagePruningResult::new(access_plan, 0, 0);
         }
 
         let page_index_predicates = &self.predicates;
         let groups = parquet_metadata.row_groups();
 
         if groups.is_empty() {
-            return PagePruningResult::new(access_plan, 0);
+            return PagePruningResult::new(access_plan, 0, 0);
         }
 
         if parquet_metadata.offset_index().is_none()
@@ -233,8 +251,27 @@ impl PagePruningAccessPlanFilter {
                 parquet_metadata.offset_index().is_some(),
                 parquet_metadata.column_index().is_some()
             );
-            return PagePruningResult::new(access_plan, 0);
+            return PagePruningResult::new(access_plan, 0, 0);
         }
+
+        // Build inverse predicates only for unordered LIMIT queries. Ordinary
+        // page pruning does not need them.
+        let inverted_predicates: Option<Vec<_>> =
+            if limit.is_some() && self.all_predicates_supported {
+                self.predicates
+                    .iter()
+                    .map(|predicate| {
+                        let inverted = build_inverted_predicate(predicate, arrow_schema)?;
+                        inverted
+                            .required_columns()
+                            .single_column()
+                            .is_some()
+                            .then_some(inverted)
+                    })
+                    .collect()
+            } else {
+                None
+            };
 
         // track the total number of rows that should be skipped
         let mut total_skip = 0;
@@ -247,6 +284,9 @@ impl PagePruningAccessPlanFilter {
         // track pages for which page-index pruning was skipped because the
         // containing row group was already proven fully matched by statistics
         let mut total_pages_skipped_by_fully_matched = 0;
+        let mut fully_matched_page_selections = inverted_predicates
+            .as_ref()
+            .map(|_| vec![None; groups.len()]);
 
         // for each row group specified in the access plan
         let row_group_indexes = access_plan.row_group_indexes();
@@ -274,35 +314,11 @@ impl PagePruningAccessPlanFilter {
                 HashSet::from_iter(0..total_pages_in_group);
 
             for predicate in page_index_predicates {
-                let Some(column) = predicate.required_columns().single_column() else {
-                    debug!(
-                        "Ignoring multi-column page pruning predicate: {:?}",
-                        predicate.predicate_expr()
-                    );
-                    continue;
-                };
-
-                let converter = StatisticsConverter::try_new(
-                    column.name(),
-                    arrow_schema,
-                    parquet_schema,
-                );
-
-                let converter = match converter {
-                    Ok(converter) => converter,
-                    Err(e) => {
-                        debug!(
-                            "Could not create statistics converter for column {}: {e}",
-                            column.name()
-                        );
-                        continue;
-                    }
-                };
-
-                let selection = prune_pages_in_one_row_group(
+                let selection = prune_pages_for_predicate(
                     row_group_index,
                     predicate,
-                    converter,
+                    arrow_schema,
+                    parquet_schema,
                     parquet_metadata,
                     file_metrics,
                 );
@@ -365,6 +381,38 @@ impl PagePruningAccessPlanFilter {
                     parquet_metadata.row_group(row_group_index).num_rows() as usize;
             }
 
+            if access_plan.should_scan(row_group_index)
+                && let Some(inverted_predicates) = &inverted_predicates
+            {
+                let mut fully_matched_selection = None;
+                let mut complete = true;
+
+                for predicate in inverted_predicates {
+                    let Some((selection, _)) = prune_pages_for_predicate(
+                        row_group_index,
+                        predicate,
+                        arrow_schema,
+                        parquet_schema,
+                        parquet_metadata,
+                        file_metrics,
+                    ) else {
+                        complete = false;
+                        break;
+                    };
+
+                    fully_matched_selection = update_selection(
+                        fully_matched_selection,
+                        complement_selection(selection),
+                    );
+                }
+
+                if complete
+                    && let Some(selections) = fully_matched_page_selections.as_mut()
+                {
+                    selections[row_group_index] = fully_matched_selection;
+                }
+            }
+
             let pages_matched = matched_pages_in_group.len();
             total_pages_select += pages_matched;
             total_pages_skip += total_pages_in_group - pages_matched;
@@ -380,7 +428,30 @@ impl PagePruningAccessPlanFilter {
         file_metrics
             .page_index_pages_pruned
             .add_matched(total_pages_select);
-        PagePruningResult::new(access_plan, total_pages_skipped_by_fully_matched)
+
+        let mut limit_pruned_rows = 0;
+        if let Some(limit) = limit
+            && let Some(fully_matched_page_selections) =
+                fully_matched_page_selections.as_deref()
+            && let Some((limit_plan, pruned_rows, pruned_row_groups)) = limit_pruned_plan(
+                &access_plan,
+                fully_matched_page_selections,
+                limit,
+                groups,
+            )
+        {
+            access_plan = limit_plan;
+            limit_pruned_rows = pruned_rows;
+            file_metrics
+                .limit_pruned_row_groups
+                .add_pruned(pruned_row_groups);
+        }
+
+        PagePruningResult::new(
+            access_plan,
+            total_pages_skipped_by_fully_matched,
+            limit_pruned_rows,
+        )
     }
 
     /// Returns the number of filters in the [`PagePruningAccessPlanFilter`]
@@ -409,6 +480,96 @@ fn update_selection(
     }
 }
 
+fn complement_selection(selection: RowSelection) -> RowSelection {
+    let selectors: Vec<RowSelector> = selection.into();
+    selectors
+        .into_iter()
+        .map(|selector| {
+            if selector.skip {
+                RowSelector::select(selector.row_count)
+            } else {
+                RowSelector::skip(selector.row_count)
+            }
+        })
+        .collect()
+}
+
+/// Build a plan containing only ranges known to satisfy the predicate, if
+/// those ranges contain enough rows to satisfy `limit`.
+fn limit_pruned_plan(
+    access_plan: &ParquetAccessPlan,
+    fully_matched_page_selections: &[Option<RowSelection>],
+    limit: usize,
+    groups: &[RowGroupMetaData],
+) -> Option<(ParquetAccessPlan, usize, usize)> {
+    let original_rows = selected_row_count(access_plan, groups);
+    let original_row_groups = access_plan.row_group_indexes().len();
+    let mut candidate_plan = ParquetAccessPlan::new_none(access_plan.len());
+    if limit == 0 {
+        return Some((candidate_plan, original_rows, original_row_groups));
+    }
+
+    let mut candidate_rows = 0;
+
+    for row_group_index in access_plan.row_group_indexes() {
+        let access = if access_plan.is_fully_matched(row_group_index) {
+            access_plan.inner()[row_group_index].clone()
+        } else {
+            let Some(selection) = fully_matched_page_selections[row_group_index].as_ref()
+            else {
+                continue;
+            };
+            match &access_plan.inner()[row_group_index] {
+                RowGroupAccess::Skip => continue,
+                RowGroupAccess::Scan => RowGroupAccess::Selection(selection.clone()),
+                RowGroupAccess::Selection(existing) => {
+                    RowGroupAccess::Selection(existing.intersection(selection))
+                }
+            }
+        };
+
+        let rows = selected_rows_in_access(&access, &groups[row_group_index]);
+        if rows == 0 {
+            continue;
+        }
+
+        candidate_plan.set(row_group_index, access);
+        if access_plan.is_fully_matched(row_group_index) {
+            candidate_plan.mark_fully_matched(row_group_index);
+        }
+        candidate_rows += rows;
+
+        if candidate_rows >= limit {
+            let pruned_rows = original_rows.saturating_sub(candidate_rows);
+            let pruned_row_groups = original_row_groups
+                .saturating_sub(candidate_plan.row_group_indexes().len());
+            return Some((candidate_plan, pruned_rows, pruned_row_groups));
+        }
+    }
+
+    None
+}
+
+fn selected_row_count(
+    access_plan: &ParquetAccessPlan,
+    groups: &[RowGroupMetaData],
+) -> usize {
+    access_plan
+        .inner()
+        .iter()
+        .zip(groups)
+        .map(|(access, group)| selected_rows_in_access(access, group))
+        .sum()
+}
+
+fn selected_rows_in_access(access: &RowGroupAccess, group: &RowGroupMetaData) -> usize {
+    match access {
+        RowGroupAccess::Skip => 0,
+        RowGroupAccess::Scan => group.num_rows() as usize,
+        RowGroupAccess::Selection(selection) => selection.row_count(),
+    }
+}
+
 /// Returns the number of pages for which page-index pruning is skipped because
 /// the containing row group is fully matched by row-group statistics.
 fn fully_matched_page_count(
@@ -420,6 +581,36 @@ fn fully_matched_page_count(
             .first()
             .map_or(0, |column| column.page_locations.len())
     })
+}
+
+fn prune_pages_for_predicate(
+    row_group_index: usize,
+    predicate: &PruningPredicate,
+    arrow_schema: &Schema,
+    parquet_schema: &SchemaDescriptor,
+    parquet_metadata: &ParquetMetaData,
+    metrics: &ParquetFileMetrics,
+) -> Option<(RowSelection, Vec<bool>)> {
+    let column = predicate.required_columns().single_column()?;
+    let converter =
+        match StatisticsConverter::try_new(column.name(), arrow_schema, parquet_schema) {
+            Ok(converter) => converter,
+            Err(e) => {
+                debug!(
+                    "Could not create statistics converter for column {}: {e}",
+                    column.name()
+                );
+                return None;
+            }
+        };
+
+    prune_pages_in_one_row_group(
+        row_group_index,
+        predicate,
+        converter,
+        parquet_metadata,
+        metrics,
+    )
 }
 
 /// Returns a [`RowSelection`] for the rows in this row group to scan, in addition to a vec of
@@ -653,5 +844,98 @@ impl PruningStatistics for PagesPruningStatistics<'_> {
         _values: &HashSet<ScalarValue>,
     ) -> Option<BooleanArray> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use parquet::basic::Type as PhysicalType;
+    use parquet::file::metadata::ColumnChunkMetaData;
+    use parquet::schema::types::{SchemaDescriptor, Type as SchemaType};
+
+    #[test]
+    fn limit_plan_preserves_existing_selections() {
+        let groups = vec![row_group_metadata(6), row_group_metadata(6)];
+        let mut access_plan = ParquetAccessPlan::new(vec![
+            RowGroupAccess::Selection(
+                vec![
+                    RowSelector::skip(2),
+                    RowSelector::select(1),
+                    RowSelector::skip(3),
+                ]
+                .into(),
+            ),
+            RowGroupAccess::Selection(
+                vec![
+                    RowSelector::select(2),
+                    RowSelector::skip(1),
+                    RowSelector::select(3),
+                ]
+                .into(),
+            ),
+        ]);
+        access_plan.mark_fully_matched(0);
+
+        let fully_matched_pages = vec![
+            None,
+            Some(
+                vec![
+                    RowSelector::skip(1),
+                    RowSelector::select(4),
+                    RowSelector::skip(1),
+                ]
+                .into(),
+            ),
+        ];
+
+        // One selected row from the fully matched row group plus three rows
+        // from the fully matched page satisfy the limit.
+        let (plan, pruned_rows, _) =
+            limit_pruned_plan(&access_plan, &fully_matched_pages, 4, &groups).unwrap();
+        assert_eq!(selected_row_count(&plan, &groups), 4);
+        assert_eq!(pruned_rows, 2);
+        assert!(plan.is_fully_matched(0));
+        assert_eq!(plan.inner()[0], access_plan.inner()[0]);
+        assert_eq!(
+            plan.inner()[1],
+            RowGroupAccess::Selection(
+                vec![
+                    RowSelector::skip(1),
+                    RowSelector::select(1),
+                    RowSelector::skip(1),
+                    RowSelector::select(2),
+                    RowSelector::skip(1),
+                ]
+                .into()
+            )
+        );
+
+        // The same candidates are insufficient for a larger limit.
+        assert!(
+            limit_pruned_plan(&access_plan, &fully_matched_pages, 5, &groups).is_none()
+        );
+    }
+
+    fn row_group_metadata(num_rows: i64) -> RowGroupMetaData {
+        let field = SchemaType::primitive_type_builder("a", PhysicalType::INT32)
+            .build()
+            .unwrap();
+        let schema = Arc::new(SchemaDescriptor::new(Arc::new(
+            SchemaType::group_type_builder("schema")
+                .with_fields(vec![Arc::new(field)])
+                .build()
+                .unwrap(),
+        )));
+        let column = ColumnChunkMetaData::builder(schema.column(0))
+            .set_num_values(num_rows)
+            .build()
+            .unwrap();
+
+        RowGroupMetaData::builder(schema)
+            .set_num_rows(num_rows)
+            .set_column_metadata(vec![column])
+            .build()
+            .unwrap()
     }
 }
