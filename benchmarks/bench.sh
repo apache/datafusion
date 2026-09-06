@@ -122,6 +122,7 @@ clickbench_extended:    ClickBench \"inspired\" queries against a single parquet
 # Sort Pushdown Benchmarks
 sort_pushdown:          Sort pushdown baseline (no WITH ORDER) on TPC-H data (SF=1)
 sort_pushdown_sorted:   Sort pushdown with WITH ORDER — tests sort elimination on non-overlapping files
+sort_pushdown_100:      Sort pushdown variation with 100 non-overlapping sorted files
 sort_pushdown_inexact:  Sort pushdown Inexact path (--sorted DESC) — multi-file with scrambled RGs, tests reverse scan + RG reorder
 sort_pushdown_inexact_unsorted: Sort pushdown Inexact path (no WITH ORDER) — same data, tests Unsupported path + RG reorder
 sort_pushdown_inexact_overlap: Sort pushdown Inexact path — multi-file scrambled RGs (streaming data scenario)
@@ -370,6 +371,9 @@ main() {
                 sort_pushdown|sort_pushdown_sorted)
                     data_sort_pushdown
                     ;;
+                sort_pushdown_100)
+                    data_sort_pushdown_100
+                    ;;
                 sort_pushdown_inexact|sort_pushdown_inexact_unsorted|sort_pushdown_inexact_overlap)
                     data_sort_pushdown_inexact
                     ;;
@@ -614,6 +618,9 @@ main() {
                     ;;
                 sort_pushdown_sorted)
                     run_sort_pushdown_sorted
+                    ;;
+                sort_pushdown_100)
+                    run_sort_pushdown_100
                     ;;
                 sort_pushdown_inexact)
                     run_sort_pushdown_inexact
@@ -1397,6 +1404,33 @@ data_sort_pushdown() {
     ls -la "${SORT_PUSHDOWN_DIR}"
 }
 
+# Generates the 100-file variation of the sort pushdown data: TPCH lineitem
+# (SF=1) as 100 sorted, non-overlapping parquet files.
+#
+# No renaming is needed to exercise reordering, the lexical file order already
+# differs from key order.
+data_sort_pushdown_100() {
+    SORT_PUSHDOWN_100_DIR="${DATA_DIR}/sort_pushdown_100/lineitem"
+    if [ -d "${SORT_PUSHDOWN_100_DIR}" ] && [ "$(ls -A ${SORT_PUSHDOWN_100_DIR}/*.parquet 2>/dev/null)" ]; then
+        echo "Sort pushdown 100-file data already exists at ${SORT_PUSHDOWN_100_DIR}"
+        return
+    fi
+
+    echo "Generating sort pushdown benchmark data (100 parts)..."
+
+    TEMP_DIR="${DATA_DIR}/sort_pushdown_100_temp"
+    mkdir -p "${TEMP_DIR}" "${SORT_PUSHDOWN_100_DIR}"
+
+    tpchgen-cli --scale-factor 1 --format parquet --parquet-compression='ZSTD(1)' --parts=100 --output-dir "${TEMP_DIR}"
+
+    mv "${TEMP_DIR}"/lineitem/*.parquet "${SORT_PUSHDOWN_100_DIR}/"
+
+    rm -rf "${TEMP_DIR}"
+
+    echo "Sort pushdown 100-file data generated at ${SORT_PUSHDOWN_100_DIR}"
+    ls "${SORT_PUSHDOWN_100_DIR}" | wc -l
+}
+
 run_sort_pushdown() {
     SORT_PUSHDOWN_DIR="${DATA_DIR}/sort_pushdown"
     RESULTS_FILE="${RESULTS_DIR}/sort_pushdown.json"
@@ -1409,6 +1443,14 @@ run_sort_pushdown_sorted() {
     SORT_PUSHDOWN_DIR="${DATA_DIR}/sort_pushdown"
     RESULTS_FILE="${RESULTS_DIR}/sort_pushdown_sorted.json"
     echo "Running sort pushdown benchmark (with WITH ORDER)..."
+    debug_run $CARGO_COMMAND --bin dfbench -- sort-pushdown --sorted --iterations 5 --path "${SORT_PUSHDOWN_DIR}" --queries-path "${SCRIPT_DIR}/queries/sort_pushdown" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Runs the sort pushdown benchmark with WITH ORDER on the 100 file variation
+run_sort_pushdown_100() {
+    SORT_PUSHDOWN_DIR="${DATA_DIR}/sort_pushdown_100"
+    RESULTS_FILE="${RESULTS_DIR}/sort_pushdown_100.json"
+    echo "Running sort pushdown benchmark (with 100 files)..."
     debug_run $CARGO_COMMAND --bin dfbench -- sort-pushdown --sorted --iterations 5 --path "${SORT_PUSHDOWN_DIR}" --queries-path "${SCRIPT_DIR}/queries/sort_pushdown" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 

@@ -1043,6 +1043,7 @@ Benchmarks for sort pushdown optimizations on TPC-H lineitem data (SF=1).
 |-----------|-------------|
 | `sort_pushdown` | Baseline — no `WITH ORDER`, tests standard sort behavior |
 | `sort_pushdown_sorted` | With `WITH ORDER` — tests sort elimination on sorted files |
+| `sort_pushdown_100` | Variation with the same data partitioned into many more (100) files |
 | `sort_pushdown_inexact` | Inexact path (`--sorted` DESC) — multi-file with scrambled RGs, tests reverse scan + RG reorder |
 | `sort_pushdown_inexact_unsorted` | No `WITH ORDER` — same data, tests Unsupported path + RG reorder |
 | `sort_pushdown_inexact_overlap` | Multi-file scrambled RGs — streaming data scenario |
@@ -1067,9 +1068,11 @@ adjacent chunks at RG boundaries.
 ```bash
 # Generate data and run all sort pushdown benchmarks
 ./bench.sh data sort_pushdown
+./bench.sh data sort_pushdown_100
 ./bench.sh data sort_pushdown_inexact
 ./bench.sh run sort_pushdown
 ./bench.sh run sort_pushdown_sorted
+./bench.sh run sort_pushdown_100
 ./bench.sh run sort_pushdown_inexact
 ./bench.sh run sort_pushdown_inexact_overlap
 ```

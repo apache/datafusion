@@ -3604,9 +3604,8 @@ fn test_partition_statistics() -> Result<()> {
 
         // Test partition-specific statistics (partition = Some(0))
         // The implementation correctly passes `partition` to children.
-        // Since the child TestMemoryExec returns unknown stats for specific partitions,
-        // the join output will also have Absent num_rows. This is expected behavior
-        // as the statistics depend on what the children can provide.
+        // The inputs have a single partition, so the statistics for partition 0
+        // match the aggregate statistics.
         let partition_stats = StatisticsContext::new()
             .compute(&join_exec, &StatisticsArgs::new().with_partition(Some(0)))?;
         assert_eq!(
@@ -3614,11 +3613,9 @@ fn test_partition_statistics() -> Result<()> {
             expected_cols,
             "Partition stats column count failed for {join_type:?}"
         );
-        // When children return unknown stats, the join's partition stats will be Absent
-        assert!(
-            partition_stats.num_rows == Precision::Absent,
-            "Partition stats should have Absent num_rows when children return unknown for {join_type:?}, got {:?}",
-            partition_stats.num_rows
+        assert_eq!(
+            partition_stats.num_rows, stats.num_rows,
+            "Partition stats num_rows should match aggregate stats for {join_type:?}"
         );
     }
 

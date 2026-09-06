@@ -514,13 +514,13 @@ pub fn verify_sort_integrity(file_groups: &[FileGroup]) -> bool {
             let prev_file = files[i - 1];
             let curr_file = files[i];
 
-            // Check if the min value of current file is greater than max value of previous file
+            // Check if the min value of current file is greater or equal to max value of previous file
             if let (Some(prev_stats), Some(curr_stats)) =
                 (&prev_file.statistics, &curr_file.statistics)
             {
                 let prev_max = &prev_stats.column_statistics[0].max_value;
                 let curr_min = &curr_stats.column_statistics[0].min_value;
-                if curr_min.get_value().unwrap() <= prev_max.get_value().unwrap() {
+                if curr_min.get_value().unwrap() < prev_max.get_value().unwrap() {
                     return false;
                 }
             }
