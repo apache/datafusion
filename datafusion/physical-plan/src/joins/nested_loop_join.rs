@@ -4218,22 +4218,28 @@ pub(crate) mod tests {
             let left_spill_file = left_spill_file
                 .finish()?
                 .expect("the test left spill contains one batch");
-            // Build the chunk the coordinator would have loaded, and publish
-            // it directly so no spill read is needed for the left side.
+            // Two tests share this helper and need different things from it.
+            //
+            // `join_time_excludes_global_right_unmatched_replay_poll` runs a
+            // RIGHT join with `spill_read_delay` and asserts the run performs
+            // exactly one spill read, the final right replay. Preloading the
+            // left chunk into the coordinator's slot gives it that.
+            //
+            // `build_time_excludes_spill_stream_poll` runs an INNER join with no
+            // `spill_read_delay`; its delay lives in the stream wrapping the
+            // left input, and it must be paid while the join is being polled
+            // (the helper starts its wall clock at `common::collect` below).
+            // Handing that stream to the coordinator keeps the delay on the
+            // build side and inside the measured window. An INNER join never
+            // reaches `EmitGlobalRightUnmatched`, so the extra left read does
+            // not disturb the other test's count.
             let coordinator = Arc::new(FallbackCoordinator::new(
                 1,
                 need_produce_result_in_final(join_type),
             ));
-            {
-                // Drain the delayed left stream here so `left_delay` still lands
-                // on the build side: `build_time_excludes_spill_stream_poll`
-                // injects its delay through this stream (it passes no
-                // `spill_read_delay`), and asserts the delay dominates wall time
-                // while staying out of `build_time`.
-                let mut left_stream = left_stream;
-                while let Some(batch) = left_stream.next().await {
-                    let _ = batch?;
-                }
+            let preload_left_chunk = need_produce_result_in_final(join_type)
+                || matches!(join_type, JoinType::Right);
+            if preload_left_chunk {
                 let n_rows = left_batch.num_rows();
                 let visited = if need_produce_result_in_final(join_type) {
                     let mut buffer = BooleanBufferBuilder::new(n_rows);
@@ -4256,6 +4262,10 @@ pub(crate) mod tests {
                     data: chunk,
                     is_last: true,
                 });
+            } else {
+                let mut inner = coordinator.inner.lock().await;
+                inner.left_schema = Some(Arc::clone(&left_schema));
+                inner.left_stream = Some(left_stream);
             }
             let active = SpillStateActive {
                 left_spill: Arc::new(LeftSpillData {
