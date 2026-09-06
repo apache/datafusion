@@ -1320,6 +1320,32 @@ mod tests {
         )
     }
 
+    #[test]
+    fn unsupported_correlated_in_projection_is_left_unchanged() -> Result<()> {
+        let subquery = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(
+                    out_ref_col(DataType::Int64, "customer.c_custkey")
+                        .eq(col("orders.o_custkey")),
+                )?
+                .limit(0, Some(1))?
+                .project(vec![col("orders.o_custkey")])?
+                .build()?,
+        );
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .project(vec![
+                in_subquery(col("customer.c_custkey"), subquery).alias("is_present"),
+            ])?
+            .build()?;
+
+        let result = DecorrelatePredicateSubquery::new()
+            .rewrite(plan.clone(), &crate::OptimizerContext::new())?;
+
+        assert!(!result.transformed);
+        assert_eq!(result.data, plan);
+        Ok(())
+    }
+
     /// Test for single NOT IN subquery filter
     #[test]
     fn not_in_subquery_simple() -> Result<()> {
