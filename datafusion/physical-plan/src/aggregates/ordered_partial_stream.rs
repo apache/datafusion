@@ -116,6 +116,8 @@ pub(crate) struct OrderedPartialAggregateStream {
     reservation: MemoryReservation,
     baseline_metrics: BaselineMetrics,
     reduction_factor: metrics::RatioMetrics,
+    /// Number of times accumulated states were emitted due to memory pressure.
+    early_emit_count: metrics::Count,
     table: Option<OrderedAggregateTable<PartialMarker>>,
 }
 
@@ -138,6 +140,8 @@ impl OrderedPartialAggregateStream {
         let reduction_factor = MetricBuilder::new(&agg.metrics)
             .with_type(metrics::MetricType::Summary)
             .ratio_metrics("reduction_factor", partition);
+        let early_emit_count =
+            MetricBuilder::new(&agg.metrics).counter("early_emit_count", partition);
 
         let table = OrderedAggregateTable::<PartialMarker>::new(
             agg,
@@ -159,6 +163,7 @@ impl OrderedPartialAggregateStream {
             reservation,
             baseline_metrics,
             reduction_factor,
+            early_emit_count,
             table: Some(table),
         })
     }
@@ -307,6 +312,7 @@ impl OrderedPartialAggregateStream {
             return Err(oom);
         };
         self.reservation.try_resize(table.memory_size())?;
+        self.early_emit_count.add(1);
         Ok(Some(batch))
     }
 
