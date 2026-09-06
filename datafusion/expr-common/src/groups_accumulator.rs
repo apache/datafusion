@@ -471,184 +471,164 @@ pub trait GroupsAccumulator: Send + std::any::Any {
 }
 
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Hash)]
-#[repr(transparent)]
-pub struct BlocksIndex(u64);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
+pub struct BlocksIndex {
+  block_index: usize,
+  index_in_block: usize,
+}
 
 impl BlocksIndex {
-  const SHIFT: u32 = 32;
-  const LOW_MASK: u64 = u32::MAX as u64;
-  const HIGH_MASK: u64 = !Self::LOW_MASK;
-  const ONE_BLOCK: u64 = 1 << Self::SHIFT;
+  pub const ZERO: Self = Self {
+    block_index: 0,
+    index_in_block: 0,
+  };
+  pub const MAX: Self = Self {
+    block_index: usize::MAX,
+    index_in_block: usize::MAX,
+  };
 
-  pub const ZERO: Self = Self(0);
-  pub const MAX: Self = Self(u64::MAX);
-
-  /// Quotient and remainder of x by block_size.
-  /// Power of two sizes take a shift and mask path with no division.
-  /// Both the check and trailing_zeros are loop invariant when block_size is,
-  /// so LLVM hoists them and the loop body keeps only the shift and the mask.
-  #[inline(always)]
-  fn div_rem(x: usize, block_size: usize) -> (usize, usize) {
-    debug_assert!(block_size != 0);
-    if block_size & (block_size - 1) == 0 {
-      let shift = block_size.trailing_zeros();
-      (x >> shift, x & (block_size - 1))
-    } else {
-      (x / block_size, x % block_size)
+  pub fn new(block_index: usize, index_in_block: usize) -> Self {
+    Self {
+      block_index,
+      index_in_block,
     }
   }
 
-  #[inline(always)]
-  pub const fn new(block_index: usize, index_in_block: usize) -> Self {
-    debug_assert!(block_index <= u32::MAX as usize);
-    debug_assert!(index_in_block <= u32::MAX as usize);
-    Self(((block_index as u64) << Self::SHIFT) | (index_in_block as u64))
-  }
-
-  #[inline(always)]
-  pub const fn new_in_first_block(index_in_block: usize) -> Self {
+  pub fn new_in_first_block(index_in_block: usize) -> Self {
+    // Implementation note:
+    // not having From<usize> that will do this instead even when it will be more convenient
+    // so we can later change the layout to be a single usize with bit shifts
     Self::new(0, index_in_block)
   }
 
-  #[inline(always)]
   pub fn from_index_in_fixed_block_size(index: usize, block_size: usize) -> Self {
-    let (q, r) = Self::div_rem(index, block_size);
-    Self::new(q, r)
+    Self::new(index / block_size, index % block_size)
   }
 
-  #[inline(always)]
   pub fn into_index_in_fixed_block_size(&self, block_size: usize) -> usize {
-    self.block_index() * block_size + self.index_in_block()
+    self.block_index * block_size + self.index_in_block
   }
 
-  #[inline(always)]
-  pub const fn block_index(&self) -> usize {
-    (self.0 >> Self::SHIFT) as usize
+  pub fn block_index(&self) -> usize {
+    self.block_index
   }
 
-  #[inline(always)]
-  pub const fn index_in_block(&self) -> usize {
-    (self.0 & Self::LOW_MASK) as usize
+  pub fn index_in_block(&self) -> usize {
+    self.index_in_block
   }
 
-  #[inline(always)]
-  pub const fn next_index_in_block(&self) -> Self {
-    Self(self.0 + 1)
+  pub fn next_index_in_block(&self) -> Self {
+    self.add_index_in_block(1)
   }
 
-  #[inline(always)]
-  pub const fn add_index_in_block(&self, n: usize) -> Self {
-    Self(self.0 + n as u64)
+  pub fn add_index_in_block(&self, n: usize) -> Self {
+    Self {
+      block_index: self.block_index,
+      index_in_block: self.index_in_block + n,
+    }
   }
 
-  #[inline(always)]
   pub fn add_fixed(&self, n: usize, block_size: usize) -> Self {
     let mut new = *self;
     new.add_mut_fixed(n, block_size);
     new
   }
 
-  #[inline(always)]
   pub fn add_mut_fixed(&mut self, n: usize, block_size: usize) {
-    let i = self.index_in_block() + n;
-    if i < block_size {
-      // No block crossing, the common case in tight loops with small strides.
-      // Well predicted branch and no division.
-      self.0 += n as u64;
-    } else {
-      let (q, r) = Self::div_rem(i, block_size);
-      self.0 = (self.0 & Self::HIGH_MASK) + ((q as u64) << Self::SHIFT) + r as u64;
-    }
+    self.block_index += (self.index_in_block + n) / block_size;
+    self.index_in_block = (self.index_in_block + n) % block_size;
   }
 
-  #[inline(always)]
   pub fn next_fixed(&self, block_size: usize) -> Self {
     let mut new = *self;
     new.next_mut_fixed(block_size);
     new
   }
 
-  #[inline(always)]
   pub fn next_mut_fixed(&mut self, block_size: usize) {
-    let v = self.0 + 1;
-    let wrap = (v & Self::LOW_MASK) == block_size as u64;
-    // Compiles to a cmov. When wrapping, clear the low half and bump the block.
-    self.0 = if wrap { (v & Self::HIGH_MASK) + Self::ONE_BLOCK } else { v };
+    self.block_index += ((self.index_in_block + 1) == block_size) as usize;
+    self.index_in_block = (self.index_in_block + 1) % block_size;
   }
 
-  #[inline(always)]
   pub fn prev_fixed(&self, block_size: usize) -> Self {
     let mut new = *self;
     new.prev_mut_fixed(block_size);
     new
   }
 
-  #[inline(always)]
   pub fn prev_mut_fixed(&mut self, block_size: usize) {
-    let at_start = (self.0 & Self::LOW_MASK) == 0;
-    // Compiles to a cmov. When at index 0, move to the last slot of the previous block.
-    self.0 = if at_start {
-      self.0 - Self::ONE_BLOCK + (block_size as u64 - 1)
-    } else {
-      self.0 - 1
-    };
+    self.block_index -= (self.index_in_block == 0) as usize;
+    self.index_in_block = self.index_in_block.wrapping_sub(1).min(block_size - 1);
   }
 
-  #[inline(always)]
-  pub const fn prev_block(&self) -> Self {
-    Self(self.0 - Self::ONE_BLOCK)
-  }
-
-  #[inline(always)]
-  pub const fn prev_block_saturate(&self) -> Self {
-    if self.0 < Self::ONE_BLOCK {
-      Self::ZERO
-    } else {
-      Self(self.0 - Self::ONE_BLOCK)
+  pub fn prev_block(&self) -> Self {
+    Self {
+      block_index: self.block_index - 1,
+      index_in_block: self.index_in_block
     }
   }
 
-  #[inline(always)]
-  pub const fn prev_block_checked(&self) -> Option<Self> {
-    match self.0.checked_sub(Self::ONE_BLOCK) {
-      Some(v) => Some(Self(v)),
-      None => None,
-    }
+  pub fn prev_block_saturate(&self) -> Self {
+    self.block_index.checked_sub(1).map_or_else(
+      || {
+        Self {
+          block_index: 0,
+          index_in_block: 0
+        }
+      },
+      |b| {
+        Self {
+          block_index: b,
+          index_in_block: self.index_in_block
+        }
+      })
   }
 
-  #[inline(always)]
-  pub fn sub(self, rhs: Self, batch_size: usize) -> Self {
-    // A plain u64 subtraction already borrows one block into the high half when the
-    // low half underflows. The only fix needed is rebasing the low half from 2^32 to batch_size.
-    let borrow = (self.0 & Self::LOW_MASK) < (rhs.0 & Self::LOW_MASK);
-    let d = self.0.wrapping_sub(rhs.0);
-    Self(if borrow {
-      d.wrapping_add(batch_size as u64).wrapping_sub(Self::ONE_BLOCK)
-    } else {
-      d
+  pub fn prev_block_checked(&self) -> Option<Self> {
+    self.block_index.checked_sub(1).map(|b| {
+      Self {
+        block_index: b,
+        index_in_block: self.index_in_block
+      }
     })
   }
 
-  #[inline(always)]
-  pub fn sub_assign(&mut self, rhs: Self, batch_size: usize) {
-    *self = self.sub(rhs, batch_size);
+  pub fn sub(self, rhs: Self, batch_size: usize) -> Self {
+    if self.index_in_block >= rhs.index_in_block {
+      BlocksIndex::new(self.block_index - rhs.block_index, self.index_in_block - rhs.index_in_block)
+    } else {
+      BlocksIndex::new(self.block_index - rhs.block_index - 1, batch_size - (rhs.index_in_block - self.index_in_block))
+    }
   }
 
-  #[inline(always)]
   pub fn sub_flat(self, rhs_flat: usize, batch_size: usize) -> Self {
-    Self::from_index_in_fixed_block_size(
-      self.into_index_in_fixed_block_size(batch_size) - rhs_flat,
-      batch_size,
-    )
+    BlocksIndex::from_index_in_fixed_block_size(self.into_index_in_fixed_block_size(batch_size) - rhs_flat, batch_size)
   }
 
-  #[inline(always)]
   pub fn sub_flat_checked(self, rhs_flat: usize, batch_size: usize) -> Option<Self> {
-    Some(Self::from_index_in_fixed_block_size(
-      self.into_index_in_fixed_block_size(batch_size).checked_sub(rhs_flat)?,
-      batch_size,
-    ))
+    Some(BlocksIndex::from_index_in_fixed_block_size(self.into_index_in_fixed_block_size(batch_size).checked_sub(rhs_flat)?, batch_size))
+  }
+
+  pub fn sub_assign(&mut self, rhs: Self, batch_size: usize) {
+    if self.index_in_block >= rhs.index_in_block {
+      self.block_index -= rhs.block_index;
+      self.index_in_block -= rhs.index_in_block;
+    } else {
+      self.block_index = self.block_index - rhs.block_index - 1;
+      self.index_in_block = batch_size - (rhs.index_in_block - self.index_in_block);
+    }
+  }
+}
+
+impl PartialOrd for BlocksIndex {
+  fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+    Some(self.cmp(other))
+  }
+}
+
+impl Ord for BlocksIndex {
+  fn cmp(&self, other: &Self) -> Ordering {
+    self.block_index.cmp(&other.block_index).then(self.index_in_block.cmp(&other.index_in_block))
   }
 }
 
