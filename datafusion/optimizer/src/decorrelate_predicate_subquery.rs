@@ -29,8 +29,8 @@ use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
-    Column, DFSchemaRef, ExprSchema, NullEquality, Result, assert_or_internal_err,
-    plan_err,
+    Column, DFSchemaRef, ExprSchema, NullEquality, Result, ScalarValue,
+    assert_or_internal_err, plan_err,
 };
 use datafusion_expr::expr::{Exists, InSubquery};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
@@ -38,7 +38,7 @@ use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::{conjunction, expr_to_columns, split_conjunction_owned};
 use datafusion_expr::{
     BinaryExpr, Expr, Filter, LogicalPlan, LogicalPlanBuilder, Operator, exists,
-    in_subquery, lit, not, not_exists, not_in_subquery,
+    in_subquery, lit, not, not_exists, not_in_subquery, when,
 };
 
 use log::debug;
@@ -69,6 +69,37 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
                 subquery.transform_down(|p| self.rewrite(p, config))
             })?
             .data;
+
+        if let LogicalPlan::Projection(projection) = plan {
+            if !projection.expr.iter().any(has_subquery) {
+                return Ok(Transformed::no(LogicalPlan::Projection(projection)));
+            }
+
+            let original_projection = projection.clone();
+            let mut cur_input = Arc::unwrap_or_clone(projection.input);
+            let mut rewritten_exprs = Vec::with_capacity(projection.expr.len());
+            for expr in projection.expr {
+                let original_name = expr.schema_name().to_string();
+                let (new_input, mut rewritten_expr) =
+                    rewrite_inner_subqueries(cur_input, expr, config, true)?;
+                if has_subquery(&rewritten_expr) {
+                    return Ok(Transformed::no(LogicalPlan::Projection(
+                        original_projection,
+                    )));
+                }
+                cur_input = new_input;
+
+                if rewritten_expr.schema_name().to_string() != original_name {
+                    rewritten_expr = rewritten_expr.alias(original_name);
+                }
+                rewritten_exprs.push(rewritten_expr);
+            }
+
+            let new_plan = LogicalPlanBuilder::from(cur_input)
+                .project(rewritten_exprs)?
+                .build()?;
+            return Ok(Transformed::yes(new_plan));
+        }
 
         let LogicalPlan::Filter(filter) = plan else {
             return Ok(Transformed::no(plan));
@@ -105,7 +136,7 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
                 // The subquery expression is embedded within another expression
                 SubqueryPredicate::Embedded(expr) => {
                     let (plan, expr_without_subqueries) =
-                        rewrite_inner_subqueries(cur_input, expr, config)?;
+                        rewrite_inner_subqueries(cur_input, expr, config, false)?;
                     cur_input = plan;
                     other_exprs.push(expr_without_subqueries);
                 }
@@ -140,6 +171,7 @@ fn rewrite_inner_subqueries(
     outer: LogicalPlan,
     expr: Expr,
     config: &dyn OptimizerConfig,
+    materialize_in_value: bool,
 ) -> Result<(LogicalPlan, Expr)> {
     let mut cur_input = outer;
     let alias = config.alias_generator();
@@ -160,12 +192,23 @@ fn rewrite_inner_subqueries(
             subquery: Subquery { subquery, .. },
             negated,
         }) => {
-            let in_predicate = subquery
-                .head_output_expr()?
-                .map_or(plan_err!("single expression required."), |output_expr| {
-                    Ok(Expr::eq(*expr.clone(), output_expr))
-                })?;
-            match mark_join(&cur_input, &subquery, Some(&in_predicate), negated, alias)? {
+            let rewritten = if materialize_in_value {
+                in_subquery_value_mark_join(
+                    &cur_input,
+                    &subquery,
+                    *expr.clone(),
+                    negated,
+                    alias,
+                )?
+            } else {
+                let in_predicate = subquery
+                    .head_output_expr()?
+                    .map_or(plan_err!("single expression required."), |output_expr| {
+                        Ok(Expr::eq(*expr.clone(), output_expr))
+                    })?;
+                mark_join(&cur_input, &subquery, Some(&in_predicate), negated, alias)?
+            };
+            match rewritten {
                 Some((plan, exists_expr)) => {
                     cur_input = plan;
                     Ok(Transformed::yes(exists_expr))
@@ -177,6 +220,48 @@ fn rewrite_inner_subqueries(
         _ => Ok(Transformed::no(e)),
     })?;
     Ok((cur_input, expr_without_subqueries.data))
+}
+
+fn in_subquery_value_mark_join(
+    left: &LogicalPlan,
+    subquery: &LogicalPlan,
+    expr: Expr,
+    negated: bool,
+    alias: &Arc<AliasGenerator>,
+) -> Result<Option<(LogicalPlan, Expr)>> {
+    let output_expr = subquery
+        .head_output_expr()?
+        .map_or(plan_err!("single expression required."), Ok)?;
+    let in_predicate = Expr::eq(expr.clone(), output_expr.clone());
+    let Some((matched_plan, matched)) =
+        mark_join(left, subquery, Some(&in_predicate), false, alias)?
+    else {
+        return Ok(None);
+    };
+
+    // SQL IN needs three facts per outer row to distinguish FALSE from UNKNOWN.
+    let null_subquery = LogicalPlanBuilder::from(subquery.clone())
+        .filter(output_expr.is_null())?
+        .build()?;
+    let Some((null_plan, subquery_has_null)) =
+        mark_join(&matched_plan, &null_subquery, None, false, alias)?
+    else {
+        return Ok(None);
+    };
+    let Some((final_plan, subquery_non_empty)) =
+        mark_join(&null_plan, subquery, None, false, alias)?
+    else {
+        return Ok(None);
+    };
+
+    let unknown = subquery_has_null.or(expr.is_null().and(subquery_non_empty));
+    let result = when(matched, lit(true))
+        .when(unknown, lit(ScalarValue::Boolean(None)))
+        .otherwise(lit(false))?;
+    Ok(Some((
+        final_plan,
+        if negated { not(result) } else { result },
+    )))
 }
 
 enum SubqueryPredicate {
@@ -428,16 +513,17 @@ fn build_join(
 
         // Keep only columns that actually belong to the RIGHT child, and sort by their
         // position in the right schema for deterministic order.
-        let mut right_cols_idx_and_col: Vec<(usize, Column)> = needed
+        let mut right_col_indices: Vec<usize> = needed
             .into_iter()
-            .filter_map(|c| right_schema.index_of_column(&c).ok().map(|idx| (idx, c)))
+            .filter_map(|column| right_schema.index_of_column(&column).ok())
             .collect();
 
-        right_cols_idx_and_col.sort_by_key(|(idx, _)| *idx);
+        right_col_indices.sort_unstable();
+        right_col_indices.dedup();
 
-        let right_proj_exprs: Vec<Expr> = right_cols_idx_and_col
+        let right_proj_exprs: Vec<Expr> = right_col_indices
             .into_iter()
-            .map(|(_, c)| Expr::Column(c))
+            .map(|index| Expr::Column(Column::from(right_schema.qualified_field(index))))
             .collect();
 
         let right_projected = if !right_proj_exprs.is_empty() {
@@ -1197,6 +1283,37 @@ mod tests {
           LeftSemi Join:  Filter: test.c = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32]
             TableScan: test [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [c:UInt32]
+              Projection: sq.c [c:UInt32]
+                TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn in_subquery_in_projection() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![
+                in_subquery(col("c"), test_subquery_with_name("sq")?).alias("is_present"),
+            ])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: CASE WHEN __correlated_sq_1.mark THEN Boolean(true) WHEN __correlated_sq_2.mark OR test.c IS NULL AND __correlated_sq_3.mark THEN Boolean(NULL) ELSE Boolean(false) END AS is_present [is_present:Boolean;N]
+          LeftMark Join:  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, mark:Boolean;N, mark:Boolean;N, mark:Boolean;N]
+            LeftMark Join:  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, mark:Boolean;N, mark:Boolean;N]
+              LeftMark Join:  Filter: test.c = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32, mark:Boolean;N]
+                TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+                Projection: __correlated_sq_1.c [c:UInt32]
+                  SubqueryAlias: __correlated_sq_1 [c:UInt32]
+                    Projection: sq.c [c:UInt32]
+                      TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+              SubqueryAlias: __correlated_sq_2 [c:UInt32]
+                Filter: sq.c IS NULL [c:UInt32]
+                  Projection: sq.c [c:UInt32]
+                    TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+            SubqueryAlias: __correlated_sq_3 [c:UInt32]
               Projection: sq.c [c:UInt32]
                 TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
         "

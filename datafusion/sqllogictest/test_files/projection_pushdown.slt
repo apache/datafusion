@@ -2295,11 +2295,11 @@ SET datafusion.execution.target_partitions = 4;
 # Without the fix, extraction reuses `__datafusion_extracted_1` and planning
 # aborts with: Optimizer rule 'push_down_leaf_projections' failed Schema error:
 # Schema contains duplicate unqualified field name __datafusion_extracted_1.
-# With the fix, the generator starts at 2, as the plan below shows.
+# With the fix, generated aliases remain distinct, as the plan below shows.
 #
-# This is `EXPLAIN` under `logical_plan_only` rather than an executed query
-# because a surviving `InSubquery` expression has no physical plan; the logical
-# plan is both the observable result and exactly what regressed.
+# Keep this as `EXPLAIN` under `logical_plan_only`: the logical plan exposes both
+# the collision-free extracted aliases and the mark joins used to preserve the
+# three-valued semantics of `IN` in a projection.
 #####################
 
 statement ok
@@ -2321,13 +2321,22 @@ SELECT
 FROM simple_struct;
 ----
 logical_plan
-01)Projection: simple_struct.id, simple_struct.id IN (<subquery>) AS has_matching_label
-02)--Subquery:
-03)----Projection: simple_struct.id
-04)------Filter: __datafusion_extracted_2 > Int64(120) AND __datafusion_extracted_1 != Utf8("delta")
-05)--------Projection: get_field(simple_struct.s, Utf8("value")) AS __datafusion_extracted_2, simple_struct.id, get_field(simple_struct.s, Utf8("label")) AS __datafusion_extracted_1
-06)----------TableScan: simple_struct projection=[id, s], partial_filters=[get_field(simple_struct.s, Utf8("value")) > Int64(120)]
-07)--TableScan: simple_struct projection=[id]
+01)Projection: simple_struct.id, __correlated_sq_1.mark IS NOT DISTINCT FROM Boolean(true) OR __correlated_sq_2.mark IS NOT DISTINCT FROM Boolean(true) AND __correlated_sq_1.mark IS DISTINCT FROM Boolean(true) AND Boolean(NULL) AS has_matching_label
+02)--LeftMark Join:
+03)----LeftMark Join:
+04)------LeftMark Join: simple_struct.id = __correlated_sq_1.id
+05)--------TableScan: simple_struct projection=[id]
+06)--------SubqueryAlias: __correlated_sq_1
+07)----------Projection: simple_struct.id
+08)------------Filter: __datafusion_extracted_4 > Int64(120) AND __datafusion_extracted_1 != Utf8("delta")
+09)--------------Projection: get_field(simple_struct.s, Utf8("value")) AS __datafusion_extracted_4, simple_struct.id, get_field(simple_struct.s, Utf8("label")) AS __datafusion_extracted_1
+10)----------------TableScan: simple_struct projection=[id, s], partial_filters=[get_field(simple_struct.s, Utf8("value")) > Int64(120)]
+11)------EmptyRelation: rows=0
+12)----SubqueryAlias: __correlated_sq_3
+13)------Projection: simple_struct.id
+14)--------Filter: __datafusion_extracted_6 > Int64(120) AND __datafusion_extracted_1 != Utf8("delta")
+15)----------Projection: get_field(simple_struct.s, Utf8("value")) AS __datafusion_extracted_6, simple_struct.id, get_field(simple_struct.s, Utf8("label")) AS __datafusion_extracted_1
+16)------------TableScan: simple_struct projection=[id, s], partial_filters=[Boolean(true), get_field(simple_struct.s, Utf8("value")) > Int64(120)]
 
 statement ok
 set datafusion.explain.logical_plan_only = false;
