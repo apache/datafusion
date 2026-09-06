@@ -75,7 +75,8 @@ use datafusion_physical_plan::{
 };
 
 use itertools::izip;
-
+use datafusion_common::plan_err;
+use datafusion_physical_plan::aggregates_blocked::BlockedAggregateExec;
 // The `EnforceDistribution` rule was retired in favour of `EnsureRequirements`,
 // which composes distribution and sorting enforcement into a single idempotent
 // pass. The helper functions below (`adjust_input_keys_ordering`,
@@ -229,11 +230,13 @@ pub fn adjust_input_keys_ordering(
             &join_constructor,
         )
         .map(Transformed::yes);
-    } else if let Some(aggregate_exec) = plan.downcast_ref::<AggregateExec>() {
+    } else if plan.downcast_ref::<AggregateExec>().is_some() {
+        return plan_err!("should not have AggregateExec, we should migrate to BlockedAggregateExec");
+    } else if let Some(aggregate_exec) = plan.downcast_ref::<BlockedAggregateExec>() {
         if !requirements.data.is_empty() {
             if aggregate_exec.mode() == &AggregateMode::FinalPartitioned {
                 return reorder_aggregate_keys(requirements, aggregate_exec)
-                    .map(Transformed::yes);
+                  .map(Transformed::yes);
             } else {
                 requirements.data.clear();
             }
@@ -314,7 +317,7 @@ where
 
 pub fn reorder_aggregate_keys(
     mut agg_node: PlanWithKeyRequirements,
-    agg_exec: &AggregateExec,
+    agg_exec: &BlockedAggregateExec,
 ) -> Result<PlanWithKeyRequirements> {
     let parent_required = &agg_node.data;
     let output_columns = agg_exec
@@ -330,11 +333,15 @@ pub fn reorder_aggregate_keys(
         .map(|c| Arc::new(c.clone()) as _)
         .collect::<Vec<_>>();
 
+    if agg_exec.input().downcast_ref::<AggregateExec>().is_some() {
+        return plan_err!("should not have AggregateExec, we should migrate to BlockedAggregateExec");
+    }
+
     if parent_required.len() == output_exprs.len()
         && agg_exec.group_expr().null_expr().is_empty()
         && !physical_exprs_equal(&output_exprs, parent_required)
         && let Some(positions) = expected_expr_positions(&output_exprs, parent_required)
-        && let Some(agg_exec) = agg_exec.input().downcast_ref::<AggregateExec>()
+        && let Some(agg_exec) = agg_exec.input().downcast_ref::<BlockedAggregateExec>()
         && *agg_exec.mode() == AggregateMode::Partial
     {
         let group_exprs = agg_exec.group_expr().expr();
@@ -709,7 +716,10 @@ fn partial_aggregate_output_satisfies_final_partitioning(
     plan: &Arc<dyn ExecutionPlan>,
     allow_subset_satisfy_partitioning: bool,
 ) -> bool {
-    let Some(aggregate) = plan.downcast_ref::<AggregateExec>() else {
+    if plan.downcast_ref::<AggregateExec>().is_some() {
+        panic!("should not have AggregateExec, we should migrate to BlockedAggregateExec")
+    }
+    let Some(aggregate) = plan.downcast_ref::<BlockedAggregateExec>() else {
         return false;
     };
     if aggregate.mode() != &AggregateMode::Partial

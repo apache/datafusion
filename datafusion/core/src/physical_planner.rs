@@ -4529,7 +4529,7 @@ mod tests {
 
         let execution_plan = plan(&logical_plan).await?;
         let final_hash_agg = execution_plan
-            .downcast_ref::<AggregateExec>()
+            .downcast_ref::<BlockedAggregateExec>()
             .expect("hash aggregate");
         assert_eq!(
             "sum(aggregate_test_100.c2)",
@@ -4556,7 +4556,7 @@ mod tests {
 
         let execution_plan = plan(&logical_plan).await?;
         let final_hash_agg = execution_plan
-            .downcast_ref::<AggregateExec>()
+            .downcast_ref::<BlockedAggregateExec>()
             .expect("hash aggregate");
         assert_eq!(
             "sum(aggregate_test_100.c3)",
@@ -5563,6 +5563,7 @@ digraph {
     use crate::catalog::TableProvider;
     use datafusion_catalog::Session;
     use datafusion_expr::TableType;
+    use datafusion_physical_plan::aggregates_blocked::BlockedAggregateExec;
 
     /// A TableProvider that returns schemas for logical planning vs physical planning.
     /// Used to test schema mismatch error messages.

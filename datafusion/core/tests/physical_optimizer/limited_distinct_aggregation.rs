@@ -28,7 +28,7 @@ use crate::physical_optimizer::test_utils::{
 use arrow::datatypes::DataType;
 use arrow::{compute::SortOptions, util::pretty::pretty_format_batches};
 use datafusion::prelude::SessionContext;
-use datafusion_common::Result;
+use datafusion_common::{plan_err, Result};
 use datafusion_execution::config::SessionConfig;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{self, cast, col};
@@ -39,6 +39,7 @@ use datafusion_physical_plan::{
     collect, displayable,
     limit::{GlobalLimitExec, LocalLimitExec},
 };
+use datafusion_physical_plan::aggregates_blocked::BlockedAggregateExec;
 
 async fn run_plan_and_format(plan: Arc<dyn ExecutionPlan>) -> Result<String> {
     let cfg = SessionConfig::new().with_target_partitions(1);
@@ -133,7 +134,11 @@ async fn limited_distinct_aggregate_stream_respects_soft_limit() -> Result<()> {
         plan: &Arc<dyn ExecutionPlan>,
         metrics: &mut Vec<AggregateRuntimeMetric>,
     ) {
-        if let Some(agg) = plan.downcast_ref::<AggregateExec>() {
+        if plan.downcast_ref::<AggregateExec>().is_some() {
+            return plan_err!("should not get AggregateExec, should be migrated to BlockedAggregateExec");
+        }
+
+        if let Some(agg) = plan.downcast_ref::<BlockedAggregateExec>() {
             let output_rows = agg
                 .metrics()
                 .and_then(|metrics| metrics.aggregate_by_name().output_rows())
