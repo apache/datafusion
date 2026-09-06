@@ -112,8 +112,12 @@ impl OptimizerRule for EliminateDuplicatedExpr {
                     fetch: sort.fetch,
                 })))
             }
-            LogicalPlan::Aggregate(agg) => {
+            LogicalPlan::Aggregate(mut agg) => {
                 let len = agg.group_expr.len();
+                // With zero or one group expression, there is nothing to deduplicate.
+                if len <= 1 {
+                    return Ok(Transformed::no(LogicalPlan::Aggregate(agg)));
+                }
 
                 let unique_exprs: Vec<Expr> = agg
                     .group_expr
@@ -122,14 +126,15 @@ impl OptimizerRule for EliminateDuplicatedExpr {
                     .into_iter()
                     .collect();
 
-                let transformed = if len != unique_exprs.len() {
-                    Transformed::yes
-                } else {
-                    Transformed::no
-                };
+                if len == unique_exprs.len() {
+                    // No duplicate expressions were found, so we can reuse the
+                    // existing schema (including functional dependencies).
+                    agg.group_expr = unique_exprs;
+                    return Ok(Transformed::no(LogicalPlan::Aggregate(agg)));
+                }
 
                 Aggregate::try_new(agg.input, unique_exprs, agg.aggr_expr)
-                    .map(|f| transformed(LogicalPlan::Aggregate(f)))
+                    .map(|f| Transformed::yes(LogicalPlan::Aggregate(f)))
             }
             _ => Ok(Transformed::no(plan)),
         }
@@ -145,7 +150,10 @@ mod tests {
     use crate::OptimizerContext;
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::test::*;
-    use datafusion_expr::{col, logical_plan::builder::LogicalPlanBuilder};
+    use datafusion_expr::{
+        GroupingSet, col, lit, logical_plan::builder::LogicalPlanBuilder,
+    };
+    use datafusion_functions_aggregate::expr_fn::sum;
     use std::sync::Arc;
 
     macro_rules! assert_optimized_plan_equal {
@@ -199,5 +207,74 @@ mod tests {
           Sort: test.a ASC NULLS FIRST, test.b ASC NULLS LAST
             TableScan: test
         ")
+    }
+
+    /// A no-op must preserve both the plan and its already computed schema.
+    fn assert_unchanged_aggregate(plan: LogicalPlan) -> Result<()> {
+        let schema = Arc::clone(plan.schema());
+        let result = EliminateDuplicatedExpr::new()
+            .rewrite(plan.clone(), &OptimizerContext::new())?;
+        assert!(!result.transformed);
+        assert_eq!(result.data, plan);
+        assert!(Arc::ptr_eq(result.data.schema(), &schema));
+        Ok(())
+    }
+
+    #[test]
+    fn unchanged_aggregates_reuse_schema() -> Result<()> {
+        for group_expr in [vec![], vec![col("a")], vec![col("b"), col("a") + lit(1u32)]] {
+            let plan = LogicalPlanBuilder::from(test_table_scan()?)
+                .aggregate(group_expr, vec![sum(col("c")).alias("total")])?
+                .build()?;
+            assert_unchanged_aggregate(plan)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn unchanged_grouping_sets_reuse_schema() -> Result<()> {
+        // Repeated grouping sets must retain their multiplicity.
+        let grouping_set = GroupingSet::GroupingSets(vec![
+            vec![col("a"), col("b")],
+            vec![col("a")],
+            vec![col("a")],
+            vec![],
+        ]);
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .aggregate(vec![Expr::GroupingSet(grouping_set)], vec![sum(col("c"))])?
+            .build()?;
+        assert_unchanged_aggregate(plan)
+    }
+
+    #[test]
+    fn eliminate_duplicate_group_exprs() -> Result<()> {
+        let input = Arc::new(test_table_scan()?);
+        let a = col("test.a");
+        let b = col("test.b");
+        let computed = a.clone() + lit(1u32);
+        let aggr_expr = vec![sum(col("test.c")).alias("total")];
+        let plan = LogicalPlan::Aggregate(Aggregate::try_new(
+            Arc::clone(&input),
+            vec![
+                b.clone(),
+                computed.clone(),
+                b.clone(),
+                a.clone(),
+                computed.clone(),
+            ],
+            aggr_expr.clone(),
+        )?);
+        let expected = LogicalPlan::Aggregate(Aggregate::try_new(
+            input,
+            // Keep the order of the first occurrence of each expression.
+            vec![b, computed, a],
+            aggr_expr,
+        )?);
+
+        let result =
+            EliminateDuplicatedExpr::new().rewrite(plan, &OptimizerContext::new())?;
+        assert!(result.transformed);
+        assert_eq!(result.data, expected);
+        Ok(())
     }
 }
