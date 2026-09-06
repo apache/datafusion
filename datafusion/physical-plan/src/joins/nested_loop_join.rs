@@ -1446,8 +1446,10 @@ pub(crate) struct FallbackCoordinator {
     notify: tokio::sync::Notify,
     /// Broadcast signalled when the fallback is cancelled.
     ///
-    /// This carries no state of its own -- `cancelled` is what persists; this
-    /// only wakes tasks so they go and read it. Kept separate from `notify`
+    /// This carries no state of its own -- `cancelled` is what persists. A
+    /// delivered broadcast is itself sufficient to establish cancellation;
+    /// observers read the flag before awaiting, so neither alone is relied on.
+    /// Kept separate from `notify`
     /// because cancellation has to reach tasks that are not waiting on chunk
     /// progress at all: a stream parked on its right input, or a loader parked
     /// on a spill read. Waiters enable their `Notified` before reading
@@ -5852,128 +5854,6 @@ pub(crate) mod tests {
         }))
     }
 
-    /// A survivor parked on the global-right replay must be woken by a peer's
-    /// cancellation.
-    ///
-    /// `EmitGlobalRightUnmatched` reopens the spilled right side and polls it,
-    /// so a stream can sit there rather than in `BufferingLeft`. The watcher is
-    /// polled at the top of every iteration regardless of state, so this should
-    /// behave like the build-input case; it is the last parking spot left to
-    /// confirm.
-    #[tokio::test]
-    async fn review_v4_cancel_wakes_parked_global_right_replay() -> Result<()> {
-        struct WakeCount(AtomicUsize);
-        impl futures::task::ArcWake for WakeCount {
-            fn wake_by_ref(this: &Arc<Self>) {
-                this.0.fetch_add(1, Ordering::SeqCst);
-            }
-        }
-        let runtime = RuntimeEnvBuilder::new().build_arc()?;
-        let ctx = Arc::new(TaskContext::default().with_runtime(runtime));
-        let coordinator = Arc::new(FallbackCoordinator::new(2, true));
-        let spill = spill_left_for_test(build_left_table(), Arc::clone(&ctx)).await?;
-        let _chunk = Arc::clone(&coordinator)
-            .next_chunk(0, Arc::clone(&spill), Arc::clone(&ctx), Time::new())
-            .await?
-            .expect("chunk");
-
-        // FULL tracks unmatched right rows, so the stream has a global-right
-        // replay stage to park in.
-        let make_stream = || {
-            let right_schema = build_right_table().schema();
-            let (schema, columns) =
-                build_join_schema(&spill.schema, &right_schema, &JoinType::Full);
-            NestedLoopJoinStream::new(
-                Arc::new(schema),
-                None,
-                JoinType::Full,
-                Box::pin(crate::stream::RecordBatchStreamAdapter::new(
-                    right_schema,
-                    futures::stream::pending::<Result<RecordBatch>>(),
-                )),
-                OnceFut::new(futures::future::pending::<Result<LeftLoad>>()),
-                columns,
-                NestedLoopJoinMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
-                1,
-                SpillState::Pending {
-                    task_context: Arc::clone(&ctx),
-                    fallback_coordinator: Arc::clone(&coordinator),
-                },
-            )
-        };
-        let peer = make_stream();
-        let mut survivor = make_stream();
-
-        // Park it in the replay stage rather than in BufferingLeft.
-        survivor.state = NLJState::EmitGlobalRightUnmatched;
-        survivor.left_exhausted = true;
-
-        let wakes = Arc::new(WakeCount(AtomicUsize::new(0)));
-        let waker = futures::task::waker(Arc::clone(&wakes));
-        let mut cx = std::task::Context::from_waker(&waker);
-        assert!(survivor.poll_next_unpin(&mut cx).is_pending());
-        assert!(matches!(survivor.state, NLJState::EmitGlobalRightUnmatched));
-        wakes.0.store(0, Ordering::SeqCst);
-
-        drop(peer);
-        assert!(coordinator.is_cancelled());
-        assert!(
-            wakes.0.load(Ordering::SeqCst) > 0,
-            "cancel must wake a survivor parked on the global-right replay"
-        );
-        Ok(())
-    }
-
-    /// A stream that ends in an error is unfinished, so dropping it cancels the
-    /// peers.
-    ///
-    /// The error path reaches `Drop` without passing through `Done`, and the
-    /// coordinated execution has lost a partition either way, so the survivors
-    /// must be failed rather than left to report success from partial input.
-    #[tokio::test]
-    async fn review_v4_errored_stream_drop_cancels_peers() -> Result<()> {
-        let runtime = RuntimeEnvBuilder::new().build_arc()?;
-        let ctx = Arc::new(TaskContext::default().with_runtime(runtime));
-        let coordinator = Arc::new(FallbackCoordinator::new(2, true));
-        let spill = spill_left_for_test(build_left_table(), Arc::clone(&ctx)).await?;
-
-        let right_schema = build_right_table().schema();
-        let (schema, columns) =
-            build_join_schema(&spill.schema, &right_schema, &JoinType::Left);
-        // A right input that fails on its first poll.
-        let failing = NestedLoopJoinStream::new(
-            Arc::new(schema),
-            None,
-            JoinType::Left,
-            Box::pin(crate::stream::RecordBatchStreamAdapter::new(
-                Arc::clone(&right_schema),
-                futures::stream::once(async {
-                    Err(datafusion_common::DataFusionError::Execution(
-                        "injected right-input failure".to_string(),
-                    ))
-                }),
-            )),
-            OnceFut::new(futures::future::pending::<Result<LeftLoad>>()),
-            columns,
-            NestedLoopJoinMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
-            1,
-            SpillState::Pending {
-                task_context: Arc::clone(&ctx),
-                fallback_coordinator: Arc::clone(&coordinator),
-            },
-        );
-
-        assert!(!coordinator.is_cancelled());
-        // The stream never reaches `Done`, so dropping it counts as unfinished.
-        drop(failing);
-        assert!(
-            coordinator.is_cancelled(),
-            "an unfinished stream must cancel its peers when dropped, including \
-             one that ended in an error"
-        );
-        Ok(())
-    }
-
     #[tokio::test]
     async fn review_v3_cancel_wakes_pending_build_input() -> Result<()> {
         struct WakeCount(AtomicUsize);
@@ -6100,6 +5980,169 @@ pub(crate) mod tests {
         })
         .await
         .expect("normal execution hung")
+    }
+
+    /// A stream that ends in an error is unfinished, so dropping it cancels the
+    /// peers.
+    ///
+    /// The error path reaches `Drop` without passing through `Done`. The build
+    /// side has to resolve for the poll to get as far as the failing right input,
+    /// so this uses a `LeftLoad::Spilled` future rather than a pending one, and
+    /// asserts the injected error actually surfaced before the drop -- otherwise
+    /// the test would silently degrade into "an unstarted stream cancels", which
+    /// other tests already cover.
+    #[tokio::test]
+    async fn review_v4_errored_stream_drop_cancels_peers() -> Result<()> {
+        let runtime = RuntimeEnvBuilder::new().build_arc()?;
+        let ctx = Arc::new(TaskContext::default().with_runtime(runtime));
+        let coordinator = Arc::new(FallbackCoordinator::new(2, true));
+        let spill = spill_left_for_test(build_left_table(), Arc::clone(&ctx)).await?;
+
+        let right_schema = build_right_table().schema();
+        let (schema, columns) =
+            build_join_schema(&spill.schema, &right_schema, &JoinType::Left);
+        let left_spill = Arc::clone(&spill);
+        let mut failing = NestedLoopJoinStream::new(
+            Arc::new(schema),
+            None,
+            JoinType::Left,
+            Box::pin(crate::stream::RecordBatchStreamAdapter::new(
+                right_schema,
+                futures::stream::once(async {
+                    exec_err!("injected right-input failure")
+                }),
+            )),
+            OnceFut::new(async move { Ok(LeftLoad::Spilled(left_spill)) }),
+            columns,
+            NestedLoopJoinMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
+            1,
+            SpillState::Pending {
+                task_context: Arc::clone(&ctx),
+                fallback_coordinator: Arc::clone(&coordinator),
+            },
+        );
+
+        // Drive it until the injected error comes out. Bounded so a fixture that
+        // stops reaching the right input fails instead of spinning.
+        let err = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                match failing.next().await {
+                    Some(Err(e)) => return e,
+                    Some(Ok(_)) => {}
+                    None => panic!("stream finished without surfacing the error"),
+                }
+            }
+        })
+        .await
+        .expect("fixture never reached its failing right input");
+        assert_contains!(err.to_string(), "injected right-input failure");
+        assert!(
+            !matches!(failing.state, NLJState::Done),
+            "an errored stream must not look finished"
+        );
+        assert!(!coordinator.is_cancelled());
+
+        drop(failing);
+        assert!(
+            coordinator.is_cancelled(),
+            "an unfinished stream must cancel its peers when dropped, including \
+             one that ended in an error"
+        );
+        Ok(())
+    }
+
+    /// A survivor parked on the global-right replay must be woken by a peer's
+    /// cancellation.
+    ///
+    /// `EmitGlobalRightUnmatched` is only reachable with `Active` spill state, so
+    /// the fixture installs one rather than assigning the state on top of
+    /// `Pending` -- otherwise the handler reaches its pending read through a path
+    /// a real execution never takes, and the test would be checking a `Pending`
+    /// watcher while claiming to check the replay configuration. The replay
+    /// reader is injected directly, which skips the reopen step; that is the
+    /// shortcut here, and reopening itself is covered elsewhere.
+    #[tokio::test]
+    async fn review_v4_cancel_wakes_parked_global_right_replay() -> Result<()> {
+        struct WakeCount(AtomicUsize);
+        impl futures::task::ArcWake for WakeCount {
+            fn wake_by_ref(this: &Arc<Self>) {
+                this.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let runtime = RuntimeEnvBuilder::new().build_arc()?;
+        let ctx = Arc::new(TaskContext::default().with_runtime(runtime));
+        let coordinator = Arc::new(FallbackCoordinator::new(2, true));
+        let spill = spill_left_for_test(build_left_table(), Arc::clone(&ctx)).await?;
+        let _chunk = Arc::clone(&coordinator)
+            .next_chunk(0, Arc::clone(&spill), Arc::clone(&ctx), Time::new())
+            .await?
+            .expect("chunk");
+
+        let right_schema = build_right_table().schema();
+        let make_stream = || {
+            let (schema, columns) =
+                build_join_schema(&spill.schema, &right_schema, &JoinType::Full);
+            let left_spill = Arc::clone(&spill);
+            NestedLoopJoinStream::new(
+                Arc::new(schema),
+                None,
+                JoinType::Full,
+                Box::pin(crate::stream::RecordBatchStreamAdapter::new(
+                    Arc::clone(&right_schema),
+                    futures::stream::pending::<Result<RecordBatch>>(),
+                )),
+                OnceFut::new(async move { Ok(LeftLoad::Spilled(left_spill)) }),
+                columns,
+                NestedLoopJoinMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
+                1,
+                SpillState::Pending {
+                    task_context: Arc::clone(&ctx),
+                    fallback_coordinator: Arc::clone(&coordinator),
+                },
+            )
+        };
+        let peer = make_stream();
+        let mut survivor = make_stream();
+
+        // Reach `Active` the way execution does, by letting the spilled build
+        // side resolve, then park in the replay stage.
+        let wakes = Arc::new(WakeCount(AtomicUsize::new(0)));
+        let waker = futures::task::waker(Arc::clone(&wakes));
+        let mut cx = std::task::Context::from_waker(&waker);
+        assert!(survivor.poll_next_unpin(&mut cx).is_pending());
+        assert!(
+            matches!(survivor.spill_state, SpillState::Active(_)),
+            "the global-right replay only exists with Active spill state"
+        );
+
+        survivor.state = NLJState::EmitGlobalRightUnmatched;
+        survivor.left_exhausted = true;
+        // Inject the replay reader so the handler parks on it rather than
+        // reopening the spill file, which other tests cover.
+        survivor.right_data =
+            Some(Box::pin(crate::stream::RecordBatchStreamAdapter::new(
+                Arc::clone(&right_schema),
+                futures::stream::pending::<Result<RecordBatch>>(),
+            )));
+        assert!(survivor.poll_next_unpin(&mut cx).is_pending());
+        assert!(matches!(survivor.state, NLJState::EmitGlobalRightUnmatched));
+        wakes.0.store(0, Ordering::SeqCst);
+
+        drop(peer);
+        assert!(coordinator.is_cancelled());
+        assert!(
+            wakes.0.load(Ordering::SeqCst) > 0,
+            "cancel must wake a survivor parked on the global-right replay"
+        );
+
+        // And the wake must actually surface the cancellation, not just tick.
+        match survivor.poll_next_unpin(&mut cx) {
+            Poll::Ready(Some(Err(e))) => {
+                assert_contains!(e.to_string(), "cancelled");
+            }
+            _ => panic!("the woken survivor must report the cancellation"),
+        }
+        Ok(())
     }
 
     #[tokio::test]
@@ -6470,13 +6513,12 @@ pub(crate) mod tests {
         Ok(())
     }
 
-    /// Cancelling while a loader is mid-read must not let it publish into the
-    /// coordinator it just cleaned up.
+    /// An already-cancelled coordinator refuses to serve chunks at all.
     ///
-    /// The loader takes the shared stream and reservation out of the slot, reads
-    /// without the lock, then puts them back. Without the cancellation check on
-    /// that publish, the resources `cancel` dropped would be reinstated and the
-    /// retention would come straight back.
+    /// This is the entry check in `next_chunk`, nothing more: cancellation
+    /// happens before any load starts. The publish-after-an-in-flight-read path
+    /// is covered by `review_inflight_publish_is_discarded`, which pauses a real
+    /// read and then completes it.
     #[tokio::test]
     async fn test_nlj_cancelled_coordinator_refuses_to_serve_chunks() -> Result<()> {
         let runtime = RuntimeEnvBuilder::new().build_arc()?;
