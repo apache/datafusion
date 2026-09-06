@@ -678,7 +678,6 @@ impl HashJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
-        let build_timer = self.join_metrics.build_time.timer();
         // build hash table from left (build) side, if not yet done
         let left_data = ready!(
             self.build_side
@@ -686,7 +685,6 @@ impl HashJoinStream {
                 .left_fut
                 .get_shared(cx)
         )?;
-        build_timer.done();
 
         // Note: For null-aware anti join, we need to check the probe side (right) for NULLs,
         // not the build side (left). The probe-side NULL check happens during process_probe_batch.
