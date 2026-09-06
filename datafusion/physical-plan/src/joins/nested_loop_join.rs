@@ -1388,18 +1388,18 @@ struct CurrentChunk {
 
 /// Inner state of [`FallbackCoordinator`], guarded by a synchronous mutex.
 ///
-/// Synchronous because cancellation and chunk release have to complete inside a
-/// single `poll_next` rather than depending on a future a dropped stream would
-/// take with it. No critical section awaits: the one slow operation, reading a
-/// chunk, runs after the guard is released.
+/// Synchronous because cancellation and chunk release have to complete without
+/// another poll or await -- cancellation runs from `Drop`, which has neither --
+/// rather than depending on a future a dropped stream would take with it. No
+/// critical section awaits: the one slow operation, reading a chunk, runs after
+/// the guard is released.
 struct FallbackCoordinatorInner {
     /// Reservation the leader borrows to bound one chunk load.
     ///
-    /// It only holds bytes while a load is in progress: on success
-    /// `load_one_chunk` moves them into the chunk's `JoinLeftData` with
-    /// `take()`, so the accounting follows the data rather than this slot.
-    /// Lazily registered by the first leader, once a runtime context is
-    /// available.
+    /// On a successful load `load_one_chunk` moves the accounted bytes into the
+    /// chunk's `JoinLeftData` with `take()`, so the accounting follows the data
+    /// rather than staying with this slot. Lazily registered by the first
+    /// leader, once a runtime context is available.
     reservation: Option<MemoryReservation>,
     /// The shared left spill stream from which chunks are read. Owned by
     /// the coordinator so only one partition reads it at a time.
@@ -2923,8 +2923,14 @@ impl NestedLoopJoinStream {
                     // `JoinLeftData` before releasing the slot. The coordinator
                     // slot holds a strong `Arc` too, so the reservation inside
                     // the chunk is freed only once every probing partition *and*
-                    // the slot have let go -- which is why the slot cannot hold
-                    // the chunk weakly instead.
+                    // the slot have let go.
+                    //
+                    // The slot's reference is load-bearing, not redundant: a
+                    // faster partition can reach here and let go before a slower
+                    // one has taken the chunk at all, and the slow one is served
+                    // from the slot (`Decision::Serve`). The slot therefore has
+                    // to keep the chunk alive across that handoff, which is why
+                    // it cannot hold it weakly.
                     self.buffered_left_data = None;
 
                     if self.is_memory_limited() {
