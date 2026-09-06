@@ -32,7 +32,6 @@ use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
 use std::task::{Context, Poll};
-use std::time::Duration;
 
 use arrow::array::{
     Array, ArrayRef, BinaryViewArray, BufferSpec, GenericByteViewArray, StringViewArray,
@@ -520,11 +519,10 @@ struct AsyncIPCStreamWriter {
     abort_handle: Option<tokio::runtime::Handle>,
 }
 
-/// Bounds detached cleanup work after query cancellation. If all permits are
-/// occupied, the writer is dropped and the backend lifecycle policy is the
-/// remaining cleanup mechanism.
+/// Bounds the number of detached cleanup tasks after query cancellation. If all
+/// permits are occupied, the writer is dropped and the backend lifecycle policy
+/// is the remaining cleanup mechanism.
 const MAX_CONCURRENT_SPILL_ABORTS: usize = 8;
-const SPILL_ABORT_TIMEOUT: Duration = Duration::from_secs(30);
 static SPILL_ABORT_PERMITS: LazyLock<Arc<tokio::sync::Semaphore>> =
     LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_SPILL_ABORTS)));
 
@@ -649,16 +647,12 @@ impl Drop for AsyncIPCStreamWriter {
         };
 
         let _abort_task = handle.spawn(async move {
-            match tokio::time::timeout(SPILL_ABORT_TIMEOUT, writer.abort()).await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => {
-                    debug!("Failed to abort dropped spill writer: {error}");
-                }
-                Err(_) => {
-                    debug!("Timed out aborting dropped spill writer");
-                }
+            // Backends bound their own abort latency; the runtime may not have
+            // a time driver. See the AsyncSpillWriter::abort contract.
+            if let Err(error) = writer.abort().await {
+                debug!("Failed to abort dropped spill writer: {error}");
             }
-            // `permit` is released when this bounded cleanup task exits.
+            // Keep the permit until cleanup finishes.
             drop(permit);
         });
     }
@@ -936,6 +930,7 @@ mod tests {
     use std::io::Cursor;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::time::Duration;
     use tokio::sync::Notify;
 
     struct YieldingAsyncWriter {

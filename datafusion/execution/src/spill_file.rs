@@ -97,6 +97,10 @@ pub trait AsyncSpillWriter: Send {
     /// Multipart backends should override this method to explicitly abort an
     /// in-progress upload. A successful call is terminal. DataFusion may retry
     /// an abort that returns an error, including during best-effort drop cleanup.
+    ///
+    /// Implementations should bound their own abort latency to avoid holding
+    /// DataFusion's limited cleanup slots indefinitely. DataFusion does not
+    /// impose a timeout because the caller's runtime may not have a time driver.
     async fn abort(&mut self) -> Result<()> {
         Ok(())
     }
