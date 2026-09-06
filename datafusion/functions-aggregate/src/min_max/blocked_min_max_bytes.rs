@@ -390,7 +390,6 @@ fn capacity_to_view_block_size(data_capacity: usize) -> u32 {
 #[derive(Debug)]
 struct BlockedMinMaxBytesState {
     /// The minimum/maximum value for each group
-    /// TODO - Allocated size is not correct, need to calculate
     min_max: BlockedVecBuilder<true, Option<Vec<u8>>, CommonHeapAllocatorSize>,
     /// The data type of the array
     data_type: DataType,
