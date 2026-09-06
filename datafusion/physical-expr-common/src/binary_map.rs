@@ -849,6 +849,91 @@ mod tests {
     }
 
     #[test]
+    fn push_value_bytes_ignores_an_empty_value() {
+        let mut buffer = Vec::new();
+        push_value_bytes(&mut buffer, b"");
+        assert_eq!(buffer.capacity(), 0);
+        assert!(buffer.is_empty());
+
+        push_value_bytes(&mut buffer, b"abcd");
+        let capacity = buffer.capacity();
+        push_value_bytes(&mut buffer, b"");
+        assert_eq!(buffer, b"abcd");
+        assert_eq!(buffer.capacity(), capacity);
+    }
+
+    #[test]
+    fn push_value_bytes_grows_only_past_a_power_of_two() {
+        let mut buffer = Vec::new();
+
+        // A first append that is not itself a power of two still lands on the
+        // ladder: a plain `Vec` would have stopped at a capacity of 9.
+        push_value_bytes(&mut buffer, &[1u8; 9]);
+        assert_eq!(buffer.len(), 9);
+        assert_eq!(buffer.capacity(), 16);
+
+        // Filling exactly to the capacity does not grow it.
+        push_value_bytes(&mut buffer, &[2u8; 7]);
+        assert_eq!(buffer.len(), 16);
+        assert_eq!(buffer.capacity(), 16);
+
+        // The next byte moves up one rung.
+        push_value_bytes(&mut buffer, &[3u8; 1]);
+        assert_eq!(buffer.len(), 17);
+        assert_eq!(buffer.capacity(), 32);
+
+        // So does an append that overshoots several rungs at once.
+        push_value_bytes(&mut buffer, &[4u8; 100]);
+        assert_eq!(buffer.len(), 117);
+        assert_eq!(buffer.capacity(), 128);
+
+        let mut expected = vec![1u8; 9];
+        expected.extend_from_slice(&[2u8; 7]);
+        expected.extend_from_slice(&[3u8; 1]);
+        expected.extend_from_slice(&[4u8; 100]);
+        assert_eq!(buffer, expected);
+    }
+
+    #[test]
+    fn push_value_bytes_does_not_grow_a_buffer_with_room() {
+        let mut buffer = Vec::with_capacity(INITIAL_BUFFER_CAPACITY);
+        let start = buffer.as_ptr();
+
+        let value = vec![7u8; 512];
+        for _ in 0..16 {
+            push_value_bytes(&mut buffer, &value);
+        }
+
+        assert_eq!(buffer.len(), INITIAL_BUFFER_CAPACITY);
+        assert_eq!(buffer.capacity(), INITIAL_BUFFER_CAPACITY);
+        assert!(
+            std::ptr::eq(buffer.as_ptr(), start),
+            "buffer was reallocated"
+        );
+        assert!(buffer.iter().all(|&byte| byte == 7));
+    }
+
+    #[test]
+    fn push_value_bytes_rounds_a_single_oversized_append_up_to_a_power_of_two() {
+        let value = vec![9u8; INITIAL_BUFFER_CAPACITY + 1];
+        let rounded = (INITIAL_BUFFER_CAPACITY + 1).next_power_of_two();
+
+        // A value larger than the pre-allocation lands on the same rung
+        // whether the buffer started empty or pre-allocated, which is what
+        // keeps a lazily allocated map from outgrowing a pre-allocated one.
+        let mut lazy = Vec::new();
+        push_value_bytes(&mut lazy, &value);
+        assert_eq!(lazy.len(), value.len());
+        assert_eq!(lazy.capacity(), rounded);
+        assert_eq!(lazy, value);
+
+        let mut pre_allocated = Vec::with_capacity(INITIAL_BUFFER_CAPACITY);
+        push_value_bytes(&mut pre_allocated, &value);
+        assert_eq!(pre_allocated.capacity(), rounded);
+        assert_eq!(pre_allocated, value);
+    }
+
+    #[test]
     fn lazy_and_pre_allocated_buffers_grow_on_the_same_ladder() {
         // Value lengths chosen so the buffer requirement lands between powers
         // of two, which is where the two ladders used to diverge.
