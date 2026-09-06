@@ -1009,34 +1009,22 @@ impl LogicalPlanBuilder {
         )
     }
 
-    /// Apply a left-preserving ASOF join using pre-separated equality
-    /// expressions and a structured ordered match condition.
+    /// Apply a left-preserving ASOF join using an optional equality condition
+    /// and one ordered match condition.
     ///
-    /// This is a low-level API. Most callers should use
-    /// [`asof_join_on`](Self::asof_join_on), which validates and separates
-    /// ordinary predicate expressions.
-    pub fn asof_join(
-        self,
-        right: LogicalPlan,
-        on: Vec<(Expr, Expr)>,
-        match_condition: AsOfMatch,
-    ) -> Result<Self> {
-        self.asof_join_with_constraint(right, on, match_condition, JoinConstraint::On)
-    }
-
-    /// Apply a left-preserving ASOF join using ordinary `ON` and
-    /// `MATCH_CONDITION` expressions.
-    ///
-    /// Equality predicates may be combined with `AND`. This method validates
-    /// and separates their left and right operands before constructing the
-    /// structured ASOF logical plan.
+    /// When present, `on_expr` must contain equality comparisons combined with
+    /// `AND`. Each comparison must have one operand that references only the
+    /// left input and one that references only `right`; their order does not
+    /// matter. `match_condition` must be a single `<`, `<=`, `>`, or `>=`
+    /// comparison whose left operand references only the left input and whose
+    /// right operand references only `right`.
     pub fn asof_join_on(
         self,
         right: LogicalPlan,
-        on_exprs: impl IntoIterator<Item = Expr>,
+        on_expr: Option<Expr>,
         match_condition: Expr,
     ) -> Result<Self> {
-        let on = on_exprs
+        let on = on_expr
             .into_iter()
             .flat_map(split_conjunction_owned)
             .map(|predicate| {
@@ -1063,15 +1051,25 @@ impl LogicalPlanBuilder {
                 })
             })
             .collect::<Result<_>>()?;
-        self.asof_join(right, on, AsOfMatch::try_from(match_condition)?)
+        self.asof_join_with_constraint(
+            right,
+            on,
+            AsOfMatch::try_from(match_condition)?,
+            JoinConstraint::On,
+        )
     }
 
-    /// Apply a left-preserving ASOF join using `USING` equality keys.
+    /// Apply a left-preserving ASOF join using `USING` equality keys and one
+    /// ordered match condition.
+    ///
+    /// Every key in `using_keys` must resolve in both inputs.
+    /// `match_condition` follows the same operand and operator requirements as
+    /// [`asof_join_on`](Self::asof_join_on).
     pub fn asof_join_using(
         self,
         right: LogicalPlan,
         using_keys: Vec<Column>,
-        match_condition: AsOfMatch,
+        match_condition: Expr,
     ) -> Result<Self> {
         let on = using_keys
             .into_iter()
@@ -1081,7 +1079,12 @@ impl LogicalPlanBuilder {
                 Ok((Expr::Column(left), Expr::Column(right)))
             })
             .collect::<Result<_>>()?;
-        self.asof_join_with_constraint(right, on, match_condition, JoinConstraint::Using)
+        self.asof_join_with_constraint(
+            right,
+            on,
+            AsOfMatch::try_from(match_condition)?,
+            JoinConstraint::Using,
+        )
     }
 
     fn asof_join_with_constraint(
@@ -2984,9 +2987,11 @@ mod tests {
         let plan = LogicalPlanBuilder::from(left.clone())
             .asof_join_on(
                 right.clone(),
-                [col("r.column1")
-                    .eq(col("l.column1"))
-                    .and(col("l.column2").eq(col("r.column2")))],
+                Some(
+                    col("r.column1")
+                        .eq(col("l.column1"))
+                        .and(col("l.column2").eq(col("r.column2"))),
+                ),
                 col("l.column2").gt_eq(col("r.column2")),
             )?
             .build()?;
@@ -3008,7 +3013,7 @@ mod tests {
         let invalid_on = LogicalPlanBuilder::from(left.clone())
             .asof_join_on(
                 right.clone(),
-                [col("l.column1").gt(col("r.column1"))],
+                Some(col("l.column1").gt(col("r.column1"))),
                 col("l.column2").gt_eq(col("r.column2")),
             )
             .expect_err("non-equality ASOF ON should fail");
@@ -3017,7 +3022,7 @@ mod tests {
         let invalid_match = LogicalPlanBuilder::from(left.clone())
             .asof_join_on(
                 right.clone(),
-                [col("l.column1").eq(col("r.column1"))],
+                Some(col("l.column1").eq(col("r.column1"))),
                 col("l.column2").eq(col("r.column2")),
             )
             .expect_err("equality ASOF MATCH_CONDITION should fail");
@@ -3026,7 +3031,7 @@ mod tests {
         let reversed_match = LogicalPlanBuilder::from(left)
             .asof_join_on(
                 right,
-                [col("l.column1").eq(col("r.column1"))],
+                Some(col("l.column1").eq(col("r.column1"))),
                 col("r.column2").gt_eq(col("l.column2")),
             )
             .expect_err("reversed ASOF MATCH_CONDITION should fail");

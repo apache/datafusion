@@ -403,6 +403,8 @@ SELECT * FROM x LEFT JOIN x AS y ON x.column_1 = y.column_2;
 
 ### ASOF JOIN
 
+DataFusion follows the
+[Snowflake `ASOF JOIN` syntax](https://docs.snowflake.com/en/sql-reference/constructs/asof-join).
 An `ASOF JOIN` matches each left row with at most one right row according to an
 ordered comparison. It preserves every left row and fills the right columns
 with `NULL` when no right row matches.
@@ -416,7 +418,8 @@ ON t.symbol = p.symbol;
 ```
 
 `MATCH_CONDITION` must compare an expression from the left input with an
-expression from the right input using one of the following operators:
+expression from the right input using one of the following operators. Operand
+order is significant: the left input expression must appear on the left.
 
 | Condition | Selected right row                        |
 | --------- | ----------------------------------------- |

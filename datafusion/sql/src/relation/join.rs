@@ -16,8 +16,8 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{Column, Result, not_impl_err, plan_datafusion_err};
-use datafusion_expr::{AsOfMatch, JoinType, LogicalPlan, LogicalPlanBuilder};
+use datafusion_common::{Column, Result, not_impl_err, plan_datafusion_err, plan_err};
+use datafusion_expr::{JoinType, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{
     Join, JoinConstraint, JoinOperator, ObjectName, TableFactor, TableWithJoins,
 };
@@ -128,7 +128,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             JoinConstraint::On(sql_on) => {
                 let on = self.sql_to_expr(sql_on, &join_schema, planner_context)?;
                 LogicalPlanBuilder::from(left)
-                    .asof_join_on(right, [on], match_condition)?
+                    .asof_join_on(right, Some(on), match_condition)?
                     .build()
             }
             JoinConstraint::Using(object_names) => {
@@ -157,15 +157,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     })
                     .collect::<Result<Vec<_>>>()?;
                 LogicalPlanBuilder::from(left)
-                    .asof_join_using(right, keys, AsOfMatch::try_from(match_condition)?)?
+                    .asof_join_using(right, keys, match_condition)?
                     .build()
             }
             JoinConstraint::None => LogicalPlanBuilder::from(left)
-                .asof_join_on(right, [], match_condition)?
+                .asof_join_on(right, None, match_condition)?
                 .build(),
-            JoinConstraint::Natural => {
-                not_impl_err!("NATURAL ASOF JOIN is not supported")
-            }
+            JoinConstraint::Natural => plan_err!("NATURAL ASOF JOIN is not supported"),
         }
     }
 

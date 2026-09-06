@@ -1929,7 +1929,10 @@ impl Unparser<'_> {
         let already_projected = select.already_projected();
         let left_plan =
             Self::unwrap_qualified_passthrough_join_projection(Arc::clone(&join.left));
-        let inline_left_join = matches!(left_plan.as_ref(), LogicalPlan::Join(_));
+        let inline_left_join = matches!(
+            left_plan.as_ref(),
+            LogicalPlan::Join(_) | LogicalPlan::AsOfJoin(_)
+        );
         let left_projection = if already_projected {
             None
         } else if inline_left_join {
@@ -2414,7 +2417,10 @@ impl Unparser<'_> {
         plan: Arc<LogicalPlan>,
     ) -> Arc<LogicalPlan> {
         if let LogicalPlan::Projection(projection) = plan.as_ref()
-            && matches!(projection.input.as_ref(), LogicalPlan::Join(_))
+            && matches!(
+                projection.input.as_ref(),
+                LogicalPlan::Join(_) | LogicalPlan::AsOfJoin(_)
+            )
             && Self::is_qualified_passthrough_projection(projection)
         {
             Arc::clone(&projection.input)
@@ -2429,10 +2435,12 @@ impl Unparser<'_> {
         query: &mut Option<QueryBuilder>,
     ) -> Result<Option<RelationBuilder>> {
         let join_plan = match plan {
-            LogicalPlan::Join(_) => plan,
+            LogicalPlan::Join(_) | LogicalPlan::AsOfJoin(_) => plan,
             LogicalPlan::Projection(projection)
-                if matches!(projection.input.as_ref(), LogicalPlan::Join(_))
-                    && Self::is_qualified_passthrough_projection(projection) =>
+                if matches!(
+                    projection.input.as_ref(),
+                    LogicalPlan::Join(_) | LogicalPlan::AsOfJoin(_)
+                ) && Self::is_qualified_passthrough_projection(projection) =>
             {
                 projection.input.as_ref()
             }

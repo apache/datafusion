@@ -6198,10 +6198,10 @@ mod tests {
         assert_eq!(cross_join.min_rows(), 2);
 
         let asof_join = LogicalPlanBuilder::from(two_rows.clone())
-            .asof_join(
+            .asof_join_on(
                 one_row.clone(),
-                vec![],
-                AsOfMatch::new(col("l.column1"), Operator::GtEq, col("r.column1")),
+                None,
+                col("l.column1").gt_eq(col("r.column1")),
             )?
             .build()?;
         assert_eq!(asof_join.min_rows(), 2);

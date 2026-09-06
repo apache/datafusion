@@ -18,7 +18,7 @@
 #[cfg(test)]
 mod tests {
     use datafusion::datasource::provider_as_source;
-    use datafusion::logical_expr::{AsOfMatch, LogicalPlanBuilder, Operator};
+    use datafusion::logical_expr::LogicalPlanBuilder;
     use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
     use datafusion_substrait::logical_plan::producer::to_substrait_plan;
     use datafusion_substrait::serializer;
@@ -110,10 +110,10 @@ mod tests {
         let left = LogicalPlanBuilder::scan("l", Arc::clone(&table), None)?.build()?;
         let right = LogicalPlanBuilder::scan("r", table, None)?.build()?;
         let plan = LogicalPlanBuilder::from(left)
-            .asof_join(
+            .asof_join_on(
                 right,
-                vec![(col("l.b"), col("r.b"))],
-                AsOfMatch::new(col("l.a"), Operator::GtEq, col("r.a")),
+                Some(col("l.b").eq(col("r.b"))),
+                col("l.a").gt_eq(col("r.a")),
             )?
             .build()?;
         let error = to_substrait_plan(&plan, &ctx.state())
