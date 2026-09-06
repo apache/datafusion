@@ -1459,7 +1459,7 @@ mod tests {
             &TypeSignature::Numeric(2),
             &[DataType::Null, DataType::Null],
         );
-        assert_eq!(got, [DataType::Float64]);
+        assert_eq!(got, [DataType::Float64, DataType::Float64]);
 
         // Rejects non-numeric arg.
         let got = get_valid_types(
