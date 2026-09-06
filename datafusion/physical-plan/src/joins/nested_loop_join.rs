@@ -1444,6 +1444,16 @@ pub(crate) struct FallbackCoordinator {
     /// Notified when a new chunk becomes available, when the left stream
     /// is exhausted, or when a chunk is released.
     notify: tokio::sync::Notify,
+    /// Notified once, permanently, when the fallback is cancelled.
+    ///
+    /// Separate from `notify` because cancellation is terminal and has to reach
+    /// tasks that are not waiting on chunk progress at all -- a stream parked on
+    /// its right input, or a loader parked on a spill read. Waiters register with
+    /// `Notified::enable` and then re-check `cancelled` under the lock, so a
+    /// cancellation landing between those two steps still wakes them.
+    cancel_notify: tokio::sync::Notify,
+    #[cfg(test)]
+    review_cancel_before_watch: AtomicUsize,
 }
 
 impl FallbackCoordinator {
@@ -1463,6 +1473,9 @@ impl FallbackCoordinator {
                 cancelled: false,
             }),
             notify: tokio::sync::Notify::new(),
+            cancel_notify: tokio::sync::Notify::new(),
+            #[cfg(test)]
+            review_cancel_before_watch: AtomicUsize::new(0),
         }
     }
 
@@ -1492,8 +1505,34 @@ impl FallbackCoordinator {
     /// them; what this drops is the coordinator's own state, which nothing will
     /// come back for.
     /// True once a partition was dropped unfinished, cancelling the fallback.
+    ///
+    /// Production code observes cancellation through `cancellation_watcher` so a
+    /// waker is registered; this plain read is for assertions.
+    #[cfg(test)]
     fn is_cancelled(&self) -> bool {
         self.inner.lock().cancelled
+    }
+
+    /// A future that resolves when the fallback is cancelled, already queued for
+    /// the broadcast.
+    ///
+    /// Callers that park on something other than chunk progress -- a stream
+    /// waiting on its right input, for instance -- have to hold one of these and
+    /// poll it alongside their own work, or a peer's cancellation never reaches
+    /// their waker. Registration happens here, before the caller re-checks
+    /// `cancelled`, so a cancellation in between is delivered rather than lost.
+    fn cancellation_watcher(self: &Arc<Self>) -> BoxFuture<'static, ()> {
+        let coordinator = Arc::clone(self);
+        async move {
+            let notified = coordinator.cancel_notify.notified();
+            let mut notified = std::pin::pin!(notified);
+            notified.as_mut().enable();
+            if coordinator.inner.lock().cancelled {
+                return;
+            }
+            notified.await;
+        }
+        .boxed()
     }
 
     fn cancel(self: &Arc<Self>) {
@@ -1509,6 +1548,7 @@ impl FallbackCoordinator {
             inner.reservation = None;
         }
         self.notify.notify_waiters();
+        self.cancel_notify.notify_waiters();
     }
 
     /// Fetch `expected_chunk_index`, becoming leader to load it from the
@@ -1637,7 +1677,13 @@ impl FallbackCoordinator {
                     // its input is not waiting on `notify`, so without this a
                     // `cancel` would not be observed until the read finished on
                     // its own -- which may be never if the input is gone.
-                    let cancelled = self.notify.notified();
+                    // Test-only hook: a peer cancels after the leader claim,
+                    // before this task constructs its cancellation watcher.
+                    #[cfg(test)]
+                    if self.review_cancel_before_watch.swap(0, Ordering::SeqCst) == 1 {
+                        self.cancel();
+                    }
+                    let cancelled = self.cancel_notify.notified();
                     let load = Arc::clone(&self).load_one_chunk(
                         chunk_index,
                         &mut left_stream,
@@ -1649,17 +1695,18 @@ impl FallbackCoordinator {
                     let load_result = {
                         let mut load = std::pin::pin!(load);
                         let mut cancelled = std::pin::pin!(cancelled);
-                        loop {
+                        // Queue the waiter, then read the flag. If cancellation
+                        // already happened we bail without awaiting; if it lands
+                        // just after, the enabled future receives the broadcast
+                        // rather than losing it.
+                        cancelled.as_mut().enable();
+                        if self.inner.lock().cancelled {
+                            None
+                        } else {
                             tokio::select! {
                                 biased;
-                                result = &mut load => break Some(result),
-                                () = &mut cancelled => {
-                                    if self.inner.lock().cancelled {
-                                        break None;
-                                    }
-                                    // Woken for some other reason; keep reading.
-                                    cancelled.set(self.notify.notified());
-                                }
+                                result = &mut load => Some(result),
+                                () = &mut cancelled => None,
                             }
                         }
                     };
@@ -2025,6 +2072,14 @@ pub(crate) struct NestedLoopJoinStream {
     // ========================================================================
     /// State Tracking
     state: NLJState,
+    /// Registered watcher for the coordinator's cancellation broadcast.
+    ///
+    /// Polled on every `poll_next` iteration so a stream parked on its own input
+    /// still has a waker registered with the coordinator; without it a peer's
+    /// cancellation would not be observed until some unrelated event happened to
+    /// wake this task.
+    cancel_watch: Option<BoxFuture<'static, ()>>,
+
     /// Output buffer holds the join result to output. It will emit eagerly when
     /// the threshold is reached.
     output_buffer: Box<BatchCoalescer>,
@@ -2135,12 +2190,35 @@ impl Stream for NestedLoopJoinStream {
             // including while this stream was working on the final chunk. The
             // coordinated execution cannot produce a complete result after that,
             // so fail rather than emit output from partial input.
-            if !matches!(self.state, NLJState::Done) && self.fallback_cancelled() {
-                self.state = NLJState::Done;
-                return Poll::Ready(Some(exec_err!(
-                    "NestedLoopJoin coordinated fallback was cancelled because a \
-                     partition was dropped before finishing"
-                )));
+            if !matches!(self.state, NLJState::Done) {
+                // Poll a registered watcher rather than only reading the flag:
+                // this stream may be about to park on its own input, and the
+                // poll leaves a waker with the coordinator so a peer's
+                // cancellation actually reaches it.
+                if self.cancel_watch.is_none() {
+                    self.cancel_watch = match &self.spill_state {
+                        SpillState::Active(active) => {
+                            Some(active.coordinator.cancellation_watcher())
+                        }
+                        SpillState::Pending {
+                            fallback_coordinator,
+                            ..
+                        } => Some(fallback_coordinator.cancellation_watcher()),
+                        SpillState::Disabled => None,
+                    };
+                }
+                let cancelled = match self.cancel_watch.as_mut() {
+                    Some(watch) => watch.poll_unpin(cx).is_ready(),
+                    None => false,
+                };
+                if cancelled {
+                    self.state = NLJState::Done;
+                    self.cancel_watch = None;
+                    return Poll::Ready(Some(exec_err!(
+                        "NestedLoopJoin coordinated fallback was cancelled because \
+                         a partition was dropped before finishing"
+                    )));
+                }
             }
 
             match self.state {
@@ -2394,6 +2472,7 @@ impl NestedLoopJoinStream {
             current_right_batch: None,
             current_right_batch_matched: None,
             state: NLJState::BufferingLeft,
+            cancel_watch: None,
             left_probe_idx: 0,
             left_emit_idx: 0,
             left_exhausted: false,
@@ -2478,23 +2557,6 @@ impl NestedLoopJoinStream {
     }
 
     // ==== State handler functions ====
-
-    /// True if a peer partition cancelled the coordinated fallback.
-    ///
-    /// Checked on every `poll_next` iteration: a stream holding the final chunk
-    /// never asks for another one, so `next_chunk`'s own check would not be
-    /// reached and it would otherwise report success built from an execution
-    /// that lost one of its partitions.
-    fn fallback_cancelled(&self) -> bool {
-        match &self.spill_state {
-            SpillState::Active(active) => active.coordinator.is_cancelled(),
-            SpillState::Pending {
-                fallback_coordinator,
-                ..
-            } => fallback_coordinator.is_cancelled(),
-            SpillState::Disabled => false,
-        }
-    }
 
     /// Handle BufferingLeft state - prepare left side batches.
     ///
@@ -5779,6 +5841,160 @@ pub(crate) mod tests {
             spill_file: file,
             schema,
         }))
+    }
+
+    #[tokio::test]
+    async fn review_v2_cancel_wakes_pending_right_input() -> Result<()> {
+        struct WakeCount(AtomicUsize);
+        impl futures::task::ArcWake for WakeCount {
+            fn wake_by_ref(this: &Arc<Self>) {
+                this.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let runtime = RuntimeEnvBuilder::new().build_arc()?;
+        let ctx = Arc::new(TaskContext::default().with_runtime(runtime));
+        let coordinator = Arc::new(FallbackCoordinator::new(2, true));
+        let spill = spill_left_for_test(build_left_table(), Arc::clone(&ctx)).await?;
+        let _chunk = Arc::clone(&coordinator)
+            .next_chunk(0, Arc::clone(&spill), Arc::clone(&ctx), Time::new())
+            .await?
+            .expect("chunk");
+        let make_stream = || {
+            let right_schema = build_right_table().schema();
+            let (schema, columns) =
+                build_join_schema(&spill.schema, &right_schema, &JoinType::Left);
+            let left_spill = Arc::clone(&spill);
+            NestedLoopJoinStream::new(
+                Arc::new(schema),
+                None,
+                JoinType::Left,
+                Box::pin(crate::stream::RecordBatchStreamAdapter::new(
+                    right_schema,
+                    futures::stream::pending::<Result<RecordBatch>>(),
+                )),
+                OnceFut::new(async move { Ok(LeftLoad::Spilled(left_spill)) }),
+                columns,
+                NestedLoopJoinMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
+                1,
+                SpillState::Pending {
+                    task_context: Arc::clone(&ctx),
+                    fallback_coordinator: Arc::clone(&coordinator),
+                },
+            )
+        };
+        let peer = make_stream();
+        let mut survivor = make_stream();
+        let wakes = Arc::new(WakeCount(AtomicUsize::new(0)));
+        let waker = futures::task::waker(Arc::clone(&wakes));
+        let mut cx = std::task::Context::from_waker(&waker);
+        assert!(survivor.poll_next_unpin(&mut cx).is_pending());
+        assert!(matches!(survivor.state, NLJState::FetchingRight));
+        wakes.0.store(0, Ordering::SeqCst);
+        drop(peer);
+        assert!(coordinator.is_cancelled());
+        assert!(
+            wakes.0.load(Ordering::SeqCst) > 0,
+            "cancel must wake the survivor waiting on right input"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn review_v2_output_after_cancellation_error() -> Result<()> {
+        let (plan, ctx) = review_cancellation_plan()?;
+        let mut peer = plan.execute(0, Arc::clone(&ctx))?;
+        let mut survivor = plan.execute(1, Arc::clone(&ctx))?;
+        peer.next().await.expect("output")?;
+        survivor.next().await.expect("output")?;
+        drop(peer);
+        assert!(survivor.next().await.expect("cancellation").is_err());
+        let after_error = survivor.next().await;
+        eprintln!("after cancellation error: {after_error:?}");
+        assert!(
+            after_error.is_none(),
+            "cancellation did not discard buffered output"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn review_v2_cancel_before_watch_is_not_lost() -> Result<()> {
+        let ctx = Arc::new(TaskContext::default());
+        let coordinator = Arc::new(FallbackCoordinator::new(2, true));
+        let spill = spill_left_for_test(build_left_table(), Arc::clone(&ctx)).await?;
+        {
+            let mut inner = coordinator.inner.lock();
+            inner.left_schema = Some(Arc::clone(&spill.schema));
+            inner.left_stream =
+                Some(Box::pin(crate::stream::RecordBatchStreamAdapter::new(
+                    Arc::clone(&spill.schema),
+                    futures::stream::pending::<Result<RecordBatch>>(),
+                )));
+        }
+        coordinator
+            .review_cancel_before_watch
+            .store(1, Ordering::SeqCst);
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            Arc::clone(&coordinator).next_chunk(0, spill, ctx, Time::new()),
+        )
+        .await;
+        assert!(coordinator.is_cancelled());
+        assert!(
+            result.is_ok(),
+            "cancel before watcher registration was lost"
+        );
+        assert!(result.unwrap().is_err());
+        Ok(())
+    }
+
+    /// Chunk-progress notifications must not disturb a loader's cancellation
+    /// watcher.
+    ///
+    /// The re-arm gap the review found came from watching the shared `notify`,
+    /// where an unrelated wake forced a re-register and could lose a concurrent
+    /// cancel. The watcher now waits on a dedicated `cancel_notify` that only
+    /// `cancel` ever signals, so there is no re-arm to race: any wake is a real
+    /// cancellation. This drives unrelated `notify_waiters()` traffic past a
+    /// parked loader and then cancels for real.
+    #[tokio::test]
+    async fn review_v2_progress_notifications_do_not_disturb_cancel_watch() -> Result<()>
+    {
+        let ctx = Arc::new(TaskContext::default());
+        let coordinator = Arc::new(FallbackCoordinator::new(2, true));
+        let spill = spill_left_for_test(build_left_table(), Arc::clone(&ctx)).await?;
+        {
+            let mut inner = coordinator.inner.lock();
+            inner.left_schema = Some(Arc::clone(&spill.schema));
+            inner.left_stream =
+                Some(Box::pin(crate::stream::RecordBatchStreamAdapter::new(
+                    Arc::clone(&spill.schema),
+                    futures::stream::pending::<Result<RecordBatch>>(),
+                )));
+        }
+        let mut load = Arc::clone(&coordinator)
+            .next_chunk(0, spill, ctx, Time::new())
+            .boxed();
+        assert!(futures::poll!(load.as_mut()).is_pending());
+
+        // Unrelated progress traffic: must neither complete nor cancel the load.
+        for _ in 0..5 {
+            coordinator.notify.notify_waiters();
+            assert!(
+                futures::poll!(load.as_mut()).is_pending(),
+                "chunk-progress traffic must not resolve the cancellation watcher"
+            );
+        }
+        assert!(!coordinator.is_cancelled());
+
+        // A real cancellation must still be observed while the read is parked.
+        coordinator.cancel();
+        let result = tokio::time::timeout(Duration::from_secs(1), load)
+            .await
+            .expect("a parked loader must observe cancellation");
+        assert!(result.is_err());
+        assert!(coordinator.inner.lock().current.is_none());
+        Ok(())
     }
 
     fn review_cancellation_plan() -> Result<(Arc<NestedLoopJoinExec>, Arc<TaskContext>)> {
