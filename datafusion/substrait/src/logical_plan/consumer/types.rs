@@ -179,9 +179,7 @@ pub fn from_substrait_type(
                 })?;
                 let field = Arc::new(Field::new_list_field(
                     from_substrait_type(consumer, inner_type, dfs_names, name_idx)?,
-                    // We ignore Substrait's nullability here to match to_substrait_literal
-                    // which always creates nullable lists
-                    true,
+                    type_is_nullable(inner_type)?,
                 ));
                 match list.type_variation_reference {
                     DEFAULT_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::List(field)),
@@ -198,6 +196,7 @@ pub fn from_substrait_type(
                 let value_type = map.value.as_ref().ok_or_else(|| {
                     substrait_datafusion_err!("Map type must have value type")
                 })?;
+                let value_nullable = type_is_nullable(value_type)?;
                 let key_type =
                     from_substrait_type(consumer, key_type, dfs_names, name_idx)?;
                 let value_type =
@@ -206,7 +205,8 @@ pub fn from_substrait_type(
                 match map.type_variation_reference {
                     DEFAULT_MAP_TYPE_VARIATION_REF => {
                         let key_field = Arc::new(Field::new("key", key_type, false));
-                        let value_field = Arc::new(Field::new("value", value_type, true));
+                        let value_field =
+                            Arc::new(Field::new("value", value_type, value_nullable));
                         Ok(DataType::Map(
                             Arc::new(Field::new_struct(
                                 "entries",
