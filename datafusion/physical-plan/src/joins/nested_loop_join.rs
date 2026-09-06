@@ -5852,6 +5852,128 @@ pub(crate) mod tests {
         }))
     }
 
+    /// A survivor parked on the global-right replay must be woken by a peer's
+    /// cancellation.
+    ///
+    /// `EmitGlobalRightUnmatched` reopens the spilled right side and polls it,
+    /// so a stream can sit there rather than in `BufferingLeft`. The watcher is
+    /// polled at the top of every iteration regardless of state, so this should
+    /// behave like the build-input case; it is the last parking spot left to
+    /// confirm.
+    #[tokio::test]
+    async fn review_v4_cancel_wakes_parked_global_right_replay() -> Result<()> {
+        struct WakeCount(AtomicUsize);
+        impl futures::task::ArcWake for WakeCount {
+            fn wake_by_ref(this: &Arc<Self>) {
+                this.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let runtime = RuntimeEnvBuilder::new().build_arc()?;
+        let ctx = Arc::new(TaskContext::default().with_runtime(runtime));
+        let coordinator = Arc::new(FallbackCoordinator::new(2, true));
+        let spill = spill_left_for_test(build_left_table(), Arc::clone(&ctx)).await?;
+        let _chunk = Arc::clone(&coordinator)
+            .next_chunk(0, Arc::clone(&spill), Arc::clone(&ctx), Time::new())
+            .await?
+            .expect("chunk");
+
+        // FULL tracks unmatched right rows, so the stream has a global-right
+        // replay stage to park in.
+        let make_stream = || {
+            let right_schema = build_right_table().schema();
+            let (schema, columns) =
+                build_join_schema(&spill.schema, &right_schema, &JoinType::Full);
+            NestedLoopJoinStream::new(
+                Arc::new(schema),
+                None,
+                JoinType::Full,
+                Box::pin(crate::stream::RecordBatchStreamAdapter::new(
+                    right_schema,
+                    futures::stream::pending::<Result<RecordBatch>>(),
+                )),
+                OnceFut::new(futures::future::pending::<Result<LeftLoad>>()),
+                columns,
+                NestedLoopJoinMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
+                1,
+                SpillState::Pending {
+                    task_context: Arc::clone(&ctx),
+                    fallback_coordinator: Arc::clone(&coordinator),
+                },
+            )
+        };
+        let peer = make_stream();
+        let mut survivor = make_stream();
+
+        // Park it in the replay stage rather than in BufferingLeft.
+        survivor.state = NLJState::EmitGlobalRightUnmatched;
+        survivor.left_exhausted = true;
+
+        let wakes = Arc::new(WakeCount(AtomicUsize::new(0)));
+        let waker = futures::task::waker(Arc::clone(&wakes));
+        let mut cx = std::task::Context::from_waker(&waker);
+        assert!(survivor.poll_next_unpin(&mut cx).is_pending());
+        assert!(matches!(survivor.state, NLJState::EmitGlobalRightUnmatched));
+        wakes.0.store(0, Ordering::SeqCst);
+
+        drop(peer);
+        assert!(coordinator.is_cancelled());
+        assert!(
+            wakes.0.load(Ordering::SeqCst) > 0,
+            "cancel must wake a survivor parked on the global-right replay"
+        );
+        Ok(())
+    }
+
+    /// A stream that ends in an error is unfinished, so dropping it cancels the
+    /// peers.
+    ///
+    /// The error path reaches `Drop` without passing through `Done`, and the
+    /// coordinated execution has lost a partition either way, so the survivors
+    /// must be failed rather than left to report success from partial input.
+    #[tokio::test]
+    async fn review_v4_errored_stream_drop_cancels_peers() -> Result<()> {
+        let runtime = RuntimeEnvBuilder::new().build_arc()?;
+        let ctx = Arc::new(TaskContext::default().with_runtime(runtime));
+        let coordinator = Arc::new(FallbackCoordinator::new(2, true));
+        let spill = spill_left_for_test(build_left_table(), Arc::clone(&ctx)).await?;
+
+        let right_schema = build_right_table().schema();
+        let (schema, columns) =
+            build_join_schema(&spill.schema, &right_schema, &JoinType::Left);
+        // A right input that fails on its first poll.
+        let failing = NestedLoopJoinStream::new(
+            Arc::new(schema),
+            None,
+            JoinType::Left,
+            Box::pin(crate::stream::RecordBatchStreamAdapter::new(
+                Arc::clone(&right_schema),
+                futures::stream::once(async {
+                    Err(datafusion_common::DataFusionError::Execution(
+                        "injected right-input failure".to_string(),
+                    ))
+                }),
+            )),
+            OnceFut::new(futures::future::pending::<Result<LeftLoad>>()),
+            columns,
+            NestedLoopJoinMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
+            1,
+            SpillState::Pending {
+                task_context: Arc::clone(&ctx),
+                fallback_coordinator: Arc::clone(&coordinator),
+            },
+        );
+
+        assert!(!coordinator.is_cancelled());
+        // The stream never reaches `Done`, so dropping it counts as unfinished.
+        drop(failing);
+        assert!(
+            coordinator.is_cancelled(),
+            "an unfinished stream must cancel its peers when dropped, including \
+             one that ended in an error"
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn review_v3_cancel_wakes_pending_build_input() -> Result<()> {
         struct WakeCount(AtomicUsize);
