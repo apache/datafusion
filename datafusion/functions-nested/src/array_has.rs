@@ -756,7 +756,8 @@ fn array_has_all_and_any_dispatch<'a>(
             ComparisonType::All => BooleanBuffer::new_set(haystack.len()),
             ComparisonType::Any => BooleanBuffer::new_unset(haystack.len()),
         };
-        Ok(Arc::new(BooleanArray::from(buffer)))
+        let nulls = NullBuffer::union(haystack.nulls(), needle.nulls());
+        Ok(Arc::new(BooleanArray::new(buffer, nulls)))
     } else {
         match needle.value_type() {
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
