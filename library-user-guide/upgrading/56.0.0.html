@@ -489,6 +489,52 @@ without a <code class="docutils literal notranslate"><span class="pre">constrain
 </div>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/24170">issue #24170</a> for details.</p>
 </section>
+<section id="executionoptions-has-a-new-enable-nlj-coordinated-fallback-field">
+<h3><code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> has a new <code class="docutils literal notranslate"><span class="pre">enable_nlj_coordinated_fallback</span></code> field<a class="headerlink" href="#executionoptions-has-a-new-enable-nlj-coordinated-fallback-field" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> gained a public <code class="docutils literal notranslate"><span class="pre">enable_nlj_coordinated_fallback:</span> <span class="pre">bool</span></code> field
+(default <code class="docutils literal notranslate"><span class="pre">true</span></code>). It controls whether the memory-limited <code class="docutils literal notranslate"><span class="pre">NestedLoopJoinExec</span></code>
+fallback shares per-chunk build-side state across probe partitions, which is what
+lets <code class="docutils literal notranslate"><span class="pre">LEFT</span></code>, <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">SEMI</span></code>, <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">ANTI</span></code>, <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">MARK</span></code> and <code class="docutils literal notranslate"><span class="pre">FULL</span></code> joins spill instead
+of failing with <code class="docutils literal notranslate"><span class="pre">ResourcesExhausted</span></code> when the right side has several partitions.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users constructing <code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> (or <code class="docutils literal notranslate"><span class="pre">ConfigOptions</span></code>) with an exhaustive
+struct literal. Reading or <code class="docutils literal notranslate"><span class="pre">SET</span></code>-ing configuration is unaffected.</p></li>
+<li><p>Distributed engines that run each output partition as an independent task.
+The coordination assumes all probe partitions run in one process; with one
+coordinator per task the shared probe-thread counter never reaches zero and the
+fallback would stall. Such engines should set the flag to <code class="docutils literal notranslate"><span class="pre">false</span></code>, which keeps
+the previous fail-fast behaviour for the affected join types.</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>Set the new field, or fill it from <code class="docutils literal notranslate"><span class="pre">Default</span></code>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
+<span class="n">ExecutionOptions</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">batch_size</span><span class="p">:</span><span class="w"> </span><span class="mi">8192</span><span class="p">,</span>
+<span class="w">    </span><span class="c1">// ... every other field ...</span>
+<span class="p">}</span>
+
+<span class="c1">// After: set it explicitly</span>
+<span class="n">ExecutionOptions</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">batch_size</span><span class="p">:</span><span class="w"> </span><span class="mi">8192</span><span class="p">,</span>
+<span class="w">    </span><span class="n">enable_nlj_coordinated_fallback</span><span class="p">:</span><span class="w"> </span><span class="nc">true</span><span class="p">,</span>
+<span class="w">    </span><span class="c1">// ... every other field ...</span>
+<span class="p">}</span>
+
+<span class="c1">// After: or let the remaining fields come from Default, which also keeps</span>
+<span class="c1">// future field additions from breaking the literal</span>
+<span class="n">ExecutionOptions</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">batch_size</span><span class="p">:</span><span class="w"> </span><span class="mi">8192</span><span class="p">,</span>
+<span class="w">    </span><span class="o">..</span><span class="nb">Default</span><span class="p">::</span><span class="n">default</span><span class="p">()</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Distributed engines opting out:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">config</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionConfig</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
+<span class="n">config</span><span class="p">.</span><span class="n">options_mut</span><span class="p">().</span><span class="n">execution</span><span class="p">.</span><span class="n">enable_nlj_coordinated_fallback</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
 <section id="datafusion-optimizer-use-statistics-registry-is-deprecated-and-ignored">
 <h3><code class="docutils literal notranslate"><span class="pre">datafusion.optimizer.use_statistics_registry</span></code> is deprecated and ignored<a class="headerlink" href="#datafusion-optimizer-use-statistics-registry-is-deprecated-and-ignored" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">datafusion.optimizer.use_statistics_registry</span></code> config flag is deprecated and
@@ -619,6 +665,7 @@ to be updated to account for the new generic API.</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-56-0-0">DataFusion 56.0.0</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#groupcolumn-now-requires-values-preserving"><code class="docutils literal notranslate"><span class="pre">GroupColumn</span></code> now requires <code class="docutils literal notranslate"><span class="pre">values_preserving</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-proto-common-option-and-constraint-conversions-are-fallible"><code class="docutils literal notranslate"><span class="pre">datafusion-proto</span></code>: common option and constraint conversions are fallible</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionoptions-has-a-new-enable-nlj-coordinated-fallback-field"><code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> has a new <code class="docutils literal notranslate"><span class="pre">enable_nlj_coordinated_fallback</span></code> field</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-optimizer-use-statistics-registry-is-deprecated-and-ignored"><code class="docutils literal notranslate"><span class="pre">datafusion.optimizer.use_statistics_registry</span></code> is deprecated and ignored</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#defaultstatisticsprovider-is-deprecated"><code class="docutils literal notranslate"><span class="pre">DefaultStatisticsProvider</span></code> is deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#statisticsregistry-compute-and-compute-base-are-deprecated"><code class="docutils literal notranslate"><span class="pre">StatisticsRegistry::compute</span></code> and <code class="docutils literal notranslate"><span class="pre">compute_base</span></code> are deprecated</a></li>
