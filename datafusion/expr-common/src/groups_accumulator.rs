@@ -509,6 +509,12 @@ impl BlocksIndex {
     self.block_index * block_size + self.index_in_block
   }
 
+  /// Flat position given the absolute start of every block, `head` is the absolute
+  /// position of the first item
+  pub fn into_flat_index_in_dyn_block_size(self, block_starts: &std::collections::VecDeque<usize>, head: usize) -> usize {
+    block_starts[self.block_index()] - head + self.index_in_block()
+  }
+
   pub fn block_index(&self) -> usize {
     self.block_index
   }
