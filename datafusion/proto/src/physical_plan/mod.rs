@@ -758,6 +758,58 @@ mod tests {
             }
         }
 
+        /// Writes into the buffer before discovering it cannot encode the node.
+        #[derive(Debug)]
+        struct WritesThenRejectsCodec;
+
+        impl PhysicalExtensionCodec for WritesThenRejectsCodec {
+            fn try_decode(
+                &self,
+                _buf: &[u8],
+                _inputs: &[Arc<dyn ExecutionPlan>],
+                _ctx: &TaskContext,
+                _proto_converter: &dyn PhysicalProtoConverterExtension,
+            ) -> Result<Arc<dyn ExecutionPlan>> {
+                internal_err!("not needed for these tests")
+            }
+
+            fn try_encode(
+                &self,
+                _node: Arc<dyn ExecutionPlan>,
+                buf: &mut Vec<u8>,
+                _proto_converter: &dyn PhysicalProtoConverterExtension,
+            ) -> Result<()> {
+                buf.extend_from_slice(b"partial");
+                internal_err!("not mine")
+            }
+        }
+
+        /// Encodes any plan as a fixed payload.
+        #[derive(Debug)]
+        struct PlanPayloadCodec;
+
+        impl PhysicalExtensionCodec for PlanPayloadCodec {
+            fn try_decode(
+                &self,
+                _buf: &[u8],
+                _inputs: &[Arc<dyn ExecutionPlan>],
+                _ctx: &TaskContext,
+                _proto_converter: &dyn PhysicalProtoConverterExtension,
+            ) -> Result<Arc<dyn ExecutionPlan>> {
+                internal_err!("not needed for these tests")
+            }
+
+            fn try_encode(
+                &self,
+                _node: Arc<dyn ExecutionPlan>,
+                buf: &mut Vec<u8>,
+                _proto_converter: &dyn PhysicalProtoConverterExtension,
+            ) -> Result<()> {
+                buf.extend_from_slice(b"plan");
+                Ok(())
+            }
+        }
+
         /// Codec whose decode hooks only accept an empty payload, to pin the
         /// by-name decode fallback (registry miss → codec with `&[]`).
         #[derive(Debug)]
@@ -987,6 +1039,30 @@ mod tests {
                     .contains("PhysicalPlanNode is not a ProjectionExec"),
                 "unexpected error: {err}"
             );
+        }
+
+        #[test]
+        fn composed_codec_discards_bytes_from_a_failed_attempt() -> Result<()> {
+            // A codec may write before discovering it cannot encode the node.
+            // Those bytes must not be committed with the codec that succeeds next.
+            let composed = ComposedPhysicalExtensionCodec::new(vec![
+                Arc::new(WritesThenRejectsCodec),
+                Arc::new(PlanPayloadCodec),
+            ]);
+            let plan: Arc<dyn ExecutionPlan> =
+                Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
+
+            let mut buf = vec![];
+            composed.try_encode(plan, &mut buf, &DefaultPhysicalProtoConverter {})?;
+
+            let proto = DataEncoderTuple::decode(buf.as_slice())
+                .map_err(|e| internal_datafusion_err!("{e}"))?;
+            assert_eq!(proto.encoder_position, 1);
+            assert_eq!(
+                proto.blob, b"plan",
+                "bytes from the failed attempt must not be committed"
+            );
+            Ok(())
         }
 
         #[test]
@@ -2096,6 +2172,9 @@ impl ComposedPhysicalExtensionCodec {
 
         // find the encoder
         for (position, codec) in self.codecs.iter().enumerate() {
+            // A codec may write before it rejects the node; those bytes must not
+            // reach whichever codec succeeds next.
+            data.clear();
             match encode(codec.as_ref(), &mut data) {
                 Ok(_) => {
                     encoder_position = Some(position as u32);
