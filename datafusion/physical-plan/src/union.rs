@@ -713,11 +713,20 @@ impl InterleaveExec {
         let eq_properties = EquivalenceProperties::new(schema);
         // Get output partitioning. Only claim the shared hash / range layout
         // when every input actually has it (see `try_new_unchecked`).
-        let first_partitioning = inputs[0].output_partitioning();
         let output_partitioning = if can_interleave(inputs.iter()) {
-            first_partitioning.clone()
+            inputs[0].output_partitioning().clone()
         } else {
-            Partitioning::UnknownPartitioning(first_partitioning.partition_count())
+            // Non-interleavable inputs need not even agree on a partition
+            // count. Report the largest one: `execute` errors out for a
+            // partition that some input lacks, so an unrepaired node fails
+            // loudly instead of silently dropping the extra partitions of
+            // the widest input.
+            let partition_count = inputs
+                .iter()
+                .map(|input| input.output_partitioning().partition_count())
+                .max()
+                .unwrap_or(0);
+            Partitioning::UnknownPartitioning(partition_count)
         };
         Ok(PlanProperties::new(
             eq_properties,
@@ -1826,6 +1835,43 @@ mod tests {
             err.contains(
                 "Not all InterleaveExec children have a consistent hash or range partitioning"
             ),
+            "{err}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_interleave_rebuild_reports_widest_partition_count() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("name", DataType::Int32, true)]));
+        let interleave: Arc<dyn ExecutionPlan> =
+            Arc::new(InterleaveExec::try_new(vec![
+                make_hash_exec(&schema, vec!["name"], 3)?,
+                make_hash_exec(&schema, vec!["name"], 3)?,
+            ])?);
+
+        // A rewrite that leaves the children with different partition counts.
+        let rebuilt = interleave.replace_children(
+            vec![
+                make_hash_exec(&schema, vec!["name"], 3)?,
+                make_hash_exec(&schema, vec!["name"], 5)?,
+            ],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+
+        // The widest child decides the reported count, so the partitions only
+        // it has are still visible to callers instead of being dropped.
+        assert!(matches!(
+            rebuilt.output_partitioning(),
+            Partitioning::UnknownPartitioning(5)
+        ));
+        // Executing one of them fails loudly rather than returning no rows.
+        let Err(err) = rebuilt.execute(4, Arc::new(TaskContext::default())) else {
+            panic!("executing a partition the narrow child lacks must fail");
+        };
+        let err = err.to_string();
+        assert!(
+            err.contains("Partition 4 not found in InterleaveExec"),
             "{err}"
         );
         Ok(())
