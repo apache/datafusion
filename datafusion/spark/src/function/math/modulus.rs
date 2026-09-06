@@ -15,12 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use arrow::array::{ArrayRef, BooleanArray, Scalar, new_null_array};
-use arrow::compute::kernels::numeric::add;
+use arrow::compute::cast;
 use arrow::compute::kernels::{
     boolean::{and, is_not_null, or},
-    cmp::{eq, lt},
-    numeric::{neg, rem},
+    cmp::{eq, lt, neq},
+    numeric::{add_wrapping, neg, rem},
     zip::zip,
 };
 use arrow::datatypes::DataType;
@@ -35,8 +37,8 @@ use datafusion_expr::{
 ///
 /// Arrow's comparison kernels order floating point values totally, so `-0.0`
 /// compares as distinct from, and less than, `0.0`. Java, and therefore Spark,
-/// treats `-0.0` as equal to zero. The helper below uses this to restore the
-/// IEEE 754 answer.
+/// treats `-0.0` as equal to zero and as not less than zero. The helpers below
+/// use this to restore the IEEE 754 answer.
 fn negative_zero(data_type: &DataType) -> Result<Option<ArrayRef>> {
     match data_type {
         DataType::Float16 | DataType::Float32 | DataType::Float64 => {
@@ -101,9 +103,30 @@ pub fn spark_mod(
     Ok(ColumnarValue::Array(result))
 }
 
+/// Rows of `values` that are less than zero, with `-0.0` counting as not
+/// negative.
+fn is_negative(values: &ArrayRef) -> Result<BooleanArray> {
+    let zero = ScalarValue::new_zero(values.data_type())?.to_array()?;
+    let mask = lt(values, &Scalar::new(zero))?;
+    match negative_zero(values.data_type())? {
+        Some(negative_zero) => {
+            Ok(and(&mask, &neq(values, &Scalar::new(negative_zero))?)?)
+        }
+        None => Ok(mask),
+    }
+}
+
 /// Spark-compatible `pmod` function
+///
+/// Spark evaluates `val r = a % n; if (r < 0) (r + n) % n else r`, so the
+/// adjustment only applies where the plain remainder is negative.
+///
 /// In ANSI mode, division by zero throws an error.
 /// In legacy mode, division by zero returns NULL (Spark behavior).
+///
+/// `pmod` does not share [`try_rem`] with `mod` because it needs the
+/// zero-divisor-masked divisor again for the `(r + n) % n` step, which
+/// [`try_rem`] does not hand back. The zero-divisor handling itself matches.
 pub fn spark_pmod(
     args: &[ColumnarValue],
     enable_ansi_mode: bool,
@@ -112,12 +135,53 @@ pub fn spark_pmod(
     let args = ColumnarValue::values_to_arrays(args)?;
     let left = &args[0];
     let right = &args[1];
-    let zero = ScalarValue::new_zero(left.data_type())?.to_array_of_size(left.len())?;
-    let result = try_rem(left, right, enable_ansi_mode)?;
-    let neg = lt(&result, &zero)?;
-    let plus = zip(&neg, right, &zero)?;
-    let result = add(&plus, &result)?;
-    let result = try_rem(&result, right, enable_ansi_mode)?;
+
+    let divisor_is_zero = is_zero(right)?;
+    let divisor = if enable_ansi_mode {
+        // Spark's `pmod` is null intolerant, so a row whose dividend is NULL
+        // evaluates to NULL and never raises, even when the divisor on that row
+        // is zero. Mask the check by the validity of the dividend to match.
+        let raises = and(&divisor_is_zero, &is_not_null(left.as_ref())?)?;
+        if raises.iter().flatten().any(|raises| raises) {
+            return Err(ArrowError::DivideByZero.into());
+        }
+        Arc::clone(right)
+    } else {
+        // In legacy mode, null out zero divisors so that division by zero
+        // returns NULL instead of erroring (integers) or returning NaN (floats).
+        let null = Scalar::new(new_null_array(right.data_type(), 1));
+        zip(&divisor_is_zero, &null, right)?
+    };
+
+    let remainder = rem(left, &divisor)?;
+
+    // Spark evaluates `(r + n) % n` with Java arithmetic. Java promotes `byte`
+    // and `short` operands to `int`, so those widths never overflow, while
+    // `int` and `long` are evaluated at their own width and wrap around. Widen
+    // the narrow integer types so the addition reproduces Java's promotion, and
+    // use the wrapping addition elsewhere so that, for example,
+    // `pmod(-1, -2147483648)` yields `2147483647` the way Spark does instead of
+    // reporting an overflow.
+    let widen = matches!(remainder.data_type(), DataType::Int8 | DataType::Int16);
+    let (wide_remainder, wide_divisor) = if widen {
+        (
+            cast(&remainder, &DataType::Int32)?,
+            cast(&divisor, &DataType::Int32)?,
+        )
+    } else {
+        (Arc::clone(&remainder), Arc::clone(&divisor))
+    };
+    let shifted = add_wrapping(&wide_remainder, &wide_divisor)?;
+    let shifted = rem(&shifted, &wide_divisor)?;
+    let shifted = if shifted.data_type() == remainder.data_type() {
+        shifted
+    } else {
+        cast(&shifted, remainder.data_type())?
+    };
+
+    // Select `(r + n) % n` only where `r < 0`. Adding zero to the other rows
+    // instead would turn Spark's `-0.0` results into `0.0`.
+    let result = zip(&is_negative(&remainder)?, &shifted, &remainder)?;
     Ok(ColumnarValue::Array(result))
 }
 
@@ -889,6 +953,182 @@ mod test {
             assert_eq!(result_int32.value(0), 1); // 10 pmod -3 = 1
             assert_eq!(result_int32.value(1), -1); // -7 pmod -3 = -1
             assert_eq!(result_int32.value(2), 3); // 15 pmod -4 = 3
+        } else {
+            panic!("Expected array result");
+        }
+    }
+
+    /// Spark keeps the sign of a negative zero remainder, because `r < 0` is
+    /// false for `-0.0` in Java. The `.slt` runner renders `-0.0` and `0.0`
+    /// identically, so the sign can only be asserted here.
+    #[test]
+    fn test_pmod_negative_zero_result() {
+        let left = Float64Array::from(vec![
+            Some(-5.0),
+            Some(-3.0),
+            Some(-0.0),
+            Some(5.0),
+            Some(0.0),
+        ]);
+        let right = Float64Array::from(vec![
+            Some(2.5),
+            Some(3.0),
+            Some(3.0),
+            Some(2.5),
+            Some(3.0),
+        ]);
+
+        let result = spark_pmod(
+            &[
+                ColumnarValue::Array(Arc::new(left)),
+                ColumnarValue::Array(Arc::new(right)),
+            ],
+            false,
+        )
+        .unwrap();
+
+        if let ColumnarValue::Array(result_array) = result {
+            let result = result_array
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .unwrap();
+            // -5.0 pmod 2.5 = -0.0
+            assert_eq!(result.value(0), 0.0);
+            assert!(result.value(0).is_sign_negative());
+            // -3.0 pmod 3.0 = -0.0
+            assert!(result.value(1).is_sign_negative());
+            // -0.0 pmod 3.0 = -0.0
+            assert!(result.value(2).is_sign_negative());
+            // 5.0 pmod 2.5 = 0.0
+            assert!(result.value(3).is_sign_positive());
+            // 0.0 pmod 3.0 = 0.0
+            assert!(result.value(4).is_sign_positive());
+        } else {
+            panic!("Expected array result");
+        }
+    }
+
+    /// Spark evaluates `(r + n) % n` with Java arithmetic, which wraps around
+    /// for `int` and `long` and promotes `byte` and `short` to `int`.
+    #[test]
+    fn test_pmod_integer_boundaries() {
+        let left =
+            Int32Array::from(vec![Some(-1), Some(-2), Some(i32::MAX), Some(i32::MIN)]);
+        let right = Int32Array::from(vec![
+            Some(i32::MIN),
+            Some(i32::MIN),
+            Some(i32::MIN),
+            Some(-1),
+        ]);
+        let result = spark_pmod(
+            &[
+                ColumnarValue::Array(Arc::new(left)),
+                ColumnarValue::Array(Arc::new(right)),
+            ],
+            false,
+        )
+        .unwrap();
+        if let ColumnarValue::Array(result_array) = result {
+            let result = result_array.as_any().downcast_ref::<Int32Array>().unwrap();
+            assert_eq!(result.value(0), i32::MAX);
+            assert_eq!(result.value(1), 2147483646);
+            assert_eq!(result.value(2), i32::MAX);
+            assert_eq!(result.value(3), 0);
+        } else {
+            panic!("Expected array result");
+        }
+
+        let left = Int64Array::from(vec![Some(-1), Some(i64::MIN)]);
+        let right = Int64Array::from(vec![Some(i64::MIN), Some(-1)]);
+        let result = spark_pmod(
+            &[
+                ColumnarValue::Array(Arc::new(left)),
+                ColumnarValue::Array(Arc::new(right)),
+            ],
+            false,
+        )
+        .unwrap();
+        if let ColumnarValue::Array(result_array) = result {
+            let result = result_array.as_any().downcast_ref::<Int64Array>().unwrap();
+            assert_eq!(result.value(0), i64::MAX);
+            assert_eq!(result.value(1), 0);
+        } else {
+            panic!("Expected array result");
+        }
+
+        // Java widens byte and short to int, so `-1 pmod -128` stays `-1`
+        // rather than wrapping to `127`.
+        let left = Int8Array::from(vec![Some(-1), Some(i8::MIN)]);
+        let right = Int8Array::from(vec![Some(i8::MIN), Some(-1)]);
+        let result = spark_pmod(
+            &[
+                ColumnarValue::Array(Arc::new(left)),
+                ColumnarValue::Array(Arc::new(right)),
+            ],
+            false,
+        )
+        .unwrap();
+        if let ColumnarValue::Array(result_array) = result {
+            let result = result_array.as_any().downcast_ref::<Int8Array>().unwrap();
+            assert_eq!(result.value(0), -1);
+            assert_eq!(result.value(1), 0);
+        } else {
+            panic!("Expected array result");
+        }
+
+        let left = Int16Array::from(vec![Some(-1), Some(i16::MIN), Some(128)]);
+        let right = Int16Array::from(vec![Some(i16::MIN), Some(-1), Some(i16::MIN)]);
+        let result = spark_pmod(
+            &[
+                ColumnarValue::Array(Arc::new(left)),
+                ColumnarValue::Array(Arc::new(right)),
+            ],
+            false,
+        )
+        .unwrap();
+        if let ColumnarValue::Array(result_array) = result {
+            let result = result_array.as_any().downcast_ref::<Int16Array>().unwrap();
+            assert_eq!(result.value(0), -1);
+            assert_eq!(result.value(1), 0);
+            assert_eq!(result.value(2), 128);
+        } else {
+            panic!("Expected array result");
+        }
+    }
+
+    /// Spark raises on a zero divisor of any numeric type in ANSI mode, and
+    /// treats `-0.0` as a zero divisor.
+    #[test]
+    fn test_pmod_zero_divisor_by_type() {
+        let float_args = |divisor: f64| {
+            [
+                ColumnarValue::Array(Arc::new(Float64Array::from(vec![Some(10.5)]))),
+                ColumnarValue::Array(Arc::new(Float64Array::from(vec![Some(divisor)]))),
+            ]
+        };
+
+        for divisor in [0.0, -0.0] {
+            assert!(spark_pmod(&float_args(divisor), true).is_err());
+
+            let result = spark_pmod(&float_args(divisor), false).unwrap();
+            if let ColumnarValue::Array(result_array) = result {
+                assert!(result_array.is_null(0));
+            } else {
+                panic!("Expected array result");
+            }
+        }
+
+        // A NULL dividend short circuits to NULL before the divisor is
+        // validated, so ANSI mode does not raise here.
+        let args = [
+            ColumnarValue::Array(Arc::new(Int32Array::from(vec![None, Some(-7)]))),
+            ColumnarValue::Array(Arc::new(Int32Array::from(vec![Some(0), Some(3)]))),
+        ];
+        let result = spark_pmod(&args, true).unwrap();
+        if let ColumnarValue::Array(result_array) = result {
+            let result = result_array.as_any().downcast_ref::<Int32Array>().unwrap();
+            assert!(result.is_null(0));
+            assert_eq!(result.value(1), 2);
         } else {
             panic!("Expected array result");
         }
