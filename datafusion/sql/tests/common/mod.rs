@@ -179,6 +179,15 @@ impl ContextProvider for MockContextProvider {
                 Field::new("first_name", DataType::Utf8, false),
                 Field::new("last_name", DataType::Utf8, false),
             ])),
+            "string_with_extension" => Ok(Schema::new(vec![
+                Field::new("value", DataType::Utf8, false).with_metadata(
+                    [(
+                        "ARROW:extension:name".to_string(),
+                        "example.string".to_string(),
+                    )]
+                    .into(),
+                ),
+            ])),
             "orders" => Ok(Schema::new(vec![
                 Field::new("order_id", DataType::UInt32, false),
                 Field::new("o_orderkey", DataType::UInt32, false),

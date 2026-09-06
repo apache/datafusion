@@ -735,6 +735,21 @@ fn plan_insert_preserves_target_extension_metadata() {
     );
 }
 
+#[test]
+fn plan_insert_preserves_target_extension_metadata_on_type_cast() {
+    let sql = "INSERT INTO string_with_extension SELECT id FROM test_decimal";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Dml: op=[Insert Into] table=[string_with_extension]
+      Projection: CAST(test_decimal.id AS Utf8<{"ARROW:extension:name": "example.string"}>) AS value
+        Projection: test_decimal.id
+          TableScan: test_decimal
+    "#
+    );
+}
+
 #[rstest]
 #[case::duplicate_columns(
     "INSERT INTO test_decimal (id, price, price) VALUES (1, 2, 3), (4, 5, 6)",
