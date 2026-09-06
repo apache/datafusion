@@ -251,9 +251,8 @@ where
         new_self
     }
 
-    fn new_result(&self, offsets: Vec<O>, values: Vec<u8>, nulls: Option<NullBuffer>) -> ArrayRef {
-        let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));
-        let values = Buffer::from_vec(values);
+    fn new_result(&self, offsets: ScalarBuffer<O>, values: Buffer, nulls: Option<NullBuffer>) -> ArrayRef {
+        let offsets = OffsetBuffer::new(offsets);
         match self.output_type {
             OutputType::Binary => {
                 // SAFETY: the offsets were constructed correctly
@@ -523,7 +522,7 @@ where
         // The bytes builder can not tell a trailing block of empty values (or just the null)
         // from an unused one, so take as many blocks as the offsets have
         let mut values = self.buffer.take_all();
-        values.resize_with(offsets.len(), Vec::new);
+        values.resize_with(offsets.len(), || Buffer::from(&[]));
         self.map = hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY);
         // self.map_size = 0;
 

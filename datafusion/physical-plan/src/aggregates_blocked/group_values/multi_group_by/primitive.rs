@@ -86,8 +86,8 @@ where
             if !equal_to_results.get_bit(i) {
                 continue;
             }
-            // TODO ADD BACK THE GET UNCHECKED
-            let left = self.group_values[lhs_row];
+            // SAFETY: `lhs_rows` are existing groups
+            let left = unsafe { *self.group_values.get_unchecked(lhs_row) };
             let right = if cfg!(debug_assertions) {
                 array_values[rhs_row]
             } else {

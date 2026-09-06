@@ -17,6 +17,7 @@
 
 use crate::aggregates::group_values::GroupValues;
 use crate::aggregates_blocked::group_values::BlockedGroupValues;
+use arrow::buffer::ScalarBuffer;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::{
     ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder, PrimitiveArray,
@@ -138,9 +139,10 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
     }
 
     fn build_primitive(
-        values: Vec<T::Native>,
+        values: impl Into<ScalarBuffer<T::Native>>,
         null_idx: Option<usize>,
     ) -> PrimitiveArray<T> {
+        let values = values.into();
         let nulls = null_idx.map(|null_idx| {
             let mut buffer = NullBufferBuilder::new(values.len());
             buffer.append_n_non_nulls(null_idx);
@@ -153,17 +155,18 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
     }
 
     fn build_no_nulls_primitive_arc(
-        values: Vec<T::Native>,
+        values: impl Into<ScalarBuffer<T::Native>>,
         data_type: DataType,
     ) -> ArrayRef {
         Arc::new(PrimitiveArray::<T>::new(values.into(), None).with_data_type(data_type))
     }
 
     fn build_with_nulls_primitive_arc(
-        values: Vec<T::Native>,
+        values: impl Into<ScalarBuffer<T::Native>>,
         null_idx: usize,
         data_type: DataType,
     ) -> ArrayRef {
+        let values = values.into();
         let nulls = {
             let mut buffer = NullBufferBuilder::new(values.len());
             buffer.append_n_non_nulls(null_idx);
@@ -208,8 +211,8 @@ where
                     let insert = self.map.entry(
                         hash,
                         |&(g, h)| {
-                        // TODO - add back the get unchecked
-                            hash == h && self.values[g].is_eq(key)
+                            // SAFETY: every group in the map was appended to `values`
+                            hash == h && unsafe { self.values.get_unchecked(g) }.is_eq(key)
                         },
                         |&(_, h)| h,
                     );

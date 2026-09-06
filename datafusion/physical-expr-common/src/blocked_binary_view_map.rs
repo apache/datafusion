@@ -31,7 +31,7 @@ use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt, VecDequeAl
 use std::fmt::Debug;
 use std::mem::size_of;
 use std::sync::Arc;
-use datafusion_expr_common::blocked_helpers::{BlockedBytesBufferBuilder, BlockedNullsBuilder, BlockedVecBuilder, CopyItemBlockedVecBuilder};
+use datafusion_expr_common::blocked_helpers::{BlockedBytesBufferBuilder, BlockedNullsBuilder, CopyItemBlockedVecBuilder};
 use datafusion_expr_common::groups_accumulator::BlocksIndex;
 
 /// HashSet optimized for storing string or binary values that can produce that

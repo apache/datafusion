@@ -984,7 +984,7 @@ impl BlockedGroupsAccumulator for BlockedCountGroupsAccumulator {
                     self.batch_size()
                 );
                 let counts = self.counts.take_n(n, None::<std::iter::Empty<usize>>);
-                Ok(vec![Arc::new(Int64Array::from(counts))])
+                Ok(vec![Arc::new(Int64Array::new(counts.into(), None))])
             }
         }
     }

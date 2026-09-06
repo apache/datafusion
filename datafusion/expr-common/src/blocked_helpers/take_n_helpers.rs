@@ -250,23 +250,6 @@ pub(crate) fn layout_unchanged(
     adjusted_block_size_iter.eq(current_block_sizes)
 }
 
-/// Like [`layout_unchanged`] but a trailing empty block, the one waiting for the next push,
-/// does not count. Only valid for builders whose blocks are never empty otherwise
-pub(crate) fn layout_unchanged_ignoring_trailing_empty(
-    adjusted_block_size_iter: impl Iterator<Item = usize>,
-    current_block_sizes: impl Iterator<Item = usize>,
-) -> bool {
-    let mut expected: Vec<usize> = adjusted_block_size_iter.collect();
-    let mut actual: Vec<usize> = current_block_sizes.collect();
-    while expected.last() == Some(&0) {
-        expected.pop();
-    }
-    while actual.last() == Some(&0) {
-        actual.pop();
-    }
-    expected == actual
-}
-
 /// There must always be a block that the next push can go into,
 /// with a fixed block size that means the back block must not be full
 fn ensure_writable_tail<B: BlockBuilder>(

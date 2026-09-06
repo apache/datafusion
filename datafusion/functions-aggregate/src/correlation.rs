@@ -43,6 +43,7 @@ use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::format_state_name,
 };
+use arrow::datatypes::ArrowNativeType;
 use datafusion_expr::blocked_helpers::CopyItemBlockedVecBuilder;
 use datafusion_expr::groups_accumulator::{BlockedEmitTo, BlockedGroupSelection, BlockedGroupsAccumulator, BlocksIndex};
 use datafusion_functions_aggregate_common::accumulator::BlockedAccumulatorArgs;
@@ -673,7 +674,7 @@ pub struct CorrelationBlockedGroupsAccumulator {
     sum_yy: CopyItemBlockedVecBuilder<true, f64>,
 }
 
-fn blocked_copy_selected<T: Copy>(selection: BlockedGroupSelection<'_>, values: &CopyItemBlockedVecBuilder<true, T>) -> Vec<T> {
+fn blocked_copy_selected<T: ArrowNativeType>(selection: BlockedGroupSelection<'_>, values: &CopyItemBlockedVecBuilder<true, T>) -> Vec<T> {
     debug_assert_eq!(selection.total_num_groups(), values.len());
     selection.iter().map(|index| values[index]).collect()
 }
@@ -759,12 +760,12 @@ impl CorrelationBlockedGroupsAccumulator {
         count.into_iter().zip(sum_x).zip(sum_y)
           .zip(sum_xy).zip(sum_xx).zip(sum_yy)
           .map(|(((((count, sum_x), sum_y), sum_xy), sum_xx), sum_yy)| vec![
-              Arc::new(UInt64Array::from(count)) as ArrayRef,
-              Arc::new(Float64Array::from(sum_x)),
-              Arc::new(Float64Array::from(sum_y)),
-              Arc::new(Float64Array::from(sum_xy)),
-              Arc::new(Float64Array::from(sum_xx)),
-              Arc::new(Float64Array::from(sum_yy)),
+              Arc::new(UInt64Array::new(count.into(), None)) as ArrayRef,
+              Arc::new(Float64Array::new(sum_x.into(), None)),
+              Arc::new(Float64Array::new(sum_y.into(), None)),
+              Arc::new(Float64Array::new(sum_xy.into(), None)),
+              Arc::new(Float64Array::new(sum_xx.into(), None)),
+              Arc::new(Float64Array::new(sum_yy.into(), None)),
           ])
           .collect()
 
@@ -780,12 +781,12 @@ impl CorrelationBlockedGroupsAccumulator {
         let sum_yy = self.sum_yy.take_block()?;
 
         Some(vec![
-            Arc::new(UInt64Array::from(count)),
-            Arc::new(Float64Array::from(sum_x)),
-            Arc::new(Float64Array::from(sum_y)),
-            Arc::new(Float64Array::from(sum_xy)),
-            Arc::new(Float64Array::from(sum_xx)),
-            Arc::new(Float64Array::from(sum_yy)),
+            Arc::new(UInt64Array::new(count.into(), None)),
+            Arc::new(Float64Array::new(sum_x.into(), None)),
+            Arc::new(Float64Array::new(sum_y.into(), None)),
+            Arc::new(Float64Array::new(sum_xy.into(), None)),
+            Arc::new(Float64Array::new(sum_xx.into(), None)),
+            Arc::new(Float64Array::new(sum_yy.into(), None)),
         ])
     }
 
@@ -798,12 +799,12 @@ impl CorrelationBlockedGroupsAccumulator {
         let sum_yy = self.sum_yy.take_n_fixed(n);
 
         vec![
-            Arc::new(UInt64Array::from(count)),
-            Arc::new(Float64Array::from(sum_x)),
-            Arc::new(Float64Array::from(sum_y)),
-            Arc::new(Float64Array::from(sum_xy)),
-            Arc::new(Float64Array::from(sum_xx)),
-            Arc::new(Float64Array::from(sum_yy)),
+            Arc::new(UInt64Array::new(count.into(), None)),
+            Arc::new(Float64Array::new(sum_x.into(), None)),
+            Arc::new(Float64Array::new(sum_y.into(), None)),
+            Arc::new(Float64Array::new(sum_xy.into(), None)),
+            Arc::new(Float64Array::new(sum_xx.into(), None)),
+            Arc::new(Float64Array::new(sum_yy.into(), None)),
         ]
     }
 

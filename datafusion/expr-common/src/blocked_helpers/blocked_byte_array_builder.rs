@@ -147,11 +147,7 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteArrayType>
         let bytes_block = self.blocked_bytes.block(index.block_index());
 
         // Safety: the offsets are constructed correctly and never decrease
-        unsafe {
-            bytes_block
-                .as_slice()
-                .get_unchecked(start_in_block..end_in_block)
-        }
+        unsafe { bytes_block.get_unchecked(start_in_block..end_in_block) }
     }
 
     pub fn is_valid(&self, index: BlocksIndex) -> bool {
@@ -200,7 +196,7 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteArrayType>
         // The bytes block may be empty when every item in it is empty or null
         let bytes = self.blocked_bytes.take_first_block();
 
-        Some((offsets, Buffer::from(bytes), nulls))
+        Some((offsets, bytes, nulls))
     }
 
     /// Take every non empty block
@@ -230,11 +226,11 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteArrayType>
         let offsets = self.blocked_offsets.take_all();
         let nulls = self.blocked_nulls.take_all();
         let mut bytes = self.blocked_bytes.take_all();
-        bytes.resize_with(offsets.len(), Vec::new);
+        bytes.resize_with(offsets.len(), || Buffer::from(&[]));
 
         offsets.into_iter().zip_eq(bytes).zip_eq(nulls).map(
             |((offsets, bytes), nulls)| {
-                (Self::offsets_from_vec(offsets), Buffer::from(bytes), nulls)
+                (Self::offsets_from_vec(offsets), bytes, nulls)
             },
         )
     }
@@ -286,12 +282,12 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteArrayType>
             bytes_per_block.into_iter(),
         );
 
-        (offsets, Buffer::from(bytes), nulls)
+        (offsets, bytes, nulls)
     }
 
-    fn offsets_from_vec(offsets: Vec<B::Offset>) -> OffsetBuffer<B::Offset> {
+    fn offsets_from_vec(offsets: ScalarBuffer<B::Offset>) -> OffsetBuffer<B::Offset> {
         // SAFETY: the offsets builder only ever produces monotonically increasing offsets starting at 0
-        unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(offsets)) }
+        unsafe { OffsetBuffer::new_unchecked(offsets) }
     }
 }
 
@@ -548,15 +544,17 @@ mod tests {
 
     #[test]
     fn allocated_size_follows_blocks() {
+        // memory is returned page by page, so make the bytes of a block span a whole page
+        let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
         let mut builder = Fixed::new(4);
         let empty = builder.allocated_size();
         for _ in 0..10 {
-            builder.push(Some(&[7; 50]));
+            builder.push(Some(&vec![7; page / 4]));
         }
         let full = builder.allocated_size();
-        assert!(full >= empty + 500);
+        assert!(full >= empty + 10 * page / 4);
         builder.take_block();
-        assert!(builder.allocated_size() < full);
+        assert!(builder.allocated_size() <= full - page);
     }
 
     // ---- manual block sizing ----

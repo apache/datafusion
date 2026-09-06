@@ -26,7 +26,7 @@ use arrow::buffer::{Buffer, NullBuffer, ScalarBuffer};
 use arrow::datatypes::ByteViewType;
 use datafusion_common::Result;
 use datafusion_common::utils::proxy::VecDequeAllocExt;
-use datafusion_expr_common::blocked_helpers::{BlockedNullsBuilder, CopyItemBlockedVecBuilder};
+use datafusion_expr_common::blocked_helpers::{BlockedNullsBuilder, CopyItemBlockedVecBuilder, MmapVec};
 use datafusion_expr_common::groups_accumulator::{BlockedGroupSelection, BlocksIndex};
 use std::collections::VecDeque;
 use std::marker::PhantomData;
@@ -385,7 +385,7 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType>
     /// The completed buffers they reference are shared, `in_progress` is only copied
     /// up to the last referenced byte (or flushed when everything in it is referenced),
     /// and the buffer indexes are rebased so the array starts at buffer 0
-    fn build_taken(&mut self, mut views: Vec<u128>, nulls: Option<NullBuffer>) -> ArrayRef {
+    fn build_taken(&mut self, mut views: MmapVec<u128>, nulls: Option<NullBuffer>) -> ArrayRef {
         let mut min_buffer = usize::MAX;
         let mut max_buffer = 0;
         // the end of the referenced bytes in the last referenced buffer
@@ -405,7 +405,7 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType>
 
         if min_buffer == usize::MAX {
             // Everything inlined
-            return Self::build(ScalarBuffer::from(views), Vec::new(), nulls);
+            return Self::build(views.into(), Vec::new(), nulls);
         }
 
         if max_buffer == self.in_progress_index() && max_buffer_end == self.in_progress.len() {
@@ -429,7 +429,7 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType>
             *view = byte_view.as_u128();
         }
 
-        Self::build(ScalarBuffer::from(views), buffers, nulls)
+        Self::build(views.into(), buffers, nulls)
     }
 
     /// Drops the completed buffers that no stored view references anymore

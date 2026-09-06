@@ -57,6 +57,7 @@ use std::marker::PhantomData;
 use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 use arrow::datatypes::DataType::Float64;
+use arrow::buffer::ScalarBuffer;
 use datafusion_expr::blocked_helpers::CopyItemBlockedVecBuilder;
 use datafusion_expr::groups_accumulator::{BlockedEmitTo, BlockedGroupSelection, BlockedGroupsAccumulator, BlocksIndex};
 use datafusion_functions_aggregate_common::accumulator::BlockedAccumulatorArgs;
@@ -1501,10 +1502,11 @@ where
 
     fn evaluate_values(
         &self,
-        counts: Vec<u64>,
-        sums: Vec<S::Native>,
+        counts: impl Into<ScalarBuffer<u64>>,
+        sums: impl Into<ScalarBuffer<S::Native>>,
         nulls: Option<NullBuffer>,
     ) -> Result<ArrayRef> {
+        let (counts, sums) = (counts.into(), sums.into());
         if let Some(nulls) = &nulls {
             assert_eq!(nulls.len(), sums.len());
         }
@@ -1516,9 +1518,9 @@ where
         {
             let mut builder = PrimitiveBuilder::<O>::with_capacity(nulls.len())
               .with_data_type(self.return_data_type.clone());
-            let iter = sums.into_iter().zip(counts).zip(nulls.iter());
+            let iter = sums.iter().zip(counts.iter()).zip(nulls.iter());
 
-            for ((sum, count), is_valid) in iter {
+            for ((&sum, &count), is_valid) in iter {
                 if is_valid {
                     builder.append_value((self.avg_fn)(sum, count)?)
                 } else {
@@ -1528,9 +1530,9 @@ where
             builder.finish()
         } else {
             let averages: Vec<O::Native> = sums
-              .into_iter()
-              .zip(counts)
-              .map(|(sum, count)| (self.avg_fn)(sum, count))
+              .iter()
+              .zip(counts.iter())
+              .map(|(&sum, &count)| (self.avg_fn)(sum, count))
               .collect::<Result<Vec<_>>>()?;
             PrimitiveArray::new(averages.into(), nulls)
               .with_data_type(self.return_data_type.clone())
@@ -1541,8 +1543,8 @@ where
 
     fn state_values(
         &self,
-        counts: Vec<u64>,
-        sums: Vec<S::Native>,
+        counts: impl Into<ScalarBuffer<u64>>,
+        sums: impl Into<ScalarBuffer<S::Native>>,
         nulls: Option<NullBuffer>,
     ) -> Vec<ArrayRef> {
         let counts = UInt64Array::new(counts.into(), nulls.clone());
@@ -1593,11 +1595,12 @@ where
             total_num_groups,
             |group_index, new_value| {
                 // SAFETY: group_index is guaranteed to be in bounds
-                // TODO - add get unchecked mut back
-                let sum = &mut self.sums[group_index];
-                *sum = add_avg_sum::<I, S>(*sum, new_value);
+                unsafe {
+                    let sum = self.sums.get_unchecked_mut(group_index);
+                    *sum = add_avg_sum::<I, S>(*sum, new_value);
 
-                self.counts[group_index] += 1;
+                    *self.counts.get_unchecked_mut(group_index) += 1;
+                }
             },
         );
 
@@ -1641,8 +1644,8 @@ where
     fn evaluate_preserving(&mut self, selection: BlockedGroupSelection<'_>) -> Result<ArrayRef> {
         debug_assert_eq!(self.counts.len(), self.sums.len());
         selection.validate_num_groups(self.counts.len())?;
-        let counts = selection.iter().map(|index| self.counts[index]).collect();
-        let sums = selection.iter().map(|index| self.sums[index]).collect();
+        let counts: Vec<u64> = selection.iter().map(|index| self.counts[index]).collect();
+        let sums: Vec<S::Native> = selection.iter().map(|index| self.sums[index]).collect();
         let nulls = self.null_state.build_preserving(selection)?;
         self.evaluate_values(counts, sums, nulls)
     }
@@ -1692,8 +1695,8 @@ where
     ) -> Result<Vec<ArrayRef>> {
         debug_assert_eq!(self.counts.len(), self.sums.len());
         selection.validate_num_groups(self.counts.len())?;
-        let counts = selection.iter().map(|index| self.counts[index]).collect();
-        let sums = selection.iter().map(|index| self.sums[index]).collect();
+        let counts: Vec<u64> = selection.iter().map(|index| self.counts[index]).collect();
+        let sums: Vec<S::Native> = selection.iter().map(|index| self.sums[index]).collect();
         let nulls = self.null_state.build_preserving(selection)?;
         Ok(self.state_values(counts, sums, nulls))
     }
@@ -1724,9 +1727,7 @@ where
             total_num_groups,
             |group_index, partial_count| {
                 // SAFETY: group_index is guaranteed to be in bounds
-                // TODO - add back the get_mut_unchecked
-                let count = &mut self.counts[group_index];
-                *count += partial_count;
+                unsafe { *self.counts.get_unchecked_mut(group_index) += partial_count };
             },
         );
 
@@ -1743,9 +1744,10 @@ where
             total_num_groups,
             |group_index, new_value: <S as ArrowPrimitiveType>::Native| {
                 // SAFETY: group_index is guaranteed to be in bounds
-                // TODO - add back the get unchecked
-                let sum = &mut self.sums[group_index];
-                *sum = add_avg_sum::<S, S>(*sum, new_value);
+                unsafe {
+                    let sum = self.sums.get_unchecked_mut(group_index);
+                    *sum = add_avg_sum::<S, S>(*sum, new_value);
+                }
             },
         );
 

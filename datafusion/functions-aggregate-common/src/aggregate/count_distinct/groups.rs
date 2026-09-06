@@ -283,7 +283,7 @@ where
             self.seen = remaining;
         }
 
-        Some(Arc::new(Int64Array::from(counts)))
+        Some(Arc::new(Int64Array::new(counts.into(), None)))
     }
 
     fn state_block_or_n<const IS_FIRST_N: bool>(&mut self, n: usize) -> Option<Vec<ArrayRef>> {
@@ -305,8 +305,8 @@ where
         } else {
             self.counts.take_block()?
         };
-        for c in counts_block {
-            total += c as i32;
+        for c in counts_block.iter() {
+            total += *c as i32;
             offsets.push(total);
         }
 
@@ -368,8 +368,8 @@ where
             offsets.push(0i32);
             let mut total = 0i32;
 
-            for c in block {
-                total += c as i32;
+            for c in block.iter() {
+                total += *c as i32;
                 offsets.push(total);
             }
 
@@ -478,7 +478,7 @@ where
                 }
                 self.seen = remaining;
 
-                Ok(vec![Arc::new(Int64Array::from(first))])
+                Ok(vec![Arc::new(Int64Array::new(first.into(), None))])
             }
         }
     }

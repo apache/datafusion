@@ -9,7 +9,7 @@ pub use blocked_byte_array_builder::BlockedByteArrayBuilder;
 mod blocked_boolean_builder;
 pub use blocked_boolean_builder::BlockedBooleanBuilder;
 mod blocked_vec_builder;
-pub use blocked_vec_builder::CopyItemBlockedVecBuilder;
+pub use blocked_vec_builder::{CopyItemBlockedVecBuilder, MmapVec};
 mod blocked_custom_input_builder;
 pub use blocked_custom_input_builder::{
     Block, BlockProvider, BlockProviderFinish, BlockWithSlice, BlockedCustomInputBuilder,
