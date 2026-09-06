@@ -1491,6 +1491,11 @@ impl FallbackCoordinator {
     /// Chunks other partitions still hold stay accounted until they release
     /// them; what this drops is the coordinator's own state, which nothing will
     /// come back for.
+    /// True once a partition was dropped unfinished, cancelling the fallback.
+    fn is_cancelled(&self) -> bool {
+        self.inner.lock().cancelled
+    }
+
     fn cancel(self: &Arc<Self>) {
         {
             let mut inner = self.inner.lock();
@@ -1628,16 +1633,52 @@ impl FallbackCoordinator {
                         }
                     };
 
-                    let load_result = Arc::clone(&self)
-                        .load_one_chunk(
-                            chunk_index,
-                            &mut left_stream,
-                            &mut reservation,
-                            carryover,
-                            Arc::clone(&left_schema),
-                            build_time.clone(),
-                        )
-                        .await;
+                    // Race the read against cancellation. A loader parked on
+                    // its input is not waiting on `notify`, so without this a
+                    // `cancel` would not be observed until the read finished on
+                    // its own -- which may be never if the input is gone.
+                    let cancelled = self.notify.notified();
+                    let load = Arc::clone(&self).load_one_chunk(
+                        chunk_index,
+                        &mut left_stream,
+                        &mut reservation,
+                        carryover,
+                        Arc::clone(&left_schema),
+                        build_time.clone(),
+                    );
+                    let load_result = {
+                        let mut load = std::pin::pin!(load);
+                        let mut cancelled = std::pin::pin!(cancelled);
+                        loop {
+                            tokio::select! {
+                                biased;
+                                result = &mut load => break Some(result),
+                                () = &mut cancelled => {
+                                    if self.inner.lock().cancelled {
+                                        break None;
+                                    }
+                                    // Woken for some other reason; keep reading.
+                                    cancelled.set(self.notify.notified());
+                                }
+                            }
+                        }
+                    };
+                    let Some(load_result) = load_result else {
+                        // Cancelled mid-read. Drop the local stream and
+                        // reservation instead of putting them back, and
+                        // clear the leader claim so nothing waits on us.
+                        drop(left_stream);
+                        drop(reservation);
+                        {
+                            let mut inner = self.inner.lock();
+                            inner.loader_in_flight = false;
+                        }
+                        self.notify.notify_waiters();
+                        return exec_err!(
+                            "NestedLoopJoin coordinated fallback was cancelled \
+                             while a chunk was being loaded"
+                        );
+                    };
 
                     // Publish, unless the fallback was cancelled while this
                     // load was running -- putting the stream and reservation
@@ -2090,6 +2131,18 @@ impl Stream for NestedLoopJoinStream {
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         loop {
+            // A peer partition may have been dropped unfinished at any point,
+            // including while this stream was working on the final chunk. The
+            // coordinated execution cannot produce a complete result after that,
+            // so fail rather than emit output from partial input.
+            if !matches!(self.state, NLJState::Done) && self.fallback_cancelled() {
+                self.state = NLJState::Done;
+                return Poll::Ready(Some(exec_err!(
+                    "NestedLoopJoin coordinated fallback was cancelled because a \
+                     partition was dropped before finishing"
+                )));
+            }
+
             match self.state {
                 // # NLJState transitions
                 // --> FetchingRight
@@ -2296,8 +2349,20 @@ impl Drop for NestedLoopJoinStream {
         if matches!(self.state, NLJState::Done) {
             return;
         }
-        if let SpillState::Active(active) = &self.spill_state {
-            Arc::clone(&active.coordinator).cancel();
+        // Both states matter. `Active` means this stream was probing chunks;
+        // `Pending` means the fallback was set up but this stream had not taken
+        // one yet, and a partition that vanishes at that point still owes the
+        // report the others are waiting on.
+        let coordinator = match &self.spill_state {
+            SpillState::Active(active) => Some(Arc::clone(&active.coordinator)),
+            SpillState::Pending {
+                fallback_coordinator,
+                ..
+            } => Some(Arc::clone(fallback_coordinator)),
+            SpillState::Disabled => None,
+        };
+        if let Some(coordinator) = coordinator {
+            coordinator.cancel();
         }
     }
 }
@@ -2413,6 +2478,23 @@ impl NestedLoopJoinStream {
     }
 
     // ==== State handler functions ====
+
+    /// True if a peer partition cancelled the coordinated fallback.
+    ///
+    /// Checked on every `poll_next` iteration: a stream holding the final chunk
+    /// never asks for another one, so `next_chunk`'s own check would not be
+    /// reached and it would otherwise report success built from an execution
+    /// that lost one of its partitions.
+    fn fallback_cancelled(&self) -> bool {
+        match &self.spill_state {
+            SpillState::Active(active) => active.coordinator.is_cancelled(),
+            SpillState::Pending {
+                fallback_coordinator,
+                ..
+            } => fallback_coordinator.is_cancelled(),
+            SpillState::Disabled => false,
+        }
+    }
 
     /// Handle BufferingLeft state - prepare left side batches.
     ///
@@ -5697,6 +5779,144 @@ pub(crate) mod tests {
             spill_file: file,
             schema,
         }))
+    }
+
+    fn review_cancellation_plan() -> Result<(Arc<NestedLoopJoinExec>, Arc<TaskContext>)> {
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(50, 1.0)
+            .build_arc()?;
+        let cfg = TaskContext::default()
+            .session_config()
+            .clone()
+            .with_batch_size(1);
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_runtime(runtime)
+                .with_session_config(cfg),
+        );
+        let right = Arc::new(RepartitionExec::try_new(
+            build_right_table_one_batch_per_row(),
+            Partitioning::RoundRobinBatch(2),
+        )?) as Arc<dyn ExecutionPlan>;
+        let plan = Arc::new(NestedLoopJoinExec::try_new(
+            build_left_table(),
+            right,
+            None,
+            &JoinType::Left,
+            None,
+        )?);
+        Ok((plan, task_ctx))
+    }
+
+    #[tokio::test]
+    async fn review_drop_pending_retains_chunk() -> Result<()> {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let (plan, ctx) = review_cancellation_plan()?;
+            let abandoned = plan.execute(0, Arc::clone(&ctx))?;
+            let survivor = plan.execute(1, Arc::clone(&ctx))?;
+            drop(abandoned);
+            let result = common::collect(survivor).await;
+            eprintln!(
+                "survivor succeeded={}, retained={}",
+                result.is_ok(),
+                ctx.memory_pool().reserved()
+            );
+            assert_eq!(
+                ctx.memory_pool().reserved(),
+                0,
+                "pending partition drop must not strand the chunk"
+            );
+            Ok(())
+        })
+        .await
+        .expect("stream hung")
+    }
+
+    #[tokio::test]
+    async fn review_active_survivor_must_observe_cancel() -> Result<()> {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let (plan, ctx) = review_cancellation_plan()?;
+            let mut abandoned = plan.execute(0, Arc::clone(&ctx))?;
+            let mut survivor = plan.execute(1, Arc::clone(&ctx))?;
+            abandoned.next().await.expect("first output")?;
+            survivor.next().await.expect("first output")?;
+            assert!(
+                plan.fallback_coordinator
+                    .inner
+                    .lock()
+                    .current
+                    .as_ref()
+                    .expect("chunk")
+                    .is_last
+            );
+            drop(abandoned);
+            assert!(
+                plan.fallback_coordinator.inner.lock().cancelled,
+                "Drop must have cancelled"
+            );
+            let result = common::collect(survivor).await;
+            assert!(
+                result.is_err(),
+                "survivor holding final chunk reported success after cancellation"
+            );
+            Ok(())
+        })
+        .await
+        .expect("stream hung")
+    }
+
+    async fn review_paused_loader(complete_read: bool) -> Result<()> {
+        let runtime = RuntimeEnvBuilder::new().build_arc()?;
+        let pool = Arc::clone(&runtime.memory_pool);
+        let ctx = Arc::new(TaskContext::default().with_runtime(runtime));
+        let coordinator = Arc::new(FallbackCoordinator::new(2, true));
+        let spill = spill_left_for_test(build_left_table(), Arc::clone(&ctx)).await?;
+        let batches =
+            common::collect(build_left_table().execute(0, Arc::clone(&ctx))?).await?;
+        let batch = batches[0].clone();
+        let schema = batch.schema();
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        {
+            let mut inner = coordinator.inner.lock();
+            inner.left_schema = Some(Arc::clone(&schema));
+            inner.left_stream =
+                Some(Box::pin(crate::stream::RecordBatchStreamAdapter::new(
+                    schema,
+                    futures::stream::once(async move {
+                        rx.await.expect("release the test read");
+                        Ok(batch)
+                    }),
+                )));
+        }
+        let mut load = Arc::clone(&coordinator)
+            .next_chunk(0, spill, ctx, Time::new())
+            .boxed();
+        assert!(futures::poll!(load.as_mut()).is_pending());
+        assert!(coordinator.inner.lock().loader_in_flight);
+        coordinator.cancel();
+        let _keep_sender = if complete_read {
+            tx.send(()).expect("read is waiting");
+            None
+        } else {
+            Some(tx)
+        };
+        let outcome = tokio::time::timeout(Duration::from_secs(1), load)
+            .await
+            .expect("cancelled loader still waits for its input");
+        assert!(outcome.is_err());
+        assert!(coordinator.inner.lock().current.is_none());
+        assert_eq!(pool.reserved(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn review_inflight_publish_is_discarded() -> Result<()> {
+        review_paused_loader(true).await
+    }
+
+    #[tokio::test]
+    async fn review_inflight_load_observes_cancellation() -> Result<()> {
+        review_paused_loader(false).await
     }
 
     /// A partition dropped before finishing must cancel the coordinated
