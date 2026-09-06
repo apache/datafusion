@@ -69,19 +69,19 @@
 //! kept by `RightAnti`.
 //!
 //! Picking the extreme and comparing against it must agree on ordering. `min_batch`/`max_batch`
-//! and arrow's `lt`/`lt_eq`/`gt`/`gt_eq` kernels both order floats by `total_cmp`
-//! (`arrow-arith`'s `MinAccumulator` compares with `ArrowNativeTypeOp::is_lt`, seeded from
-//! `MAX_TOTAL_ORDER`), which puts `-0.0` strictly below `+0.0` -- but SQL comparisons treat
-//! them as equal, and that is what a real `k < r` predicate actually evaluates to: any
-//! `BinaryExpr` comparison, including the one the `NestedLoopJoinExec` oracle in the
-//! differential fuzz test builds its filter from, normalizes `-0.0` to `+0.0` first (see
-//! `apply_cmp` in `datafusion-physical-expr-common`). Both the extreme and the streamed key
-//! array are normalized with [`normalize_float_zero`] before comparing,
-//! after the reduction: normalizing first would not change which value the reduction picks
-//! (`-0.0` and `+0.0` are numerically equal either way), and normalizing only where the
-//! comparison happens keeps the reduction itself agreeing with the unnormalized `min`/`max`
-//! semantics its docs above describe. `NaN` needs no such fix-up: every kernel involved orders
-//! it as the maximum, so it is treated identically on both sides already.
+//! order floats by `total_cmp` (`arrow-arith`'s `MinAccumulator` compares with
+//! `ArrowNativeTypeOp::is_lt`, seeded from `MAX_TOTAL_ORDER`), which puts `-0.0` strictly below
+//! `+0.0` -- but SQL comparisons treat them as equal, and that is what a real `k < r` predicate
+//! actually evaluates to: any `BinaryExpr` comparison, including the one the
+//! `NestedLoopJoinExec` oracle in the differential fuzz test builds its filter from, normalizes
+//! `-0.0` to `+0.0` first (see `apply_cmp` in `datafusion-physical-expr-common`, which
+//! [`filter_streamed_batch`](RightExistencePWMJStream::filter_streamed_batch) calls to compare
+//! the extreme against each streamed batch). `apply_cmp` normalizes both operands itself, so
+//! nothing here has to: the reduction can order `-0.0` below `+0.0` as `min`/`max` do, and the
+//! comparison it feeds into still agrees with SQL semantics. `NaN` needs no such fix-up: every
+//! kernel involved orders it as the maximum, so it is treated identically on both sides already.
+//! `apply_cmp` also dispatches to the nested-aware comparator for List/Struct keys, which the
+//! raw arrow `lt`/`lt_eq`/`gt`/`gt_eq` kernels reject outright.
 //!
 //! # Cost
 //!
@@ -99,16 +99,15 @@
 use std::sync::Arc;
 use std::task::{Poll, ready};
 
-use arrow::array::{Array, ArrayRef, RecordBatch, Scalar};
+use arrow::array::{AsArray, RecordBatch};
 use arrow::compute::filter_record_batch;
 use arrow::compute::kernels::boolean::not;
-use arrow::compute::kernels::cmp::{gt, gt_eq, lt, lt_eq};
 use arrow_schema::SchemaRef;
-use datafusion_common::utils::normalize_float_zero;
-use datafusion_common::{Result, internal_err};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
-use datafusion_expr::{JoinType, Operator};
+use datafusion_expr::{ColumnarValue, JoinType, Operator};
 use datafusion_physical_expr::PhysicalExprRef;
+use datafusion_physical_expr_common::datum::apply_cmp;
 use futures::{Stream, StreamExt};
 
 use crate::handle_state;
@@ -142,10 +141,10 @@ pub(super) struct RightExistencePWMJStream {
     /// partitions, so that reduction happens exactly once.
     buffered_extreme_fut: OnceFut<BufferedExtreme>,
     state: RightExistencePWMJStreamState,
-    /// That key, held as a one-element [`Scalar`] so the comparison against a streamed batch is
-    /// one kernel call. `None` when the buffered side has no non-null key, i.e. nothing can ever
-    /// match. Only populated once `buffered_extreme_fut` has resolved.
-    buffered_extreme: Option<Scalar<ArrayRef>>,
+    /// That key, held as a [`ScalarValue`] so `apply_cmp` broadcasts it against a streamed
+    /// batch in one call. `None` when the buffered side has no non-null key, i.e. nothing can
+    /// ever match. Only populated once `buffered_extreme_fut` has resolved.
+    buffered_extreme: Option<ScalarValue>,
     join_metrics: BuildProbeJoinMetrics,
 }
 
@@ -198,18 +197,11 @@ impl RightExistencePWMJStream {
         let buffered_extreme = ready!(self.buffered_extreme_fut.get_shared(cx))?;
         build_timer.done();
 
-        // Null exactly when no buffered key is non-null, and NULLs match nothing. Cloned out by
-        // value -- it is one row -- so the shared state is not kept alive by this stream.
-        //
-        // Normalized because the `lt`/`lt_eq`/`gt`/`gt_eq` kernels called in
-        // `filter_streamed_batch` order `-0.0` strictly below `+0.0`, but SQL comparisons --
-        // including `apply_cmp`, which every other `k < r` predicate in the plan goes through
-        // -- treat them as equal. The streamed key array is normalized the same way, right
-        // before that comparison. `min`/`max_batch`, which reduced this extreme, order `-0.0`
-        // below `+0.0` too, so normalizing after the reduction rather than before leaves the
-        // reduction itself agreeing with the unnormalized ordering its own docs describe.
-        let extreme = normalize_float_zero(buffered_extreme.extreme());
-        self.buffered_extreme = (extreme.null_count() == 0).then(|| Scalar::new(extreme));
+        // Null exactly when no buffered key is non-null, and NULLs match nothing. `apply_cmp`
+        // normalizes `-0.0`/`+0.0` on both operands when it compares this against the streamed
+        // key in `filter_streamed_batch`, so no normalization is needed here.
+        let extreme = ScalarValue::try_from_array(buffered_extreme.extreme(), 0)?;
+        self.buffered_extreme = (!extreme.is_null()).then_some(extreme);
 
         // With no non-null buffered key nothing matches, so `RightSemi` outputs nothing
         // and does not need to read a single streamed batch. `RightAnti` still has to,
@@ -258,36 +250,34 @@ impl RightExistencePWMJStream {
             // the streamed side.
             None => batch.columns().to_vec(),
             Some(extreme) => {
-                let stream_values = normalize_float_zero(
-                    &self
-                        .on_streamed
+                let stream_values = ColumnarValue::Array(
+                    self.on_streamed
                         .evaluate(batch)?
                         .into_array(batch.num_rows())?,
                 );
 
                 // `extreme` is the buffered key, so it goes on the left of the operator,
-                // matching the `buffered OP streamed` orientation of the predicate.
-                let matched = match self.operator {
-                    Operator::Lt => lt(extreme, &stream_values),
-                    Operator::LtEq => lt_eq(extreme, &stream_values),
-                    Operator::Gt => gt(extreme, &stream_values),
-                    Operator::GtEq => gt_eq(extreme, &stream_values),
-                    other => {
-                        return internal_err!(
-                            "PiecewiseMergeJoin should not contain operator, {other}"
-                        );
-                    }
-                }?;
+                // matching the `buffered OP streamed` orientation of the predicate. `apply_cmp`
+                // dispatches to the nested-aware comparator for List/Struct keys, unlike the
+                // raw arrow `lt`/`lt_eq`/`gt`/`gt_eq` kernels this used to call directly, which
+                // reject those types outright.
+                let matched = apply_cmp(
+                    self.operator,
+                    &ColumnarValue::Scalar(extreme.clone()),
+                    &stream_values,
+                )?
+                .into_array(batch.num_rows())?;
+                let matched = matched.as_boolean();
 
                 let predicate = match self.join_type {
                     // A NULL streamed key compares NULL rather than false, and `filter`
                     // already treats NULL as "not selected" -- which is what a
                     // non-matching row is.
-                    JoinType::RightSemi => matched,
+                    JoinType::RightSemi => matched.clone(),
                     // Anti needs the complement, so those NULLs have to be folded into
                     // false first: `not(NULL)` is NULL, which would drop a row that
                     // matched nothing.
-                    _ => not(&boolean_mask_from_filter(&matched))?,
+                    _ => not(&boolean_mask_from_filter(matched))?,
                 };
 
                 filter_record_batch(batch, &predicate)?.columns().to_vec()
@@ -329,8 +319,9 @@ mod tests {
         ExecutionPlan, ExecutionPlanProperties, common, joins::PiecewiseMergeJoinExec,
         test::TestMemoryExec,
     };
-    use arrow::array::Int32Array;
+    use arrow::array::{DictionaryArray, Int32Array, ListArray, StructArray};
     use arrow::compute::SortOptions;
+    use arrow::datatypes::Int32Type;
     use arrow_schema::{DataType, Field, Schema};
     use datafusion_common::test_util::batches_to_string;
     use datafusion_execution::TaskContext;
@@ -474,6 +465,187 @@ mod tests {
         +----+---+
         | 20 | 5 |
         | 30 | 6 |
+        +----+---+
+        ");
+        Ok(())
+    }
+
+    fn kv_list_schema() -> Arc<Schema> {
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new(
+                "k",
+                DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
+                true,
+            ),
+        ]))
+    }
+
+    fn kv_list_batch(rows: &[(i32, Option<Vec<i32>>)]) -> RecordBatch {
+        let ids: Vec<i32> = rows.iter().map(|(id, _)| *id).collect();
+        let keys = ListArray::from_iter_primitive::<Int32Type, _, _>(
+            rows.iter()
+                .map(|(_, k)| k.clone().map(|v| v.into_iter().map(Some))),
+        );
+        RecordBatch::try_new(
+            kv_list_schema(),
+            vec![Arc::new(Int32Array::from(ids)), Arc::new(keys)],
+        )
+        .unwrap()
+    }
+
+    fn kv_list_exec(partitions: &[Vec<RecordBatch>]) -> Arc<dyn ExecutionPlan> {
+        TestMemoryExec::try_new_exec(partitions, kv_list_schema(), None).unwrap()
+    }
+
+    /// List/Struct keys go through `apply_cmp`'s nested comparator, unlike arrow's raw
+    /// `lt`/`lt_eq`/`gt`/`gt_eq` kernels, which reject nested types outright -- this pins that
+    /// dispatch rather than any particular list-ordering rule. Same shape as `join_right_semi`,
+    /// with every key wrapped in a one-element list.
+    #[tokio::test]
+    async fn join_right_semi_supports_list_keys() -> Result<()> {
+        let join = join(
+            kv_list_exec(&[vec![kv_list_batch(&[
+                (1, Some(vec![5])),
+                (2, Some(vec![1])),
+                (3, Some(vec![2])),
+            ])]]),
+            kv_list_exec(&[vec![kv_list_batch(&[
+                (10, Some(vec![4])),
+                (20, Some(vec![5])),
+                (30, Some(vec![6])),
+            ])]]),
+            Operator::Gt,
+            JoinType::RightSemi,
+        )?;
+
+        let stream = join.execute(0, Arc::new(TaskContext::default()))?;
+        let batches = common::collect(stream).await?;
+
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+-----+
+        | id | k   |
+        +----+-----+
+        | 10 | [4] |
+        +----+-----+
+        ");
+        Ok(())
+    }
+
+    fn kv_struct_schema() -> Arc<Schema> {
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new(
+                "k",
+                DataType::Struct(vec![Field::new("v", DataType::Int32, true)].into()),
+                true,
+            ),
+        ]))
+    }
+
+    fn kv_struct_batch(rows: &[(i32, Option<i32>)]) -> RecordBatch {
+        let ids: Vec<i32> = rows.iter().map(|(id, _)| *id).collect();
+        let values: Vec<Option<i32>> = rows.iter().map(|(_, k)| *k).collect();
+        let is_valid: Vec<bool> = rows.iter().map(|(_, k)| k.is_some()).collect();
+        let keys = StructArray::new(
+            vec![Field::new("v", DataType::Int32, true)].into(),
+            vec![Arc::new(Int32Array::from(values))],
+            Some(is_valid.into()),
+        );
+        RecordBatch::try_new(
+            kv_struct_schema(),
+            vec![Arc::new(Int32Array::from(ids)), Arc::new(keys)],
+        )
+        .unwrap()
+    }
+
+    fn kv_struct_exec(partitions: &[Vec<RecordBatch>]) -> Arc<dyn ExecutionPlan> {
+        TestMemoryExec::try_new_exec(partitions, kv_struct_schema(), None).unwrap()
+    }
+
+    /// Struct keys, same shape and expectation as [`join_right_semi_supports_list_keys`].
+    #[tokio::test]
+    async fn join_right_semi_supports_struct_keys() -> Result<()> {
+        let join = join(
+            kv_struct_exec(&[vec![kv_struct_batch(&[
+                (1, Some(5)),
+                (2, Some(1)),
+                (3, Some(2)),
+            ])]]),
+            kv_struct_exec(&[vec![kv_struct_batch(&[
+                (10, Some(4)),
+                (20, Some(5)),
+                (30, Some(6)),
+            ])]]),
+            Operator::Gt,
+            JoinType::RightSemi,
+        )?;
+
+        let stream = join.execute(0, Arc::new(TaskContext::default()))?;
+        let batches = common::collect(stream).await?;
+
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+--------+
+        | id | k      |
+        +----+--------+
+        | 10 | {v: 4} |
+        +----+--------+
+        ");
+        Ok(())
+    }
+
+    fn kv_dict_schema() -> Arc<Schema> {
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new(
+                "k",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                true,
+            ),
+        ]))
+    }
+
+    fn kv_dict_batch(rows: &[(i32, Option<&str>)]) -> RecordBatch {
+        let ids: Vec<i32> = rows.iter().map(|(id, _)| *id).collect();
+        let keys: DictionaryArray<Int32Type> = rows.iter().map(|(_, k)| *k).collect();
+        RecordBatch::try_new(
+            kv_dict_schema(),
+            vec![Arc::new(Int32Array::from(ids)), Arc::new(keys)],
+        )
+        .unwrap()
+    }
+
+    fn kv_dict_exec(partitions: &[Vec<RecordBatch>]) -> Arc<dyn ExecutionPlan> {
+        TestMemoryExec::try_new_exec(partitions, kv_dict_schema(), None).unwrap()
+    }
+
+    /// Dictionary-encoded keys, same shape as [`join_right_semi_supports_list_keys`] with
+    /// string values ordered the same as the int cases (`"4" < "5" < "6"`).
+    #[tokio::test]
+    async fn join_right_semi_supports_dictionary_keys() -> Result<()> {
+        let join = join(
+            kv_dict_exec(&[vec![kv_dict_batch(&[
+                (1, Some("5")),
+                (2, Some("1")),
+                (3, Some("2")),
+            ])]]),
+            kv_dict_exec(&[vec![kv_dict_batch(&[
+                (10, Some("4")),
+                (20, Some("5")),
+                (30, Some("6")),
+            ])]]),
+            Operator::Gt,
+            JoinType::RightSemi,
+        )?;
+
+        let stream = join.execute(0, Arc::new(TaskContext::default()))?;
+        let batches = common::collect(stream).await?;
+
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+---+
+        | id | k |
+        +----+---+
+        | 10 | 4 |
         +----+---+
         ");
         Ok(())
