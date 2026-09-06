@@ -295,7 +295,6 @@ impl ClassicPWMJStream {
         }
 
         // Produce more work
-        let join_timer = self.join_metrics.join_time.timer();
         let batch = resolve_classic_join(
             buffered_side,
             stream_batch,
@@ -306,7 +305,6 @@ impl ClassicPWMJStream {
             &mut self.batch_process_state,
             &self.join_metrics,
         )?;
-        join_timer.done();
 
         if !self.batch_process_state.continue_process {
             // Scan finished; re-enter through the drain guard above.
@@ -340,7 +338,6 @@ impl ClassicPWMJStream {
         let buffered_data = Arc::clone(&self.buffered_side.try_as_ready()?.buffered_data);
         let buffered_batch = buffered_data.batch();
 
-        let join_timer = self.join_metrics.join_time.timer();
         // Every match marks the suffix `[k, buffered_len)`, so the buffered rows that were
         // never matched are exactly the complementary prefix `[0, min_marked)` -- which
         // includes the null-keyed rows, since nulls sort first and the scan starts past
@@ -363,7 +360,6 @@ impl ClassicPWMJStream {
         buffered_columns.extend(streamed_columns);
 
         let batch = RecordBatch::try_new(Arc::clone(&self.schema), buffered_columns)?;
-        join_timer.done();
 
         self.batch_process_state.output_batches.push_batch(batch)?;
 

@@ -244,15 +244,12 @@ impl ExistencePWMJStream {
                 // An empty batch has no extreme key to compare, so it can neither match
                 // nor miss -- counting it either way would understate the real hit rate.
                 if batch.num_rows() > 0 {
-                    let join_time = self.join_metrics.join_time.clone();
-                    let join_timer = join_time.timer();
                     // Only the batch's extreme key is ever compared against the buffered
                     // side, so reduce the batch to that one key.
                     let stream_values =
                         extreme_key(&stream_values, self.sort_option.descending)?;
 
                     self.mark_matched_buffered_rows(&stream_values)?;
-                    join_timer.done();
                 }
             }
             Some(Err(err)) => return Poll::Ready(Err(err)),
