@@ -23,7 +23,7 @@ mod tests {
     use crate::physical_plan::collect;
     use crate::prelude::SessionContext;
     use arrow::array::{AsArray, Int32Array};
-    use arrow::datatypes::{DataType, Field, Schema, UInt64Type};
+    use arrow::datatypes::{DataType, Field, Int32Type, Schema, UInt64Type};
     use arrow::error::ArrowError;
     use arrow::record_batch::RecordBatch;
     use arrow_schema::SchemaRef;
@@ -319,6 +319,16 @@ mod tests {
         initial_data: Vec<Vec<RecordBatch>>,
         inserted_data: Vec<Vec<RecordBatch>>,
     ) -> Result<Vec<Vec<RecordBatch>>> {
+        experiment_with_insert_op(schema, initial_data, inserted_data, InsertOp::Append)
+            .await
+    }
+
+    async fn experiment_with_insert_op(
+        schema: SchemaRef,
+        initial_data: Vec<Vec<RecordBatch>>,
+        inserted_data: Vec<Vec<RecordBatch>>,
+        insert_op: InsertOp,
+    ) -> Result<Vec<Vec<RecordBatch>>> {
         let expected_count: u64 = inserted_data
             .iter()
             .flat_map(|batches| batches.iter().map(|batch| batch.num_rows() as u64))
@@ -339,7 +349,7 @@ mod tests {
         let scan_plan = LogicalPlanBuilder::scan("source", source, None)?.build()?;
         // Create an insert plan to insert the source data into the initial table
         let insert_into_table =
-            LogicalPlanBuilder::insert_into(scan_plan, "t", target, InsertOp::Append)?
+            LogicalPlanBuilder::insert_into(scan_plan, "t", target, insert_op)?
                 .build()?;
         // Create a physical plan from the insert plan
         let plan = session_ctx
@@ -476,6 +486,57 @@ mod tests {
         .await?;
         // Ensure that the table now contains two batches of data in the same partition
         assert_eq!(resulting_data_in_table[0].len(), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_insert_overwrite_replaces_existing_data() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let initial_batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )?;
+        let replacement_batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![4, 5]))],
+        )?;
+
+        let resulting_data = experiment_with_insert_op(
+            schema,
+            vec![vec![initial_batch]],
+            vec![vec![replacement_batch]],
+            InsertOp::Overwrite,
+        )
+        .await?;
+
+        assert_eq!(resulting_data[0].len(), 1);
+        assert_eq!(
+            resulting_data[0][0]
+                .column(0)
+                .as_primitive::<Int32Type>()
+                .values(),
+            &[4, 5]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_insert_overwrite_with_empty_input_clears_table() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let initial_batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )?;
+
+        let resulting_data = experiment_with_insert_op(
+            schema,
+            vec![vec![initial_batch]],
+            vec![vec![]],
+            InsertOp::Overwrite,
+        )
+        .await?;
+
+        assert!(resulting_data[0].is_empty());
         Ok(())
     }
 

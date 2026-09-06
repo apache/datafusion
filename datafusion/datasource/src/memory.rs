@@ -879,6 +879,7 @@ pub struct MemSink {
     /// Target locations for writing data
     batches: Vec<PartitionData>,
     schema: SchemaRef,
+    overwrite: bool,
 }
 
 impl Debug for MemSink {
@@ -912,7 +913,17 @@ impl MemSink {
         if batches.is_empty() {
             return plan_err!("Cannot insert into MemTable with zero partitions");
         }
-        Ok(Self { batches, schema })
+        Ok(Self {
+            batches,
+            schema,
+            overwrite: false,
+        })
+    }
+
+    /// Configures whether writes replace the existing data instead of appending to it.
+    pub fn with_overwrite(mut self, overwrite: bool) -> Self {
+        self.overwrite = overwrite;
+        self
     }
 }
 
@@ -940,10 +951,15 @@ impl DataSink for MemSink {
             i = (i + 1) % num_partitions;
         }
 
-        // write the outputs into the batches
+        // Modify the table only after the input stream has completed successfully.
         for (target, mut batches) in self.batches.iter().zip(new_batches) {
-            // Append all the new batches in one go to minimize locking overhead
-            target.write().await.append(&mut batches);
+            let mut target = target.write().await;
+            if self.overwrite {
+                *target = batches;
+            } else {
+                // Append all the new batches in one go to minimize locking overhead
+                target.append(&mut batches);
+            }
         }
 
         Ok(row_count as u64)
