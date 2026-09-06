@@ -1567,6 +1567,167 @@ SELECT r.id FROM rex_sv_l l RIGHT ANTI JOIN rex_sv_r r ON l.v > r.v ORDER BY 1;
 3
 4
 
+# ------------------------------------------------------------------
+# Right existence joins: nested and dictionary key regressions, PWMJ on vs. off
+# ------------------------------------------------------------------
+# The buffered-side reduction (`min_batch`/`max_batch`) handles List/Struct/Dictionary keys
+# through the same generic path the earlier Dictionary case above exercises, but comparing the
+# reduced extreme against the streamed batch is a separate step: it goes through `apply_cmp`,
+# which dispatches List/Struct (and a dictionary of either) to a nested-aware comparator instead
+# of arrow's `lt`/`lt_eq`/`gt`/`gt_eq` kernels, which reject those types outright. Each key type
+# below runs the same query with PWMJ enabled and disabled and checks the two agree, so a
+# regression in that dispatch fails a result comparison rather than only an internal error.
+
+statement ok
+CREATE TABLE rex_list_l(v INT[]);
+
+statement ok
+INSERT INTO rex_list_l VALUES ([2]), ([4]);
+
+statement ok
+CREATE TABLE rex_list_r(id INT, v INT[]);
+
+statement ok
+INSERT INTO rex_list_r VALUES (1, [1]), (2, [2]), (3, [4]), (4, [5]), (5, NULL);
+
+query I
+SELECT r.id FROM rex_list_l l RIGHT SEMI JOIN rex_list_r r ON l.v > r.v ORDER BY 1;
+----
+1
+2
+
+query I
+SELECT r.id FROM rex_list_l l RIGHT ANTI JOIN rex_list_r r ON l.v > r.v ORDER BY 1;
+----
+3
+4
+5
+
+statement ok
+set datafusion.optimizer.enable_piecewise_merge_join = false;
+
+query TT
+EXPLAIN SELECT r.id FROM rex_list_l l RIGHT SEMI JOIN rex_list_r r ON l.v > r.v ORDER BY 1;
+----
+logical_plan
+01)Sort: r.id ASC NULLS LAST
+02)--Projection: r.id
+03)----RightSemi Join:  Filter: l.v > r.v
+04)------SubqueryAlias: l
+05)--------TableScan: rex_list_l projection=[v]
+06)------SubqueryAlias: r
+07)--------TableScan: rex_list_r projection=[id, v]
+physical_plan
+01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--NestedLoopJoinExec: join_type=RightSemi, filter=v@0 > v@1, projection=[id@0]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+SELECT r.id FROM rex_list_l l RIGHT SEMI JOIN rex_list_r r ON l.v > r.v ORDER BY 1;
+----
+1
+2
+
+query I
+SELECT r.id FROM rex_list_l l RIGHT ANTI JOIN rex_list_r r ON l.v > r.v ORDER BY 1;
+----
+3
+4
+5
+
+statement ok
+set datafusion.optimizer.enable_piecewise_merge_join = true;
+
+statement ok
+CREATE TABLE rex_struct_l AS
+  SELECT named_struct('v', column1) AS v FROM (VALUES (2), (4)) t(column1);
+
+statement ok
+CREATE TABLE rex_struct_r AS
+  SELECT column1 AS id, named_struct('v', column2) AS v
+  FROM (VALUES (1, 1), (2, 2), (3, 4), (4, 5)) t(column1, column2);
+
+query I
+SELECT r.id FROM rex_struct_l l RIGHT SEMI JOIN rex_struct_r r ON l.v > r.v ORDER BY 1;
+----
+1
+2
+
+query I
+SELECT r.id FROM rex_struct_l l RIGHT ANTI JOIN rex_struct_r r ON l.v > r.v ORDER BY 1;
+----
+3
+4
+
+statement ok
+set datafusion.optimizer.enable_piecewise_merge_join = false;
+
+query TT
+EXPLAIN SELECT r.id FROM rex_struct_l l RIGHT SEMI JOIN rex_struct_r r ON l.v > r.v ORDER BY 1;
+----
+logical_plan
+01)Sort: r.id ASC NULLS LAST
+02)--Projection: r.id
+03)----RightSemi Join:  Filter: l.v > r.v
+04)------SubqueryAlias: l
+05)--------TableScan: rex_struct_l projection=[v]
+06)------SubqueryAlias: r
+07)--------TableScan: rex_struct_r projection=[id, v]
+physical_plan
+01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--NestedLoopJoinExec: join_type=RightSemi, filter=v@0 > v@1, projection=[id@0]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+SELECT r.id FROM rex_struct_l l RIGHT SEMI JOIN rex_struct_r r ON l.v > r.v ORDER BY 1;
+----
+1
+2
+
+query I
+SELECT r.id FROM rex_struct_l l RIGHT ANTI JOIN rex_struct_r r ON l.v > r.v ORDER BY 1;
+----
+3
+4
+
+statement ok
+set datafusion.optimizer.enable_piecewise_merge_join = true;
+
+# `Dictionary` of a non-nested value type is not itself `is_nested()`, so `apply_cmp` takes the
+# plain kernel path rather than the nested one above -- covered here for the same on/off
+# comparison, reusing the tables the earlier Dictionary case created.
+query I
+SELECT r.id FROM rex_dict_l l RIGHT SEMI JOIN rex_dict_r r ON l.v > r.v ORDER BY 1;
+----
+1
+
+query I
+SELECT r.id FROM rex_dict_l l RIGHT ANTI JOIN rex_dict_r r ON l.v > r.v ORDER BY 1;
+----
+2
+3
+4
+
+statement ok
+set datafusion.optimizer.enable_piecewise_merge_join = false;
+
+query I
+SELECT r.id FROM rex_dict_l l RIGHT SEMI JOIN rex_dict_r r ON l.v > r.v ORDER BY 1;
+----
+1
+
+query I
+SELECT r.id FROM rex_dict_l l RIGHT ANTI JOIN rex_dict_r r ON l.v > r.v ORDER BY 1;
+----
+2
+3
+4
+
+statement ok
+set datafusion.optimizer.enable_piecewise_merge_join = true;
+
 # A temporal key checks that the reduced extreme keeps its own type: a `Date32` minimum that came
 # back as the underlying `Int32` would fail the comparison against a `Date32` streamed column
 # rather than answer it wrongly.
