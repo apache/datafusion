@@ -2956,7 +2956,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let (_, expr_field) = expr.to_field(source.schema())?;
                 // A storage-type cast alone does not apply extension metadata from the
                 // table schema when the source and target storage types are identical.
-                let expr = if expr_field.metadata() == target_field.metadata() {
+                let expr = if target_field.extension_type_name().is_none()
+                    || expr_field.metadata() == target_field.metadata()
+                {
                     expr
                 } else {
                     match expr {

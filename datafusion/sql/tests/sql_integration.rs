@@ -750,6 +750,17 @@ fn plan_insert_preserves_target_extension_metadata_on_type_cast() {
     );
 }
 
+#[test]
+fn plan_insert_does_not_promise_ordinary_target_field_metadata() {
+    let sql = "INSERT INTO array_with_field_metadata SELECT left FROM array";
+    let plan = logical_plan(sql).unwrap();
+    let LogicalPlan::Dml(dml) = &plan else {
+        panic!("expected DML plan");
+    };
+
+    assert!(dml.input.schema().field(0).metadata().is_empty());
+}
+
 #[rstest]
 #[case::duplicate_columns(
     "INSERT INTO test_decimal (id, price, price) VALUES (1, 2, 3), (4, 5, 6)",

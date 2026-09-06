@@ -228,6 +228,20 @@ impl ContextProvider for MockContextProvider {
                     false,
                 ),
             ])),
+            "array_with_field_metadata" => Ok(Schema::new(vec![
+                Field::new(
+                    "left",
+                    DataType::List(Arc::new(
+                        Field::new_list_field(DataType::Int64, true).with_metadata(
+                            [("PARQUET:field_id".to_string(), "2".to_string())].into(),
+                        ),
+                    )),
+                    false,
+                )
+                .with_metadata(
+                    [("PARQUET:field_id".to_string(), "1".to_string())].into(),
+                ),
+            ])),
             "lineitem" => Ok(Schema::new(vec![
                 Field::new("l_orderkey", DataType::UInt32, false),
                 Field::new("l_item_id", DataType::UInt32, false),
