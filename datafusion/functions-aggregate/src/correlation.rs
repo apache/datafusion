@@ -982,7 +982,7 @@ impl BlockedGroupsAccumulator for CorrelationBlockedGroupsAccumulator {
     fn merge_batch(
         &mut self,
         values: &[ArrayRef],
-        group_indices: &[BlockedEmitTo],
+        group_indices: &[BlocksIndex],
         total_num_groups: usize,
     ) -> Result<()> {
         // Resize vectors to accommodate total number of groups
