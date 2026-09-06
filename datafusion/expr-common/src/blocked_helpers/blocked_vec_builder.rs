@@ -1,5 +1,5 @@
 use crate::blocked_helpers::take_n_helpers::BlockBuilder;
-use crate::groups_accumulator::BlocksIndex;
+use crate::groups_accumulator::BlockedIndex;
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::ArrowNativeType;
 use std::collections::{BTreeMap, VecDeque};
@@ -9,9 +9,13 @@ use std::ops::{Deref, DerefMut, Index, IndexMut, Range};
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 
-/// Virtual bytes reserved per builder up front. Untouched pages cost nothing,
-/// the live window is relocated (and doubled if needed) once it runs past the end
-const INITIAL_MAP_BYTES: usize = 64 << 20;
+/// Virtual bytes reserved per builder up front. Untouched pages cost nothing, so this
+/// is sized to practically never fill; the live window is relocated (and doubled if
+/// needed) if it ever does. Halved until the kernel accepts it on strict overcommit setups
+const RESERVED_BYTES: usize = 10 << 30;
+
+/// Smallest reservation worth falling back to
+const MIN_RESERVED_BYTES: usize = 64 << 20;
 
 /// Anonymous private mapping shared between a builder and the blocks it handed out.
 ///
@@ -42,20 +46,27 @@ unsafe impl Send for Region {}
 unsafe impl Sync for Region {}
 
 impl Region {
-    fn map(cap: usize) -> Arc<Self> {
+    /// Reserve `cap` bytes, settling for less (down to `min`) when the kernel refuses
+    fn map(cap: usize, min: usize) -> Arc<Self> {
         let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
-        let cap = cap.next_multiple_of(page);
-        let base = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                cap,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE,
-                -1,
-                0,
-            )
+        let mut cap = cap.next_multiple_of(page);
+        let base = loop {
+            let base = unsafe {
+                libc::mmap(
+                    std::ptr::null_mut(),
+                    cap,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE,
+                    -1,
+                    0,
+                )
+            };
+            if base != libc::MAP_FAILED {
+                break base;
+            }
+            assert!(cap > min, "mmap of {cap} bytes failed");
+            cap = (cap / 2).max(min).next_multiple_of(page);
         };
-        assert_ne!(base, libc::MAP_FAILED, "mmap of {cap} bytes failed");
         Arc::new(Self {
             base: base.cast::<u8>(),
             cap,
@@ -268,12 +279,17 @@ impl<const FIXED_BLOCK_SIZING: bool, T: Copy>
     const ITEM: usize = size_of::<T>();
 
     pub fn new(block_size: usize) -> Self {
+        Self::with_reservation(block_size, RESERVED_BYTES)
+    }
+
+    /// Reserve `reserved_bytes` of address space instead of the default
+    pub fn with_reservation(block_size: usize, reserved_bytes: usize) -> Self {
         assert!(Self::ITEM > 0, "zero sized items are not supported");
         if FIXED_BLOCK_SIZING {
             assert_ne!(block_size, 0, "block size must be greater than 0");
         }
         let mut this = Self {
-            region: Region::map(INITIAL_MAP_BYTES),
+            region: Region::map(reserved_bytes, MIN_RESERVED_BYTES.min(reserved_bytes)),
             head: 0,
             tail: 0,
             block_size,
@@ -352,6 +368,17 @@ impl<const FIXED_BLOCK_SIZING: bool, T: Copy>
         } else {
             false
         }
+    }
+
+    /// Make `n` more items live without writing them, they read as all zero bytes
+    /// since the mapping is zero filled and their pages stay untouched
+    ///
+    /// # Safety
+    /// `T` must be valid when all of its bytes are zero
+    pub unsafe fn advance_untouched(&mut self, n: usize) {
+        self.reserve(n);
+        self.tail += n;
+        self.relayout_fixed();
     }
 
     pub fn extend_from_slice(&mut self, slice: &[T]) {
@@ -543,7 +570,7 @@ impl<const FIXED_BLOCK_SIZING: bool, T: Copy>
         while cap < need.saturating_mul(2) {
             cap *= 2;
         }
-        let new = Region::map(cap);
+        let new = Region::map(cap, need);
         unsafe {
             std::ptr::copy_nonoverlapping(
                 self.ptr_at(self.head).cast::<u8>(),
@@ -581,49 +608,25 @@ impl<const FIXED_BLOCK_SIZING: bool, T: Copy> Extend<T>
     }
 }
 
-impl<const FIXED_BLOCK_SIZING: bool, T: Copy> Index<usize>
-    for CopyItemBlockedVecBuilder<FIXED_BLOCK_SIZING, T>
-{
-    type Output = T;
-
-    #[inline]
-    fn index(&self, index: usize) -> &T {
-        &self.as_slice()[index]
-    }
-}
-
-impl<const FIXED_BLOCK_SIZING: bool, T: Copy> IndexMut<usize>
-    for CopyItemBlockedVecBuilder<FIXED_BLOCK_SIZING, T>
-{
-    #[inline]
-    fn index_mut(&mut self, index: usize) -> &mut T {
-        &mut self.as_mut_slice()[index]
-    }
-}
-
 impl<const FIXED_BLOCK_SIZING: bool, T: Copy>
     CopyItemBlockedVecBuilder<FIXED_BLOCK_SIZING, T>
 {
-    /// Offset of a `BlocksIndex` from `head`
+    /// Offset of an index from `head`
     #[inline]
-    fn offset(&self, index: BlocksIndex) -> usize {
+    fn offset<I: BlockedIndex>(&self, index: I) -> usize {
         if FIXED_BLOCK_SIZING {
-            index.into_index_in_fixed_block_size(self.block_size)
+            index.flat(self.block_size)
         } else {
-            self.block_starts[index.block_index()] - self.head + index.index_in_block()
+            index.flat_in_blocks(&self.block_starts, self.head)
         }
     }
-}
 
-impl<const FIXED_BLOCK_SIZING: bool, T: Copy>
-    CopyItemBlockedVecBuilder<FIXED_BLOCK_SIZING, T>
-{
     /// Item at `index` without bounds checking
     ///
     /// # Safety
     /// `index` must point at an existing item, i.e. `self.offset(index) < self.len()`
     #[inline]
-    pub unsafe fn get_unchecked(&self, index: BlocksIndex) -> &T {
+    pub unsafe fn get_unchecked<I: BlockedIndex>(&self, index: I) -> &T {
         let offset = self.offset(index);
         debug_assert!(offset < self.len());
         unsafe { &*self.ptr_at(self.head + offset) }
@@ -634,29 +637,29 @@ impl<const FIXED_BLOCK_SIZING: bool, T: Copy>
     /// # Safety
     /// `index` must point at an existing item, i.e. `self.offset(index) < self.len()`
     #[inline]
-    pub unsafe fn get_unchecked_mut(&mut self, index: BlocksIndex) -> &mut T {
+    pub unsafe fn get_unchecked_mut<I: BlockedIndex>(&mut self, index: I) -> &mut T {
         let offset = self.offset(index);
         debug_assert!(offset < self.len());
         unsafe { &mut *self.ptr_at(self.head + offset).cast_mut() }
     }
 }
 
-impl<const FIXED_BLOCK_SIZING: bool, T: Copy> Index<BlocksIndex>
+impl<const FIXED_BLOCK_SIZING: bool, T: Copy, I: BlockedIndex> Index<I>
     for CopyItemBlockedVecBuilder<FIXED_BLOCK_SIZING, T>
 {
     type Output = T;
 
     #[inline]
-    fn index(&self, index: BlocksIndex) -> &T {
+    fn index(&self, index: I) -> &T {
         &self.as_slice()[self.offset(index)]
     }
 }
 
-impl<const FIXED_BLOCK_SIZING: bool, T: Copy> IndexMut<BlocksIndex>
+impl<const FIXED_BLOCK_SIZING: bool, T: Copy, I: BlockedIndex> IndexMut<I>
     for CopyItemBlockedVecBuilder<FIXED_BLOCK_SIZING, T>
 {
     #[inline]
-    fn index_mut(&mut self, index: BlocksIndex) -> &mut T {
+    fn index_mut(&mut self, index: I) -> &mut T {
         let offset = self.offset(index);
         &mut self.as_mut_slice()[offset]
     }
@@ -702,6 +705,7 @@ impl<T: Copy> BlockBuilder for Vec<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::groups_accumulator::BlocksIndex;
 
     type Fixed = CopyItemBlockedVecBuilder<true, i32>;
     type Manual = CopyItemBlockedVecBuilder<false, i32>;
@@ -1145,8 +1149,9 @@ mod tests {
 
     #[test]
     fn relocates_past_the_initial_mapping() {
-        let mut builder = Fixed::new(1024);
-        let total = INITIAL_MAP_BYTES / size_of::<i32>() + 5000;
+        const RESERVED: usize = 1 << 20;
+        let mut builder = Fixed::with_reservation(1024, RESERVED);
+        let total = RESERVED / size_of::<i32>() + 5000;
         let mut expected = vec![];
         let mut next = 0;
         while builder.len() + expected.len() < total {
@@ -1167,8 +1172,8 @@ mod tests {
         check_fixed_layout(&builder);
 
         // grow while everything stays live
-        let mut builder = Fixed::new(1024);
-        let big = values(0..INITIAL_MAP_BYTES / size_of::<i32>() + 3);
+        let mut builder = Fixed::with_reservation(1024, RESERVED);
+        let big = values(0..RESERVED / size_of::<i32>() + 3);
         builder.extend_from_slice(&big);
         assert_eq!(to_vec(&builder), big);
         assert_eq!(builder[BlocksIndex::new(3, 7)], big[3 * 1024 + 7]);

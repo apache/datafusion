@@ -632,6 +632,70 @@ impl Ord for BlocksIndex {
   }
 }
 
+/// Position of an item in a blocked builder, either flat (`usize`) or as
+/// `(block, index in block)` ([`BlocksIndex`])
+///
+/// With fixed block sizing both resolve without any lookup, with manual sizing a
+/// flat position is used as is and a [`BlocksIndex`] goes through the block starts
+pub trait BlockedIndex: Copy + std::fmt::Debug {
+  /// Flat position when every block holds `block_size` items
+  fn flat(self, block_size: usize) -> usize;
+
+  /// Flat position given the absolute start of every block, `head` is the absolute
+  /// position of the first item
+  fn flat_in_blocks(self, block_starts: &std::collections::VecDeque<usize>, head: usize) -> usize;
+
+  /// Block of the item when every block holds `block_size` items
+  fn fixed_block(self, block_size: usize) -> usize;
+
+  /// Block of the item given the absolute start of every block
+  fn block_in_blocks(self, block_starts: &std::collections::VecDeque<usize>, head: usize) -> usize;
+}
+
+impl BlockedIndex for usize {
+  #[inline(always)]
+  fn flat(self, _block_size: usize) -> usize {
+    self
+  }
+
+  #[inline(always)]
+  fn flat_in_blocks(self, _block_starts: &std::collections::VecDeque<usize>, _head: usize) -> usize {
+    self
+  }
+
+  #[inline(always)]
+  fn fixed_block(self, block_size: usize) -> usize {
+    self / block_size
+  }
+
+  fn block_in_blocks(self, block_starts: &std::collections::VecDeque<usize>, head: usize) -> usize {
+    // first block that starts after the item, minus one
+    block_starts.partition_point(|&start| start <= head + self) - 1
+  }
+}
+
+impl BlockedIndex for BlocksIndex {
+  #[inline(always)]
+  fn flat(self, block_size: usize) -> usize {
+    self.into_index_in_fixed_block_size(block_size)
+  }
+
+  #[inline(always)]
+  fn flat_in_blocks(self, block_starts: &std::collections::VecDeque<usize>, head: usize) -> usize {
+    block_starts[self.block_index()] - head + self.index_in_block()
+  }
+
+  #[inline(always)]
+  fn fixed_block(self, _block_size: usize) -> usize {
+    self.block_index()
+  }
+
+  #[inline(always)]
+  fn block_in_blocks(self, _block_starts: &std::collections::VecDeque<usize>, _head: usize) -> usize {
+    self.block_index()
+  }
+}
+
 /// Describes how many rows should be emitted during grouping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockedEmitTo {
