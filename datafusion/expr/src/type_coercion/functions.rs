@@ -1479,14 +1479,14 @@ mod tests {
             &TypeSignature::Numeric(2),
             &[DataType::Null, DataType::Int32],
         );
-        assert_eq!(got, [DataType::Int32]);
+        assert_eq!(got, [DataType::Int32, DataType::Int32]);
 
         let got = get_valid_types_flatten(
             "test",
             &TypeSignature::Numeric(2),
             &[DataType::Int32, DataType::Null],
         );
-        assert_eq!(got, [DataType::Int32]);
+        assert_eq!(got, [DataType::Int32, DataType::Int32]);
 
         Ok(())
     }
