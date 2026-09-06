@@ -95,6 +95,10 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
             match extract_subquery_info(subquery_expr) {
                 // The subquery expression is at the top level of the filter
                 SubqueryPredicate::Top(subquery) => {
+                    if let Some(expr) = single_row_subquery_predicate(&subquery) {
+                        other_exprs.push(expr);
+                        continue;
+                    }
                     match build_join_top(&subquery, &cur_input, config.alias_generator())?
                     {
                         Some(plan) => cur_input = plan,
@@ -144,6 +148,24 @@ fn rewrite_inner_subqueries(
     let mut cur_input = outer;
     let alias = config.alias_generator();
     let expr_without_subqueries = expr.transform(|e| match e {
+        Expr::Exists(Exists { subquery, negated })
+            if correlated_guaranteed_single_row(subquery.subquery.as_ref()) =>
+        {
+            Ok(Transformed::yes(lit(!negated)))
+        }
+        Expr::InSubquery(InSubquery {
+            expr,
+            subquery,
+            negated,
+        }) if correlated_guaranteed_single_row(subquery.subquery.as_ref()) => {
+            let scalar_subquery = Expr::ScalarSubquery(subquery);
+            let expr = if negated {
+                (*expr).not_eq(scalar_subquery)
+            } else {
+                (*expr).eq(scalar_subquery)
+            };
+            Ok(Transformed::yes(expr))
+        }
         Expr::Exists(Exists {
             subquery: Subquery { subquery, .. },
             negated,
@@ -223,6 +245,51 @@ fn has_subquery(expr: &Expr) -> bool {
         _ => Ok(false),
     })
     .unwrap()
+}
+
+/// Returns whether the plan is guaranteed to produce one row.
+///
+/// This deliberately recognizes only transparent wrappers around an
+/// ungrouped aggregate. In particular, a `Filter` above the aggregate is a
+/// `HAVING` clause and can remove the otherwise guaranteed row.
+fn guaranteed_single_row(plan: &LogicalPlan) -> bool {
+    match plan {
+        LogicalPlan::Projection(projection) => {
+            guaranteed_single_row(projection.input.as_ref())
+        }
+        LogicalPlan::SubqueryAlias(alias) => guaranteed_single_row(alias.input.as_ref()),
+        LogicalPlan::Aggregate(aggregate) => aggregate.group_expr.is_empty(),
+        _ => false,
+    }
+}
+
+fn correlated_guaranteed_single_row(plan: &LogicalPlan) -> bool {
+    !plan.all_out_ref_exprs().is_empty() && guaranteed_single_row(plan)
+}
+
+/// Rewrite predicates over a guaranteed-single-row subquery to scalar forms.
+///
+/// An ungrouped aggregate without `HAVING` always produces one row, even when
+/// its input is empty. `EXISTS` can therefore be folded by cardinality, while
+/// `IN` is equivalent to comparison with a scalar subquery. The latter lets
+/// `ScalarSubqueryToJoin` apply its existing empty-input aggregate
+/// compensation.
+fn single_row_subquery_predicate(query_info: &SubqueryInfo) -> Option<Expr> {
+    if !correlated_guaranteed_single_row(query_info.query.subquery.as_ref()) {
+        return None;
+    }
+
+    match &query_info.where_in_expr {
+        Some(expr) => {
+            let scalar_subquery = Expr::ScalarSubquery(query_info.query.clone());
+            Some(if query_info.negated {
+                expr.clone().not_eq(scalar_subquery)
+            } else {
+                expr.clone().eq(scalar_subquery)
+            })
+        }
+        None => Some(lit(!query_info.negated)),
+    }
 }
 
 /// Optimize the subquery to left-anti/left-semi join.

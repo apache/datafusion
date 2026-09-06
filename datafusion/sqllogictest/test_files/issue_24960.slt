@@ -1,0 +1,102 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+statement ok
+CREATE TABLE outer_values(value INT) AS VALUES (0), (1), (2), (3);
+
+statement ok
+CREATE TABLE inner_values(value INT) AS VALUES (2), (2);
+
+# A groupless aggregate produces one row even when its input is empty.
+query I rowsort
+SELECT value
+FROM outer_values o
+WHERE EXISTS (
+    SELECT count(*) FROM inner_values i WHERE o.value = i.value
+);
+----
+0
+1
+2
+3
+
+query I
+SELECT value
+FROM outer_values o
+WHERE NOT EXISTS (
+    SELECT count(*) FROM inner_values i WHERE o.value = i.value
+);
+----
+
+# IN must compare against the aggregate's empty-input value for outer rows
+# that have no matching inner rows.
+query I rowsort
+SELECT value
+FROM outer_values o
+WHERE value IN (
+    SELECT count(*) FROM inner_values i WHERE o.value = i.value
+);
+----
+0
+2
+
+query I rowsort
+SELECT value
+FROM outer_values o
+WHERE value NOT IN (
+    SELECT count(*) FROM inner_values i WHERE o.value = i.value
+);
+----
+1
+3
+
+# HAVING can remove the aggregate row, so these subqueries must not be folded
+# based on the aggregate's cardinality.
+query I
+SELECT value
+FROM outer_values o
+WHERE EXISTS (
+    SELECT count(*)
+    FROM inner_values i
+    WHERE o.value = i.value
+    HAVING count(*) > 0
+);
+----
+2
+
+# LIMIT 0 also removes the otherwise guaranteed aggregate row.
+query I
+SELECT value
+FROM outer_values o
+WHERE EXISTS (
+    SELECT count(*) FROM inner_values i WHERE o.value = i.value LIMIT 0
+);
+----
+
+# The same cardinality rule applies when EXISTS is embedded in another
+# predicate and would otherwise be implemented with a mark join.
+query I rowsort
+SELECT value
+FROM outer_values o
+WHERE value = 99 OR EXISTS (
+    SELECT count(*) FROM inner_values i WHERE o.value = i.value
+);
+----
+0
+1
+2
+3
