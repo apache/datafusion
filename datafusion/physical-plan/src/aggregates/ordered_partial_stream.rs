@@ -116,7 +116,6 @@ pub(crate) struct OrderedPartialAggregateStream {
     reservation: MemoryReservation,
     baseline_metrics: BaselineMetrics,
     reduction_factor: metrics::RatioMetrics,
-    /// Number of times accumulated states were emitted due to memory pressure.
     early_emit_count: metrics::Count,
     table: Option<OrderedAggregateTable<PartialMarker>>,
 }
