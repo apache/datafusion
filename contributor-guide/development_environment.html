@@ -554,6 +554,13 @@ libprotoc<span class="w"> </span><span class="m">3</span>.15.0
 <ul class="simple">
 <li><p><a class="reference download internal" download="" href="../_downloads/1e336e540124589d1e27210fa4f805f6/rust_lint.sh"><span class="xref download myst">dev/rust_lint.sh</span></a></p></li>
 </ul>
+<p>Debugging:</p>
+<p>The standard dev profile, used by cargo build and cargo test, disables variable-level DWARF debug information that is required by interactive debuggers.</p>
+<p>If you need to step through the code with a debugger, build with:</p>
+<p><code class="docutils literal notranslate"><span class="pre">CARGO_PROFILE_DEV_DEBUG=2</span> <span class="pre">cargo</span> <span class="pre">build</span></code></p>
+<p>Alternatively, you can set <code class="docutils literal notranslate"><span class="pre">CARGO_PROFILE_DEV_DEBUG=2</span></code> as an environment variable in your IDE.</p>
+<p>This enables the additional debug information required for source-level debugging.</p>
+<p>For more details, see the DataFusion <a class="reference external" href="https://github.com/apache/datafusion/blob/main/Cargo.toml#L329">Cargo.toml</a> configuration.</p>
 </section>
 </section>
 
