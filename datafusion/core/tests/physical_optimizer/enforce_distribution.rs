@@ -71,8 +71,9 @@ use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::JoinOn;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
+use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion_physical_plan::union::UnionExec;
+use datafusion_physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion_physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlanProperties,
     PlanProperties, ReplaceChildrenOptions, displayable,
@@ -731,6 +732,12 @@ impl TestConfig {
         // After these operations tree nodes should be in a consistent state.
         // This code block makes sure that these rules doesn't violate tree node integrity.
         {
+            // Mirror `EnsureRequirements`: interleaves are normalized to
+            // unions before distribution is enforced.
+            let plan = plan
+                .clone()
+                .transform_down(replace_interleave_with_union)
+                .data()?;
             let adjusted = if self.config.optimizer.top_down_join_key_reordering {
                 // Run adjust_input_keys_ordering rule
                 let plan_requirements =
@@ -2690,6 +2697,161 @@ fn union_not_to_interleave() -> Result<()> {
     ");
     let plan_sort = test_config.to_plan(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
+
+    Ok(())
+}
+
+/// Builds `RepartitionExec(Hash([a], 10))` over a single-partition parquet scan.
+fn hash_repartitioned_parquet_exec() -> Result<Arc<dyn ExecutionPlan>> {
+    let schema = schema();
+    Ok(Arc::new(RepartitionExec::try_new(
+        parquet_exec(),
+        Partitioning::Hash(vec![col("a", &schema)?], 10),
+    )?))
+}
+
+/// Builds `FinalPartitioned <- RepartitionExec(Hash([alias], 10)) <- Partial <- input`,
+/// i.e. an aggregate whose output is natively hash partitioned on its group key.
+fn hash_partitioned_aggregate_exec(
+    input: Arc<dyn ExecutionPlan>,
+    column: &str,
+    alias: &str,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let schema = schema();
+    let group_by = PhysicalGroupBy::new_single(vec![(
+        col(column, &input.schema())?,
+        alias.to_string(),
+    )]);
+    let partial = Arc::new(AggregateExec::try_new(
+        AggregateMode::Partial,
+        group_by,
+        vec![],
+        vec![],
+        input,
+        schema.clone(),
+    )?);
+    let hash_expr = col(alias, &partial.schema())?;
+    let repartition = Arc::new(RepartitionExec::try_new(
+        partial,
+        Partitioning::Hash(vec![hash_expr], 10),
+    )?);
+    let final_grouping = PhysicalGroupBy::new_single(vec![(
+        Arc::new(Column::new(alias, 0)) as Arc<dyn PhysicalExpr>,
+        alias.to_string(),
+    )]);
+    Ok(Arc::new(AggregateExec::try_new(
+        AggregateMode::FinalPartitioned,
+        final_grouping,
+        vec![],
+        vec![],
+        repartition,
+        schema,
+    )?))
+}
+
+#[test]
+fn interleave_falls_back_to_union_when_children_lose_partitioning() -> Result<()> {
+    // An `InterleaveExec` whose children are hash partitioned only by
+    // `RepartitionExec`s that nothing requires. The rule removes those
+    // repartitions, after which the children can no longer be interleaved,
+    // so the node must degrade to a `UnionExec` instead of failing
+    // (https://github.com/apache/datafusion/issues/21826).
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(InterleaveExec::try_new(vec![
+        hash_repartitioned_parquet_exec()?,
+        hash_repartitioned_parquet_exec()?,
+    ])?);
+
+    let test_config = TestConfig::default();
+    let plan_distrib = test_config.to_plan(plan.clone(), &DISTRIB_DISTRIB_SORT);
+    assert_plan!(plan_distrib,
+        @r"
+    UnionExec
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+    ");
+    let plan_sort = test_config.to_plan(plan, &SORT_DISTRIB_DISTRIB);
+    assert_plan!(plan_distrib, plan_sort);
+
+    Ok(())
+}
+
+#[test]
+fn interleave_fallback_still_satisfies_parent_hash_requirement() -> Result<()> {
+    // Same as above, but a parent requires hash partitioning. After the
+    // interleave degrades to a union, the parent's requirement is enforced
+    // with a single repartition above the union.
+    let interleave: Arc<dyn ExecutionPlan> = Arc::new(InterleaveExec::try_new(vec![
+        hash_repartitioned_parquet_exec()?,
+        hash_repartitioned_parquet_exec()?,
+    ])?);
+    let plan =
+        aggregate_exec_with_alias(interleave, vec![("a".to_string(), "a".to_string())]);
+
+    let test_config = TestConfig::default();
+    let plan_distrib = test_config.to_plan(plan.clone(), &DISTRIB_DISTRIB_SORT);
+    assert_plan!(plan_distrib,
+        @r"
+    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
+      RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10
+        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
+          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2
+            UnionExec
+              DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+              DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+    ");
+    let plan_sort = test_config.to_plan(plan, &SORT_DISTRIB_DISTRIB);
+    assert_plan!(plan_distrib, plan_sort);
+
+    Ok(())
+}
+
+#[test]
+fn existing_interleave_is_kept_when_children_stay_interleavable() -> Result<()> {
+    // An `InterleaveExec` over hash-partitioned aggregates. The aggregates
+    // require the hash partitioning, so the children stay interleavable and
+    // the interleave is re-derived.
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(InterleaveExec::try_new(vec![
+        hash_partitioned_aggregate_exec(parquet_exec(), "a", "a1")?,
+        hash_partitioned_aggregate_exec(parquet_exec(), "a", "a1")?,
+    ])?);
+
+    let test_config = TestConfig::default();
+    let plan_distrib = test_config.to_plan(plan.clone(), &DISTRIB_DISTRIB_SORT);
+    assert_plan!(plan_distrib,
+        @r"
+    InterleaveExec
+      AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[]
+        RepartitionExec: partitioning=Hash([a1@0], 10), input_partitions=10
+          AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[]
+            RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+              DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+      AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[]
+        RepartitionExec: partitioning=Hash([a1@0], 10), input_partitions=10
+          AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[]
+            RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+              DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+    ");
+    let plan_sort = test_config.to_plan(plan.clone(), &SORT_DISTRIB_DISTRIB);
+    assert_plan!(plan_distrib, plan_sort);
+
+    // Interleaves are re-derived from unions, so with `prefer_existing_union`
+    // the rule keeps the union it normalized the input interleave to.
+    let test_config = TestConfig::default().with_prefer_existing_union();
+    let plan_prefer_union = test_config.to_plan(plan, &DISTRIB_DISTRIB_SORT);
+    assert_plan!(plan_prefer_union,
+        @r"
+    UnionExec
+      AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[]
+        RepartitionExec: partitioning=Hash([a1@0], 10), input_partitions=10
+          AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[]
+            RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+              DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+      AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[]
+        RepartitionExec: partitioning=Hash([a1@0], 10), input_partitions=10
+          AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[]
+            RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+              DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+    ");
 
     Ok(())
 }
