@@ -19,14 +19,10 @@
 //! Adapter that makes [`GroupsAccumulator`] out of [`Accumulator`]
 
 use arrow::{
-    array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray},
-    compute,
-    compute::take_arrays,
-    datatypes::UInt32Type,
+    array::{ArrayRef, BooleanArray},
 };
-use datafusion_common::{Result, ScalarValue, arrow_datafusion_err};
-use datafusion_expr_common::accumulator::Accumulator;
-use datafusion_expr_common::groups_accumulator::{BlockedEmitTo, BlockedGroupSelection, BlockedGroupsAccumulator, BlocksIndex, EmitTo, GroupSelection, GroupsAccumulator};
+use datafusion_common::{Result};
+use datafusion_expr_common::groups_accumulator::{BlockedEmitTo, BlockedGroupSelection, BlockedGroupsAccumulator, BlocksIndex, GroupSelection, GroupsAccumulator};
 
 /// An adapter that implements [`GroupsAccumulator`] for any [`Accumulator`]
 ///

@@ -1,4 +1,3 @@
-use std::marker::PhantomData;
 use datafusion_common::utils::proxy::VecAllocExt;
 
 /// Get size of value T

@@ -1,7 +1,7 @@
 use crate::blocked_helpers::take_n_helpers::{
     BlockBuilder, create_adjusted_block_size_iter_for_fixed_blocks, take_n_from_blocks,
 };
-use crate::groups_accumulator::{BlockedGroupSelection, BlocksIndex, GroupSelection};
+use crate::groups_accumulator::{BlockedGroupSelection, BlocksIndex};
 use arrow::array::NullBufferBuilder;
 use arrow::buffer::NullBuffer;
 use arrow::util::bit_util::apply_bitwise_binary_op;

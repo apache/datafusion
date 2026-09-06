@@ -250,7 +250,7 @@ where
                 )
             }
             _ => unreachable!("Utf8/Binary should use `ArrowBytesSet`"),
-        };
+        }
     }
 
     /// Generic version of [`Self::insert_if_new`] that handles `ByteViewType`
@@ -356,6 +356,9 @@ where
             } else {
                 // no existing value, make a new one
                 let index = self.next_index();
+                // The bytes go into the buffers of the views block the value is appended to,
+                // appending it may complete that block and move `current_start_block_index` on
+                let start_block_index = self.current_start_block_index;
                 let (new_view, payload) = if len <= 12 {
                     // Inline path: bytes are already packed in view_u128.
                     // The inline ByteView format is [len:u32 LE][data:12 bytes zero-padded],
@@ -379,7 +382,7 @@ where
                 };
 
                 let new_header = Entry {
-                    start_block_index: self.current_start_block_index,
+                    start_block_index,
                     index,
                     view: new_view,
                     hash,
@@ -1102,6 +1105,31 @@ mod tests {
         positions(&mut map, &[None, Some("x")]);
         assert_eq!(strings(&map.take_block().unwrap()), owned(&[None, Some("x")]));
         assert_eq!(positions(&mut map, &[None, Some("x")]), [0, 1]);
+    }
+
+    #[test]
+    fn long_value_completing_a_block_is_found_again() {
+        // with a block size of 2 every second value completes a views block, make those
+        // the long ones so their bytes live in the block that was just completed
+        let values: Vec<String> = (0..10)
+            .map(|i| {
+                if i % 2 == 1 {
+                    format!("long value that is not inline {i}")
+                } else {
+                    format!("s{i}")
+                }
+            })
+            .collect();
+        let values: Vec<Option<&str>> = values.iter().map(|v| Some(v.as_str())).collect();
+        let mut map = Map::new(OutputType::Utf8View, 2);
+        assert_eq!(positions(&mut map, &values), (0..10).collect::<Vec<_>>());
+        // every value must be found again, the long ones through their buffer block
+        assert_eq!(positions(&mut map, &values), (0..10).collect::<Vec<_>>());
+        assert_eq!(map.len(), 10);
+
+        let blocks = map.take_all();
+        let all: Vec<Option<String>> = blocks.iter().flat_map(strings).collect();
+        assert_eq!(all, owned(&values));
     }
 
     #[test]

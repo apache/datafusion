@@ -18,15 +18,15 @@
 use std::option::IntoIter;
 use std::sync::Arc;
 
-use super::accumulate::{BlockedNullState, NullState};
+use super::accumulate::{BlockedNullState};
 use datafusion_expr_common::blocked_helpers::CopyItemBlockedVecBuilder;
 use arrow::array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray};
 use arrow::buffer::NullBuffer;
 use arrow::compute;
 use arrow::datatypes::ArrowPrimitiveType;
 use arrow::datatypes::DataType;
-use datafusion_common::{DataFusionError, Result, internal_datafusion_err, internal_err};
-use datafusion_expr_common::groups_accumulator::{BlockedEmitTo, BlockedGroupSelection, BlockedGroupsAccumulator, BlocksIndex, EmitTo, GroupSelection, GroupsAccumulator};
+use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
+use datafusion_expr_common::groups_accumulator::{BlockedEmitTo, BlockedGroupSelection, BlockedGroupsAccumulator, BlocksIndex};
 
 /// An accumulator that implements a single operation over
 /// [`ArrowPrimitiveType`] where the accumulated state is the same as

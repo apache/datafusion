@@ -1,5 +1,5 @@
 use crate::blocked_helpers::take_n_helpers::{
-    BlockBuilder, create_adjusted_block_size_iter_for_fixed_blocks, take_n_from_blocks,
+    create_adjusted_block_size_iter_for_fixed_blocks,
 };
 use crate::groups_accumulator::BlocksIndex;
 use datafusion_common::utils::proxy::VecDequeAllocExt;
@@ -223,9 +223,8 @@ BlockedCustomHeapAllocatedInputBuilder<FIXED_BLOCK_SIZING, CustomBlockProvider, 
         let prev_block_len = block.len();
         if Self::should_track_blocks_heap_allocation() {
             let mut heap_allocated = 0;
-            block.extend(iter.map(|item| {
-                heap_allocated += HeapAllocatedSize::get_heap_allocated_size(&item);
-                item
+            block.extend(iter.inspect(|item| {
+                heap_allocated += HeapAllocatedSize::get_heap_allocated_size(item);
             }));
 
             self.blocks_heap_allocated_sizes[self.current_block_index] += heap_allocated;
@@ -486,8 +485,8 @@ BlockedCustomHeapAllocatedInputBuilder<FIXED_BLOCK_SIZING, CustomBlockProvider, 
 
         blocks
           .into_iter()
-          .zip(blocks_mem.into_iter())
-          .filter(|((block, _mem))| !block.is_empty())
+          .zip(blocks_mem)
+          .filter(|(block, _mem)| !block.is_empty())
           .collect()
     }
 

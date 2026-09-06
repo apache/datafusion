@@ -28,7 +28,7 @@ use crate::physical_optimizer::test_utils::{
 use arrow::datatypes::DataType;
 use arrow::{compute::SortOptions, util::pretty::pretty_format_batches};
 use datafusion::prelude::SessionContext;
-use datafusion_common::{plan_err, Result};
+use datafusion_common::Result;
 use datafusion_execution::config::SessionConfig;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{self, cast, col};
@@ -134,9 +134,10 @@ async fn limited_distinct_aggregate_stream_respects_soft_limit() -> Result<()> {
         plan: &Arc<dyn ExecutionPlan>,
         metrics: &mut Vec<AggregateRuntimeMetric>,
     ) {
-        if plan.downcast_ref::<AggregateExec>().is_some() {
-            return plan_err!("should not get AggregateExec, should be migrated to BlockedAggregateExec");
-        }
+        assert!(
+            plan.downcast_ref::<AggregateExec>().is_none(),
+            "should not get AggregateExec, should be migrated to BlockedAggregateExec"
+        );
 
         if let Some(agg) = plan.downcast_ref::<BlockedAggregateExec>() {
             let output_rows = agg

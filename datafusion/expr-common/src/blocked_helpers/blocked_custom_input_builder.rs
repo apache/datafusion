@@ -5,7 +5,6 @@ use crate::groups_accumulator::BlocksIndex;
 use datafusion_common::utils::proxy::VecDequeAllocExt;
 use std::collections::VecDeque;
 use std::fmt::Debug;
-use std::marker::PhantomData;
 use std::ops::{Index, IndexMut};
 
 pub trait BlockProvider {
@@ -333,7 +332,7 @@ impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider: BlockProvider>
             let to_add = remaining_in_current_block.min(n);
             n -= to_add;
 
-            self.push_value_n_within_block(value.clone(), to_add);
+            self.push_value_n_within_block(value, to_add);
         }
     }
 

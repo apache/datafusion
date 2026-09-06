@@ -97,7 +97,7 @@ impl<'a> Deref for BlockedAccumulatorArgs<'a> {
         &self.accumulator_args
     }
 }
-impl<'a> DerefMut for BlockedAccumulatorArgs<'a> {
+impl DerefMut for BlockedAccumulatorArgs<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.accumulator_args
     }

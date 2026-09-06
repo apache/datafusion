@@ -28,13 +28,13 @@ use arrow::buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
+use datafusion_common::utils::proxy::VecAllocExt;
 use std::any::type_name;
 use std::fmt::Debug;
 use std::mem::{size_of, swap};
 use std::ops::Range;
 use std::sync::Arc;
-use datafusion_expr_common::blocked_helpers::{Block, BlockedBytesBufferBuilder, BlockedOffsetBufferBuilder};
+use datafusion_expr_common::blocked_helpers::{BlockedBytesBufferBuilder, BlockedOffsetBufferBuilder};
 use datafusion_expr_common::groups_accumulator::BlocksIndex;
 use crate::binary_map::OutputType;
 
@@ -338,7 +338,7 @@ where
                 )
             }
             _ => unreachable!("View types should use `ArrowBytesViewMap`"),
-        };
+        }
     }
 
     /// Generic version of [`Self::insert_if_new`] that handles `ByteArrayType`
@@ -528,7 +528,7 @@ where
         // self.map_size = 0;
 
         let mut blocks = Vec::with_capacity(offsets.len());
-        let mut into_iter = offsets.into_iter().zip(values.into_iter());
+        let mut into_iter = offsets.into_iter().zip(values);
 
         if let Some((_, null_index)) = self.null.take() {
             if null_index.block_index() > 0 {
@@ -585,7 +585,7 @@ where
             None
         };
 
-        if self.offsets.len() == 0 {
+        if self.offsets.is_empty() {
             self.map.clear();
             // self.map_size = 0;
             assert_eq!(self.null, None);

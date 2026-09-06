@@ -18,13 +18,12 @@
 use std::option::IntoIter;
 use std::sync::Arc;
 
-use super::accumulate::{BlockedNullState, NullState};
+use super::accumulate::{BlockedNullState};
 use crate::aggregate::groups_accumulator::nulls::filtered_null_mask;
-use arrow::array::{ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder, PrimitiveArray};
-use arrow::buffer::BooleanBuffer;
-use datafusion_common::{Result, internal_err};
+use arrow::array::{ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder};
+use datafusion_common::{Result};
 use datafusion_expr_common::blocked_helpers::BlockedBooleanBuilder;
-use datafusion_expr_common::groups_accumulator::{BlockedEmitTo, BlockedGroupSelection, BlockedGroupsAccumulator, BlocksIndex, EmitTo, GroupSelection, GroupsAccumulator};
+use datafusion_expr_common::groups_accumulator::{BlockedEmitTo, BlockedGroupSelection, BlockedGroupsAccumulator, BlocksIndex};
 
 /// An accumulator that implements a single operation over a
 /// [`BooleanArray`] where the accumulated state is also boolean (such

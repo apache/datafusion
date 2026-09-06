@@ -264,9 +264,7 @@ where
     }
 
     fn evaluate_next_block(&mut self, update_seen: bool) -> Option<ArrayRef> {
-        let Some(counts) = self.counts.take_block() else {
-            return None;
-        };
+        let counts = self.counts.take_block()?;
 
         if update_seen {
             let mut remaining = HashSet::default();
@@ -346,10 +344,15 @@ where
 
         let mut blocks_all_values = Vec::with_capacity(counts_blocks.len());
         let mut blocks_offsets = Vec::with_capacity(counts_blocks.len());
-        let mut flat_cursors = Vec::with_capacity(counts_len);
-        // SAFETY: this is save as we just reserved for it
-        unsafe {
-            flat_cursors.set_len(counts_len)
+
+        #[expect(clippy::uninit_vec)]
+        let mut flat_cursors = {
+            let mut v = Vec::with_capacity(counts_len);
+            // SAFETY: this is safe as we just reserved for it
+            unsafe {
+                v.set_len(counts_len)
+            };
+            v
         };
 
         let mut flat_cursor_index = 0;
@@ -386,7 +389,7 @@ where
 
         blocks_all_values
           .into_iter()
-          .zip(blocks_offsets.into_iter())
+          .zip(blocks_offsets)
           .map(|(values, offsets)| Self::build_state_from_parts(values, offsets))
           .collect::<Vec<_>>()
     }
