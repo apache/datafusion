@@ -1210,7 +1210,13 @@ pub fn add_possible_columns_to_diag(
 
 #[cfg(test)]
 mod test {
-    use crate::error::{Column, MAX_LISTED_VALID_FIELDS, SchemaError};
+    use super::*;
+
+    use std::mem::size_of;
+    use std::sync::Arc;
+
+    use arrow::error::ArrowError;
+    use insta::assert_snapshot;
 
     fn field_not_found_message(num_fields: usize) -> String {
         let valid_fields = (0..num_fields)
@@ -1225,50 +1231,36 @@ mod test {
 
     #[test]
     fn field_not_found_lists_every_field_for_a_narrow_schema() {
-        let message = field_not_found_message(3);
-        assert!(
-            message.contains("Valid fields are col_0, col_1, col_2."),
-            "{message}"
-        );
-        assert!(!message.contains("other"), "{message}");
+        assert_snapshot!(field_not_found_message(3), @r"
+        No field named nope.
+        Valid fields are col_0, col_1, col_2.
+        ");
     }
 
     #[test]
     fn field_not_found_lists_every_field_at_the_cap() {
-        let message = field_not_found_message(MAX_LISTED_VALID_FIELDS);
-        assert!(
-            message.contains(&format!("col_{}.", MAX_LISTED_VALID_FIELDS - 1)),
-            "{message}"
-        );
-        assert!(!message.contains("other"), "{message}");
-    }
-
-    #[test]
-    fn field_not_found_truncates_a_wide_schema() {
-        let message = field_not_found_message(200);
-        // The remaining fields are summarised rather than listed.
-        assert!(message.contains("and 180 others."), "{message}");
-        assert!(message.contains("col_0"), "{message}");
-        assert!(
-            !message.contains(&format!("col_{MAX_LISTED_VALID_FIELDS}")),
-            "{message}"
-        );
-        // A 200 column schema used to produce roughly 2.8k characters.
-        assert!(message.len() < 500, "message was {} chars", message.len());
+        assert_snapshot!(field_not_found_message(MAX_LISTED_VALID_FIELDS), @r"
+        No field named nope.
+        Valid fields are col_0, col_1, col_2, col_3, col_4, col_5, col_6, col_7, col_8, col_9, col_10, col_11, col_12, col_13, col_14, col_15, col_16, col_17, col_18, col_19.
+        ");
     }
 
     #[test]
     fn field_not_found_uses_singular_for_one_extra_field() {
-        let message = field_not_found_message(MAX_LISTED_VALID_FIELDS + 1);
-        assert!(message.contains("and 1 other."), "{message}");
+        assert_snapshot!(field_not_found_message(MAX_LISTED_VALID_FIELDS + 1), @r"
+        No field named nope.
+        Valid fields are col_0, col_1, col_2, col_3, col_4, col_5, col_6, col_7, col_8, col_9, col_10, col_11, col_12, col_13, col_14, col_15, col_16, col_17, col_18, col_19 and 1 other.
+        ");
     }
 
-    use super::*;
-
-    use std::mem::size_of;
-    use std::sync::Arc;
-
-    use arrow::error::ArrowError;
+    /// A 200 column schema used to produce roughly 2.8k characters.
+    #[test]
+    fn field_not_found_truncates_a_wide_schema() {
+        assert_snapshot!(field_not_found_message(200), @r"
+        No field named nope.
+        Valid fields are col_0, col_1, col_2, col_3, col_4, col_5, col_6, col_7, col_8, col_9, col_10, col_11, col_12, col_13, col_14, col_15, col_16, col_17, col_18, col_19 and 180 others.
+        ");
+    }
 
     fn ok_result() -> Result<()> {
         Ok(())
