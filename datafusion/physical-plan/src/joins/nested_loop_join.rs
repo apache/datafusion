@@ -1444,13 +1444,15 @@ pub(crate) struct FallbackCoordinator {
     /// Notified when a new chunk becomes available, when the left stream
     /// is exhausted, or when a chunk is released.
     notify: tokio::sync::Notify,
-    /// Notified once, permanently, when the fallback is cancelled.
+    /// Broadcast signalled when the fallback is cancelled.
     ///
-    /// Separate from `notify` because cancellation is terminal and has to reach
-    /// tasks that are not waiting on chunk progress at all -- a stream parked on
-    /// its right input, or a loader parked on a spill read. Waiters register with
-    /// `Notified::enable` and then re-check `cancelled` under the lock, so a
-    /// cancellation landing between those two steps still wakes them.
+    /// This carries no state of its own -- `cancelled` is what persists; this
+    /// only wakes tasks so they go and read it. Kept separate from `notify`
+    /// because cancellation has to reach tasks that are not waiting on chunk
+    /// progress at all: a stream parked on its right input, or a loader parked
+    /// on a spill read. Waiters enable their `Notified` before reading
+    /// `cancelled`, so a cancellation landing between those two steps is
+    /// delivered rather than lost.
     cancel_notify: tokio::sync::Notify,
     #[cfg(test)]
     review_cancel_before_watch: AtomicUsize,
@@ -1497,30 +1499,26 @@ impl FallbackCoordinator {
         self.notify.notify_waiters();
     }
 
-    /// Cancels the coordinated fallback and drops everything the coordinator
-    /// holds, synchronously.
-    ///
-    /// Called from a stream's drop guard when it goes away without finishing.
-    /// Chunks other partitions still hold stay accounted until they release
-    /// them; what this drops is the coordinator's own state, which nothing will
-    /// come back for.
     /// True once a partition was dropped unfinished, cancelling the fallback.
     ///
-    /// Production code observes cancellation through `cancellation_watcher` so a
-    /// waker is registered; this plain read is for assertions.
+    /// Production code observes cancellation through `cancellation_watcher`, so
+    /// that a waker is registered; this plain read is for assertions only.
     #[cfg(test)]
     fn is_cancelled(&self) -> bool {
         self.inner.lock().cancelled
     }
 
-    /// A future that resolves when the fallback is cancelled, already queued for
-    /// the broadcast.
+    /// A future that resolves when the fallback is cancelled.
+    ///
+    /// Registration happens on the future's **first poll**, not at construction:
+    /// that poll enables the `Notified` and then reads `cancelled`, so whichever
+    /// happens first is observed. Callers must therefore poll it, not merely hold
+    /// it.
     ///
     /// Callers that park on something other than chunk progress -- a stream
-    /// waiting on its right input, for instance -- have to hold one of these and
-    /// poll it alongside their own work, or a peer's cancellation never reaches
-    /// their waker. Registration happens here, before the caller re-checks
-    /// `cancelled`, so a cancellation in between is delivered rather than lost.
+    /// waiting on its right input, for instance -- need one of these polled
+    /// alongside their own work, or a peer's cancellation never reaches their
+    /// waker.
     fn cancellation_watcher(self: &Arc<Self>) -> BoxFuture<'static, ()> {
         let coordinator = Arc::clone(self);
         async move {
@@ -1535,6 +1533,17 @@ impl FallbackCoordinator {
         .boxed()
     }
 
+    /// Cancels the coordinated fallback and drops everything the coordinator
+    /// holds, synchronously.
+    ///
+    /// Called from a stream's drop guard when it goes away without finishing.
+    /// Chunks other partitions still hold stay accounted until they release
+    /// them; what this drops is the coordinator's own state, which nothing will
+    /// come back for.
+    ///
+    /// This is the only place that signals `cancel_notify`. Watchers rely on
+    /// that: a wake from it always means a real cancellation, which is why they
+    /// need no re-arm loop. Keep it that way if you add call sites.
     fn cancel(self: &Arc<Self>) {
         {
             let mut inner = self.inner.lock();
@@ -5844,6 +5853,134 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn review_v3_cancel_wakes_pending_build_input() -> Result<()> {
+        struct WakeCount(AtomicUsize);
+        impl futures::task::ArcWake for WakeCount {
+            fn wake_by_ref(this: &Arc<Self>) {
+                this.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let runtime = RuntimeEnvBuilder::new().build_arc()?;
+        let ctx = Arc::new(TaskContext::default().with_runtime(runtime));
+        let coordinator = Arc::new(FallbackCoordinator::new(2, true));
+        let spill = spill_left_for_test(build_left_table(), Arc::clone(&ctx)).await?;
+        let _chunk = Arc::clone(&coordinator)
+            .next_chunk(0, Arc::clone(&spill), Arc::clone(&ctx), Time::new())
+            .await?
+            .expect("chunk");
+        let make_stream = || {
+            let right_schema = build_right_table().schema();
+            let (schema, columns) =
+                build_join_schema(&spill.schema, &right_schema, &JoinType::Left);
+            NestedLoopJoinStream::new(
+                Arc::new(schema),
+                None,
+                JoinType::Left,
+                Box::pin(crate::stream::RecordBatchStreamAdapter::new(
+                    right_schema,
+                    futures::stream::pending::<Result<RecordBatch>>(),
+                )),
+                OnceFut::new(futures::future::pending::<Result<LeftLoad>>()),
+                columns,
+                NestedLoopJoinMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
+                1,
+                SpillState::Pending {
+                    task_context: Arc::clone(&ctx),
+                    fallback_coordinator: Arc::clone(&coordinator),
+                },
+            )
+        };
+        let peer = make_stream();
+        let mut survivor = make_stream();
+        let wakes = Arc::new(WakeCount(AtomicUsize::new(0)));
+        let waker = futures::task::waker(Arc::clone(&wakes));
+        let mut cx = std::task::Context::from_waker(&waker);
+        assert!(survivor.poll_next_unpin(&mut cx).is_pending());
+        assert!(matches!(survivor.state, NLJState::BufferingLeft));
+        wakes.0.store(0, Ordering::SeqCst);
+        drop(peer);
+        assert!(coordinator.is_cancelled());
+        assert!(
+            wakes.0.load(Ordering::SeqCst) > 0,
+            "cancel must wake the survivor waiting on build input"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn review_v3_cancel_before_first_poll() {
+        let coordinator = Arc::new(FallbackCoordinator::new(2, true));
+        let before = coordinator.cancellation_watcher();
+        coordinator.cancel();
+        coordinator.cancel();
+        let after = coordinator.cancellation_watcher();
+        assert!(before.now_or_never().is_some());
+        assert!(after.now_or_never().is_some());
+    }
+
+    #[tokio::test]
+    async fn review_v3_broadcast_and_waker_replacement() {
+        struct WakeCount(AtomicUsize);
+        impl futures::task::ArcWake for WakeCount {
+            fn wake_by_ref(this: &Arc<Self>) {
+                this.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let coordinator = Arc::new(FallbackCoordinator::new(2, true));
+        let mut first = coordinator.cancellation_watcher();
+        let mut second = coordinator.cancellation_watcher();
+        let old_count = Arc::new(WakeCount(AtomicUsize::new(0)));
+        let new_count = Arc::new(WakeCount(AtomicUsize::new(0)));
+        let other_count = Arc::new(WakeCount(AtomicUsize::new(0)));
+        let old_waker = futures::task::waker(Arc::clone(&old_count));
+        let new_waker = futures::task::waker(Arc::clone(&new_count));
+        let other_waker = futures::task::waker(Arc::clone(&other_count));
+        assert!(
+            first
+                .poll_unpin(&mut std::task::Context::from_waker(&old_waker))
+                .is_pending()
+        );
+        assert!(
+            first
+                .poll_unpin(&mut std::task::Context::from_waker(&new_waker))
+                .is_pending()
+        );
+        assert!(
+            second
+                .poll_unpin(&mut std::task::Context::from_waker(&other_waker))
+                .is_pending()
+        );
+        coordinator.notify.notify_waiters();
+        assert_eq!(new_count.0.load(Ordering::SeqCst), 0);
+        assert_eq!(other_count.0.load(Ordering::SeqCst), 0);
+        coordinator.cancel();
+        coordinator.cancel();
+        assert!(new_count.0.load(Ordering::SeqCst) > 0);
+        assert!(other_count.0.load(Ordering::SeqCst) > 0);
+        assert!(first.now_or_never().is_some());
+        assert!(second.now_or_never().is_some());
+    }
+
+    #[tokio::test]
+    async fn review_v3_normal_finish_does_not_cancel() -> Result<()> {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let (plan, ctx) = review_cancellation_plan()?;
+            let mut rows = 0;
+            for partition in 0..2 {
+                let batches =
+                    common::collect(plan.execute(partition, Arc::clone(&ctx))?).await?;
+                rows += batches.iter().map(RecordBatch::num_rows).sum::<usize>();
+                assert!(!plan.fallback_coordinator.is_cancelled());
+            }
+            assert_eq!(rows, 9);
+            assert_eq!(ctx.memory_pool().reserved(), 0);
+            Ok(())
+        })
+        .await
+        .expect("normal execution hung")
+    }
+
+    #[tokio::test]
     async fn review_v2_cancel_wakes_pending_right_input() -> Result<()> {
         struct WakeCount(AtomicUsize);
         impl futures::task::ArcWake for WakeCount {
@@ -6219,7 +6356,7 @@ pub(crate) mod tests {
     /// that publish, the resources `cancel` dropped would be reinstated and the
     /// retention would come straight back.
     #[tokio::test]
-    async fn test_nlj_cancel_during_load_discards_the_result() -> Result<()> {
+    async fn test_nlj_cancelled_coordinator_refuses_to_serve_chunks() -> Result<()> {
         let runtime = RuntimeEnvBuilder::new().build_arc()?;
         let pool = Arc::clone(&runtime.memory_pool);
         let task_ctx = Arc::new(TaskContext::default().with_runtime(runtime));
@@ -6228,7 +6365,9 @@ pub(crate) mod tests {
         let spill =
             spill_left_for_test(build_left_table(), Arc::clone(&task_ctx)).await?;
 
-        // Cancel first, then let a load complete: the publish must be discarded.
+        // Cancel first, then ask for a chunk: the entry check must refuse. The
+        // publish-after-an-in-flight-read path is covered by
+        // `review_inflight_publish_is_discarded`, which pauses a real read.
         Arc::clone(&coordinator).cancel();
         let result = Arc::clone(&coordinator)
             .next_chunk(0, Arc::clone(&spill), Arc::clone(&task_ctx), Time::new())
@@ -6245,17 +6384,19 @@ pub(crate) mod tests {
         Ok(())
     }
 
-    /// A stream that finished normally must not cancel anything on drop.
+    /// A coordinator nobody cancelled keeps serving chunks.
     #[tokio::test]
-    async fn test_nlj_completed_stream_drop_does_not_cancel() -> Result<()> {
+    async fn test_nlj_uncancelled_coordinator_serves_and_stays_live() -> Result<()> {
         let runtime = RuntimeEnvBuilder::new().build_arc()?;
         let task_ctx = Arc::new(TaskContext::default().with_runtime(runtime));
         let coordinator = Arc::new(FallbackCoordinator::new(1, true));
         let spill =
             spill_left_for_test(build_left_table(), Arc::clone(&task_ctx)).await?;
 
-        // Serving a chunk still works after a completed stream would have been
-        // dropped, i.e. nothing marked the coordinator cancelled.
+        // A plain sanity check that nothing marks the coordinator cancelled on
+        // its own. Real stream drops are covered by
+        // `review_v3_normal_finish_does_not_cancel`, which runs both partitions
+        // to completion and drops them.
         let (chunk, _) = Arc::clone(&coordinator)
             .next_chunk(0, Arc::clone(&spill), Arc::clone(&task_ctx), Time::new())
             .await?
