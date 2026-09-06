@@ -19,10 +19,12 @@
 
 use crate::utils::{get_map_entry_field, make_scalar_function};
 use arrow::array::{
-    Array, ArrayRef, Capacities, ListArray, MapArray, MutableArrayData, make_array,
+    Array, ArrayRef, ListArray, MapArray, MutableArrayData, make_array, new_empty_array,
 };
 use arrow::buffer::OffsetBuffer;
+use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field};
+use arrow_ord::ord::make_comparator;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, cast::as_map_array, exec_err};
 use datafusion_expr::{
@@ -31,7 +33,6 @@ use datafusion_expr::{
 };
 use datafusion_macros::user_doc;
 use std::sync::Arc;
-use std::vec;
 
 // Create static instances of ScalarUDFs for each function
 make_udf_expr_and_func!(
@@ -149,43 +150,55 @@ fn general_map_extract_inner(
     query_keys_array: &dyn Array,
 ) -> Result<ArrayRef> {
     let keys = map_array.keys();
-    let mut offsets = vec![0_i32];
-
     let values = map_array.values();
+    let field = Arc::new(Field::new_list_field(map_array.value_type().clone(), true));
+    let map_offsets = map_array.value_offsets();
+    if map_offsets.first() == map_offsets.last() {
+        return Ok(Arc::new(ListArray::new(
+            field,
+            OffsetBuffer::new_zeroed(map_array.len()),
+            new_empty_array(values.data_type()),
+            map_array.nulls().cloned(),
+        )));
+    }
+
+    // Compare keys by index using a single comparator for the batch.
+    let compare =
+        make_comparator(keys.as_ref(), query_keys_array, SortOptions::default())?;
+    let mut offsets = Vec::with_capacity(map_array.len() + 1);
+    offsets.push(0_i32);
+
     let original_data = values.to_data();
-    let capacity = Capacities::Array(original_data.len());
+    // There is at most one output value per map row.
+    let mut mutable = MutableArrayData::new(
+        vec![&original_data],
+        false,
+        map_array.len().min(values.len()),
+    );
 
-    let mut mutable =
-        MutableArrayData::with_capacities(vec![&original_data], true, capacity);
-
-    for (row_index, offset_window) in map_array.value_offsets().windows(2).enumerate() {
+    for (row_index, offset_window) in map_offsets.windows(2).enumerate() {
         let start = offset_window[0] as usize;
         let end = offset_window[1] as usize;
-        let len = end - start;
+        let mut offset = offsets[row_index];
 
-        let query_key = query_keys_array.slice(row_index, 1);
-
-        let value_index =
-            (0..len).find(|&i| keys.slice(start + i, 1).as_ref() == query_key.as_ref());
-
-        match value_index {
-            Some(index) => {
-                mutable.try_extend(0, start + index, start + index + 1)?;
-            }
-            None => {
-                mutable.try_extend_nulls(1)?;
-            }
+        if map_array.is_valid(row_index)
+            && let Some(index) = (start..end).find(|&i| compare(i, row_index).is_eq())
+        {
+            mutable.try_extend(0, index, index + 1)?;
+            offset += 1;
         }
-        offsets.push(offsets[row_index] + 1);
+
+        // A missing key results in an empty list.
+        offsets.push(offset);
     }
 
     let data = mutable.freeze();
 
     Ok(Arc::new(ListArray::new(
-        Arc::new(Field::new_list_field(map_array.value_type().clone(), true)),
+        field,
         OffsetBuffer::<i32>::new(offsets.into()),
-        Arc::new(make_array(data)),
-        None,
+        make_array(data),
+        map_array.nulls().cloned(),
     )))
 }
 
@@ -209,4 +222,78 @@ fn map_extract_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 
     general_map_extract_inner(map_array, key_arg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{Float64Array, Int32Array, StructArray};
+    use arrow::datatypes::Int32Type;
+
+    fn make_map(keys: ArrayRef, values: Vec<i32>, offsets: Vec<i32>) -> MapArray {
+        let entries = StructArray::from(vec![
+            (
+                Arc::new(Field::new("key", keys.data_type().clone(), false)),
+                keys,
+            ),
+            (
+                Arc::new(Field::new("value", DataType::Int32, true)),
+                Arc::new(Int32Array::from(values)) as ArrayRef,
+            ),
+        ]);
+        MapArray::new(
+            Arc::new(Field::new("entries", entries.data_type().clone(), false)),
+            OffsetBuffer::new(offsets.into()),
+            entries,
+            None,
+            false,
+        )
+    }
+
+    #[test]
+    fn map_extract_sliced_maps() -> Result<()> {
+        let map = make_map(
+            Arc::new(Int32Array::from(vec![0, 1, 2, 3])),
+            vec![0, 10, 20, 30],
+            vec![0, 1, 3, 4],
+        );
+        let query_keys = Int32Array::from(vec![0, 2, 9]);
+
+        // Map offsets address the original entries; query indices address the slice.
+        let result =
+            general_map_extract_inner(&map.slice(1, 2), &query_keys.slice(1, 2))?;
+        let expected = ListArray::from_iter_primitive::<Int32Type, _, _>([
+            Some(vec![Some(20)]),
+            Some(vec![]),
+        ]);
+        assert_eq!(result.as_ref(), &expected);
+
+        // Empty slices may retain the original nonempty keys and values buffers.
+        let result =
+            general_map_extract_inner(&map.slice(1, 0), &query_keys.slice(1, 0))?;
+        assert_eq!(result.len(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn map_extract_float_keys() -> Result<()> {
+        let nan = f64::NAN;
+        let other_nan = f64::from_bits(nan.to_bits() + 1);
+        let map = make_map(
+            Arc::new(Float64Array::from(vec![-0.0, 0.0, nan, other_nan])),
+            vec![1, 2, 3, 4],
+            vec![0, 4],
+        );
+
+        // Signed zeros and distinct NaN payloads identify different keys.
+        for (query, expected) in [(-0.0, 1), (0.0, 2), (nan, 3), (other_nan, 4)] {
+            let result =
+                general_map_extract_inner(&map, &Float64Array::from(vec![query]))?;
+            let expected = ListArray::from_iter_primitive::<Int32Type, _, _>([Some(
+                vec![Some(expected)],
+            )]);
+            assert_eq!(result.as_ref(), &expected);
+        }
+        Ok(())
+    }
 }
