@@ -109,10 +109,10 @@ impl ScalarUDFImpl for SparkDatePart {
             }
         };
 
-        // Map Spark-specific date part aliases to datafusion ones
+        // Map Spark-specific date part aliases to DataFusion ones.
         let part = match part.as_str() {
             "yearofweek" | "year_iso" => "isoyear",
-            "dayofweek" => "dow",
+            "dayofweek" | "dow" => "dow1",
             "dayofweek_iso" | "dow_iso" => "isodow",
             other => other,
         };
@@ -124,15 +124,6 @@ impl ScalarUDFImpl for SparkDatePart {
             vec![part_expr, date_expr],
         ));
 
-        match part {
-            // Spark's `dayofweek` is 1..=7 (Sun=1) but df's `dow` is 0..=6
-            // (Sun=0); shift by +1. df's `isodow` already returns the
-            // PG-correct 1..=7 (Mon=1), which matches Spark's
-            // `dayofweek_iso`/`dow_iso`, so no shift is needed there.
-            "dow" => Ok(ExprSimplifyResult::Simplified(
-                date_part_expr + Expr::Literal(ScalarValue::Int32(Some(1)), None),
-            )),
-            _ => Ok(ExprSimplifyResult::Simplified(date_part_expr)),
-        }
+        Ok(ExprSimplifyResult::Simplified(date_part_expr))
     }
 }

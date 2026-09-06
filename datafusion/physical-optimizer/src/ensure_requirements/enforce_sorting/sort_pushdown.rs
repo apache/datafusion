@@ -43,9 +43,11 @@ use datafusion_physical_plan::joins::utils::{
     ColumnIndex, calculate_join_output_ordering,
 };
 use datafusion_physical_plan::joins::{HashJoinExec, SortMergeJoinExec};
+use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
+use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
@@ -111,6 +113,72 @@ fn min_fetch(f1: Option<usize>, f2: Option<usize>) -> Option<usize> {
         (Some(_), _) => f1,
         (_, Some(_)) => f2,
         _ => None,
+    }
+}
+
+/// Returns whether a fetch on `plan` can also be applied to each child.
+fn can_push_fetch_through(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.supports_limit_pushdown()
+        && matches!(plan.cardinality_effect(), CardinalityEffect::Equal)
+}
+
+/// Returns a plan when the fast path for an already-satisfied ordering can also
+/// preserve `parent_fetch` at the current node.
+fn try_preserve_fetch_for_satisfied_plan(
+    plan: &Arc<dyn ExecutionPlan>,
+    parent_fetch: Option<usize>,
+) -> Option<Arc<dyn ExecutionPlan>> {
+    let Some(parent_fetch) = parent_fetch else {
+        return Some(Arc::clone(plan));
+    };
+    let fetch = min_fetch(plan.fetch(), Some(parent_fetch));
+
+    if plan.fetch() == fetch {
+        return Some(Arc::clone(plan));
+    }
+
+    plan.with_fetch(fetch)
+}
+
+/// Preserves a fetch above an already ordered plan while satisfying the
+/// required distribution.
+fn preserve_fetch_above_ordered_plan(
+    mut node: SortPushDown,
+    ordering: LexOrdering,
+    fetch: usize,
+    required_distribution: &Distribution,
+) -> SortPushDown {
+    // The new limit carries the fetch, so it is no longer pending on the
+    // wrapped plan.
+    node.data.fetch = None;
+
+    let input_has_multiple_partitions =
+        node.plan.output_partitioning().partition_count() > 1;
+    let input = Arc::clone(&node.plan);
+
+    let limit: Arc<dyn ExecutionPlan> = if input_has_multiple_partitions {
+        let mut limit = LocalLimitExec::new(input, fetch);
+        limit.set_required_ordering(Some(ordering.clone()));
+        Arc::new(limit)
+    } else {
+        let mut limit = GlobalLimitExec::new(input, 0, Some(fetch));
+        limit.set_required_ordering(Some(ordering.clone()));
+        Arc::new(limit)
+    };
+    let limit_node = PlanContext::new(limit, ParentRequirements::default(), vec![node]);
+
+    if input_has_multiple_partitions
+        && matches!(required_distribution, Distribution::SinglePartition)
+    {
+        let merge = SortPreservingMergeExec::new(ordering, Arc::clone(&limit_node.plan))
+            .with_fetch(Some(fetch));
+        PlanContext::new(
+            Arc::new(merge),
+            ParentRequirements::default(),
+            vec![limit_node],
+        )
+    } else {
+        limit_node
     }
 }
 
@@ -244,8 +312,15 @@ fn pushdown_sorts_helper(
         }
     }
 
+    let can_push_fetch_to_children = can_push_fetch_through(&plan);
     sort_push_down.plan = plan;
-    if satisfy_parent {
+    let plan_with_preserved_fetch = if satisfy_parent {
+        try_preserve_fetch_for_satisfied_plan(&sort_push_down.plan, parent_fetch)
+    } else {
+        None
+    };
+    if let Some(plan) = plan_with_preserved_fetch {
+        sort_push_down.plan = plan;
         // For non-sort operators which satisfy ordering:
         let reqs = sort_push_down.plan.required_input_ordering();
         let dists = sort_push_down
@@ -261,12 +336,19 @@ fn pushdown_sorts_helper(
             } else {
                 parent_distribution.clone()
             };
+        // A fetch retained by the current node is the pushdown boundary unless
+        // the original node can safely pass the limit through.
+        let child_fetch = if can_push_fetch_to_children {
+            parent_fetch
+        } else {
+            None
+        };
 
         for (idx, (child, order)) in
             sort_push_down.children.iter_mut().zip(reqs).enumerate()
         {
             child.data.ordering_requirement = order;
-            child.data.fetch = min_fetch(parent_fetch, child.data.fetch);
+            child.data.fetch = min_fetch(child_fetch, child.data.fetch);
             child.data.distribution_requirement = stronger_distribution(
                 &effective_parent_dist,
                 dists
@@ -306,6 +388,22 @@ fn pushdown_sorts_helper(
             );
         }
         sort_push_down.data.ordering_requirement = None;
+    } else if satisfy_parent && let Some(fetch) = parent_fetch {
+        // Use the plan's concrete ordering when the requirement leaves sort
+        // options unspecified. If there is none, the requirement is satisfied
+        // by constants, so either direction is valid.
+        let ordering = sort_push_down
+            .plan
+            .output_ordering()
+            .cloned()
+            .unwrap_or_else(|| parent_requirement.into_single().into());
+        sort_push_down = preserve_fetch_above_ordered_plan(
+            sort_push_down,
+            ordering,
+            fetch,
+            &parent_distribution,
+        );
+        assign_initial_requirements(&mut sort_push_down);
     } else {
         // Can not push down requirements, add new `SortExec` (distribution-aware):
         sort_push_down = add_sort_above_with_distribution(
@@ -326,14 +424,13 @@ fn pushdown_requirement_to_children(
     parent_required: OrderingRequirements,
     parent_fetch: Option<usize>,
 ) -> Result<Option<Vec<Option<OrderingRequirements>>>> {
-    // If there is a limit on the parent plan we cannot push it down through operators that change the cardinality.
-    // E.g. consider if LIMIT 2 is applied below a FilteExec that filters out 1/2 of the rows we'll end up with 1 row instead of 2.
-    // If the LIMIT is applied after the FilterExec and the FilterExec returns > 2 rows we'll end up with 2 rows (correct).
-    if parent_fetch.is_some() && !plan.supports_limit_pushdown() {
-        return Ok(None);
-    }
-    // Note: we still need to check the cardinality effect of the plan here, because the
-    // limit pushdown is not always safe, even if the plan supports it. Here's an example:
+    // A parent fetch can be pushed through a plan only if the plan explicitly
+    // supports limit pushdown and does not change cardinality. For example, if
+    // LIMIT 2 is applied below a FilterExec that removes half the rows, only one
+    // row may remain. Applied after the filter, it correctly returns two rows
+    // when at least two are available.
+    //
+    // Checking `supports_limit_pushdown()` alone is not enough. For example:
     //
     // UnionExec advertises `supports_limit_pushdown() == true` because it can
     // forward a LIMIT k to each of its children—i.e. apply “LIMIT k” separately
@@ -347,16 +444,11 @@ fn pushdown_requirement_to_children(
     //   — Global LIMIT: take the first 3 rows from (A ∪ B) after merging.
     //   — Pushed down: take 3 from A, 3 from B, then merge → up to 6 rows!
     //
-    // That’s why we still block on cardinality: even though UnionExec can
+    // That’s why we also require equal cardinality: even though UnionExec can
     // push a LIMIT to its children, its GreaterEqual effect means it cannot
     // preserve the global TopK semantics.
-    if parent_fetch.is_some() {
-        match plan.cardinality_effect() {
-            CardinalityEffect::Equal => {
-                // safe: only true sources (e.g. CoalesceBatchesExec, ProjectionExec) pass
-            }
-            _ => return Ok(None),
-        }
+    if parent_fetch.is_some() && !can_push_fetch_through(plan) {
+        return Ok(None);
     }
 
     let maintains_input_order = plan.maintains_input_order();
