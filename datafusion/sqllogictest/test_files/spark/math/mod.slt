@@ -102,6 +102,21 @@ SELECT MOD(NULL::int, NULL::int) as mod_null_3;
 ----
 NULL
 
+query I
+SELECT MOD(NULL, 3);
+----
+NULL
+
+query I
+SELECT MOD(10, NULL);
+----
+NULL
+
+query R
+SELECT MOD(NULL, NULL);
+----
+NULL
+
 # Special values: NaN and Infinity
 query R
 SELECT MOD(5.0::float8, 'NaN'::float8) as mod_nan_1;

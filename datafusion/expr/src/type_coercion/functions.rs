@@ -816,13 +816,21 @@ fn get_valid_types(
         TypeSignature::Numeric(number) => {
             function_length_check(function_name, current_types.len(), *number)?;
 
+            let non_nulls = current_types
+                .iter()
+                .filter(|&t| NativeType::from(t) != NativeType::Null)
+                .collect::<Vec<_>>();
+            let mut valid_type = non_nulls
+                .first()
+                .copied()
+                .cloned()
+                // Fallback to default type if we don't know which type to coerced to
+                // f64 is chosen since most of the math functions utilize Signature::numeric,
+                // and their default type is double precision
+                .unwrap_or(DataType::Float64);
             // Find common numeric type among given types except string
-            let mut valid_type = current_types.first().unwrap().to_owned();
-            for t in current_types.iter().skip(1) {
+            for &t in non_nulls.iter().skip(1) {
                 let logical_data_type: NativeType = t.into();
-                if logical_data_type == NativeType::Null {
-                    continue;
-                }
 
                 if !logical_data_type.is_numeric() {
                     return plan_err!(
@@ -840,12 +848,7 @@ fn get_valid_types(
             }
 
             let logical_data_type: NativeType = valid_type.clone().into();
-            // Fallback to default type if we don't know which type to coerced to
-            // f64 is chosen since most of the math functions utilize Signature::numeric,
-            // and their default type is double precision
-            if logical_data_type == NativeType::Null {
-                valid_type = DataType::Float64;
-            } else if !logical_data_type.is_numeric() {
+            if !logical_data_type.is_numeric() {
                 return plan_err!(
                     "Function '{function_name}' expects Numeric but received {logical_data_type}"
                 );
@@ -1451,6 +1454,13 @@ mod tests {
         );
         assert_eq!(got, [DataType::Float64]);
 
+        let got = get_valid_types_flatten(
+            "test",
+            &TypeSignature::Numeric(2),
+            &[DataType::Null, DataType::Null],
+        );
+        assert_eq!(got, [DataType::Float64]);
+
         // Rejects non-numeric arg.
         let got = get_valid_types(
             "test",
@@ -1462,6 +1472,21 @@ mod tests {
             got.to_string(),
             "Function 'test' expects Numeric but received Timestamp(s)"
         );
+
+        // Nulls should get ignored among other valid types
+        let got = get_valid_types_flatten(
+            "test",
+            &TypeSignature::Numeric(2),
+            &[DataType::Null, DataType::Int32],
+        );
+        assert_eq!(got, [DataType::Int32]);
+
+        let got = get_valid_types_flatten(
+            "test",
+            &TypeSignature::Numeric(2),
+            &[DataType::Int32, DataType::Null],
+        );
+        assert_eq!(got, [DataType::Int32]);
 
         Ok(())
     }
