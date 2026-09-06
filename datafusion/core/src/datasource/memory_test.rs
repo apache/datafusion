@@ -540,6 +540,30 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_insert_replace_remains_unsupported() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )?;
+
+        let error = experiment_with_insert_op(
+            schema,
+            vec![vec![batch.clone()]],
+            vec![vec![batch]],
+            InsertOp::Replace,
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(
+            error.strip_backtrace(),
+            "This feature is not implemented: Replace Into not implemented for MemoryTable yet"
+        );
+        Ok(())
+    }
+
     // Test inserting a batch into a MemTable without any partitions
     #[tokio::test]
     async fn test_insert_into_zero_partition() -> Result<()> {
