@@ -41,8 +41,8 @@ use crate::joins::hash_join::stream::{
 };
 use crate::joins::join_hash_map::{JoinHashMapU32, JoinHashMapU64};
 use crate::joins::utils::{
-    OnceAsync, OnceFut, asymmetric_join_output_partitioning, reorder_output_after_swap,
-    swap_join_projection, update_hash,
+    OnceAsync, OnceFut, asymmetric_join_output_partitioning, emits_unmatched_left_rows,
+    is_existence_join, reorder_output_after_swap, swap_join_projection, update_hash,
 };
 use crate::joins::{JoinOn, JoinOnRef, PartitionMode, SharedBitmapBuilder};
 use crate::metrics::{Count, MetricBuilder, MetricCategory};
@@ -210,6 +210,63 @@ pub(super) struct NullValueScopeMap {
     /// Maps positions in `map`/`scope_values` back to row indices in the full
     /// build batch.
     pub(super) build_indices: UInt64Array,
+}
+
+/// Null-aware (`NOT IN`) semantics of a hash join, derived from
+/// [`HashJoinExec::null_aware`] and the join type.
+///
+/// Only these three combinations are legal (see [`Self::try_new`]), so the
+/// stream matches on this instead of re-checking `null_aware && join_type == ..`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum NullAwareMode {
+    /// Uncorrelated `build.key NOT IN (probe.key)`: emits build rows, and
+    /// none of them once any probe key is NULL.
+    LeftAnti,
+    /// Uncorrelated `probe.key NOT IN (build.key)`: emits probe rows, and
+    /// none of them once any build key is NULL.
+    RightAnti,
+    /// `NOT IN` as a nullable mark column on the build rows. `correlated`
+    /// means `on[1..]` are correlation scope keys (see
+    /// [`HashJoinExec::null_aware`]).
+    LeftMark { correlated: bool },
+}
+
+impl NullAwareMode {
+    /// Validates that `null_aware` may be set for this join and returns its mode.
+    pub(super) fn try_new(
+        join_type: JoinType,
+        partition_mode: PartitionMode,
+        num_keys: usize,
+        has_filter: bool,
+    ) -> Result<Self> {
+        let mode = match (join_type, partition_mode) {
+            (JoinType::LeftAnti, _) => Self::LeftAnti,
+            // `PartitionMode::CollectLeft` is safe because `RightAnti` is probe-driven
+            (JoinType::RightAnti, PartitionMode::CollectLeft) => Self::RightAnti,
+            (JoinType::LeftMark, _) => Self::LeftMark {
+                correlated: num_keys > 1,
+            },
+            _ => {
+                return plan_err!(
+                    "null_aware can only be true for LeftAnti joins and RightAnti joins with `CollectLeft` `PartitionMode`, or LeftMark joins, got {join_type} with {partition_mode}"
+                );
+            }
+        };
+        match mode {
+            Self::LeftAnti | Self::RightAnti if num_keys != 1 => plan_err!(
+                "null_aware {join_type} joins only support single column join key, got {num_keys} columns"
+            ),
+            Self::LeftMark { .. } if partition_mode == PartitionMode::Partitioned => {
+                plan_err!(
+                    "null_aware joins require PartitionMode::CollectLeft, got PartitionMode::Partitioned"
+                )
+            }
+            Self::RightAnti if has_filter => {
+                plan_err!("null_aware RightAnti join does not support a join filter")
+            }
+            _ => Ok(mode),
+        }
+    }
 }
 
 /// HashTable and input data for the left (build side) of a join
@@ -474,45 +531,7 @@ impl HashJoinExecBuilder {
         } = self;
 
         // Validate null_aware flag
-        if exec.null_aware {
-            let join_type = exec.join_type();
-            let partition_mode = exec.partition_mode();
-            if !matches!(
-                (join_type, partition_mode),
-                (JoinType::LeftAnti, _)
-                    | (JoinType::RightAnti, PartitionMode::CollectLeft) // `PartitionMode::CollectLeft` is safe because `RightAnti` is probe-driven
-                    | (JoinType::LeftMark, _)
-            ) {
-                return plan_err!(
-                    "null_aware can only be true for LeftAnti joins and RightAnti joins with `CollectLeft` `PartitionMode`, or LeftMark joins, got {join_type} with {partition_mode}"
-                );
-            }
-            let on = exec.on();
-            if *join_type == JoinType::LeftAnti && on.len() != 1 {
-                return plan_err!(
-                    "null_aware LeftAnti joins only support single column join key, got {} columns",
-                    on.len()
-                );
-            }
-            if *join_type == JoinType::RightAnti && on.len() != 1 {
-                return plan_err!(
-                    "null_aware RightAnti joins only support single column join key, got {} columns",
-                    on.len()
-                );
-            }
-            if *join_type == JoinType::LeftMark
-                && matches!(partition_mode, PartitionMode::Partitioned)
-            {
-                return plan_err!(
-                    "null_aware joins require PartitionMode::CollectLeft, got PartitionMode::Partitioned"
-                );
-            }
-            if *join_type == JoinType::RightAnti && exec.filter.is_some() {
-                return plan_err!(
-                    "null_aware RightAnti join does not support a join filter"
-                );
-            }
-        }
+        exec.null_aware_mode()?;
 
         if preserve_properties {
             return Ok(exec);
@@ -1121,19 +1140,28 @@ impl HashJoinExec {
         Ok(self)
     }
 
+    /// The null-aware semantics of this join, if [`Self::null_aware`] is set.
+    ///
+    /// Errors if `null_aware` is set on a join that does not support it.
+    pub(super) fn null_aware_mode(&self) -> Result<Option<NullAwareMode>> {
+        self.null_aware
+            .then(|| {
+                NullAwareMode::try_new(
+                    self.join_type,
+                    self.mode,
+                    self.on.len(),
+                    self.filter.is_some(),
+                )
+            })
+            .transpose()
+    }
+
     /// Calculate order preservation flags for this hash join.
     fn maintains_input_order(join_type: JoinType) -> Vec<bool> {
-        vec![
-            false,
-            matches!(
-                join_type,
-                JoinType::Inner
-                    | JoinType::Right
-                    | JoinType::RightAnti
-                    | JoinType::RightSemi
-                    | JoinType::RightMark
-            ),
-        ]
+        // The output follows the probe (right) order only when every output
+        // row is produced while scanning the probe side. Joins that also emit
+        // rows from the build-side visited bitmap at the end break that order.
+        vec![false, !need_produce_result_in_final(join_type)]
     }
 
     /// Get probe side information for the hash join.
@@ -1193,21 +1221,12 @@ impl HashJoinExec {
         let emission_type = if left.boundedness().is_unbounded() {
             EmissionType::Final
         } else if right.pipeline_behavior() == EmissionType::Incremental {
-            match join_type {
-                // If we only need to generate matched rows from the probe side,
-                // we can emit rows incrementally.
-                JoinType::Inner
-                | JoinType::LeftSemi
-                | JoinType::RightSemi
-                | JoinType::Right
-                | JoinType::RightAnti
-                | JoinType::RightMark => EmissionType::Incremental,
-                // If we need to generate unmatched rows from the *build side*,
-                // we need to emit them at the end.
-                JoinType::Left
-                | JoinType::LeftAnti
-                | JoinType::LeftMark
-                | JoinType::Full => EmissionType::Both,
+            // Unmatched build-side rows can only be emitted once the probe side
+            // is exhausted; everything else is emitted incrementally.
+            if emits_unmatched_left_rows(join_type) {
+                EmissionType::Both
+            } else {
+                EmissionType::Incremental
             }
         } else {
             right.pipeline_behavior()
@@ -1285,17 +1304,10 @@ impl HashJoinExec {
             ))
             .with_partition_mode(partition_mode)
             .build()?;
-        // In case of anti / semi joins or if there is embedded projection in HashJoinExec, output column order is preserved, no need to add projection again
-        if matches!(
-            self.join_type(),
-            JoinType::LeftSemi
-                | JoinType::RightSemi
-                | JoinType::LeftAnti
-                | JoinType::RightAnti
-                | JoinType::LeftMark
-                | JoinType::RightMark
-        ) || self.projection.is_some()
-        {
+        // Semi / anti / mark joins output columns from one side only, so
+        // swapping does not reorder them; an embedded projection already fixes
+        // the order too. Otherwise a projection restores the original order.
+        if is_existence_join(self.join_type) || self.projection.is_some() {
             Ok(Arc::new(new_join))
         } else {
             reorder_output_after_swap(Arc::new(new_join), &left.schema(), &right.schema())
@@ -1589,10 +1601,7 @@ impl ExecutionPlan for HashJoinExec {
             .flatten()
             .flatten();
 
-        // The extra scope maps + null bitmap are only built for correlated
-        // null-aware LeftMark joins (`on[1..]` are correlation scope keys).
-        let with_null_aware_mark_state =
-            self.null_aware && self.join_type == JoinType::LeftMark && on_left.len() > 1;
+        let null_aware = self.null_aware_mode()?;
 
         let left_fut = match self.mode {
             PartitionMode::CollectLeft => self.left_fut.try_once(|| {
@@ -1612,9 +1621,8 @@ impl ExecutionPlan for HashJoinExec {
                     enable_dynamic_filter_pushdown,
                     Arc::clone(context.session_config().options()),
                     self.null_equality,
-                    self.null_aware && self.join_type == JoinType::RightAnti,
+                    null_aware,
                     array_map_created_count,
-                    with_null_aware_mark_state,
                 ))
             })?,
             PartitionMode::Partitioned => {
@@ -1634,11 +1642,8 @@ impl ExecutionPlan for HashJoinExec {
                     enable_dynamic_filter_pushdown,
                     Arc::clone(context.session_config().options()),
                     self.null_equality,
-                    false,
+                    null_aware,
                     array_map_created_count,
-                    // Partitioned mode is rejected for null-aware joins (see
-                    // `try_new`), so the extra null-aware state is never built.
-                    false,
                 ))
             }
             PartitionMode::Auto => {
@@ -1688,7 +1693,7 @@ impl ExecutionPlan for HashJoinExec {
             self.right.output_ordering().is_some(),
             build_accumulator,
             self.mode,
-            self.null_aware,
+            null_aware,
             self.fetch,
         )))
     }
@@ -2700,7 +2705,7 @@ fn new_join_hashmap(
 /// # Returns
 /// `JoinLeftData` containing the hash map, consolidated batch, join key values,
 /// visited indices bitmap, and computed bounds (if requested).
-#[expect(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
+#[expect(clippy::too_many_arguments)]
 async fn collect_left_input(
     random_state: RandomState,
     left_stream: SendableRecordBatchStream,
@@ -2712,11 +2717,17 @@ async fn collect_left_input(
     should_compute_dynamic_filters: bool,
     config: Arc<ConfigOptions>,
     null_equality: NullEquality,
-    compute_build_side_has_null: bool,
+    null_aware: Option<NullAwareMode>,
     array_map_created_count: Count,
-    with_null_aware_mark_state: bool,
 ) -> Result<JoinLeftData> {
     let schema = left_stream.schema();
+
+    // The extra scope maps + null bitmap are only built for correlated
+    // null-aware LeftMark joins (`on_left[1..]` are correlation scope keys).
+    let with_null_aware_mark_state = matches!(
+        null_aware,
+        Some(NullAwareMode::LeftMark { correlated: true })
+    );
 
     let is_phj_candidate = is_perfect_hash_join_candidate(&on_left, &schema)?;
 
@@ -2954,7 +2965,7 @@ async fn collect_left_input(
         bounds = None;
     }
 
-    let build_has_null = compute_build_side_has_null
+    let build_has_null = null_aware == Some(NullAwareMode::RightAnti)
         && !left_values.is_empty()
         && left_values[0].logical_null_count() > 0;
 
