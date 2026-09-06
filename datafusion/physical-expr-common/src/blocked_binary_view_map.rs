@@ -31,7 +31,7 @@ use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt, VecDequeAl
 use std::fmt::Debug;
 use std::mem::size_of;
 use std::sync::Arc;
-use datafusion_expr_common::blocked_helpers::{BlockedBytesBufferBuilder, BlockedNullsBuilder, BlockedVecBuilder};
+use datafusion_expr_common::blocked_helpers::{BlockedBytesBufferBuilder, BlockedNullsBuilder, BlockedVecBuilder, CopyItemBlockedVecBuilder};
 use datafusion_expr_common::groups_accumulator::BlocksIndex;
 
 /// HashSet optimized for storing string or binary values that can produce that
@@ -141,7 +141,7 @@ where
     map_size: usize,
 
     /// Views for all stored values (in insertion order)
-    views: BlockedVecBuilder<true, u128>,
+    views: CopyItemBlockedVecBuilder<true, u128>,
     buffer: BlockedBytesBufferBuilder,
     /// Tracks null values (true = null)
     nulls: BlockedNullsBuilder<true>,
@@ -175,7 +175,7 @@ where
             output_type,
             map,
             map_size,
-            views: BlockedVecBuilder::new(block_size),
+            views: CopyItemBlockedVecBuilder::new(block_size),
             buffer: BlockedBytesBufferBuilder::new(),
             nulls: BlockedNullsBuilder::new(block_size),
             // 1 empty block
