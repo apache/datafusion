@@ -485,7 +485,6 @@ where
     pub fn take_all(&mut self) -> Vec<ArrayRef> {
         // Build null buffer if we have any nulls
         let views_blocks = self.views.take_all();
-        let mut buffers = self.buffer.take_all().into_iter();
         let number_of_buffers_per_block = std::mem::replace(
             &mut self.num_buffer_blocks_per_block,
             VecDeque::from(vec![1]),
@@ -505,8 +504,7 @@ where
         for (index, (views, number_of_buffers)) in views_blocks.into_iter()
             .zip(number_of_buffers_per_block.into_iter()).enumerate()
         {
-            let block_buffers =
-                buffers.by_ref().take(number_of_buffers).collect::<Vec<_>>();
+            let block_buffers = (0..number_of_buffers).map(|_| self.buffer.take_first_block()).collect::<Vec<_>>();
             assert_eq!(block_buffers.len(), number_of_buffers);
 
             let null_buffer = if null_block_index == index {
@@ -532,6 +530,8 @@ where
 
             output_blocks.push(output);
         }
+
+        self.current_start_block_index = 0;
 
         output_blocks
     }
