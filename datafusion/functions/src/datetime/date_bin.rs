@@ -812,12 +812,14 @@ mod tests {
     use crate::datetime::date_bin::{DateBinFunc, date_bin_nanos_interval};
     use arrow::array::types::TimestampNanosecondType;
     use arrow::array::{Array, IntervalDayTimeArray, TimestampNanosecondArray};
+    use arrow::compute::SortOptions;
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
     use datafusion_common::{DataFusionError, ScalarValue};
-    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
+    use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl};
 
     use chrono::TimeDelta;
     use datafusion_common::config::ConfigOptions;
@@ -865,6 +867,26 @@ mod tests {
             err.strip_backtrace().contains("overflows i64"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn date_bin_does_not_propagate_grouping() -> Result<(), DataFusionError> {
+        let udf = ScalarUDF::from(DateBinFunc::new());
+        let step = ExprProperties::new_unknown().with_order(SortProperties::Singleton);
+        let grouped = ExprProperties::new_unknown().with_order(SortProperties::Grouped);
+
+        assert_eq!(
+            udf.output_ordering(&[step.clone(), grouped])?,
+            SortProperties::Unordered
+        );
+
+        let ordered = ExprProperties::new_unknown()
+            .with_order(SortProperties::Ordered(SortOptions::default()));
+        assert_eq!(
+            udf.output_ordering(&[step, ordered])?,
+            SortProperties::Ordered(SortOptions::default())
+        );
+        Ok(())
     }
 
     #[test]
