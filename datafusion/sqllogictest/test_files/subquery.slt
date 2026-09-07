@@ -1138,6 +1138,65 @@ select t1.t1_int from t1 where (
 2
 4
 
+# correlated_exists_groupless_count_agg_count_bug
+query II rowsort
+SELECT t1_id, t1_int FROM t1 WHERE EXISTS (SELECT count(*) FROM t2 WHERE t1.t1_id = t2.t2_id)
+----
+11 1
+22 2
+33 3
+44 4
+
+# correlated_exists_groupless_count_agg_count_bug_having
+query TT
+explain SELECT t1_id, t1_int FROM t1 WHERE EXISTS (SELECT count(*) FROM t2 WHERE t1.t1_id = t2.t2_id HAVING count(*) = 0)
+----
+logical_plan
+01)Projection: t1.t1_id, t1.t1_int
+02)--Filter: __correlated_sq_1.__always_true IS NULL OR __correlated_sq_1.__always_true IS NOT NULL AND (__correlated_sq_1.count(Int64(1)) != Int64(0)) IS DISTINCT FROM Boolean(true)
+03)----Projection: t1.t1_id, t1.t1_int, __correlated_sq_1.count(Int64(1)), __correlated_sq_1.__always_true
+04)------Left Join: t1.t1_id = __correlated_sq_1.t2_id
+05)--------TableScan: t1 projection=[t1_id, t1_int]
+06)--------SubqueryAlias: __correlated_sq_1
+07)----------Projection: t2.t2_id, count(Int64(1)), Boolean(true) AS __always_true
+08)------------Aggregate: groupBy=[[t2.t2_id]], aggr=[[count(Int64(1))]]
+09)--------------TableScan: t2 projection=[t2_id]
+
+query II
+SELECT t1_id, t1_int FROM t1 WHERE EXISTS (SELECT count(*) FROM t2 WHERE t1.t1_id = t2.t2_id HAVING count(*) = 0)
+----
+33 3
+
+# correlated_not_exists_groupless_count_agg_count_bug
+query II
+SELECT t1_id, t1_int FROM t1 WHERE NOT EXISTS (SELECT count(*) FROM t2 WHERE t1.t1_id = t2.t2_id)
+----
+
+# correlated_in_groupless_count_agg_count_bug
+query II
+SELECT t1_id, t1_int FROM t1 WHERE 0 IN (SELECT count(*) FROM t2 WHERE t1.t1_id = t2.t2_id)
+----
+33 3
+
+# correlated_exists_groupless_null_default_agg_always_true
+query II rowsort
+SELECT t1_id, t1_int FROM t1 WHERE EXISTS (SELECT sum(t2_int) FROM t2 WHERE t1.t1_id = t2.t2_id)
+----
+11 1
+22 2
+33 3
+44 4
+
+# correlated_not_exists_groupless_null_default_agg_always_true
+query II
+SELECT t1_id, t1_int FROM t1 WHERE NOT EXISTS (SELECT sum(t2_int) FROM t2 WHERE t1.t1_id = t2.t2_id)
+----
+
+# correlated_in_groupless_null_default_agg_wrong_zero_substitution
+query II
+SELECT t1_id, t1_int FROM t1 WHERE t1_id = 33 AND 0 IN (SELECT sum(t2_int) FROM t2 WHERE t1.t1_id = t2.t2_id)
+----
+
 #correlated_scalar_subquery_count_agg_in_case_when
 query TT
 explain
@@ -1368,6 +1427,55 @@ select t1_id from t1
 where t1_id > 40 or not exists (select 1 from t2 where t2.t2_int > t1.t1_int)
 ----
 33
+44
+
+# correlated_exists_groupless_count_agg_count_bug_embedded_in_or
+query I rowsort
+select t1_id from t1
+where t1_id > 40 or exists (select count(*) from t2 where t1.t1_id = t2.t2_id having count(*) = 0)
+----
+33
+44
+
+# correlated_not_exists_groupless_count_agg_count_bug_embedded_in_or
+query I rowsort
+select t1_id from t1
+where t1_id > 40 or not exists (select count(*) from t2 where t1.t1_id = t2.t2_id having count(*) = 0)
+----
+11
+22
+44
+
+# correlated_in_groupless_count_agg_count_bug_embedded_in_or
+query I rowsort
+select t1_id from t1
+where t1_id > 40 or 0 in (select count(*) from t2 where t1.t1_id = t2.t2_id)
+----
+33
+44
+
+# correlated_exists_groupless_null_default_agg_count_bug_embedded_in_or
+query I rowsort
+select t1_id from t1
+where t1_id > 40 or exists (select sum(t2_int) from t2 where t1.t1_id = t2.t2_id having sum(t2_int) is null)
+----
+33
+44
+
+# correlated_not_exists_groupless_null_default_agg_count_bug_embedded_in_or
+query I rowsort
+select t1_id from t1
+where t1_id > 40 or not exists (select sum(t2_int) from t2 where t1.t1_id = t2.t2_id having sum(t2_int) is null)
+----
+11
+22
+44
+
+# correlated_in_groupless_null_default_agg_wrong_zero_substitution_embedded_in_or
+query I rowsort
+select t1_id from t1
+where t1_id > 40 or 0 in (select sum(t2_int) from t2 where t1.t1_id = t2.t2_id)
+----
 44
 
 ##########

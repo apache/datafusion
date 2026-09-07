@@ -20,17 +20,18 @@ use std::collections::BTreeSet;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use crate::decorrelate::PullUpCorrelatedExpr;
+use crate::analyzer::type_coercion::TypeCoercionRewriter;
+use crate::decorrelate::{PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR};
 use crate::extract_equijoin_predicate::split_eq_and_noneq_join_predicate;
 use crate::optimizer::ApplyOrder;
-use crate::utils::replace_qualified_name;
+use crate::utils::{evaluates_to_null, replace_qualified_name};
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
-    Column, DFSchemaRef, ExprSchema, NullEquality, Result, assert_or_internal_err,
-    plan_err,
+    Column, DFSchemaRef, ExprSchema, NullEquality, Result, ScalarValue,
+    assert_or_internal_err, internal_err, plan_err,
 };
 use datafusion_expr::expr::{Exists, InSubquery};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
@@ -38,7 +39,7 @@ use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::{conjunction, expr_to_columns, split_conjunction_owned};
 use datafusion_expr::{
     BinaryExpr, Expr, Filter, LogicalPlan, LogicalPlanBuilder, Operator, exists,
-    in_subquery, lit, not, not_exists, not_in_subquery,
+    in_subquery, lit, not, not_exists, not_in_subquery, when,
 };
 
 use log::debug;
@@ -285,7 +286,7 @@ fn build_join_top(
         subquery,
         in_predicate_opt.as_ref(),
         join_type,
-        subquery_alias,
+        &subquery_alias,
     )
 }
 
@@ -317,7 +318,7 @@ fn mark_join(
     let exists_expr = if negated { !exists_col } else { exists_col };
 
     Ok(
-        build_join(left, subquery, in_predicate_opt, JoinType::LeftMark, alias)?
+        build_join(left, subquery, in_predicate_opt, JoinType::LeftMark, &alias)?
             .map(|plan| (plan, exists_expr)),
     )
 }
@@ -355,21 +356,61 @@ fn join_keys_may_be_null(
     Ok(false)
 }
 
+/// Combines the join filter derived from the subquery's correlated
+/// predicates with an `IN`-subquery's equality predicate, folding
+/// the latter into an equality against the right-side (subquery) column
+/// where needed.
+fn build_join_filter_with_in_predicate(
+    join_filter_opt: Option<Expr>,
+    in_predicate_opt: Option<&Expr>,
+    alias: &str,
+) -> Result<Option<Expr>> {
+    // Validate and extract the equality operands from the `IN` predicate.
+    let eq_operands = in_predicate_opt
+        .map(|in_predicate| match in_predicate {
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::Eq,
+                right,
+            }) => Ok((left.deref().clone(), right.deref().clone())),
+            _ => internal_err!("expected a binary equality IN predicate"),
+        })
+        .transpose()?;
+
+    let join_filter = match (join_filter_opt, eq_operands) {
+        (Some(join_filter), Some((left, right))) => {
+            let right_col = create_col_from_scalar_expr(&right, alias.to_string())?;
+            let in_predicate = Expr::eq(left, Expr::Column(right_col));
+            Some(in_predicate.and(join_filter))
+        }
+        (Some(join_filter), None) => Some(join_filter),
+        (None, Some((left, right))) => {
+            let right_col = create_col_from_scalar_expr(&right, alias.to_string())?;
+            Some(Expr::eq(left, Expr::Column(right_col)))
+        }
+        (None, None) => None,
+    };
+    Ok(join_filter)
+}
+
 fn build_join(
     left: &LogicalPlan,
     subquery: &LogicalPlan,
     in_predicate_opt: Option<&Expr>,
     join_type: JoinType,
-    alias: String,
+    alias: &str,
 ) -> Result<Option<LogicalPlan>> {
     let mut pull_up = PullUpCorrelatedExpr::new()
         .with_in_predicate_opt(in_predicate_opt.cloned())
-        .with_exists_sub_query(in_predicate_opt.is_none());
+        .with_exists_sub_query(in_predicate_opt.is_none())
+        .with_need_handle_count_bug(true);
 
     let new_plan = subquery.clone().rewrite(&mut pull_up).data()?;
     if !pull_up.can_pull_up {
         return Ok(None);
     }
+
+    let count_bug_compensation = pull_up.collected_count_expr_map.get(&new_plan).cloned();
 
     let sub_query_alias = LogicalPlanBuilder::from(new_plan)
         .alias(alias.to_string())?
@@ -383,37 +424,33 @@ fn build_join(
     // alias the join filter
     let join_filter_opt = conjunction(pull_up.join_filters)
         .map_or(Ok(None), |filter| {
-            replace_qualified_name(filter, &all_correlated_cols, &alias).map(Some)
+            replace_qualified_name(filter, &all_correlated_cols, alias).map(Some)
         })?;
 
-    let join_filter = match (join_filter_opt, in_predicate_opt.cloned()) {
-        (
-            Some(join_filter),
-            Some(Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: Operator::Eq,
-                right,
-            })),
-        ) => {
-            let right_col = create_col_from_scalar_expr(&right, alias)?;
-            let in_predicate = Expr::eq(left.deref().clone(), Expr::Column(right_col));
-            in_predicate.and(join_filter)
-        }
-        (Some(join_filter), _) => join_filter,
-        (
-            _,
-            Some(Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: Operator::Eq,
-                right,
-            })),
-        ) => {
-            let right_col = create_col_from_scalar_expr(&right, alias)?;
+    if let Some(expr_map) = count_bug_compensation
+        && !expr_map.is_empty()
+    {
+        return build_join_with_count_bug(
+            left,
+            sub_query_alias,
+            join_filter_opt,
+            in_predicate_opt,
+            join_type,
+            alias,
+            &expr_map,
+            pull_up.pull_up_having_expr.as_ref(),
+        )
+        .map(Some);
+    }
 
-            Expr::eq(left.deref().clone(), Expr::Column(right_col))
-        }
-        (None, None) => lit(true),
-        _ => return Ok(None),
+    let join_filter = match build_join_filter_with_in_predicate(
+        join_filter_opt,
+        in_predicate_opt,
+        alias,
+    )? {
+        Some(join_filter) => join_filter,
+        None if in_predicate_opt.is_none() => lit(true),
+        None => return Ok(None),
     };
 
     if matches!(join_type, JoinType::LeftMark | JoinType::RightMark) {
@@ -465,6 +502,9 @@ fn build_join(
         // nullable mark column when the predicate can be implemented by hash keys.
         // Non-equality correlated filters stay on the legacy path because hash join
         // execution cannot mark UNKNOWN candidates for residual predicates.
+        // Only handles LeftMark, no caller produces RightMark today.
+        // The join below has no join keys set yet, so this flag has no effect
+        // unless a later pass sets them from the filter before execution.
         let null_aware = join_type == JoinType::LeftMark
             && in_predicate_opt.is_some()
             && mark_filter_is_hashable_only
@@ -501,6 +541,9 @@ fn build_join(
     //
     // Additionally, if the join keys are non-nullable on both sides, we don't need
     // null-aware semantics because NULLs cannot exist in the data.
+    // Only handles LeftAnti, no caller produces RightAnti today.
+    // The join below has no join keys set yet, so this flag has no effect
+    // unless a later pass sets them from the filter before execution.
     let null_aware = join_type == JoinType::LeftAnti
         && in_predicate_opt.is_some()
         && join_keys_may_be_null(&join_filter, left.schema(), sub_query_alias.schema())?;
@@ -528,6 +571,124 @@ fn build_join(
         new_plan.display_indent()
     );
     Ok(Some(new_plan))
+}
+
+/// Builds the join for a correlated `EXISTS`/`IN` subquery whose groupless
+/// aggregate requires count-bug compensation.
+#[expect(clippy::too_many_arguments)]
+fn build_join_with_count_bug(
+    left: &LogicalPlan,
+    sub_query_alias: LogicalPlan,
+    join_filter_opt: Option<Expr>,
+    in_predicate_opt: Option<&Expr>,
+    join_type: JoinType,
+    alias: &str,
+    expr_map: &crate::decorrelate::ExprResultMap,
+    pull_up_having_expr: Option<&Expr>,
+) -> Result<LogicalPlan> {
+    // The `IN` equality must not be folded into the join filter here. This is a
+    // `LEFT JOIN` on the correlation condition alone, and the value comparison
+    // (with count-bug compensation) is applied afterward, in `exists_expr` below.
+    // Folding it in would make the join itself conditional on the compared value,
+    // causing rows with a real match to be NULL-padded and wrongly compensated.
+    let joined = LogicalPlanBuilder::from(left.clone())
+        .join_on(sub_query_alias, JoinType::Left, join_filter_opt)?
+        .build()?;
+
+    let left_projection: Vec<Expr> = left
+        .schema()
+        .columns()
+        .into_iter()
+        .map(Expr::from)
+        .collect();
+
+    let indicator_col = Expr::Column(Column::new(Some(alias), UN_MATCHED_ROW_INDICATOR));
+
+    let having_arm = pull_up_having_expr.map(|f| not(f.clone()));
+
+    let mut expr_rewrite = TypeCoercionRewriter {
+        schema: joined.schema(),
+    };
+
+    let exists_expr = if let Some(in_predicate) = in_predicate_opt {
+        let Expr::BinaryExpr(BinaryExpr {
+            left: in_left,
+            op: Operator::Eq,
+            right: in_right,
+        }) = in_predicate
+        else {
+            return internal_err!("expected a binary equality IN predicate");
+        };
+        let value_name = create_col_from_scalar_expr(in_right, alias.to_string())?.name;
+        let compensation = expr_map.get(&value_name).cloned();
+        let value_col = Expr::Column(Column::new(Some(alias), value_name));
+        let compensated_value = match compensation {
+            // Only substitute when the empty-input value isn't NULL itself.
+            // If it is NULL, the unmatched row's raw NULL from the LEFT JOIN
+            // is already the correct value, so no substitution is needed.
+            Some(empty_batch_result)
+                if !evaluates_to_null(
+                    empty_batch_result.clone(),
+                    empty_batch_result.column_refs(),
+                )? =>
+            {
+                let mut builder =
+                    when(indicator_col.clone().is_null(), empty_batch_result);
+                if let Some(when_expr) = &having_arm {
+                    builder = builder.when(when_expr.clone(), lit(ScalarValue::Null));
+                }
+                builder
+                    .otherwise(value_col)?
+                    .rewrite(&mut expr_rewrite)
+                    .data()?
+            }
+            _ => value_col,
+        };
+        in_left.deref().clone().eq(compensated_value)
+    } else {
+        // EXISTS is true by default (the groupless aggregate always
+        // produces a row), unless the row has an actual join match whose
+        // HAVING predicate fails.
+        match having_arm {
+            Some(when_expr) => when(indicator_col.clone().is_null(), lit(true))
+                .when(when_expr, lit(false))
+                .otherwise(lit(true))?
+                .rewrite(&mut expr_rewrite)
+                .data()?,
+            None => lit(true),
+        }
+    };
+
+    let new_plan = match join_type {
+        JoinType::LeftMark | JoinType::RightMark => {
+            let mut proj_exprs = left_projection;
+            // "mark" must match the column name mark_join expects back.
+            proj_exprs.push(exists_expr.alias_qualified(Some(alias), "mark"));
+            LogicalPlanBuilder::from(joined)
+                .project(proj_exprs)?
+                .build()?
+        }
+        JoinType::LeftAnti => LogicalPlanBuilder::from(joined)
+            .filter(not(exists_expr))?
+            .project(left_projection)?
+            .build()?,
+        JoinType::LeftSemi => LogicalPlanBuilder::from(joined)
+            .filter(exists_expr)?
+            .project(left_projection)?
+            .build()?,
+        _ => {
+            return internal_err!(
+                "build_join_with_count_bug: unsupported join type {join_type:?}"
+            );
+        }
+    };
+
+    debug!(
+        "predicate subquery (count bug) optimized:\n{}",
+        new_plan.display_indent()
+    );
+
+    Ok(new_plan)
 }
 
 #[derive(Debug)]
@@ -579,6 +740,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_expr::builder::table_source;
     use datafusion_expr::{and, binary_expr, col, out_ref_col, table_scan};
+    use datafusion_functions_aggregate::count::count_udaf;
 
     macro_rules! assert_optimized_plan_equal {
         (
@@ -765,7 +927,7 @@ mod tests {
             SubqueryAlias: __correlated_sq_2 [o_custkey:Int64]
               Projection: orders.o_custkey [o_custkey:Int64]
                 TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
-        "    
+        "
         )
     }
 
@@ -1877,6 +2039,37 @@ mod tests {
                   Projection: orders.o_custkey [o_custkey:Int64]
                     Filter: customer.c_custkey = orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
                       TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+        "
+        )
+    }
+
+    /// Test for correlated exists subquery filter with disjunction and count bug
+    #[test]
+    fn exists_subquery_disjunction_with_count_bug() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
+                .filter(out_ref_col(DataType::UInt32, "test.a").eq(col("sq.a")))?
+                .aggregate(Vec::<Expr>::new(), vec![count_udaf().call(vec![])])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(exists(sq).or(col("test.c").eq(lit(1))))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.b [b:UInt32]
+          Projection: test.a, test.b, test.c [a:UInt32, b:UInt32, c:UInt32]
+            Filter: __correlated_sq_1.mark OR test.c = Int32(1) [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
+              Projection: test.a, test.b, test.c, Boolean(true) AS mark [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
+                Left Join:  Filter: test.a = __correlated_sq_1.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, __always_true:Boolean;N, count():Int64;N]
+                  TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+                  SubqueryAlias: __correlated_sq_1 [a:UInt32, __always_true:Boolean, count():Int64]
+                    Aggregate: groupBy=[[sq.a, Boolean(true) AS __always_true]], aggr=[[count()]] [a:UInt32, __always_true:Boolean, count():Int64]
+                      TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
