@@ -235,7 +235,7 @@ impl ScalarUDFImpl for FloorFunc {
     }
 
     fn strictly_order_preserving(&self, _inputs: &[ExprProperties]) -> Result<bool> {
-        // floor allow distinct inputs to collapse into equal outputs
+        // floor allows distinct inputs to collapse into equal outputs
         Ok(false)
     }
 

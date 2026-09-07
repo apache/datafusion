@@ -163,8 +163,7 @@ impl ScalarUDFImpl for RepeatFunc {
     }
 
     fn strictly_order_preserving(&self, _inputs: &[ExprProperties]) -> Result<bool> {
-        // repeat does not strictly preserve ordering since for the following 2 rows:
-        // "bc" and "bca" and repeat(2) the result will be "bcbc" and "bcabca" which now the order is different
+        // repeat('bc', 2) = 'bcbc' > repeat('bca', 2) = 'bcabca', so ordering is not preserved
         Ok(false)
     }
 }

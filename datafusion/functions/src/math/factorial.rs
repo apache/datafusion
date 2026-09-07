@@ -123,9 +123,8 @@ impl ScalarUDFImpl for FactorialFunc {
     }
 
     fn strictly_order_preserving(&self, _inputs: &[ExprProperties]) -> Result<bool> {
-        // There is one-to-one mapping between input and output and nulls maps to nulls
-        // and because overflow will be resulted in an error and not wrapping or saturating we are ok
-        Ok(true)
+        // factorial(0) == factorial(1) == 1 so orderingis not preserved
+        Ok(false)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
