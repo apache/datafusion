@@ -36,13 +36,13 @@ use std::{
 
 /// Cast a struct column to match target struct fields, handling nested structs recursively.
 ///
-/// This function implements struct-to-struct casting with the assumption that **structs should
-/// always be allowed to cast to other structs**. However, the source column must already be
-/// a struct type - non-struct sources will result in an error.
+/// Structs can be cast to other structs as long as they share at least one field. The source column
+/// must already be a struct type - non-struct sources will result in an error.
 ///
 /// ## Field Matching Strategy
 /// - **By Name**: Source struct fields are matched to target fields by name (case-sensitive)
-/// - **No Positional Mapping**: Structs with no overlapping field names are rejected
+/// - **At Least One Mapped Field**: The source and target struct must share at least one field by name
+///   (unless the source struct has no fields at all)
 /// - **Type Adaptation**: When a matching field is found, it is recursively cast to the target field's type
 /// - **Missing Fields**: Target fields not present in the source are filled with null values
 /// - **Extra Fields**: Source fields not present in the target are ignored
@@ -75,7 +75,13 @@ fn cast_struct_column(
 
     if let Some(source_struct) = source_col.as_any().downcast_ref::<StructArray>() {
         let source_fields = source_struct.fields();
-        validate_struct_compatibility(source_fields, target_fields)?;
+        let mut mapped_source_fields: Vec<Option<usize>> =
+            Vec::with_capacity(target_fields.len());
+        map_struct_fields(
+            source_fields,
+            target_fields,
+            Some(&mut mapped_source_fields),
+        )?;
 
         if !source_col.is_empty() && source_col.null_count() == source_col.len() {
             return Ok(new_null_array(
@@ -89,14 +95,15 @@ fn cast_struct_column(
         let num_rows = source_col.len();
 
         // Iterate target fields and pick source child by name when present.
-        for target_child_field in target_fields.iter() {
+        for (source_child_opt, target_child_field) in
+            mapped_source_fields.iter().zip(target_fields.iter())
+        {
             fields.push(Arc::clone(target_child_field));
 
-            let source_child_opt =
-                source_struct.column_by_name(target_child_field.name());
-
             match source_child_opt {
-                Some(source_child_col) => {
+                Some(source_child_col_idx) => {
+                    let source_child_col = source_struct.column(*source_child_col_idx);
+
                     let adapted_child = cast_column(
                         source_child_col,
                         target_child_field.data_type(),
@@ -111,6 +118,8 @@ fn cast_struct_column(
                     arrays.push(adapted_child);
                 }
                 None => {
+                    // No need to check if `target_child_field` is nullable here
+                    // The call to `map_struct_fields` will have done that for us
                     arrays.push(new_null_array(target_child_field.data_type(), num_rows));
                 }
             }
@@ -674,6 +683,8 @@ fn cast_dictionary_column(
 /// - **Field Matching**: Fields are matched by name (case-sensitive)
 /// - **Missing Target Fields**: Allowed - will be filled with null values during casting
 /// - **Extra Source Fields**: Allowed - will be ignored during casting
+/// - **At Least One Mapped Field**: source and target must share at least one field by name
+///   (unless source is empty)
 /// - **Type Compatibility**: Each matching field must be castable using Arrow's type system
 /// - **Nested Structs**: Recursively validates nested struct compatibility
 ///
@@ -702,6 +713,25 @@ pub fn validate_struct_compatibility(
     source_fields: &[FieldRef],
     target_fields: &[FieldRef],
 ) -> Result<()> {
+    map_struct_fields(source_fields, target_fields, None)
+}
+
+/// Performs the mapping of struct fields, checking compatibility and handling missing or extra fields.
+///
+/// # Arguments
+/// * `source_fields` - Fields from the source struct type
+/// * `target_fields` - Fields from the target struct type
+/// * `mapped_source_fields` - An optional `Vec` into which the indexes of the matching source fields
+///   are written in the order of the target fields
+///
+/// # Returns
+/// * `Ok(())` if the structs are compatible for casting
+/// * `Err(DataFusionError)` with detailed error message if incompatible
+fn map_struct_fields(
+    source_fields: &[FieldRef],
+    target_fields: &[FieldRef],
+    mut mapped_source_fields: Option<&mut Vec<Option<usize>>>,
+) -> Result<()> {
     if !source_fields.is_empty() {
         let has_overlap = has_one_of_more_common_fields(source_fields, target_fields);
         if !has_overlap {
@@ -716,11 +746,16 @@ pub fn validate_struct_compatibility(
     // Check compatibility for each target field
     for target_field in target_fields {
         // Look for matching field in source by name
-        if let Some(source_field) = source_fields
+        let source_field_opt = source_fields
             .iter()
-            .find(|f| f.name() == target_field.name())
+            .enumerate()
+            .find(|(_, f)| f.name() == target_field.name());
+        let source_field_idx = if let Some((source_field_idx, source_field)) =
+            source_field_opt
         {
             validate_field_compatibility(source_field, target_field)?;
+
+            Some(source_field_idx)
         } else {
             // Target field is missing from source
             // If it's non-nullable, we cannot fill it with NULL
@@ -731,6 +766,12 @@ pub fn validate_struct_compatibility(
                     target_field.name()
                 );
             }
+
+            None
+        };
+
+        if let Some(mapped_fields) = mapped_source_fields.as_mut() {
+            mapped_fields.push(source_field_idx);
         }
     }
 
