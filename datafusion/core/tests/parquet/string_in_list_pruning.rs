@@ -15,12 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! End-to-end coverage for compact, large string IN-list pruning. The `IN` and
-//! `NOT IN` cases disable the row and Bloom filters to isolate min/max pruning.
+//! End-to-end coverage for compact, large IN-list pruning. The string cases
+//! exercise detailed edge conditions; representative ordered types verify the
+//! same path against real Parquet row-group and page statistics.
 
 use std::sync::Arc;
 
-use arrow::array::StringArray;
+use arrow::array::{
+    ArrayRef, BinaryArray, Date64Array, Decimal128Array, Int64Array, StringArray,
+    TimestampMicrosecondArray,
+};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
@@ -34,9 +38,11 @@ use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{ScalarValue, assert_batches_eq};
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_physical_expr::expressions::{col, in_list, lit};
+use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::metrics::{MetricValue, MetricsSet};
 use object_store::path::Path;
 use parquet::arrow::ArrowWriter;
+use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
 use tempfile::NamedTempFile;
 
@@ -46,6 +52,21 @@ const ROWS_PER_UNIT: usize = 16;
 const UNITS: usize = 4;
 const TOTAL_ROWS: usize = ROWS_PER_UNIT * UNITS;
 const MATCHING_ROWS: usize = ROWS_PER_UNIT * 2;
+
+fn assert_file_layout(
+    metadata: &ParquetMetaData,
+    total_rows: usize,
+    rows_per_group: usize,
+) {
+    assert_eq!(metadata.num_row_groups(), total_rows / rows_per_group);
+    let offsets = metadata.offset_index().unwrap();
+    for row_group in offsets {
+        assert_eq!(
+            row_group[0].page_locations().len(),
+            rows_per_group / ROWS_PER_UNIT
+        );
+    }
+}
 
 /// Write either four row groups or four pages in one row group. Each unit holds
 /// a single repeated value, so `NOT IN` can exclude the two units whose value is
@@ -116,14 +137,7 @@ fn write_file_with_truncation(
     let mut writer = ArrowWriter::try_new(&mut file, schema, Some(properties)).unwrap();
     writer.write(&batch).unwrap();
     let metadata = writer.close().unwrap();
-    assert_eq!(metadata.num_row_groups(), total_rows / rows_per_group);
-    let offsets = metadata.offset_index().unwrap();
-    for row_group in offsets {
-        assert_eq!(
-            row_group[0].page_locations().len(),
-            rows_per_group / ROWS_PER_UNIT
-        );
-    }
+    assert_file_layout(&metadata, total_rows, rows_per_group);
     file
 }
 
@@ -248,6 +262,93 @@ async fn scan(
         .await
         .unwrap();
     let plan_text = displayable(plan.as_ref()).indent(true).to_string();
+    let batches = collect(Arc::clone(&plan), ctx.task_ctx()).await.unwrap();
+    let metrics = MetricsFinder::find_metrics(plan.as_ref()).unwrap();
+    ScanOutput {
+        batches,
+        plan: plan_text,
+        metrics,
+    }
+}
+
+fn repeated_ordered_values(scale: i64) -> Vec<i64> {
+    [0, 1, 2, 100]
+        .into_iter()
+        .flat_map(|value| std::iter::repeat_n(value * scale, ROWS_PER_UNIT))
+        .collect()
+}
+
+fn write_ordered_file(
+    schema: &Arc<Schema>,
+    values: ArrayRef,
+    page_pruning: bool,
+) -> NamedTempFile {
+    let mut file = tempfile::Builder::new()
+        .prefix("ordered_in_list_pruning")
+        .suffix(".parquet")
+        .tempfile()
+        .unwrap();
+    let rows_per_group = if page_pruning {
+        TOTAL_ROWS
+    } else {
+        ROWS_PER_UNIT
+    };
+    let properties = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(rows_per_group))
+        .set_data_page_row_count_limit(ROWS_PER_UNIT)
+        .set_write_batch_size(ROWS_PER_UNIT)
+        .set_dictionary_enabled(false)
+        .set_bloom_filter_enabled(false)
+        .set_statistics_enabled(EnabledStatistics::Page)
+        .build();
+    let batch = RecordBatch::try_new(Arc::clone(schema), vec![values]).unwrap();
+    let mut writer =
+        ArrowWriter::try_new(&mut file, Arc::clone(schema), Some(properties)).unwrap();
+    writer.write(&batch).unwrap();
+    let metadata = writer.close().unwrap();
+    assert_file_layout(&metadata, TOTAL_ROWS, rows_per_group);
+    file
+}
+
+async fn scan_ordered(
+    file: &NamedTempFile,
+    schema: &Arc<Schema>,
+    list: &[ScalarValue],
+    max_in_list_size: usize,
+    page_pruning: bool,
+    negated: bool,
+) -> ScanOutput {
+    let predicate = in_list(
+        col("value", schema).unwrap(),
+        list.iter().cloned().map(lit).collect(),
+        &negated,
+        schema,
+    )
+    .unwrap();
+    let mut options = TableParquetOptions::default();
+    options.global.max_in_list_size = max_in_list_size;
+    let source = Arc::new(
+        ParquetSource::new(Arc::clone(schema))
+            .with_table_parquet_options(options)
+            .with_predicate(Arc::clone(&predicate))
+            .with_pushdown_filters(false)
+            .with_enable_page_index(page_pruning)
+            .with_bloom_filter_on_read(false),
+    );
+    let location = Path::from_filesystem_path(file.path()).unwrap();
+    let partitioned_file = PartitionedFile::new(
+        location.to_string(),
+        file.as_file().metadata().unwrap().len(),
+    );
+    let config = FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+        .with_file(partitioned_file)
+        .build();
+    let scan: Arc<dyn ExecutionPlan> = Arc::new(DataSourceExec::new(Arc::new(config)));
+    let plan: Arc<dyn ExecutionPlan> =
+        Arc::new(FilterExec::try_new(predicate, scan).unwrap());
+    let plan_text = displayable(plan.as_ref()).indent(true).to_string();
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(1));
     let batches = collect(Arc::clone(&plan), ctx.task_ctx()).await.unwrap();
     let metrics = MetricsFinder::find_metrics(plan.as_ref()).unwrap();
     ScanOutput {
@@ -411,6 +512,118 @@ async fn check_string_not_in_list_with_truncated_bounds(page_pruning: bool) {
     assert_eq!(output.pruned("row_groups_pruned_statistics"), 0);
     assert_eq!(output.pruned("page_index_rows_pruned"), 0);
     assert_eq!(output.counter("output_rows"), ROWS_PER_UNIT);
+}
+
+#[tokio::test]
+async fn ordered_in_list_parquet_pruning() {
+    let decimal_values = Decimal128Array::from_iter_values(
+        repeated_ordered_values(1).into_iter().map(i128::from),
+    )
+    .with_precision_and_scale(18, 2)
+    .unwrap();
+    let cases = [
+        (
+            "binary",
+            Arc::new(BinaryArray::from_iter_values(
+                repeated_ordered_values(1)
+                    .into_iter()
+                    .map(|value| [0xff, value as u8]),
+            )) as ArrayRef,
+            (0..21)
+                .map(|value| ScalarValue::Binary(Some(vec![0xff, value * 2])))
+                .collect::<Vec<_>>(),
+        ),
+        (
+            "int64",
+            Arc::new(Int64Array::from(repeated_ordered_values(1))) as ArrayRef,
+            (0..21)
+                .map(|value| ScalarValue::Int64(Some(value * 2)))
+                .collect(),
+        ),
+        (
+            "decimal128",
+            Arc::new(decimal_values) as ArrayRef,
+            (0..21)
+                .map(|value| ScalarValue::Decimal128(Some(value * 2), 18, 2))
+                .collect(),
+        ),
+        (
+            "date64",
+            Arc::new(Date64Array::from(repeated_ordered_values(86_400_000))) as ArrayRef,
+            (0..21)
+                .map(|value| ScalarValue::Date64(Some(value * 2 * 86_400_000)))
+                .collect(),
+        ),
+        (
+            "timestamp_microsecond_utc",
+            Arc::new(
+                TimestampMicrosecondArray::from(repeated_ordered_values(1_000_000))
+                    .with_timezone("UTC"),
+            ) as ArrayRef,
+            (0..21)
+                .map(|value| {
+                    ScalarValue::TimestampMicrosecond(
+                        Some(value * 2 * 1_000_000),
+                        Some("UTC".into()),
+                    )
+                })
+                .collect(),
+        ),
+    ];
+
+    for (name, values, list) in cases {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            values.data_type().clone(),
+            false,
+        )]));
+        for page_pruning in [false, true] {
+            let file = write_ordered_file(&schema, Arc::clone(&values), page_pruning);
+            for negated in [false, true] {
+                let control =
+                    scan_ordered(&file, &schema, &list, 0, page_pruning, negated).await;
+                let output =
+                    scan_ordered(&file, &schema, &list, 32, page_pruning, negated).await;
+                control.assert_no_filter_interference();
+                output.assert_no_filter_interference();
+                assert!(!control.plan.contains("IN_SET_INTERSECTS"));
+                assert!(!control.plan.contains("NOT_IN_SET_MAY_MATCH"));
+                assert_eq!(
+                    pretty_format_batches(&output.batches).unwrap().to_string(),
+                    pretty_format_batches(&control.batches).unwrap().to_string(),
+                    "type={name}, page_pruning={page_pruning}, negated={negated}"
+                );
+                assert_eq!(
+                    output
+                        .batches
+                        .iter()
+                        .map(RecordBatch::num_rows)
+                        .sum::<usize>(),
+                    MATCHING_ROWS,
+                    "type={name}, page_pruning={page_pruning}, negated={negated}"
+                );
+                assert!(
+                    output.plan.contains(if negated {
+                        "NOT_IN_SET_MAY_MATCH"
+                    } else {
+                        "IN_SET_INTERSECTS"
+                    }),
+                    "type={name}, page_pruning={page_pruning}, negated={negated}, plan={}",
+                    output.plan
+                );
+                assert_eq!(
+                    output.pruned("row_groups_pruned_statistics"),
+                    if page_pruning { 0 } else { 2 },
+                    "type={name}, page_pruning={page_pruning}, negated={negated}"
+                );
+                assert_eq!(
+                    output.pruned("page_index_rows_pruned"),
+                    if page_pruning { MATCHING_ROWS } else { 0 },
+                    "type={name}, page_pruning={page_pruning}, negated={negated}"
+                );
+            }
+        }
+    }
 }
 
 #[tokio::test]
