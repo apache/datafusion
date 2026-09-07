@@ -102,7 +102,7 @@
 //! ```
 //!
 //! Every stage without grouping expressions uses [`AggregateStream`]. This path
-//! is selected before the grouped-stream migration setting is considered.
+//! is selected before any of the grouped streams are considered.
 //!
 //! ## 4. Grouped TopK aggregation
 //!
@@ -135,10 +135,14 @@
 //!
 //! See [`PartialReduceHashAggregateStream`] for details.
 //!
-//! ## 6. Fallback grouped hash aggregation
+//! ## 6. Legacy grouped hash aggregation
 //!
-//! [`GroupedHashAggregateStream`] is the legacy implementation for several of the
-//! stream types above. It is being incrementally migrated to separate streams.
+//! [`GroupedHashAggregateStream`] is the legacy implementation that all of the
+//! grouped streams above were split out of. The split is complete, so it is no
+//! longer planned: it is only reachable by setting
+//! [`datafusion.execution.enable_migration_aggregate`](datafusion_common::config::ExecutionOptions::enable_migration_aggregate)
+//! to `false`. That fallback is kept for one release and will then be removed
+//! together with this stream.
 //!
 //! See the issue for details: <https://github.com/apache/datafusion/issues/22710>
 #![expect(rustdoc::private_intra_doc_links)]
@@ -691,15 +695,11 @@ enum StreamType {
     OrderedFinalAggregate(OrderedFinalAggregateStream),
     /// Single stage of aggregation for ordered input.
     OrderedSingleAggregate(OrderedSingleAggregateStream),
-    /// Hash aggregation reused for multiple stages
+    /// Legacy hash aggregation reused for multiple stages
     ///
-    /// Note this is being incrementally migrated to dedicated streams like
-    /// [`StreamType::PartialHash`], [`StreamType::FinalHash`],
-    /// [`StreamType::OrderedPartialAggregate`],
-    /// [`StreamType::OrderedFinalAggregate`], and
-    /// [`StreamType::OrderedSingleAggregate`]
-    ///
-    /// See issue for details: <https://github.com/apache/datafusion/issues/22710>
+    /// Every path it handles now has a dedicated stream, so this variant is only
+    /// produced when `datafusion.execution.enable_migration_aggregate` is set to
+    /// `false`. See [`grouped_hash_stream`] for the deprecation schedule.
     GroupedHash(GroupedHashAggregateStream),
     /// Grouped TopK aggregate stream.
     /// Input output scheme: initial input -> final result
@@ -1234,11 +1234,8 @@ impl AggregateExec {
         // `enable_migration_aggregate` config option selects between the new
         // streams and the legacy implementation.
         //
-        // The legacy implementation is deprecated. It is kept for one more
-        // release as a fallback for potential bugs in the new streams, and
-        // will be removed after that.
-        //
-        // Issue: <https://github.com/apache/datafusion/issues/22710>
+        // See the `grouped_hash_stream` module documentation for the
+        // deprecation schedule.
         if context
             .session_config()
             .options()
@@ -1292,7 +1289,8 @@ impl AggregateExec {
             );
         }
 
-        // Execution paths that have not been migrated use the fallback implementation
+        // `enable_migration_aggregate` is disabled: fall back to the legacy
+        // implementation, which handles every grouped execution path itself.
         Ok(StreamType::GroupedHash(GroupedHashAggregateStream::new(
             self, context, partition,
         )?))

@@ -964,13 +964,14 @@ config_namespace! {
         /// the new schema verification step.
         pub skip_physical_aggregate_schema_check: bool, default = false
 
-        /// Temporary switch for aggregate stream implementations that are being
-        /// migrated from `GroupedHashAggregateStream`.
+        /// Temporary switch for the aggregate stream implementations that were
+        /// split out of `GroupedHashAggregateStream`.
         ///
-        /// When set to true, DataFusion tries the migrated implementations when
-        /// their preconditions are satisfied. When set to false, grouped
-        /// aggregation falls back to `GroupedHashAggregateStream`. This option
-        /// will be removed after the migration is finished.
+        /// The split is complete, so the default `true` plans every grouped
+        /// aggregation with the dedicated streams. When set to false, grouped
+        /// aggregation falls back to the legacy `GroupedHashAggregateStream`.
+        /// The fallback is kept in case of major bugs in the new streams, and
+        /// will be deleted after the 56.0.0 release together with this option.
         ///
         /// See <https://github.com/apache/datafusion/issues/22710> for details.
         pub enable_migration_aggregate: bool, default = true

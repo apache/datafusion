@@ -335,9 +335,9 @@ mod tests {
             schema,
         )?);
 
-        // This test is for `GroupByMetrics`, which are maintained by
-        // `GroupedHashAggregateStream`. Use a finite memory pool so the partial
-        // aggregate does not take the initial-partial stream path.
+        // This test is for `GroupByMetrics`, which every grouped aggregation
+        // stream records. The memory limit is large enough that the partial
+        // aggregate stays on the in-memory path.
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(10 * 1024 * 1024, 1.0)
             .build_arc()?;
