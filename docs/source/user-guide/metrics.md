@@ -85,8 +85,9 @@ only: an `AggregateExec` without a `GROUP BY` reports just `BaselineMetrics`
 and the per-aggregate timers. `reduction_factor` and `skipped_aggregation_rows`
 are recorded in partial mode only. `skipped_aggregation_rows` is recorded only
 when partial-aggregation skipping is enabled for a single, non-grouping-sets
-`GROUP BY`; a `datafusion.execution.skip_partial_aggregation_probe_ratio_threshold`
-of `>= 1.0` disables the feature.
+`GROUP BY` whose input is not ordered by its grouping expressions; a
+`datafusion.execution.skip_partial_aggregation_probe_ratio_threshold` of `>= 1.0`
+disables the feature.
 
 `time_calculating_group_ids` covers both grouping-expression evaluation and
 resolving the resulting rows to group IDs, including interning and ordering
