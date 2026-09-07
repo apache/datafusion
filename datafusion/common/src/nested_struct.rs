@@ -116,8 +116,12 @@ fn cast_struct_column(
             }
         }
 
-        let struct_array =
-            StructArray::try_new(fields.into(), arrays, source_struct.nulls().cloned())?;
+        let struct_array = StructArray::try_new_with_length(
+            fields.into(),
+            arrays,
+            source_struct.nulls().cloned(),
+            source_struct.len(),
+        )?;
         Ok(Arc::new(struct_array))
     } else {
         // Return error if source is not a struct type
@@ -1155,6 +1159,8 @@ mod tests {
         buffer::{NullBuffer, OffsetBuffer, ScalarBuffer},
         datatypes::{DataType, Field, FieldRef, Int32Type},
     };
+    use arrow_schema::Fields;
+
     /// Macro to extract and downcast a column from a StructArray
     macro_rules! get_column_as {
         ($struct_array:expr, $column_name:expr, $array_type:ty) => {
@@ -1289,6 +1295,65 @@ mod tests {
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
         assert!(error_msg.contains("Cannot cast struct field 'a'"));
+    }
+
+    #[test]
+    fn test_cast_struct_empty_source_and_target() {
+        // Source and target struct: {} (no fields)
+        let source =
+            StructArray::try_new_with_length(Fields::empty(), vec![], None, 1024)
+                .unwrap();
+        let source = Arc::new(source) as ArrayRef;
+
+        // Target struct: {}
+        let target_field = struct_field("s", vec![]);
+
+        // This should succeed - an empty struct is compatible with itself
+        let result =
+            cast_column(&source, target_field.data_type(), &DEFAULT_CAST_OPTIONS)
+                .unwrap();
+        let result = result.as_any().downcast_ref::<StructArray>().unwrap();
+
+        assert_eq!(result.len(), source.len());
+        assert_eq!(result.data_type(), target_field.data_type());
+    }
+
+    #[test]
+    fn test_cast_struct_compatibility_empty_source_nullable_target() {
+        // Source and target struct: {} (no fields)
+        let source =
+            StructArray::try_new_with_length(Fields::empty(), vec![], None, 1024)
+                .unwrap();
+        let source = Arc::new(source) as ArrayRef;
+
+        // Target struct: {a: Int32}
+        let target_field = struct_field("s", vec![field("a", DataType::Int32)]);
+
+        // This should succeed - all target fields are nullable
+        let result =
+            cast_column(&source, target_field.data_type(), &DEFAULT_CAST_OPTIONS)
+                .unwrap();
+        let result = result.as_any().downcast_ref::<StructArray>().unwrap();
+
+        assert_eq!(result.len(), source.len());
+        assert_eq!(result.data_type(), target_field.data_type());
+    }
+
+    #[test]
+    fn test_cast_struct_compatibility_empty_source_non_nullable_target() {
+        // Source and target struct: {} (no fields)
+        let source =
+            StructArray::try_new_with_length(Fields::empty(), vec![], None, 1024)
+                .unwrap();
+        let source = Arc::new(source) as ArrayRef;
+
+        // Target struct: {a: Int32}
+        let target_field = struct_field("s", vec![non_null_field("a", DataType::Int32)]);
+
+        // This should succeed - all target fields are nullable
+        let result =
+            cast_column(&source, target_field.data_type(), &DEFAULT_CAST_OPTIONS);
+        assert!(result.is_err());
     }
 
     #[test]
