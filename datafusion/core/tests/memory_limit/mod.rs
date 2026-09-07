@@ -26,7 +26,10 @@ mod nlj_spill_unmatched;
 mod repartition_mem_limit;
 mod union_nullable_spill;
 mod view_spill_compaction;
-use arrow::array::{ArrayRef, DictionaryArray, Int32Array, RecordBatch, StringViewArray};
+use arrow::array::{
+    ArrayRef, DictionaryArray, Int32Array, Int64Array, RecordBatch, StringArray,
+    StringViewArray,
+};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Int32Type, SchemaRef};
 use arrow_schema::{DataType, Field, Schema};
@@ -218,6 +221,68 @@ mod count_distinct_spill {
         expected.push("+------+------+");
         assert_batches_sorted_eq!(expected, &batches);
     }
+}
+
+/// A grouped `COUNT(DISTINCT <string>)` gets one accumulator per group, and
+/// each of those owns a hash set of the distinct values it has seen. Those
+/// sets used to be created pre-allocated, which costs far more than the
+/// handful of values a group typically holds, so the query's memory use
+/// tracked the number of groups rather than the amount of data.
+///
+/// With 4,000 groups holding 2 distinct values each, this query needed about
+/// 35.5 MB of budget before the per group pre-allocation was removed and
+/// about 1.9 MB after, so an 8 MB limit is a failure before the change and a
+/// success after it. Spilling is disabled, so completing means the query
+/// genuinely fit in the budget.
+///
+/// The `avg(payload)` is load bearing, and `avg` specifically. Without a
+/// second aggregate, `single_distinct_aggregation_to_group_by` rewrites the
+/// distinct aggregate into a plain two stage `GROUP BY` that does not use
+/// these accumulators at all. That rule tolerates a non-distinct `sum`, `min`
+/// or `max` beside the distinct aggregate, because it re-aggregates its own
+/// partial results over the deduplicated inner group by, and those three
+/// compose with themselves. `avg` does not: averaging per group averages of
+/// different sizes gives the wrong answer, so the rule can never accept it.
+/// That is why ClickBench Q9 keeps its distinct aggregate. Do not replace
+/// this with `count(*)`: `count` is only incidentally rejected today, and
+/// <https://github.com/apache/datafusion/pull/24859> proposes accepting it,
+/// which would rewrite the query and leave this test passing by construction.
+#[tokio::test]
+async fn group_by_count_distinct_utf8() {
+    TestCase::new()
+        .with_query(
+            "select group_key, count(distinct value), avg(payload) from t group by group_key",
+        )
+        .with_scenario(Scenario::GroupedDistinctStrings {
+            groups: 4_000,
+            string_view: false,
+        })
+        .with_config(SessionConfig::new().with_target_partitions(1))
+        .with_memory_limit(8_000_000)
+        .with_expected_success()
+        .run()
+        .await
+}
+
+/// The `Utf8View` counterpart of [`group_by_count_distinct_utf8`], covering
+/// the separate view flavoured hash set. The same query over a `Utf8View`
+/// column needed about 123 MB of budget before the change and about 2.5 MB
+/// after, so 16 MB separates the two.
+#[tokio::test]
+async fn group_by_count_distinct_utf8_view() {
+    TestCase::new()
+        .with_query(
+            "select group_key, count(distinct value), avg(payload) from t group by group_key",
+        )
+        .with_scenario(Scenario::GroupedDistinctStrings {
+            groups: 4_000,
+            string_view: true,
+        })
+        .with_config(SessionConfig::new().with_target_partitions(1))
+        .with_memory_limit(16_000_000)
+        .with_expected_success()
+        .run()
+        .await
 }
 
 #[tokio::test]
@@ -1077,6 +1142,14 @@ enum Scenario {
         /// If true, splits all input batches into 1 row each
         single_row_batches: bool,
     },
+
+    /// `groups` distinct integer keys paired with a short string value, for
+    /// grouped aggregates that build one accumulator per group.
+    GroupedDistinctStrings {
+        groups: usize,
+        /// If true, the value column is `Utf8View` rather than `Utf8`
+        string_view: bool,
+    },
 }
 
 impl Scenario {
@@ -1151,6 +1224,15 @@ impl Scenario {
                 let table = SortedTableProvider::new(batches, sort_information);
                 Arc::new(table)
             }
+            Self::GroupedDistinctStrings {
+                groups,
+                string_view,
+            } => {
+                let batches = grouped_distinct_string_batches(*groups, *string_view);
+                let table =
+                    MemTable::try_new(batches[0].schema(), vec![batches]).unwrap();
+                Arc::new(table)
+            }
         }
     }
 
@@ -1174,8 +1256,62 @@ impl Scenario {
                 // Use default rules
                 None
             }
+            Self::GroupedDistinctStrings { .. } => {
+                // Disable the rules that would add a repartition, so the test
+                // measures the aggregate's budget rather than a repartition's
+                Some(vec![Arc::new(JoinSelection::new())])
+            }
         }
     }
+}
+
+/// Number of distinct string values held by every group produced by
+/// [`grouped_distinct_string_batches`]
+const DISTINCT_VALUES_PER_GROUP: usize = 2;
+
+/// Returns batches of 1024 rows with `groups` distinct keys in `group_key`,
+/// each key paired with [`DISTINCT_VALUES_PER_GROUP`] distinct short strings
+/// in `value` and an `Int64` `payload` to aggregate over. The values are
+/// `Utf8View` if `string_view` is set, `Utf8` otherwise.
+fn grouped_distinct_string_batches(groups: usize, string_view: bool) -> Vec<RecordBatch> {
+    let value_type = if string_view {
+        DataType::Utf8View
+    } else {
+        DataType::Utf8
+    };
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("group_key", DataType::Int32, false),
+        Field::new("value", value_type, false),
+        Field::new("payload", DataType::Int64, false),
+    ]));
+
+    const ROWS_PER_BATCH: usize = 1024;
+
+    let rows = groups * DISTINCT_VALUES_PER_GROUP;
+    let mut keys = Vec::with_capacity(rows);
+    let mut values = Vec::with_capacity(rows);
+    for value in 0..DISTINCT_VALUES_PER_GROUP {
+        for group in 0..groups {
+            keys.push(group as i32);
+            values.push(format!("value-{value}"));
+        }
+    }
+
+    keys.chunks(ROWS_PER_BATCH)
+        .zip(values.chunks(ROWS_PER_BATCH))
+        .map(|(keys, values)| {
+            let payloads: ArrayRef =
+                Arc::new(Int64Array::from_iter_values(keys.iter().map(|k| *k as i64)));
+            let keys: ArrayRef = Arc::new(Int32Array::from(keys.to_vec()));
+            let values: ArrayRef = if string_view {
+                Arc::new(StringViewArray::from_iter_values(values))
+            } else {
+                Arc::new(StringArray::from_iter_values(values))
+            };
+            RecordBatch::try_new(Arc::clone(&schema), vec![keys, values, payloads])
+                .unwrap()
+        })
+        .collect()
 }
 
 fn access_log_batches() -> Vec<RecordBatch> {
