@@ -73,7 +73,8 @@ impl GroupedTopKAggregateStream {
         let agg_schema = Arc::clone(&aggr.schema);
         let group_by = Arc::clone(&aggr.group_by);
         let input = aggr.input.execute(partition, Arc::clone(context))?;
-        let baseline_metrics = BaselineMetrics::new(&aggr.metrics, partition);
+        let baseline_metrics =
+            BaselineMetrics::new_with_deduplicated_output_bytes(&aggr.metrics, partition);
         let group_by_metrics = GroupByMetrics::new(&aggr.metrics, partition);
         let aggregate_argument_metrics = AggregateArgumentMetrics::new(
             &aggr.metrics,

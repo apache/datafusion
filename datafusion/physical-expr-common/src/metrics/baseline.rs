@@ -20,10 +20,11 @@
 use std::{borrow::Cow, collections::BTreeMap, sync::Arc, task::Poll};
 
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{Result, utils::memory::get_record_batch_memory_size};
+use datafusion_common::Result;
 
 use super::{
-    Count, ExecutionPlanMetricsSet, Metric, MetricBuilder, MetricsSet, Time, Timestamp,
+    Count, ExecutionPlanMetricsSet, Metric, MetricBuilder, MetricsSet, OutputBytesCount,
+    Time, Timestamp,
 };
 
 const OUTPUT_ROWS_SKEW_METRIC_NAME: &str = "output_rows_skew";
@@ -66,7 +67,7 @@ pub struct BaselineMetrics {
     /// instances share underlying memory buffers, their sizes will be counted
     /// multiple times.
     /// Issue: <https://github.com/apache/datafusion/issues/16841>
-    output_bytes: Count,
+    output_bytes: OutputBytesCount,
 
     /// output batches: the total output batch count
     output_batches: Count,
@@ -99,6 +100,34 @@ impl BaselineMetrics {
         }
     }
 
+    /// Create a new BaselineMetric structure, and set `start_time` to now
+    pub fn new_with_deduplicated_output_bytes(
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+    ) -> Self {
+        let start_time = MetricBuilder::new(metrics).start_timestamp(partition);
+        start_time.record();
+
+        Self {
+            end_time: MetricBuilder::new(metrics)
+                .with_type(super::MetricType::Summary)
+                .end_timestamp(partition),
+            elapsed_compute: MetricBuilder::new(metrics)
+                .with_type(super::MetricType::Summary)
+                .elapsed_compute(partition),
+            output_rows: MetricBuilder::new(metrics)
+                .with_type(super::MetricType::Summary)
+                .output_rows(partition),
+            output_bytes: MetricBuilder::new(metrics)
+                .with_type(super::MetricType::Summary)
+                .with_deduplicated_output_bytes(true)
+                .output_bytes(partition),
+            output_batches: MetricBuilder::new(metrics)
+                .with_type(super::MetricType::Dev)
+                .output_batches(partition),
+        }
+    }
+
     /// Returns a [`BaselineMetrics`] that updates the same `elapsed_compute` ignoring
     /// all other metrics
     ///
@@ -109,7 +138,7 @@ impl BaselineMetrics {
             end_time: Default::default(),
             elapsed_compute: self.elapsed_compute.clone(),
             output_rows: Default::default(),
-            output_bytes: Default::default(),
+            output_bytes: OutputBytesCount::new(self.output_bytes.is_deduped()),
             output_batches: Default::default(),
         }
     }
@@ -331,8 +360,7 @@ impl RecordOutput for usize {
 impl RecordOutput for RecordBatch {
     fn record_output(self, bm: &BaselineMetrics) -> Self {
         bm.record_output(self.num_rows());
-        let n_bytes = get_record_batch_memory_size(&self);
-        bm.output_bytes.add(n_bytes);
+        bm.output_bytes.count_batch(&self);
         bm.output_batches.add(1);
         self
     }
@@ -341,8 +369,7 @@ impl RecordOutput for RecordBatch {
 impl RecordOutput for &RecordBatch {
     fn record_output(self, bm: &BaselineMetrics) -> Self {
         bm.record_output(self.num_rows());
-        let n_bytes = get_record_batch_memory_size(self);
-        bm.output_bytes.add(n_bytes);
+        bm.output_bytes.count_batch(self);
         bm.output_batches.add(1);
         self
     }

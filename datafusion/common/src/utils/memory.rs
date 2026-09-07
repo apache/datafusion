@@ -214,6 +214,11 @@ impl RecordBatchMemoryCounter {
         total_size
     }
 
+    /// Increase the memory usage by n
+    pub fn add(&mut self, n: usize) {
+        self.memory_usage += n;
+    }
+
     /// Total memory of all counted allocations.
     pub fn memory_usage(&self) -> usize {
         self.memory_usage
