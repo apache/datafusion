@@ -1,0 +1,7 @@
+subgroup costsel
+
+template sql_benchmarks/predicate_eval/predicate_eval.benchmark.template
+SUBGROUP=costsel
+QPAD=04
+DATASET=mixed
+NAME=costsel_q04_expensive_selective_then_cheap_unselective
