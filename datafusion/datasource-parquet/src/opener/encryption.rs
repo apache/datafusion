@@ -76,6 +76,7 @@ impl EncryptionContext {
 
 #[cfg(not(feature = "parquet_encryption"))]
 #[expect(dead_code)]
+#[expect(clippy::unused_async)]
 impl EncryptionContext {
     pub(super) async fn get_file_decryption_properties(
         &self,

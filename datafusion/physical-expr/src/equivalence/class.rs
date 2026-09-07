@@ -310,6 +310,33 @@ pub struct EquivalenceGroup {
 }
 
 impl EquivalenceGroup {
+    /// A cheap, deliberately conservative check that two groups hold the same
+    /// equivalence classes.
+    ///
+    /// This is not `PartialEq`, and the distinction is the point. `classes` is a
+    /// `Vec` whose order carries no meaning -- `remove_class_at_idx` uses
+    /// `swap_remove` -- so two groups describing exactly the same equalities can
+    /// hold their classes in different orders and this returns `false` for them.
+    /// Naming it `PartialEq` would invite callers to read it as semantic equality,
+    /// which it is not.
+    ///
+    /// The comparison is positional because it runs on a hot path:
+    /// `ProjectionExec` consults it every time a rule replaces its child. Set
+    /// semantics would mean scanning the other group once per class, and that
+    /// quadratic term costs more than the recomputation the caller is trying to
+    /// skip, by a margin that widens with the number of classes.
+    ///
+    /// Only the false direction is reachable: a group can be reported different
+    /// when it is not, never the same when it is not. Callers using this to skip
+    /// work must be built so that a `false` merely costs them that work, which is
+    /// exactly how the projection fast path uses it.
+    ///
+    /// `map` is an index into `classes` and carries no information the classes do
+    /// not already have, so it takes no part in the comparison.
+    pub fn has_same_classes(&self, other: &Self) -> bool {
+        self.classes == other.classes
+    }
+
     /// Creates an equivalence group from the given equivalence classes.
     pub fn new(classes: impl IntoIterator<Item = EquivalenceClass>) -> Self {
         classes.into_iter().collect::<Vec<_>>().into()
@@ -362,7 +389,7 @@ impl EquivalenceGroup {
         let (mut idx, mut change) = (0, false);
         while idx < self.classes.len() {
             let cls = &mut self.classes[idx];
-            if let Some(AcrossPartitions::Heterogeneous) = cls.constant {
+            if cls.constant == Some(AcrossPartitions::Heterogeneous) {
                 change = true;
                 if cls.len() == 1 {
                     // If this class becomes trivial, remove it entirely:
@@ -924,7 +951,7 @@ mod tests {
     use super::*;
     use crate::equivalence::tests::create_test_params;
     use crate::expressions::{BinaryExpr, Column, binary, col, lit};
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
     use datafusion_expr::Operator;
 
@@ -1242,6 +1269,94 @@ mod tests {
         let second_normalized = projected.normalize_expr(col("b+c", &projected_schema)?);
 
         assert!(first_normalized.eq(&second_normalized));
+
+        Ok(())
+    }
+
+    /// Builds a group from a list of equated column pairs.
+    fn group_of(schema: &SchemaRef, pairs: &[(&str, &str)]) -> Result<EquivalenceGroup> {
+        let mut group = EquivalenceGroup::default();
+        for (lhs, rhs) in pairs {
+            group.add_equal_conditions(col(lhs, schema)?, col(rhs, schema)?);
+        }
+        Ok(group)
+    }
+
+    fn abc_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+            Field::new("d", DataType::Int32, false),
+        ]))
+    }
+
+    #[test]
+    fn test_has_same_classes_is_conservative_about_class_order() -> Result<()> {
+        // `classes` is a `Vec` and `remove_class_at_idx` uses `swap_remove`, so
+        // the order two groups hold their classes in depends on how they were
+        // built. This check is positional and reports such a pair as different.
+        //
+        // That is deliberate, and it is why this is not `PartialEq`: set
+        // semantics would mean scanning the other group per class, and the
+        // quadratic cost dwarfs the recomputation the caller is trying to skip.
+        // The error can only go this way -- different when they match, never the
+        // reverse -- so a caller only forfeits an optimization.
+        let schema = abc_schema();
+        let ab_then_cd = group_of(&schema, &[("a", "b"), ("c", "d")])?;
+        let cd_then_ab = group_of(&schema, &[("c", "d"), ("a", "b")])?;
+
+        assert_eq!(ab_then_cd.len(), 2, "expected two disjoint classes");
+        assert!(!ab_then_cd.has_same_classes(&cd_then_ab));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_has_same_classes_compares_classes() -> Result<()> {
+        let schema = abc_schema();
+
+        // Two empty groups agree.
+        assert!(group_of(&schema, &[])?.has_same_classes(&group_of(&schema, &[])?));
+        // The same class, built the same way.
+        assert!(
+            group_of(&schema, &[("a", "b")])?
+                .has_same_classes(&group_of(&schema, &[("a", "b")])?)
+        );
+        // A class is a set, so the order within a pair is immaterial.
+        assert!(
+            group_of(&schema, &[("a", "b")])?
+                .has_same_classes(&group_of(&schema, &[("b", "a")])?)
+        );
+        // A populated group is not an empty one.
+        assert!(
+            !group_of(&schema, &[("a", "b")])?.has_same_classes(&group_of(&schema, &[])?)
+        );
+        // Equating a different pair yields a different group.
+        assert!(
+            !group_of(&schema, &[("a", "b")])?
+                .has_same_classes(&group_of(&schema, &[("a", "c")])?)
+        );
+        // Widening a class yields a different group.
+        assert!(
+            !group_of(&schema, &[("a", "b")])?
+                .has_same_classes(&group_of(&schema, &[("a", "b"), ("b", "c")])?)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_has_same_classes_ignores_the_map() -> Result<()> {
+        // `map` indexes into `classes`, so equal classes must imply equal
+        // groups no matter how the classes were arrived at. Bridging `a = b`
+        // and `b = c` into one class must match stating `a = c` and `a = b`.
+        let schema = abc_schema();
+        let bridged = group_of(&schema, &[("a", "b"), ("b", "c")])?;
+        let direct = group_of(&schema, &[("a", "c"), ("a", "b")])?;
+
+        assert_eq!(bridged.len(), 1, "expected a single bridged class");
+        assert!(bridged.has_same_classes(&direct));
 
         Ok(())
     }

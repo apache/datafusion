@@ -79,13 +79,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
     ),
     argument(
         name = "flags",
-        description = r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
-- **g**: (global) Search globally and don't return after the first match
-- **i**: case-insensitive: letters match both upper and lower case
-- **m**: multi-line mode: ^ and $ match begin/end of line
-- **s**: allow . to match \n
-- **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
-- **U**: swap the meaning of x* and x*?"#
+        description = r#"Optional regular expression flags that control the behavior of the regular expression. Refer to the flags reference above for supported flags."#
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -256,7 +250,7 @@ impl OptimizedRegex {
         // also leave the input unchanged.
         if short_re.captures_read(locs, val).is_none() {
             return Cow::Borrowed(val);
-        };
+        }
 
         // `captures_read` succeeded, so the overall shortened match is present.
         let match_end = locs.get(0).unwrap().1;
@@ -265,7 +259,7 @@ impl OptimizedRegex {
             // regex since it won't match across lines. Fall back to the full
             // regex replacement.
             return self.re.replacen(val, limit, replacement);
-        };
+        }
         // The fast path only applies to `${1}` replacements, so the result is
         // either capture group 1 or the empty string if that group did not match.
         if let Some((start, end)) = locs.get(1) {

@@ -16,6 +16,7 @@
 // under the License.
 
 pub mod abs;
+pub mod atan2;
 pub mod bin;
 pub mod ceil;
 pub mod expm1;
@@ -37,6 +38,7 @@ use datafusion_functions::make_udf_function;
 use std::sync::Arc;
 
 make_udf_function!(abs::SparkAbs, abs);
+make_udf_function!(atan2::SparkAtan2, atan2);
 make_udf_function!(ceil::SparkCeil, ceil);
 make_udf_function!(expm1::SparkExpm1, expm1);
 make_udf_function!(factorial::SparkFactorial, factorial);
@@ -59,6 +61,7 @@ pub mod expr_fn {
     use datafusion_functions::export_functions;
 
     export_functions!((abs, "Returns abs(expr)", arg1));
+    export_functions!((atan2, "Returns the angle in radians between the positive x-axis and the point (exprX, exprY).", arg1 arg2));
     export_functions!((ceil, "Returns the ceiling of expr.", arg1));
     export_functions!((expm1, "Returns exp(expr) - 1 as a Float64.", arg1));
     export_functions!((
@@ -105,6 +108,7 @@ pub mod expr_fn {
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
     vec![
         abs(),
+        atan2(),
         ceil(),
         expm1(),
         factorial(),

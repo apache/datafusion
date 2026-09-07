@@ -1,2 +1,31 @@
-name = "predicate_eval"
-description = "Micro-benchmarks for conjunctive (AND) filter evaluation. Each subgroup exercises a different predicate pattern (per-predicate cost, selectivity, conjunct count, string-column width, row count, correlation, selectivity drift, plus an order-neutral control) so the suite can show how an adaptive predicate-ordering system behaves across them -- the kind of change these benchmarks are meant to help drive, e.g. https://github.com/apache/datafusion/issues/11262. By default it measures DataFusion's built-in left-deep AND short-circuit and sets no engine config of its own; toggle a system under test with its native DATAFUSION_* env var (the harness reads SessionConfig::from_env), e.g. DATAFUSION_EXECUTION_ADAPTIVE_FILTER_REORDERING=true. Subgroups (BENCH_SUBGROUP): costsel, cost, selectivity, cardinality, width, scale, neutral, correlation, drift. Size synthetic data with PRED_ROWS and string-column width with PRED_FILL."
+description = "Conjunctive filter evaluation micro-benchmarks covering predicate cost, selectivity, cardinality, width, scale, correlation, and drift"
+
+query_pattern = "q{QUERY_ID_PADDED}.benchmark"
+
+[[options]]
+name = "rows"
+short = "r"
+env = "PRED_ROWS"
+default = "1000000"
+values = ["1000000", "..."]
+help = "Sets the number of rows in generated predicate-evaluation datasets."
+
+[[options]]
+name = "fill"
+short = "f"
+env = "PRED_FILL"
+default = "30"
+values = ["2", "30", "170", "..."]
+help = "Sets the filler width for generated string columns."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- predicate_eval"
+description = "Run all predicate-evaluation subgroups with default data sizes."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- predicate_eval --query 20 --subgroup selectivity"
+description = "Run selectivity query 20."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- predicate_eval --subgroup width -r 500000 -f 170"
+description = "Run the width subgroup with 500,000 extra-wide rows."

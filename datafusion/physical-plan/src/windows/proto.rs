@@ -19,7 +19,6 @@
 
 use std::sync::Arc;
 
-use arrow::compute::SortOptions;
 use arrow::datatypes::Schema;
 use datafusion_common::{
     Result, ScalarValue, internal_datafusion_err, internal_err, not_impl_err,
@@ -28,7 +27,9 @@ use datafusion_expr::{
     WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
 use datafusion_physical_expr::window::SlidingAggregateWindowExpr;
-use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+use datafusion_physical_expr_common::sort_expr::{
+    sort_exprs_try_from_proto, sort_exprs_try_to_proto,
+};
 use datafusion_proto_common::protobuf_common;
 use datafusion_proto_models::protobuf::{self, physical_window_expr_node};
 
@@ -93,17 +94,7 @@ pub(super) fn encode_physical_window_expr(
 
     let args = ctx.encode_expressions(&args)?;
     let partition_by = ctx.encode_expressions(window_expr.partition_by())?;
-    let order_by = window_expr
-        .order_by()
-        .iter()
-        .map(|sort_expr| {
-            Ok(protobuf::PhysicalSortExprNode {
-                expr: Some(Box::new(ctx.encode_expr(&sort_expr.expr)?)),
-                asc: !sort_expr.options.descending,
-                nulls_first: sort_expr.options.nulls_first,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let order_by = sort_exprs_try_to_proto(window_expr.order_by(), &ctx.expr_ctx())?;
 
     Ok(protobuf::PhysicalWindowExprNode {
         args,
@@ -133,24 +124,8 @@ pub(super) fn decode_physical_window_expr(
         .iter()
         .map(|expr| ctx.decode_expr(expr, input_schema))
         .collect::<Result<Vec<_>>>()?;
-    let order_by = proto
-        .order_by
-        .iter()
-        .map(|sort_expr| {
-            let expr = sort_expr.expr.as_ref().ok_or_else(|| {
-                internal_datafusion_err!(
-                    "Missing expr in window order_by sort expression"
-                )
-            })?;
-            Ok(PhysicalSortExpr {
-                expr: ctx.decode_expr(expr, input_schema)?,
-                options: SortOptions {
-                    descending: !sort_expr.asc,
-                    nulls_first: sort_expr.nulls_first,
-                },
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let order_by =
+        sort_exprs_try_from_proto(&proto.order_by, &ctx.expr_ctx(input_schema))?;
     let window_frame = proto
         .window_frame
         .as_ref()

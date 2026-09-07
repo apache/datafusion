@@ -30,6 +30,7 @@ mod decoder_projection;
 pub mod file_format;
 pub mod metadata;
 mod metrics;
+mod nested_schema_pruning;
 mod opener;
 mod page_filter;
 mod projection_read_plan;
@@ -41,6 +42,8 @@ mod schema_coercion;
 mod sink;
 mod sort;
 pub mod source;
+#[cfg(test)]
+mod statistics_order_tests;
 mod supported_predicates;
 #[cfg(test)]
 mod test_util;

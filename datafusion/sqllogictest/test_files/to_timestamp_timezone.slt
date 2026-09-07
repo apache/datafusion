@@ -199,6 +199,55 @@ select arrow_typeof(to_timestamp(61))
 ----
 Timestamp(ns, "America/New_York")
 
+## Test 18: Array (non-constant-folded) input must carry the configured timezone
+## https://github.com/apache/datafusion/issues/24632
+statement ok
+SET datafusion.execution.time_zone = 'UTC';
+
+query TP
+SELECT arrow_typeof(to_timestamp(s)), to_timestamp(s) FROM (VALUES ('2020-09-08T13:42:29'), ('2020-09-08T13:42:29Z')) AS t(s);
+----
+Timestamp(ns, "UTC") 2020-09-08T13:42:29Z
+Timestamp(ns, "UTC") 2020-09-08T13:42:29Z
+
+## The declared type is trusted by the planner, so a comparison against another
+## timezone-aware value must reach the Arrow kernel with matching types
+query B
+SELECT to_timestamp(s) <= to_timestamp('2262-01-01T00:00:00') FROM (VALUES ('2020-09-08T13:42:29')) AS t(s);
+----
+true
+
+statement ok
+SET datafusion.execution.time_zone = 'America/New_York';
+
+query TP
+SELECT arrow_typeof(to_timestamp(s)), to_timestamp(s) FROM (VALUES ('2020-09-08T13:42:29')) AS t(s);
+----
+Timestamp(ns, "America/New_York") 2020-09-08T13:42:29-04:00
+
+## with an explicit format string
+query TP
+SELECT arrow_typeof(to_timestamp(s, '%Y-%m-%d %H:%M:%S')), to_timestamp(s, '%Y-%m-%d %H:%M:%S') FROM (VALUES ('2020-09-08 13:42:29')) AS t(s);
+----
+Timestamp(ns, "America/New_York") 2020-09-08T13:42:29-04:00
+
+## all precision variants
+query TTTT
+SELECT
+  arrow_typeof(to_timestamp_seconds(s)),
+  arrow_typeof(to_timestamp_millis(s)),
+  arrow_typeof(to_timestamp_micros(s)),
+  arrow_typeof(to_timestamp_nanos(s))
+FROM (VALUES ('2020-09-08T13:42:29')) AS t(s);
+----
+Timestamp(s, "America/New_York") Timestamp(ms, "America/New_York") Timestamp(µs, "America/New_York") Timestamp(ns, "America/New_York")
+
+## to_date is unaffected by the execution timezone
+query TD
+SELECT arrow_typeof(to_date(s)), to_date(s) FROM (VALUES ('2020-09-08')) AS t(s);
+----
+Date32 2020-09-08
+
 ## Reset timezone for other tests
 statement ok
 RESET datafusion.execution.time_zone

@@ -2665,3 +2665,18 @@ false
 
 statement ok
 drop table t;
+
+
+# Test numeric literals with underscore separators
+# (https://github.com/apache/datafusion/issues/23877)
+
+statement ok
+set datafusion.sql_parser.dialect = 'postgres'
+
+query IIIRI
+select 1_000, 1_2_3_4, -1_2_3_4, 1_2.3_4, 0_0
+----
+1000 1234 -1234 12.34 0
+
+statement ok
+reset datafusion.sql_parser.dialect

@@ -20,14 +20,17 @@
 use crate::binary_map::OutputType;
 use arrow::array::NullBufferBuilder;
 use arrow::array::cast::AsArray;
-use arrow::array::{Array, ArrayRef, BinaryViewArray, ByteView, make_view};
+use arrow::array::{
+    Array, ArrayRef, BinaryViewArray, BinaryViewBuilder, ByteView, StringViewBuilder,
+    make_view,
+};
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::{BinaryViewType, ByteViewType, DataType, StringViewType};
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
+use datafusion_common::utils::proxy::VecAllocExt;
+use datafusion_common::{Result, exec_err};
 use std::fmt::Debug;
-use std::mem::size_of;
 use std::sync::Arc;
 
 /// HashSet optimized for storing string or binary values that can produce that
@@ -36,8 +39,19 @@ use std::sync::Arc;
 pub struct ArrowBytesViewSet(ArrowBytesViewMap<()>);
 
 impl ArrowBytesViewSet {
+    /// Creates a set that does not pre-allocate its hash table.
+    ///
+    /// See [`ArrowBytesViewMap::new`] for when to prefer this over
+    /// [`Self::with_capacity`].
     pub fn new(output_type: OutputType) -> Self {
         Self(ArrowBytesViewMap::new(output_type))
+    }
+
+    /// Creates a set with room for `map_capacity` entries.
+    ///
+    /// See [`ArrowBytesViewMap::with_capacity`].
+    pub fn with_capacity(output_type: OutputType, map_capacity: usize) -> Self {
+        Self(ArrowBytesViewMap::with_capacity(output_type, map_capacity))
     }
 
     /// Inserts each value from `values` into the set
@@ -51,9 +65,7 @@ impl ArrowBytesViewSet {
     /// Return the contents of this map and replace it with a new empty map with
     /// the same output type
     pub fn take(&mut self) -> Self {
-        let mut new_self = Self::new(self.0.output_type);
-        std::mem::swap(self, &mut new_self);
-        new_self
+        Self(self.0.take())
     }
 
     /// Converts this set into a `StringViewArray` or `BinaryViewArray`
@@ -125,8 +137,10 @@ where
     output_type: OutputType,
     /// Underlying hash set for each distinct value
     map: hashbrown::hash_table::HashTable<Entry<V>>,
-    /// Total size of the map in bytes
-    map_size: usize,
+    /// Hash table capacity to re-create the map with in [`Self::take`], so a
+    /// map built with [`Self::with_capacity`] keeps its pre-allocation when it
+    /// is emptied and reused
+    initial_map_capacity: usize,
 
     /// Views for all stored values (in insertion order)
     views: Vec<u128>,
@@ -147,18 +161,36 @@ where
     null: Option<(V, usize)>,
 }
 
-/// The size, in number of entries, of the initial hash table
-const INITIAL_MAP_CAPACITY: usize = 512;
+/// The size, in number of entries, of the hash table pre-allocated by
+/// [`ArrowBytesViewMap::with_capacity`]. It is a warm up size for maps that go
+/// on to hold many values, not a bound on what the map can hold.
+pub const INITIAL_MAP_CAPACITY: usize = 512;
 
 impl<V> ArrowBytesViewMap<V>
 where
     V: Debug + PartialEq + Eq + Clone + Copy + Default,
 {
+    /// Creates a map that does not pre-allocate its hash table.
+    ///
+    /// Use this when maps are created in large numbers and most of them stay
+    /// small, such as the per group `COUNT(DISTINCT)` accumulators that
+    /// `GroupsAccumulatorAdapter` creates one of per group. There the
+    /// pre-allocation dwarfs the values the map actually holds.
     pub fn new(output_type: OutputType) -> Self {
+        Self::with_capacity(output_type, 0)
+    }
+
+    /// Creates a map whose hash table is pre-allocated for `map_capacity`
+    /// entries.
+    ///
+    /// Use this for the few long lived maps that are each expected to hold many
+    /// values, such as the single map backing a `GROUP BY` on one string
+    /// column. The capacity is preserved across [`Self::take`].
+    pub fn with_capacity(output_type: OutputType, map_capacity: usize) -> Self {
         Self {
             output_type,
-            map: hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY),
-            map_size: 0,
+            map: hashbrown::hash_table::HashTable::with_capacity(map_capacity),
+            initial_map_capacity: map_capacity,
             views: Vec::new(),
             in_progress: Vec::new(),
             completed: Vec::new(),
@@ -172,9 +204,25 @@ where
     /// Return the contents of this map and replace it with a new empty map with
     /// the same output type
     pub fn take(&mut self) -> Self {
-        let mut new_self = Self::new(self.output_type);
+        let mut new_self =
+            Self::with_capacity(self.output_type, self.initial_map_capacity);
         std::mem::swap(self, &mut new_self);
         new_self
+    }
+
+    /// Empties this map and releases every allocation it holds, so
+    /// [`Self::size`] drops to approximately zero.
+    ///
+    /// This is the difference from [`Self::take`]: `take` restores the capacity
+    /// the map was configured with so the emptied map stays warm for continued
+    /// use, which is what emitting wants, whereas here the point is to hand the
+    /// memory back, as before spilling or before a downstream sort. The
+    /// configured capacity is remembered, so the next [`Self::take`] warms the
+    /// map up again.
+    pub fn clear_and_release(&mut self) {
+        let mut released = Self::with_capacity(self.output_type, 0);
+        released.initial_map_capacity = self.initial_map_capacity;
+        *self = released;
     }
 
     /// Inserts each value from `values` into the map, invoking `payload_fn` for
@@ -231,7 +279,7 @@ where
                 )
             }
             _ => unreachable!("Utf8/Binary should use `ArrowBytesSet`"),
-        };
+        }
     }
 
     /// Generic version of [`Self::insert_if_new`] that handles `ByteViewType`
@@ -367,11 +415,29 @@ where
                     payload,
                 };
 
-                self.map
-                    .insert_accounted(new_header, |h| h.hash, &mut self.map_size);
+                self.map.insert_unique(hash, new_header, |h| h.hash);
                 payload
             };
             observe_payload_fn(payload);
+        }
+    }
+
+    /// Returns the bytes for the key at `index`, irrespective of nullness.
+    fn key(&self, index: usize) -> &[u8] {
+        let view = &self.views[index];
+        let byte_view = ByteView::from(*view);
+        let length = byte_view.length as usize;
+        if length <= 12 {
+            // SAFETY: `view` is a valid inline view with `length` bytes.
+            unsafe { BinaryViewArray::inline_value(view, length) }
+        } else {
+            let buffer_index = byte_view.buffer_index as usize;
+            let offset = byte_view.offset as usize;
+            if buffer_index < self.completed.len() {
+                &self.completed[buffer_index][offset..offset + length]
+            } else {
+                &self.in_progress[offset..offset + length]
+            }
         }
     }
 
@@ -404,6 +470,47 @@ where
             }
             _ => unreachable!("Utf8/Binary should use `ArrowBytesMap`"),
         }
+    }
+
+    /// Copies keys at `indices` into an array without changing this map.
+    ///
+    /// Keys are returned in index order, and duplicate indices are supported.
+    pub fn keys<I>(&self, indices: I) -> Result<ArrayRef>
+    where
+        I: IntoIterator<Item = usize>,
+    {
+        let indices = indices.into_iter();
+        let capacity = indices.size_hint().0;
+        let num_keys = self.views.len();
+        let null_index = self.null.map(|(_, index)| index);
+
+        macro_rules! build_keys {
+            ($builder:ty, $value:expr) => {{
+                let mut builder = <$builder>::with_capacity(capacity);
+                for index in indices {
+                    if index >= num_keys {
+                        return exec_err!(
+                            "Key index {index} is out of bounds for {num_keys} keys"
+                        );
+                    }
+                    if null_index == Some(index) {
+                        builder.append_null();
+                    } else {
+                        builder.append_value($value(self.key(index)));
+                    }
+                }
+                Arc::new(builder.finish()) as ArrayRef
+            }};
+        }
+
+        Ok(match self.output_type {
+            OutputType::BinaryView => build_keys!(BinaryViewBuilder, |value| value),
+            OutputType::Utf8View => build_keys!(StringViewBuilder, |value| unsafe {
+                // Inputs to an Utf8View map are validated UTF-8.
+                std::str::from_utf8_unchecked(value)
+            }),
+            _ => unreachable!("Utf8/Binary should use `ArrowBytesMap`"),
+        })
     }
 
     /// Append an already-computed inline view (len <= 12) directly, bypassing
@@ -469,14 +576,23 @@ where
     }
 
     /// Return the total size, in bytes, of memory used to store the data in
-    /// this set, not including `self`
+    /// this set, not including `self` or input-array buffers.
     pub fn size(&self) -> usize {
-        let views_size = self.views.len() * size_of::<u128>();
-        let in_progress_size = self.in_progress.capacity();
-        let completed_size: usize = self.completed.iter().map(|b| b.len()).sum();
+        // All fields below own their allocations. Count retained capacity rather
+        // than used length because this value drives memory accounting.
+        //
+        // `HashTable::allocation_size` reports the whole hashbrown allocation,
+        // which is the entry array plus the control bytes plus the trailing
+        // group, so it is larger than `capacity() * size_of::<Entry<V>>()`. It
+        // is a constant time layout calculation, not a walk of the table.
+        let map_size = self.map.allocation_size();
+        let views_size = self.views.allocated_size();
+        let in_progress_size = self.in_progress.allocated_size();
+        let completed_size = self.completed.allocated_size()
+            + self.completed.iter().map(Buffer::capacity).sum::<usize>();
         let nulls_size = self.nulls.allocated_size();
 
-        self.map_size
+        map_size
             + views_size
             + in_progress_size
             + completed_size
@@ -492,7 +608,7 @@ where
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ArrowBytesMap")
             .field("map", &"<map>")
-            .field("map_size", &self.map_size)
+            .field("map_allocation_size", &self.map.allocation_size())
             .field("views_len", &self.views.len())
             .field("completed_buffers", &self.completed.len())
             .field("random_state", &self.random_state)
@@ -527,6 +643,7 @@ where
 mod tests {
     use arrow::array::{GenericByteViewArray, StringViewArray};
     use datafusion_common::HashMap;
+    use std::mem::size_of;
 
     use super::*;
 
@@ -715,6 +832,167 @@ mod tests {
         assert_eq!(set.len(), 10);
     }
 
+    /// A lower bound on the bytes a hashbrown table holding `entries` entries
+    /// of type `T` must allocate: one entry slot and one control byte each.
+    /// Derived independently of the production accounting so it can bracket it.
+    fn min_table_bytes<T>(entries: usize) -> usize {
+        entries * (size_of::<T>() + 1)
+    }
+
+    #[test]
+    fn map_new_does_not_allocate() {
+        let map = ArrowBytesViewMap::<()>::new(OutputType::Utf8View);
+
+        assert_eq!(map.map.capacity(), 0);
+        assert_eq!(map.map.allocation_size(), 0);
+        assert_eq!(map.size(), 0);
+    }
+
+    #[test]
+    fn test_size_counts_initial_hash_table_capacity() {
+        let map = ArrowBytesViewMap::<()>::with_capacity(
+            OutputType::Utf8View,
+            INITIAL_MAP_CAPACITY,
+        );
+
+        assert!(map.map.capacity() >= INITIAL_MAP_CAPACITY);
+        assert_eq!(map.size(), map.map.allocation_size());
+
+        // Before this accounting was corrected the map reported exactly
+        // `capacity() * size_of::<Entry<V>>()`, which leaves out the control
+        // bytes and undercounts the real allocation by roughly half.
+        let lower_bound = min_table_bytes::<Entry<()>>(map.map.capacity());
+        assert!(
+            map.size() >= lower_bound,
+            "expected {} to be at least {lower_bound}",
+            map.size()
+        );
+        assert!(
+            map.size() <= 2 * lower_bound + 64,
+            "expected {} to be within a small factor of {lower_bound}",
+            map.size()
+        );
+        assert!(
+            map.size() > map.map.capacity() * size_of::<Entry<()>>(),
+            "expected {} to exceed {}",
+            map.size(),
+            map.map.capacity() * size_of::<Entry<()>>()
+        );
+    }
+
+    #[test]
+    fn take_preserves_the_capacity_the_map_was_built_with() {
+        let mut preallocated = ArrowBytesViewMap::<()>::with_capacity(
+            OutputType::Utf8View,
+            INITIAL_MAP_CAPACITY,
+        );
+        let capacity = preallocated.map.capacity();
+        preallocated.take();
+        assert_eq!(preallocated.map.capacity(), capacity);
+
+        let mut lazy = ArrowBytesViewMap::<()>::new(OutputType::Utf8View);
+        lazy.take();
+        assert_eq!(lazy.map.capacity(), 0);
+    }
+
+    #[test]
+    fn clear_and_release_frees_the_preallocation_that_take_keeps() {
+        let mut map = ArrowBytesViewMap::<()>::with_capacity(
+            OutputType::Utf8View,
+            INITIAL_MAP_CAPACITY,
+        );
+        let values: ArrayRef = Arc::new(StringViewArray::from_iter_values(
+            (0..1_000).map(|i| format!("distinct value number {i}")),
+        ));
+        map.insert_if_new(&values, |_| (), |_| ());
+
+        let warm_size = map.map.allocation_size();
+        assert!(warm_size > 0);
+
+        // `take` deliberately keeps the map warm, so it does not release the
+        // configured capacity.
+        map.take();
+        let taken_size = map.size();
+        assert!(
+            taken_size >= min_table_bytes::<Entry<()>>(INITIAL_MAP_CAPACITY),
+            "expected take to retain the warm up allocation, got {taken_size}"
+        );
+
+        map.clear_and_release();
+        assert_eq!(map.map.allocation_size(), 0);
+        let released_size = map.size();
+        assert!(
+            released_size < 128,
+            "expected the released map to report approximately zero bytes, got {released_size}"
+        );
+
+        // The configured capacity survives, so the map warms back up when it is
+        // emitted from again.
+        map.take();
+        assert!(map.map.capacity() >= INITIAL_MAP_CAPACITY);
+    }
+
+    #[test]
+    fn test_size_counts_retained_buffer_capacities() {
+        let first = "a".repeat(BYTE_VIEW_MAX_BLOCK_SIZE / 2 + 1);
+        let second = "b".repeat(BYTE_VIEW_MAX_BLOCK_SIZE / 2 + 1);
+        let third = "c".repeat(BYTE_VIEW_MAX_BLOCK_SIZE / 2 + 1);
+        let values: ArrayRef = Arc::new(StringViewArray::from(vec![
+            first.as_str(),
+            second.as_str(),
+            third.as_str(),
+        ]));
+
+        let mut map = ArrowBytesViewMap::new(OutputType::Utf8View);
+        map.insert_if_new(&values, |_| (), |_| {});
+
+        // Make unused vector capacity explicit; the completed buffers were created
+        // by the map's flush path.
+        map.views.shrink_to_fit();
+        map.views.reserve_exact(1);
+        map.completed.shrink_to_fit();
+        map.completed.reserve_exact(1);
+
+        // The map owns these allocations; `values` and its Arrow buffers remain external.
+        assert!(map.views.capacity() > map.views.len());
+        assert!(map.completed.capacity() > map.completed.len());
+        assert!(
+            map.completed
+                .iter()
+                .any(|buffer| buffer.capacity() > buffer.len())
+        );
+
+        let expected_size = map.map.allocation_size()
+            + map.views.allocated_size()
+            + map.in_progress.allocated_size()
+            + map.completed.allocated_size()
+            + map.completed.iter().map(Buffer::capacity).sum::<usize>()
+            + map.nulls.allocated_size()
+            + map.hashes_buffer.allocated_size();
+        assert_eq!(map.size(), expected_size);
+
+        // Verify the retained-capacity delta independently from the production formula.
+        let legacy_size = map.map.allocation_size()
+            + map.views.len() * size_of::<u128>()
+            + map.in_progress.capacity()
+            + map.completed.iter().map(Buffer::len).sum::<usize>()
+            + map.nulls.allocated_size()
+            + map.hashes_buffer.allocated_size();
+        let retained_capacity_delta = (map.views.capacity() - map.views.len())
+            * size_of::<u128>()
+            + map.completed.capacity() * size_of::<Buffer>()
+            + map
+                .completed
+                .iter()
+                .map(|buffer| buffer.capacity() - buffer.len())
+                .sum::<usize>();
+        assert_eq!(map.size() - legacy_size, retained_capacity_delta);
+
+        let size_after_insert = map.size();
+        map.insert_if_new(&values, |_| (), |_| {});
+        assert_eq!(map.size(), size_after_insert);
+    }
+
     #[derive(Debug, PartialEq, Eq, Default, Clone, Copy)]
     struct TestPayload {
         // store the string value to check against input
@@ -752,7 +1030,7 @@ mod tests {
             // update self with new values, keeping track of newly added values
             for str in strings {
                 let str = str.map(|s| s.to_string());
-                let index = self.indexes.get(&str).cloned().unwrap_or_else(|| {
+                let index = self.indexes.get(&str).copied().unwrap_or_else(|| {
                     actual_new_strings.push(str.clone());
                     let index = self.strings.len();
                     self.strings.push(str.clone());

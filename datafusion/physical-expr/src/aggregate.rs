@@ -287,13 +287,10 @@ impl AggregateExprBuilder {
             return_field = output_metadata.add_to_field_ref(return_field);
         }
         let is_nullable = fun.is_nullable();
-        let name = match alias {
-            None => {
-                return internal_err!(
-                    "AggregateExprBuilder::alias must be provided prior to calling build"
-                );
-            }
-            Some(alias) => alias,
+        let Some(name) = alias else {
+            return internal_err!(
+                "AggregateExprBuilder::alias must be provided prior to calling build"
+            );
         };
 
         let human_display =

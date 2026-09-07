@@ -44,8 +44,8 @@ pub async fn from_read_rel(
         consumer: &impl SubstraitConsumer,
         table_ref: TableReference,
         schema: DFSchema,
-        projection: &Option<MaskExpression>,
-        filter: &Option<Box<Expression>>,
+        projection: Option<&MaskExpression>,
+        filter: Option<&Expression>,
     ) -> datafusion::common::Result<LogicalPlan> {
         let schema = schema.replace_qualifier(table_ref.clone());
 
@@ -108,8 +108,8 @@ pub async fn from_read_rel(
                 consumer,
                 table_reference,
                 substrait_schema,
-                &read.projection,
-                &read.filter,
+                read.projection.as_ref(),
+                read.filter.as_deref(),
             )
             .await
         }
@@ -148,19 +148,48 @@ pub async fn from_read_rel(
             let values = if !vt.expressions.is_empty() {
                 let mut exprs = vec![];
                 for row in &vt.expressions {
-                    let mut row_exprs = vec![];
-                    for expression in &row.fields {
-                        let expr = consumer
-                            .consume_expression(expression, &substrait_schema)
-                            .await?;
-                        row_exprs.push(expr);
-                    }
-                    // For expressions, validate against top-level schema fields, not nested names
-                    if row_exprs.len() != substrait_schema.fields().len() {
+                    if row.fields.len() != substrait_schema.fields().len() {
                         return substrait_err!(
                             "Field count mismatch: expected {} fields but found {} in virtual table row",
                             substrait_schema.fields().len(),
-                            row_exprs.len()
+                            row.fields.len()
+                        );
+                    }
+
+                    let mut row_exprs = vec![];
+                    let mut name_idx = 0;
+                    for expression in &row.fields {
+                        // Top-level names are provided through schema
+                        // Each expression consumes at least one name, and Literals may consume additional names.
+                        name_idx += 1;
+                        let expr = match expression.rex_type.as_ref() {
+                            Some(substrait::proto::expression::RexType::Literal(lit)) => {
+                                // Values literals need 'named_struct.names' so nested struct fields keep their names from the ReadRel base schema.
+                                // This is important for nested struct fields to retain their names.
+                                Expr::Literal(
+                                    from_substrait_literal(
+                                        consumer,
+                                        lit,
+                                        &named_struct.names,
+                                        &mut name_idx,
+                                    )?,
+                                    None,
+                                )
+                            }
+                            _ => {
+                                consumer
+                                    .consume_expression(expression, &substrait_schema)
+                                    .await?
+                            }
+                        };
+                        row_exprs.push(expr);
+                    }
+
+                    if name_idx != named_struct.names.len() {
+                        return substrait_err!(
+                            "Names list must match exactly to nested schema, but found {} uses for {} names",
+                            name_idx,
+                            named_struct.names.len()
                         );
                     }
                     exprs.push(row_exprs);
@@ -211,8 +240,8 @@ pub async fn from_read_rel(
                 consumer,
                 table_reference,
                 substrait_schema,
-                &read.projection,
-                &read.filter,
+                read.projection.as_ref(),
+                read.filter.as_deref(),
             )
             .await
         }
@@ -264,7 +293,7 @@ fn convert_literal_rows(
 
 pub fn apply_masking(
     schema: DFSchema,
-    mask_expression: &::core::option::Option<MaskExpression>,
+    mask_expression: Option<&MaskExpression>,
 ) -> datafusion::common::Result<DFSchema> {
     match mask_expression {
         Some(MaskExpression { select, .. }) => match &select.as_ref() {

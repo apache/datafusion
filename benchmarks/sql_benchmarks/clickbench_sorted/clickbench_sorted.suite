@@ -1,0 +1,28 @@
+description = "ClickBench query over a pre-sorted hits dataset"
+
+query_pattern = "q{QUERY_ID_PADDED}.benchmark"
+
+[path_replacements]
+DATA_DIR = "../../data"
+
+[[options]]
+name = "sort-column"
+env = "SORTED_BY"
+default = "EventTime"
+values = ["EventTime", "..."]
+help = "Selects the column used to sort the ClickBench data."
+
+[[options]]
+name = "sort-order"
+env = "SORTED_ORDER"
+default = "ASC"
+values = ["ASC", "DESC"]
+help = "Selects the sort direction for the ClickBench data."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- clickbench_sorted"
+description = "Run the sorted ClickBench query ordered by EventTime ascending."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- clickbench_sorted --sort-column UserID --sort-order DESC"
+description = "Run the query over data sorted by UserID descending."

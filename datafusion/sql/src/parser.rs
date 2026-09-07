@@ -357,7 +357,7 @@ impl fmt::Display for Statement {
     }
 }
 
-fn ensure_not_set<T>(field: &Option<T>, name: &str) -> Result<(), DataFusionError> {
+fn ensure_not_set<T>(field: Option<&T>, name: &str) -> Result<(), DataFusionError> {
     if field.is_some() {
         parser_err!(format!("{name} specified more than once",))?
     }
@@ -722,11 +722,11 @@ impl<'a> DFParser<'a> {
                 match keyword {
                     Keyword::STORED => {
                         self.parser.expect_keyword(Keyword::AS)?;
-                        ensure_not_set(&builder.stored_as, "STORED AS")?;
+                        ensure_not_set(builder.stored_as.as_ref(), "STORED AS")?;
                         builder.stored_as = Some(self.parse_file_format()?);
                     }
                     Keyword::TO => {
-                        ensure_not_set(&builder.target, "TO")?;
+                        ensure_not_set(builder.target.as_ref(), "TO")?;
                         builder.target = Some(self.parser.parse_literal_string()?);
                     }
                     Keyword::WITH => {
@@ -738,11 +738,14 @@ impl<'a> DFParser<'a> {
                     }
                     Keyword::PARTITIONED => {
                         self.parser.expect_keyword(Keyword::BY)?;
-                        ensure_not_set(&builder.partitioned_by, "PARTITIONED BY")?;
+                        ensure_not_set(
+                            builder.partitioned_by.as_ref(),
+                            "PARTITIONED BY",
+                        )?;
                         builder.partitioned_by = Some(self.parse_partitions()?);
                     }
                     Keyword::OPTIONS => {
-                        ensure_not_set(&builder.options, "OPTIONS")?;
+                        ensure_not_set(builder.options.as_ref(), "OPTIONS")?;
                         builder.options = Some(self.parse_value_options()?);
                     }
                     _ => {
@@ -1079,7 +1082,7 @@ impl<'a> DFParser<'a> {
                 options.push(ColumnOptionDef { name: None, option });
             } else {
                 break;
-            };
+            }
         }
         Ok(ColumnDef {
             name,
@@ -1133,11 +1136,11 @@ impl<'a> DFParser<'a> {
                 match keyword {
                     Keyword::STORED => {
                         self.parser.expect_keyword(Keyword::AS)?;
-                        ensure_not_set(&builder.file_type, "STORED AS")?;
+                        ensure_not_set(builder.file_type.as_ref(), "STORED AS")?;
                         builder.file_type = Some(self.parse_file_format()?);
                     }
                     Keyword::LOCATION => {
-                        ensure_not_set(&builder.locations, "LOCATION")?;
+                        ensure_not_set(builder.locations.as_ref(), "LOCATION")?;
                         builder.locations = Some(self.parse_locations()?);
                     }
                     Keyword::WITH => {
@@ -1164,7 +1167,10 @@ impl<'a> DFParser<'a> {
                     }
                     Keyword::PARTITIONED => {
                         self.parser.expect_keyword(Keyword::BY)?;
-                        ensure_not_set(&builder.table_partition_cols, "PARTITIONED BY")?;
+                        ensure_not_set(
+                            builder.table_partition_cols.as_ref(),
+                            "PARTITIONED BY",
+                        )?;
                         // Expects either list of column names (col_name [, col_name]*)
                         // or list of column definitions (col_name datatype [, col_name datatype]* )
                         // use the token after the name to decide which parsing rule to use
@@ -1191,7 +1197,7 @@ impl<'a> DFParser<'a> {
                         }
                     }
                     Keyword::OPTIONS => {
-                        ensure_not_set(&builder.options, "OPTIONS")?;
+                        ensure_not_set(builder.options.as_ref(), "OPTIONS")?;
                         builder.options = Some(self.parse_value_options()?);
                     }
                     _ => {
@@ -1914,9 +1920,7 @@ mod tests {
             panic!("Expected statement, got {statement:?}");
         };
 
-        let query = if let SQLStatement::Query(query) = statement {
-            query
-        } else {
+        let SQLStatement::Query(query) = statement else {
             panic!("Expected query, got {statement:?}");
         };
 

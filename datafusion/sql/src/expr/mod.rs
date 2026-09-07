@@ -57,6 +57,12 @@ mod substring;
 mod unary_op;
 mod value;
 
+/// Returns `None` if `expr` is not a NULL literal, and `Some(span)` where
+/// `span` is the literal's span, if it has one.
+#[expect(
+    clippy::option_option,
+    reason = "The two levels mean different things, see above"
+)]
 fn null_value_span(expr: &SQLExpr) -> Option<Option<Span>> {
     if let SQLExpr::Value(ValueWithSpan {
         value: Value::Null,
@@ -387,11 +393,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 value,
                 uses_odbc_syntax: _,
             }) => {
-                let value = match value.into_string() {
-                    Some(value) => value,
-                    None => {
-                        return plan_err!("Typed literal requires a string payload");
-                    }
+                let Some(value) = value.into_string() else {
+                    return plan_err!("Typed literal requires a string payload");
                 };
 
                 Ok(Expr::Cast(Cast::new_from_field(
@@ -1008,10 +1011,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
-        let pattern_type = pattern.get_type(schema)?;
-        if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
-            return plan_err!("Invalid pattern in SIMILAR TO expression");
-        }
         let escape_char = match escape_char.map(|v| v.value) {
             Some(Value::SingleQuotedString(char)) if char.len() == 1 => {
                 Some(char.chars().next().unwrap())
@@ -1596,5 +1595,33 @@ mod tests {
             .unwrap();
 
         assert!(matches!(expr, Expr::Alias(_)));
+    }
+
+    #[test]
+    fn test_parse_numbers_with_underscores() {
+        use datafusion_common::ScalarValue::*;
+
+        let context_provider = TestContextProvider::new();
+        let sql_to_rel = SqlToRel::new(&context_provider);
+
+        // (input, positive result, negative result)
+        let test_cases = [
+            ("1_000", Int64(Some(1000)), Int64(Some(-1000))),
+            ("100_000", Int64(Some(100000)), Int64(Some(-100000))),
+            ("1_2_3_4", Int64(Some(1234)), Int64(Some(-1234))),
+            ("0_0", Int64(Some(0)), Int64(Some(-0))),
+            ("1_23.4_56", Float64(Some(123.456)), Float64(Some(-123.456))),
+        ];
+
+        for (literal, out_positive, out_negative) in test_cases {
+            assert_eq!(
+                sql_to_rel.parse_sql_number(literal, false).unwrap(),
+                Expr::Literal(out_positive, None)
+            );
+            assert_eq!(
+                sql_to_rel.parse_sql_number(literal, true).unwrap(),
+                Expr::Literal(out_negative, None)
+            );
+        }
     }
 }

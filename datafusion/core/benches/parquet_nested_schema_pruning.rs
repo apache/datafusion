@@ -36,10 +36,9 @@
 //!
 //! At setup the benchmark reads the parquet scan's `bytes_scanned` metric for
 //! (1), (2) and (3) so the IO pattern is visible in addition to wall time, and
-//! asserts the current baseline: today a narrow declared schema scans the same
-//! bytes as the full schema. When nested projection pruning lands, that
-//! assertion is expected to fail, which is the signal to flip it to
-//! `narrow < full` (see [`assert_scan_baseline`]).
+//! asserts that nested projection pruning keeps the narrow declared schema's
+//! scan well below the full schema's, close to the physically-narrow floor
+//! (see [`assert_scan_prunes`]).
 
 use arrow::array::{
     ArrayRef, Int32Array, Int64Array, ListArray, StringArray, StructArray,
@@ -267,15 +266,14 @@ fn scan_bytes(ctx: &SessionContext, rt: &Runtime, sql: &str) -> usize {
         .expect("parquet scan should report a bytes_scanned metric")
 }
 
-/// Report and assert the `bytes_scanned` baseline for one dataset shape.
+/// Report and assert the `bytes_scanned` improvement for one dataset shape.
 ///
 /// `narrow` selects from a wide file through a narrow declared schema, `full`
-/// through the full schema, and `floor` from a physically-narrow file. Today
-/// the extra leaves are fetched and discarded, so `narrow == full`; that
-/// equality is the checked-in baseline. When nested projection pruning lands,
-/// `narrow` should drop toward `floor` and this assertion is expected to fail —
-/// the signal to flip it to `assert!(narrow < full)`.
-fn assert_scan_baseline(
+/// through the full schema, and `floor` from a physically-narrow file.
+/// Nested projection pruning clips the narrow read to the declared leaves, so
+/// `narrow` should read substantially less than `full`, close to `floor`,
+/// the cost of a file that never had the extra leaves to begin with.
+fn assert_scan_prunes(
     ctx: &SessionContext,
     rt: &Runtime,
     label: &str,
@@ -290,13 +288,11 @@ fn assert_scan_baseline(
         "{label}: bytes_scanned narrow_schema={narrow} full_schema={full} \
          physically_narrow={floor}"
     );
-    assert_eq!(
-        narrow, full,
-        "{label}: narrow declared schema scanned {narrow} bytes vs {full} for \
-         the full schema. The baseline is that a narrow schema still reads \
-         every leaf, so these should be equal; if narrow is now smaller, \
-         nested projection pruning has likely landed — flip this to \
-         `assert!(narrow < full)`."
+    assert!(
+        narrow * 2 < full,
+        "{label}: expected the narrow declared schema to read less than half \
+         of the full schema's {full} bytes (physically-narrow floor is \
+         {floor} bytes), but it read {narrow}"
     );
 }
 
@@ -363,7 +359,7 @@ fn list_struct_benchmarks(c: &mut Criterion) {
     let f = setup("list_struct", list_schema, list_batch);
     let (ctx, rt) = (&f.ctx, &f.rt);
 
-    assert_scan_baseline(
+    assert_scan_prunes(
         ctx,
         rt,
         "list_struct",
@@ -410,7 +406,7 @@ fn top_level_struct_benchmarks(c: &mut Criterion) {
     let f = setup("struct", struct_schema, struct_batch);
     let (ctx, rt) = (&f.ctx, &f.rt);
 
-    assert_scan_baseline(
+    assert_scan_prunes(
         ctx,
         rt,
         "top_level_struct",

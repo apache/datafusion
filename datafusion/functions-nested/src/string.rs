@@ -170,16 +170,16 @@ make_udf_expr_and_func!(
     sql_example = r#"```sql
 > select string_to_array('abc##def', '##');
 +-----------------------------------+
-| string_to_array(Utf8('abc##def'))  |
+| string_to_array(Utf8('abc##def')) |
 +-----------------------------------+
 | ['abc', 'def']                    |
 +-----------------------------------+
 > select string_to_array('abc def', ' ', 'def');
-+---------------------------------------------+
++----------------------------------------------------------+
 | string_to_array(Utf8('abc def'), Utf8(' '), Utf8('def')) |
-+---------------------------------------------+
-| ['abc', NULL]                               |
-+---------------------------------------------+
++----------------------------------------------------------+
+| ['abc', NULL]                                            |
++----------------------------------------------------------+
 ```"#,
     argument(name = "str", description = "String expression to split."),
     argument(name = "delimiter", description = "Delimiter string to split on."),

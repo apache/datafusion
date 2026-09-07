@@ -21,7 +21,151 @@
 # For more information, please see:
 #   https://github.com/apache/datafusion/issues/15914
 
-## Original Query: SELECT atan2(0, 0);
-## PySpark 3.5.5 Result: {'ATAN2(0, 0)': 0.0, 'typeof(ATAN2(0, 0))': 'double', 'typeof(0)': 'int'}
-#query
-#SELECT atan2(0::int);
+# standard angles in radians
+query R
+SELECT atan2(0, 0);
+----
+0
+
+query R
+SELECT atan2(0, 1);
+----
+0
+
+# all four quadrants (atan2 is quadrant-aware via the signs of both arguments)
+query R
+SELECT atan2(1, 1);
+----
+0.785398163397448
+
+query R
+SELECT atan2(1, -1);
+----
+2.356194490192345
+
+query R
+SELECT atan2(-1, -1);
+----
+-2.356194490192345
+
+query R
+SELECT atan2(-1, 1);
+----
+-0.785398163397448
+
+# on the axes
+query R
+SELECT atan2(1, 0);
+----
+1.570796326794897
+
+# negative x-axis: atan2 range extends to pi (atan only reaches +/- pi/2)
+query R
+SELECT atan2(0, -1);
+----
+3.141592653589793
+
+# NULL if either argument is NULL
+query R
+SELECT atan2(NULL::double, 1.0::double);
+----
+NULL
+
+query R
+SELECT atan2(1.0::double, NULL::double);
+----
+NULL
+
+# NaN: any NaN input yields NaN (for atan2, NaN wins even over Infinity)
+query R
+SELECT atan2('NaN'::double, 1.0::double);
+----
+NaN
+
+query R
+SELECT atan2(1.0::double, 'NaN'::double);
+----
+NaN
+
+query R
+SELECT atan2('NaN'::double, 'NaN'::double);
+----
+NaN
+
+query R
+SELECT atan2('NaN'::double, 'Infinity'::double);
+----
+NaN
+
+# NULL beats every special value (validity is checked before the value)
+query R
+SELECT atan2(NULL::double, 'Infinity'::double);
+----
+NULL
+
+# both infinite: quadrant set by the signs (+/- pi/4, +/- 3pi/4)
+query R
+SELECT atan2('Infinity'::double, 'Infinity'::double);
+----
+0.785398163397448
+
+query R
+SELECT atan2('-Infinity'::double, 'Infinity'::double);
+----
+-0.785398163397448
+
+query R
+SELECT atan2('Infinity'::double, '-Infinity'::double);
+----
+2.356194490192345
+
+query R
+SELECT atan2('-Infinity'::double, '-Infinity'::double);
+----
+-2.356194490192345
+
+# one infinite argument
+query R
+SELECT atan2('Infinity'::double, 1.0::double);
+----
+1.570796326794897
+
+query R
+SELECT atan2('-Infinity'::double, 1.0::double);
+----
+-1.570796326794897
+
+query R
+SELECT atan2(1.0::double, 'Infinity'::double);
+----
+0
+
+query R
+SELECT atan2(1.0::double, '-Infinity'::double);
+----
+3.141592653589793
+
+query R
+SELECT atan2(-1.0::double, '-Infinity'::double);
+----
+-3.141592653589793
+
+# signed zeros: -0 flips the sign on the negative x-axis (atan2(+0, -1) = pi above; atan2(-0, -1) = -pi)
+query R
+SELECT atan2(-0.0::double, -1.0::double);
+----
+-3.141592653589793
+
+# -0 in the first argument still returns 0 on the positive x-axis
+query R
+SELECT atan2(-0.0::double, 1.0::double);
+----
+0
+
+# array path, including a NULL row
+query R
+SELECT atan2(a, b) FROM (VALUES (0.0::double, 1.0::double), (1.0::double, 1.0::double), (NULL::double, 1.0::double)) AS t(a, b);
+----
+0
+0.785398163397448
+NULL

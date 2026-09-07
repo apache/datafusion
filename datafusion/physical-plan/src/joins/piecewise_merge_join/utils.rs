@@ -38,24 +38,16 @@ pub(super) fn is_existence_join(join_type: JoinType) -> bool {
     )
 }
 
+// Returns boolean for whether the join is a left existence join that is currently
+// supported by `PiecewiseMergeJoin`. These do not require swapping the inputs: the
+// marked (left) side is already the buffered side, so `ExistencePWMJStream` can track the
+// matched suffix and slice the buffered batch at its start.
+pub(super) fn is_supported_existence_join(join_type: JoinType) -> bool {
+    matches!(join_type, JoinType::LeftSemi | JoinType::LeftAnti)
+}
+
 // Returns boolean to check if the join type needs to record
 // buffered side matches for classic joins
 pub(super) fn need_produce_result_in_final(join_type: JoinType) -> bool {
     matches!(join_type, JoinType::Full | JoinType::Left)
-}
-
-// Returns boolean for whether or not we need to build the buffered side
-// bitmap for marking matched rows on the buffered side.
-pub(super) fn build_visited_indices_map(join_type: JoinType) -> bool {
-    matches!(
-        join_type,
-        JoinType::Full
-            | JoinType::Left
-            | JoinType::LeftAnti
-            | JoinType::RightAnti
-            | JoinType::LeftSemi
-            | JoinType::RightSemi
-            | JoinType::LeftMark
-            | JoinType::RightMark
-    )
 }

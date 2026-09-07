@@ -180,7 +180,10 @@ struct CredentialsFromConfig {
 impl CredentialsFromConfig {
     /// Attempt find AWS S3 credentials via the AWS SDK
     pub async fn try_new() -> Result<Self> {
-        let config = aws_config::defaults(BehaviorVersion::latest()).load().await;
+        // Loading the SDK config produces a large future, so box it to avoid
+        // potentially triggering the `large_futures` clippy lint.
+        let config =
+            Box::pin(aws_config::defaults(BehaviorVersion::latest()).load()).await;
         let region = config.region().map(|r| r.to_string());
 
         let credentials = config

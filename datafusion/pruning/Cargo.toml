@@ -26,7 +26,12 @@ datafusion-physical-plan = { workspace = true }
 log = { workspace = true }
 
 [dev-dependencies]
+criterion = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions-nested = { workspace = true }
 insta = { workspace = true }
 itertools = { workspace = true }
+
+[[bench]]
+harness = false
+name = "string_in_list_pruning"

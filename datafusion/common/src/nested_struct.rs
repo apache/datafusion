@@ -19,13 +19,20 @@ use crate::error::{_plan_err, Result};
 use arrow::{
     array::{
         Array, ArrayRef, AsArray, DictionaryArray, FixedSizeListArray, GenericListArray,
-        GenericListViewArray, StructArray, downcast_integer, make_array, new_null_array,
+        GenericListViewArray, MapArray, RecordBatch, StructArray, UInt64Array,
+        UnionArray, downcast_integer, make_array, new_null_array,
     },
-    buffer::NullBuffer,
-    compute::{CastOptions, can_cast_types, cast_with_options},
-    datatypes::{DataType, DataType::Struct, Field, FieldRef},
+    buffer::{NullBuffer, ScalarBuffer},
+    compute::{CastOptions, can_cast_types, cast_with_options, take},
+    datatypes::{
+        DataType, DataType::Struct, Field, FieldRef, SchemaRef, UnionFields, UnionMode,
+    },
+    error::ArrowError,
 };
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 /// Cast a struct column to match target struct fields, handling nested structs recursively.
 ///
@@ -110,7 +117,7 @@ fn cast_struct_column(
         }
 
         let struct_array =
-            StructArray::new(fields.into(), arrays, source_struct.nulls().cloned());
+            StructArray::try_new(fields.into(), arrays, source_struct.nulls().cloned())?;
         Ok(Arc::new(struct_array))
     } else {
         // Return error if source is not a struct type
@@ -119,6 +126,63 @@ fn cast_struct_column(
             source_col.data_type()
         )
     }
+}
+
+/// Cast a union column to match target union fields, handling child fields recursively.
+///
+/// ## Casting Behavior
+/// - Preserves union mode (sparse or dense). Incompatible modes are rejected.
+/// - Requires exact matching union type ID sets (order may differ).
+/// - Recursively adapts each matching child array using `cast_column`.
+/// - Preserves row-level `type_ids` and dense `offsets` buffers without copying primitive data.
+fn cast_union_column(
+    source_col: &ArrayRef,
+    source_fields: &UnionFields,
+    source_mode: &UnionMode,
+    target_fields: &UnionFields,
+    target_mode: &UnionMode,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef> {
+    validate_union_schema_compatibility(
+        source_fields,
+        source_mode,
+        target_fields,
+        target_mode,
+    )?;
+
+    let source_union = source_col
+        .as_any()
+        .downcast_ref::<UnionArray>()
+        .ok_or_else(|| {
+            crate::error::DataFusionError::Plan(format!(
+                "Expected UnionArray for Union data type, got {}",
+                source_col.data_type()
+            ))
+        })?;
+
+    let mut children = Vec::with_capacity(target_fields.len());
+
+    for (target_type_id, target_field) in target_fields.iter() {
+        let source_child = source_union.child(target_type_id);
+
+        children.push(
+            cast_column(source_child, target_field.data_type(), cast_options).map_err(
+                |e| {
+                    e.context(format!(
+                        "While adapting Union child type ID {target_type_id} ('{}')",
+                        target_field.name()
+                    ))
+                },
+            )?,
+        );
+    }
+
+    Ok(Arc::new(UnionArray::try_new(
+        target_fields.clone(),
+        source_union.type_ids().clone(),
+        source_union.offsets().cloned(),
+        children,
+    )?))
 }
 
 /// Cast a column to match the target field type, with special handling for nested structs.
@@ -205,6 +269,18 @@ pub fn cast_column(
         (DataType::LargeListView(_), DataType::LargeListView(target_inner)) => {
             cast_list_view_column::<i64>(source_col, target_inner, cast_options)
         }
+        (DataType::Map(_, _), DataType::Map(target_entries, target_sorted)) => {
+            if requires_nested_struct_cast(source_col.data_type(), target_type) {
+                cast_map_column(
+                    source_col.as_map(),
+                    target_entries,
+                    *target_sorted,
+                    cast_options,
+                )
+            } else {
+                Ok(cast_with_options(source_col, target_type, cast_options)?)
+            }
+        }
         (
             DataType::Dictionary(source_key_type, _),
             DataType::Dictionary(target_key_type, target_value_type),
@@ -213,6 +289,17 @@ pub fn cast_column(
             source_key_type,
             target_key_type,
             target_value_type,
+            cast_options,
+        ),
+        (
+            DataType::Union(source_fields, source_mode),
+            DataType::Union(target_fields, target_mode),
+        ) => cast_union_column(
+            source_col,
+            source_fields,
+            source_mode,
+            target_fields,
+            target_mode,
             cast_options,
         ),
         _ => Ok(cast_with_options(source_col, target_type, cast_options)?),
@@ -225,6 +312,18 @@ fn cast_list_column<O: arrow::array::OffsetSizeTrait>(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
     let source_list = source_col.as_list::<O>();
+    let offsets = source_list.value_offsets();
+    let needs_compaction = offsets[0] != O::usize_as(0)
+        || offsets[offsets.len() - 1].as_usize() != source_list.values().len()
+        || source_list
+            .offsets()
+            .has_non_empty_nulls(source_list.nulls());
+    let compacted_list = if needs_compaction {
+        Some(compact_list_values(source_list)?)
+    } else {
+        None
+    };
+    let source_list = compacted_list.as_ref().unwrap_or(source_list);
 
     let cast_values = cast_column(
         source_list.values(),
@@ -247,21 +346,125 @@ fn cast_list_view_column<O: arrow::array::OffsetSizeTrait>(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
     let source_list = source_col.as_list_view::<O>();
+    let compacted_values = compact_list_view_values(source_list)?;
+    let (offsets, sizes, values) = match compacted_values.as_ref() {
+        Some((offsets, sizes, values)) => (offsets, sizes, values),
+        None => (
+            source_list.offsets(),
+            source_list.sizes(),
+            source_list.values(),
+        ),
+    };
 
-    let cast_values = cast_column(
-        source_list.values(),
-        target_inner_field.data_type(),
-        cast_options,
-    )?;
+    let cast_values = cast_column(values, target_inner_field.data_type(), cast_options)?;
 
     let result = GenericListViewArray::<O>::try_new(
         Arc::clone(target_inner_field),
-        source_list.offsets().clone(),
-        source_list.sizes().clone(),
+        offsets.clone(),
+        sizes.clone(),
         cast_values,
         source_list.nulls().cloned(),
     )?;
     Ok(Arc::new(result))
+}
+
+fn compact_list_values<O: arrow::array::OffsetSizeTrait>(
+    list: &GenericListArray<O>,
+) -> Result<GenericListArray<O>> {
+    let indices = UInt64Array::from_iter_values(0..list.len() as u64);
+    Ok(take(list, &indices, None)?.as_list::<O>().clone())
+}
+
+type CompactedListView<O> = (ScalarBuffer<O>, ScalarBuffer<O>, ArrayRef);
+
+/// Selects the union of child ranges reachable from valid ListView rows.
+///
+/// ListView ranges may overlap or appear in any order, so selecting each row
+/// independently could duplicate a large number of child values. Merging the
+/// ranges first preserves sharing while excluding unreachable values.
+fn compact_list_view_values<O: arrow::array::OffsetSizeTrait>(
+    list: &GenericListViewArray<O>,
+) -> Result<Option<CompactedListView<O>>> {
+    let mut dense_end = 0;
+    let mut is_dense = true;
+    for row in 0..list.len() {
+        if list.is_null(row) || list.value_sizes()[row] == O::usize_as(0) {
+            continue;
+        }
+        let start = list.value_offsets()[row].as_usize();
+        if start != dense_end {
+            is_dense = false;
+            break;
+        }
+        dense_end = start + list.value_sizes()[row].as_usize();
+    }
+    if is_dense && dense_end == list.values().len() {
+        return Ok(None);
+    }
+
+    let mut ranges = list
+        .value_offsets()
+        .iter()
+        .zip(list.value_sizes())
+        .enumerate()
+        .filter(|(row, (_, size))| list.is_valid(*row) && **size != O::usize_as(0))
+        .map(|(_, (offset, size))| {
+            let start = offset.as_usize();
+            (start, start + size.as_usize())
+        })
+        .collect::<Vec<_>>();
+    ranges.sort_unstable_by_key(|range| range.0);
+
+    let mut merged_ranges: Vec<(usize, usize)> = Vec::with_capacity(ranges.len());
+    for (start, end) in ranges {
+        if let Some((_, previous_end)) = merged_ranges.last_mut()
+            && start <= *previous_end
+        {
+            *previous_end = (*previous_end).max(end);
+        } else {
+            merged_ranges.push((start, end));
+        }
+    }
+
+    if merged_ranges.as_slice() == [(0, list.values().len())] {
+        return Ok(None);
+    }
+
+    let mut range_bases = Vec::with_capacity(merged_ranges.len());
+    let mut selected_len = 0;
+    for &(start, end) in &merged_ranges {
+        range_bases.push(selected_len);
+        selected_len += end - start;
+    }
+
+    let mut offsets = Vec::with_capacity(list.len());
+    let mut sizes = Vec::with_capacity(list.len());
+    for row in 0..list.len() {
+        let size = list.value_sizes()[row];
+        if list.is_null(row) || size == O::usize_as(0) {
+            offsets.push(O::usize_as(0));
+            sizes.push(O::usize_as(0));
+            continue;
+        }
+
+        let source_offset = list.value_offsets()[row].as_usize();
+        let range_index =
+            merged_ranges.partition_point(|range| range.0 <= source_offset) - 1;
+        let new_offset =
+            range_bases[range_index] + source_offset - merged_ranges[range_index].0;
+        offsets.push(O::from_usize(new_offset).ok_or_else(|| {
+            ArrowError::ComputeError("ListView offset overflow during compaction".into())
+        })?);
+        sizes.push(size);
+    }
+
+    let child_indices = UInt64Array::from_iter_values(
+        merged_ranges
+            .iter()
+            .flat_map(|&(start, end)| (start..end).map(|index| index as u64)),
+    );
+    let values = take(list.values(), &child_indices, None)?;
+    Ok(Some((offsets.into(), sizes.into(), values)))
 }
 
 fn cast_fixed_size_list_column(
@@ -338,6 +541,79 @@ fn mask_array_values(
     Ok(make_array(
         values.to_data().into_builder().nulls(nulls).build()?,
     ))
+}
+
+/// Casts Map children by their semantic positions: key at index 0 and value at
+/// index 1. Technical entry field names are taken from the target schema.
+///
+/// Nested Struct fields within keys and values are still matched by name. Key
+/// evolution is restricted by [`validate_map_key_compatibility`] so it cannot
+/// remove identity-bearing fields; sorted Maps require an unchanged key type.
+///
+/// Map-specific compaction is necessary because sliced Maps retain unreachable
+/// entries and null parents hide entries in their backing array, which `keys()`
+/// and `values()` expose to recursive casts. List-family casts currently
+/// preserve offsets and cast their backing values directly; consistent handling
+/// is tracked in #24506.
+fn cast_map_column(
+    source_map: &MapArray,
+    target_entries: &FieldRef,
+    target_sorted: bool,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef> {
+    let DataType::Map(source_entries, source_sorted) = source_map.data_type() else {
+        unreachable!("MapArray data type must be Map")
+    };
+    let (target_key, target_value) = validate_map_compatibility(
+        source_entries,
+        *source_sorted,
+        target_entries,
+        target_sorted,
+        None,
+    )?;
+
+    let offsets = source_map.value_offsets();
+    let has_unreachable_entries = offsets[0] != 0
+        || offsets[offsets.len() - 1] as usize != source_map.entries().len();
+    let needs_compaction = has_unreachable_entries
+        || source_map.offsets().has_non_empty_nulls(source_map.nulls());
+    let compacted_map = if needs_compaction {
+        Some(compact_map_entries(source_map)?)
+    } else {
+        None
+    };
+    let source_map = compacted_map.as_ref().unwrap_or(source_map);
+
+    let cast_keys = cast_column(source_map.keys(), target_key.data_type(), cast_options)
+        .map_err(|error| error.context("While casting Map keys"))?;
+    let cast_values =
+        cast_column(source_map.values(), target_value.data_type(), cast_options)
+            .map_err(|error| error.context("While casting Map values"))?;
+    let Struct(target_fields) = target_entries.data_type() else {
+        unreachable!("validated Map entries must be Struct")
+    };
+    let cast_entries =
+        StructArray::try_new(target_fields.clone(), vec![cast_keys, cast_values], None)?;
+
+    Ok(Arc::new(MapArray::try_new(
+        Arc::clone(target_entries),
+        source_map.offsets().clone(),
+        cast_entries,
+        source_map.nulls().cloned(),
+        target_sorted,
+    )?))
+}
+
+/// Returns an equivalent MapArray whose entries contain only values reachable
+/// from visible Map rows.
+///
+/// Arrow Map arrays can contain unreachable entries after slicing, or entries
+/// hidden behind null parent rows. An identity `take` rebuilds the Map through
+/// Arrow's selection kernel, normalizing offsets and dropping those unreachable
+/// child entries before recursive key/value casts are applied.
+fn compact_map_entries(map: &MapArray) -> Result<MapArray> {
+    let indices = UInt64Array::from_iter_values(0..map.len() as u64);
+    Ok(take(map, &indices, None)?.as_map().clone())
 }
 
 fn cast_dictionary_column(
@@ -490,8 +766,220 @@ fn validate_field_compatibility(
     )
 }
 
+fn validate_map_compatibility<'a>(
+    source_entries: &Field,
+    source_sorted: bool,
+    target_entries: &'a Field,
+    target_sorted: bool,
+    field_name: Option<&str>,
+) -> Result<(&'a FieldRef, &'a FieldRef)> {
+    if source_sorted != target_sorted {
+        if let Some(field_name) = field_name {
+            return _plan_err!(
+                "Cannot change Map sorted flag for field '{}' during schema adaptation",
+                field_name
+            );
+        }
+        return _plan_err!("Cannot change Map sorted flag during schema adaptation");
+    }
+    let (source_key, source_value) = validate_map_entries_field(source_entries)?;
+    let (target_key, target_value) = validate_map_entries_field(target_entries)?;
+    validate_map_key_compatibility(source_key, target_key, target_sorted)?;
+    validate_field_compatibility(source_value, target_value)?;
+    Ok((target_key, target_value))
+}
+
+fn validate_map_key_compatibility(
+    source_key: &Field,
+    target_key: &Field,
+    sorted: bool,
+) -> Result<()> {
+    if sorted && source_key.data_type() != target_key.data_type() {
+        return _plan_err!("Cannot evolve key type of a sorted Map");
+    }
+    validate_map_key_data_type(source_key.data_type(), target_key.data_type())
+}
+
+fn validate_map_key_data_type(
+    source_type: &DataType,
+    target_type: &DataType,
+) -> Result<()> {
+    if source_type == target_type {
+        return Ok(());
+    }
+
+    match (source_type, target_type) {
+        (Struct(source_fields), Struct(target_fields)) => {
+            if !has_one_of_more_common_fields(source_fields, target_fields) {
+                return _plan_err!(
+                    "Cannot cast Map key Struct because there is no field name overlap"
+                );
+            }
+
+            let target_by_name: HashMap<&str, &FieldRef> = target_fields
+                .iter()
+                .map(|field| (field.name().as_str(), field))
+                .collect();
+            let source_names: HashSet<&str> = source_fields
+                .iter()
+                .map(|field| field.name().as_str())
+                .collect();
+
+            for source_field in source_fields {
+                let Some(target_field) = target_by_name.get(source_field.name().as_str())
+                else {
+                    return _plan_err!(
+                        "Cannot remove field '{}' from a Map key Struct",
+                        source_field.name()
+                    );
+                };
+                if source_field.is_nullable() && !target_field.is_nullable() {
+                    return _plan_err!(
+                        "Cannot cast nullable Map key field '{}' to non-nullable field",
+                        source_field.name()
+                    );
+                }
+                validate_map_key_data_type(
+                    source_field.data_type(),
+                    target_field.data_type(),
+                )?;
+            }
+            for target_field in target_fields {
+                if !source_names.contains(target_field.name().as_str())
+                    && !target_field.is_nullable()
+                {
+                    return _plan_err!(
+                        "Cannot add non-nullable field '{}' to a Map key Struct",
+                        target_field.name()
+                    );
+                }
+            }
+            Ok(())
+        }
+        _ if is_injective_map_key_cast(source_type, target_type) => Ok(()),
+        _ => _plan_err!(
+            "Cannot safely evolve Map key type from {} to {}",
+            source_type,
+            target_type
+        ),
+    }
+}
+
+/// Returns true when casting a Map key from `source_type` to `target_type` is
+/// known to preserve key identity.
+///
+/// Keep this list conservative. Map keys define equality/lookup identity, so
+/// only representation widenings that cannot merge distinct source keys belong
+/// here. Other Arrow-supported casts, including decimal/timestamp widening and
+/// dictionaries, should stay rejected until their identity semantics are
+/// deliberately reviewed.
+fn is_injective_map_key_cast(source_type: &DataType, target_type: &DataType) -> bool {
+    matches!(
+        (source_type, target_type),
+        (
+            DataType::Int8,
+            DataType::Int16 | DataType::Int32 | DataType::Int64
+        ) | (DataType::Int16, DataType::Int32 | DataType::Int64)
+            | (DataType::Int32, DataType::Int64)
+            | (
+                DataType::UInt8,
+                DataType::Int16
+                    | DataType::Int32
+                    | DataType::Int64
+                    | DataType::UInt16
+                    | DataType::UInt32
+                    | DataType::UInt64
+            )
+            | (
+                DataType::UInt16,
+                DataType::Int32 | DataType::Int64 | DataType::UInt32 | DataType::UInt64
+            )
+            | (DataType::UInt32, DataType::Int64 | DataType::UInt64)
+            | (DataType::Utf8, DataType::LargeUtf8 | DataType::Utf8View)
+            | (
+                DataType::Binary,
+                DataType::LargeBinary | DataType::BinaryView
+            )
+    )
+}
+
+fn validate_map_entries_field(entries: &Field) -> Result<(&FieldRef, &FieldRef)> {
+    if entries.is_nullable() {
+        return _plan_err!("Map entries field must be non-nullable");
+    }
+
+    let Struct(fields) = entries.data_type() else {
+        return _plan_err!("Map entries field must be a struct");
+    };
+    if fields.len() != 2 {
+        return _plan_err!(
+            "Map entries struct must contain exactly two fields, found {}",
+            fields.len()
+        );
+    }
+    if fields[0].is_nullable() {
+        return _plan_err!("Map key field must be non-nullable");
+    }
+    Ok((&fields[0], &fields[1]))
+}
+
 /// Validates that `source_type` can be cast to `target_type`, recursively
 /// handling container types that wrap structs.
+///
+/// # Map evolution
+///
+/// Map entry children are matched by position (key, then value), regardless of
+/// their technical field names. Nested Struct fields within each child are
+/// matched by name. Values use the standard Struct evolution rules: nullable
+/// target fields may be added and extra source fields are omitted.
+///
+/// For Maps using specialized nested Struct adaptation, unsorted Struct keys may
+/// add nullable fields and use only injective primitive widening casts, but may
+/// not remove source fields. Sorted Maps require an unchanged key type. Map
+/// entries and keys must remain non-nullable. Source and target sorted flags
+/// must match. Maps without semantic Struct children use Arrow's normal cast.
+fn validate_union_schema_compatibility(
+    source_fields: &UnionFields,
+    source_mode: &UnionMode,
+    target_fields: &UnionFields,
+    target_mode: &UnionMode,
+) -> Result<()> {
+    if source_mode != target_mode {
+        return _plan_err!(
+            "Cannot adapt Union from mode {source_mode:?} to {target_mode:?}"
+        );
+    }
+
+    // This adapter is for schema conformance, not general Union variant-set evolution.
+    if source_fields.len() != target_fields.len() {
+        return _plan_err!(
+            "Cannot adapt Union schema with different field sets:              source has {} fields, target has {}",
+            source_fields.len(),
+            target_fields.len()
+        );
+    }
+
+    for (target_type_id, target_field) in target_fields.iter() {
+        let Some((_, source_field)) = source_fields
+            .iter()
+            .find(|(source_type_id, _)| *source_type_id == target_type_id)
+        else {
+            return _plan_err!(
+                "Cannot adapt Union schema: target type ID {target_type_id}                  ('{}') is missing from source",
+                target_field.name()
+            );
+        };
+
+        if !target_field.contains(source_field) {
+            return _plan_err!(
+                "Cannot adapt Union child with type ID {target_type_id}:                  source field {source_field} is not contained by target field {target_field}"
+            );
+        }
+    }
+
+    Ok(())
+}
+
 pub fn validate_data_type_compatibility(
     field_name: &str,
     source_type: &DataType,
@@ -513,6 +1001,24 @@ pub fn validate_data_type_compatibility(
         | (DataType::LargeListView(s), DataType::LargeListView(t)) => {
             validate_field_compatibility(s, t)?;
         }
+        (DataType::Map(s, source_sorted), DataType::Map(t, target_sorted)) => {
+            if requires_nested_struct_cast(source_type, target_type) {
+                validate_map_compatibility(
+                    s,
+                    *source_sorted,
+                    t,
+                    *target_sorted,
+                    Some(field_name),
+                )?;
+            } else if !can_cast_types(source_type, target_type) {
+                return _plan_err!(
+                    "Cannot cast struct field '{}' from type {} to type {}",
+                    field_name,
+                    source_type,
+                    target_type
+                );
+            }
+        }
         (DataType::Dictionary(s_key, s_val), DataType::Dictionary(t_key, t_val)) => {
             if !can_cast_types(s_key, t_key) {
                 return _plan_err!(
@@ -523,6 +1029,17 @@ pub fn validate_data_type_compatibility(
                 );
             }
             validate_data_type_compatibility(field_name, s_val, t_val)?;
+        }
+        (
+            DataType::Union(source_fields, source_mode),
+            DataType::Union(target_fields, target_mode),
+        ) => {
+            validate_union_schema_compatibility(
+                source_fields,
+                source_mode,
+                target_fields,
+                target_mode,
+            )?;
         }
         _ => {
             if !can_cast_types(source_type, target_type) {
@@ -539,13 +1056,18 @@ pub fn validate_data_type_compatibility(
 }
 
 /// Returns true if casting from `source_type` to `target_type` requires
-/// name-based nested struct casting logic, rather than Arrow's standard cast.
+/// DataFusion's specialized nested/container casting logic rather than Arrow's
+/// standard cast.
 ///
 /// This is the case when both types are struct types, or both are the same
 /// container type (List, LargeList, equal-width FixedSizeList, ListView,
-/// LargeListView, Dictionary) wrapping types that recursively contain structs.
+/// LargeListView, Map, Dictionary) wrapping types that recursively contain structs.
 ///
-/// Use this predicate at both planning time (to decide whether to apply struct
+/// Map entries are technically Struct-backed, but that implementation detail does
+/// not require name-based adaptation. A Map uses the specialized path only when
+/// its semantic key or value child recursively contains a Struct.
+///
+/// Use this predicate at both planning time (to decide whether to apply nested
 /// compatibility validation) and execution time (to decide whether to route
 /// through [`cast_column`] instead of Arrow's generic cast).
 pub fn requires_nested_struct_cast(
@@ -566,11 +1088,39 @@ pub fn requires_nested_struct_cast(
         | (DataType::LargeListView(s), DataType::LargeListView(t)) => {
             requires_nested_struct_cast(s.data_type(), t.data_type())
         }
+        (DataType::Map(source_entries, _), DataType::Map(target_entries, _)) => {
+            map_entries_require_nested_struct_cast(source_entries, target_entries)
+        }
         (DataType::Dictionary(_, s_val), DataType::Dictionary(_, t_val)) => {
             requires_nested_struct_cast(s_val, t_val)
         }
         _ => false,
     }
+}
+
+/// Returns whether corresponding semantic Map children require nested Struct casting.
+///
+/// Invalid Map entry layouts return `false`; normal Map validation/casting reports
+/// those layouts through its usual error path.
+fn map_entries_require_nested_struct_cast(
+    source_entries: &FieldRef,
+    target_entries: &FieldRef,
+) -> bool {
+    let (Struct(source_fields), Struct(target_fields)) =
+        (source_entries.data_type(), target_entries.data_type())
+    else {
+        return false;
+    };
+
+    source_fields.len() == 2
+        && target_fields.len() == 2
+        && (requires_nested_struct_cast(
+            source_fields[0].data_type(),
+            target_fields[0].data_type(),
+        ) || requires_nested_struct_cast(
+            source_fields[1].data_type(),
+            target_fields[1].data_type(),
+        ))
 }
 
 /// Check if two field lists have at least one common field by name.
@@ -597,10 +1147,10 @@ mod tests {
     use arrow::{
         array::{
             BinaryArray, FixedSizeListArray, Int32Array, Int32Builder, Int64Array,
-            ListArray, ListViewArray, MapArray, MapBuilder, NullArray, StringArray,
-            StringBuilder,
+            Int64Builder, ListArray, ListViewArray, MapArray, MapBuilder, NullArray,
+            StringArray, StringBuilder, UInt32Array,
         },
-        buffer::{NullBuffer, ScalarBuffer},
+        buffer::{NullBuffer, OffsetBuffer, ScalarBuffer},
         datatypes::{DataType, Field, FieldRef, Int32Type},
     };
     /// Macro to extract and downcast a column from a StructArray
@@ -1292,6 +1842,782 @@ mod tests {
         assert!(b_col.is_null(1));
     }
 
+    fn map_type(key_type: DataType, value_type: DataType) -> DataType {
+        map_type_with_entry_names(key_type, value_type, "keys", "values", false)
+    }
+
+    fn map_type_with_entry_names(
+        key_type: DataType,
+        value_type: DataType,
+        key_name: &str,
+        value_name: &str,
+        sorted: bool,
+    ) -> DataType {
+        DataType::Map(
+            Arc::new(non_null_field(
+                "entries",
+                struct_type(vec![
+                    non_null_field(key_name, key_type),
+                    field(value_name, value_type),
+                ]),
+            )),
+            sorted,
+        )
+    }
+
+    fn struct_map_array() -> ArrayRef {
+        struct_map_array_with_sorted(false)
+    }
+
+    fn struct_map_array_with_sorted(sorted: bool) -> ArrayRef {
+        struct_map_array_with_key_fields(sorted, false)
+    }
+
+    fn struct_map_array_with_key_fields(sorted: bool, include_tenant: bool) -> ArrayRef {
+        let mut key_fields = vec![(
+            arc_field("id", DataType::Int32),
+            Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+        )];
+        if include_tenant {
+            key_fields.push((
+                arc_field("tenant", DataType::Utf8),
+                Arc::new(StringArray::from(vec!["a"])) as ArrayRef,
+            ));
+        }
+        let keys = StructArray::from(key_fields);
+        let values = StructArray::from(vec![
+            (
+                arc_field("amount", DataType::Int32),
+                Arc::new(Int32Array::from(vec![10])) as ArrayRef,
+            ),
+            (
+                arc_field("ignored", DataType::Utf8),
+                Arc::new(StringArray::from(vec!["x"])) as ArrayRef,
+            ),
+        ]);
+        let entries = StructArray::new(
+            vec![
+                Arc::new(non_null_field("keys", keys.data_type().clone())),
+                arc_field("values", values.data_type().clone()),
+            ]
+            .into(),
+            vec![Arc::new(keys), Arc::new(values)],
+            None,
+        );
+        Arc::new(MapArray::new(
+            Arc::new(non_null_field("entries", entries.data_type().clone())),
+            OffsetBuffer::new(vec![0, 1, 1].into()),
+            entries,
+            Some(NullBuffer::from(vec![true, false])),
+            sorted,
+        ))
+    }
+
+    fn nested_struct_map_array(
+        key_name: &str,
+        value_name: &str,
+        sorted: bool,
+    ) -> ArrayRef {
+        let key_nested = StructArray::from(vec![(
+            arc_field("id", DataType::Int32),
+            Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+        )]);
+        let keys = StructArray::from(vec![(
+            arc_field("nested", key_nested.data_type().clone()),
+            Arc::new(key_nested) as ArrayRef,
+        )]);
+        let value_nested = StructArray::from(vec![(
+            arc_field("amount", DataType::Int32),
+            Arc::new(Int32Array::from(vec![10])) as ArrayRef,
+        )]);
+        let values = StructArray::from(vec![(
+            arc_field("nested", value_nested.data_type().clone()),
+            Arc::new(value_nested) as ArrayRef,
+        )]);
+        let entries = StructArray::new(
+            vec![
+                Arc::new(non_null_field(key_name, keys.data_type().clone())),
+                arc_field(value_name, values.data_type().clone()),
+            ]
+            .into(),
+            vec![Arc::new(keys), Arc::new(values)],
+            None,
+        );
+        Arc::new(MapArray::new(
+            Arc::new(non_null_field("entries", entries.data_type().clone())),
+            OffsetBuffer::new(vec![0, 1].into()),
+            entries,
+            None,
+            sorted,
+        ))
+    }
+
+    #[test]
+    fn test_safe_cast_to_non_nullable_struct_field_returns_error() {
+        let source_col: ArrayRef = Arc::new(StructArray::new(
+            vec![Arc::new(non_null_field("value", DataType::Utf8))].into(),
+            vec![Arc::new(StringArray::from(vec!["not-an-int"]))],
+            None,
+        ));
+        let target_type = struct_type(vec![non_null_field("value", DataType::Int32)]);
+        let cast_options = CastOptions {
+            safe: true,
+            ..DEFAULT_CAST_OPTIONS
+        };
+
+        let error = cast_column(&source_col, &target_type, &cast_options)
+            .unwrap_err()
+            .to_string();
+        assert_contains!(
+            error,
+            "Found unmasked nulls for non-nullable StructArray field \"value\""
+        );
+    }
+
+    #[test]
+    fn test_safe_cast_to_non_nullable_map_value_returns_error() {
+        let entries = StructArray::new(
+            vec![
+                Arc::new(non_null_field("keys", DataType::Utf8)),
+                Arc::new(non_null_field("values", DataType::Utf8)),
+            ]
+            .into(),
+            vec![
+                Arc::new(StringArray::from(vec!["key"])) as ArrayRef,
+                Arc::new(StringArray::from(vec!["not-an-int"])) as ArrayRef,
+            ],
+            None,
+        );
+        let source_col: ArrayRef = Arc::new(MapArray::new(
+            Arc::new(non_null_field("entries", entries.data_type().clone())),
+            OffsetBuffer::new(vec![0, 1].into()),
+            entries,
+            None,
+            false,
+        ));
+        let target_type = DataType::Map(
+            Arc::new(non_null_field(
+                "entries",
+                struct_type(vec![
+                    non_null_field("keys", DataType::Utf8),
+                    non_null_field("values", DataType::Int32),
+                ]),
+            )),
+            false,
+        );
+        let cast_options = CastOptions {
+            safe: true,
+            ..DEFAULT_CAST_OPTIONS
+        };
+
+        let error = cast_column(&source_col, &target_type, &cast_options)
+            .unwrap_err()
+            .to_string();
+        assert_contains!(
+            error,
+            "Found unmasked nulls for non-nullable StructArray field \"values\""
+        );
+    }
+
+    #[test]
+    fn test_cast_primitive_map_uses_arrow_cast() {
+        let mut builder = MapBuilder::new(None, Int64Builder::new(), Int64Builder::new());
+        builder.keys().append_value(1);
+        builder.values().append_value(10);
+        builder.append(true).unwrap();
+
+        let source_col: ArrayRef = Arc::new(builder.finish());
+        let target_type = map_type(DataType::Int32, DataType::Int32);
+
+        assert!(!requires_nested_struct_cast(
+            source_col.data_type(),
+            &target_type
+        ));
+        assert!(
+            validate_data_type_compatibility(
+                "map_col",
+                source_col.data_type(),
+                &target_type
+            )
+            .is_ok()
+        );
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        assert_eq!(result.data_type(), &target_type);
+    }
+
+    #[test]
+    fn test_cast_map_int32_keys_to_int64() {
+        let mut builder =
+            MapBuilder::new(None, Int32Builder::new(), StringBuilder::new());
+        builder.keys().append_value(1);
+        builder.keys().append_value(2);
+        builder.values().append_value("a");
+        builder.values().append_value("b");
+        builder.append(true).unwrap();
+
+        let source_col: ArrayRef = Arc::new(builder.finish());
+        let target_type = map_type(DataType::Int64, DataType::Utf8);
+
+        assert!(
+            validate_data_type_compatibility(
+                "map_col",
+                source_col.data_type(),
+                &target_type
+            )
+            .is_ok()
+        );
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        assert_eq!(result.data_type(), &target_type);
+        let map = result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(map.value_offsets(), &[0, 2]);
+
+        let keys = map.keys().as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(keys.values(), &[1, 2]);
+        let values = map.values().as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(values.value(0), "a");
+        assert_eq!(values.value(1), "b");
+    }
+
+    #[test]
+    fn test_cast_map_uint32_keys_to_int64() {
+        let entries = StructArray::new(
+            vec![
+                Arc::new(non_null_field("keys", DataType::UInt32)),
+                arc_field("values", DataType::Utf8),
+            ]
+            .into(),
+            vec![
+                Arc::new(UInt32Array::from(vec![u32::MAX])) as ArrayRef,
+                Arc::new(StringArray::from(vec!["value"])) as ArrayRef,
+            ],
+            None,
+        );
+        let source_col: ArrayRef = Arc::new(MapArray::new(
+            Arc::new(non_null_field("entries", entries.data_type().clone())),
+            OffsetBuffer::new(vec![0, 1].into()),
+            entries,
+            None,
+            false,
+        ));
+        let target_type = map_type(DataType::Int64, DataType::Utf8);
+
+        assert!(
+            validate_data_type_compatibility(
+                "map_col",
+                source_col.data_type(),
+                &target_type
+            )
+            .is_ok()
+        );
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let keys = result
+            .as_map()
+            .keys()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(keys.value(0), i64::from(u32::MAX));
+    }
+
+    #[test]
+    fn test_injective_unsigned_to_signed_map_key_casts() {
+        for (source_type, target_type) in [
+            (DataType::UInt8, DataType::Int16),
+            (DataType::UInt8, DataType::Int32),
+            (DataType::UInt8, DataType::Int64),
+            (DataType::UInt16, DataType::Int32),
+            (DataType::UInt16, DataType::Int64),
+            (DataType::UInt32, DataType::Int64),
+        ] {
+            assert!(is_injective_map_key_cast(&source_type, &target_type));
+        }
+        for (source_type, target_type) in [
+            (DataType::UInt8, DataType::Int8),
+            (DataType::UInt16, DataType::Int16),
+            (DataType::UInt32, DataType::Int32),
+        ] {
+            assert!(!is_injective_map_key_cast(&source_type, &target_type));
+        }
+    }
+
+    #[test]
+    fn test_map_entry_names_match_positionally_and_adapt_nested_structs() {
+        let source_col = nested_struct_map_array("source_keys", "source_values", false);
+        let target_type = map_type_with_entry_names(
+            struct_type(vec![field(
+                "nested",
+                struct_type(vec![
+                    field("id", DataType::Int64),
+                    field("label", DataType::Utf8),
+                ]),
+            )]),
+            struct_type(vec![field(
+                "nested",
+                struct_type(vec![
+                    field("amount", DataType::Int64),
+                    field("currency", DataType::Utf8),
+                ]),
+            )]),
+            "key",
+            "value",
+            false,
+        );
+
+        assert!(
+            validate_data_type_compatibility(
+                "map_col",
+                source_col.data_type(),
+                &target_type
+            )
+            .is_ok()
+        );
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let map = result.as_any().downcast_ref::<MapArray>().unwrap();
+        let (key_field, value_field) = map.entries_fields();
+        assert_eq!(key_field.name(), "key");
+        assert_eq!(value_field.name(), "value");
+        let keys = map.keys().as_struct();
+        let key_nested = keys.column_by_name("nested").unwrap().as_struct();
+        assert_eq!(get_column_as!(key_nested, "id", Int64Array).value(0), 1);
+        assert!(get_column_as!(key_nested, "label", StringArray).is_null(0));
+        let values = map.values().as_struct();
+        let value_nested = values.column_by_name("nested").unwrap().as_struct();
+        assert_eq!(
+            get_column_as!(value_nested, "amount", Int64Array).value(0),
+            10
+        );
+        assert!(get_column_as!(value_nested, "currency", StringArray).is_null(0));
+    }
+
+    #[test]
+    fn test_unsorted_map_key_struct_field_removal_rejected_by_planner_and_runtime() {
+        let source_col = struct_map_array_with_key_fields(false, true);
+        let target_type = map_type(
+            struct_type(vec![field("id", DataType::Int32)]),
+            struct_type(vec![
+                field("amount", DataType::Int32),
+                field("ignored", DataType::Utf8),
+            ]),
+        );
+        assert_map_planning_runtime_error(
+            &source_col,
+            &target_type,
+            "Cannot remove field 'tenant' from a Map key Struct",
+        );
+    }
+
+    #[test]
+    fn test_unsorted_map_non_injective_key_cast_rejected() {
+        let source_col = struct_map_array();
+        let target_type = map_type(
+            struct_type(vec![field("id", DataType::Float64)]),
+            struct_type(vec![
+                field("amount", DataType::Int32),
+                field("ignored", DataType::Utf8),
+            ]),
+        );
+        assert_map_planning_runtime_error(
+            &source_col,
+            &target_type,
+            "Cannot safely evolve Map key type",
+        );
+    }
+
+    #[test]
+    fn test_unsorted_map_key_struct_no_overlap_rejected_by_planner_and_runtime() {
+        let keys = StructArray::new_empty_fields(1, Some(NullBuffer::from(vec![true])));
+        let values = StructArray::from(vec![(
+            arc_field("amount", DataType::Int32),
+            Arc::new(Int32Array::from(vec![10])) as ArrayRef,
+        )]);
+        let entries = StructArray::new(
+            vec![
+                Arc::new(non_null_field("keys", keys.data_type().clone())),
+                arc_field("values", values.data_type().clone()),
+            ]
+            .into(),
+            vec![Arc::new(keys), Arc::new(values)],
+            None,
+        );
+        let source_col: ArrayRef = Arc::new(MapArray::new(
+            Arc::new(non_null_field("entries", entries.data_type().clone())),
+            OffsetBuffer::new(vec![0, 1].into()),
+            entries,
+            None,
+            false,
+        ));
+        let target_type = map_type(
+            struct_type(vec![field("new_id", DataType::Int32)]),
+            struct_type(vec![field("amount", DataType::Int32)]),
+        );
+        assert_map_planning_runtime_error(
+            &source_col,
+            &target_type,
+            "Cannot cast Map key Struct because there is no field name overlap",
+        );
+    }
+
+    #[test]
+    fn test_sorted_map_key_struct_schema_evolution_rejected() {
+        let source_col = struct_map_array_with_sorted(true);
+        let target_type = map_type_with_entry_names(
+            struct_type(vec![
+                field("id", DataType::Int32),
+                field("label", DataType::Utf8),
+            ]),
+            struct_type(vec![
+                field("amount", DataType::Int32),
+                field("ignored", DataType::Utf8),
+            ]),
+            "keys",
+            "values",
+            true,
+        );
+        assert_map_planning_runtime_error(
+            &source_col,
+            &target_type,
+            "Cannot evolve key type of a sorted Map",
+        );
+    }
+
+    #[test]
+    fn test_sorted_map_value_struct_schema_evolution_preserves_sorted() {
+        let source_col = struct_map_array_with_sorted(true);
+        let target_type = map_type_with_entry_names(
+            struct_type(vec![field("id", DataType::Int32)]),
+            struct_type(vec![
+                field("amount", DataType::Int64),
+                field("currency", DataType::Utf8),
+            ]),
+            "keys",
+            "values",
+            true,
+        );
+        assert!(
+            validate_data_type_compatibility(
+                "map_col",
+                source_col.data_type(),
+                &target_type
+            )
+            .is_ok()
+        );
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        assert_eq!(result.data_type(), &target_type);
+        let map = result.as_any().downcast_ref::<MapArray>().unwrap();
+        let values = map.values().as_struct();
+        assert_eq!(get_column_as!(values, "amount", Int64Array).value(0), 10);
+        assert!(get_column_as!(values, "currency", StringArray).is_null(0));
+    }
+
+    #[test]
+    fn test_sorted_map_value_struct_schema_evolution_to_unsorted_rejected() {
+        let source_col = struct_map_array_with_sorted(true);
+        let target_type = map_type_with_entry_names(
+            struct_type(vec![
+                field("id", DataType::Int32),
+                field("label", DataType::Utf8),
+            ]),
+            struct_type(vec![
+                field("amount", DataType::Int64),
+                field("currency", DataType::Utf8),
+            ]),
+            "keys",
+            "values",
+            false,
+        );
+
+        assert_map_planning_runtime_error(
+            &source_col,
+            &target_type,
+            "Cannot change Map sorted flag",
+        );
+    }
+
+    #[test]
+    fn test_null_map_parent_hides_invalid_nested_value_cast() {
+        let values = StructArray::from(vec![(
+            arc_field("amount", DataType::Utf8),
+            Arc::new(StringArray::from(vec!["bad", "2"])) as ArrayRef,
+        )]);
+        let keys = StringArray::from(vec!["hidden", "visible"]);
+        let entries = StructArray::new(
+            vec![
+                Arc::new(non_null_field("keys", DataType::Utf8)),
+                arc_field("values", values.data_type().clone()),
+            ]
+            .into(),
+            vec![Arc::new(keys), Arc::new(values)],
+            None,
+        );
+        let source_col: ArrayRef = Arc::new(MapArray::new(
+            Arc::new(non_null_field("entries", entries.data_type().clone())),
+            OffsetBuffer::new(vec![0, 1, 2].into()),
+            entries,
+            Some(NullBuffer::from(vec![false, true])),
+            false,
+        ));
+        let target_type = map_type(
+            DataType::Utf8,
+            struct_type(vec![field("amount", DataType::Int32)]),
+        );
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let map = result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert!(map.is_null(0));
+        assert_eq!(map.value_offsets(), &[0, 0, 1]);
+        let visible_entries = map.value(1);
+        let visible_values = visible_entries
+            .column_by_name("values")
+            .unwrap()
+            .as_struct();
+        assert_eq!(
+            get_column_as!(visible_values, "amount", Int32Array).value(0),
+            2
+        );
+    }
+
+    #[test]
+    fn test_sliced_map_ignores_unreachable_invalid_nested_value() {
+        let values = StructArray::from(vec![(
+            arc_field("amount", DataType::Utf8),
+            Arc::new(StringArray::from(vec!["bad", "2"])) as ArrayRef,
+        )]);
+        let entries = StructArray::new(
+            vec![
+                Arc::new(non_null_field("keys", DataType::Utf8)),
+                arc_field("values", values.data_type().clone()),
+            ]
+            .into(),
+            vec![
+                Arc::new(StringArray::from(vec!["unreachable", "visible"])),
+                Arc::new(values),
+            ],
+            None,
+        );
+        let source_col: ArrayRef = Arc::new(
+            MapArray::new(
+                Arc::new(non_null_field("entries", entries.data_type().clone())),
+                OffsetBuffer::new(vec![0, 1, 2].into()),
+                entries,
+                None,
+                false,
+            )
+            .slice(1, 1),
+        );
+        let target_type = map_type(
+            DataType::Utf8,
+            struct_type(vec![field("amount", DataType::Int32)]),
+        );
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let map = result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(map.value_offsets(), &[0, 1]);
+        let values = map.values().as_struct();
+        assert_eq!(get_column_as!(values, "amount", Int32Array).value(0), 2);
+    }
+
+    #[test]
+    fn test_cast_map_struct_key_and_value() {
+        let source_col = struct_map_array();
+        let target_type = map_type(
+            struct_type(vec![
+                field("id", DataType::Int64),
+                field("label", DataType::Utf8),
+            ]),
+            struct_type(vec![
+                field("amount", DataType::Int64),
+                field("currency", DataType::Utf8),
+            ]),
+        );
+
+        assert!(requires_nested_struct_cast(
+            source_col.data_type(),
+            &target_type
+        ));
+        assert!(
+            validate_data_type_compatibility(
+                "map_col",
+                source_col.data_type(),
+                &target_type
+            )
+            .is_ok()
+        );
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let map = result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert!(map.is_valid(0));
+        assert!(map.is_null(1));
+
+        let keys = map.keys().as_any().downcast_ref::<StructArray>().unwrap();
+        let key_ids = get_column_as!(keys, "id", Int64Array);
+        assert_eq!(key_ids.values(), &[1]);
+        let key_labels = get_column_as!(keys, "label", StringArray);
+        assert!(key_labels.is_null(0));
+
+        let values = map.values().as_any().downcast_ref::<StructArray>().unwrap();
+        let amounts = get_column_as!(values, "amount", Int64Array);
+        assert_eq!(amounts.values(), &[10]);
+        let currencies = get_column_as!(values, "currency", StringArray);
+        assert!(currencies.is_null(0));
+        assert!(values.column_by_name("ignored").is_none());
+    }
+
+    #[test]
+    fn test_cast_all_null_map_with_struct_value() {
+        let source_type = map_type(
+            DataType::Utf8,
+            struct_type(vec![field("amount", DataType::Int32)]),
+        );
+        let target_type = map_type(
+            DataType::Utf8,
+            struct_type(vec![
+                field("amount", DataType::Int64),
+                field("currency", DataType::Utf8),
+            ]),
+        );
+        let source_col = new_null_array(&source_type, 2);
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let map = result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(map.null_count(), 2);
+        assert!(map.entries().is_empty());
+        assert_eq!(map.data_type(), &target_type);
+    }
+
+    #[test]
+    fn test_map_entry_invariants_rejected_during_validation() {
+        let source_col = struct_map_array();
+        let DataType::Map(target_entries, sorted) = map_type(
+            struct_type(vec![field("id", DataType::Int32)]),
+            struct_type(vec![field("amount", DataType::Int32)]),
+        ) else {
+            unreachable!()
+        };
+        let nullable_entries = DataType::Map(
+            Arc::new(target_entries.as_ref().clone().with_nullable(true)),
+            sorted,
+        );
+        let error = validate_data_type_compatibility(
+            "map_col",
+            source_col.data_type(),
+            &nullable_entries,
+        )
+        .unwrap_err()
+        .to_string();
+        assert_contains!(error, "Map entries field must be non-nullable");
+
+        let Struct(fields) = target_entries.data_type() else {
+            unreachable!()
+        };
+        let nullable_key_entries = Arc::new(Field::new(
+            "entries",
+            Struct(
+                vec![
+                    Arc::new(fields[0].as_ref().clone().with_nullable(true)),
+                    Arc::clone(&fields[1]),
+                ]
+                .into(),
+            ),
+            false,
+        ));
+        let error = validate_data_type_compatibility(
+            "map_col",
+            source_col.data_type(),
+            &DataType::Map(nullable_key_entries, sorted),
+        )
+        .unwrap_err()
+        .to_string();
+        assert_contains!(error, "Map key field must be non-nullable");
+
+        let sorted_target = DataType::Map(target_entries, !sorted);
+        assert_map_planning_runtime_error(
+            &source_col,
+            &sorted_target,
+            "Cannot change Map sorted flag",
+        );
+    }
+
+    #[test]
+    fn test_map_sorted_flag_validation_error_includes_field_name() {
+        let source_col = struct_map_array();
+        let DataType::Map(target_entries, sorted) = source_col.data_type() else {
+            unreachable!()
+        };
+        let target_type = DataType::Map(Arc::clone(target_entries), !sorted);
+
+        let error = validate_data_type_compatibility(
+            "map_col",
+            source_col.data_type(),
+            &target_type,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert_contains!(
+            error,
+            "Cannot change Map sorted flag for field 'map_col' during schema adaptation"
+        );
+    }
+
+    fn assert_map_planning_runtime_error(
+        source: &ArrayRef,
+        target: &DataType,
+        expected: &str,
+    ) {
+        let planning_error =
+            validate_data_type_compatibility("map_col", source.data_type(), target)
+                .unwrap_err()
+                .to_string();
+        assert_contains!(planning_error, expected);
+
+        let runtime_error = cast_column(source, target, &DEFAULT_CAST_OPTIONS)
+            .unwrap_err()
+            .to_string();
+        assert_contains!(runtime_error, expected);
+    }
+
+    #[test]
+    fn test_map_struct_planner_runtime_parity_on_invalid_evolution() {
+        let source_col = struct_map_array();
+        let target_type = map_type(
+            struct_type(vec![field("id", DataType::Int32)]),
+            struct_type(vec![
+                field("amount", DataType::Int32),
+                non_null_field("currency", DataType::Utf8),
+            ]),
+        );
+        assert_map_planning_runtime_error(
+            &source_col,
+            &target_type,
+            "target field 'currency' is non-nullable",
+        );
+
+        let incompatible_target = map_type(
+            struct_type(vec![field("id", DataType::Int32)]),
+            struct_type(vec![field(
+                "amount",
+                struct_type(vec![field("value", DataType::Utf8)]),
+            )]),
+        );
+        assert_map_planning_runtime_error(
+            &source_col,
+            &incompatible_target,
+            "Cannot cast struct field 'amount'",
+        );
+    }
+
     #[test]
     fn test_validate_dictionary_value_evolution() {
         let source_inner = struct_type(vec![field("a", DataType::Int32)]);
@@ -1394,6 +2720,266 @@ mod tests {
         assert_eq!(a_col.values(), &[1, 2, 3]);
         let b_col = get_column_as!(&struct_values, "b", StringArray);
         assert!(b_col.iter().all(|v| v.is_none()));
+    }
+
+    fn list_struct_values(values: Vec<&str>) -> ArrayRef {
+        Arc::new(StructArray::from(vec![(
+            arc_field("value", DataType::Utf8),
+            Arc::new(StringArray::from(values)) as ArrayRef,
+        )]))
+    }
+
+    fn list_struct_fields() -> (FieldRef, FieldRef) {
+        (
+            arc_field("item", struct_type(vec![field("value", DataType::Utf8)])),
+            arc_field("item", struct_type(vec![field("value", DataType::Int32)])),
+        )
+    }
+
+    fn assert_visible_list_value(list: &ArrayRef, row: usize, expected: i32) {
+        let values = list.as_list::<i32>().value(row);
+        let values = values.as_struct();
+        assert_eq!(
+            get_column_as!(values, "value", Int32Array).value(0),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_sliced_list_ignores_unreachable_invalid_nested_value() {
+        let (source_field, target_field) = list_struct_fields();
+        let source_col: ArrayRef = Arc::new(
+            ListArray::new(
+                source_field,
+                OffsetBuffer::new(vec![0, 1, 2].into()),
+                list_struct_values(vec!["bad", "2"]),
+                None,
+            )
+            .slice(1, 1),
+        );
+        let target_type = DataType::List(target_field);
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+
+        assert_eq!(result.data_type(), &target_type);
+        assert_visible_list_value(&result, 0, 2);
+    }
+
+    #[test]
+    fn test_null_list_parent_hides_invalid_nested_value() {
+        let (source_field, target_field) = list_struct_fields();
+        let source_col: ArrayRef = Arc::new(ListArray::new(
+            source_field,
+            OffsetBuffer::new(vec![0, 1, 2].into()),
+            list_struct_values(vec!["bad", "2"]),
+            Some(NullBuffer::from(vec![false, true])),
+        ));
+        let target_type = DataType::List(target_field);
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+
+        assert_eq!(result.data_type(), &target_type);
+        assert!(result.is_null(0));
+        assert_visible_list_value(&result, 1, 2);
+    }
+
+    #[test]
+    fn test_sliced_large_list_ignores_unreachable_invalid_nested_value() {
+        let (source_field, target_field) = list_struct_fields();
+        let source_col: ArrayRef = Arc::new(
+            GenericListArray::<i64>::new(
+                source_field,
+                OffsetBuffer::new(vec![0, 1, 2].into()),
+                list_struct_values(vec!["bad", "2"]),
+                None,
+            )
+            .slice(1, 1),
+        );
+        let target_type = DataType::LargeList(target_field);
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let values = result.as_list::<i64>().value(0);
+
+        assert_eq!(result.data_type(), &target_type);
+        assert_eq!(
+            get_column_as!(values.as_struct(), "value", Int32Array).value(0),
+            2
+        );
+    }
+
+    #[test]
+    fn test_list_view_ignores_unreachable_invalid_nested_values() {
+        let (source_field, target_field) = list_struct_fields();
+        let source_col: ArrayRef = Arc::new(ListViewArray::new(
+            source_field,
+            ScalarBuffer::from(vec![0i32, 1, 2]),
+            ScalarBuffer::from(vec![1i32, 1, 1]),
+            list_struct_values(vec!["bad", "2", "bad"]),
+            Some(NullBuffer::from(vec![false, true, true])),
+        ));
+        let source_col = source_col.slice(0, 2);
+        let target_type = DataType::ListView(target_field);
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let result = result.as_list_view::<i32>();
+        let values = result.value(1);
+
+        assert_eq!(result.data_type(), &target_type);
+        assert!(result.is_null(0));
+        assert_eq!(result.value_sizes(), &[0, 1]);
+        assert_eq!(
+            get_column_as!(values.as_struct(), "value", Int32Array).value(0),
+            2
+        );
+    }
+
+    #[test]
+    fn test_all_null_list_view_ignores_invalid_backing_values() {
+        let (source_field, target_field) = list_struct_fields();
+        let source_col: ArrayRef = Arc::new(ListViewArray::new(
+            source_field,
+            ScalarBuffer::from(vec![0i32, 1]),
+            ScalarBuffer::from(vec![1i32, 1]),
+            list_struct_values(vec!["bad", "also_bad"]),
+            Some(NullBuffer::from(vec![false, false])),
+        ));
+        let target_type = DataType::ListView(target_field);
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let result = result.as_list_view::<i32>();
+
+        assert_eq!(result.data_type(), &target_type);
+        assert_eq!(result.null_count(), 2);
+        assert_eq!(result.value_offsets(), &[0, 0]);
+        assert_eq!(result.value_sizes(), &[0, 0]);
+        assert!(result.values().is_empty());
+    }
+
+    #[test]
+    fn test_list_view_compacts_overlapping_out_of_order_ranges() {
+        let (source_field, target_field) = list_struct_fields();
+        let source_col: ArrayRef = Arc::new(ListViewArray::new(
+            source_field,
+            ScalarBuffer::from(vec![2i32, 0, 2]),
+            ScalarBuffer::from(vec![2i32, 1, 1]),
+            list_struct_values(vec!["1", "bad", "2", "3", "bad"]),
+            None,
+        ));
+        let target_type = DataType::ListView(target_field);
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let result = result.as_list_view::<i32>();
+        let first = result.value(0);
+        let second = result.value(1);
+
+        assert_eq!(result.value_offsets(), &[1, 0, 1]);
+        assert_eq!(result.value_sizes(), &[2, 1, 1]);
+        assert_eq!(
+            get_column_as!(first.as_struct(), "value", Int32Array).values(),
+            &[2, 3]
+        );
+        assert_eq!(
+            get_column_as!(second.as_struct(), "value", Int32Array).values(),
+            &[1]
+        );
+    }
+
+    #[test]
+    fn test_nested_sparse_list_view_compacts_backing_once() {
+        let (source_inner_field, target_inner_field) = list_struct_fields();
+        let inner = ListViewArray::new(
+            source_inner_field,
+            ScalarBuffer::from(vec![0i32, 1, 2, 3, 5]),
+            ScalarBuffer::from(vec![1i32, 1, 1, 2, 1]),
+            list_struct_values(vec!["bad", "1", "bad", "2", "3", "bad"]),
+            None,
+        );
+        let source_outer_field = arc_field("item", inner.data_type().clone());
+        let target_outer_field =
+            arc_field("item", DataType::ListView(Arc::clone(&target_inner_field)));
+        let source_col: ArrayRef = Arc::new(ListViewArray::new(
+            source_outer_field,
+            ScalarBuffer::from(vec![1i32, 3]),
+            ScalarBuffer::from(vec![1i32, 1]),
+            Arc::new(inner),
+            None,
+        ));
+        let target_type = DataType::ListView(target_outer_field);
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let outer = result.as_list_view::<i32>();
+        let inner = outer.values().as_list_view::<i32>();
+
+        assert_eq!(outer.value_offsets(), &[0, 1]);
+        assert_eq!(outer.value_sizes(), &[1, 1]);
+        assert_eq!(inner.len(), 2);
+        assert_eq!(inner.value_offsets(), &[0, 1]);
+        assert_eq!(inner.value_sizes(), &[1, 2]);
+        assert_eq!(inner.values().len(), 3);
+
+        let first = outer.value(0);
+        let first = first.as_list_view::<i32>().value(0);
+        assert_eq!(
+            get_column_as!(first.as_struct(), "value", Int32Array).values(),
+            &[1]
+        );
+        let second = outer.value(1);
+        let second = second.as_list_view::<i32>().value(0);
+        assert_eq!(
+            get_column_as!(second.as_struct(), "value", Int32Array).values(),
+            &[2, 3]
+        );
+    }
+
+    #[test]
+    fn test_sliced_large_list_view_ignores_unreachable_invalid_nested_value() {
+        let (source_field, target_field) = list_struct_fields();
+        let source_col: ArrayRef = Arc::new(
+            GenericListViewArray::<i64>::new(
+                source_field,
+                ScalarBuffer::from(vec![0i64, 1]),
+                ScalarBuffer::from(vec![1i64, 1]),
+                list_struct_values(vec!["bad", "2"]),
+                None,
+            )
+            .slice(1, 1),
+        );
+        let target_type = DataType::LargeListView(target_field);
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let result = result.as_list_view::<i64>();
+        let values = result.value(0);
+
+        assert_eq!(result.data_type(), &target_type);
+        assert_eq!(result.value_offsets(), &[0]);
+        assert_eq!(result.value_sizes(), &[1]);
+        assert_eq!(
+            get_column_as!(values.as_struct(), "value", Int32Array).value(0),
+            2
+        );
+    }
+
+    #[test]
+    fn test_large_list_view_visible_invalid_nested_value_returns_error() {
+        let (source_field, target_field) = list_struct_fields();
+        let source_col: ArrayRef = Arc::new(GenericListViewArray::<i64>::new(
+            source_field,
+            ScalarBuffer::from(vec![0i64]),
+            ScalarBuffer::from(vec![1i64]),
+            list_struct_values(vec!["bad"]),
+            None,
+        ));
+        let target_type = DataType::LargeListView(target_field);
+
+        assert!(cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).is_err());
     }
 
     fn fixed_size_list_struct_field(fields: Vec<(&str, DataType)>) -> FieldRef {
@@ -1680,6 +3266,14 @@ mod tests {
             &DataType::Dictionary(Box::new(DataType::Int32), Box::new(s2.clone())),
         ));
         assert!(requires_nested_struct_cast(
+            &map_type(s1.clone(), DataType::Utf8),
+            &map_type(s2.clone(), DataType::Utf8),
+        ));
+        assert!(requires_nested_struct_cast(
+            &map_type(DataType::Utf8, map_type(DataType::Utf8, s1.clone()),),
+            &map_type(DataType::Utf8, map_type(DataType::Utf8, s2.clone())),
+        ));
+        assert!(requires_nested_struct_cast(
             &DataType::ListView(arc_field("item", s1.clone())),
             &DataType::ListView(arc_field("item", s2.clone())),
         ));
@@ -1698,8 +3292,601 @@ mod tests {
             &DataType::List(arc_field("item", DataType::Int64)),
         ));
         assert!(!requires_nested_struct_cast(
+            &map_type(DataType::Int64, DataType::Int64),
+            &map_type(DataType::Int32, DataType::Int32),
+        ));
+        assert!(!requires_nested_struct_cast(
+            &map_type(DataType::Utf8, map_type(DataType::Utf8, DataType::Int64),),
+            &map_type(DataType::Utf8, map_type(DataType::Utf8, DataType::Int32),),
+        ));
+        assert!(!requires_nested_struct_cast(
             &DataType::FixedSizeList(arc_field("item", DataType::Int32), 2),
             &DataType::FixedSizeList(arc_field("item", DataType::Int64), 2),
         ));
+    }
+}
+
+/// Adapts a `RecordBatch` to conform to `target_schema`, verifying that each target field
+/// type contains the incoming column data type (as verified by [`arrow::datatypes::DataType::contains`])
+/// and transforms the metadata/types of differing columns to match `target_schema`
+/// without copying primitive buffer data.
+///
+/// If `batch` has an incompatible column count or incompatible column data types,
+/// an error is returned.
+pub fn adapt_batch_to_schema(
+    batch: RecordBatch,
+    target_schema: &SchemaRef,
+) -> Result<RecordBatch> {
+    if Arc::ptr_eq(batch.schema_ref(), target_schema)
+        || batch.schema().as_ref() == target_schema.as_ref()
+    {
+        return Ok(batch);
+    }
+
+    if batch.num_columns() != target_schema.fields().len() {
+        return _plan_err!(
+            "Batch schema does not conform to expected schema (column count mismatch). Expected: {target_schema}, got: {}",
+            batch.schema()
+        );
+    }
+
+    let mut columns = Vec::with_capacity(batch.num_columns());
+    let mut needs_column_adaptation = false;
+    let cast_options = CastOptions::default();
+
+    for (target_field, col) in target_schema.fields().iter().zip(batch.columns()) {
+        if target_field.data_type() != col.data_type() {
+            // If data types differ, verify that target_field's data type contains
+            // the column's data type (e.g. stricter nested struct / list field nullability).
+            if !target_field.data_type().contains(col.data_type()) {
+                return _plan_err!(
+                    "Batch column '{}' with type {} cannot be adapted to expected type {}",
+                    target_field.name(),
+                    col.data_type(),
+                    target_field.data_type()
+                );
+            }
+            needs_column_adaptation = true;
+            let adapted_col = cast_column(col, target_field.data_type(), &cast_options)?;
+            columns.push(adapted_col);
+        } else {
+            columns.push(Arc::clone(col));
+        }
+    }
+
+    if needs_column_adaptation {
+        Ok(RecordBatch::try_new(Arc::clone(target_schema), columns)?)
+    } else {
+        // Schema differs only in top-level metadata or field nullability, while
+        // column data types match exactly. Replace the schema on the batch.
+        Ok(RecordBatch::try_new(
+            Arc::clone(target_schema),
+            batch.columns().to_vec(),
+        )?)
+    }
+}
+
+#[cfg(test)]
+mod adapt_schema_tests {
+    use super::*;
+    use arrow::array::{Int32Array, StringArray};
+    use arrow::datatypes::{Field, Fields, Schema};
+
+    #[test]
+    fn test_adapt_batch_to_schema_identical() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, true),
+        ]));
+
+        let a = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let b = Arc::new(StringArray::from(vec![Some("x"), None, Some("z")])) as ArrayRef;
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![a, b])?;
+
+        let adapted = adapt_batch_to_schema(batch.clone(), &schema)?;
+        assert_eq!(adapted, batch);
+        Ok(())
+    }
+
+    #[test]
+    fn test_adapt_batch_to_schema_stricter_nested_struct() -> Result<()> {
+        // Declared table schema: {a: Struct({x: Int32 (nullable), y: Utf8 (nullable)})}
+        let declared_inner_fields = Fields::from(vec![
+            Field::new("x", DataType::Int32, true),
+            Field::new("y", DataType::Utf8, true),
+        ]);
+        let declared_schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            Struct(declared_inner_fields),
+            false,
+        )]));
+
+        // Runtime batch schema: {a: Struct({x: Int32 (NON-nullable), y: Utf8 (NON-nullable)})}
+        let runtime_inner_fields = Fields::from(vec![
+            Field::new("x", DataType::Int32, false),
+            Field::new("y", DataType::Utf8, false),
+        ]);
+        let runtime_schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            Struct(runtime_inner_fields.clone()),
+            false,
+        )]));
+
+        let x = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let y = Arc::new(StringArray::from(vec!["x", "y", "z"])) as ArrayRef;
+        let struct_array =
+            Arc::new(StructArray::new(runtime_inner_fields, vec![x, y], None))
+                as ArrayRef;
+        let batch = RecordBatch::try_new(runtime_schema, vec![struct_array])?;
+
+        let adapted = adapt_batch_to_schema(batch, &declared_schema)?;
+        assert_eq!(adapted.schema().as_ref(), declared_schema.as_ref());
+        assert_eq!(adapted.num_rows(), 3);
+
+        // Verify nested fields now have the declared nullability
+        let Struct(fields) = adapted.column(0).data_type() else {
+            panic!("expected struct");
+        };
+        assert!(fields[0].is_nullable());
+        assert!(fields[1].is_nullable());
+        Ok(())
+    }
+
+    #[test]
+    fn test_adapt_batch_to_schema_top_level_nullability_only() -> Result<()> {
+        // Declared schema has nullable column 'a', runtime batch has non-nullable 'a'
+        let declared_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let runtime_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        let a = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let batch = RecordBatch::try_new(runtime_schema, vec![a])?;
+
+        let adapted = adapt_batch_to_schema(batch, &declared_schema)?;
+        assert_eq!(adapted.schema().as_ref(), declared_schema.as_ref());
+        assert!(adapted.schema().field(0).is_nullable());
+        Ok(())
+    }
+
+    #[test]
+    fn test_adapt_batch_to_schema_null_into_non_nullable_rejected() {
+        // Declared schema is non-nullable, but runtime batch is nullable
+        let declared_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let runtime_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+
+        let a = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)])) as ArrayRef;
+        let batch = RecordBatch::try_new(runtime_schema, vec![a]).unwrap();
+
+        // Must reject because nullable is not contained by non-nullable
+        let result = adapt_batch_to_schema(batch, &declared_schema);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_adapt_batch_to_schema_incompatible_type_rejected() {
+        let declared_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let runtime_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, true)]));
+
+        let a = Arc::new(StringArray::from(vec!["1", "2"])) as ArrayRef;
+        let batch = RecordBatch::try_new(runtime_schema, vec![a]).unwrap();
+
+        let result = adapt_batch_to_schema(batch, &declared_schema);
+        assert!(result.is_err());
+    }
+
+    fn test_two_field_union(nullable: bool) -> UnionFields {
+        UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("value", DataType::Int32, nullable),
+                Field::new("str", DataType::Utf8, nullable),
+            ],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn test_adapt_batch_to_schema_stricter_sparse_union() -> Result<()> {
+        use arrow::array::UnionArray;
+        use arrow::buffer::ScalarBuffer;
+        use arrow::datatypes::UnionMode;
+
+        let target_union_fields = test_two_field_union(true);
+        let declared_schema = Arc::new(Schema::new(vec![Field::new(
+            "u",
+            DataType::Union(target_union_fields, UnionMode::Sparse),
+            false,
+        )]));
+
+        let source_union_fields = test_two_field_union(false);
+        let runtime_schema = Arc::new(Schema::new(vec![Field::new(
+            "u",
+            DataType::Union(source_union_fields.clone(), UnionMode::Sparse),
+            false,
+        )]));
+
+        let int_array: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 30]));
+        let str_array: ArrayRef =
+            Arc::new(StringArray::from(vec!["hello", "world", "!"]));
+        let type_ids = [0, 0, 1].into_iter().collect::<ScalarBuffer<i8>>();
+        let source_union = UnionArray::try_new(
+            source_union_fields,
+            type_ids,
+            None,
+            vec![int_array, str_array],
+        )?;
+        let batch = RecordBatch::try_new(runtime_schema, vec![Arc::new(source_union)])?;
+
+        let adapted = adapt_batch_to_schema(batch, &declared_schema)?;
+        assert_eq!(adapted.schema().as_ref(), declared_schema.as_ref());
+
+        let adapted_union = adapted
+            .column(0)
+            .as_any()
+            .downcast_ref::<UnionArray>()
+            .unwrap();
+        let DataType::Union(fields, mode) = adapted_union.data_type() else {
+            panic!("expected union");
+        };
+        assert_eq!(*mode, UnionMode::Sparse);
+        assert!(fields.iter().all(|(_, f)| f.is_nullable()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_adapt_batch_to_schema_stricter_dense_union() -> Result<()> {
+        use arrow::array::UnionArray;
+        use arrow::buffer::ScalarBuffer;
+        use arrow::datatypes::UnionMode;
+
+        let target_union_fields = test_two_field_union(true);
+        let declared_schema = Arc::new(Schema::new(vec![Field::new(
+            "u",
+            DataType::Union(target_union_fields, UnionMode::Dense),
+            false,
+        )]));
+
+        let source_union_fields = test_two_field_union(false);
+        let runtime_schema = Arc::new(Schema::new(vec![Field::new(
+            "u",
+            DataType::Union(source_union_fields.clone(), UnionMode::Dense),
+            false,
+        )]));
+
+        let int_array: ArrayRef = Arc::new(Int32Array::from(vec![10, 30]));
+        let str_array: ArrayRef = Arc::new(StringArray::from(vec!["hello"]));
+        let type_ids = [0, 1, 0].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets = [0, 0, 1].into_iter().collect::<ScalarBuffer<i32>>();
+        let source_union = UnionArray::try_new(
+            source_union_fields,
+            type_ids,
+            Some(offsets),
+            vec![int_array, str_array],
+        )?;
+        let batch = RecordBatch::try_new(runtime_schema, vec![Arc::new(source_union)])?;
+
+        let adapted = adapt_batch_to_schema(batch, &declared_schema)?;
+        assert_eq!(adapted.schema().as_ref(), declared_schema.as_ref());
+
+        let adapted_union = adapted
+            .column(0)
+            .as_any()
+            .downcast_ref::<UnionArray>()
+            .unwrap();
+        let DataType::Union(fields, mode) = adapted_union.data_type() else {
+            panic!("expected union");
+        };
+        assert_eq!(*mode, UnionMode::Dense);
+        assert!(fields.iter().all(|(_, f)| f.is_nullable()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_adapt_batch_to_schema_union_reordered_and_non_contiguous_type_ids()
+    -> Result<()> {
+        use arrow::array::UnionArray;
+        use arrow::buffer::ScalarBuffer;
+        use arrow::datatypes::UnionMode;
+
+        let target_union_fields = UnionFields::try_new(
+            vec![3, 1],
+            vec![
+                Field::new("str", DataType::Utf8, true),
+                Field::new("int", DataType::Int32, true),
+            ],
+        )?;
+        let declared_schema = Arc::new(Schema::new(vec![Field::new(
+            "u",
+            DataType::Union(target_union_fields, UnionMode::Dense),
+            false,
+        )]));
+
+        let source_union_fields = UnionFields::try_new(
+            vec![1, 3],
+            vec![
+                Field::new("int", DataType::Int32, false),
+                Field::new("str", DataType::Utf8, false),
+            ],
+        )?;
+        let source_schema = Arc::new(Schema::new(vec![Field::new(
+            "u",
+            DataType::Union(source_union_fields.clone(), UnionMode::Dense),
+            false,
+        )]));
+
+        let int_array: ArrayRef = Arc::new(Int32Array::from(vec![10, 30]));
+        let str_array: ArrayRef = Arc::new(StringArray::from(vec!["b"]));
+        let type_ids = [1, 3, 1].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets = [0, 0, 1].into_iter().collect::<ScalarBuffer<i32>>();
+        let source_union = UnionArray::try_new(
+            source_union_fields,
+            type_ids.clone(),
+            Some(offsets.clone()),
+            vec![int_array, str_array],
+        )?;
+
+        let source_batch =
+            RecordBatch::try_new(source_schema, vec![Arc::new(source_union)])?;
+
+        let adapted = adapt_batch_to_schema(source_batch, &declared_schema)?;
+        assert_eq!(adapted.schema().as_ref(), declared_schema.as_ref());
+        let adapted_union = adapted
+            .column(0)
+            .as_any()
+            .downcast_ref::<UnionArray>()
+            .unwrap();
+        assert_eq!(
+            adapted_union.data_type(),
+            declared_schema.field(0).data_type()
+        );
+        assert_eq!(adapted_union.type_ids(), &type_ids);
+        assert_eq!(adapted_union.offsets(), Some(&offsets));
+
+        // Child 1 is int, Child 3 is str (accessed by type ID)
+        let int_child = adapted_union
+            .child(1)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let str_child = adapted_union
+            .child(3)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+
+        // Row 0: type_id 1 -> int value 10
+        assert_eq!(adapted_union.type_id(0), 1);
+        assert_eq!(int_child.value(adapted_union.value_offset(0)), 10);
+
+        // Row 1: type_id 3 -> str value "b"
+        assert_eq!(adapted_union.type_id(1), 3);
+        assert_eq!(str_child.value(adapted_union.value_offset(1)), "b");
+
+        // Row 2: type_id 1 -> int value 30
+        assert_eq!(adapted_union.type_id(2), 1);
+        assert_eq!(int_child.value(adapted_union.value_offset(2)), 30);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_adapt_batch_to_schema_union_nested_struct() -> Result<()> {
+        use arrow::array::UnionArray;
+        use arrow::buffer::ScalarBuffer;
+        use arrow::datatypes::{UnionFields, UnionMode};
+
+        let target_struct_fields = vec![Field::new("x", DataType::Int32, true)];
+        let target_union_fields = UnionFields::try_new(
+            vec![0],
+            vec![Field::new("s", Struct(target_struct_fields.into()), true)],
+        )?;
+        let declared_schema = Arc::new(Schema::new(vec![Field::new(
+            "u",
+            DataType::Union(target_union_fields, UnionMode::Dense),
+            false,
+        )]));
+
+        let source_struct_fields = vec![Field::new("x", DataType::Int32, false)];
+        let source_union_fields = UnionFields::try_new(
+            vec![0],
+            vec![Field::new("s", Struct(source_struct_fields.into()), false)],
+        )?;
+        let source_schema = Arc::new(Schema::new(vec![Field::new(
+            "u",
+            DataType::Union(source_union_fields.clone(), UnionMode::Dense),
+            false,
+        )]));
+
+        let struct_child: ArrayRef = Arc::new(StructArray::new(
+            vec![Field::new("x", DataType::Int32, false)].into(),
+            vec![Arc::new(Int32Array::from(vec![1, 2]))],
+            None,
+        ));
+        let type_ids = [0, 0].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets = [0, 1].into_iter().collect::<ScalarBuffer<i32>>();
+        let source_union = UnionArray::try_new(
+            source_union_fields,
+            type_ids.clone(),
+            Some(offsets.clone()),
+            vec![struct_child],
+        )?;
+
+        let source_batch =
+            RecordBatch::try_new(source_schema, vec![Arc::new(source_union)])?;
+
+        let adapted = adapt_batch_to_schema(source_batch, &declared_schema)?;
+        assert_eq!(adapted.schema().as_ref(), declared_schema.as_ref());
+        let adapted_union = adapted
+            .column(0)
+            .as_any()
+            .downcast_ref::<UnionArray>()
+            .unwrap();
+        let adapted_child = adapted_union.child(0);
+        let struct_arr = adapted_child
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        assert!(struct_arr.fields()[0].is_nullable());
+        Ok(())
+    }
+
+    #[test]
+    fn test_adapt_batch_to_schema_union_incompatible_mode_rejected() {
+        use arrow::array::UnionArray;
+        use arrow::buffer::ScalarBuffer;
+        use arrow::datatypes::UnionMode;
+
+        let declared_schema = Arc::new(Schema::new(vec![Field::new(
+            "u",
+            DataType::Union(test_two_field_union(true), UnionMode::Dense),
+            false,
+        )]));
+        let source_schema = Arc::new(Schema::new(vec![Field::new(
+            "u",
+            DataType::Union(test_two_field_union(false), UnionMode::Sparse),
+            false,
+        )]));
+
+        let int_array: ArrayRef = Arc::new(Int32Array::from(vec![10, 20]));
+        let str_array: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
+        let type_ids = [0, 0].into_iter().collect::<ScalarBuffer<i8>>();
+        let source_union = UnionArray::try_new(
+            test_two_field_union(false),
+            type_ids,
+            None,
+            vec![int_array, str_array],
+        )
+        .unwrap();
+
+        let source_batch =
+            RecordBatch::try_new(source_schema, vec![Arc::new(source_union)]).unwrap();
+
+        let res = adapt_batch_to_schema(source_batch, &declared_schema);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_adapt_batch_to_schema_union_field_set_mismatch_rejected() {
+        use arrow::array::UnionArray;
+        use arrow::buffer::ScalarBuffer;
+        use arrow::datatypes::{UnionFields, UnionMode};
+
+        // Target has type ID [0]
+        let target_union_fields = UnionFields::try_new(
+            vec![0],
+            vec![Field::new("value", DataType::Int32, true)],
+        )
+        .unwrap();
+        let declared_schema = Arc::new(Schema::new(vec![Field::new(
+            "u",
+            DataType::Union(target_union_fields, UnionMode::Sparse),
+            false,
+        )]));
+
+        // Source has type IDs [0, 1] (where ID 0 is compatible)
+        let source_union_fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("value", DataType::Int32, false),
+                Field::new("extra", DataType::Utf8, false),
+            ],
+        )
+        .unwrap();
+        let source_schema = Arc::new(Schema::new(vec![Field::new(
+            "u",
+            DataType::Union(source_union_fields.clone(), UnionMode::Sparse),
+            false,
+        )]));
+
+        let int_array: ArrayRef = Arc::new(Int32Array::from(vec![10, 20]));
+        let str_array: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
+        let type_ids = [0, 1].into_iter().collect::<ScalarBuffer<i8>>();
+        let source_union = UnionArray::try_new(
+            source_union_fields,
+            type_ids,
+            None,
+            vec![int_array, str_array],
+        )
+        .unwrap();
+
+        let source_batch =
+            RecordBatch::try_new(source_schema, vec![Arc::new(source_union)]).unwrap();
+
+        let res = adapt_batch_to_schema(source_batch, &declared_schema);
+        assert!(res.is_err());
+        let err = res.unwrap_err().to_string();
+        assert!(
+            err.contains("different field sets")
+                || err.contains("cannot be adapted to expected type"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_data_type_compatibility_union() {
+        use arrow::datatypes::{UnionFields, UnionMode};
+
+        let target_type = DataType::Union(test_two_field_union(true), UnionMode::Dense);
+
+        // Compatible: exact same type IDs in different order with stricter nullability
+        let reordered_source_fields = UnionFields::try_new(
+            vec![1, 0],
+            vec![
+                Field::new("str", DataType::Utf8, false),
+                Field::new("value", DataType::Int32, false),
+            ],
+        )
+        .unwrap();
+        let source_type = DataType::Union(reordered_source_fields, UnionMode::Dense);
+        assert!(
+            validate_data_type_compatibility("u", &source_type, &target_type).is_ok()
+        );
+
+        // Incompatible: mismatched mode
+        let sparse_source_type =
+            DataType::Union(test_two_field_union(false), UnionMode::Sparse);
+        assert!(
+            validate_data_type_compatibility("u", &sparse_source_type, &target_type)
+                .is_err()
+        );
+
+        // Incompatible: field-set mismatch (extra source ID 2)
+        let extra_id_source = DataType::Union(
+            UnionFields::try_new(
+                vec![0, 1, 2],
+                vec![
+                    Field::new("value", DataType::Int32, false),
+                    Field::new("str", DataType::Utf8, false),
+                    Field::new("extra", DataType::Int32, false),
+                ],
+            )
+            .unwrap(),
+            UnionMode::Dense,
+        );
+        assert!(
+            validate_data_type_compatibility("u", &extra_id_source, &target_type)
+                .is_err()
+        );
+
+        // Incompatible: field-set mismatch (missing source ID 1)
+        let missing_id_source = DataType::Union(
+            UnionFields::try_new(
+                vec![0],
+                vec![Field::new("value", DataType::Int32, false)],
+            )
+            .unwrap(),
+            UnionMode::Dense,
+        );
+        assert!(
+            validate_data_type_compatibility("u", &missing_id_source, &target_type)
+                .is_err()
+        );
     }
 }

@@ -122,9 +122,19 @@ fn array_empty_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 fn general_array_empty<O: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef> {
-    let result = as_generic_list_array::<O>(array)?
-        .iter()
-        .map(|arr| arr.map(|arr| arr.is_empty()))
-        .collect::<BooleanArray>();
+    let result = as_generic_list_array::<O>(array)?;
+    let is_empty_iter = result.offsets().lengths().map(|n| n == 0);
+    // SAFETY: this is safe since the iterator lengths is exact size and
+    // trusted - it maps over fixed known number of elements
+    let output_buffer = unsafe { BooleanArray::from_trusted_len_iter(is_empty_iter) };
+
+    let (values, _) = output_buffer.into_parts();
+
+    // Add the nulls
+    let result = BooleanArray::new(
+        values,
+        result.nulls().filter(|n| n.null_count() > 0).cloned(),
+    );
+
     Ok(Arc::new(result))
 }

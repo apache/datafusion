@@ -29,14 +29,15 @@ use arrow::{
     },
 };
 use datafusion_common::hash_utils::RandomState;
+use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use datafusion_common::{
     HashMap, Result, ScalarValue, downcast_value, exec_err, internal_err, not_impl_err,
     stats::Precision, utils::expr::COUNT_STAR_EXPANSION,
 };
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr, GroupsAccumulator,
-    ReversedUDAF, SetMonotonicity, Signature, StatisticsArgs, TypeSignature, Volatility,
-    WindowFunctionDefinition,
+    Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr, GroupSelection,
+    GroupsAccumulator, ReversedUDAF, SetMonotonicity, Signature, StatisticsArgs,
+    TypeSignature, Volatility, WindowFunctionDefinition,
     expr::WindowFunction,
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::format_state_name,
@@ -138,7 +139,7 @@ pub fn count_all_window() -> Expr {
     sql_example = r#"```sql
 > SELECT count(column_name) FROM table_name;
 +-----------------------+
-| count(column_name)     |
+| count(column_name)    |
 +-----------------------+
 | 100                   |
 +-----------------------+
@@ -706,11 +707,35 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         Ok(Arc::new(array))
     }
 
+    fn evaluate_preserving(&mut self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
+        selection.validate_num_groups(self.counts.len())?;
+        let counts = selection
+            .iter()
+            .map(|index| self.counts[index])
+            .collect::<Vec<_>>();
+        Ok(Arc::new(Int64Array::from(counts)))
+    }
+
+    fn supports_evaluate_preserving(&self) -> bool {
+        true
+    }
+
     // return arrays for counts
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let counts = emit_to.take_needed(&mut self.counts);
         let counts: PrimitiveArray<Int64Type> = Int64Array::from(counts); // zero copy, no nulls
         Ok(vec![Arc::new(counts) as ArrayRef])
+    }
+
+    fn state_preserving(
+        &mut self,
+        selection: GroupSelection<'_>,
+    ) -> Result<Vec<ArrayRef>> {
+        self.evaluate_preserving(selection).map(|array| vec![array])
+    }
+
+    fn supports_state_preserving(&self) -> bool {
+        true
     }
 
     /// Converts an input batch directly to a state batch
@@ -774,7 +799,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         Ok(vec![state_array])
     }
     fn size(&self) -> usize {
-        self.counts.capacity() * size_of::<usize>()
+        self.counts.heap_size(&mut DFHeapSizeCtx::default())
     }
 }
 
@@ -912,7 +937,7 @@ mod tests {
 
     use super::*;
     use arrow::{
-        array::{DictionaryArray, Int32Array, NullArray, StringArray},
+        array::{DictionaryArray, Int32Array, Int64Array, NullArray, StringArray},
         datatypes::{DataType, Field, Int32Type, Schema},
     };
     use datafusion_expr::function::AccumulatorArgs;
@@ -921,7 +946,7 @@ mod tests {
     /// Helper function to create a dictionary array with non-null keys but some null values
     /// Returns a dictionary array where:
     /// - keys are [0, 1, 2, 0, 1] (all non-null)
-    /// - values are ["a", null, "c"]
+    /// - values are `["a", null, "c"]`
     /// - so the keys reference: "a", null, "c", "a", null
     fn create_dictionary_with_null_values() -> Result<DictionaryArray<Int32Type>> {
         let values = StringArray::from(vec![Some("a"), None, Some("c")]);
@@ -933,10 +958,60 @@ mod tests {
     }
 
     #[test]
+    fn count_groups_size_includes_vec_capacity() -> Result<()> {
+        let mut acc = CountGroupsAccumulator::new();
+        let empty_size = acc.size();
+        assert_eq!(empty_size, 0);
+        let values: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
+        acc.update_batch(&[values], &[0, 1, 2], None, 3)?;
+
+        assert!(acc.counts.capacity() > 0);
+        let allocated_size = acc.counts.heap_size(&mut DFHeapSizeCtx::default());
+        assert_eq!(allocated_size, acc.counts.capacity() * size_of::<i64>());
+        assert_eq!(acc.size(), allocated_size);
+        assert!(acc.size() > empty_size);
+
+        Ok(())
+    }
+
+    #[test]
     fn count_accumulator_nulls() -> Result<()> {
         let mut accumulator = CountAccumulator::new();
         accumulator.update_batch(&[Arc::new(NullArray::new(10))])?;
         assert_eq!(accumulator.evaluate()?, ScalarValue::Int64(Some(0)));
+        Ok(())
+    }
+
+    #[test]
+    fn count_groups_preserving_reads() -> Result<()> {
+        let mut accumulator = CountGroupsAccumulator::new();
+        let values = Arc::new(Int32Array::from(vec![Some(1), None, Some(2), Some(3)]));
+        accumulator.update_batch(&[values], &[0, 1, 0, 2], None, 4)?;
+
+        let selection = GroupSelection::try_from_indices(&[2, 0, 3, 2], 4)?;
+        let expected = Int64Array::from(vec![1, 2, 0, 1]);
+        assert_eq!(
+            accumulator
+                .evaluate_preserving(selection)?
+                .as_primitive::<Int64Type>(),
+            &expected
+        );
+        assert_eq!(
+            accumulator.state_preserving(selection)?[0].as_primitive::<Int64Type>(),
+            &expected
+        );
+
+        let values = Arc::new(Int32Array::from(vec![4]));
+        accumulator.update_batch(&[values], &[3], None, 4)?;
+        let expected = Int64Array::from(vec![2, 0, 1, 1]);
+        assert_eq!(
+            accumulator
+                .evaluate_preserving(
+                    GroupSelection::try_from_indices(&[0, 1, 2, 3], 4,)?
+                )?
+                .as_primitive::<Int64Type>(),
+            &expected
+        );
         Ok(())
     }
 

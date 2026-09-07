@@ -24,7 +24,8 @@ use arrow::buffer::NullBuffer;
 use arrow::datatypes::ArrowPrimitiveType;
 
 use crate::aggregate::groups_accumulator::nulls::filter_to_validity;
-use datafusion_expr_common::groups_accumulator::EmitTo;
+use datafusion_common::Result;
+use datafusion_expr_common::groups_accumulator::{EmitTo, GroupSelection};
 
 /// If the input has nulls, then the accumulator must potentially
 /// handle each input null value specially (e.g. for `SUM` to mark the
@@ -264,7 +265,7 @@ impl NullState {
                     .zip(data.iter())
                     .zip(filter.iter())
                     .for_each(|((&group_index, new_value), filter_value)| {
-                        if let Some(true) = filter_value {
+                        if filter_value == Some(true) {
                             seen_values.set_bit(group_index, true);
                             value_fn(group_index, new_value);
                         }
@@ -278,13 +279,35 @@ impl NullState {
                     .zip(group_indices.iter())
                     .zip(values.iter())
                     .for_each(|((filter_value, &group_index), new_value)| {
-                        if let Some(true) = filter_value
+                        if filter_value == Some(true)
                             && let Some(new_value) = new_value
                         {
                             seen_values.set_bit(group_index, true);
                             value_fn(group_index, new_value)
                         }
                     })
+            }
+        }
+    }
+
+    /// Creates a [`NullBuffer`] for `selection` without changing this state.
+    pub fn build_preserving(
+        &self,
+        selection: GroupSelection<'_>,
+    ) -> Result<Option<NullBuffer>> {
+        let selected_len = selection.len();
+        match &self.seen_values {
+            SeenValues::All { num_values } => {
+                selection.validate_num_groups(*num_values)?;
+                Ok(None)
+            }
+            SeenValues::Some { values } => {
+                selection.validate_num_groups(values.len())?;
+                let mut selected = BooleanBufferBuilder::new(selected_len);
+                for index in selection.iter() {
+                    selected.append(values.get_bit(index));
+                }
+                Ok(Some(NullBuffer::new(selected.finish())))
             }
         }
     }
@@ -311,9 +334,11 @@ impl NullState {
                     None
                 }
                 SeenValues::Some { .. } => {
-                    let mut old_values = match std::mem::take(&mut self.seen_values) {
-                        SeenValues::Some { values } => values,
-                        _ => unreachable!(),
+                    let SeenValues::Some {
+                        values: mut old_values,
+                    } = std::mem::take(&mut self.seen_values)
+                    else {
+                        unreachable!()
                     };
                     let nulls = old_values.finish();
                     let first_n_null = nulls.slice(0, n);
@@ -442,7 +467,7 @@ pub fn accumulate<T, F>(
                 .zip(data.iter())
                 .zip(filter.iter())
                 .for_each(|((&group_index, &new_value), filter_value)| {
-                    if let Some(true) = filter_value {
+                    if filter_value == Some(true) {
                         value_fn(group_index, new_value);
                     }
                 })
@@ -458,7 +483,7 @@ pub fn accumulate<T, F>(
                 .zip(group_indices.iter())
                 .zip(values.iter())
                 .for_each(|((filter_value, &group_index), new_value)| {
-                    if let Some(true) = filter_value
+                    if filter_value == Some(true)
                         && let Some(new_value) = new_value
                     {
                         value_fn(group_index, new_value)
@@ -565,14 +590,14 @@ pub fn accumulate_indices<F>(
                 |(group_index_chunk, mask)| {
                     // index_mask has value 1 << i in the loop
                     let mut index_mask = 1;
-                    group_index_chunk.iter().for_each(|&group_index| {
+                    for &group_index in group_index_chunk {
                         // valid bit was set, real vale
                         let is_valid = (mask & index_mask) != 0;
                         if is_valid {
                             index_fn(group_index);
                         }
                         index_mask <<= 1;
-                    })
+                    }
                 },
             );
 
@@ -601,14 +626,14 @@ pub fn accumulate_indices<F>(
                 |(group_index_chunk, mask)| {
                     // index_mask has value 1 << i in the loop
                     let mut index_mask = 1;
-                    group_index_chunk.iter().for_each(|&group_index| {
+                    for &group_index in group_index_chunk {
                         // valid bit was set, real vale
                         let is_valid = (mask & index_mask) != 0;
                         if is_valid {
                             index_fn(group_index);
                         }
                         index_mask <<= 1;
-                    })
+                    }
                 },
             );
 
@@ -642,14 +667,14 @@ pub fn accumulate_indices<F>(
                 .for_each(|((group_index_chunk, valid_mask), filter_mask)| {
                     // index_mask has value 1 << i in the loop
                     let mut index_mask = 1;
-                    group_index_chunk.iter().for_each(|&group_index| {
+                    for &group_index in group_index_chunk {
                         // valid bit was set, real vale
                         let is_valid = (valid_mask & filter_mask & index_mask) != 0;
                         if is_valid {
                             index_fn(group_index);
                         }
                         index_mask <<= 1;
-                    })
+                    }
                 });
 
             // handle any remaining bits (after the initial 64)
@@ -903,7 +928,7 @@ mod test {
                         .zip(filter.iter())
                         .for_each(|((&group_index, value), is_included)| {
                             // if value passed filter
-                            if let Some(true) = is_included
+                            if is_included == Some(true)
                                 && let Some(value) = value
                             {
                                 mock.saw_value(group_index);
@@ -966,7 +991,7 @@ mod test {
                 ),
                 (None, Some(filter)) => group_indices.iter().zip(filter.iter()).for_each(
                     |(&group_index, is_included)| {
-                        if let Some(true) = is_included {
+                        if is_included == Some(true) {
                             expected_values.push(group_index);
                         }
                     },
@@ -978,7 +1003,7 @@ mod test {
                         .zip(filter.iter())
                         .for_each(|((&group_index, is_valid), is_included)| {
                             // if value passed filter
-                            if let (true, Some(true)) = (is_valid, is_included) {
+                            if is_valid && is_included == Some(true) {
                                 expected_values.push(group_index);
                             }
                         });
@@ -1032,7 +1057,7 @@ mod test {
                         .zip(filter.iter())
                         .for_each(|((&group_index, value), is_included)| {
                             // if value passed filter
-                            if let Some(true) = is_included
+                            if is_included == Some(true)
                                 && let Some(value) = value
                             {
                                 mock.saw_value(group_index);

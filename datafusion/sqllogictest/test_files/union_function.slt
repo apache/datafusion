@@ -28,6 +28,9 @@ select union_column, union_extract(union_column, 'int') from union_table;
 {int=1} 1
 {string=bar} NULL
 {int=3} 3
+{int=1} 1
+{string=bar} NULL
+{int=3} 3
 
 query error DataFusion error: Execution error: field bool not found on union
 select union_extract(union_column, 'bool') from union_table;
@@ -56,6 +59,9 @@ select union_column, union_tag(union_column) from union_table;
 {int=1} int
 {string=bar} string
 {int=3} int
+{int=1} int
+{string=bar} string
+{int=3} int
 
 query error DataFusion error: Error during planning: 'union_tag' does not support zero arguments
 select union_tag() from union_table;
@@ -65,3 +71,44 @@ select union_tag(union_column, 'int') from union_table;
 
 query error DataFusion error: Execution error: union_tag only support unions, got Utf8
 select union_tag('int') from union_table;
+
+##########
+## UNION Hashing Tests
+##########
+
+query ?I
+select union_column, count(*)
+from union_table
+group by union_column
+order by union_column;
+----
+{string=bar} 2
+{int=1} 2
+{int=3} 2
+
+query ?
+select distinct union_column
+from union_table
+order by union_column;
+----
+{string=bar}
+{int=1}
+{int=3}
+
+query I
+select count(distinct union_column) from union_table;
+----
+3
+
+query ?II
+select
+	union_column,
+	count(*),
+	sum(union_extract(union_column, 'int'))
+from union_table
+group by union_column
+order by union_column;
+----
+{string=bar} 2 NULL
+{int=1} 2 2
+{int=3} 2 6

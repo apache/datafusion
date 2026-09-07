@@ -567,14 +567,99 @@ impl ParquetAccessPlan {
 
     /// Prepare this plan and resolve to the final `PreparedAccessPlan`
     pub(crate) fn prepare(
-        self,
+        mut self,
         row_group_meta_data: &[RowGroupMetaData],
     ) -> Result<PreparedAccessPlan> {
         let row_group_indexes = self.row_group_indexes();
+        // `fully_matched` is indexed by absolute row-group index; take it out
+        // before `into_overall_row_selection` consumes `self`.
+        let fully_matched_by_index = std::mem::take(&mut self.fully_matched);
         let row_selection = self.into_overall_row_selection(row_group_meta_data)?;
 
-        PreparedAccessPlan::new(row_group_indexes, row_selection)
+        let (row_group_indexes, row_selection) =
+            strip_empty_row_groups(row_group_indexes, row_selection, row_group_meta_data);
+
+        // Carry `fully_matched` flags in the same order as the *surviving*
+        // `row_group_indexes` so downstream code (per-RG `RowFilter` skip) can
+        // look them up positionally. Mapping after the strip keeps
+        // `strip_empty_row_groups` generic (no `fully_matched` parameter).
+        let fully_matched: Vec<bool> = row_group_indexes
+            .iter()
+            .map(|&idx| fully_matched_by_index[idx])
+            .collect();
+
+        PreparedAccessPlan::new(row_group_indexes, fully_matched, row_selection)
     }
+}
+
+/// Drop row groups whose post-pruning `RowSelection` selects zero rows, so the
+/// prepared plan stays well-formed: `with_row_groups(...)` never names a row
+/// group the decoder would immediately skip.
+///
+/// arrow-rs's push decoder silently advances past an all-skipped row group
+/// inside `try_next_reader` without handing back a reader, so keeping such a
+/// row group in the plan would leave its row-group list one entry longer than
+/// the readers the decoder produces. An empty selection is reachable today via
+/// [`ParquetAccessPlan::scan_selection`], which intersects an existing
+/// `Selection` with a new one and can leave a row group selecting nothing.
+/// A well-formed plan here is also a precondition for re-enabling runtime
+/// pruning under a live selection (#24358) and for #23696.
+///
+/// Walks the flat `RowSelection` once with [`OverallRowSelectionCursor`],
+/// rather than a per-row-group [`RowSelection::split_off`] (which reallocates
+/// the selector tail on every call, i.e. O(row groups × selectors)), keeping
+/// only the row groups that still select at least one row. `row_group_meta_data`
+/// is the **full file** metadata, indexed absolutely by row-group index, while
+/// `row_selection` covers only the scanned row groups — matching
+/// `into_overall_row_selection`, which emits nothing for a skipped row group.
+/// When `row_selection` is `None` no row group can be empty and the inputs are
+/// returned unchanged.
+fn strip_empty_row_groups(
+    row_group_indexes: Vec<usize>,
+    row_selection: Option<RowSelection>,
+    row_group_meta_data: &[RowGroupMetaData],
+) -> (Vec<usize>, Option<RowSelection>) {
+    let Some(selection) = row_selection else {
+        return (row_group_indexes, None);
+    };
+
+    let mut cursor = OverallRowSelectionCursor::new(selection);
+    let mut kept_indexes = Vec::with_capacity(row_group_indexes.len());
+    let mut kept_selectors: Vec<RowSelector> = Vec::new();
+
+    for &rg_idx in row_group_indexes.iter() {
+        let rg_row_count = row_group_meta_data[rg_idx].num_rows() as usize;
+        // Pull this row group's fragments off the shared cursor in a single
+        // pass (no `split_off` tail reallocation).
+        let start = kept_selectors.len();
+        let mut selected = 0usize;
+        let mut taken = 0usize;
+        while taken < rg_row_count {
+            let Some(fragment) = cursor.take(rg_row_count - taken) else {
+                break;
+            };
+            taken += fragment.row_count;
+            if !fragment.skip {
+                selected += fragment.row_count;
+            }
+            kept_selectors.push(fragment);
+        }
+        if selected > 0 {
+            kept_indexes.push(rg_idx);
+        } else {
+            // Empty row group: arrow-rs would silently skip it. Drop it and its
+            // fragments so the plan stays 1:1 with the readers.
+            kept_selectors.truncate(start);
+        }
+    }
+
+    let result_selection = if kept_selectors.is_empty() {
+        None
+    } else {
+        Some(RowSelection::from(kept_selectors))
+    };
+
+    (kept_indexes, result_selection)
 }
 
 /// Represents a prepared, fully resolved [`ParquetAccessPlan`]
@@ -587,6 +672,11 @@ impl ParquetAccessPlan {
 pub(crate) struct PreparedAccessPlan {
     /// Row group indexes to read
     pub(crate) row_group_indexes: Vec<usize>,
+    /// Per-RG `fully_matched` flag, positionally aligned with
+    /// [`Self::row_group_indexes`]. A `true` entry means stats already
+    /// proved every row of this RG passes the predicate, so the per-row
+    /// `RowFilter` can be skipped for it.
+    pub(crate) fully_matched: Vec<bool>,
     /// Optional row selection for filtering within row groups
     pub(crate) row_selection: Option<RowSelection>,
 }
@@ -595,10 +685,13 @@ impl PreparedAccessPlan {
     /// Create a new prepared access plan
     fn new(
         row_group_indexes: Vec<usize>,
+        fully_matched: Vec<bool>,
         row_selection: Option<RowSelection>,
     ) -> Result<Self> {
+        debug_assert_eq!(row_group_indexes.len(), fully_matched.len());
         Ok(Self {
             row_group_indexes,
+            fully_matched,
             row_selection,
         })
     }
@@ -606,13 +699,24 @@ impl PreparedAccessPlan {
     /// Reorder row groups by their min statistics for the given sort order.
     ///
     /// This helps TopK queries find optimal values first. Row groups are
-    /// always sorted by min values in ASC order — direction (DESC) is
-    /// handled separately by `reverse()` which is applied after reorder.
+    /// lexicographically sorted by per-column min values over the longest
+    /// prefix of the sort order made of plain columns present in the file
+    /// schema. The leading column is always sorted ASC by min — direction
+    /// (DESC) is handled separately by `reverse()` which is applied after
+    /// reorder. Subsequent columns sort by their direction *relative* to
+    /// the leading column (and their null placement is flipped when the
+    /// plan will be reversed), so that the post-`reverse()` order
+    /// approximates the requested lexicographic order.
+    ///
+    /// Secondary sort keys matter when the leading column's min ties
+    /// across row groups (e.g. `ORDER BY low_cardinality_col, ts LIMIT k`)
+    /// — without them the reorder is a no-op on such files and the TopK
+    /// dynamic filter converges only as fast as disk order allows.
     ///
     /// Gracefully skips reordering when:
     /// - There is a row_selection (too complex to remap)
     /// - 0 or 1 row groups (nothing to reorder)
-    /// - Sort expression is not a simple column reference
+    /// - The leading sort expression is not a simple column reference
     /// - Statistics are unavailable
     pub(crate) fn reorder_by_statistics(
         mut self,
@@ -631,95 +735,128 @@ impl PreparedAccessPlan {
             return Ok(self);
         }
 
-        let first_sort_expr = sort_order.first();
-
-        // Extract column name from sort expression
-        let column: &Column = match first_sort_expr.expr.downcast_ref::<Column>() {
-            Some(col) => col,
-            None => {
-                debug!("Skipping RG reorder: sort expr is not a simple column");
-                return Ok(self);
-            }
-        };
-
-        // Expected graceful skip: the sort column lives outside the
-        // file schema (e.g. a partition column whose ordering came
-        // through `reversed_satisfies` rather than `column_in_file_schema`).
-        // Parquet has no per-RG stats for it. Bail out quietly — no
-        // `debug_assert!` because this is a normal pushdown shape.
-        if arrow_schema.field_with_name(column.name()).is_err() {
-            debug!(
-                "Skipping RG reorder: column `{}` not in file schema",
-                column.name()
-            );
-            return Ok(self);
-        }
-
-        // From here, any `StatisticsConverter` / stats read / sort
-        // failure is unexpected — the column exists in the file
-        // schema, so building the converter and pulling typed mins
-        // should succeed on any well-formed parquet file. Trip a
-        // `debug_assert!` so CI catches regressions, but stay graceful
-        // in release so a single odd file can't take down a scan.
-        let converter = match StatisticsConverter::try_new(
-            column.name(),
-            arrow_schema,
-            file_metadata.file_metadata().schema_descr(),
-        ) {
-            Ok(c) => c,
-            Err(e) => {
-                debug_assert!(
-                    false,
-                    "RG reorder: cannot create stats converter for `{}`: {e}",
-                    column.name(),
-                );
-                return Ok(self);
-            }
-        };
-
-        // Always sort ASC by min values — direction is handled by reverse
         let rg_metadata: Vec<&RowGroupMetaData> = self
             .row_group_indexes
             .iter()
             .map(|&idx| file_metadata.row_group(idx))
             .collect();
 
-        let stat_mins = match converter.row_group_mins(rg_metadata.iter().copied()) {
-            Ok(vals) => vals,
+        let leading_descending = sort_order.first().options.descending;
+
+        // Build one `SortColumn` of per-RG mins for each usable prefix
+        // column of the sort order. The walk stops at the first
+        // expression that isn't a plain `Column` in the file schema —
+        // stats for later columns can't refine the order once an
+        // unresolvable key sits between them and the resolved prefix.
+        let mut sort_columns: Vec<arrow::compute::SortColumn> = Vec::new();
+        for (i, sort_expr) in sort_order.iter().enumerate() {
+            let column: &Column = match sort_expr.expr.downcast_ref::<Column>() {
+                Some(col) => col,
+                None => {
+                    if i == 0 {
+                        debug!("Skipping RG reorder: sort expr is not a simple column");
+                        return Ok(self);
+                    }
+                    break;
+                }
+            };
+
+            // Expected graceful skip: the sort column lives outside the
+            // file schema (e.g. a partition column whose ordering came
+            // through `reversed_satisfies` rather than
+            // `column_in_file_schema`). Parquet has no per-RG stats for
+            // it. Bail out quietly — no `debug_assert!` because this is
+            // a normal pushdown shape.
+            if arrow_schema.field_with_name(column.name()).is_err() {
+                if i == 0 {
+                    debug!(
+                        "Skipping RG reorder: column `{}` not in file schema",
+                        column.name()
+                    );
+                    return Ok(self);
+                }
+                break;
+            }
+
+            // From here, any `StatisticsConverter` / stats read / sort
+            // failure is unexpected — the column exists in the file
+            // schema, so building the converter and pulling typed mins
+            // should succeed on any well-formed parquet file. Trip a
+            // `debug_assert!` so CI catches regressions, but stay graceful
+            // in release so a single odd file can't take down a scan.
+            let converter = match StatisticsConverter::try_new(
+                column.name(),
+                arrow_schema,
+                file_metadata.file_metadata().schema_descr(),
+            ) {
+                Ok(c) => c,
+                Err(e) => {
+                    debug_assert!(
+                        false,
+                        "RG reorder: cannot create stats converter for `{}`: {e}",
+                        column.name(),
+                    );
+                    if i == 0 {
+                        return Ok(self);
+                    }
+                    break;
+                }
+            };
+
+            let stat_mins = match converter.row_group_mins(rg_metadata.iter().copied()) {
+                Ok(vals) => vals,
+                Err(e) => {
+                    debug_assert!(
+                        false,
+                        "RG reorder: cannot get min values for `{}`: {e}",
+                        column.name(),
+                    );
+                    if i == 0 {
+                        return Ok(self);
+                    }
+                    break;
+                }
+            };
+
+            // The plan is later `reverse()`d iff the leading column is
+            // DESC, which flips both value order and null placement of
+            // every column. Sort each column by its direction relative
+            // to the leading column (leading itself is therefore always
+            // ASC), and pre-flip null placement when the reverse is
+            // coming, so the post-reverse order matches the request.
+            // Nulls here are row groups with *missing stats*, so their
+            // placement is a heuristic, not a correctness matter.
+            let sort_options = arrow::compute::SortOptions {
+                descending: sort_expr.options.descending != leading_descending,
+                nulls_first: sort_expr.options.nulls_first != leading_descending,
+            };
+            sort_columns.push(arrow::compute::SortColumn {
+                values: stat_mins,
+                options: Some(sort_options),
+            });
+        }
+
+        let sorted_indices = match arrow::compute::lexsort_to_indices(&sort_columns, None)
+        {
+            Ok(indices) => indices,
             Err(e) => {
-                debug_assert!(
-                    false,
-                    "RG reorder: cannot get min values for `{}`: {e}",
-                    column.name(),
-                );
+                debug_assert!(false, "RG reorder: arrow lexsort_to_indices failed: {e}");
                 return Ok(self);
             }
         };
 
-        let sort_options = arrow::compute::SortOptions {
-            descending: false,
-            nulls_first: first_sort_expr.options.nulls_first,
-        };
-        let sorted_indices =
-            match arrow::compute::sort_to_indices(&stat_mins, Some(sort_options), None) {
-                Ok(indices) => indices,
-                Err(e) => {
-                    debug_assert!(
-                        false,
-                        "RG reorder: arrow sort_to_indices failed for `{}`: {e}",
-                        column.name(),
-                    );
-                    return Ok(self);
-                }
-            };
-
-        // Apply the reordering
+        // Apply the reordering — `fully_matched` must be permuted alongside
+        // `row_group_indexes` so the two stay positionally aligned for the
+        // per-RG `RowFilter` skip path.
         let original_indexes = self.row_group_indexes.clone();
-        self.row_group_indexes = sorted_indices
+        let original_fully_matched = self.fully_matched.clone();
+        let order: Vec<usize> = sorted_indices
             .values()
             .iter()
-            .map(|&i| original_indexes[i as usize])
+            .map(|&i| i as usize)
             .collect();
+        self.row_group_indexes = order.iter().map(|&i| original_indexes[i]).collect();
+        self.fully_matched = order.iter().map(|&i| original_fully_matched[i]).collect();
 
         Ok(self)
     }
@@ -729,8 +866,9 @@ impl PreparedAccessPlan {
         // Get the row group indexes before reversing
         let row_groups_to_scan = self.row_group_indexes.clone();
 
-        // Reverse the row group indexes
+        // Reverse the row group indexes (and the parallel `fully_matched`)
         self.row_group_indexes = self.row_group_indexes.into_iter().rev().collect();
+        self.fully_matched = self.fully_matched.into_iter().rev().collect();
 
         // If we have a row selection, reverse it to match the new row group order
         if let Some(row_selection) = self.row_selection {
@@ -1121,7 +1259,7 @@ mod test {
     #[test]
     fn reorder_by_statistics_sorts_row_groups_asc_by_min() {
         let metadata = parquet_metadata_with_int_mins(&[50, 10, 100]);
-        let plan = PreparedAccessPlan::new(vec![0, 1, 2], None).unwrap();
+        let plan = PreparedAccessPlan::new(vec![0, 1, 2], vec![false; 3], None).unwrap();
 
         let result = plan
             .reorder_by_statistics(
@@ -1140,7 +1278,8 @@ mod test {
     fn reorder_by_statistics_skips_when_row_selection_present() {
         let metadata = parquet_metadata_with_int_mins(&[50, 10]);
         let selection = RowSelection::from(vec![RowSelector::select(100)]);
-        let plan = PreparedAccessPlan::new(vec![0, 1], Some(selection)).unwrap();
+        let plan =
+            PreparedAccessPlan::new(vec![0, 1], vec![false; 2], Some(selection)).unwrap();
 
         let result = plan
             .reorder_by_statistics(
@@ -1157,7 +1296,7 @@ mod test {
     #[test]
     fn reorder_by_statistics_skips_when_at_most_one_row_group() {
         let metadata = parquet_metadata_with_int_mins(&[50]);
-        let plan = PreparedAccessPlan::new(vec![0], None).unwrap();
+        let plan = PreparedAccessPlan::new(vec![0], vec![false; 1], None).unwrap();
 
         let result = plan
             .reorder_by_statistics(
@@ -1176,7 +1315,7 @@ mod test {
     #[test]
     fn reorder_by_statistics_skips_for_non_column_sort_expr() {
         let metadata = parquet_metadata_with_int_mins(&[50, 10]);
-        let plan = PreparedAccessPlan::new(vec![0, 1], None).unwrap();
+        let plan = PreparedAccessPlan::new(vec![0, 1], vec![false; 2], None).unwrap();
         let arrow_schema = arrow_schema_a_int();
         let order = LexOrdering::new(vec![PhysicalSortExpr {
             expr: Arc::new(BinaryExpr::new(
@@ -1205,7 +1344,7 @@ mod test {
     #[test]
     fn reorder_by_statistics_skips_when_column_not_in_arrow_schema() {
         let metadata = parquet_metadata_with_int_mins(&[50, 10]);
-        let plan = PreparedAccessPlan::new(vec![0, 1], None).unwrap();
+        let plan = PreparedAccessPlan::new(vec![0, 1], vec![false; 2], None).unwrap();
         // Arrow schema only has "a"; the sort references "b".
         let arrow_schema = arrow_schema_a_int();
         let order = LexOrdering::new(vec![PhysicalSortExpr {
@@ -1222,5 +1361,260 @@ mod test {
             .unwrap();
 
         assert_eq!(result.row_group_indexes, vec![0, 1]);
+    }
+
+    // ----------------------------------------------------------------
+    // multi-column `reorder_by_statistics` tests
+    // ----------------------------------------------------------------
+
+    /// Two-column int32 schema named "a", "b".
+    fn two_col_schema_descr() -> SchemaDescPtr {
+        use parquet::basic::Type as PhysicalType;
+        use parquet::schema::types::Type as SchemaType;
+        let fields = ["a", "b"]
+            .iter()
+            .map(|name| {
+                Arc::new(
+                    SchemaType::primitive_type_builder(name, PhysicalType::INT32)
+                        .build()
+                        .unwrap(),
+                )
+            })
+            .collect();
+        let schema = SchemaType::group_type_builder("schema")
+            .with_fields(fields)
+            .build()
+            .unwrap();
+        Arc::new(SchemaDescriptor::new(Arc::new(schema)))
+    }
+
+    /// Build a `ParquetMetaData` with one row group per element of
+    /// `mins`: `(min(a), min(b))` per row group, `min == max`.
+    fn parquet_metadata_with_two_col_mins(mins: &[(i32, i32)]) -> ParquetMetaData {
+        let schema_descr = two_col_schema_descr();
+        let row_groups: Vec<RowGroupMetaData> = mins
+            .iter()
+            .map(|&(a, b)| {
+                let columns = [(0, a), (1, b)]
+                    .iter()
+                    .map(|&(col, m)| {
+                        let stats = ParquetStatistics::int32(
+                            Some(m),
+                            Some(m),
+                            None,
+                            Some(0),
+                            false,
+                        );
+                        ColumnChunkMetaData::builder(schema_descr.column(col))
+                            .set_statistics(stats)
+                            .set_num_values(100)
+                            .build()
+                            .unwrap()
+                    })
+                    .collect();
+                RowGroupMetaData::builder(schema_descr.clone())
+                    .set_num_rows(100)
+                    .set_column_metadata(columns)
+                    .build()
+                    .unwrap()
+            })
+            .collect();
+        let file_metadata =
+            FileMetaData::new(0, 0, None, None, schema_descr.clone(), None);
+        ParquetMetaData::new(file_metadata, row_groups)
+    }
+
+    fn arrow_schema_ab_int() -> Schema {
+        Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ])
+    }
+
+    fn sort_expr(name: &str, index: usize, descending: bool) -> PhysicalSortExpr {
+        PhysicalSortExpr {
+            expr: Arc::new(Column::new(name, index)),
+            options: SortOptions {
+                descending,
+                nulls_first: true,
+            },
+        }
+    }
+
+    /// `ORDER BY a ASC, b ASC` with the leading key tied everywhere:
+    /// the secondary key must break the tie, so RGs order by `min(b)`.
+    #[test]
+    fn reorder_by_statistics_breaks_leading_ties_with_secondary_column() {
+        let metadata =
+            parquet_metadata_with_two_col_mins(&[(1, 300), (1, 100), (1, 200)]);
+        let plan = PreparedAccessPlan::new(vec![0, 1, 2], vec![false; 3], None).unwrap();
+        let order =
+            LexOrdering::new(vec![sort_expr("a", 0, false), sort_expr("b", 1, false)])
+                .unwrap();
+
+        let result = plan
+            .reorder_by_statistics(&order, &metadata, &arrow_schema_ab_int())
+            .unwrap();
+
+        assert_eq!(result.row_group_indexes, vec![1, 2, 0]);
+    }
+
+    /// `ORDER BY a ASC, b DESC`: the secondary key's direction is
+    /// honored relative to the leading key, so ties on `min(a)` order
+    /// by `min(b)` DESC.
+    #[test]
+    fn reorder_by_statistics_honors_secondary_direction() {
+        let metadata =
+            parquet_metadata_with_two_col_mins(&[(1, 100), (1, 300), (0, 500)]);
+        let plan = PreparedAccessPlan::new(vec![0, 1, 2], vec![false; 3], None).unwrap();
+        let order =
+            LexOrdering::new(vec![sort_expr("a", 0, false), sort_expr("b", 1, true)])
+                .unwrap();
+
+        let result = plan
+            .reorder_by_statistics(&order, &metadata, &arrow_schema_ab_int())
+            .unwrap();
+
+        // a=0 first, then the two a=1 groups by b DESC: 300 before 100.
+        assert_eq!(result.row_group_indexes, vec![2, 1, 0]);
+    }
+
+    /// `ORDER BY a DESC, b DESC` is normalized to ASC lexsort here and
+    /// flipped by the later `reverse()`: both keys sort ASC relative to
+    /// the leading direction, so reversing yields `(a DESC, b DESC)`.
+    #[test]
+    fn reorder_by_statistics_normalizes_desc_desc_for_reverse() {
+        let metadata =
+            parquet_metadata_with_two_col_mins(&[(1, 300), (2, 100), (1, 100)]);
+        let plan = PreparedAccessPlan::new(vec![0, 1, 2], vec![false; 3], None).unwrap();
+        let order =
+            LexOrdering::new(vec![sort_expr("a", 0, true), sort_expr("b", 1, true)])
+                .unwrap();
+
+        let result = plan
+            .reorder_by_statistics(&order, &metadata, &arrow_schema_ab_int())
+            .unwrap();
+
+        // ASC lexsort of (a, b): (1,100) < (1,300) < (2,100); the later
+        // reverse() produces (2,100), (1,300), (1,100) = (a DESC, b DESC).
+        assert_eq!(result.row_group_indexes, vec![2, 0, 1]);
+    }
+
+    /// A non-`Column` *secondary* expression stops the stats walk but
+    /// keeps the leading column's reorder (prefix semantics).
+    #[test]
+    fn reorder_by_statistics_keeps_leading_prefix_on_non_column_secondary() {
+        let metadata =
+            parquet_metadata_with_two_col_mins(&[(5, 300), (3, 100), (4, 200)]);
+        let plan = PreparedAccessPlan::new(vec![0, 1, 2], vec![false; 3], None).unwrap();
+        let order = LexOrdering::new(vec![
+            sort_expr("a", 0, false),
+            PhysicalSortExpr {
+                expr: Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("b", 1)),
+                    Operator::Plus,
+                    lit(1i32),
+                )),
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: true,
+                },
+            },
+        ])
+        .unwrap();
+
+        let result = plan
+            .reorder_by_statistics(&order, &metadata, &arrow_schema_ab_int())
+            .unwrap();
+
+        // Ordered by min(a) ASC only: 3, 4, 5.
+        assert_eq!(result.row_group_indexes, vec![1, 2, 0]);
+    }
+
+    #[test]
+    fn test_strip_empty_row_groups_drops_only_empties() {
+        // 4 row groups of [10, 20, 30, 40] rows. RG 1 and RG 3 select nothing
+        // after pruning, so they must be dropped; RG 0 and RG 2 survive with
+        // their re-concatenated selections intact.
+        let selection = RowSelection::from(vec![
+            RowSelector::select(10), // RG 0: keep all 10
+            RowSelector::skip(30),   // RG 1 (20) fully skipped + RG 2's leading 10
+            RowSelector::select(20), // RG 2: keep 20
+            RowSelector::skip(40),   // RG 3: skip all 40
+        ]);
+
+        let (indexes, result) = strip_empty_row_groups(
+            vec![0, 1, 2, 3],
+            Some(selection),
+            &ROW_GROUP_METADATA,
+        );
+
+        // RG 1 and RG 3 are dropped; the surviving indexes stay in order.
+        assert_eq!(indexes, vec![0, 2]);
+        let result = result.expect("survivors keep a selection");
+        assert_eq!(result.row_count(), 30); // 10 from RG 0 + 20 from RG 2
+        assert_eq!(result.skipped_row_count(), 10); // RG 2's leading skip
+    }
+
+    #[test]
+    fn test_strip_empty_row_groups_non_contiguous_indexes() {
+        // Only RG 1 (20 rows) and RG 3 (40 rows) are scanned — RG 0 and RG 2
+        // are whole-group skips, so the selection covers 20 + 40 = 60 rows.
+        // This pins down that `strip` indexes `row_group_meta_data`
+        // *absolutely* (meta[1]=20, meta[3]=40): a relative reading would take
+        // 10 then 20 rows and misalign the split.
+        let selection = RowSelection::from(vec![
+            RowSelector::skip(20),   // RG 1: skip all 20 -> dropped
+            RowSelector::select(40), // RG 3: keep all 40
+        ]);
+
+        let (indexes, result) =
+            strip_empty_row_groups(vec![1, 3], Some(selection), &ROW_GROUP_METADATA);
+
+        assert_eq!(indexes, vec![3]);
+        let result = result.expect("RG 3 survives");
+        assert_eq!(result.row_count(), 40);
+        assert_eq!(result.skipped_row_count(), 0);
+    }
+
+    #[test]
+    fn test_strip_empty_row_groups_none_selection_unchanged() {
+        // With no row selection no row group can be empty, so the inputs pass
+        // through unchanged.
+        let (indexes, result) =
+            strip_empty_row_groups(vec![0, 1, 2, 3], None, &ROW_GROUP_METADATA);
+        assert_eq!(indexes, vec![0, 1, 2, 3]);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_prepare_strips_row_group_emptied_by_intersecting_selections() {
+        // The reachable producer: `scan_selection` intersects two disjoint
+        // selections within RG 1 to nothing, leaving an empty `Selection` in
+        // the plan (its own `rows_selected > 0` guard checks the incoming
+        // selection, not the intersection). `prepare` must strip that row
+        // group so the prepared plan never names a row group the decoder would
+        // silently skip.
+        let mut plan = ParquetAccessPlan::new_all(4); // RGs [10, 20, 30, 40]
+
+        // RG 1 (20 rows): select rows 0..10, then intersect with rows 10..20.
+        plan.scan_selection(
+            1,
+            RowSelection::from(vec![RowSelector::select(10), RowSelector::skip(10)]),
+        );
+        plan.scan_selection(
+            1,
+            RowSelection::from(vec![RowSelector::skip(10), RowSelector::select(10)]),
+        );
+        // RG 2 keeps a genuine partial selection so a flat selection is emitted.
+        plan.scan_selection(
+            2,
+            RowSelection::from(vec![RowSelector::skip(10), RowSelector::select(20)]),
+        );
+
+        let prepared = plan.prepare(&ROW_GROUP_METADATA).expect("prepare");
+
+        // RG 1 (emptied by the intersection) is stripped; RG 0/2/3 remain.
+        assert_eq!(prepared.row_group_indexes, vec![0, 2, 3]);
     }
 }

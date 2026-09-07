@@ -28,8 +28,7 @@ use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::{ColumnarValue, Expr, ScalarFunctionArgs};
 use datafusion_functions_nested::map::map_udf;
 use datafusion_functions_nested::planner::NestedFunctionPlanner;
-use rand::Rng;
-use rand::prelude::ThreadRng;
+use rand::prelude::*;
 use std::collections::HashSet;
 use std::hash::Hash;
 use std::hint::black_box;
@@ -38,10 +37,7 @@ use std::sync::Arc;
 const MAP_ROWS: usize = 1000;
 const MAP_KEYS_PER_ROW: usize = 1000;
 
-fn gen_unique_values<T>(
-    rng: &mut ThreadRng,
-    mut make_value: impl FnMut(i32) -> T,
-) -> Vec<T>
+fn gen_unique_values<T>(rng: &mut StdRng, mut make_value: impl FnMut(i32) -> T) -> Vec<T>
 where
     T: Eq + Hash,
 {
@@ -64,15 +60,15 @@ fn gen_repeat_values<T: Clone>(values: &[T], repeats: usize) -> Vec<T> {
     repeated
 }
 
-fn gen_utf8_values(rng: &mut ThreadRng) -> Vec<String> {
+fn gen_utf8_values(rng: &mut StdRng) -> Vec<String> {
     gen_unique_values(rng, |value| value.to_string())
 }
 
-fn gen_binary_values(rng: &mut ThreadRng) -> Vec<Vec<u8>> {
+fn gen_binary_values(rng: &mut StdRng) -> Vec<Vec<u8>> {
     gen_unique_values(rng, |value| value.to_le_bytes().to_vec())
 }
 
-fn gen_primitive_values(rng: &mut ThreadRng) -> Vec<i32> {
+fn gen_primitive_values(rng: &mut StdRng) -> Vec<i32> {
     gen_unique_values(rng, |value| value)
 }
 
@@ -122,7 +118,7 @@ fn bench_map_case(c: &mut Criterion, name: &str, keys: ArrayRef, values: ArrayRe
 
 fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("make_map_1000", |b| {
-        let mut rng = rand::rng();
+        let mut rng = StdRng::seed_from_u64(0);
         let keys = gen_utf8_values(&mut rng);
         let values = gen_primitive_values(&mut rng);
         let mut buffer = Vec::new();
@@ -143,7 +139,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
     });
 
-    let mut rng = rand::rng();
+    let mut rng = StdRng::seed_from_u64(0);
     let values = Arc::new(Int32Array::from(gen_repeat_values(
         &gen_primitive_values(&mut rng),
         MAP_ROWS,

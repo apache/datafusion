@@ -100,29 +100,52 @@
                                 }
                               },
                               "virtualTable": {
-                                "values": [{
-                                  "fields": [{
-                                    "string": "aaa",
-                                    "nullable": true
-                                  }, {
-                                    "string": "host-a",
-                                    "nullable": true
-                                  }, {
-                                    "i64": "128",
-                                    "nullable": true
-                                  }]
-                                }, {
-                                  "fields": [{
-                                    "string": "bbb",
-                                    "nullable": true
-                                  }, {
-                                    "string": "host-b",
-                                    "nullable": true
-                                  }, {
-                                    "i64": "256",
-                                    "nullable": true
-                                  }]
-                                }]
+                                "expressions": [
+                                  {
+                                    "fields": [
+                                      {
+                                        "literal": {
+                                          "string": "aaa",
+                                          "nullable": true
+                                        }
+                                      },
+                                      {
+                                        "literal": {
+                                          "string": "host-a",
+                                          "nullable": true
+                                        }
+                                      },
+                                      {
+                                        "literal": {
+                                          "i64": "128",
+                                          "nullable": true
+                                        }
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "fields": [
+                                      {
+                                        "literal": {
+                                          "string": "bbb",
+                                          "nullable": true
+                                        }
+                                      },
+                                      {
+                                        "literal": {
+                                          "string": "host-b",
+                                          "nullable": true
+                                        }
+                                      },
+                                      {
+                                        "literal": {
+                                          "i64": "256",
+                                          "nullable": true
+                                        }
+                                      }
+                                    ]
+                                  }
+                                ]
                               }
                             }
                           },
@@ -293,23 +316,40 @@
                                 }
                               },
                               "virtualTable": {
-                                "values": [{
-                                  "fields": [{
-                                    "string": "host-a",
-                                    "nullable": true
-                                  }, {
-                                    "i64": "107",
-                                    "nullable": true
-                                  }]
-                                }, {
-                                  "fields": [{
-                                    "string": "host-b",
-                                    "nullable": true
-                                  }, {
-                                    "i64": "214",
-                                    "nullable": true
-                                  }]
-                                }]
+                                "expressions": [
+                                  {
+                                    "fields": [
+                                      {
+                                        "literal": {
+                                          "string": "host-a",
+                                          "nullable": true
+                                        }
+                                      },
+                                      {
+                                        "literal": {
+                                          "i64": "107",
+                                          "nullable": true
+                                        }
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "fields": [
+                                      {
+                                        "literal": {
+                                          "string": "host-b",
+                                          "nullable": true
+                                        }
+                                      },
+                                      {
+                                        "literal": {
+                                          "i64": "214",
+                                          "nullable": true
+                                        }
+                                      }
+                                    ]
+                                  }
+                                ]
                               }
                             }
                           },
@@ -365,29 +405,52 @@
                                                 }
                                               },
                                               "virtualTable": {
-                                                "values": [{
-                                                  "fields": [{
-                                                    "string": "aaa",
-                                                    "nullable": true
-                                                  }, {
-                                                    "string": "host-a",
-                                                    "nullable": true
-                                                  }, {
-                                                    "i64": "128",
-                                                    "nullable": true
-                                                  }]
-                                                }, {
-                                                  "fields": [{
-                                                    "string": "bbb",
-                                                    "nullable": true
-                                                  }, {
-                                                    "string": "host-b",
-                                                    "nullable": true
-                                                  }, {
-                                                    "i64": "256",
-                                                    "nullable": true
-                                                  }]
-                                                }]
+                                                "expressions": [
+                                                  {
+                                                    "fields": [
+                                                      {
+                                                        "literal": {
+                                                          "string": "aaa",
+                                                          "nullable": true
+                                                        }
+                                                      },
+                                                      {
+                                                        "literal": {
+                                                          "string": "host-a",
+                                                          "nullable": true
+                                                        }
+                                                      },
+                                                      {
+                                                        "literal": {
+                                                          "i64": "128",
+                                                          "nullable": true
+                                                        }
+                                                      }
+                                                    ]
+                                                  },
+                                                  {
+                                                    "fields": [
+                                                      {
+                                                        "literal": {
+                                                          "string": "bbb",
+                                                          "nullable": true
+                                                        }
+                                                      },
+                                                      {
+                                                        "literal": {
+                                                          "string": "host-b",
+                                                          "nullable": true
+                                                        }
+                                                      },
+                                                      {
+                                                        "literal": {
+                                                          "i64": "256",
+                                                          "nullable": true
+                                                        }
+                                                      }
+                                                    ]
+                                                  }
+                                                ]
                                               }
                                             }
                                           },

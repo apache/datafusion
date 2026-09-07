@@ -145,11 +145,10 @@ fn run_benchmark_as_child_process(
         env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "target".to_string());
     let command = format!("{target_dir}/{profile}/dfbench");
     // Check whether benchmark binary exists
-    if !Path::new(&command).exists() {
-        panic!(
-            "Benchmark binary not found: `{command}`\nRun this command from the top-level `datafusion/` directory so `target/{profile}/dfbench` can be found.",
-        );
-    }
+    assert!(
+        Path::new(&command).exists(),
+        "Benchmark binary not found: `{command}`\nRun this command from the top-level `datafusion/` directory so `target/{profile}/dfbench` can be found.",
+    );
     args.insert(0, command);
     let mut results = vec![];
 
@@ -339,11 +338,10 @@ mod tests {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
-        if !output.status.success() {
-            panic!(
-                "mem_profile failed\nstdout:\n{stdout}\nstderr:\n{stderr}---------------------",
-            );
-        }
+        assert!(
+            output.status.success(),
+            "mem_profile failed\nstdout:\n{stdout}\nstderr:\n{stderr}---------------------",
+        );
 
         assert!(
             stdout.contains("Peak RSS")

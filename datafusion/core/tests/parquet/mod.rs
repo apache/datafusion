@@ -58,6 +58,7 @@ mod page_pruning;
 mod row_group_pruning;
 mod schema;
 mod schema_coercion;
+mod string_in_list_pruning;
 mod utils;
 
 #[cfg(test)]
@@ -901,25 +902,25 @@ fn make_dictionary_batch(strings: Vec<&str>, integers: Vec<i32>) -> RecordBatch 
     let large_utf8_dict = DictionaryArray::new(keys.clone(), Arc::new(large_utf8));
 
     let binary =
-        BinaryArray::from_iter_values(strings.iter().cloned().map(|v| v.as_bytes()));
+        BinaryArray::from_iter_values(strings.iter().copied().map(|v| v.as_bytes()));
     let binary_dict = DictionaryArray::new(keys.clone(), Arc::new(binary));
 
     let large_binary =
-        LargeBinaryArray::from_iter_values(strings.iter().cloned().map(|v| v.as_bytes()));
+        LargeBinaryArray::from_iter_values(strings.iter().copied().map(|v| v.as_bytes()));
     let large_binary_dict = DictionaryArray::new(keys.clone(), Arc::new(large_binary));
 
     let int32 = Int32Array::from_iter_values(integers.clone());
     let int32_dict = DictionaryArray::new(small_keys.clone(), Arc::new(int32));
 
-    let int64 = Int64Array::from_iter_values(integers.iter().cloned().map(|v| v as i64));
+    let int64 = Int64Array::from_iter_values(integers.iter().copied().map(|v| v as i64));
     let int64_dict = DictionaryArray::new(keys.clone(), Arc::new(int64));
 
     let uint32 =
-        UInt32Array::from_iter_values(integers.iter().cloned().map(|v| v as u32));
+        UInt32Array::from_iter_values(integers.iter().copied().map(|v| v as u32));
     let uint32_dict = DictionaryArray::new(small_keys.clone(), Arc::new(uint32));
 
     let decimal = Decimal128Array::from_iter_values(
-        integers.iter().cloned().map(|v| (v * 100) as i128),
+        integers.iter().copied().map(|v| (v * 100) as i128),
     )
     .with_precision_and_scale(6, 2)
     .unwrap();
