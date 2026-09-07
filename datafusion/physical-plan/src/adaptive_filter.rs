@@ -106,7 +106,7 @@
 //! Each conjunct is timed and counted on exactly the rows it evaluated, giving
 //! its marginal selectivity and per-row cost. After a short warm-up the
 //! conjuncts are ranked by rows discarded per nanosecond
-//! (`(1 - pass_rate) / cost_per_row`, the classic optimal ordering key for
+//! (`(1 + rows_in - rows_out) / time`, the ordering key Velox uses for
 //! independent conjuncts). The ranking is adopted only if it is materially
 //! cheaper than the written order ([`TIE_COST_FRACTION`]); otherwise the
 //! written predicate is evaluated unchanged, so a conjunction that does not
@@ -207,16 +207,21 @@ impl ConjunctStats {
         (self.rows > 0).then(|| self.nanos.max(1) as f64 / self.rows as f64)
     }
 
-    /// Ranking key: rows discarded per nanosecond of evaluation
-    /// (`(1 - pass_rate) / cost_per_row`). Maximising this is exactly
-    /// minimising `cost_per_row / (1 - pass_rate)`, the classic optimal
-    /// ordering key for independent conjuncts — so a selective-but-expensive
-    /// predicate correctly sorts ahead of a cheap-but-unselective one.
-    /// `None` when unmeasured, so such conjuncts sort last.
+    /// Ranking key: rows discarded per nanosecond of evaluation,
+    /// `(1 + rows_in - rows_out) / time`. This is the reciprocal of the
+    /// `time / (1 + n_in - n_out)` score Velox sorts its filters by
+    /// (Pedreira et al., "Velox: Meta's Unified Execution Engine", VLDB 2022,
+    /// <https://www.vldb.org/pvldb/vol15/p3372-pedreira.pdf>): maximising it
+    /// minimises time per discarded row, the optimal ordering key for
+    /// independent conjuncts, so a selective-but-expensive predicate sorts
+    /// ahead of a cheap-but-unselective one. The `1 +` keeps conjuncts that
+    /// discard nothing ordered cheapest-first instead of tied; the time is
+    /// clamped to one nanosecond so an evaluation faster than the timer's
+    /// resolution ranks as very cheap. `None` when unmeasured, so such
+    /// conjuncts sort last.
     fn effectiveness(&self) -> Option<f64> {
-        let cost = self.cost_per_row()?;
-        let pass = self.pass_rate()?;
-        Some((1.0 - pass) / cost)
+        (self.rows > 0)
+            .then(|| (1 + self.rows - self.matched) as f64 / self.nanos.max(1) as f64)
     }
 }
 
