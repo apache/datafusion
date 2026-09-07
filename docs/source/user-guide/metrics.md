@@ -169,6 +169,19 @@ FROM t
 GROUP BY k;
 ```
 
+The abbreviated partial-aggregate plan line below shows that mapping (timings
+and unrelated metrics are omitted):
+
+```text
+AggregateExec: mode=Partial, gby=[k@0 as k], aggr=[sum(t.a), sum(t.b), count(t.c)],
+  metrics=[..., agg_expr_0_arguments_time=..., agg_expr_1_arguments_time=...,
+  agg_expr_2_arguments_time=...]
+```
+
+Thus `agg_expr_0_*` is `sum(t.a)`, `agg_expr_1_*` is `sum(t.b)`, and
+`agg_expr_2_*` is `count(t.c)`. In verbose output, the corresponding
+`aggregate` labels provide the same mapping per partition.
+
 ## TODO
 
 Add metrics for the remaining operators

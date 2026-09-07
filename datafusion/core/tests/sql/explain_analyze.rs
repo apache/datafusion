@@ -1077,7 +1077,10 @@ async fn explain_analyze_aggregate_metrics_map_indices_to_expressions() {
     let normal = arrow::util::pretty::pretty_format_batches(&normal)
         .unwrap()
         .to_string();
-    assert_contains!(normal.as_str(), "aggr=[");
+    assert_contains!(
+        normal.as_str(),
+        "aggr=[sum(aggregate_test_100.c5), sum(aggregate_test_100.c6), count(aggregate_test_100.c7)]"
+    );
     assert_contains!(normal.as_str(), "agg_expr_0_arguments_time");
     assert_contains!(normal.as_str(), "agg_expr_1_arguments_time");
     assert_contains!(normal.as_str(), "agg_expr_2_arguments_time");
