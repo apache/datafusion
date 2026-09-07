@@ -1574,7 +1574,12 @@ message PhysicalHashRepartition {
 
 message PhysicalRangePartitioning {
   repeated PhysicalSortExprNode sort_expr = 1;
+  // Effective split points. Kept for compatibility with older readers.
   repeated PhysicalRangeSplitPoint split_point = 2;
+  // Maximum-resolution sample points used to derive effective split points.
+  repeated PhysicalRangeSplitPoint sample_point = 3;
+  // Zero in legacy payloads means split_point.len() + 1.
+  uint64 partition_count = 4;
 }
 
 message PhysicalRangeSplitPoint {

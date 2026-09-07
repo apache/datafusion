@@ -2373,8 +2373,15 @@ pub struct PhysicalHashRepartition {
 pub struct PhysicalRangePartitioning {
     #[prost(message, repeated, tag = "1")]
     pub sort_expr: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
+    /// Effective split points. Kept for compatibility with older readers.
     #[prost(message, repeated, tag = "2")]
     pub split_point: ::prost::alloc::vec::Vec<PhysicalRangeSplitPoint>,
+    /// Maximum-resolution sample points used to derive effective split points.
+    #[prost(message, repeated, tag = "3")]
+    pub sample_point: ::prost::alloc::vec::Vec<PhysicalRangeSplitPoint>,
+    /// Zero in legacy payloads means split_point.len() + 1.
+    #[prost(uint64, tag = "4")]
+    pub partition_count: u64,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalRangeSplitPoint {
