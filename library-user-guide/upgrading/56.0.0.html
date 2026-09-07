@@ -559,6 +559,36 @@ NDV-aware providers the flag previously enabled, register
 <li><p>To opt out, register nothing (the default).</p></li>
 </ul>
 </section>
+<section id="generated-protobuf-jsonwriteroptions-gained-a-compression-level-field">
+<h3>Generated protobuf <code class="docutils literal notranslate"><span class="pre">JsonWriterOptions</span></code> gained a <code class="docutils literal notranslate"><span class="pre">compression_level</span></code> field<a class="headerlink" href="#generated-protobuf-jsonwriteroptions-gained-a-compression-level-field" title="Link to this heading">#</a></h3>
+<p>The generated public protobuf <code class="docutils literal notranslate"><span class="pre">JsonWriterOptions</span></code> struct now carries an optional
+<code class="docutils literal notranslate"><span class="pre">compression_level</span></code> so JSON sink plans preserve explicitly configured
+compression levels across serialization.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users constructing generated <code class="docutils literal notranslate"><span class="pre">JsonWriterOptions</span></code> values with an exhaustive
+struct literal.</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>Set <code class="docutils literal notranslate"><span class="pre">compression_level</span></code> explicitly, or fill it from <code class="docutils literal notranslate"><span class="pre">Default</span></code>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
+<span class="n">JsonWriterOptions</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">compression</span><span class="w"> </span><span class="p">}</span>
+
+<span class="c1">// After</span>
+<span class="n">JsonWriterOptions</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">compression</span><span class="p">,</span>
+<span class="w">    </span><span class="n">compression_level</span><span class="p">:</span><span class="w"> </span><span class="nb">None</span><span class="p">,</span>
+<span class="p">}</span>
+<span class="c1">// or</span>
+<span class="n">JsonWriterOptions</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">compression</span><span class="p">,</span>
+<span class="w">    </span><span class="o">..</span><span class="nb">Default</span><span class="p">::</span><span class="n">default</span><span class="p">()</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>The protobuf wire format remains backward compatible.</p>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/24945">PR #24945</a> for details.</p>
+</section>
 <section id="defaultstatisticsprovider-is-deprecated">
 <h3><code class="docutils literal notranslate"><span class="pre">DefaultStatisticsProvider</span></code> is deprecated<a class="headerlink" href="#defaultstatisticsprovider-is-deprecated" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">datafusion_physical_plan::operator_statistics::DefaultStatisticsProvider</span></code> is
@@ -667,6 +697,7 @@ to be updated to account for the new generic API.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-proto-common-option-and-constraint-conversions-are-fallible"><code class="docutils literal notranslate"><span class="pre">datafusion-proto</span></code>: common option and constraint conversions are fallible</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionoptions-has-a-new-enable-nlj-coordinated-fallback-field"><code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> has a new <code class="docutils literal notranslate"><span class="pre">enable_nlj_coordinated_fallback</span></code> field</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-optimizer-use-statistics-registry-is-deprecated-and-ignored"><code class="docutils literal notranslate"><span class="pre">datafusion.optimizer.use_statistics_registry</span></code> is deprecated and ignored</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#generated-protobuf-jsonwriteroptions-gained-a-compression-level-field">Generated protobuf <code class="docutils literal notranslate"><span class="pre">JsonWriterOptions</span></code> gained a <code class="docutils literal notranslate"><span class="pre">compression_level</span></code> field</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#defaultstatisticsprovider-is-deprecated"><code class="docutils literal notranslate"><span class="pre">DefaultStatisticsProvider</span></code> is deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#statisticsregistry-compute-and-compute-base-are-deprecated"><code class="docutils literal notranslate"><span class="pre">StatisticsRegistry::compute</span></code> and <code class="docutils literal notranslate"><span class="pre">compute_base</span></code> are deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#api-change-for-floor-and-ceil-udf">API change for <code class="docutils literal notranslate"><span class="pre">floor</span></code> and <code class="docutils literal notranslate"><span class="pre">ceil</span></code> UDF</a></li>
