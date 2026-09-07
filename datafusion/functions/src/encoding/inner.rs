@@ -22,6 +22,7 @@ use arrow::{
         Array, ArrayRef, AsArray, BinaryArrayType, GenericBinaryArray,
         GenericStringArray, OffsetSizeTrait,
     },
+    compute::cast,
     datatypes::DataType,
 };
 use arrow_buffer::{Buffer, OffsetBuffer};
@@ -39,8 +40,8 @@ use datafusion_common::{
     },
 };
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, Documentation, EncodingPreservation, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::fmt;
@@ -94,7 +95,8 @@ impl EncodeFunc {
                         TypeSignatureClass::Binary,
                         vec![TypeSignatureClass::Native(logical_string())],
                         NativeType::Binary,
-                    ),
+                    )
+                    .with_encoding_preservation(EncodingPreservation::dictionary()),
                     Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
                 ],
                 Volatility::Immutable,
@@ -113,10 +115,20 @@ impl ScalarUDFImpl for EncodeFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
+        // A dictionary-encoded argument is encoded by its values, so the
+        // width of the result follows them.
+        let mut value_type = &arg_types[0];
+        while let DataType::Dictionary(_, inner) = value_type {
+            value_type = inner;
+        }
+        match value_type {
             DataType::LargeBinary => Ok(DataType::LargeUtf8),
             _ => Ok(DataType::Utf8),
         }
+    }
+
+    fn evaluates_elementwise(&self) -> bool {
+        true
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -227,12 +239,19 @@ fn encode_scalar(value: &ScalarValue, encoding: Encoding) -> Result<ColumnarValu
                     .map(|bytes| encoding.encode_bytes(bytes)),
             )))
         }
+        ScalarValue::Dictionary(_, value) => encode_scalar(value, encoding),
         v => internal_err!("Unexpected value for encode: {v}"),
     }
 }
 
 fn encode_array(array: &ArrayRef, encoding: Encoding) -> Result<ColumnarValue> {
     let array = match array.data_type() {
+        // The signature keeps a dictionary so the physical layer can encode
+        // its values once; wherever it declines to, the dictionary arrives
+        // here and is expanded, as coercion would have done.
+        DataType::Dictionary(_, value_type) => {
+            return encode_array(&cast(array, value_type)?, encoding);
+        }
         DataType::Binary => encoding.encode_array::<_, i32>(&array.as_binary::<i32>()),
         DataType::BinaryView => encoding.encode_array::<_, i32>(&array.as_binary_view()),
         DataType::LargeBinary => {
@@ -528,10 +547,80 @@ where
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{ArrayBuilder, BinaryArray, BinaryViewBuilder};
+    use std::sync::Arc;
+
+    use arrow::array::{
+        ArrayBuilder, BinaryArray, BinaryViewBuilder, DictionaryArray, Int32Array,
+    };
     use arrow_buffer::OffsetBuffer;
 
     use super::*;
+
+    fn dictionary_of(values: BinaryArray, keys: Int32Array) -> ArrayRef {
+        Arc::new(DictionaryArray::new(keys, Arc::new(values)))
+    }
+
+    #[test]
+    fn encode_expands_a_dictionary_it_is_handed() {
+        // The physical layer declines to peel some batches — empty ones,
+        // fields carrying metadata — and hands the dictionary over.
+        let dictionary = dictionary_of(
+            BinaryArray::from(vec![Some(b"tom".as_slice()), None]),
+            Int32Array::from(vec![Some(0), None, Some(1), Some(0)]),
+        );
+        let ColumnarValue::Array(encoded) =
+            encode_array(&dictionary, Encoding::Hex).unwrap()
+        else {
+            panic!("expected an array");
+        };
+        assert_eq!(
+            encoded.as_string::<i32>().iter().collect::<Vec<_>>(),
+            vec![Some("746f6d"), None, None, Some("746f6d")]
+        );
+
+        let ColumnarValue::Array(encoded) =
+            encode_array(&dictionary.slice(0, 0), Encoding::Hex).unwrap()
+        else {
+            panic!("expected an array");
+        };
+        assert_eq!(encoded.data_type(), &DataType::Utf8);
+        assert_eq!(encoded.len(), 0);
+    }
+
+    #[test]
+    fn encode_unwraps_a_dictionary_scalar() {
+        let scalar = ScalarValue::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(ScalarValue::Binary(Some(b"tom".to_vec()))),
+        );
+        let ColumnarValue::Scalar(encoded) =
+            encode_scalar(&scalar, Encoding::Hex).unwrap()
+        else {
+            panic!("expected a scalar");
+        };
+        assert_eq!(encoded, ScalarValue::Utf8(Some("746f6d".to_string())));
+    }
+
+    #[test]
+    fn encode_return_type_follows_dictionary_values() {
+        let dictionary = |value: DataType| {
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(value))
+        };
+        let return_type = |input: DataType| {
+            EncodeFunc::new()
+                .return_type(&[input, DataType::Utf8])
+                .unwrap()
+        };
+        assert_eq!(return_type(dictionary(DataType::Binary)), DataType::Utf8);
+        assert_eq!(
+            return_type(dictionary(DataType::LargeBinary)),
+            DataType::LargeUtf8
+        );
+        assert_eq!(
+            return_type(dictionary(dictionary(DataType::LargeBinary))),
+            DataType::LargeUtf8
+        );
+    }
 
     #[test]
     fn test_estimate_byte_data_size() {

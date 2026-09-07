@@ -586,6 +586,56 @@ NULL NULL Dictionary(Int32, Utf8) Dictionary(Int32, Dictionary(UInt32, Utf8))
 statement ok
 DROP TABLE unicode_dictionary_test
 
+# A batch referencing all 128 values an Int8 key can address, plus a null key:
+# peeling has nowhere to put its NULL slot and must hand the dictionary to the
+# function as it arrived, without changing the type the plan promised.
+statement ok
+CREATE TABLE narrow_key_dictionary_test AS
+SELECT arrow_cast(CASE WHEN v = 128 THEN NULL ELSE 'value' || CAST(v AS VARCHAR) END,
+                  'Dictionary(Int8, Utf8)') AS dict_col
+FROM generate_series(0, 128) AS t(v);
+
+query II
+SELECT count(*), count(reverse(dict_col)) FROM narrow_key_dictionary_test
+----
+129 128
+
+query TT
+SELECT reverse(dict_col), arrow_typeof(reverse(dict_col))
+FROM narrow_key_dictionary_test
+WHERE dict_col = 'value42'
+----
+24eulav Dictionary(Int8, Utf8)
+
+statement ok
+DROP TABLE narrow_key_dictionary_test
+
+# A null key stays a null key on a peeled dictionary result: the aggregates
+# and window functions that read a dictionary's nulls off its keys skip it.
+statement ok
+CREATE TABLE null_key_dictionary_test AS
+SELECT arrow_cast(x, 'Dictionary(Int32, Utf8)') AS d, i
+FROM (VALUES (NULL, 1), ('ab', 2), ('cd', 3)) AS v(x, i);
+
+query TT
+SELECT first_value(reverse(d) ORDER BY i) IGNORE NULLS,
+       last_value(reverse(d) ORDER BY i) IGNORE NULLS
+FROM null_key_dictionary_test
+----
+ba dc
+
+query T
+SELECT first_value(reverse(d)) IGNORE NULLS OVER (ORDER BY i)
+FROM null_key_dictionary_test
+ORDER BY i
+----
+NULL
+ba
+ba
+
+statement ok
+DROP TABLE null_key_dictionary_test
+
 query ?
 SELECT ascii(arrow_cast('é', 'Dictionary(Int32, Utf8)'))
 ----

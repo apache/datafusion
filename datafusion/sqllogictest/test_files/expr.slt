@@ -1459,6 +1459,65 @@ SELECT encode(arrow_cast('tom', 'Binary'),'base64');
 ----
 dG9t
 
+# a dictionary column reaches encode encoded, so repeated values are encoded
+# once; the plan shows no cast away from the dictionary on the way in
+query TT
+EXPLAIN SELECT encode(column1, 'base64') FROM (
+  SELECT arrow_cast(column1, 'Dictionary(Int32, Utf8)') AS column1
+  FROM (VALUES ('tom'), ('tom'), ('jerry'), (NULL), ('tom'), ('jerry')) AS t(column1)
+);
+----
+logical_plan
+01)Projection: encode(CAST(CAST(t.column1 AS Dictionary(Int32, Utf8)) AS Dictionary(Int32, BinaryView)), Utf8("base64")) AS encode(column1,Utf8("base64"))
+02)--SubqueryAlias: t
+03)----Projection: column1 AS column1
+04)------Values: (Utf8("tom")), (Utf8("tom")), (Utf8("jerry")), (Utf8(NULL)), (Utf8("tom"))...
+physical_plan
+01)ProjectionExec: expr=[encode(CAST(CAST(column1@0 AS Dictionary(Int32, Utf8)) AS Dictionary(Int32, BinaryView)), base64) as encode(column1,Utf8("base64"))]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query T
+SELECT encode(column1, 'base64') FROM (
+  SELECT arrow_cast(column1, 'Dictionary(Int32, Utf8)') AS column1
+  FROM (VALUES ('tom'), ('tom'), ('jerry'), (NULL), ('tom'), ('jerry')) AS t(column1)
+);
+----
+dG9t
+dG9t
+amVycnk
+NULL
+dG9t
+amVycnk
+
+# a dictionary over large strings encodes to large strings, as the flat
+# column does
+query TT rowsort
+SELECT encode(column1, 'hex'), arrow_typeof(encode(column1, 'hex')) FROM (
+  SELECT arrow_cast(column1, 'Dictionary(Int32, LargeUtf8)') AS column1
+  FROM (VALUES ('tom'), ('tom'), ('jerry')) AS t(column1)
+);
+----
+6a65727279 LargeUtf8
+746f6d LargeUtf8
+746f6d LargeUtf8
+
+# a nested dictionary is expanded level by level, column or scalar
+query T rowsort
+SELECT encode(column1, 'hex') FROM (
+  SELECT arrow_cast(arrow_cast(column1, 'Dictionary(UInt32, Utf8)'),
+                    'Dictionary(Int32, Dictionary(UInt32, Utf8))') AS column1
+  FROM (VALUES ('tom'), ('jerry')) AS t(column1)
+);
+----
+6a65727279
+746f6d
+
+query T
+SELECT encode(arrow_cast(arrow_cast('tom', 'Dictionary(UInt32, Utf8)'),
+                         'Dictionary(Int32, Dictionary(UInt32, Utf8))'), 'hex');
+----
+746f6d
+
 query T
 SELECT arrow_cast(decode(arrow_cast('dG9t', 'Binary'),'base64'), 'Utf8');
 ----

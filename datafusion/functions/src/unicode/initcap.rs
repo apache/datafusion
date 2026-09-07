@@ -86,6 +86,10 @@ impl ScalarUDFImpl for InitcapFunc {
         Ok(arg_types[0].clone())
     }
 
+    fn evaluates_elementwise(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         match &args.args[0] {
             ColumnarValue::Scalar(scalar) => {
@@ -140,6 +144,8 @@ fn initcap_array(array: &ArrayRef) -> Result<ArrayRef> {
         DataType::Utf8 => initcap::<i32>(&[Arc::clone(array)]),
         DataType::LargeUtf8 => initcap::<i64>(&[Arc::clone(array)]),
         DataType::Utf8View => initcap_utf8view(&[Arc::clone(array)]),
+        // Serves the calls the physical layer leaves encoded, such as fields
+        // carrying extension metadata.
         DataType::Dictionary(_, _) => {
             let dictionary = array.as_any_dictionary();
             let converted = initcap_array(dictionary.values())?;

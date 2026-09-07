@@ -87,6 +87,10 @@ impl ScalarUDFImpl for ReverseFunc {
         Ok(arg_types[0].clone())
     }
 
+    fn evaluates_elementwise(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(reverse, vec![])(&args.args)
     }
@@ -114,6 +118,8 @@ fn reverse(args: &[ArrayRef]) -> Result<ArrayRef> {
             &args[0].as_string_view(),
             StringViewArrayBuilder::with_capacity(len),
         ),
+        // Serves the calls the physical layer leaves encoded, such as fields
+        // carrying extension metadata.
         DataType::Dictionary(_, _) => {
             let dictionary = args[0].as_any_dictionary();
             let converted = reverse(&[Arc::clone(dictionary.values())])?;
