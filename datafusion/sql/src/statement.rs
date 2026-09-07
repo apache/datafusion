@@ -2852,6 +2852,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 MergeIntoAction::Insert { columns, values }
             }
             ast::MergeAction::Delete { .. } => MergeIntoAction::Delete,
+            ast::MergeAction::DoNothing { .. } => {
+                return not_impl_err!("MERGE DO NOTHING is not supported");
+            }
         };
 
         Ok(MergeIntoClause {

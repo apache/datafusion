@@ -965,7 +965,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         negated: bool,
         expr: SQLExpr,
         pattern: SQLExpr,
-        escape_char: Option<ValueWithSpan>,
+        escape_char: Option<Box<SQLExpr>>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
         case_insensitive: bool,
@@ -975,13 +975,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return not_impl_err!("ANY in LIKE expression");
         }
         let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
-        let escape_char = match escape_char.map(|v| v.value) {
-            Some(Value::SingleQuotedString(char)) if char.len() == 1 => {
-                Some(char.chars().next().unwrap())
-            }
-            Some(value) => {
+        let escape_char = match escape_char.map(|e| *e) {
+            Some(SQLExpr::Value(ValueWithSpan {
+                value: Value::SingleQuotedString(char),
+                ..
+            })) if char.len() == 1 => Some(char.chars().next().unwrap()),
+            Some(expr) => {
                 return plan_err!(
-                    "Invalid escape character in LIKE expression. Expected a single character wrapped with single quotes, got {value}"
+                    "Invalid escape character in LIKE expression. Expected a single character wrapped with single quotes, got {expr}"
                 );
             }
             None => None,
@@ -1000,18 +1001,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         negated: bool,
         expr: SQLExpr,
         pattern: SQLExpr,
-        escape_char: Option<ValueWithSpan>,
+        escape_char: Option<Box<SQLExpr>>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
-        let escape_char = match escape_char.map(|v| v.value) {
-            Some(Value::SingleQuotedString(char)) if char.len() == 1 => {
-                Some(char.chars().next().unwrap())
-            }
-            Some(value) => {
+        let escape_char = match escape_char.map(|e| *e) {
+            Some(SQLExpr::Value(ValueWithSpan {
+                value: Value::SingleQuotedString(char),
+                ..
+            })) if char.len() == 1 => Some(char.chars().next().unwrap()),
+            Some(expr) => {
                 return plan_err!(
-                    "Invalid escape character in SIMILAR TO expression. Expected a single character wrapped with single quotes, got {value}"
+                    "Invalid escape character in SIMILAR TO expression. Expected a single character wrapped with single quotes, got {expr}"
                 );
             }
             None => None,
