@@ -9,7 +9,7 @@
 --
 -- The flip is early on purpose: at the default PRED_ROWS it lands a few batches
 -- into the scan. `drift_half.sql` moves it to the halfway point and
--- `drift_blocks.sql` repeats it every 16 batches.
+-- `drift_files.sql` drops the time axis entirely and skews per partition.
 --
 -- PRED_ROWS sizes the table.
 CREATE TABLE t AS

@@ -3,5 +3,5 @@ subgroup drift
 template sql_benchmarks/predicate_eval/predicate_eval.benchmark.template
 SUBGROUP=drift
 QPAD=83
-DATASET=drift_blocks
-NAME=drift_q83_alternating_blocks
+DATASET=drift_files
+NAME=drift_q83_per_partition_skew
