@@ -1192,6 +1192,31 @@ pub(crate) fn need_produce_result_in_final(join_type: JoinType) -> bool {
     )
 }
 
+/// Whether the join emits left rows that found no match on the right side
+/// (`LeftMark` emits them with a `false` mark). Those rows can only be produced
+/// once the right side has been fully consumed.
+pub(crate) fn emits_unmatched_left_rows(join_type: JoinType) -> bool {
+    matches!(
+        join_type,
+        JoinType::Left | JoinType::LeftAnti | JoinType::LeftMark | JoinType::Full
+    )
+}
+
+/// Whether the join only tests for the existence of a match (semi, anti and
+/// mark joins). Such joins output the columns of a single input, plus the
+/// mark column for mark joins.
+pub(crate) fn is_existence_join(join_type: JoinType) -> bool {
+    matches!(
+        join_type,
+        JoinType::LeftSemi
+            | JoinType::RightSemi
+            | JoinType::LeftAnti
+            | JoinType::RightAnti
+            | JoinType::LeftMark
+            | JoinType::RightMark
+    )
+}
+
 pub(crate) fn get_final_indices_from_shared_bitmap(
     shared_bitmap: &SharedBitmapBuilder,
     join_type: JoinType,
