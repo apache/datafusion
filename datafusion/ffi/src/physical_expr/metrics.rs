@@ -397,7 +397,7 @@ fn count_from_value(v: u64) -> Count {
 }
 
 fn output_bytes_count_from_value(v: u64) -> OutputBytesCount {
-    let c = OutputBytesCount::new();
+    let c = OutputBytesCount::default();
     c.add(v as usize);
     c
 }
@@ -621,7 +621,7 @@ mod tests {
         assert_value_roundtrip(MetricValue::OutputBatches(c.clone()));
         assert_value_roundtrip(MetricValue::SpilledRows(c.clone()));
 
-        let obc = OutputBytesCount::new();
+        let obc = OutputBytesCount::default();
         assert_value_roundtrip(MetricValue::OutputBytes(obc.clone()));
 
         let g = Gauge::new();

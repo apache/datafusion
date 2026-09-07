@@ -67,6 +67,9 @@ pub struct MetricBuilder<'a> {
     /// Semantic category (rows / bytes / timing).
     /// `None` means "always include" (the default for custom metrics).
     metric_category: Option<MetricCategory>,
+
+    /// Whether to deduplicate the output bytes between the record batches
+    deduped_output_bytes: bool,
 }
 
 impl<'a> MetricBuilder<'a> {
@@ -81,6 +84,7 @@ impl<'a> MetricBuilder<'a> {
             labels: vec![],
             metric_type: MetricType::Dev,
             metric_category: None,
+            deduped_output_bytes: false,
         }
     }
 
@@ -93,6 +97,12 @@ impl<'a> MetricBuilder<'a> {
     /// Set the metric type to the metric being constructed
     pub fn with_type(mut self, metric_type: MetricType) -> Self {
         self.metric_type = metric_type;
+        self
+    }
+
+    /// Set the deduplicated output bytes to the metric being constructed
+    pub fn with_deduplicated_output_bytes(mut self, deduped: bool) -> Self {
+        self.deduped_output_bytes = deduped;
         self
     }
 
@@ -132,6 +142,7 @@ impl<'a> MetricBuilder<'a> {
             metrics,
             metric_type,
             metric_category,
+            ..
         } = self;
         let mut metric =
             Metric::new_with_labels(value, partition, labels).with_type(metric_type);
@@ -182,7 +193,7 @@ impl<'a> MetricBuilder<'a> {
 
     /// Consume self and create a new counter for recording total output bytes
     pub fn output_bytes(self, partition: usize) -> OutputBytesCount {
-        let count = OutputBytesCount::new();
+        let count = OutputBytesCount::new(self.deduped_output_bytes);
         self.with_category(MetricCategory::Bytes)
             .with_partition(partition)
             .build(MetricValue::OutputBytes(count.clone()));

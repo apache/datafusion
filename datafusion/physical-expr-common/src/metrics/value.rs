@@ -21,8 +21,9 @@ use super::CustomMetricValue;
 use arrow::record_batch::RecordBatch;
 use chrono::{DateTime, Utc};
 use datafusion_common::{
-    human_readable_count, human_readable_duration, human_readable_size, instant::Instant,
-    utils::memory::RecordBatchMemoryCounter,
+    human_readable_count, human_readable_duration, human_readable_size,
+    instant::Instant,
+    utils::memory::{RecordBatchMemoryCounter, get_record_batch_memory_size},
 };
 use parking_lot::Mutex;
 use std::{
@@ -38,14 +39,15 @@ use std::{
 /// A counter to record deduplicated RecordBatch output bytes
 /// see [`RecordBatchMemoryCounter`] for details
 #[derive(Debug, Clone)]
-pub struct OutputBytesCount {
+pub enum OutputBytesCount {
     /// value of the metric counter
-    value: Arc<Mutex<RecordBatchMemoryCounter>>,
+    Deduped(Arc<Mutex<RecordBatchMemoryCounter>>),
+    Plain(Count),
 }
 
 impl Default for OutputBytesCount {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
@@ -57,27 +59,49 @@ impl PartialEq for OutputBytesCount {
 
 impl OutputBytesCount {
     /// create a new counter
-    pub fn new() -> Self {
-        Self {
-            value: Arc::new(Mutex::new(RecordBatchMemoryCounter::new())),
+    pub fn new(deduped: bool) -> Self {
+        if deduped {
+            Self::Deduped(Arc::new(Mutex::new(RecordBatchMemoryCounter::new())))
+        } else {
+            Self::Plain(Count::new())
         }
+    }
+
+    pub fn is_deduped(&self) -> bool {
+        matches!(&self, &OutputBytesCount::Deduped(_))
     }
 
     /// Count the RecordBatch's memory
     pub fn count_batch(&self, record_batch: &RecordBatch) {
-        let mut val = self.value.lock();
-        (*val).count_batch(record_batch);
+        match &self {
+            Self::Deduped(val) => {
+                let mut val = val.lock();
+                (*val).count_batch(record_batch);
+            }
+            Self::Plain(val) => {
+                let n_bytes = get_record_batch_memory_size(record_batch);
+                val.add(n_bytes);
+            }
+        }
     }
 
     /// Add `n` to the metric's value
     pub fn add(&self, n: usize) {
-        let mut val = self.value.lock();
-        (*val).add(n);
+        match &self {
+            Self::Deduped(val) => {
+                let mut val = val.lock();
+                (*val).add(n);
+            }
+            Self::Plain(val) => val.add(n),
+        }
     }
 
     /// Get the current value
     pub fn value(&self) -> usize {
-        self.value.lock().memory_usage()
+        match self {
+            Self::Deduped(val) => val.lock().memory_usage(),
+            Self::Plain(val) => val.value(),
+        }
     }
 }
 
@@ -928,7 +952,9 @@ impl MetricValue {
             Self::OutputRows(_) => Self::OutputRows(Count::new()),
             Self::SpillCount(_) => Self::SpillCount(Count::new()),
             Self::SpilledBytes(_) => Self::SpilledBytes(Count::new()),
-            Self::OutputBytes(_) => Self::OutputBytes(OutputBytesCount::new()),
+            Self::OutputBytes(val) => {
+                Self::OutputBytes(OutputBytesCount::new(val.is_deduped()))
+            }
             Self::OutputBatches(_) => Self::OutputBatches(Count::new()),
             Self::SpilledRows(_) => Self::SpilledRows(Count::new()),
             Self::CurrentMemoryUsage(_) => Self::CurrentMemoryUsage(Gauge::new()),

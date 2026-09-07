@@ -282,7 +282,8 @@ impl OrderedFinalAggregateStream {
         input: SendableRecordBatchStream,
         input_order_mode: &InputOrderMode,
     ) -> Result<Self> {
-        let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
+        let baseline_metrics =
+            BaselineMetrics::new_with_deduplicated_output_bytes(&agg.metrics, partition);
         let metrics = OrderedAggregateTableMetrics::new(agg, partition);
         let spill_metrics = SpillMetrics::new(&agg.metrics, partition);
         let reservation =

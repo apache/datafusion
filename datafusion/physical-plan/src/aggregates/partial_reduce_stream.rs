@@ -189,7 +189,8 @@ impl PartialReduceHashAggregateStream {
         let schema = Arc::clone(&agg.schema);
         let input = agg.input.execute(partition, Arc::clone(context))?;
         let batch_size = context.session_config().batch_size();
-        let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
+        let baseline_metrics =
+            BaselineMetrics::new_with_deduplicated_output_bytes(&agg.metrics, partition);
 
         // Preserve the existing aggregate metric surface for this plan node.
         let _spill_metrics = SpillMetrics::new(&agg.metrics, partition);

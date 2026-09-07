@@ -401,7 +401,8 @@ impl GroupedHashAggregateStream {
 
         let batch_size = context.session_config().batch_size();
         let input = agg.input.execute(partition, Arc::clone(context))?;
-        let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
+        let baseline_metrics =
+            BaselineMetrics::new_with_deduplicated_output_bytes(&agg.metrics, partition);
         let group_by_metrics = GroupByMetrics::new(&agg.metrics, partition);
         let aggregate_labels = agg
             .aggr_expr

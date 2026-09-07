@@ -296,7 +296,8 @@ impl AggregateStream {
         let agg_schema = Arc::clone(&agg.schema);
         let agg_filter_expr = Arc::clone(&agg.filter_expr);
 
-        let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
+        let baseline_metrics =
+            BaselineMetrics::new_with_deduplicated_output_bytes(&agg.metrics, partition);
         let input = agg.input.execute(partition, Arc::clone(context))?;
 
         let aggregate_expressions = aggregate_expressions(&agg.aggr_expr, &agg.mode, 0)?;

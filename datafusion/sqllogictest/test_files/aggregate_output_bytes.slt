@@ -61,7 +61,7 @@ EXPLAIN ANALYZE
 SELECT group_col, COUNT(value_col) FROM agg_output_bytes_src GROUP BY group_col;
 ----
 Plan with Metrics
-01)AggregateExec: mode=Single, gby=[group_col@0 as group_col], aggr=[count(agg_output_bytes_src.value_col)], metrics=[output_rows=30, elapsed_compute=<slt:ignore>, output_bytes=1264.0 B, output_batches=1, spill_count=0, spilled_bytes=0.0 B, spilled_rows=0, aggregate_arguments_time=<slt:ignore>, aggregation_time=<slt:ignore>, emitting_time=<slt:ignore>, time_calculating_group_ids=<slt:ignore>]
+01)AggregateExec: mode=Single, gby=[group_col@0 as group_col], aggr=[count(agg_output_bytes_src.value_col)], metrics=[output_rows=30, elapsed_compute=<slt:ignore>, output_bytes=1264.0 B, output_batches=1, spill_count=0, spilled_bytes=0.0 B, spilled_rows=0, agg_expr_0_arguments_time=<slt:ignore>, agg_expr_0_evaluate_time=<slt:ignore>, agg_expr_0_merge_time=<slt:ignore>, agg_expr_0_state_time=<slt:ignore>, agg_expr_0_update_time=<slt:ignore>, aggregate_arguments_time=<slt:ignore>, aggregation_time=<slt:ignore>, emitting_time=<slt:ignore>, time_calculating_group_ids=<slt:ignore>]
 02)--DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
 
 # batch_size = 10: the same 30-row emit is sliced into 3 output batches, all
@@ -75,7 +75,7 @@ EXPLAIN ANALYZE
 SELECT group_col, COUNT(value_col) FROM agg_output_bytes_src GROUP BY group_col;
 ----
 Plan with Metrics
-01)AggregateExec: mode=Single, gby=[group_col@0 as group_col], aggr=[count(agg_output_bytes_src.value_col)], metrics=[output_rows=30, elapsed_compute=<slt:ignore>, output_bytes=1344.0 B, output_batches=3, spill_count=0, spilled_bytes=0.0 B, spilled_rows=0, aggregate_arguments_time=<slt:ignore>, aggregation_time=<slt:ignore>, emitting_time=<slt:ignore>, time_calculating_group_ids=<slt:ignore>]
+01)AggregateExec: mode=Single, gby=[group_col@0 as group_col], aggr=[count(agg_output_bytes_src.value_col)], metrics=[output_rows=30, elapsed_compute=<slt:ignore>, output_bytes=1344.0 B, output_batches=3, spill_count=0, spilled_bytes=0.0 B, spilled_rows=0, agg_expr_0_arguments_time=<slt:ignore>, agg_expr_0_evaluate_time=<slt:ignore>, agg_expr_0_merge_time=<slt:ignore>, agg_expr_0_state_time=<slt:ignore>, agg_expr_0_update_time=<slt:ignore>, aggregate_arguments_time=<slt:ignore>, aggregation_time=<slt:ignore>, emitting_time=<slt:ignore>, time_calculating_group_ids=<slt:ignore>]
 02)--DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
 
 statement ok

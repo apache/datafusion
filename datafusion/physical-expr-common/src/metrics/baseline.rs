@@ -100,6 +100,34 @@ impl BaselineMetrics {
         }
     }
 
+    /// Create a new BaselineMetric structure, and set `start_time` to now
+    pub fn new_with_deduplicated_output_bytes(
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+    ) -> Self {
+        let start_time = MetricBuilder::new(metrics).start_timestamp(partition);
+        start_time.record();
+
+        Self {
+            end_time: MetricBuilder::new(metrics)
+                .with_type(super::MetricType::Summary)
+                .end_timestamp(partition),
+            elapsed_compute: MetricBuilder::new(metrics)
+                .with_type(super::MetricType::Summary)
+                .elapsed_compute(partition),
+            output_rows: MetricBuilder::new(metrics)
+                .with_type(super::MetricType::Summary)
+                .output_rows(partition),
+            output_bytes: MetricBuilder::new(metrics)
+                .with_type(super::MetricType::Summary)
+                .with_deduplicated_output_bytes(true)
+                .output_bytes(partition),
+            output_batches: MetricBuilder::new(metrics)
+                .with_type(super::MetricType::Dev)
+                .output_batches(partition),
+        }
+    }
+
     /// Returns a [`BaselineMetrics`] that updates the same `elapsed_compute` ignoring
     /// all other metrics
     ///
@@ -110,7 +138,7 @@ impl BaselineMetrics {
             end_time: Default::default(),
             elapsed_compute: self.elapsed_compute.clone(),
             output_rows: Default::default(),
-            output_bytes: Default::default(),
+            output_bytes: OutputBytesCount::new(self.output_bytes.is_deduped()),
             output_batches: Default::default(),
         }
     }
