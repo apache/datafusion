@@ -213,7 +213,7 @@ impl FileScanConfig {
             preserve_order,
         } = conf;
 
-        let expression_schema = parse_file_scan_schema(proto_schema)?;
+        let expression_schema = parse_file_scan_schema(proto_schema.as_ref())?;
 
         let decoded_constraints = constraints
             .as_ref()
@@ -347,7 +347,7 @@ impl FileScanConfig {
     pub fn parse_table_schema_from_proto(
         conf: &protobuf::FileScanExecConf,
     ) -> Result<TableSchema> {
-        let schema = parse_file_scan_schema(&conf.schema)?;
+        let schema = parse_file_scan_schema(conf.schema.as_ref())?;
 
         // Reacquire the partition column types from the schema before removing
         // them below.
@@ -380,8 +380,8 @@ impl FileScanConfig {
 }
 
 /// Parse the full (file + partition columns) schema off the base conf.
-fn parse_file_scan_schema(schema: &Option<ProtoSchema>) -> Result<Arc<Schema>> {
-    let proto_schema = schema.as_ref().ok_or_else(|| {
+fn parse_file_scan_schema(schema: Option<&ProtoSchema>) -> Result<Arc<Schema>> {
+    let proto_schema = schema.ok_or_else(|| {
         internal_datafusion_err!("FileScanExecConf is missing required field 'schema'")
     })?;
     Ok(Arc::new(proto_schema.try_into()?))
