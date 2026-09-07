@@ -910,14 +910,14 @@ impl TableProvider for MyMutableTable {
 
 The planner drops some clauses before it calls a hook, so do not expect them:
 
-- A `LIMIT` clause on a `DELETE` has no effect. Your hook sees only the filters.
-- A scalar subquery in a `WHERE` clause or in a `SET` clause fails during physical planning, before the hook runs.
-- An `IN` or an `EXISTS` subquery reaches your hook with an empty `filters` vector, because the optimizer rewrites the subquery into a join. Your hook then changes every row, which is the wrong answer. DataFusion does not yet protect a provider against this case.
-- `UPDATE ... FROM`, which reads new values from a second table, returns a "not implemented" error.
+- A `LIMIT` clause on a `DELETE` has no effect. Your hook sees only the filters. This limitation is tracked at [issue #24998](https://github.com/apache/datafusion/issues/24998).
+- A scalar subquery in a `WHERE` clause or in a `SET` clause fails during physical planning, before the hook runs. This limitation is tracked at [issue #24654](https://github.com/apache/datafusion/issues/24654).
+- An `IN` or an `EXISTS` subquery reaches your hook with an empty `filters` vector, because the optimizer rewrites the subquery into a join. Your hook then changes every row, which is the wrong answer. DataFusion does not yet protect a provider against this case. This limitation is tracked at [issue #24654](https://github.com/apache/datafusion/issues/24654).
+- `UPDATE ... FROM`, which reads new values from a second table, returns a "not implemented" error. This limitation is tracked at [issue #19950](https://github.com/apache/datafusion/issues/19950).
 
 ### When the Work Happens
 
-The hooks run during physical planning, like `scan()`. A hook that changes rows before it returns its plan therefore changes them during planning, and `EXPLAIN DELETE` or `EXPLAIN UPDATE` also changes them. [MemTable] works this way.
+The hooks run during physical planning, like `scan()`. A hook that changes rows before it returns its plan therefore changes them during planning, and `EXPLAIN DELETE` or `EXPLAIN UPDATE` also changes them. [MemTable] works this way. This limitation is tracked at [issue #24656](https://github.com/apache/datafusion/issues/24656).
 
 For a provider that writes to durable storage, do the work in the `execute()` method of the plan that you return instead. The hook then stays lightweight, and `EXPLAIN` shows the plan without a side effect.
 

@@ -237,13 +237,13 @@ This feature is not implemented: DELETE not supported for Base table
 ### Limitations
 
 :::{warning}
-Do not use a subquery in the condition of a `DELETE` or an `UPDATE`. A scalar subquery, such as `WHERE id = (SELECT max(id) FROM other)`, returns an error. An `IN` or an `EXISTS` subquery is worse: the statement applies to **all** rows of the table. The optimizer rewrites the subquery into a join, and the condition then no longer reaches the table provider.
+Do not use a subquery in the condition of a `DELETE` or an `UPDATE`. A scalar subquery, such as `WHERE id = (SELECT max(id) FROM other)`, returns an error. An `IN` or an `EXISTS` subquery is worse: the statement applies to **all** rows of the table. The optimizer rewrites the subquery into a join, and the condition then no longer reaches the table provider. This limitation is tracked at [issue #24654](https://github.com/apache/datafusion/issues/24654).
 :::
 
 :::{warning}
-`EXPLAIN` executes a `DELETE` or an `UPDATE` on an in-memory table. The provider changes the rows while DataFusion plans the statement. Use a copy of the table if you want to read the plan only.
+`EXPLAIN` executes a `DELETE` or an `UPDATE` on an in-memory table. The provider changes the rows while DataFusion plans the statement. Use a copy of the table if you want to read the plan only. This limitation is tracked at [issue #24656](https://github.com/apache/datafusion/issues/24656).
 :::
 
-DataFusion ignores a `LIMIT` clause in a `DELETE` statement. The statement removes all rows that match the condition.
+DataFusion ignores a `LIMIT` clause in a `DELETE` statement. The statement removes all rows that match the condition. This limitation is tracked at [issue #24998](https://github.com/apache/datafusion/issues/24998).
 
-`UPDATE ... FROM`, which reads the new values from a second table, returns a "not implemented" error. See [issue #19950](https://github.com/apache/datafusion/issues/19950).
+`UPDATE ... FROM`, which reads the new values from a second table, returns a "not implemented" error. This limitation is tracked at [issue #19950](https://github.com/apache/datafusion/issues/19950).
