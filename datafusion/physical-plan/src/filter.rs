@@ -663,8 +663,12 @@ impl ExecutionPlan for FilterExec {
                 )
             })
             .flatten();
-        let metrics =
-            FilterExecMetrics::new(&self.metrics, partition, adaptive.is_some());
+        let metrics = FilterExecMetrics::new(&self.metrics, partition);
+        let metrics = if adaptive.is_some() {
+            metrics.with_adaptive_reorder_metrics(&self.metrics, partition)
+        } else {
+            metrics
+        };
         Ok(Box::pin(FilterExecStream {
             schema: self.schema(),
             predicate: Arc::clone(&self.predicate),
@@ -1402,24 +1406,31 @@ struct FilterExecMetrics {
 }
 
 impl FilterExecMetrics {
-    pub fn new(
-        metrics: &ExecutionPlanMetricsSet,
-        partition: usize,
-        adaptive: bool,
-    ) -> Self {
+    pub fn new(metrics: &ExecutionPlanMetricsSet, partition: usize) -> Self {
         Self {
             baseline_metrics: BaselineMetrics::new(metrics, partition),
             selectivity: MetricBuilder::new(metrics)
                 .with_type(MetricType::Summary)
                 .ratio_metrics("selectivity", partition),
-            adaptive_reorders: adaptive.then(|| {
-                MetricBuilder::new(metrics)
-                    // A deterministic, dimensionless counter: it depends on
-                    // the plan and the data, not on wall-clock timings.
-                    .with_category(MetricCategory::Rows)
-                    .counter("adaptive_reorders", partition)
-            }),
+            adaptive_reorders: None,
         }
+    }
+
+    /// Also register the `adaptive_reorders` counter; see
+    /// [`Self::adaptive_reorders`].
+    fn with_adaptive_reorder_metrics(
+        mut self,
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+    ) -> Self {
+        self.adaptive_reorders = Some(
+            MetricBuilder::new(metrics)
+                // A deterministic, dimensionless counter: it depends on
+                // the plan and the data, not on wall-clock timings.
+                .with_category(MetricCategory::Rows)
+                .counter("adaptive_reorders", partition),
+        );
+        self
     }
 
     /// Record that this stream adopted a reordered evaluation order.
