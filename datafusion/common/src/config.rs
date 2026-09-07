@@ -1457,7 +1457,9 @@ config_namespace! {
         /// estimated. Subsequent batches are split using the observed average row size,
         /// so this is not a hard byte or memory limit. The parallel writer synchronizes
         /// column feedback to match the single-threaded writer's boundaries for the
-        /// same batches. If `None` (the default), only the row-count limit applies.
+        /// same batches. Columns within each slice still encode in parallel, but
+        /// synchronization reduces overlap between slices and may lower write
+        /// throughput. If `None` (the default), only the row-count limit applies.
         pub max_row_group_bytes: Option<MaxRowGroupBytes>, default = None
 
         /// (writing) Sets "created by" property

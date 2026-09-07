@@ -170,6 +170,13 @@ The following options are available when reading or writing Parquet files. If an
 | CONTENT_DEFINED_CHUNKING_NORM_LEVEL        | No                      | Controls how aggressively chunk boundaries are selected. Higher values can improve deduplication but increase fragmentation. The recommended range is `-3` through `3`.                                                                                                                                                              | `'content_defined_chunking.norm_level'`               | 0                        |
 | KEY_VALUE_METADATA                         | No (Key is specific)    | Adds custom key-value pairs to the file metadata. Use the format `'metadata::your_key_name' 'your_value'`. Multiple entries allowed.                                                                                                                                                                                                 | `'metadata::key_name'`                                | None                     |
 
+When `MAX_ROW_GROUP_BYTES` is set, the parallel writer synchronizes column
+progress between input slices. Columns within each slice still encode in
+parallel, but reduced overlap between slices may lower write throughput. The
+target applies to estimated encoded row-group size; it is not a hard byte limit
+or a limit on total writer memory. When this option is unset (the default), only
+the row-count limit applies and this synchronization is not needed.
+
 **Example:**
 
 ```sql
