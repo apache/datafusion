@@ -87,12 +87,18 @@ pub type SortPushDown = PlanContext<ParentRequirements>;
 ///
 /// Note this is distinct from the fetch a parent imposes on `plan`'s *output*
 /// (`ParentRequirements::fetch`), for which `plan.fetch()` is the right bound.
+///
+/// `skip` and `fetch` are independent `usize`s, so their sum can overflow. Like
+/// [`combine_limit`], we saturate: `usize::MAX` input rows is never a smaller
+/// bound than the real one, so the pushed-down fetch stays correct.
+///
+/// [`combine_limit`]: datafusion_common::utils::combine_limit
 fn input_fetch(plan: &Arc<dyn ExecutionPlan>) -> Option<usize> {
     let fetch = plan.fetch()?;
     let skip = plan
         .downcast_ref::<GlobalLimitExec>()
         .map_or(0, |limit| limit.skip());
-    Some(fetch + skip)
+    Some(fetch.saturating_add(skip))
 }
 
 /// Assigns the ordering requirement of the root node to the its children.
@@ -1220,6 +1226,7 @@ mod tests {
     use datafusion_physical_expr::PhysicalExpr;
     use datafusion_physical_expr::expressions::{BinaryExpr, col};
     use datafusion_physical_plan::empty::EmptyExec;
+    use datafusion_physical_plan::limit::GlobalLimitExec;
 
     const DESC: SortOptions = SortOptions {
         descending: true,
@@ -1229,6 +1236,28 @@ mod tests {
         descending: false,
         nulls_first: true,
     };
+
+    #[test]
+    fn input_fetch_adds_skip_for_global_limit() {
+        let input = Arc::new(EmptyExec::new(child_schema()));
+        let limit: Arc<dyn ExecutionPlan> =
+            Arc::new(GlobalLimitExec::new(input, 5, Some(10)));
+
+        assert_eq!(input_fetch(&limit), Some(15));
+    }
+
+    /// `skip` and `fetch` are unrelated `usize`s, so `skip + fetch` can exceed
+    /// `usize::MAX`. Saturating keeps this at an (unreachable) upper bound
+    /// instead of panicking in debug builds or wrapping to a too-small fetch --
+    /// wrapping to 0 would push down a `TopK(fetch=0)` and drop every row.
+    #[test]
+    fn input_fetch_saturates_instead_of_overflowing() {
+        let input = Arc::new(EmptyExec::new(child_schema()));
+        let limit: Arc<dyn ExecutionPlan> =
+            Arc::new(GlobalLimitExec::new(input, usize::MAX, Some(1)));
+
+        assert_eq!(input_fetch(&limit), Some(usize::MAX));
+    }
 
     /// Child (input) schema fed to the projections under test: `[a, b, c]`.
     fn child_schema() -> Arc<Schema> {
