@@ -85,6 +85,29 @@ fn physical_plan(ctx: &SessionContext, rt: &Runtime, sql: &str) {
     }));
 }
 
+/// Read the `q{N}.sql` query files from `dir`, starting at `q0.sql` and
+/// stopping at the first missing file.
+///
+/// This mirrors the discovery scheme used by the `dfbench clickbench` runner
+/// (see `get_query_sql` / `get_query_path` in `benchmarks/src/clickbench.rs`)
+/// so that newly added query files are picked up without changing this code.
+fn read_numbered_queries(dir: &str) -> Vec<String> {
+    let mut queries = Vec::new();
+    for q in 0.. {
+        let path = format!("{dir}q{q}.sql");
+        match std::fs::read_to_string(&path) {
+            Ok(sql) => queries.push(sql),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+            Err(e) => panic!("Failed to read query file '{path}': {e}"),
+        }
+    }
+    assert!(
+        !queries.is_empty(),
+        "No `q*.sql` query files found in '{dir}'"
+    );
+    queries
+}
+
 /// Create schema with the specified number of columns
 fn create_schema(column_prefix: &str, num_columns: usize) -> Schema {
     let fields: Fields = (0..num_columns)
@@ -636,20 +659,13 @@ fn criterion_benchmark(c: &mut Criterion) {
     // });
 
     // -- clickbench --
-    let clickbench_queries = (0..=42)
-        .map(|q| {
-            std::fs::read_to_string(format!(
-                "{benchmarks_path}queries/clickbench/queries/q{q}.sql"
-            ))
-            .unwrap()
-        })
-        .chain((0..=7).map(|q| {
-            std::fs::read_to_string(format!(
-                "{benchmarks_path}queries/clickbench/extended/q{q}.sql"
-            ))
-            .unwrap()
-        }))
-        .collect::<Vec<_>>();
+    let clickbench_queries =
+        read_numbered_queries(&format!("{benchmarks_path}queries/clickbench/queries/"))
+            .into_iter()
+            .chain(read_numbered_queries(&format!(
+                "{benchmarks_path}queries/clickbench/extended/"
+            )))
+            .collect::<Vec<_>>();
 
     let clickbench_ctx = register_clickbench_hits_table(&rt);
 
