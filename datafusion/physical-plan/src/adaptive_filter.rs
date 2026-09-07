@@ -241,6 +241,32 @@ impl AdaptiveFilterShared {
     fn settled(&self) -> Option<Settled> {
         self.inner.lock().expect("poisoned").settled.clone()
     }
+
+    /// Test-only: seed the pooled measurements with `(rows, matched, nanos)`
+    /// per conjunct and leave the pool exactly one batch short of the warm-up,
+    /// so the next measured batch settles on the seeded decision.
+    ///
+    /// The stand-in for a mocked clock: it lets a test pin the settle decision
+    /// instead of depending on real timer values, which on a shared CI runner
+    /// can be perturbed by a scheduling hiccup far larger than the evaluation
+    /// being measured. Used by `FilterExec`'s end-to-end tests; the tests in
+    /// this module use the equivalent `tests::seed`.
+    #[cfg(test)]
+    pub(crate) fn seed_one_batch_short_of_warmup(
+        &self,
+        per_conjunct: &[(u64, u64, u64)],
+    ) {
+        let mut inner = self.inner.lock().expect("poisoned");
+        inner.stats = per_conjunct
+            .iter()
+            .map(|&(rows, matched, nanos)| ConjunctStats {
+                rows,
+                matched,
+                nanos,
+            })
+            .collect();
+        inner.measured_batches = WARMUP_BATCHES - 1;
+    }
 }
 
 /// Adaptive evaluator for a single conjunctive predicate, owned per partition
@@ -605,7 +631,7 @@ fn expected_cost_per_row(stats: &[ConjunctStats], order: &[usize]) -> f64 {
 mod tests {
     use super::*;
 
-    use arrow::array::Int32Array;
+    use arrow::array::{Int32Array, Int64Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{binary, col, lit};
@@ -824,6 +850,12 @@ mod tests {
     /// When the order does not change, the settled evaluator runs the plain
     /// predicate (compact-once is only used in service of a reorder), so an
     /// interchangeable conjunction costs exactly what the flag-off path costs.
+    ///
+    /// This one measures real timings on purpose and is still deterministic:
+    /// both conjuncts pass the same ~96% of rows, and with a pass rate `p`
+    /// above `1 - TIE_COST_FRACTION` the material-win guard
+    /// (`c1 + p*c0 < 0.95 * (c0 + p*c1)`) cannot hold for any positive costs,
+    /// so no timing can produce a reorder here.
     #[test]
     fn no_reorder_evaluates_plain_predicate() {
         let schema = schema();
@@ -854,16 +886,36 @@ mod tests {
     /// Two streams sharing one registry settle the order together: the pooled
     /// warm-up is `WARMUP_BATCHES` total across both streams, and once one
     /// stream publishes the order the other adopts it on its next batch.
+    ///
+    /// The pool is seeded (see [`seed`]) two batches short of the warm-up, so
+    /// the two real measured batches that complete it cannot move the ranking:
+    /// their counts are several orders of magnitude smaller than the seeded
+    /// ones. Deriving the ranking from the real `Instant` timings of two
+    /// hundred-row batches instead would make the assertions below depend on
+    /// the measured cost ratio staying inside the material-win guard, which a
+    /// scheduling hiccup on a shared runner can flip.
     #[test]
     fn streams_pool_measurements_and_share_settled_order() {
         let schema = schema();
-        let p = predicate(&schema);
+        let p = predicate(&schema); // `a > 2 AND b < 5`, written order [0, 1]
         let shared = Arc::new(AdaptiveFilterShared::new());
+        // Conjunct 1 is far more selective, so promoting it is materially
+        // cheaper. Two batches short of the warm-up: the two streams below
+        // pool one measured batch each to complete it.
+        seed(
+            &shared,
+            vec![
+                stats(70_000_000, 63_000_000, 70_000_000), // pass 0.9, ~1ns/row
+                stats(70_000_000, 700_000, 350_000_000),   // pass 0.01, ~5ns/row
+            ],
+            WARMUP_BATCHES - 2,
+        );
         let mut s1 = AdaptiveConjunction::try_new(&p, Arc::clone(&shared)).unwrap();
         let mut s2 = AdaptiveConjunction::try_new(&p, Arc::clone(&shared)).unwrap();
 
         // `b < 5` (conjunct 1) is the selective one; drive both streams with
-        // batches where it keeps ~1 row in 25.
+        // batches where it keeps 5 rows in 25 (20%, exactly the compact-once
+        // threshold).
         let mk = |round: i32| {
             let base = round * 100;
             let a: Vec<i32> = (base..base + 100).collect();
@@ -1050,5 +1102,176 @@ mod tests {
 
         assert_eq!(trace, vec!["Measure", "Fused", "Fused"]);
         assert_eq!(adaptive.order, vec![0, 1]);
+    }
+
+    /// The pooled registry is sized lazily by the first measured batch (the
+    /// conjunct count is not known to `AdaptiveFilterShared`, which is built
+    /// before the predicate is split), and the counts of that first batch land
+    /// in it.
+    #[test]
+    fn first_measured_batch_initialises_the_shared_pool() {
+        let schema = schema();
+        let p = predicate(&schema); // `a > 2 AND b < 5`
+        let shared = Arc::new(AdaptiveFilterShared::new());
+        assert!(shared.inner.lock().unwrap().stats.is_empty());
+        let mut adaptive = AdaptiveConjunction::try_new(&p, Arc::clone(&shared)).unwrap();
+        // Empty batches measure nothing, so the pool is still unsized after one.
+        adaptive.evaluate(&batch(&schema, vec![], vec![])).unwrap();
+        assert!(shared.inner.lock().unwrap().stats.is_empty());
+
+        let a: Vec<i32> = (0..10).collect();
+        adaptive.evaluate(&batch(&schema, a.clone(), a)).unwrap();
+
+        let inner = shared.inner.lock().unwrap();
+        assert_eq!(inner.stats.len(), 2, "sized to the conjunct count");
+        assert_eq!(inner.measured_batches, 1);
+        // `a > 2` keeps 7 of 10 rows: too many to compact, so `b < 5` is
+        // evaluated on all 10 rows too and keeps 5 of them.
+        assert_eq!((inner.stats[0].rows, inner.stats[0].matched), (10, 7));
+        assert_eq!((inner.stats[1].rows, inner.stats[1].matched), (10, 5));
+    }
+
+    /// `Int64` schema for the divide-by-zero side-effect tests below.
+    fn int64_schema() -> Arc<Schema> {
+        Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+        ]))
+    }
+
+    fn int64_batch(schema: &Arc<Schema>, a: Vec<i64>, b: Vec<i64>) -> RecordBatch {
+        RecordBatch::try_new(
+            Arc::clone(schema),
+            vec![Arc::new(Int64Array::from(a)), Arc::new(Int64Array::from(b))],
+        )
+        .unwrap()
+    }
+
+    /// The two conjuncts `b <> 0` and `1 / b > 2`.
+    fn divide_by_zero_conjuncts(
+        schema: &Arc<Schema>,
+    ) -> (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>) {
+        let non_zero = binary(
+            col("b", schema).unwrap(),
+            Operator::NotEq,
+            lit(0i64),
+            schema,
+        )
+        .unwrap();
+        let divide = binary(
+            binary(
+                lit(1i64),
+                Operator::Divide,
+                col("b", schema).unwrap(),
+                schema,
+            )
+            .unwrap(),
+            Operator::Gt,
+            lit(2i64),
+            schema,
+        )
+        .unwrap();
+        (non_zero, divide)
+    }
+
+    /// This is the behaviour the config option's doc warns about: adopting a
+    /// reorder can introduce an error the written order avoided.
+    ///
+    /// `b <> 0 AND 1 / b > 2` on data where `b <> 0` holds for 15% of the rows.
+    /// The written fused `BinaryExpr` `AND` pre-selects (its own threshold is
+    /// also 20%), so `1 / b` never sees a zero and the flag-off query succeeds.
+    /// Once the conjuncts are reordered, `1 / b > 2` runs first — on every row,
+    /// zeros included — and integer division by zero is an error.
+    #[test]
+    fn adopted_reorder_can_introduce_a_divide_by_zero() {
+        let schema = int64_schema();
+        let (non_zero, divide) = divide_by_zero_conjuncts(&schema);
+        // Written order [0, 1] = [`b <> 0`, `1 / b > 2`].
+        let p = binary(non_zero, Operator::And, divide, &schema).unwrap();
+        let a: Vec<i64> = (0..100).collect();
+        let b: Vec<i64> = (0..100).map(|i| i64::from(i < 15)).collect();
+        let rb = int64_batch(&schema, a, b);
+
+        // Flag off: the fused predicate pre-selects on `b <> 0` (15 of 100
+        // rows, within its 20% threshold) and succeeds.
+        assert!(p.evaluate(&rb).is_ok(), "flag-off evaluation must succeed");
+
+        let shared = Arc::new(AdaptiveFilterShared::new());
+        // `1 / b > 2` (conjunct 1) seeded as cheap and very selective, so the
+        // warm-up settles on promoting it. One batch short of the warm-up.
+        seed(
+            &shared,
+            vec![
+                stats(70_000_000, 63_000_000, 70_000_000), // pass 0.9, ~1ns/row
+                stats(70_000_000, 700_000, 70_000_000),    // pass 0.01, ~1ns/row
+            ],
+            WARMUP_BATCHES - 1,
+        );
+        let mut adaptive = AdaptiveConjunction::try_new(&p, Arc::clone(&shared)).unwrap();
+
+        // The settling batch is still measured in the written order, whose
+        // compaction on `b <> 0` also keeps `1 / b` away from the zeros.
+        adaptive.evaluate(&rb).unwrap();
+        assert_eq!(adaptive.order, vec![1, 0]);
+        assert!(adaptive.compact);
+
+        // The next batch runs the adopted reorder, and errors.
+        let err = adaptive.evaluate(&rb).unwrap_err().to_string();
+        assert!(err.contains("Divide by zero"), "unexpected error: {err}");
+    }
+
+    /// The mirror of the case above: an error the written fused order *does*
+    /// raise, which the reordered compact-once evaluation avoids.
+    ///
+    /// `1 / b > 2 AND a < 10`, with `b = 0` on exactly the rows `a < 10`
+    /// discards. The fused `AND` evaluates its left side on every row and
+    /// errors; the adopted order runs `a < 10` first, compacts to its 10
+    /// survivors (all with `b = 1`), and never divides by zero.
+    #[test]
+    fn adopted_reorder_can_avoid_a_divide_by_zero_the_written_order_raises() {
+        let schema = int64_schema();
+        let (_, divide) = divide_by_zero_conjuncts(&schema);
+        let selective = binary(
+            col("a", &schema).unwrap(),
+            Operator::Lt,
+            lit(10i64),
+            &schema,
+        )
+        .unwrap();
+        // Written order [0, 1] = [`1 / b > 2`, `a < 10`].
+        let p = binary(divide, Operator::And, selective, &schema).unwrap();
+
+        let shared = Arc::new(AdaptiveFilterShared::new());
+        // Conjunct 1 (`a < 10`) seeded as cheap and very selective, conjunct 0
+        // as expensive and unselective, so the warm-up promotes conjunct 1.
+        seed(
+            &shared,
+            vec![
+                stats(70_000_000, 63_000_000, 350_000_000), // pass 0.9, ~5ns/row
+                stats(70_000_000, 700_000, 70_000_000),     // pass 0.01, ~1ns/row
+            ],
+            WARMUP_BATCHES - 1,
+        );
+        let mut adaptive = AdaptiveConjunction::try_new(&p, Arc::clone(&shared)).unwrap();
+
+        // Settle on a batch with no zeros at all, so the warm-up itself (which
+        // evaluates in the written order) cannot hit the error.
+        let a: Vec<i64> = (0..100).collect();
+        adaptive
+            .evaluate(&int64_batch(&schema, a.clone(), vec![1; 100]))
+            .unwrap();
+        assert_eq!(adaptive.order, vec![1, 0]);
+
+        // Now a batch whose `b` is zero on every row `a < 10` discards.
+        let b: Vec<i64> = (0..100).map(|i| i64::from(i < 10)).collect();
+        let rb = int64_batch(&schema, a, b);
+
+        // The written fused order divides by zero...
+        let err = p.evaluate(&rb).unwrap_err().to_string();
+        assert!(err.contains("Divide by zero"), "unexpected error: {err}");
+        // ...while the adopted order compacts `1 / b > 2` down to the rows
+        // `a < 10` kept, none of which is zero.
+        let got = adaptive.evaluate(&rb).unwrap();
+        assert!(passing_rows(&got).is_empty(), "1 / 1 > 2 is false");
     }
 }
