@@ -28,7 +28,7 @@ pub fn join_equivalence_properties(
     join_type: &JoinType,
     join_schema: SchemaRef,
     maintains_input_order: &[bool],
-    probe_side: Option<JoinSide>,
+    _probe_side: Option<JoinSide>,
     on: &[(PhysicalExprRef, PhysicalExprRef)],
 ) -> Result<EquivalenceProperties> {
     let left_size = left.schema.fields.len();
@@ -49,56 +49,17 @@ pub fn join_equivalence_properties(
         ..
     } = right;
     match maintains_input_order {
-        [true, false] => {
-            // In this special case, right side ordering can be prefixed with
-            // the left side ordering.
-            if matches!(join_type, JoinType::Inner | JoinType::Left)
-                && probe_side == Some(JoinSide::Left)
-            {
-                updated_right_ordering_equivalence_class(
-                    &mut right_oeq_class,
-                    join_type,
-                    left_size,
-                )?;
-
-                // Right side ordering equivalence properties should be prepended
-                // with those of the left side while constructing output ordering
-                // equivalence properties since stream side is the left side.
-                //
-                // For example, if the right side ordering equivalences contain
-                // `b ASC`, and the left side ordering equivalences contain `a ASC`,
-                // then we should add `a ASC, b ASC` to the ordering equivalences
-                // of the join output.
-                let out_oeq_class = left_oeq_class.join_suffix(&right_oeq_class);
-                result.add_orderings(out_oeq_class);
-            } else {
-                result.add_orderings(left_oeq_class);
-            }
-        }
+        // Only the maintained side's ordering is guaranteed. With duplicate
+        // probe keys, the other side's matches repeat for each probe row, so
+        // its ordering cannot be appended as a suffix.
+        [true, false] => result.add_orderings(left_oeq_class),
         [false, true] => {
             updated_right_ordering_equivalence_class(
                 &mut right_oeq_class,
                 join_type,
                 left_size,
             )?;
-            // In this special case, left side ordering can be prefixed with
-            // the right side ordering.
-            if matches!(join_type, JoinType::Inner | JoinType::Right)
-                && probe_side == Some(JoinSide::Right)
-            {
-                // Left side ordering equivalence properties should be prepended
-                // with those of the right side while constructing output ordering
-                // equivalence properties since stream side is the right side.
-                //
-                // For example, if the left side ordering equivalences contain
-                // `a ASC`, and the right side ordering equivalences contain `b ASC`,
-                // then we should add `b ASC, a ASC` to the ordering equivalences
-                // of the join output.
-                let out_oeq_class = right_oeq_class.join_suffix(&left_oeq_class);
-                result.add_orderings(out_oeq_class);
-            } else {
-                result.add_orderings(right_oeq_class);
-            }
+            result.add_orderings(right_oeq_class);
         }
         [false, false] => {}
         [true, true] => unreachable!("Cannot maintain ordering of both sides"),
@@ -136,7 +97,6 @@ mod tests {
     use crate::equivalence::convert_to_orderings;
     use crate::equivalence::tests::create_test_schema;
     use crate::expressions::col;
-    use crate::physical_expr::add_offset_to_expr;
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Fields, Schema};
@@ -147,9 +107,6 @@ mod tests {
         let col_a = &col("a", &schema)?;
         let col_b = &col("b", &schema)?;
         let col_c = &col("c", &schema)?;
-        let offset = schema.fields.len() as _;
-        let col_a2 = &add_offset_to_expr(Arc::clone(col_a), offset)?;
-        let col_b2 = &add_offset_to_expr(Arc::clone(col_b), offset)?;
         let option_asc = SortOptions {
             descending: false,
             nulls_first: false,
@@ -162,13 +119,8 @@ mod tests {
                 vec![vec![(col_a, option_asc)], vec![(col_b, option_asc)]],
                 // [a ASC], [b ASC]
                 vec![vec![(col_a, option_asc)], vec![(col_b, option_asc)]],
-                // expected [a ASC, a2 ASC], [a ASC, b2 ASC], [b ASC, a2 ASC], [b ASC, b2 ASC]
-                vec![
-                    vec![(col_a, option_asc), (col_a2, option_asc)],
-                    vec![(col_a, option_asc), (col_b2, option_asc)],
-                    vec![(col_b, option_asc), (col_a2, option_asc)],
-                    vec![(col_b, option_asc), (col_b2, option_asc)],
-                ],
+                // Only the left input's orderings are preserved.
+                vec![vec![(col_a, option_asc)], vec![(col_b, option_asc)]],
             ),
             // ------- TEST CASE 2 --------
             // [a ASC], [b ASC]
@@ -181,14 +133,11 @@ mod tests {
                 ],
                 // [a ASC], [b ASC]
                 vec![vec![(col_a, option_asc)], vec![(col_b, option_asc)]],
-                // expected [a ASC, a2 ASC], [a ASC, b2 ASC], [b ASC, a2 ASC], [b ASC, b2 ASC], [c ASC, a2 ASC], [c ASC, b2 ASC]
+                // Only the left input's orderings are preserved.
                 vec![
-                    vec![(col_a, option_asc), (col_a2, option_asc)],
-                    vec![(col_a, option_asc), (col_b2, option_asc)],
-                    vec![(col_b, option_asc), (col_a2, option_asc)],
-                    vec![(col_b, option_asc), (col_b2, option_asc)],
-                    vec![(col_c, option_asc), (col_a2, option_asc)],
-                    vec![(col_c, option_asc), (col_b2, option_asc)],
+                    vec![(col_a, option_asc)],
+                    vec![(col_b, option_asc)],
+                    vec![(col_c, option_asc)],
                 ],
             ),
         ];
