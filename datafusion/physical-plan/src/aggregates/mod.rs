@@ -5081,16 +5081,6 @@ mod tests {
             }
         }
 
-        assert_eq!(
-            aggregate
-                .metrics()
-                .unwrap()
-                .sum_by_name("early_emit_count")
-                .unwrap()
-                .as_usize(),
-            1
-        );
-
         Ok(())
     }
 

@@ -385,9 +385,6 @@ pub(crate) struct GroupedHashAggregateStream {
 
     /// Reduction factor metric, calculated as `output_rows/input_rows` (only for partial aggregation)
     reduction_factor: Option<metrics::RatioMetrics>,
-
-    /// Number of times accumulated states were emitted due to memory pressure.
-    early_emit_count: Option<metrics::Count>,
 }
 
 impl GroupedHashAggregateStream {
@@ -614,9 +611,6 @@ impl GroupedHashAggregateStream {
         } else {
             None
         };
-        let early_emit_count = (agg.mode == AggregateMode::Partial).then(|| {
-            MetricBuilder::new(&agg.metrics).counter("early_emit_count", partition)
-        });
 
         Ok(GroupedHashAggregateStream {
             schema: agg_schema,
@@ -643,7 +637,6 @@ impl GroupedHashAggregateStream {
             group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
             skip_aggregation_probe,
             reduction_factor,
-            early_emit_count,
         })
     }
 }
@@ -1028,10 +1021,6 @@ impl GroupedHashAggregateStream {
                 if let Some(emit_to) = self.group_ordering.oom_emit_to(n)
                     && let Some(batch) = self.emit(emit_to, false)?
                 {
-                    self.early_emit_count
-                        .as_ref()
-                        .expect("early emit metric exists for partial aggregation")
-                        .add(1);
                     return Ok(Some(ExecutionState::ProducingOutput(batch)));
                 }
                 Err(oom)
@@ -1615,39 +1604,6 @@ mod tests {
         let per_aggregate_time = metrics.sum_by_name("agg_expr_0_arguments_time");
         assert!(per_aggregate_time.is_some());
         assert!(per_aggregate_time.unwrap().as_usize() > 0);
-        assert_eq!(
-            metrics.sum_by_name("early_emit_count").unwrap().as_usize(),
-            0
-        );
-
-        // Disable skip aggregation so the same input is emitted on memory pressure.
-        let runtime = RuntimeEnvBuilder::default()
-            .with_memory_limit(1024, 1.0)
-            .build_arc()?;
-        let session_config = task_ctx.session_config().clone().set(
-            "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
-            &datafusion_common::ScalarValue::Float64(Some(2.0)),
-        );
-        let no_skip_task_ctx = Arc::new(
-            TaskContext::default()
-                .with_runtime(runtime)
-                .with_session_config(session_config),
-        );
-        let mut stream =
-            GroupedHashAggregateStream::new(&aggregate_exec, &no_skip_task_ctx, 0)?;
-        while let Some(result) = stream.next().await {
-            result?;
-        }
-
-        assert_eq!(
-            aggregate_exec
-                .metrics()
-                .unwrap()
-                .sum_by_name("early_emit_count")
-                .unwrap()
-                .as_usize(),
-            2
-        );
 
         Ok(())
     }
