@@ -17,10 +17,6 @@
 
 //! Fuzz test that runs every valid `AggregateExec` chain over the same data
 //! and asserts identical results.
-//!
-//! See `aggregation_fuzzer/AGGREGATE_CHAINS.md` for the chain catalogue. Each
-//! chain there is a `Shape` below plus a source `Order`. Cases are generated
-//! as `shapes × orders × migration flag × cardinality × memory`.
 
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -207,7 +203,6 @@ const TOP_K_LIMIT: usize = 2 * ROWS;
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct CaseParams {
     order: Order,
-    migration_enabled: bool,
     cardinality: Cardinality,
     memory: Memory,
     /// Whether the skip-partial probe may fire. Only varied for shapes with a
@@ -240,15 +235,8 @@ fn never_out_of_memory(_params: &CaseParams) -> bool {
 fn partial_stage_starved_on_ordered_input(params: &CaseParams) -> bool {
     params.memory == Memory::Limited
         && match params.order {
-            // The stage sees `InputOrderMode::PartiallySorted`. The legacy
-            // `GroupedHashAggregateStream` emits only the groups whose sort
-            // prefix is complete, and when one prefix value spans the whole
-            // partition there is nothing it may emit, so it reports the error
-            // instead of degrading. The dedicated
-            // `OrderedPartialAggregateStream` emits everything there, so this
-            // only happens while `enable_migration_aggregate` is off, an option
-            // that goes away once the migration finishes.
-            Order::SortedByFirstKey => !params.migration_enabled,
+            // the impl emit its state early
+            Order::SortedByFirstKey => false,
             // The stage sees `InputOrderMode::Sorted`, where
             // `OrderedPartialAggregateStream` holds one group at a time and
             // registers its reservation as unable to handle memory pressure.
@@ -256,12 +244,9 @@ fn partial_stage_starved_on_ordered_input(params: &CaseParams) -> bool {
             // but reserves nothing for the others, so whichever consumer took
             // the pool first, a final hash stage or a `PartialReduce` stage,
             // leaves nothing and this stage is refused the few kilobytes it
-            // needs. It is the victim rather than the cause. The legacy stream
-            // is spillable and can emit for a full ordering, so this one only
-            // happens with the migration enabled.
-            Order::SortedByAllKeys => params.migration_enabled,
-            // Linear input: the dedicated and the legacy stream both emit
-            // their state early and both register as spillable, so the stage
+            // needs. It is the victim rather than the cause.
+            Order::SortedByAllKeys => true,
+            // Linear input: the impl emit its state early and register as spillable, so the stage
             // always survives the pressure.
             Order::Unordered => false,
         }
@@ -680,21 +665,18 @@ fn all_cases() -> Vec<Case> {
                 } else {
                     &[true]
                 };
-            for migration_enabled in [true, false] {
-                for cardinality in Cardinality::ALL {
-                    for memory in [Memory::Unlimited, Memory::Limited] {
-                        for &skip_partial_enabled in skip_partial_variants {
-                            cases.push(Case {
-                                shape,
-                                params: CaseParams {
-                                    order,
-                                    migration_enabled,
-                                    cardinality,
-                                    memory,
-                                    skip_partial_enabled,
-                                },
-                            });
-                        }
+            for cardinality in Cardinality::ALL {
+                for memory in [Memory::Unlimited, Memory::Limited] {
+                    for &skip_partial_enabled in skip_partial_variants {
+                        cases.push(Case {
+                            shape,
+                            params: CaseParams {
+                                order,
+                                cardinality,
+                                memory,
+                                skip_partial_enabled,
+                            },
+                        });
                     }
                 }
             }
@@ -1054,10 +1036,6 @@ fn task_context(case: &Case) -> Arc<TaskContext> {
     let config = SessionConfig::new()
         .with_batch_size(BATCH_SIZE)
         .with_target_partitions(PARTITIONS)
-        .set_bool(
-            "datafusion.execution.enable_migration_aggregate",
-            case.params.migration_enabled,
-        )
         // The default is 100k rows. Lower it so the skip-partial probe can
         // fire on our per-partition row counts. A ratio threshold of 1.0
         // disables the probe entirely.
@@ -1168,10 +1146,7 @@ fn can_spill(case: &Case, aggregate: &AggregateExec) -> bool {
         // The dedicated PartialReduce stream emits early and only exists for
         // Linear input; ordered input or migration off run the legacy stream,
         // which spills.
-        PartialReduce => {
-            !case.params.migration_enabled
-                || *aggregate.input_order_mode() != InputOrderMode::Linear
-        }
+        PartialReduce => *aggregate.input_order_mode() != InputOrderMode::Linear,
         Partial => false,
     };
     let has_groups = !aggregate.group_expr().is_empty();
@@ -1333,7 +1308,7 @@ async fn run_case_inner(case: &Case, rows: Arc<RecordBatch>) -> Outcome {
 }
 
 /// Reference result: the single-stage shape of `query` without a limit, one
-/// partition, unordered input, unlimited memory and migration on.
+/// partition, unordered input, unlimited memory.
 async fn reference(
     query: Query,
     rows: Arc<RecordBatch>,
@@ -1350,7 +1325,6 @@ async fn reference(
             shape,
             params: CaseParams {
                 order: Order::Unordered,
-                migration_enabled: true,
                 cardinality,
                 memory: Memory::Unlimited,
                 skip_partial_enabled: true,
@@ -1362,7 +1336,7 @@ async fn reference(
     match outcome {
         Outcome::Finished { output, .. } => output,
         Outcome::OutOfMemory => {
-            unreachable!("the reference runs with unlimited memory and migration on")
+            unreachable!("the reference runs with unlimited memory")
         }
     }
 }
@@ -1498,10 +1472,9 @@ fn print_cases(cardinality: Cardinality, outcome: &str, cases: &[(Case, Vec<Stri
                 " ".repeat(19)
             };
             format!(
-                "  {:<45} {:<17} migration={:<5} memory={:<9}{skip_partial}{spilled}",
+                "  {:<45} {:<17} memory={:<9}{skip_partial}{spilled}",
                 case.shape.name,
                 format!("{:?}", case.params.order),
-                case.params.migration_enabled,
                 format!("{:?}", case.params.memory),
             )
         })
@@ -1519,7 +1492,6 @@ fn print_cases(cardinality: Cardinality, outcome: &str, cases: &[(Case, Vec<Stri
 async fn run_single_case(
     shape_name: &str,
     order: Order,
-    migration_enabled: bool,
     cardinality: Cardinality,
     memory: Memory,
     seed: u64,
@@ -1532,7 +1504,6 @@ async fn run_single_case(
             shape,
             params: CaseParams {
                 order,
-                migration_enabled,
                 cardinality,
                 memory,
                 skip_partial_enabled: true,
