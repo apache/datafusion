@@ -3252,8 +3252,8 @@ mod tests {
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
     use datafusion_expr::{
-        Accumulator, AggregateUDF, AggregateUDFImpl, EmitTo, GroupSelection,
-        GroupsAccumulator, Signature, Volatility,
+        Accumulator, AggregateUDF, AggregateUDFImpl, EmitTo, GroupsAccumulator,
+        Signature, Volatility,
     };
     use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
     use datafusion_functions_aggregate::array_agg::array_agg_udaf;
@@ -8196,35 +8196,8 @@ mod tests {
             self.emit_counts(emit_to)
         }
 
-        fn evaluate_preserving(
-            &mut self,
-            selection: GroupSelection<'_>,
-        ) -> Result<ArrayRef> {
-            selection.validate_num_groups(self.counts.len())?;
-            let counts = selection
-                .iter()
-                .map(|index| self.counts[index])
-                .collect::<Vec<_>>();
-            Ok(Arc::new(Int64Array::from(counts)))
-        }
-
-        fn supports_evaluate_preserving(&self) -> bool {
-            true
-        }
-
         fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
             Ok(vec![self.emit_counts(emit_to)?])
-        }
-
-        fn state_preserving(
-            &mut self,
-            selection: GroupSelection<'_>,
-        ) -> Result<Vec<ArrayRef>> {
-            self.evaluate_preserving(selection).map(|array| vec![array])
-        }
-
-        fn supports_state_preserving(&self) -> bool {
-            true
         }
 
         fn convert_to_state(
