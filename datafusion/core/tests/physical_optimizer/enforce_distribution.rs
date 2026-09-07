@@ -26,7 +26,7 @@ use crate::physical_optimizer::test_utils::{
     sort_merge_join_exec, sort_preserving_merge_exec, union_exec,
 };
 
-use arrow::array::{RecordBatch, UInt8Array, UInt64Array};
+use arrow::array::{Int64Array, RecordBatch, UInt8Array, UInt64Array};
 use arrow::compute::SortOptions;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion::config::ConfigOptions;
@@ -45,6 +45,7 @@ use datafusion_common::tree_node::{
 };
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_expr::{JoinType, Operator};
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_physical_expr::aggregate::AggregateExprBuilder;
@@ -75,7 +76,7 @@ use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeE
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlanProperties,
-    PlanProperties, ReplaceChildrenOptions, displayable,
+    PlanProperties, ReplaceChildrenOptions, collect, displayable,
 };
 use insta::Settings;
 
@@ -4621,6 +4622,100 @@ fn move_fetch_to_replacement_sort() -> Result<()> {
         "fetch below the replacement sort would change TopK results:\n{plan}"
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn preserve_fetch_below_filter_when_reoptimizing() -> Result<()> {
+    check_fetch_below_filter(
+        Operator::Gt,
+        [vec![-2, 0, 2, 4], vec![-1, 1, 3, 5]],
+        &[1, 2],
+    )
+    .await
+}
+
+#[tokio::test]
+async fn preserve_fetch_below_filter_with_constant_ordering() -> Result<()> {
+    check_fetch_below_filter(
+        Operator::Eq,
+        [vec![-2, 0, 0, 0], vec![-1, 0, 0, 0]],
+        &[0, 0, 0],
+    )
+    .await
+}
+
+async fn check_fetch_below_filter(
+    op: Operator,
+    partitions: [Vec<i64>; 2],
+    expected: &[i64],
+) -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("c", DataType::Int64, false)]));
+    let sort_key: LexOrdering =
+        [PhysicalSortExpr::new_default(col("c", &schema)?)].into();
+    let partitions = partitions
+        .into_iter()
+        .map(|values| {
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int64Array::from(values))],
+            )
+            .map(|batch| vec![batch])
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let source = MemorySourceConfig::try_new(&partitions, Arc::clone(&schema), None)?
+        .try_with_sort_information(vec![sort_key.clone()])?;
+    let merge: Arc<dyn ExecutionPlan> = Arc::new(
+        SortPreservingMergeExec::new(
+            sort_key.clone(),
+            DataSourceExec::from_data_source(source),
+        )
+        .with_fetch(Some(5)),
+    );
+    let predicate = Arc::new(BinaryExpr::new(col("c", &schema)?, op, lit(0_i64)));
+    let filter: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(predicate, merge)?);
+    let mut plan = sort_required_exec_with_req(filter, sort_key);
+    let mut config = test_suite_default_config_options();
+    config.optimizer.enable_round_robin_repartition = false;
+    let task_context = SessionContext::new().task_ctx();
+
+    // The test operator only declares ordering requirements. Execute its child
+    // to compare query results before optimization and after repeated passes.
+    for iteration in 0..3 {
+        if iteration > 0 {
+            let distribution = DistributionContext::new_default(Arc::clone(&plan))
+                .transform_up(|context| ensure_distribution(context, &config))?
+                .data;
+            check_integrity(distribution)?;
+            plan = EnsureRequirements::new().optimize(plan, &config)?;
+        }
+        let input = Arc::clone(plan.children()[0]);
+        let batches = collect(input, Arc::clone(&task_context)).await?;
+        let values = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap()
+                    .values()
+                    .iter()
+                    .copied()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            values,
+            expected,
+            "iteration {iteration}:\n{}",
+            displayable(plan.as_ref()).indent(true)
+        );
+        assert!(
+            plan.children()[0].is::<FilterExec>(),
+            "fetch must stay below the filter:\n{}",
+            displayable(plan.as_ref()).indent(true)
+        );
+    }
     Ok(())
 }
 

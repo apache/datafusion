@@ -64,6 +64,7 @@ use datafusion_physical_plan::joins::{
 };
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 use datafusion_physical_plan::tree_node::PlanContext;
@@ -901,45 +902,42 @@ fn remove_dist_changing_operators(
 pub fn replace_order_preserving_variants(
     context: DistributionContext,
 ) -> Result<DistributionContext> {
-    let (context, fetch) = replace_order_preserving_variants_with_fetch(context, false)?;
-    debug_assert!(
-        fetch.is_none(),
-        "fetch must stay in the plan when no replacement sort is needed"
-    );
-    Ok(context)
+    replace_order_preserving_variants_impl(context, false)
 }
 
-/// Also returns a fetch that must be applied to the replacement sort when
-/// removing an ordered merge whose ordering satisfied the requirement. A
-/// `None` value means any fetch remains enforced within the returned context.
-fn replace_order_preserving_variants_with_fetch(
+fn replace_order_preserving_variants_impl(
     mut context: DistributionContext,
     ordering_satisfied: bool,
-) -> Result<(DistributionContext, Option<usize>)> {
-    let mut children = Vec::with_capacity(context.children.len());
-    let mut fetch = None;
-    for child in context.children {
-        if child.data {
-            let (child, child_fetch) =
-                replace_order_preserving_variants_with_fetch(child, ordering_satisfied)?;
-            children.push(child);
-            fetch = min_fetch(fetch, child_fetch);
-        } else {
-            children.push(child);
-        }
-    }
-    context.children = children;
+) -> Result<DistributionContext> {
+    context.children = context
+        .children
+        .into_iter()
+        .map(|child| {
+            if child.data {
+                replace_order_preserving_variants_impl(child, ordering_satisfied)
+            } else {
+                Ok(child)
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
 
-    if is_sort_preserving_merge(&context.plan) {
-        let fetch = min_fetch(fetch, context.plan.fetch());
+    if let Some(spm) = context.plan.downcast_ref::<SortPreservingMergeExec>() {
         let child_plan = Arc::clone(&context.children[0].plan);
-        if ordering_satisfied {
+        let fetch = spm.fetch();
+        if ordering_satisfied && fetch.is_some() {
+            // A fetched merge selects the first rows in its sort order. Moving
+            // fetch to an ancestor's sort can cross a filter, or lose the limit
+            // entirely if the ancestor needs no additional sort.
+            let ordering = spm.expr().clone();
             context.plan = Arc::new(CoalescePartitionsExec::new(child_plan));
-            return Ok((context, fetch));
+            let sort = Arc::new(
+                SortExec::new(ordering, Arc::clone(&context.plan)).with_fetch(fetch),
+            );
+            return Ok(DistributionContext::new(sort, false, vec![context]));
         }
         context.plan =
             Arc::new(CoalescePartitionsExec::new(child_plan).with_fetch(fetch));
-        return Ok((context, None));
+        return Ok(context);
     } else if let Some(repartition) = context.plan.downcast_ref::<RepartitionExec>()
         && repartition.preserve_order()
     {
@@ -947,12 +945,10 @@ fn replace_order_preserving_variants_with_fetch(
             Arc::clone(&context.children[0].plan),
             repartition.partitioning().clone(),
         )?);
-        return Ok((context, fetch));
+        return Ok(context);
     }
 
-    context
-        .update_plan_from_children()
-        .map(|context| (context, fetch))
+    context.update_plan_from_children()
 }
 
 /// A struct to keep track of repartition requirements for each child node.
@@ -1664,12 +1660,10 @@ pub fn ensure_distribution(
                         && !streaming_benefit
                         && context.data
                     {
-                        let (replaced_context, preserved_fetch) =
-                            replace_order_preserving_variants_with_fetch(
-                                context,
-                                ordering_satisfied,
-                            )?;
-                        context = replaced_context;
+                        context = replace_order_preserving_variants_impl(
+                            context,
+                            ordering_satisfied,
+                        )?;
                         // If ordering requirements were satisfied before repartitioning,
                         // make sure ordering requirements are still satisfied after.
                         if ordering_satisfied {
@@ -1680,7 +1674,7 @@ pub fn ensure_distribution(
                             context = add_sort_above_with_check(
                                 context,
                                 sort_req,
-                                min_fetch(preserved_fetch, output_fetch),
+                                output_fetch,
                             )?;
                         }
                     }
