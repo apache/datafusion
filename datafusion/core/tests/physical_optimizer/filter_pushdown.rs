@@ -740,12 +740,12 @@ fn test_pushdown_through_aggregates_on_grouping_columns() {
     OptimizationTest:
       input:
         - FilterExec: b@1 = bar
-        -   AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt], ordering_mode=PartiallySorted([0])
+        -   AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt]
         -     FilterExec: a@0 = foo
         -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
-          - AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt], ordering_mode=Sorted
+          - AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt]
           -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo AND b@1 = bar
     "
     );
@@ -804,7 +804,7 @@ fn test_pushdown_through_aggregates_preserves_parent_filter_order() {
       output:
         Ok:
           - FilterExec: cnt@2 = 1
-          -   AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt], ordering_mode=PartiallySorted([1])
+          -   AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt]
           -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=b@1 = bar
     "
     );
@@ -2099,7 +2099,7 @@ fn test_pushdown_filter_on_non_first_grouping_column() {
         -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
-          - AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt], ordering_mode=PartiallySorted([1])
+          - AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt]
           -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=b@1 = bar
     "
     );
@@ -2435,7 +2435,7 @@ fn test_pushdown_through_aggregate_with_reordered_input_columns() {
         -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
-          - AggregateExec: mode=Final, gby=[a@1 as a, b@2 as b], aggr=[cnt], ordering_mode=PartiallySorted([1])
+          - AggregateExec: mode=Final, gby=[a@1 as a, b@2 as b], aggr=[cnt]
           -   ProjectionExec: expr=[c@2 as c, a@0 as a, b@1 as b]
           -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=b@1 = bar
     "

@@ -283,6 +283,27 @@ async fn test_aggregate() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_constant_grouping_expr_on_unbounded_input() -> Result<()> {
+    let case = QueryCase {
+        sql: "SELECT c1, c2, MIN(c4) FROM test WHERE c2 = 1 GROUP BY c1, c2".to_string(),
+        cases: vec![
+            Arc::new(UnaryTestCase {
+                source_type: SourceType::Bounded,
+                expect_fail: false,
+            }),
+            Arc::new(UnaryTestCase {
+                source_type: SourceType::Unbounded,
+                expect_fail: true,
+            }),
+        ],
+        error_operator: "operator: AggregateExec".to_string(),
+    };
+
+    case.run().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_window_agg_hash_partition() -> Result<()> {
     let test1 = UnaryTestCase {
         source_type: SourceType::Bounded,
