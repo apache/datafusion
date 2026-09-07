@@ -17861,6 +17861,9 @@ impl serde::Serialize for PhysicalBinaryExprNode {
         if !self.operands.is_empty() {
             len += 1;
         }
+        if self.fail_on_overflow {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalBinaryExprNode", len)?;
         if let Some(v) = self.l.as_ref() {
             struct_ser.serialize_field("l", v)?;
@@ -17873,6 +17876,9 @@ impl serde::Serialize for PhysicalBinaryExprNode {
         }
         if !self.operands.is_empty() {
             struct_ser.serialize_field("operands", &self.operands)?;
+        }
+        if self.fail_on_overflow {
+            struct_ser.serialize_field("failOnOverflow", &self.fail_on_overflow)?;
         }
         struct_ser.end()
     }
@@ -17888,6 +17894,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalBinaryExprNode {
             "r",
             "op",
             "operands",
+            "fail_on_overflow",
+            "failOnOverflow",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -17896,6 +17904,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalBinaryExprNode {
             R,
             Op,
             Operands,
+            FailOnOverflow,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -17921,6 +17930,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalBinaryExprNode {
                             "r" => Ok(GeneratedField::R),
                             "op" => Ok(GeneratedField::Op),
                             "operands" => Ok(GeneratedField::Operands),
+                            "failOnOverflow" | "fail_on_overflow" => Ok(GeneratedField::FailOnOverflow),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -17944,6 +17954,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalBinaryExprNode {
                 let mut r__ = None;
                 let mut op__ = None;
                 let mut operands__ = None;
+                let mut fail_on_overflow__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::L => {
@@ -17970,6 +17981,12 @@ impl<'de> serde::Deserialize<'de> for PhysicalBinaryExprNode {
                             }
                             operands__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::FailOnOverflow => {
+                            if fail_on_overflow__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("failOnOverflow"));
+                            }
+                            fail_on_overflow__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(PhysicalBinaryExprNode {
@@ -17977,6 +17994,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalBinaryExprNode {
                     r: r__,
                     op: op__.unwrap_or_default(),
                     operands: operands__.unwrap_or_default(),
+                    fail_on_overflow: fail_on_overflow__.unwrap_or_default(),
                 })
             }
         }
