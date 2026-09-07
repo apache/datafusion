@@ -155,7 +155,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         };
         // Check if the placeholder is in the parameter list
-        // FIXME: In the CREATE FUNCTION branch, param_type = None should raise an error
+        // An out of range placeholder for CREATE FUNCTION is rejected at the
+        // statement level (see the `Statement::CreateFunction` arm of
+        // `statement.rs`). Here, a missing parameter type is left permissive so
+        // that PREPARE can defer type inference to bind time.
         let param_type = param_data_types.get(idx).and_then(|v| v.clone());
         // Data type of the parameter
         debug!("type of param {param} param_data_types[idx]: {param_type:?}");
