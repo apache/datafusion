@@ -17,7 +17,9 @@
 
 use arrow::array::{ArrayRef, StringArray};
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use datafusion_physical_expr_common::binary_map::{ArrowBytesMap, OutputType};
+use datafusion_physical_expr_common::binary_map::{
+    ArrowBytesMap, INITIAL_MAP_CAPACITY, OutputType,
+};
 use std::hint::black_box;
 use std::sync::Arc;
 
@@ -57,7 +59,13 @@ fn bench_arrow_bytes_map(c: &mut Criterion) {
     for (name, values) in cases {
         group.bench_function(name, |b| {
             b.iter(|| {
-                let mut map = ArrowBytesMap::<i32, usize>::new(OutputType::Utf8);
+                // The `long_low_cardinality` case is defined by the distinct
+                // values fitting in the pre-allocated buffer, so this benchmark
+                // measures the pre-allocating constructor.
+                let mut map = ArrowBytesMap::<i32, usize>::with_capacity(
+                    OutputType::Utf8,
+                    INITIAL_MAP_CAPACITY,
+                );
                 let mut next_payload = 0;
                 map.insert_if_new(
                     &values,

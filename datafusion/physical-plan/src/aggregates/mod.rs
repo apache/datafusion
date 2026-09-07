@@ -858,7 +858,20 @@ pub struct AggregateExec {
     /// FILTER (WHERE clause) expression for each aggregate expression
     /// The same reason to [`Arc`] it as for [`Self::group_by`].
     filter_expr: Arc<[Option<Arc<dyn PhysicalExpr>>]>,
-    /// Configuration for limit-based optimizations
+    /// Soft limit for best-effort, limit-based optimizations.
+    ///
+    /// `AggregateExec` has multiple stream implementations and not all of them
+    /// support the optimization, so this is only a hint. The downstream limit
+    /// operator enforces the exact row count either way.
+    ///
+    /// Supported by:
+    /// - [`StreamType::GroupedPriorityQueue`]: retains only the best `limit`
+    ///   groups per partition (this stream is selected only when a limit is set)
+    /// - [`StreamType::PartialHash`], [`StreamType::FinalHash`] and the legacy
+    ///   [`StreamType::GroupedHash`]: stop reading input once `limit` groups
+    ///   have been accumulated
+    ///
+    /// The remaining streams consume all input.
     limit_options: Option<LimitOptions>,
     /// Input plan, could be a partial aggregate or the input to the aggregate
     pub input: Arc<dyn ExecutionPlan>,
@@ -1036,9 +1049,9 @@ impl AggregateExec {
             InputOrderMode::Linear
         };
 
-        // To keep the ordering optimization simple, grouping sets are not supported.
-        // See [`OrderedPartialAggregateStream`] for more details about this optimization.
-        if group_by.has_grouping_set() {
+        // Input order mode is also used to advertise plan output ordering, grouping
+        // sets handling, and partial reduce aggregation can't promise that.
+        if group_by.has_grouping_set() || mode == AggregateMode::PartialReduce {
             input_order_mode = InputOrderMode::Linear;
         }
 
@@ -1216,11 +1229,14 @@ impl AggregateExec {
         //
         // # Implementation Note
         //
-        // `GroupedHashAggregateStream` is being incrementally refactored. See the
-        // tracking issue for details.
+        // `GroupedHashAggregateStream` is the legacy implementation of all the
+        // branches below. It has been split into dedicated streams, and the
+        // `enable_migration_aggregate` config option selects between the new
+        // streams and the legacy implementation.
         //
-        // New features and improvements should go directly into the new implementation.
-        // Please coordinate through the tracking issue.
+        // The legacy implementation is deprecated. It is kept for one more
+        // release as a fallback for potential bugs in the new streams, and
+        // will be removed after that.
         //
         // Issue: <https://github.com/apache/datafusion/issues/22710>
         if context
@@ -1270,6 +1286,10 @@ impl AggregateExec {
                     self, context, partition,
                 )?));
             }
+
+            return internal_err!(
+                "All aggregate cases should be able to handle by the new path"
+            );
         }
 
         // Execution paths that have not been migrated use the fallback implementation
@@ -1292,7 +1312,6 @@ impl AggregateExec {
         self.mode == AggregateMode::Partial
             && self.input_order_mode == InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
-            && self.limit_options_supported_by_hash_stream()
     }
 
     fn should_use_ordered_partial_aggregate_stream(
@@ -1302,22 +1321,19 @@ impl AggregateExec {
         self.mode == AggregateMode::Partial
             && self.input_order_mode != InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
-            && self.limit_options_supported_by_hash_stream()
     }
 
     fn should_use_final_hash_stream(&self, _context: &TaskContext) -> bool {
         matches!(
             self.mode,
             AggregateMode::Final | AggregateMode::FinalPartitioned
-        ) && self.limit_options_supported_by_hash_stream()
-            && self.input_order_mode == InputOrderMode::Linear
+        ) && self.input_order_mode == InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
             && self.group_by.is_single()
     }
 
     fn should_use_partial_reduce_hash_stream(&self, _context: &TaskContext) -> bool {
         self.mode == AggregateMode::PartialReduce
-            && self.limit_options.is_none()
             && self.input_order_mode == InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
             && self.group_by.is_single()
@@ -1327,8 +1343,7 @@ impl AggregateExec {
         matches!(
             self.mode,
             AggregateMode::Single | AggregateMode::SinglePartitioned
-        ) && self.limit_options.is_none()
-            && self.input_order_mode == InputOrderMode::Linear
+        ) && self.input_order_mode == InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
     }
 
@@ -1336,8 +1351,7 @@ impl AggregateExec {
         matches!(
             self.mode,
             AggregateMode::Single | AggregateMode::SinglePartitioned
-        ) && self.limit_options.is_none()
-            && self.input_order_mode != InputOrderMode::Linear
+        ) && self.input_order_mode != InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
     }
 
@@ -1345,15 +1359,9 @@ impl AggregateExec {
         matches!(
             self.mode,
             AggregateMode::Final | AggregateMode::FinalPartitioned
-        ) && self.limit_options_supported_by_hash_stream()
-            && self.input_order_mode != InputOrderMode::Linear
+        ) && self.input_order_mode != InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
             && self.group_by.is_single()
-    }
-
-    /// See comments in `PartialHashAggregateStream` limit optimization section
-    fn limit_options_supported_by_hash_stream(&self) -> bool {
-        self.limit_options.is_none() || self.is_unordered_unfiltered_group_by_distinct()
     }
 
     /// Finds the DataType and SortDirection for this Aggregate, if there is one
