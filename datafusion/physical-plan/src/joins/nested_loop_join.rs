@@ -1464,8 +1464,14 @@ pub(crate) struct FallbackCoordinator {
     /// `cancelled`, so a cancellation landing between those two steps is
     /// delivered rather than lost.
     cancel_notify: tokio::sync::Notify,
+    /// Test seam for cancelling at an interleaving a test cannot otherwise hit.
+    ///
+    /// Set to `1` to make the leader cancel after claiming the load but before
+    /// it registers its cancellation watcher -- the window where a lost
+    /// notification would strand every other partition. Consumed when it fires,
+    /// so one store arms it once.
     #[cfg(test)]
-    review_cancel_before_watch: AtomicUsize,
+    cancel_at_leader_claim: AtomicUsize,
 }
 
 impl FallbackCoordinator {
@@ -1487,7 +1493,7 @@ impl FallbackCoordinator {
             notify: tokio::sync::Notify::new(),
             cancel_notify: tokio::sync::Notify::new(),
             #[cfg(test)]
-            review_cancel_before_watch: AtomicUsize::new(0),
+            cancel_at_leader_claim: AtomicUsize::new(0),
         }
     }
 
@@ -1696,10 +1702,11 @@ impl FallbackCoordinator {
                     // its input is not waiting on `notify`, so without this a
                     // `cancel` would not be observed until the read finished on
                     // its own -- which may be never if the input is gone.
-                    // Test-only hook: a peer cancels after the leader claim,
-                    // before this task constructs its cancellation watcher.
+                    // Test seam: fire a cancellation in the window between
+                    // claiming the load and registering the watcher below. See
+                    // `cancel_at_leader_claim`.
                     #[cfg(test)]
-                    if self.review_cancel_before_watch.swap(0, Ordering::SeqCst) == 1 {
+                    if self.cancel_at_leader_claim.swap(0, Ordering::SeqCst) == 1 {
                         self.cancel();
                     }
                     let cancelled = self.cancel_notify.notified();
@@ -5839,6 +5846,32 @@ pub(crate) mod tests {
     /// until the current one is released. Collecting partitions
     /// sequentially would therefore deadlock; concurrent collection mirrors
     /// how partitions actually run under the runtime.
+    /// Waker that counts how often it is woken.
+    ///
+    /// Cancellation tests assert that a parked stream is *woken*, not merely that
+    /// a flag flipped, so they need to see the waker fire.
+    struct WakeCount(AtomicUsize);
+
+    impl futures::task::ArcWake for WakeCount {
+        fn wake_by_ref(this: &Arc<Self>) {
+            this.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    impl WakeCount {
+        fn new() -> Arc<Self> {
+            Arc::new(Self(AtomicUsize::new(0)))
+        }
+
+        fn count(&self) -> usize {
+            self.0.load(Ordering::SeqCst)
+        }
+
+        fn reset(&self) {
+            self.0.store(0, Ordering::SeqCst);
+        }
+    }
+
     /// Spills a plan's single partition to a `LeftSpillData`, so a test can hand
     /// the coordinator the same input the fallback path would.
     async fn spill_left_for_test(
@@ -5871,13 +5904,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn review_v3_cancel_wakes_pending_build_input() -> Result<()> {
-        struct WakeCount(AtomicUsize);
-        impl futures::task::ArcWake for WakeCount {
-            fn wake_by_ref(this: &Arc<Self>) {
-                this.0.fetch_add(1, Ordering::SeqCst);
-            }
-        }
+    async fn nlj_cancel_wakes_stream_parked_on_build_input() -> Result<()> {
         let runtime = RuntimeEnvBuilder::new().build_arc()?;
         let ctx = Arc::new(TaskContext::default().with_runtime(runtime));
         let coordinator = Arc::new(FallbackCoordinator::new(2, true));
@@ -5910,23 +5937,23 @@ pub(crate) mod tests {
         };
         let peer = make_stream();
         let mut survivor = make_stream();
-        let wakes = Arc::new(WakeCount(AtomicUsize::new(0)));
+        let wakes = WakeCount::new();
         let waker = futures::task::waker(Arc::clone(&wakes));
         let mut cx = std::task::Context::from_waker(&waker);
         assert!(survivor.poll_next_unpin(&mut cx).is_pending());
         assert!(matches!(survivor.state, NLJState::BufferingLeft));
-        wakes.0.store(0, Ordering::SeqCst);
+        wakes.reset();
         drop(peer);
         assert!(coordinator.is_cancelled());
         assert!(
-            wakes.0.load(Ordering::SeqCst) > 0,
+            wakes.count() > 0,
             "cancel must wake the survivor waiting on build input"
         );
         Ok(())
     }
 
     #[tokio::test]
-    async fn review_v3_cancel_before_first_poll() {
+    async fn nlj_cancel_observed_when_watcher_polled_after_cancellation() {
         let coordinator = Arc::new(FallbackCoordinator::new(2, true));
         let before = coordinator.cancellation_watcher();
         coordinator.cancel();
@@ -5937,19 +5964,13 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn review_v3_broadcast_and_waker_replacement() {
-        struct WakeCount(AtomicUsize);
-        impl futures::task::ArcWake for WakeCount {
-            fn wake_by_ref(this: &Arc<Self>) {
-                this.0.fetch_add(1, Ordering::SeqCst);
-            }
-        }
+    async fn nlj_cancel_reaches_every_watcher_and_survives_waker_replacement() {
         let coordinator = Arc::new(FallbackCoordinator::new(2, true));
         let mut first = coordinator.cancellation_watcher();
         let mut second = coordinator.cancellation_watcher();
-        let old_count = Arc::new(WakeCount(AtomicUsize::new(0)));
-        let new_count = Arc::new(WakeCount(AtomicUsize::new(0)));
-        let other_count = Arc::new(WakeCount(AtomicUsize::new(0)));
+        let old_count = WakeCount::new();
+        let new_count = WakeCount::new();
+        let other_count = WakeCount::new();
         let old_waker = futures::task::waker(Arc::clone(&old_count));
         let new_waker = futures::task::waker(Arc::clone(&new_count));
         let other_waker = futures::task::waker(Arc::clone(&other_count));
@@ -5969,20 +5990,20 @@ pub(crate) mod tests {
                 .is_pending()
         );
         coordinator.notify.notify_waiters();
-        assert_eq!(new_count.0.load(Ordering::SeqCst), 0);
-        assert_eq!(other_count.0.load(Ordering::SeqCst), 0);
+        assert_eq!(new_count.count(), 0);
+        assert_eq!(other_count.count(), 0);
         coordinator.cancel();
         coordinator.cancel();
-        assert!(new_count.0.load(Ordering::SeqCst) > 0);
-        assert!(other_count.0.load(Ordering::SeqCst) > 0);
+        assert!(new_count.count() > 0);
+        assert!(other_count.count() > 0);
         assert!(first.now_or_never().is_some());
         assert!(second.now_or_never().is_some());
     }
 
     #[tokio::test]
-    async fn review_v3_normal_finish_does_not_cancel() -> Result<()> {
+    async fn nlj_normal_completion_leaves_coordinator_usable() -> Result<()> {
         tokio::time::timeout(Duration::from_secs(5), async {
-            let (plan, ctx) = review_cancellation_plan()?;
+            let (plan, ctx) = cancellation_test_plan()?;
             let mut rows = 0;
             for partition in 0..2 {
                 let batches =
@@ -6008,7 +6029,7 @@ pub(crate) mod tests {
     /// the test would silently degrade into "an unstarted stream cancels", which
     /// other tests already cover.
     #[tokio::test]
-    async fn review_v4_errored_stream_drop_cancels_peers() -> Result<()> {
+    async fn nlj_errored_stream_drop_cancels_peers() -> Result<()> {
         let runtime = RuntimeEnvBuilder::new().build_arc()?;
         let ctx = Arc::new(TaskContext::default().with_runtime(runtime));
         let coordinator = Arc::new(FallbackCoordinator::new(2, true));
@@ -6078,13 +6099,7 @@ pub(crate) mod tests {
     /// reader is injected directly, which skips the reopen step; that is the
     /// shortcut here, and reopening itself is covered elsewhere.
     #[tokio::test]
-    async fn review_v4_cancel_wakes_parked_global_right_replay() -> Result<()> {
-        struct WakeCount(AtomicUsize);
-        impl futures::task::ArcWake for WakeCount {
-            fn wake_by_ref(this: &Arc<Self>) {
-                this.0.fetch_add(1, Ordering::SeqCst);
-            }
-        }
+    async fn nlj_cancel_wakes_stream_parked_on_global_right_replay() -> Result<()> {
         let runtime = RuntimeEnvBuilder::new().build_arc()?;
         let ctx = Arc::new(TaskContext::default().with_runtime(runtime));
         let coordinator = Arc::new(FallbackCoordinator::new(2, true));
@@ -6122,7 +6137,7 @@ pub(crate) mod tests {
 
         // Reach `Active` the way execution does, by letting the spilled build
         // side resolve, then park in the replay stage.
-        let wakes = Arc::new(WakeCount(AtomicUsize::new(0)));
+        let wakes = WakeCount::new();
         let waker = futures::task::waker(Arc::clone(&wakes));
         let mut cx = std::task::Context::from_waker(&waker);
         assert!(survivor.poll_next_unpin(&mut cx).is_pending());
@@ -6142,12 +6157,12 @@ pub(crate) mod tests {
             )));
         assert!(survivor.poll_next_unpin(&mut cx).is_pending());
         assert!(matches!(survivor.state, NLJState::EmitGlobalRightUnmatched));
-        wakes.0.store(0, Ordering::SeqCst);
+        wakes.reset();
 
         drop(peer);
         assert!(coordinator.is_cancelled());
         assert!(
-            wakes.0.load(Ordering::SeqCst) > 0,
+            wakes.count() > 0,
             "cancel must wake a survivor parked on the global-right replay"
         );
 
@@ -6162,13 +6177,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn review_v2_cancel_wakes_pending_right_input() -> Result<()> {
-        struct WakeCount(AtomicUsize);
-        impl futures::task::ArcWake for WakeCount {
-            fn wake_by_ref(this: &Arc<Self>) {
-                this.0.fetch_add(1, Ordering::SeqCst);
-            }
-        }
+    async fn nlj_cancel_wakes_stream_parked_on_right_input() -> Result<()> {
         let runtime = RuntimeEnvBuilder::new().build_arc()?;
         let ctx = Arc::new(TaskContext::default().with_runtime(runtime));
         let coordinator = Arc::new(FallbackCoordinator::new(2, true));
@@ -6202,24 +6211,24 @@ pub(crate) mod tests {
         };
         let peer = make_stream();
         let mut survivor = make_stream();
-        let wakes = Arc::new(WakeCount(AtomicUsize::new(0)));
+        let wakes = WakeCount::new();
         let waker = futures::task::waker(Arc::clone(&wakes));
         let mut cx = std::task::Context::from_waker(&waker);
         assert!(survivor.poll_next_unpin(&mut cx).is_pending());
         assert!(matches!(survivor.state, NLJState::FetchingRight));
-        wakes.0.store(0, Ordering::SeqCst);
+        wakes.reset();
         drop(peer);
         assert!(coordinator.is_cancelled());
         assert!(
-            wakes.0.load(Ordering::SeqCst) > 0,
+            wakes.count() > 0,
             "cancel must wake the survivor waiting on right input"
         );
         Ok(())
     }
 
     #[tokio::test]
-    async fn review_v2_output_after_cancellation_error() -> Result<()> {
-        let (plan, ctx) = review_cancellation_plan()?;
+    async fn nlj_stream_stops_producing_after_cancellation_error() -> Result<()> {
+        let (plan, ctx) = cancellation_test_plan()?;
         let mut peer = plan.execute(0, Arc::clone(&ctx))?;
         let mut survivor = plan.execute(1, Arc::clone(&ctx))?;
         peer.next().await.expect("output")?;
@@ -6227,7 +6236,6 @@ pub(crate) mod tests {
         drop(peer);
         assert!(survivor.next().await.expect("cancellation").is_err());
         let after_error = survivor.next().await;
-        eprintln!("after cancellation error: {after_error:?}");
         assert!(
             after_error.is_none(),
             "cancellation did not discard buffered output"
@@ -6236,7 +6244,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn review_v2_cancel_before_watch_is_not_lost() -> Result<()> {
+    async fn nlj_cancel_before_watcher_registration_is_not_lost() -> Result<()> {
         let ctx = Arc::new(TaskContext::default());
         let coordinator = Arc::new(FallbackCoordinator::new(2, true));
         let spill = spill_left_for_test(build_left_table(), Arc::clone(&ctx)).await?;
@@ -6250,7 +6258,7 @@ pub(crate) mod tests {
                 )));
         }
         coordinator
-            .review_cancel_before_watch
+            .cancel_at_leader_claim
             .store(1, Ordering::SeqCst);
         let result = tokio::time::timeout(
             Duration::from_secs(1),
@@ -6276,8 +6284,7 @@ pub(crate) mod tests {
     /// cancellation. This drives unrelated `notify_waiters()` traffic past a
     /// parked loader and then cancels for real.
     #[tokio::test]
-    async fn review_v2_progress_notifications_do_not_disturb_cancel_watch() -> Result<()>
-    {
+    async fn nlj_chunk_progress_does_not_resolve_cancel_watcher() -> Result<()> {
         let ctx = Arc::new(TaskContext::default());
         let coordinator = Arc::new(FallbackCoordinator::new(2, true));
         let spill = spill_left_for_test(build_left_table(), Arc::clone(&ctx)).await?;
@@ -6315,7 +6322,7 @@ pub(crate) mod tests {
         Ok(())
     }
 
-    fn review_cancellation_plan() -> Result<(Arc<NestedLoopJoinExec>, Arc<TaskContext>)> {
+    fn cancellation_test_plan() -> Result<(Arc<NestedLoopJoinExec>, Arc<TaskContext>)> {
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(50, 1.0)
             .build_arc()?;
@@ -6343,18 +6350,13 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn review_drop_pending_retains_chunk() -> Result<()> {
+    async fn nlj_drop_while_pending_releases_chunk() -> Result<()> {
         tokio::time::timeout(Duration::from_secs(5), async {
-            let (plan, ctx) = review_cancellation_plan()?;
+            let (plan, ctx) = cancellation_test_plan()?;
             let abandoned = plan.execute(0, Arc::clone(&ctx))?;
             let survivor = plan.execute(1, Arc::clone(&ctx))?;
             drop(abandoned);
-            let result = common::collect(survivor).await;
-            eprintln!(
-                "survivor succeeded={}, retained={}",
-                result.is_ok(),
-                ctx.memory_pool().reserved()
-            );
+            let _ = common::collect(survivor).await;
             assert_eq!(
                 ctx.memory_pool().reserved(),
                 0,
@@ -6367,9 +6369,9 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn review_active_survivor_must_observe_cancel() -> Result<()> {
+    async fn nlj_active_survivor_observes_cancel() -> Result<()> {
         tokio::time::timeout(Duration::from_secs(5), async {
-            let (plan, ctx) = review_cancellation_plan()?;
+            let (plan, ctx) = cancellation_test_plan()?;
             let mut abandoned = plan.execute(0, Arc::clone(&ctx))?;
             let mut survivor = plan.execute(1, Arc::clone(&ctx))?;
             abandoned.next().await.expect("first output")?;
@@ -6399,7 +6401,7 @@ pub(crate) mod tests {
         .expect("stream hung")
     }
 
-    async fn review_paused_loader(complete_read: bool) -> Result<()> {
+    async fn run_paused_loader_cancellation(complete_read: bool) -> Result<()> {
         let runtime = RuntimeEnvBuilder::new().build_arc()?;
         let pool = Arc::clone(&runtime.memory_pool);
         let ctx = Arc::new(TaskContext::default().with_runtime(runtime));
@@ -6444,13 +6446,13 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn review_inflight_publish_is_discarded() -> Result<()> {
-        review_paused_loader(true).await
+    async fn nlj_cancelled_inflight_load_discards_its_publish() -> Result<()> {
+        run_paused_loader_cancellation(true).await
     }
 
     #[tokio::test]
-    async fn review_inflight_load_observes_cancellation() -> Result<()> {
-        review_paused_loader(false).await
+    async fn nlj_cancelled_inflight_load_stops_waiting() -> Result<()> {
+        run_paused_loader_cancellation(false).await
     }
 
     /// A partition dropped before finishing must cancel the coordinated
@@ -6533,7 +6535,7 @@ pub(crate) mod tests {
     ///
     /// This is the entry check in `next_chunk`, nothing more: cancellation
     /// happens before any load starts. The publish-after-an-in-flight-read path
-    /// is covered by `review_inflight_publish_is_discarded`, which pauses a real
+    /// is covered by `nlj_cancelled_inflight_load_discards_its_publish`, which pauses a real
     /// read and then completes it.
     #[tokio::test]
     async fn test_nlj_cancelled_coordinator_refuses_to_serve_chunks() -> Result<()> {
@@ -6547,7 +6549,7 @@ pub(crate) mod tests {
 
         // Cancel first, then ask for a chunk: the entry check must refuse. The
         // publish-after-an-in-flight-read path is covered by
-        // `review_inflight_publish_is_discarded`, which pauses a real read.
+        // `nlj_cancelled_inflight_load_discards_its_publish`, which pauses a real read.
         Arc::clone(&coordinator).cancel();
         let result = Arc::clone(&coordinator)
             .next_chunk(0, Arc::clone(&spill), Arc::clone(&task_ctx), Time::new())
@@ -6575,7 +6577,7 @@ pub(crate) mod tests {
 
         // A plain sanity check that nothing marks the coordinator cancelled on
         // its own. Real stream drops are covered by
-        // `review_v3_normal_finish_does_not_cancel`, which runs both partitions
+        // `nlj_normal_completion_leaves_coordinator_usable`, which runs both partitions
         // to completion and drops them.
         let (chunk, _) = Arc::clone(&coordinator)
             .next_chunk(0, Arc::clone(&spill), Arc::clone(&task_ctx), Time::new())
