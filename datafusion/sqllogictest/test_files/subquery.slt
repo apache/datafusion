@@ -1197,6 +1197,24 @@ query II
 SELECT t1_id, t1_int FROM t1 WHERE t1_id = 33 AND 0 IN (SELECT sum(t2_int) FROM t2 WHERE t1.t1_id = t2.t2_id)
 ----
 
+# correlated_not_in_groupless_count_agg_count_bug
+query II rowsort
+SELECT t1_id, t1_int FROM t1 WHERE 0 NOT IN (SELECT count(*) FROM t2 WHERE t1.t1_id = t2.t2_id)
+----
+11 1
+22 2
+44 4
+
+# correlated_not_in_groupless_count_agg_count_bug_having
+query II
+SELECT t1_id, t1_int FROM t1 WHERE 0 NOT IN (SELECT count(*) FROM t2 WHERE t1.t1_id = t2.t2_id HAVING count(*) = 0)
+----
+
+# correlated_not_in_groupless_null_default_agg_wrong_zero_substitution
+query II
+SELECT t1_id, t1_int FROM t1 WHERE t1_id = 33 AND 0 NOT IN (SELECT sum(t2_int) FROM t2 WHERE t1.t1_id = t2.t2_id)
+----
+
 #correlated_scalar_subquery_count_agg_in_case_when
 query TT
 explain
@@ -1476,6 +1494,22 @@ query I rowsort
 select t1_id from t1
 where t1_id > 40 or 0 in (select sum(t2_int) from t2 where t1.t1_id = t2.t2_id)
 ----
+44
+
+# correlated_not_in_groupless_count_agg_count_bug_embedded_in_or
+query I rowsort
+select t1_id from t1
+where t1_id > 40 or 0 not in (select count(*) from t2 where t1.t1_id = t2.t2_id having count(*) = 0)
+----
+44
+
+# correlated_not_in_groupless_null_default_agg_embedded_in_or_plans_successfully
+query I rowsort
+select t1_id from t1
+where t1_id > 40 or 0 not in (select sum(t2_int) from t2 where t1.t1_id = t2.t2_id)
+----
+11
+22
 44
 
 ##########
