@@ -86,10 +86,9 @@
 //! `BinaryExpr` hands it — the population it would really see in that
 //! position.
 //!
-//! Once the order settles the wrappers are gone. If the warm-up kept the
-//! written order, the written predicate is evaluated as one expression,
-//! exactly as it would be with the flag off. If it adopted a reorder, the
-//! learned order is materialised once as a right-nested `AND` chain,
+//! Once the order settles the wrappers are gone: the settled order — the
+//! written one if the warm-up found nothing materially better, otherwise the
+//! learned one — is materialised once as a right-nested `AND` chain,
 //! `(c_first AND (c_second AND (... AND c_last)))`, and from then on evaluated
 //! by [`BinaryExpr`] like any other predicate.
 //!
@@ -109,9 +108,9 @@
 //! (`(1 + rows_in - rows_out) / time`, the ordering key Velox uses for
 //! independent conjuncts). The ranking is adopted only if it is materially
 //! cheaper than the written order ([`TIE_COST_FRACTION`]); otherwise the
-//! written predicate is evaluated unchanged, so a conjunction that does not
-//! benefit from reordering carries none of this module's machinery past the
-//! warm-up. The decision then stays fixed.
+//! written order is kept, so a conjunction that does not benefit from
+//! reordering carries none of this module's machinery past the warm-up. The
+//! decision then stays fixed.
 //!
 //! ## How it shares
 //!
@@ -256,8 +255,8 @@ enum BatchStrategy<'a> {
     /// (Empty batches are evaluated but measure nothing and do not consume the
     /// warm-up.)
     Measure,
-    /// Settled without a reorder: the written predicate evaluated as one
-    /// expression, exactly as if the feature were off.
+    /// Settled without a reorder: the written order, as a right-nested `AND`
+    /// chain.
     Fused,
     /// Settled on an adopted reorder, evaluated as the right-nested `AND`
     /// chain built from it. The payload is the adopted order: positions in the
@@ -269,15 +268,13 @@ enum BatchStrategy<'a> {
 /// is evaluated with, and the order it evaluates the conjuncts in.
 #[derive(Debug, Clone)]
 struct Settled {
-    /// The predicate to evaluate from now on: the written predicate when the
-    /// warm-up kept the written order, otherwise `order` materialised as a
+    /// The predicate to evaluate from now on: `order` materialised as a
     /// right-nested `AND` chain (see [`settle`]).
     predicate: Arc<dyn PhysicalExpr>,
     /// Evaluation order: indices into the conjunct list. Carried for reporting
     /// ([`BatchStrategy::Reordered`]) rather than for evaluation.
     order: Vec<usize>,
-    /// Whether `order` reorders the written conjuncts — equivalently, whether
-    /// `predicate` is the rebuilt chain rather than the written predicate.
+    /// Whether `order` reorders the written conjuncts.
     reordered: bool,
 }
 
@@ -287,6 +284,7 @@ impl AdaptiveFilterShared {
     }
 
     /// The settled decision, or `None` if the streams are still learning.
+    #[cfg(test)]
     fn settled(&self) -> Option<Settled> {
         self.inner.lock().expect("poisoned").settled.clone()
     }
@@ -440,8 +438,7 @@ pub(crate) struct AdaptiveConjunction {
     /// The split conjuncts. `order` indices refer to positions here.
     conjuncts: Vec<Arc<dyn PhysicalExpr>>,
     /// The written predicate as one expression: what the measured conjuncts
-    /// are ranked against, and what is evaluated when the settled order does
-    /// not reorder them.
+    /// are ranked against.
     predicate: Arc<dyn PhysicalExpr>,
     /// Measurements and the settled decision, shared by every partition stream.
     shared: Arc<AdaptiveFilterShared>,
@@ -454,9 +451,8 @@ pub(crate) struct AdaptiveConjunction {
     /// written order, so each batch's counts can be drained out of them.
     measured: Vec<Arc<MeasuredConjunct>>,
     /// The expression [`evaluate_settled`](Self::evaluate_settled) evaluates:
-    /// the written predicate, or — once a reorder is adopted — the learned
-    /// order as a right-nested `AND` chain. Unused until `settled`, and equal
-    /// to the written predicate until then.
+    /// the settled order as a right-nested `AND` chain. Unused until
+    /// `settled`, and equal to the written predicate until then.
     settled_predicate: Arc<dyn PhysicalExpr>,
     /// Evaluation order: indices into `conjuncts`. The written order until a
     /// settled order is adopted.
@@ -546,15 +542,6 @@ impl AdaptiveConjunction {
         &mut self,
         batch: &RecordBatch,
     ) -> Result<(ArrayRef, BatchStrategy<'_>)> {
-        // Take up an order another stream settled since our last batch. An
-        // unsettled stream already locks the shared state once per measured
-        // batch to pool its counts, so this brief extra lock is in the same
-        // cost class; a settled stream never touches it again.
-        if !self.settled
-            && let Some(decision) = self.shared.settled()
-        {
-            self.adopt(decision);
-        }
         if self.settled {
             let mask = self.evaluate_settled(batch)?;
             let strategy = if self.reordered {
@@ -600,9 +587,8 @@ impl AdaptiveConjunction {
         self.measured.iter().map(|m| m.take()).collect()
     }
 
-    /// Evaluate the settled arrangement with no instrumentation: one
-    /// expression, either the written predicate or the right-nested `AND`
-    /// chain built from the adopted order.
+    /// Evaluate the settled arrangement with no instrumentation: the
+    /// right-nested `AND` chain built from the settled order.
     fn evaluate_settled(&self, batch: &RecordBatch) -> Result<ArrayRef> {
         self.settled_predicate
             .evaluate(batch)?
@@ -624,6 +610,16 @@ impl AdaptiveConjunction {
     /// them.
     fn pool_and_maybe_settle(&mut self, local: &[ConjunctStats]) {
         let mut inner = self.shared.inner.lock().expect("poisoned");
+        // Another stream settled since this batch started: its decision stands
+        // and this batch's counts are discarded (they can no longer change
+        // anything). Checking here, after evaluating, rather than before keeps
+        // the shared lock off the path entirely until a stream has something to
+        // pool; the price is at most one measured batch per stream.
+        if let Some(decision) = inner.settled.clone() {
+            drop(inner);
+            self.adopt(decision);
+            return;
+        }
         if inner.stats.is_empty() {
             inner.stats = vec![ConjunctStats::default(); local.len()];
         }
@@ -636,13 +632,6 @@ impl AdaptiveConjunction {
             s.merge(l);
         }
         inner.measured_batches += 1;
-        // Another stream settled between our two lock acquisitions: adopt its
-        // decision rather than measuring on.
-        if let Some(decision) = inner.settled.clone() {
-            drop(inner);
-            self.adopt(decision);
-            return;
-        }
         if inner.measured_batches < WARMUP_BATCHES {
             return;
         }
@@ -656,10 +645,9 @@ impl AdaptiveConjunction {
 /// Decide the settled arrangement from the pooled measurements.
 ///
 /// Rank the conjuncts by effectiveness and take the ranking only if it is
-/// materially cheaper than the written order, materialising it as a
-/// right-nested `AND` chain over `conjuncts`; otherwise keep `predicate` and
-/// evaluate it as one expression, so a conjunction that does not benefit from
-/// reordering pays nothing for the attempt.
+/// materially cheaper than the written order; otherwise keep the written
+/// order. Either way the result is materialised as a right-nested `AND` chain
+/// over `conjuncts` (`predicate` is only the fallback for an empty list).
 fn settle(
     stats: &[ConjunctStats],
     conjuncts: &[Arc<dyn PhysicalExpr>],
@@ -678,8 +666,16 @@ fn settle(
             reordered: true,
         }
     } else {
+        // The written order, but still right-nested: `predicate` as the
+        // planner built it is typically left-nested, and a left-nested chain
+        // pre-selects on the accumulated prefix, paying a whole-batch filter
+        // and scatter at every level where that prefix crosses the threshold.
+        // Right-nested, each `AND` decides on a single conjunct and survivors
+        // stay compacted for the rest of the chain.
+        let written = right_nested_conjunction(conjuncts, &identity)
+            .unwrap_or_else(|| Arc::clone(predicate));
         Settled {
-            predicate: Arc::clone(predicate),
+            predicate: written,
             order: identity,
             reordered: false,
         }
@@ -1012,15 +1008,15 @@ mod tests {
         let schema = schema();
         let p = predicate(&schema);
         // Two equally cheap, equally selective conjuncts: swapping cannot help,
-        // so the written order stands and nothing is rebuilt.
+        // so the written order stands, rebuilt as a right-nested chain.
         let s = vec![stats(1000, 500, 1000), stats(1000, 500, 1000)];
-        let d = settle(&s, &split(&p), &p);
+        let cs = split(&p);
+        let d = settle(&s, &cs, &p);
         assert_eq!(d.order, vec![0, 1]);
         assert!(!d.reordered);
-        assert!(
-            Arc::ptr_eq(&d.predicate, &p),
-            "the written predicate itself"
-        );
+        let chain = d.predicate.downcast_ref::<BinaryExpr>().expect("an AND");
+        assert!(Arc::ptr_eq(chain.left(), &cs[0]));
+        assert!(Arc::ptr_eq(chain.right(), &cs[1]));
     }
 
     #[test]
@@ -1092,7 +1088,7 @@ mod tests {
     }
 
     /// When the order does not change, the settled evaluator runs the written
-    /// predicate as one expression.
+    /// order as a right-nested chain over the same conjuncts.
     ///
     /// This test measures real timings on purpose and is still deterministic:
     /// both conjuncts pass the same ~96% of rows, and with a pass rate `p`
@@ -1122,9 +1118,15 @@ mod tests {
         assert!(adaptive.settled);
         assert!(
             !adaptive.reordered,
-            "interchangeable conjuncts stay on the plain predicate"
+            "interchangeable conjuncts keep the written order"
         );
-        assert!(Arc::ptr_eq(&adaptive.settled_predicate, &p));
+        let cs = split(&p);
+        let chain = adaptive
+            .settled_predicate
+            .downcast_ref::<BinaryExpr>()
+            .expect("an AND");
+        assert!(Arc::ptr_eq(chain.left(), &cs[0]));
+        assert!(Arc::ptr_eq(chain.right(), &cs[1]));
     }
 
     /// Two streams sharing one pool settle the order together: the warm-up is
@@ -1304,8 +1306,7 @@ mod tests {
     }
 
     /// Contract scenario for the no-win case: interchangeable conjuncts settle
-    /// on the written predicate evaluated as one expression (as if the feature
-    /// were off), never a rebuilt chain.
+    /// on the written order, never a reorder.
     #[test]
     fn scenario_measure_batches_then_settle_on_fused() {
         let schema = schema();
