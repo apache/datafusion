@@ -146,7 +146,6 @@ WHERE NULLIF(id, 1) NOT IN (
   SELECT COALESCE(id, 0) FROM inner_table_no_null
 );
 ----
-a
 c
 e
 

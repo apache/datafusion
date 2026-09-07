@@ -29,16 +29,15 @@ use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
-    Column, DFSchemaRef, ExprSchema, NullEquality, Result, assert_or_internal_err,
-    plan_err,
+    Column, DFSchemaRef, NullEquality, Result, assert_or_internal_err, plan_err,
 };
 use datafusion_expr::expr::{Exists, InSubquery};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::{conjunction, expr_to_columns, split_conjunction_owned};
 use datafusion_expr::{
-    BinaryExpr, Expr, Filter, LogicalPlan, LogicalPlanBuilder, Operator, exists,
-    in_subquery, lit, not, not_exists, not_in_subquery,
+    BinaryExpr, Expr, ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder, Operator,
+    exists, in_subquery, lit, not, not_exists, not_in_subquery,
 };
 
 use log::debug;
@@ -322,32 +321,13 @@ fn mark_join(
     )
 }
 
-/// Check if join keys in the join filter may contain NULL values
-///
-/// Returns true if any join key column is nullable on either side.
-/// This is used to optimize null-aware anti joins: if all join keys are non-nullable,
-/// we can use a regular anti join instead of the more expensive null-aware variant.
-fn join_keys_may_be_null(
-    join_filter: &Expr,
+fn equijoin_filters_may_be_null(
+    equinjoin_predicates: Vec<(Expr, Expr)>,
     left_schema: &DFSchemaRef,
     right_schema: &DFSchemaRef,
 ) -> Result<bool> {
-    // Extract columns from the join filter
-    let mut columns = std::collections::HashSet::new();
-    expr_to_columns(join_filter, &mut columns)?;
-
-    // Check if any column is nullable
-    for col in columns {
-        // Check in left schema
-        if let Ok(field) = left_schema.field_from_column(&col)
-            && field.as_ref().is_nullable()
-        {
-            return Ok(true);
-        }
-        // Check in right schema
-        if let Ok(field) = right_schema.field_from_column(&col)
-            && field.as_ref().is_nullable()
-        {
+    for (left_expr, right_expr) in equinjoin_predicates {
+        if left_expr.nullable(left_schema)? || right_expr.nullable(right_schema)? {
             return Ok(true);
         }
     }
@@ -449,30 +429,26 @@ fn build_join(
             sub_query_alias.clone()
         };
 
-        let mark_filter_is_hashable_only =
-            if join_type == JoinType::LeftMark && in_predicate_opt.is_some() {
-                let (_, residual_filter) = split_eq_and_noneq_join_predicate(
+        let null_aware = if join_type == JoinType::LeftMark && in_predicate_opt.is_some()
+        {
+            let (equinjoin_predicates, residual_filter) =
+                split_eq_and_noneq_join_predicate(
                     join_filter.clone(),
                     left.schema(),
                     right_projected.schema(),
                 )?;
-                residual_filter.is_none()
-            } else {
-                false
-            };
 
-        // For scalar NOT IN mark joins, propagate null-aware semantics into the
-        // nullable mark column when the predicate can be implemented by hash keys.
-        // Non-equality correlated filters stay on the legacy path because hash join
-        // execution cannot mark UNKNOWN candidates for residual predicates.
-        let null_aware = join_type == JoinType::LeftMark
-            && in_predicate_opt.is_some()
-            && mark_filter_is_hashable_only
-            && join_keys_may_be_null(
-                &join_filter,
-                left.schema(),
-                right_projected.schema(),
-            )?;
+            match residual_filter {
+                Some(_) => false,
+                None => equijoin_filters_may_be_null(
+                    equinjoin_predicates,
+                    left.schema(),
+                    right_schema,
+                )?,
+            }
+        } else {
+            false
+        };
 
         let new_plan = LogicalPlanBuilder::from(left.clone())
             .join_detailed_with_options(
@@ -501,9 +477,21 @@ fn build_join(
     //
     // Additionally, if the join keys are non-nullable on both sides, we don't need
     // null-aware semantics because NULLs cannot exist in the data.
-    let null_aware = join_type == JoinType::LeftAnti
-        && in_predicate_opt.is_some()
-        && join_keys_may_be_null(&join_filter, left.schema(), sub_query_alias.schema())?;
+    let null_aware = if join_type == JoinType::LeftAnti && in_predicate_opt.is_some() {
+        let (equinjoin_predicates, _) = split_eq_and_noneq_join_predicate(
+            join_filter.clone(),
+            left.schema(),
+            sub_query_alias.schema(),
+        )?;
+
+        equijoin_filters_may_be_null(
+            equinjoin_predicates,
+            left.schema(),
+            sub_query_alias.schema(),
+        )?
+    } else {
+        false
+    };
 
     // join our sub query into the main plan
     let new_plan = if null_aware {
@@ -765,7 +753,7 @@ mod tests {
             SubqueryAlias: __correlated_sq_2 [o_custkey:Int64]
               Projection: orders.o_custkey [o_custkey:Int64]
                 TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
-        "    
+        "
         )
     }
 
