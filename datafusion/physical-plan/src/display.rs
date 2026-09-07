@@ -813,8 +813,8 @@ impl PgJsonExecutionPlanVisitor<'_> {
                 serde_json::Value::from(ms)
             }
             MetricValue::Count { count, .. } => serde_json::Value::from(count.value()),
-            MetricValue::Gauge { gauge, .. } => serde_json::Value::from(gauge.value()),
-            MetricValue::PeakMemoryUsage { gauge, .. } => {
+            MetricValue::Gauge { gauge, .. }
+            | MetricValue::PeakMemoryUsage { gauge, .. } => {
                 serde_json::Value::from(gauge.value())
             }
             MetricValue::Time { time, .. } => {
