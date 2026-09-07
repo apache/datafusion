@@ -198,6 +198,12 @@ pub trait BlockedGroupValues: Send {
     /// `n` must be smaller or equal to [`Self::len`]
     fn emit_first_n(&mut self, n: usize) -> Result<Vec<ArrayRef>>;
 
+    // TODO - add into iterator which move the entry state into an iterator that will output ready batches
+    //        this is so it won't need to update the underlying hash map whenever calling emit block
+    //        this is for the case when we need to emit all, but we don't want to materialize all right away
+    //        but we want to skip the internal hash map updates, so the iterator will avoid that while clearing memory
+    //        the iterator should expose `allocated_size()` function
+
     /// Clear the contents and shrink the capacity to the size of the batch (free up memory usage)
     fn clear_shrink(&mut self, num_rows: usize);
 }
