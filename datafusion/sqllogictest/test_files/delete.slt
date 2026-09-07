@@ -36,7 +36,7 @@ logical_plan
 02)--TableScan: t1
 physical_plan
 01)CooperativeExec
-02)--DmlResultExec: rows_affected=0
+02)--MemDeleteExec
 
 
 # Filtered by existing columns
@@ -49,7 +49,7 @@ logical_plan
 03)----TableScan: t1
 physical_plan
 01)CooperativeExec
-02)--DmlResultExec: rows_affected=0
+02)--MemDeleteExec: predicate=[CAST(a@0 AS Int64) = 1, CAST(b@1 AS Int64) = 2, c@2 > CAST(3 AS Float64), CAST(d@3 AS Int64) != 4]
 
 
 # Filtered by existing columns, using qualified and unqualified names
@@ -62,7 +62,7 @@ logical_plan
 03)----TableScan: t1
 physical_plan
 01)CooperativeExec
-02)--DmlResultExec: rows_affected=0
+02)--MemDeleteExec: predicate=[CAST(a@0 AS Int64) = 1, CAST(b@1 AS Int64) = 2, c@2 > CAST(3 AS Float64), CAST(d@3 AS Int64) != 4]
 
 
 # Filtered by a mix of columns and literal predicates
@@ -75,7 +75,7 @@ logical_plan
 03)----TableScan: t1
 physical_plan
 01)CooperativeExec
-02)--DmlResultExec: rows_affected=0
+02)--MemDeleteExec: predicate=[CAST(a@0 AS Int64) = 1, 1 = 1, true]
 
 
 # Deleting by columns that do not exist returns an error
@@ -126,7 +126,7 @@ logical_plan
 03)----TableScan: t1
 physical_plan
 01)CooperativeExec
-02)--DmlResultExec: rows_affected=0
+02)--MemDeleteExec
 
 
 query TT
@@ -139,7 +139,7 @@ logical_plan
 04)------TableScan: t1
 physical_plan
 01)CooperativeExec
-02)--DmlResultExec: rows_affected=0
+02)--MemDeleteExec: predicate=[CAST(a@0 AS Int64) = 1, b@1 = CAST(2 AS Utf8View)]
 
 # Config reset
 statement ok
