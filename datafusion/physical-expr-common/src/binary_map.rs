@@ -685,7 +685,7 @@ where
 }
 
 /// Returns a `NullBuffer` with a single null value at the given index
-fn single_null_buffer(num_values: usize, null_index: usize) -> NullBuffer {
+pub(crate) fn single_null_buffer(num_values: usize, null_index: usize) -> NullBuffer {
     let mut null_builder = NullBufferBuilder::new(num_values);
     null_builder.append_n_non_nulls(null_index);
     null_builder.append_null();
