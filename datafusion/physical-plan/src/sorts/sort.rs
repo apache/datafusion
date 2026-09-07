@@ -67,7 +67,9 @@ use datafusion_common::{
     unwrap_or_internal_err,
 };
 use datafusion_execution::TaskContext;
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::memory_pool::{
+    MemoryConsumer, MemoryPool, MemoryReservation, MergeMemoryPool,
+};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::PhysicalExpr;
@@ -75,6 +77,9 @@ use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
 
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
+
+#[cfg(test)]
+mod spill_tests;
 
 struct ExternalSorterMetrics {
     /// metrics
@@ -261,6 +266,9 @@ struct ExternalSorter {
     /// might spill, `sort_spill_reservation_bytes` will be
     /// pre-reserved to ensure there is some space for this sort/merge.
     merge_reservation: MemoryReservation,
+    /// Keeps that workspace available to the merge's cursor, row, and batch
+    /// reservations even when the execution pool cannot grant more memory.
+    merge_pool: Arc<MergeMemoryPool>,
     /// How much memory to reserve for performing in-memory sort/merges
     /// prior to spilling.
     sort_spill_reservation_bytes: usize,
@@ -287,9 +295,13 @@ impl ExternalSorter {
             .with_can_spill(true)
             .register(&runtime.memory_pool);
 
-        let merge_reservation =
-            MemoryConsumer::new(format!("ExternalSorterMerge[{partition_id}]"))
-                .register(&runtime.memory_pool);
+        let merge_name = format!("ExternalSorterMerge[{partition_id}]");
+        let merge_pool = Arc::new(MergeMemoryPool::new(
+            Arc::clone(&runtime.memory_pool),
+            MemoryConsumer::new(&merge_name),
+        ));
+        let merge_reservation = MemoryConsumer::new(merge_name)
+            .register(&(Arc::clone(&merge_pool) as Arc<dyn MemoryPool>));
 
         let spill_manager = SpillManager::new(
             Arc::clone(&runtime),
@@ -308,6 +320,7 @@ impl ExternalSorter {
             reservation,
             spill_manager,
             merge_reservation,
+            merge_pool,
             runtime,
             batch_size,
             sort_spill_reservation_bytes,
@@ -369,12 +382,12 @@ impl ExternalSorter {
                 .with_batch_size(self.batch_size)
                 .with_fetch(None)
                 .with_reservation(self.merge_reservation.take())
+                .with_merge_pool(Arc::clone(&self.merge_pool))
                 .build()
         } else {
-            // Release the memory reserved for merge back to the pool so
-            // there is some left when `in_mem_sort_stream` requests an
-            // allocation. Only needed for the non-spill path; the spill
-            // path transfers the reservation to the merge stream instead.
+            // Final output needs no reserve for future spills. Return unused
+            // workspace so another sorter can start while this stream is alive.
+            self.merge_pool.release_unused();
             self.merge_reservation.free();
             self.in_mem_sort_stream(true, true)
         }
@@ -472,10 +485,9 @@ impl ExternalSorter {
             "in_mem_batches must not be empty when attempting to sort and spill"
         );
 
-        // Release the memory reserved for merge back to the pool so
-        // there is some left when `in_mem_sort_stream` requests an
-        // allocation. At the end of this function, memory will be
-        // reserved again for the next spill.
+        // Reuse the pre-reserved workspace across cursor, encoded-row, and
+        // batch reservations. Returning it to the execution pool here can
+        // make spilling fail if another task consumes it or our share shrinks.
         self.merge_reservation.free();
 
         let mut sorted_stream = self.in_mem_sort_stream(
@@ -619,6 +631,10 @@ impl ExternalSorter {
 
         // If less than sort_in_place_threshold_bytes, concatenate and sort in place
         if self.reservation.size() < self.sort_in_place_threshold_bytes {
+            // Concatenation can grow the ordinary sort reservation, which cannot
+            // borrow merge workspace. Return idle workspace to the execution pool
+            // so that growth can use it.
+            self.merge_pool.release_unused();
             // Concatenate memory batches together and sort
             let batch = concat_batches(&self.schema, &self.in_mem_batches)?;
             self.in_mem_batches.clear();
@@ -726,8 +742,8 @@ impl ExternalSorter {
     /// sorted data and the target batch size.
     /// For single-batch output cases, `reservation` will be freed immediately after sorting,
     /// as the batch will be output and is expected to be reserved by the consumer of the stream.
-    /// For multi-batch output cases, `reservation` will be grown to match the actual
-    /// size of sorted output, and as each batch is output, its memory will be freed from the reservation.
+    /// For multi-batch output cases, `reservation` and any borrowed spill workspace
+    /// cover the sorted output, releasing its memory as each batch is output.
     /// (This leads to the same behaviour, as futures are only evaluated when polled by the consumer.)
     fn sort_batch_stream(
         &self,
@@ -742,6 +758,7 @@ impl ExternalSorter {
         let schema = batch.schema();
         let expressions = self.expr.clone();
         let batch_size = self.batch_size;
+        let merge_pool = Arc::clone(&self.merge_pool);
 
         let stream = futures::stream::once(async move {
             let schema = batch.schema();
@@ -749,26 +766,42 @@ impl ExternalSorter {
             // Sort the batch immediately and get all output batches
             let sorted_batches = sort_batch_chunked(&batch, &expressions, batch_size)?;
 
-            // Resize the reservation to match the actual sorted output size.
-            // Using try_resize avoids a release-then-reacquire cycle, which
-            // matters for MemoryPool implementations where grow/shrink have
-            // non-trivial cost (e.g. JNI calls in Comet).
+            // Chunked output can retain shared buffers in every batch and
+            // exceed the input estimate. Borrow only already-reserved spill
+            // workspace; any remainder still uses the original sort consumer.
             let total_sorted_size: usize = sorted_batches
                 .iter()
                 .map(get_record_batch_memory_size)
                 .sum();
+            let mut workspace =
+                merge_pool.borrow(total_sorted_size.saturating_sub(reservation.size()));
             reservation
-                .try_resize(total_sorted_size)
+                .try_resize(total_sorted_size - workspace.size())
                 .map_err(Self::err_with_oom_context)?;
 
-            // Wrap in ReservationStream to hold the reservation
-            Result::<_, DataFusionError>::Ok(Box::pin(ReservationStream::new(
-                Arc::clone(&schema),
-                Box::pin(RecordBatchStreamAdapter::new(
+            if workspace.size() == 0 {
+                return Ok(Box::pin(ReservationStream::new(
                     Arc::clone(&schema),
-                    futures::stream::iter(sorted_batches.into_iter().map(Ok)),
-                )),
-                reservation,
+                    Box::pin(RecordBatchStreamAdapter::new(
+                        Arc::clone(&schema),
+                        futures::stream::iter(sorted_batches.into_iter().map(Ok)),
+                    )),
+                    reservation,
+                )) as SendableRecordBatchStream);
+            }
+
+            // Return borrowed workspace first so the merge's cursors can reuse
+            // it immediately. Both reservations also release on stream drop.
+            let batches = sorted_batches.into_iter().map(move |batch| {
+                let size = get_record_batch_memory_size(&batch);
+                let borrowed = size.min(workspace.size());
+                workspace.shrink(borrowed);
+                reservation.shrink(size - borrowed);
+                Ok(batch)
+            });
+            Result::<_, DataFusionError>::Ok(Box::pin(RecordBatchStreamAdapter::new(
+                Arc::clone(&schema),
+                futures::stream::iter(batches),
             )) as SendableRecordBatchStream)
         })
         .try_flatten();
@@ -788,6 +821,7 @@ impl ExternalSorter {
                     .try_resize(size)
                     .map_err(Self::err_with_oom_context)?;
             }
+            self.merge_pool.retain(size);
         }
 
         Ok(())

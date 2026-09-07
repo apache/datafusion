@@ -862,7 +862,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .with_definition(definition)
                         .with_unbounded(create_extern_table.unbounded)
                         .with_options(create_extern_table.options.clone())
-                        .with_constraints(constraints.into())
+                        .with_constraints(constraints.try_into()?)
                         .with_column_defaults(column_defaults)
                         .build(),
                     ),
@@ -2224,6 +2224,9 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlan::DescribeTable(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DescribeTable",
+            )),
+            LogicalPlan::AsOfJoin(_) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for AsOfJoin",
             )),
             LogicalPlan::RecursiveQuery(recursive) => {
                 let static_term = LogicalPlanNode::try_from_logical_plan(

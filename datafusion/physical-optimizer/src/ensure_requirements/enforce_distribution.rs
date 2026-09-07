@@ -662,6 +662,37 @@ fn new_join_conditions(
         .collect()
 }
 
+/// Turns an [`InterleaveExec`] back into the equivalent [`UnionExec`], for
+/// use with `transform_down` before distribution is (re-)enforced.
+///
+/// An interleave carries no distribution requirement of its own; it exists
+/// only because its children happened to share a hash (or range)
+/// partitioning when [`ensure_distribution`] created it from a union. Later
+/// rewrites can take that partitioning away: this rule removes
+/// `RepartitionExec`s nothing requires, join-key reordering changes hash
+/// expressions, join side swaps change output partitioning, and so on.
+/// `PlanContext` rebuilds every parent from its updated children while
+/// walking the tree, and rebuilding an interleave over children that are no
+/// longer interleavable fails (see
+/// <https://github.com/apache/datafusion/issues/21826>).
+///
+/// So, like the other distribution artifacts this rule strips and re-inserts,
+/// interleaves are normalized to unions up front and re-derived by
+/// [`ensure_distribution`] where the children still qualify.
+///
+/// This must run top-down: demoting a nested interleave first would change
+/// its output partitioning and make its parent interleave fail to rebuild.
+pub fn replace_interleave_with_union(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+    match plan.downcast_ref::<InterleaveExec>() {
+        Some(interleave) => {
+            UnionExec::try_new(interleave.inputs().clone()).map(Transformed::yes)
+        }
+        None => Ok(Transformed::no(plan)),
+    }
+}
+
 /// Adds RoundRobin repartition operator to the plan increase parallelism.
 ///
 /// # Arguments
@@ -1708,6 +1739,10 @@ pub fn ensure_distribution(
         //     - Agg:
         //         Repartition (hash):
         //           Data
+        //
+        // An [`InterleaveExec`] present in the input was already turned back
+        // into a [`UnionExec`] by [`replace_interleave_with_union`], so it is
+        // re-derived here from the children's actual partitioning.
         Arc::new(InterleaveExec::try_new(children_plans)?)
     } else {
         // Route through `replace_children_if_necessary` so the common

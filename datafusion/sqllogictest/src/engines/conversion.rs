@@ -18,6 +18,7 @@
 use arrow::datatypes::DecimalType;
 use bigdecimal::BigDecimal;
 use half::f16;
+use num_traits::Float;
 use std::str::FromStr;
 
 /// Represents a constant for NULL string in your database.
@@ -40,158 +41,89 @@ pub(crate) fn varchar_to_str(value: &str) -> String {
     }
 }
 
-pub(crate) fn f16_to_str(value: f16) -> String {
+/// Decimal places to keep in floats for string representation.
+const FLOAT_ROUND_DIGITS: i64 = 12;
+
+/// Decimal places to keep in floats for Spark (derived from expm1 behaviour)
+const SPARK_FLOAT_ROUND_DIGITS: i64 = 15;
+
+pub(crate) fn float_to_str<T: Float + ToString>(value: T, round_digits: i64) -> String {
     if value.is_nan() {
         // The sign of NaN can be different depending on platform.
         // So the string representation of NaN ignores the sign.
         "NaN".to_string()
-    } else if value == f16::INFINITY {
+    } else if value == T::infinity() {
         "Infinity".to_string()
-    } else if value == f16::NEG_INFINITY {
+    } else if value == T::neg_infinity() {
         "-Infinity".to_string()
     } else {
-        big_decimal_to_str(BigDecimal::from_str(&value.to_string()).unwrap(), None)
+        float_decimal_to_str(value, round_digits)
     }
+}
+
+pub(crate) fn f16_to_str(value: f16) -> String {
+    float_to_str(value, FLOAT_ROUND_DIGITS)
 }
 
 pub(crate) fn f32_to_str(value: f32) -> String {
-    if value.is_nan() {
-        // The sign of NaN can be different depending on platform.
-        // So the string representation of NaN ignores the sign.
-        "NaN".to_string()
-    } else if value == f32::INFINITY {
-        "Infinity".to_string()
-    } else if value == f32::NEG_INFINITY {
-        "-Infinity".to_string()
-    } else {
-        big_decimal_to_str(BigDecimal::from_str(&value.to_string()).unwrap(), None)
-    }
+    float_to_str(value, FLOAT_ROUND_DIGITS)
 }
 
 pub(crate) fn f64_to_str(value: f64) -> String {
-    if value.is_nan() {
-        // The sign of NaN can be different depending on platform.
-        // So the string representation of NaN ignores the sign.
-        "NaN".to_string()
-    } else if value == f64::INFINITY {
-        "Infinity".to_string()
-    } else if value == f64::NEG_INFINITY {
-        "-Infinity".to_string()
-    } else {
-        big_decimal_to_str(BigDecimal::from_str(&value.to_string()).unwrap(), None)
-    }
+    float_to_str(value, FLOAT_ROUND_DIGITS)
 }
 
 pub(crate) fn spark_f64_to_str(value: f64) -> String {
-    if value.is_nan() {
-        // The sign of NaN can be different depending on platform.
-        // So the string representation of NaN ignores the sign.
-        "NaN".to_string()
-    } else if value == f64::INFINITY {
-        "Infinity".to_string()
-    } else if value == f64::NEG_INFINITY {
-        "-Infinity".to_string()
-    } else {
-        big_decimal_to_str(BigDecimal::from_str(&value.to_string()).unwrap(), Some(15))
-    }
+    // Spark uses 15 decimal places for doubles
+    float_to_str(value, SPARK_FLOAT_ROUND_DIGITS)
 }
 
+/// Converts a float to its plain string representation, rounding to a specified number of decimal places.
+fn float_decimal_to_str<T: Float + ToString>(value: T, round_digits: i64) -> String {
+    let bd = BigDecimal::from_str(&value.to_string()).unwrap();
+    // Round the value to limit the number of decimal places
+    let value = bd.round(round_digits).normalized();
+    // Format the value to a string
+    value.to_plain_string()
+}
+
+/// Converts a decimal to its plain string representation, using the given scale
 pub(crate) fn arrow_decimal_to_str<T: DecimalType>(
     value: T::Native,
     scale: i8,
 ) -> String {
-    let precision = u8::MAX; // does not matter
-    let value = T::format_decimal(value, precision, scale);
-    big_decimal_to_str(
-        BigDecimal::from_str(&value).unwrap(),
-        Some(i64::from(scale)),
-    )
+    T::format_decimal(value, u8::MAX, scale)
 }
 
 #[cfg(feature = "postgres")]
 pub(crate) fn decimal_to_str(value: BigDecimal) -> String {
-    big_decimal_to_str(value, None)
-}
-
-/// Converts a `BigDecimal` to its plain string representation, optionally rounding to a specified number of decimal places.
-///
-/// If `round_digits` is `None`, the value is rounded to 12 decimal places by default.
-#[expect(clippy::needless_pass_by_value)]
-pub(crate) fn big_decimal_to_str(value: BigDecimal, round_digits: Option<i64>) -> String {
-    // Round the value to limit the number of decimal places
-    let value = value.round(round_digits.unwrap_or(12)).normalized();
-    // Format the value to a string
     value.to_plain_string()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{arrow_decimal_to_str, big_decimal_to_str};
+    use super::*;
     use arrow::datatypes::{
-        Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, i256,
+        DECIMAL128_MAX_SCALE, Decimal32Type, Decimal64Type, Decimal128Type,
+        Decimal256Type, i256,
     };
-    use bigdecimal::{BigDecimal, num_bigint::BigInt};
-
-    macro_rules! assert_decimal_str_eq {
-        ($integer:expr, $scale:expr, $round_digits:expr, $expected:expr) => {
-            assert_eq!(
-                big_decimal_to_str(
-                    BigDecimal::from_bigint(BigInt::from($integer), $scale),
-                    $round_digits
-                ),
-                $expected
-            );
-        };
-    }
 
     #[test]
-    fn test_big_decimal_to_str() {
-        assert_decimal_str_eq!(110, 3, None, "0.11");
-        assert_decimal_str_eq!(11, 3, None, "0.011");
-        assert_decimal_str_eq!(11, 2, None, "0.11");
-        assert_decimal_str_eq!(11, 1, None, "1.1");
-        assert_decimal_str_eq!(11, 0, None, "11");
-        assert_decimal_str_eq!(11, -1, None, "110");
-        assert_decimal_str_eq!(0, 0, None, "0");
-        assert_decimal_str_eq!(
-            12345678901234567890123456789012345678_i128,
-            0,
-            None,
-            "12345678901234567890123456789012345678"
-        );
-        assert_decimal_str_eq!(
-            12345678901234567890123456789012345678_i128,
-            38,
-            None,
-            "0.123456789012"
-        );
+    fn test_float_decimal_to_str() {
+        assert_eq!(f64_to_str(0.11), "0.11");
+        assert_eq!(f64_to_str(0.011), "0.011");
+        assert_eq!(f64_to_str(1.1), "1.1");
+        assert_eq!(f64_to_str(11.0), "11");
+        assert_eq!(f64_to_str(-0.11), "-0.11");
+        assert_eq!(f64_to_str(-0.011), "-0.011");
+        assert_eq!(f64_to_str(-1.1,), "-1.1");
+        assert_eq!(f64_to_str(-11.0), "-11");
+        // Keep 12 decimal places
+        assert_eq!(f64_to_str(0.12345678901234567), "0.123456789012");
 
-        // Negative cases
-        assert_decimal_str_eq!(-110, 3, None, "-0.11");
-        assert_decimal_str_eq!(-11, 3, None, "-0.011");
-        assert_decimal_str_eq!(-11, 2, None, "-0.11");
-        assert_decimal_str_eq!(-11, 1, None, "-1.1");
-        assert_decimal_str_eq!(-11, 0, None, "-11");
-        assert_decimal_str_eq!(-11, -1, None, "-110");
-        assert_decimal_str_eq!(
-            -12345678901234567890123456789012345678_i128,
-            0,
-            None,
-            "-12345678901234567890123456789012345678"
-        );
-        assert_decimal_str_eq!(
-            -12345678901234567890123456789012345678_i128,
-            38,
-            None,
-            "-0.123456789012"
-        );
-
-        // Round to 12 decimal places
-        // 1.0000000000011 -> 1.000000000001
-        assert_decimal_str_eq!(10_i128.pow(13) + 11, 13, None, "1.000000000001");
-        assert_decimal_str_eq!(10_i128.pow(13) + 11, 13, Some(12), "1.000000000001");
-
-        assert_decimal_str_eq!(10_i128.pow(13) + 11, 13, Some(13), "1.0000000000011");
+        assert_eq!(spark_f64_to_str(-0.011), "-0.011");
+        // Keep 15 decimal places for Spark
+        assert_eq!(spark_f64_to_str(0.12345678901234567), "0.123456789012346");
     }
 
     #[test]
@@ -202,6 +134,32 @@ mod tests {
         assert_eq!(
             arrow_decimal_to_str::<Decimal256Type>(i256::from(12345), 2),
             "123.45"
+        );
+        // Ensure it doesn't trim trailing zeros
+        assert_eq!(arrow_decimal_to_str::<Decimal128Type>(12300, 2), "123.00");
+        assert_eq!(arrow_decimal_to_str::<Decimal128Type>(12300, 4), "1.2300");
+
+        // Keep full precision besides 12 decimal places
+        assert_eq!(
+            arrow_decimal_to_str::<Decimal128Type>(10_i128.pow(13) + 11, 13),
+            "1.0000000000011"
+        );
+
+        // Zero-scale integers
+        assert_eq!(
+            arrow_decimal_to_str::<Decimal128Type>(
+                12345678901234567890123456789012345678_i128,
+                0
+            ),
+            "12345678901234567890123456789012345678"
+        );
+        // Keep full precision
+        assert_eq!(
+            arrow_decimal_to_str::<Decimal128Type>(
+                12345678901234567890123456789012345678_i128,
+                DECIMAL128_MAX_SCALE
+            ),
+            "0.12345678901234567890123456789012345678"
         );
     }
 }

@@ -199,3 +199,56 @@ query T
 SELECT concat(soundex('   '), 'Spark')
 ----
    Spark
+
+# LargeUtf8 and Utf8View inputs
+
+query T
+SELECT soundex(arrow_cast('Miller', 'LargeUtf8'));
+----
+M460
+
+query T
+SELECT soundex(arrow_cast('123', 'LargeUtf8'));
+----
+123
+
+query T
+SELECT soundex(arrow_cast('Miller', 'Utf8View'));
+----
+M460
+
+query T
+SELECT soundex(arrow_cast('123', 'Utf8View'));
+----
+123
+
+# Non-ASCII alphabetic first characters take the passthrough route
+
+query T
+SELECT soundex('Ñoño');
+----
+Ñoño
+
+query T
+SELECT soundex('Éclair');
+----
+Éclair
+
+# Multi-row batches, so the output builder is reused across rows
+
+query T
+SELECT soundex(c) FROM VALUES ('Miller'), (NULL), (''), ('Ñoño'), ('123'), ('Robert') AS t(c);
+----
+M460
+NULL
+(empty)
+Ñoño
+123
+R163
+
+query T
+SELECT soundex(arrow_cast(c, 'Utf8View')) FROM VALUES ('Miller'), (NULL), ('Ñoño') AS t(c);
+----
+M460
+NULL
+Ñoño
