@@ -59,9 +59,11 @@
 //! slice of the data. Measurements are pooled into a shared
 //! [`AdaptiveFilterShared`] so the streams learn as one: the first stream to
 //! accumulate enough samples settles the order and publishes it, and the others
-//! adopt it (one relaxed atomic load per batch) without each re-paying the
-//! warm-up — which is what makes the win materialise when each stream is only a
-//! handful of batches long.
+//! adopt it on their next batch without each re-paying the warm-up — which is
+//! what makes the win materialise when each stream is only a handful of batches
+//! long. Only unsettled streams touch the shared mutex, and only to pool a
+//! batch's counts or pick up a published decision; a settled stream never
+//! locks it again.
 //!
 //! It is **off by default**
 //! (`datafusion.execution.adaptive_filter_reordering`) and never changes query
@@ -92,7 +94,6 @@
 
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use arrow::array::{Array, ArrayRef, BooleanArray, BooleanBufferBuilder, UInt32Array};
 use arrow::buffer::BooleanBuffer;
@@ -186,9 +187,6 @@ impl ConjunctStats {
 /// sharing the warm-up is paid roughly once per query, not once per stream.
 #[derive(Debug, Default)]
 pub(crate) struct AdaptiveFilterShared {
-    /// `0` until an order is published; bumped once when the first stream
-    /// settles. Streams poll it with one relaxed atomic load per batch.
-    epoch: AtomicU64,
     inner: Mutex<SharedInner>,
 }
 
@@ -264,8 +262,6 @@ pub(crate) struct AdaptiveConjunction {
     /// Whether the settled order runs through the compact-once loop; `false`
     /// means evaluate [`predicate`](Self::predicate) directly.
     compact: bool,
-    /// Shared epoch this stream has caught up to.
-    epoch_seen: u64,
     /// Whether the order is settled (frozen): this stream no longer measures.
     settled: bool,
 }
@@ -299,7 +295,6 @@ impl AdaptiveConjunction {
             shared,
             order,
             compact: false,
-            epoch_seen: 0,
             settled: false,
         })
     }
@@ -309,7 +304,7 @@ impl AdaptiveConjunction {
     ///
     /// Until the order settles, each batch is measured and its counts pooled
     /// into the shared registry; a stream adopts the settled order another
-    /// stream published as soon as it sees the epoch advance.
+    /// stream published on its next batch.
     pub(crate) fn evaluate(&mut self, batch: &RecordBatch) -> Result<ArrayRef> {
         self.evaluate_traced(batch).map(|(mask, _)| mask)
     }
@@ -321,16 +316,14 @@ impl AdaptiveConjunction {
         &mut self,
         batch: &RecordBatch,
     ) -> Result<(ArrayRef, BatchStrategy<'_>)> {
-        // Adopt a settled order another stream published since we last looked:
-        // one relaxed atomic load per batch, a lock only on the transition.
-        if !self.settled {
-            let epoch = self.shared.epoch.load(Ordering::Acquire);
-            if epoch != self.epoch_seen {
-                self.epoch_seen = epoch;
-                if let Some(decision) = self.shared.settled() {
-                    self.adopt(decision);
-                }
-            }
+        // Adopt a settled order another stream published since our last batch.
+        // An unsettled stream already locks the shared state once per measured
+        // batch to pool its counts, so this brief extra lock is in the same
+        // cost class; a settled stream never touches it again.
+        if !self.settled
+            && let Some(decision) = self.shared.settled()
+        {
+            self.adopt(decision);
         }
         if self.settled {
             let mask = self.evaluate_settled(batch)?;
@@ -379,21 +372,32 @@ impl AdaptiveConjunction {
     /// batches have accrued across all streams, decide and publish the order.
     fn pool_and_maybe_settle(&mut self, local: &[ConjunctStats]) {
         let mut inner = self.shared.inner.lock().expect("poisoned");
-        if inner.stats.len() != local.len() {
+        if inner.stats.is_empty() {
             inner.stats = vec![ConjunctStats::default(); local.len()];
         }
+        // One `AdaptiveFilterShared` only ever backs one predicate: the builder,
+        // predicate rewrites and `reset_state` each allocate a fresh instance,
+        // and the paths that share one (`Clone`, `with_fetch`,
+        // `with_batch_size`) keep the same predicate.
+        debug_assert_eq!(inner.stats.len(), local.len());
         for (s, l) in inner.stats.iter_mut().zip(local) {
             s.merge(l);
         }
         inner.measured_batches += 1;
-        if inner.settled.is_some() || inner.measured_batches < WARMUP_BATCHES {
+        // Another stream settled between our two lock acquisitions: adopt its
+        // decision rather than measuring on.
+        if let Some(decision) = inner.settled.clone() {
+            drop(inner);
+            self.adopt(decision);
+            return;
+        }
+        if inner.measured_batches < WARMUP_BATCHES {
             return;
         }
         let decision = settle(&inner.stats);
         inner.settled = Some(decision.clone());
         drop(inner);
         self.adopt(decision);
-        self.shared.epoch.fetch_add(1, Ordering::Release);
     }
 }
 
@@ -859,7 +863,7 @@ mod tests {
         }
 
         assert!(shared.settled().is_some());
-        // One more batch each lets a not-yet-settled stream adopt the epoch.
+        // One more batch each lets a not-yet-settled stream adopt the decision.
         s1.evaluate(&mk(99)).unwrap();
         s2.evaluate(&mk(99)).unwrap();
         assert!(s1.settled && s2.settled);
