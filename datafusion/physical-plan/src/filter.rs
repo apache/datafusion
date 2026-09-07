@@ -37,7 +37,7 @@ use crate::filter_pushdown::{
     FilterPushdownPropagation, PushedDown,
 };
 use crate::limit::LocalLimitExec;
-use crate::metrics::{MetricBuilder, MetricType};
+use crate::metrics::{Count, MetricBuilder, MetricCategory, MetricType};
 use crate::projection::{
     EmbeddedProjection, ProjectionExec, ProjectionExpr, make_with_child,
     try_embed_projection, update_expr,
@@ -652,7 +652,6 @@ impl ExecutionPlan for FilterExec {
             context.session_id(),
             context.task_id()
         );
-        let metrics = FilterExecMetrics::new(&self.metrics, partition);
         let enabled = context
             .session_config()
             .options()
@@ -666,6 +665,8 @@ impl ExecutionPlan for FilterExec {
                 )
             })
             .flatten();
+        let metrics =
+            FilterExecMetrics::new(&self.metrics, partition, adaptive.is_some());
         Ok(Box::pin(FilterExecStream {
             schema: self.schema(),
             predicate: Arc::clone(&self.predicate),
@@ -1393,17 +1394,41 @@ struct FilterExecMetrics {
     baseline_metrics: BaselineMetrics,
     /// Selectivity of the filter, calculated as output_rows / input_rows
     selectivity: RatioMetrics,
+    /// Number of partition streams that adopted an adaptively reordered
+    /// evaluation order for the predicate's conjuncts (at most one per
+    /// stream). Registered only when adaptive conjunct reordering is enabled
+    /// for this execution, so the metrics of the (default) flag-off path are
+    /// unchanged.
+    adaptive_reorders: Option<Count>,
     // Remember to update `docs/source/user-guide/metrics.md` when adding new metrics,
     // or modifying metrics comments
 }
 
 impl FilterExecMetrics {
-    pub fn new(metrics: &ExecutionPlanMetricsSet, partition: usize) -> Self {
+    pub fn new(
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+        adaptive: bool,
+    ) -> Self {
         Self {
             baseline_metrics: BaselineMetrics::new(metrics, partition),
             selectivity: MetricBuilder::new(metrics)
                 .with_type(MetricType::Summary)
                 .ratio_metrics("selectivity", partition),
+            adaptive_reorders: adaptive.then(|| {
+                MetricBuilder::new(metrics)
+                    // A deterministic, dimensionless counter: it depends on
+                    // the plan and the data, not on wall-clock timings.
+                    .with_category(MetricCategory::Rows)
+                    .counter("adaptive_reorders", partition)
+            }),
+        }
+    }
+
+    /// Record that this stream adopted a reordered evaluation order.
+    fn record_adaptive_reorder(&self) {
+        if let Some(count) = &self.adaptive_reorders {
+            count.add(1);
         }
     }
 }
@@ -1472,14 +1497,24 @@ impl Stream for FilterExecStream {
                 }
                 Some(Ok(batch)) => {
                     let timer = elapsed_compute.timer();
-                    let array = match self.adaptive.as_mut() {
-                        Some(adaptive) => adaptive.evaluate(&batch),
-                        None => self
-                            .predicate
-                            .as_ref()
-                            .evaluate(&batch)
-                            .and_then(|v| v.into_array(batch.num_rows())),
+                    let (array, adopted_reorder) = match self.adaptive.as_mut() {
+                        Some(adaptive) => {
+                            let array = adaptive.evaluate(&batch);
+                            // Report the settle-on-a-reorder transition, which
+                            // fires at most once per stream.
+                            (array, adaptive.take_adopted_reorder())
+                        }
+                        None => (
+                            self.predicate
+                                .as_ref()
+                                .evaluate(&batch)
+                                .and_then(|v| v.into_array(batch.num_rows())),
+                            false,
+                        ),
                     };
+                    if adopted_reorder {
+                        self.metrics.record_adaptive_reorder();
+                    }
                     let status = array
                         .and_then(|array| {
                             Ok(match self.projection.as_ref()  {

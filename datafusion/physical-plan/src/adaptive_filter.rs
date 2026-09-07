@@ -264,6 +264,11 @@ pub(crate) struct AdaptiveConjunction {
     compact: bool,
     /// Whether the order is settled (frozen): this stream no longer measures.
     settled: bool,
+    /// Set when this stream adopts a *reordered* decision, and cleared by
+    /// [`take_adopted_reorder`](Self::take_adopted_reorder) — a one-shot
+    /// transition signal so the owner (`FilterExec`'s stream) can report that
+    /// the reorder happened without this type knowing about metrics.
+    adopted_reorder: bool,
 }
 
 impl AdaptiveConjunction {
@@ -296,7 +301,19 @@ impl AdaptiveConjunction {
             order,
             compact: false,
             settled: false,
+            adopted_reorder: false,
         })
+    }
+
+    /// Whether this stream has just adopted a reordered evaluation order,
+    /// clearing the signal.
+    ///
+    /// Fires exactly once per stream, on the batch at which the stream settles
+    /// on a reorder — whether it settled the order itself or picked up one
+    /// another stream published. A stream that settles on the written order
+    /// (no reorder) never fires.
+    pub(crate) fn take_adopted_reorder(&mut self) -> bool {
+        std::mem::take(&mut self.adopted_reorder)
     }
 
     /// Evaluate the conjunction against `batch`, returning the boolean mask
@@ -366,6 +383,9 @@ impl AdaptiveConjunction {
         self.order = decision.order;
         self.compact = decision.compact;
         self.settled = true;
+        // Only a genuine reorder is worth reporting; settling on the written
+        // order is indistinguishable from the feature being off.
+        self.adopted_reorder = self.compact;
     }
 
     /// Merge this batch's measurements into the shared pool and, once enough
@@ -872,6 +892,80 @@ mod tests {
         assert_eq!(s1.order, vec![1, 0]);
         assert_eq!(s2.order, vec![1, 0]);
         assert!(s1.compact && s2.compact);
+    }
+
+    /// The reorder-adoption signal (`take_adopted_reorder`, what `FilterExec`
+    /// counts into its `adaptive_reorders` metric) fires exactly once per
+    /// stream: once for the stream that settles the order, and once for a
+    /// stream that later picks up the decision that stream published.
+    ///
+    /// The per-conjunct costs are seeded (see [`seed`]) so the settle decision
+    /// is a reorder deterministically, regardless of real timer values.
+    #[test]
+    fn adopted_reorder_signals_once_per_stream() {
+        let schema = schema();
+        let p = predicate(&schema); // `a > 2 AND b < 5`, written order [0, 1]
+        let shared = Arc::new(AdaptiveFilterShared::new());
+        // Conjunct 1 is far more selective; promoting it is materially cheaper,
+        // so the warm-up settles on a reorder. One batch short of the warm-up.
+        seed(
+            &shared,
+            vec![
+                stats(70_000_000, 63_000_000, 70_000_000), // pass 0.9, ~1ns/row
+                stats(70_000_000, 700_000, 350_000_000),   // pass 0.01, ~5ns/row
+            ],
+            WARMUP_BATCHES - 1,
+        );
+        let mut settler = AdaptiveConjunction::try_new(&p, Arc::clone(&shared)).unwrap();
+        let mut adopter = AdaptiveConjunction::try_new(&p, Arc::clone(&shared)).unwrap();
+
+        let a: Vec<i32> = (0..100).collect();
+        let b: Vec<i32> = a.iter().map(|x| x.rem_euclid(25)).collect();
+        let rb = batch(&schema, a, b);
+
+        // Nothing adopted yet.
+        assert!(!settler.take_adopted_reorder());
+
+        // This batch completes the warm-up: `settler` settles on the reorder
+        // and signals it, exactly once.
+        settler.evaluate(&rb).unwrap();
+        assert!(settler.compact);
+        assert!(settler.take_adopted_reorder());
+        settler.evaluate(&rb).unwrap();
+        assert!(!settler.take_adopted_reorder());
+
+        // `adopter` never measured its way to a decision: it picks up the
+        // published one on its next batch, and signals that once too.
+        adopter.evaluate(&rb).unwrap();
+        assert!(adopter.compact);
+        assert!(adopter.take_adopted_reorder());
+        adopter.evaluate(&rb).unwrap();
+        assert!(!adopter.take_adopted_reorder());
+    }
+
+    /// Settling on the written order is indistinguishable from the feature
+    /// being off, so it must not signal a reorder.
+    #[test]
+    fn settling_without_reorder_signals_nothing() {
+        let schema = schema();
+        let p = predicate(&schema);
+        let shared = Arc::new(AdaptiveFilterShared::new());
+        // Identical cost and selectivity: no order can be materially cheaper.
+        seed(
+            &shared,
+            vec![
+                stats(70_000_000, 35_000_000, 70_000_000),
+                stats(70_000_000, 35_000_000, 70_000_000),
+            ],
+            WARMUP_BATCHES - 1,
+        );
+        let mut adaptive = AdaptiveConjunction::try_new(&p, Arc::clone(&shared)).unwrap();
+
+        let a: Vec<i32> = (0..100).collect();
+        let rb = batch(&schema, a.clone(), a);
+        adaptive.evaluate(&rb).unwrap();
+        assert!(adaptive.settled && !adaptive.compact);
+        assert!(!adaptive.take_adopted_reorder());
     }
 
     /// End-to-end input/output-contract scenario: feed batches, observe the

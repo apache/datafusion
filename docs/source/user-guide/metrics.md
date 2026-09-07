@@ -38,9 +38,10 @@ DataFusion operators expose runtime metrics so you can understand where time is 
 
 ### FilterExec
 
-| Metric      | Description                                                       |
-| ----------- | ----------------------------------------------------------------- |
-| selectivity | Selectivity of the filter, calculated as output_rows / input_rows |
+| Metric            | Description                                                                                                                                                                                                                                                      |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| selectivity       | Selectivity of the filter, calculated as output_rows / input_rows                                                                                                                                                                                                |
+| adaptive_reorders | Number of partition streams that adopted an adaptively reordered evaluation order for the predicate's conjuncts (at most one per stream). Only present when `datafusion.execution.adaptive_filter_reordering` is enabled; `0` means the measured order was kept. |
 
 ### HashJoinExec
 
