@@ -100,6 +100,7 @@ use std::sync::Arc;
 use std::task::{Poll, ready};
 
 use arrow::array::{AsArray, RecordBatch};
+use arrow::compute::BatchCoalescer;
 use arrow::compute::filter_record_batch;
 use arrow::compute::kernels::boolean::not;
 use arrow_schema::SchemaRef;
@@ -123,6 +124,8 @@ pub(super) enum RightExistencePWMJStreamState {
     /// Fetch streamed batches and emit the rows that do (`RightSemi`) or do not
     /// (`RightAnti`) have a buffered match.
     ScanStreamBatches,
+    /// Streamed side exhausted; drain whatever `output_batches` still holds.
+    Draining,
     Completed,
 }
 
@@ -146,9 +149,13 @@ pub(super) struct RightExistencePWMJStream {
     /// ever match. Only populated once `buffered_extreme_fut` has resolved.
     buffered_extreme: Option<ScalarValue>,
     join_metrics: BuildProbeJoinMetrics,
+    /// Chunks the per-streamed-batch output to `batch_size`, so a low-selectivity join
+    /// does not hand downstream operators one small batch per streamed batch.
+    output_batches: Box<BatchCoalescer>,
 }
 
 impl RightExistencePWMJStream {
+    #[expect(clippy::too_many_arguments)]
     pub(super) fn try_new(
         schema: SchemaRef,
         on_streamed: PhysicalExprRef,
@@ -157,8 +164,13 @@ impl RightExistencePWMJStream {
         streamed: SendableRecordBatchStream,
         buffered_extreme_fut: OnceFut<BufferedExtreme>,
         join_metrics: BuildProbeJoinMetrics,
+        batch_size: usize,
     ) -> Self {
         Self {
+            output_batches: Box::new(BatchCoalescer::new(
+                Arc::clone(&schema),
+                batch_size,
+            )),
             schema,
             on_streamed,
             join_type,
@@ -182,6 +194,9 @@ impl RightExistencePWMJStream {
                 }
                 RightExistencePWMJStreamState::ScanStreamBatches => {
                     handle_state!(ready!(self.scan_stream_batch(cx)))
+                }
+                RightExistencePWMJStreamState::Draining => {
+                    handle_state!(self.drain_output())
                 }
                 RightExistencePWMJStreamState::Completed => Poll::Ready(None),
             };
@@ -218,27 +233,48 @@ impl RightExistencePWMJStream {
         Poll::Ready(Ok(StatefulStreamResult::Continue))
     }
 
-    /// Fetches one streamed batch and emits the rows it contributes, if any.
+    /// Fetches one streamed batch, filters it, and pushes the survivors into
+    /// `output_batches`. Once the streamed side is exhausted, flushes the coalescer's
+    /// partial batch and hands off to [`Self::drain_output`].
     fn scan_stream_batch(
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
+        if let Some(batch) = self.output_batches.next_completed_batch() {
+            return Poll::Ready(Ok(StatefulStreamResult::Ready(Some(batch))));
+        }
+
         match ready!(self.streamed.poll_next_unpin(cx)) {
-            None => self.state = RightExistencePWMJStreamState::Completed,
+            None => {
+                self.output_batches.finish_buffered_batch()?;
+                self.state = RightExistencePWMJStreamState::Draining;
+            }
             Some(Ok(batch)) => {
                 self.join_metrics.input_batches.add(1);
                 self.join_metrics.input_rows.add(batch.num_rows());
 
                 let output = self.filter_streamed_batch(&batch)?;
                 if output.num_rows() > 0 {
-                    return Poll::Ready(Ok(StatefulStreamResult::Ready(Some(output))));
+                    self.output_batches.push_batch(output)?;
                 }
-                // Nothing survived; take the next batch rather than yielding an empty one.
+                // Nothing pushed, or not enough to complete a batch yet: loop back
+                // through `poll_next_impl` to poll the next streamed batch.
             }
             Some(Err(err)) => return Poll::Ready(Err(err)),
         }
 
         Poll::Ready(Ok(StatefulStreamResult::Continue))
+    }
+
+    /// Drains whatever `output_batches` still holds once the streamed side is exhausted.
+    fn drain_output(&mut self) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
+        match self.output_batches.next_completed_batch() {
+            Some(batch) => Ok(StatefulStreamResult::Ready(Some(batch))),
+            None => {
+                self.state = RightExistencePWMJStreamState::Completed;
+                Ok(StatefulStreamResult::Ready(None))
+            }
+        }
     }
 
     /// Keeps the streamed rows that have a buffered match (`RightSemi`) or that have none
@@ -325,6 +361,7 @@ mod tests {
     use arrow_schema::{DataType, Field, Schema};
     use datafusion_common::test_util::batches_to_string;
     use datafusion_execution::TaskContext;
+    use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::GreedyMemoryPool;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_physical_expr::expressions::Column;
@@ -835,6 +872,108 @@ mod tests {
             );
             assert_eq!(input_batches(&join), 3, "{join_type}");
         }
+        Ok(())
+    }
+
+    /// Each streamed batch here is one matching row, so without coalescing the stream would
+    /// hand back 5 one-row batches. `batch_size` 2 packs them into 3 instead, pinning that
+    /// `output_batches` actually merges across streamed-batch boundaries rather than just
+    /// forwarding `filter_streamed_batch`'s output directly.
+    #[tokio::test]
+    async fn output_is_coalesced_to_batch_size() -> Result<()> {
+        let join = join(
+            kv_exec(&[vec![kv_batch(&[(1, Some(10))])]]),
+            kv_exec(&[vec![
+                kv_batch(&[(10, Some(1))]),
+                kv_batch(&[(20, Some(2))]),
+                kv_batch(&[(30, Some(3))]),
+                kv_batch(&[(40, Some(4))]),
+                kv_batch(&[(50, Some(5))]),
+            ]]),
+            Operator::Gt,
+            JoinType::RightSemi,
+        )?;
+
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(2)),
+        );
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        assert_eq!(
+            batches.iter().map(|b| b.num_rows()).collect::<Vec<_>>(),
+            vec![2, 2, 1],
+            "5 matching rows over 5 input batches should pack into ceil(5/2) = 3 output \
+             batches of at most `batch_size` rows each"
+        );
+        assert_eq!(
+            input_batches(&join),
+            5,
+            "every streamed batch is still read"
+        );
+        Ok(())
+    }
+
+    /// `output_is_coalesced_to_batch_size` above pins that coalescing happens; this pins that
+    /// it doesn't reorder rows while doing it. The streamed side is genuinely sorted (via
+    /// `SortExec`, the same claim `output_ordering_follows_the_streamed_side` checks at the
+    /// planning level), filtering drops rows unevenly across it, and a small `batch_size`
+    /// forces `output_batches` to repack across what were originally separate sorted
+    /// `SortExec` output batches. `BatchCoalescer`'s `completed` buffer is a plain FIFO
+    /// `VecDeque` in arrow-rs (`push_back`/`pop_front`, no sort), so this should hold
+    /// regardless -- the point is to check it at runtime, not just reason about it.
+    #[tokio::test]
+    async fn coalescing_does_not_reorder_a_sorted_streamed_side() -> Result<()> {
+        let streamed_input = kv_exec(&[vec![kv_batch(&[
+            (50, Some(5)),
+            (10, Some(199)),
+            (90, Some(6)),
+            (30, Some(200)),
+            (20, Some(7)),
+            (70, Some(8)),
+            (40, Some(199)),
+            (60, Some(9)),
+        ])]]);
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+            Arc::new(Column::new_with_schema("id", &streamed_input.schema())?),
+            SortOptions::new(false, false),
+        )])
+        .unwrap();
+        let streamed = Arc::new(SortExec::new(ordering, streamed_input));
+
+        // Buffered max is 100, so `>` keeps only streamed rows with k < 100 -- ids 10, 30, 40
+        // (k in the 100s) are filtered out, unevenly across the sorted id order, so the
+        // survivors (20, 50, 60, 70, 90) don't line up with any one original batch boundary.
+        let join = join(
+            kv_exec(&[vec![kv_batch(&[(1, Some(100))])]]),
+            streamed as _,
+            Operator::Gt,
+            JoinType::RightSemi,
+        )?;
+
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(2)),
+        );
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        let ids: Vec<i32> = batches
+            .iter()
+            .flat_map(|b| b.column(0).as_primitive::<Int32Type>().values().to_vec())
+            .collect();
+        assert_eq!(
+            ids,
+            vec![20, 50, 60, 70, 90],
+            "coalescing must not disturb the streamed side's sorted order"
+        );
+        assert_eq!(
+            batches.iter().map(|b| b.num_rows()).collect::<Vec<_>>(),
+            vec![2, 2, 1],
+            "5 surviving rows packed to batch_size = 2 confirms the coalescer, not a \
+             pass-through, produced this shape"
+        );
         Ok(())
     }
 

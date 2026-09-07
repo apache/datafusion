@@ -572,9 +572,10 @@ fn piecewise_join(
 /// orderings and plan properties inside `try_new`, so only the six constructor
 /// arguments travel on the wire. Cover the full cartesian product of the two
 /// enum-valued ones: every range operator against every supported join type --
-/// the four classic ones plus the two left existence joins, whose output schema is
-/// the buffered side alone. (Right existence joins and Mark joins are rejected by
-/// `try_new`, so this is the complete set.)
+/// the four classic ones plus the four existence joins, whose output schema is
+/// one side alone (buffered for `LeftSemi`/`LeftAnti`, streamed for
+/// `RightSemi`/`RightAnti`). Mark joins are rejected by `try_new`, so this is
+/// the complete set.
 #[test]
 fn roundtrip_piecewise_merge_join() -> Result<()> {
     let (schema_buffered, schema_streamed) = piecewise_schemas();
@@ -591,6 +592,8 @@ fn roundtrip_piecewise_merge_join() -> Result<()> {
             JoinType::Full,
             JoinType::LeftSemi,
             JoinType::LeftAnti,
+            JoinType::RightSemi,
+            JoinType::RightAnti,
         ] {
             let result = roundtrip_test_and_return(
                 Arc::new(PiecewiseMergeJoinExec::try_new(
@@ -615,17 +618,17 @@ fn roundtrip_piecewise_merge_join() -> Result<()> {
             // Both the name and the index have to survive on the correct side.
             assert_eq!(result.on.0.to_string(), "a@2");
             assert_eq!(result.on.1.to_string(), "b@0");
-            // The existence joins output the buffered side alone (3 fields) while the
-            // classic ones output both sides (3 + 2). The before/after comparison
+            // The left existence joins output the buffered side alone (3 fields),
+            // the right existence joins the streamed side alone (2 fields), and the
+            // classic joins output both sides (3 + 2). The before/after comparison
             // inside the helper already covers the schema; this pins the expected
-            // width absolutely, so the existence output contract is stated rather
+            // width absolutely, so each existence output contract is stated rather
             // than merely preserved.
-            let expected_fields =
-                if matches!(join_type, JoinType::LeftSemi | JoinType::LeftAnti) {
-                    3
-                } else {
-                    5
-                };
+            let expected_fields = match join_type {
+                JoinType::LeftSemi | JoinType::LeftAnti => 3,
+                JoinType::RightSemi | JoinType::RightAnti => 2,
+                _ => 5,
+            };
             assert_eq!(
                 result.schema().fields().len(),
                 expected_fields,

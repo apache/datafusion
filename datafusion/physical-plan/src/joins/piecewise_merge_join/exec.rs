@@ -743,6 +743,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
                     streamed,
                     extreme_fut,
                     metrics,
+                    batch_size,
                 )))
             }
             JoinType::LeftSemi | JoinType::LeftAnti => {
