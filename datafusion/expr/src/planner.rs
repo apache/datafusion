@@ -430,6 +430,27 @@ pub trait RelationPlannerContext {
     /// from the first registered relation planner.
     fn plan(&mut self, relation: TableFactor) -> Result<LogicalPlan>;
 
+    /// Returns the common table expression (CTE) visible for the specified
+    /// table reference in the current query scope, if any.
+    ///
+    /// Relation planners run before DataFusion's built-in relation planning. A
+    /// planner that recognizes ordinary tables by name can use this method to
+    /// pass a same-named relation to the remaining planners. When every
+    /// ordinary name-based planner does so, built-in CTE resolution is
+    /// preserved. Use [`Self::object_name_to_table_reference`] to normalize an
+    /// [`ObjectName`] before looking it up.
+    ///
+    /// The lookup follows the same string-key matching as DataFusion's built-in
+    /// relation planning, including for qualified table references. Different
+    /// [`TableReference`] variants with the same string representation therefore
+    /// use the same CTE lookup key.
+    ///
+    /// The default implementation returns `None` for compatibility with custom
+    /// implementations of this context.
+    fn get_cte(&self, _name: &TableReference) -> Option<&LogicalPlan> {
+        None
+    }
+
     /// Converts a SQL expression into a logical expression using the current
     /// planner context.
     fn sql_to_expr(&mut self, expr: SQLExpr, schema: &DFSchema) -> Result<Expr>;

@@ -38,6 +38,15 @@ struct SqlToRelRelationContext<'a, 'b, S: ContextProvider> {
     planner_context: &'a mut PlannerContext,
 }
 
+/// Look up a CTE using the same string key as DataFusion's built-in relation
+/// planning.
+fn get_cte_for_table_reference<'a>(
+    planner_context: &'a PlannerContext,
+    name: &TableReference,
+) -> Option<&'a LogicalPlan> {
+    planner_context.get_cte(&name.to_string())
+}
+
 // Implement RelationPlannerContext
 impl<S: ContextProvider> RelationPlannerContext for SqlToRelRelationContext<'_, '_, S> {
     fn context_provider(&self) -> &dyn ContextProvider {
@@ -46,6 +55,10 @@ impl<S: ContextProvider> RelationPlannerContext for SqlToRelRelationContext<'_, 
 
     fn plan(&mut self, relation: TableFactor) -> Result<LogicalPlan> {
         self.planner.create_relation(relation, self.planner_context)
+    }
+
+    fn get_cte(&self, name: &TableReference) -> Option<&LogicalPlan> {
+        get_cte_for_table_reference(self.planner_context, name)
     }
 
     fn sql_to_expr(
@@ -184,8 +197,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 } else {
                     // Normalize name and alias
                     let table_ref = self.object_name_to_table_reference(name)?;
-                    let table_name = table_ref.to_string();
-                    let cte = planner_context.get_cte(&table_name);
+                    let cte = get_cte_for_table_reference(planner_context, &table_ref);
                     (
                         match (
                             cte,
