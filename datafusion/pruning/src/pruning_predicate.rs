@@ -1575,13 +1575,17 @@ fn build_string_in_list_expr(
 }
 
 /// Default maximum number of entries in an `IN (...)` list eligible for
-/// statistics pruning. Eligible literal string lists above this threshold use a
-/// compact sorted domain instead of per-value min/max checks, for both `IN` and
-/// `NOT IN`.
+/// statistics pruning. See [`PruningPredicateBuilder::with_max_in_list_size`]
+/// for the representation used within this cap.
 /// Callers can raise the cap via [`PredicateRewriter::with_max_in_list_size`], and
 /// query engines can wire it from the
 /// `datafusion.execution.parquet.max_in_list_size` config option.
 pub const MAX_IN_LIST_SIZE: usize = 20;
+
+// Keep the representation threshold independent of the configurable pruning cap.
+// Small lists can be faster with vectorized per-value comparisons than with
+// compact per-container searches, particularly for large statistics batches.
+const MIN_COMPACT_IN_LIST_SIZE: usize = 21;
 
 /// Rewrite a predicate expression in terms of statistics (min/max/null_counts)
 /// for use as a [`PruningPredicate`].
@@ -1709,11 +1713,8 @@ fn build_predicate_expression(
         }
     }
     if let Some(in_list) = expr.downcast_ref::<phys_expr::InListExpr>() {
-        // Keep the existing expression shape for lists of at most 20 values.
-        // This lower bound is a scope/compatibility choice, not a measured
-        // performance threshold; compact pruning is opt-in via a raised cap.
         // The compact form covers both `IN` and `NOT IN`.
-        if in_list.list().len() > MAX_IN_LIST_SIZE
+        if in_list.list().len() >= MIN_COMPACT_IN_LIST_SIZE
             && in_list.list().len() <= max_in_list_size
             && let Some(pruning_expr) =
                 build_string_in_list_expr(in_list, schema, required_columns, properties)
@@ -3812,7 +3813,7 @@ mod tests {
                     predicate.required_columns().single_column().unwrap().name(),
                     "c1"
                 );
-                if count > MAX_IN_LIST_SIZE {
+                if count >= MIN_COMPACT_IN_LIST_SIZE {
                     // The expression and statistics schema do not grow with the domain.
                     assert_eq!(predicate.required_columns.columns.len(), 4);
                     let mut nodes = 0;
@@ -3947,6 +3948,41 @@ mod tests {
             predicate.prune(&stats)?,
             [true, true, false, true, true, true, true, false]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn string_in_list_representation_respects_cap_and_threshold() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, true)]));
+        for count in [1, 2, 4, 8, 20, 21] {
+            let values = (0..count)
+                .map(|i| lit(format!("a{i:03}")))
+                .collect::<Vec<_>>();
+            for (negated, marker) in
+                [(false, "IN_SET_INTERSECTS"), (true, "NOT_IN_SET_MAY_MATCH")]
+            {
+                let expr = logical2physical(
+                    &col("c1").in_list(values.clone(), negated),
+                    &schema,
+                );
+                for limit in [0, count - 1, count, 32] {
+                    let predicate = PruningPredicateBuilder::new()
+                        .with_file_schema(Arc::clone(&schema))
+                        .with_max_in_list_size(limit)
+                        .try_build(Arc::clone(&expr))?;
+                    assert_eq!(
+                        predicate.predicate_expr().to_string().contains(marker),
+                        count >= 21 && count <= limit,
+                        "count={count}, limit={limit}, negated={negated}"
+                    );
+                    assert_eq!(
+                        is_always_true(predicate.predicate_expr()),
+                        count > limit,
+                        "count={count}, limit={limit}, negated={negated}"
+                    );
+                }
+            }
+        }
         Ok(())
     }
 
