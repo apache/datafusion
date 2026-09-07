@@ -307,8 +307,9 @@ pub struct ParquetSource {
     pub(crate) batch_size: Option<usize>,
     /// Optional hint for the size of the parquet metadata
     pub(crate) metadata_size_hint: Option<usize>,
-    /// Projection to apply to the output.
-    pub(crate) projection: ProjectionExprs,
+    /// Projection to apply to the output, or `None` when the output is the
+    /// table schema itself (file columns + partition columns).
+    pub(crate) projection: Option<ProjectionExprs>,
     #[cfg(feature = "parquet_encryption")]
     pub(crate) encryption_factory: Option<Arc<dyn EncryptionFactory>>,
     /// If true, the opener flips row-group iteration order. Within-
@@ -327,13 +328,9 @@ impl ParquetSource {
     /// Uses default `TableParquetOptions`.
     /// To set custom options, use [ParquetSource::with_table_parquet_options`].
     pub fn new(table_schema: impl Into<TableSchema>) -> Self {
-        let table_schema = table_schema.into();
-        // Projection over the full table schema (file columns + partition columns)
-        let full_schema = table_schema.table_schema();
-        let indices: Vec<usize> = (0..full_schema.fields().len()).collect();
         Self {
-            projection: ProjectionExprs::from_indices(&indices, full_schema),
-            table_schema,
+            projection: None,
+            table_schema: table_schema.into(),
             table_parquet_options: TableParquetOptions::default(),
             metrics: ExecutionPlanMetricsSet::new(),
             predicate: None,
@@ -703,7 +700,11 @@ impl FileSource for ParquetSource {
         if !projection.iter().any(|projection_expr| {
             expr_references_scalar_udf::<FileRowIndexFunc>(&projection_expr.expr)
         }) {
-            source.projection = self.projection.try_merge(projection)?;
+            let table_schema = self.table_schema.table_schema();
+            source.projection = Some(match &self.projection {
+                Some(existing) => existing.try_merge(projection)?,
+                None => projection.try_merge_onto_identity(table_schema)?,
+            });
             return Ok(Some(Arc::new(source)));
         }
 
@@ -712,18 +713,29 @@ impl FileSource for ParquetSource {
         let (table_schema, row_index_col) =
             table_schema_with_row_index_col(self.table_schema());
 
-        source.table_schema = table_schema;
-        source.projection = rewrite_file_row_index_projection(
-            &self.projection,
+        // `rewrite_file_row_index_projection` appends the row-index column to
+        // the base projection, so it needs a concrete one.
+        let materialized_identity;
+        let base = match &self.projection {
+            Some(existing) => existing,
+            None => {
+                materialized_identity =
+                    ProjectionExprs::identity(self.table_schema.table_schema());
+                &materialized_identity
+            }
+        };
+        source.projection = Some(rewrite_file_row_index_projection(
+            base,
             projection,
             &row_index_col,
-        )?;
+        )?);
+        source.table_schema = table_schema;
 
         Ok(Some(Arc::new(source)))
     }
 
     fn projection(&self) -> Option<&ProjectionExprs> {
-        Some(&self.projection)
+        self.projection.as_ref()
     }
 
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
@@ -1069,9 +1081,12 @@ impl FileSource for ParquetSource {
         ) -> datafusion_common::Result<TreeNodeRecursion>,
     ) -> datafusion_common::Result<TreeNodeRecursion> {
         datafusion_physical_plan::apply_expression_roots(
-            self.predicate
-                .iter()
-                .chain(self.projection.iter().map(|proj_expr| &proj_expr.expr)),
+            self.predicate.iter().chain(
+                self.projection
+                    .iter()
+                    .flat_map(|projection| projection.iter())
+                    .map(|proj_expr| &proj_expr.expr),
+            ),
             f,
         )
     }
@@ -1308,6 +1323,91 @@ mod tests {
             ParquetSource::new(Arc::new(Schema::empty())).with_predicate(predicate);
         // same value. but filter() call Arc::clone internally
         assert_eq!(parquet_source.predicate(), parquet_source.filter().as_ref());
+    }
+
+    #[test]
+    fn test_new_source_has_no_projection() {
+        use arrow::datatypes::{DataType, Field};
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let source = ParquetSource::new(Arc::clone(&schema));
+        assert!(source.projection().is_none());
+
+        // Callers filter no-op projections (see `projection_is_no_op`), so
+        // only projections that change something reach the source.
+        let narrowed = ProjectionExprs::from_indices(&[1], &schema);
+        let pushed = source.try_pushdown_projection(&narrowed).unwrap().unwrap();
+        assert_eq!(pushed.projection(), Some(&narrowed));
+
+        let reordered = ProjectionExprs::from_indices(&[1, 0], &schema);
+        let pushed = source.try_pushdown_projection(&reordered).unwrap().unwrap();
+        assert_eq!(pushed.projection(), Some(&reordered));
+    }
+
+    #[test]
+    fn test_row_index_pushdown_onto_an_existing_projection() {
+        // `file_row_index()` pushed onto a source that already carries a
+        // projection must append the row-index column to *that* projection,
+        // not to the table's identity: the incoming expressions are indexed
+        // against the source's current output, not against the table.
+        use arrow::datatypes::{DataType, Field};
+        use datafusion_expr::col;
+        use datafusion_functions::core::expr_fn::file_row_index;
+        use datafusion_physical_expr::planner::logical2physical;
+        use datafusion_physical_expr::projection::ProjectionExpr;
+
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Utf8, true),
+        ]));
+        let source = ParquetSource::new(Arc::clone(&table_schema));
+
+        // Narrow to `b`, so the source's output is a single column.
+        let narrowed = ProjectionExprs::from_indices(&[1], &table_schema);
+        let projected = source.try_pushdown_projection(&narrowed).unwrap().unwrap();
+        assert_eq!(projected.projection(), Some(&narrowed));
+
+        // `SELECT b, file_row_index()` over that output: `b` is at index 0 here.
+        let output_schema = Schema::new(vec![Field::new("b", DataType::Utf8, true)]);
+        let pushed = ProjectionExprs::new([
+            ProjectionExpr::new(logical2physical(&col("b"), &output_schema), "b"),
+            ProjectionExpr::new(
+                logical2physical(&file_row_index(), &output_schema),
+                "ri",
+            ),
+        ]);
+        let with_row_index = projected.try_pushdown_projection(&pushed).unwrap().unwrap();
+
+        let projection = with_row_index.projection().expect("projection is stored");
+        assert_eq!(
+            projection
+                .iter()
+                .map(|expr| expr.alias.as_str())
+                .collect::<Vec<_>>(),
+            vec!["b", "ri"],
+        );
+
+        // Built on the existing projection: `b` still resolves to the table's
+        // index 1. Merging onto the table identity instead would have left `a`
+        // in the base and resolved `b` elsewhere.
+        let b = projection.as_ref()[0]
+            .expr
+            .downcast_ref::<Column>()
+            .expect("b stays a plain column reference");
+        assert_eq!((b.name(), b.index()), ("b", 1));
+
+        // The row-index column is served by a virtual column on the rewritten
+        // table schema rather than read from the file.
+        assert!(
+            with_row_index
+                .table_schema()
+                .virtual_columns()
+                .iter()
+                .any(|f| f.name() == "__datafusion_file_row_index"),
+        );
     }
 
     #[test]

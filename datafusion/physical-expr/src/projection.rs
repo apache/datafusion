@@ -246,6 +246,50 @@ impl ProjectionExprs {
         Self::from_iter(projection_exprs)
     }
 
+    /// Creates the identity projection over `schema`: every field, in order,
+    /// under its own name.
+    pub fn identity(schema: &Schema) -> Self {
+        let projection_exprs =
+            schema
+                .fields()
+                .iter()
+                .enumerate()
+                .map(|(index, field)| ProjectionExpr {
+                    expr: Arc::new(Column::new(field.name(), index)),
+                    alias: field.name().clone(),
+                });
+
+        Self::from_iter(projection_exprs)
+    }
+
+    /// Returns `true` if this projection is the identity over `schema`: every
+    /// field of `schema`, in order, under its own name. Applying it produces
+    /// the input unchanged.
+    pub fn is_identity(&self, schema: &Schema) -> bool {
+        self.is_identity_over_names(
+            schema.fields().iter().map(|field| field.name().as_str()),
+        )
+    }
+
+    /// [`Self::is_identity`] against an input described by its field names
+    /// alone, for callers whose input schema is not materialized as a
+    /// [`Schema`] (e.g. the output of another projection).
+    pub fn is_identity_over_names<'a>(
+        &self,
+        names: impl ExactSizeIterator<Item = &'a str>,
+    ) -> bool {
+        self.exprs.len() == names.len()
+            && self.exprs.iter().zip(names).enumerate().all(
+                |(index, (proj_expr, name))| {
+                    proj_expr.alias == name
+                        && proj_expr
+                            .expr
+                            .downcast_ref::<Column>()
+                            .is_some_and(|col| col.index() == index && col.name() == name)
+                },
+            )
+    }
+
     /// Returns an iterator over the projection expressions
     pub fn iter(&self) -> impl Iterator<Item = &ProjectionExpr> {
         self.exprs.iter()
@@ -383,6 +427,52 @@ impl ProjectionExprs {
         for proj_expr in other.exprs.iter() {
             new_exprs.push(ProjectionExpr {
                 expr: self.unproject_expr(&proj_expr.expr)?,
+                alias: proj_expr.alias.clone(),
+            });
+        }
+        Ok(ProjectionExprs::new(new_exprs))
+    }
+
+    /// The result of [`ProjectionExprs::identity(schema).try_merge(self)`],
+    /// computed without materializing the identity.
+    ///
+    /// Merging onto the identity leaves every expression alone except for
+    /// column references whose name disagrees with the field `schema` carries
+    /// at that index, which are renamed. The cost is therefore proportional to
+    /// `self` rather than to the width of `schema`.
+    ///
+    /// [`ProjectionExprs::identity(schema).try_merge(self)`]: Self::try_merge
+    ///
+    /// # Errors
+    /// This function returns an error if any column reference is out of bounds
+    /// for `schema`, matching [`Self::try_merge`] against the identity.
+    pub fn try_merge_onto_identity(&self, schema: &Schema) -> Result<ProjectionExprs> {
+        let fields = schema.fields();
+        let mut new_exprs = Vec::with_capacity(self.exprs.len());
+        for proj_expr in self.exprs.iter() {
+            let expr = Arc::clone(&proj_expr.expr)
+                .transform_up(|expr| {
+                    let Some(column) = expr.downcast_ref::<Column>() else {
+                        return Ok(Transformed::no(expr));
+                    };
+                    let field = fields.get(column.index()).ok_or_else(|| {
+                        internal_datafusion_err!(
+                            "Column index {} out of bounds for projected expressions of length {}",
+                            column.index(),
+                            fields.len()
+                        )
+                    })?;
+                    if field.name() == column.name() {
+                        return Ok(Transformed::no(expr));
+                    }
+                    Ok(Transformed::yes(Arc::new(Column::new(
+                        field.name(),
+                        column.index(),
+                    )) as _))
+                })
+                .data()?;
+            new_exprs.push(ProjectionExpr {
+                expr,
                 alias: proj_expr.alias.clone(),
             });
         }
@@ -2421,6 +2511,109 @@ pub(crate) mod tests {
     }
 
     // Tests for Projection struct
+
+    #[test]
+    fn test_identity_is_identity() {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, true),
+        ]);
+        assert!(ProjectionExprs::identity(&schema).is_identity(&schema));
+        assert_eq!(
+            ProjectionExprs::identity(&schema),
+            ProjectionExprs::from_indices(&[0, 1], &schema)
+        );
+    }
+
+    #[test]
+    fn test_is_identity_rejects_non_identity_projections() {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, true),
+        ]);
+
+        // Fewer columns
+        assert!(!ProjectionExprs::from_indices(&[0], &schema).is_identity(&schema));
+        // Reordered
+        assert!(!ProjectionExprs::from_indices(&[1, 0], &schema).is_identity(&schema));
+        // Duplicated
+        assert!(!ProjectionExprs::from_indices(&[0, 0], &schema).is_identity(&schema));
+        // Renamed
+        assert!(
+            !ProjectionExprs::new([
+                ProjectionExpr::new(Arc::new(Column::new("a", 0)), "renamed"),
+                ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b"),
+            ])
+            .is_identity(&schema)
+        );
+        // Not a plain column reference
+        assert!(
+            !ProjectionExprs::new([
+                ProjectionExpr::new(
+                    Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                    "a"
+                ),
+                ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b"),
+            ])
+            .is_identity(&schema)
+        );
+    }
+
+    #[test]
+    fn test_try_merge_onto_identity_matches_try_merge() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Utf8, true),
+        ]);
+        let identity = ProjectionExprs::identity(&schema);
+
+        let cases = [
+            // Plain column selection.
+            ProjectionExprs::from_indices(&[2, 0], &schema),
+            // Everything, in order.
+            ProjectionExprs::from_indices(&[0, 1, 2], &schema),
+            // A computed expression over two columns, plus a literal.
+            ProjectionExprs::new([
+                ProjectionExpr::new(
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("a", 0)),
+                        Operator::Plus,
+                        Arc::new(Column::new("b", 1)),
+                    )),
+                    "sum",
+                ),
+                ProjectionExpr::new(
+                    Arc::new(Literal::new(ScalarValue::Int32(Some(7)))),
+                    "seven",
+                ),
+            ]),
+            // A column whose name disagrees with the schema at that index:
+            // merging onto the identity renames it.
+            ProjectionExprs::new([ProjectionExpr::new(
+                Arc::new(Column::new("stale", 1)),
+                "renamed",
+            )]),
+        ];
+
+        for projection in cases {
+            assert_eq!(
+                projection.try_merge_onto_identity(&schema)?,
+                identity.try_merge(&projection)?,
+                "mismatch for {projection}"
+            );
+        }
+
+        // Out of bounds fails the same way as merging onto the identity does.
+        let out_of_bounds = ProjectionExprs::new([ProjectionExpr::new(
+            Arc::new(Column::new("d", 3)),
+            "d",
+        )]);
+        assert!(out_of_bounds.try_merge_onto_identity(&schema).is_err());
+        assert!(identity.try_merge(&out_of_bounds).is_err());
+
+        Ok(())
+    }
 
     #[test]
     fn test_projection_new() -> Result<()> {

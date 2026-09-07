@@ -238,8 +238,11 @@ fn validate_predicate_does_not_reference_virtual_columns(
 pub(super) struct ParquetMorselizer {
     /// Execution partition index
     pub(crate) partition_index: usize,
-    /// Projection to apply on top of the table schema (i.e. can reference partition columns).
-    pub projection: ProjectionExprs,
+    /// Projection to apply on top of the table schema (i.e. can reference
+    /// partition columns), or `None` when the output is the table schema
+    /// itself. `None` lets the scan read the file with an all-columns mask and
+    /// skip the per-batch transform entirely.
+    pub projection: Option<ProjectionExprs>,
     /// Target number of rows in each output RecordBatch
     pub batch_size: usize,
     /// Optional limit on the number of rows to read
@@ -447,7 +450,9 @@ struct PreparedParquetOpen {
     logical_file_schema: SchemaRef,
     physical_file_schema: SchemaRef,
     output_schema: SchemaRef,
-    projection: ProjectionExprs,
+    /// `None` carries the same meaning as [`ParquetMorselizer::projection`]:
+    /// the decoder's own output is already `output_schema`.
+    projection: Option<ProjectionExprs>,
     predicate: Option<Arc<dyn PhysicalExpr>>,
     /// Per-scan virtual-column state, Arc-cloned from [`ParquetMorselizer`] so
     /// each file shares validated fields, precomputed null replacements, and
@@ -760,10 +765,12 @@ impl ParquetMorselizer {
         // Calculate the output schema from the original projection (before literal replacement)
         // so we get correct field names from column references
         let logical_file_schema = Arc::clone(self.table_schema.file_schema());
-        let output_schema = Arc::new(
-            self.projection
-                .project_schema(self.table_schema.table_schema())?,
-        );
+        let output_schema = match &self.projection {
+            Some(projection) => {
+                Arc::new(projection.project_schema(self.table_schema.table_schema())?)
+            }
+            None => Arc::clone(self.table_schema.table_schema()),
+        };
 
         // Build a combined map for replacing column references with literal values.
         // This includes:
@@ -802,16 +809,27 @@ impl ParquetMorselizer {
         let mut projection = self.projection.clone();
         let mut predicate = self.predicate.clone();
         if !literal_columns.is_empty() {
-            projection = projection.try_map_exprs(|expr| {
+            // Partition and constant columns are not read from the file, so
+            // the projection must name them as literals; an absent projection
+            // has to be materialized to hold them.
+            let concrete =
+                projection.unwrap_or_else(|| ProjectionExprs::identity(&output_schema));
+            projection = Some(concrete.try_map_exprs(|expr| {
                 replace_columns_with_literals(Arc::clone(&expr), &literal_columns)
-            })?;
+            })?);
             predicate = predicate
                 .map(|p| replace_columns_with_literals(p, &literal_columns))
                 .transpose()?;
         }
 
-        // Replace any `input_file_name()` UDFs in the projection with a literal for this file.
-        projection = rewrite_input_file_name_in_projection(projection, &file_name)?;
+        // Replace any `input_file_name()` UDFs in the projection with a literal
+        // for this file. An absent projection is all plain column references,
+        // so there is nothing to rewrite.
+        projection = projection
+            .map(|projection| {
+                rewrite_input_file_name_in_projection(projection, &file_name)
+            })
+            .transpose()?;
 
         let predicate_creation_errors = MetricBuilder::new(&self.metrics)
             .with_category(MetricCategory::Rows)
@@ -1034,8 +1052,8 @@ impl MetadataLoadedParquetOpen {
         // columns are appended after file columns in the table schema),
         // types are the same, and there are no missing columns. Skip the
         // tree walk entirely in that case.
-        let needs_rewrite = prepared.predicate.is_some()
-            || prepared.logical_file_schema != physical_file_schema;
+        let schemas_differ = prepared.logical_file_schema != physical_file_schema;
+        let needs_rewrite = prepared.predicate.is_some() || schemas_differ;
         if needs_rewrite {
             // When virtual columns are requested, augment the logical and
             // physical schemas passed to the rewriter/simplifier with those
@@ -1067,9 +1085,19 @@ impl MetadataLoadedParquetOpen {
                 .predicate
                 .map(|p| simplifier.simplify(rewriter.rewrite(p)?))
                 .transpose()?;
-            prepared.projection = prepared
-                .projection
-                .try_map_exprs(|p| simplifier.simplify(rewriter.rewrite(p)?))?;
+            let projection = match prepared.projection.take() {
+                // The rewriter leaves an absent projection alone when the
+                // logical and physical file schemas agree: indices already
+                // line up, there is nothing to cast, and no column is missing.
+                None if !schemas_differ => None,
+                // Otherwise materialize the identity so the casts and null
+                // fills land somewhere.
+                None => Some(ProjectionExprs::identity(&prepared.output_schema)),
+                projection => projection,
+            };
+            prepared.projection = projection
+                .map(|p| p.try_map_exprs(|e| simplifier.simplify(rewriter.rewrite(e)?)))
+                .transpose()?;
         }
         prepared.physical_file_schema = Arc::clone(&physical_file_schema);
 
@@ -1453,7 +1481,7 @@ impl RowGroupsPrunedParquetOpen {
         // opener's orchestration body focused on filter / decoder / stream
         // wiring.
         let decoder_projection = DecoderProjection::try_new(
-            &prepared.projection,
+            prepared.projection.as_ref(),
             &prepared.physical_file_schema,
             reader_metadata.parquet_schema(),
             &prepared.output_schema,
@@ -2276,15 +2304,11 @@ mod test {
             );
             let file_schema = Arc::clone(table_schema.file_schema());
 
-            let projection = if let Some(projection) = self.projection {
-                projection
-            } else if let Some(indices) = self.projection_indices {
-                ProjectionExprs::from_indices(&indices, &file_schema)
-            } else {
-                // Default: project all columns
-                let all_indices: Vec<usize> = (0..file_schema.fields().len()).collect();
-                ProjectionExprs::from_indices(&all_indices, &file_schema)
-            };
+            // Default: no projection, i.e. the whole table.
+            let projection = self.projection.or_else(|| {
+                self.projection_indices
+                    .map(|indices| ProjectionExprs::from_indices(&indices, &file_schema))
+            });
 
             let virtual_state = build_virtual_columns_state(
                 table_schema.virtual_columns(),
@@ -3097,6 +3121,69 @@ mod test {
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
+    }
+
+    #[tokio::test]
+    async fn test_unprojected_scan_fills_partition_columns() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let batch = record_batch!(
+            ("a", Int32, vec![Some(1), Some(2), Some(3)]),
+            ("b", Float64, vec![Some(1.0), Some(2.0), None])
+        )
+        .unwrap();
+        let data_size =
+            write_parquet(Arc::clone(&store), "part=7/file.parquet", batch.clone()).await;
+        let file_schema = batch.schema();
+        let mut file = PartitionedFile::new(
+            "part=7/file.parquet".to_string(),
+            u64::try_from(data_size).unwrap(),
+        );
+        file.partition_values = vec![ScalarValue::Int32(Some(7))];
+
+        let table_schema = TableSchemaBuilder::from(&file_schema)
+            .with_table_partition_cols(vec![Arc::new(Field::new(
+                "part",
+                DataType::Int32,
+                false,
+            ))])
+            .build();
+
+        // No projection: the output is the whole table schema, [a, b, part],
+        // with the partition column materialized per file.
+        let opener = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_table_schema(table_schema)
+            .build();
+
+        let mut stream = open_file(&opener, file).await.unwrap();
+        let mut batches = vec![];
+        while let Some(batch) = stream.next().await {
+            batches.push(batch.unwrap());
+        }
+        assert_eq!(batches.len(), 1);
+        let batch = &batches[0];
+        assert_eq!(
+            batch
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| f.name().as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "b", "part"]
+        );
+        let a = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow::array::Int32Array>()
+            .unwrap();
+        assert_eq!(a, &arrow::array::Int32Array::from(vec![1, 2, 3]));
+        let part = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<arrow::array::Int32Array>()
+            .unwrap();
+        assert_eq!(part, &arrow::array::Int32Array::from(vec![7, 7, 7]));
     }
 
     /// Test that if the filter is not a dynamic filter and we have no stats we don't do extra pruning work at the file level.
@@ -4003,6 +4090,38 @@ mod test {
             let stream = open_file(&morselizer, file).await.unwrap();
             let row_numbers = collect_int64_values(stream, 0).await;
             assert_eq!(row_numbers, vec![0, 1, 2, 3]);
+        }
+
+        #[tokio::test]
+        async fn test_row_index_unprojected_scan() {
+            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+            let (file_schema, data_size) =
+                write_grouped_file(&store, "unprojected.parquet", 1, 5).await;
+
+            let rn_field = row_number_field("row_number", false);
+            let table_schema = TableSchemaBuilder::new(Arc::clone(&file_schema))
+                .with_virtual_columns(vec![Arc::clone(&rn_field)])
+                .build();
+
+            // No projection: the output is the table schema itself,
+            // [value, row_number], with the reader appending the virtual
+            // column to each decoded batch.
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_table_schema(table_schema)
+                .build();
+
+            let file = PartitionedFile::new(
+                "unprojected.parquet".to_string(),
+                u64::try_from(data_size).unwrap(),
+            );
+            let stream = open_file(&morselizer, file.clone()).await.unwrap();
+            let values = collect_int64_values(stream, 0).await;
+            assert_eq!(values, vec![0, 1, 2, 3, 4]);
+
+            let stream = open_file(&morselizer, file).await.unwrap();
+            let row_numbers = collect_int64_values(stream, 1).await;
+            assert_eq!(row_numbers, vec![0, 1, 2, 3, 4]);
         }
 
         #[tokio::test]

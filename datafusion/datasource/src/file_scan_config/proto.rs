@@ -51,7 +51,7 @@ use datafusion_physical_plan::proto::{ExecutionPlanDecodeCtx, ExecutionPlanEncod
 use datafusion_proto_models::datafusion_common::CompressionTypeVariant as ProtoCompressionTypeVariant;
 use datafusion_proto_models::protobuf;
 
-use crate::file::FileSource;
+use crate::file::{FileSource, projection_is_no_op};
 use crate::file_compression_type::FileCompressionType;
 use crate::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use crate::table_schema::TableSchema;
@@ -243,9 +243,15 @@ impl FileScanConfig {
 
             let projection_exprs = ProjectionExprs::new(projection_exprs);
 
-            file_source
-                .try_pushdown_projection(&projection_exprs)?
-                .unwrap_or(file_source)
+            // Plans encoded before no-op projections were dropped may still
+            // carry one; skip it rather than store it on the source.
+            if projection_is_no_op(file_source.as_ref(), &projection_exprs) {
+                file_source
+            } else {
+                file_source
+                    .try_pushdown_projection(&projection_exprs)?
+                    .unwrap_or(file_source)
+            }
         } else {
             file_source
         };

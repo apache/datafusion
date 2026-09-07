@@ -223,6 +223,71 @@ fn roundtrip_parquet_exec_attaches_cached_reader_factory_after_roundtrip() -> Re
     Ok(())
 }
 
+#[test]
+fn roundtrip_parquet_exec_decodes_identity_projection_to_none() -> Result<()> {
+    use datafusion::physical_expr::projection::ProjectionExprs;
+    use datafusion_datasource::file::FileSource;
+
+    let file_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Utf8, false),
+    ]));
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+
+    let roundtrip_projection_is_none =
+        |file_source: Arc<dyn FileSource>| -> Result<bool> {
+            let scan_config = FileScanConfigBuilder::new(
+                ObjectStoreUrl::local_filesystem(),
+                file_source,
+            )
+            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+                "/path/to/file.parquet".to_string(),
+                1024,
+            )])])
+            .build();
+            let roundtripped = roundtrip_test_and_return(
+                DataSourceExec::from_data_source(scan_config),
+                &ctx,
+                &codec,
+                &proto_converter,
+            )?;
+            let file_scan = roundtripped
+                .downcast_ref::<DataSourceExec>()
+                .and_then(|exec| exec.data_source().downcast_ref::<FileScanConfig>())
+                .ok_or_else(|| {
+                    internal_datafusion_err!("Expected FileScanConfig after roundtrip")
+                })?;
+            Ok(file_scan.file_source().projection().is_none())
+        };
+
+    // A source that never stored a projection round-trips to none.
+    let plain: Arc<dyn FileSource> =
+        Arc::new(ParquetSource::new(Arc::clone(&file_schema)));
+    assert!(plain.projection().is_none());
+
+    // Plans encoded before sources stopped storing no-op projections carry an
+    // explicit identity projection; build a source holding one directly (the
+    // no-op filtering lives at `try_pushdown_projection`'s call sites, not in
+    // the method itself).
+    let with_identity = plain
+        .try_pushdown_projection(&ProjectionExprs::identity(&file_schema))?
+        .expect("parquet source accepts projection pushdown");
+    assert!(with_identity.projection().is_some());
+
+    assert!(
+        roundtrip_projection_is_none(plain)?,
+        "a projection-less source must decode back without a projection"
+    );
+    assert!(
+        roundtrip_projection_is_none(with_identity)?,
+        "a legacy identity projection must be dropped on decode, not pushed back into the source"
+    );
+    Ok(())
+}
+
 /// Returns `FileSource::file_type` of a `DataSourceExec` file scan, e.g.
 /// "arrow" vs "arrow_stream". The two Arrow IPC formats print identically in
 /// plan debug output, so roundtrip tests must inspect the source directly.

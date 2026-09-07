@@ -38,7 +38,7 @@ use datafusion_common::{
 };
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_datasource::display::FileGroupDisplay;
-use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file::{FileSource, projection_is_no_op};
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_datasource::write::{
@@ -209,8 +209,10 @@ impl FileFormat for ArrowFormat {
                 Err(e) => Err(e)?,
             };
 
-        // Preserve projection from the original file source
+        // Preserve projection from the original file source, skipping one
+        // that is a no-op over the replacement's output.
         if let Some(projection) = conf.file_source.projection()
+            && !projection_is_no_op(source.as_ref(), projection)
             && let Some(new_source) = source.try_pushdown_projection(projection)?
         {
             source = new_source;
