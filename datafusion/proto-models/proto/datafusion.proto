@@ -1452,6 +1452,10 @@ message ProjectionExecNode {
   PhysicalPlanNode input = 1;
   repeated PhysicalExprNode expr = 2;
   repeated string expr_name = 3;
+  // Only field and schema metadata are used; output types are derived from expr.
+  // Absent when metadata can be derived from the expressions and input, including
+  // plans encoded before this field existed.
+  datafusion_common.Schema schema = 4;
 }
 
 enum AggregateMode {

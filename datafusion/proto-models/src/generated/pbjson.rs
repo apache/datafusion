@@ -23527,6 +23527,9 @@ impl serde::Serialize for ProjectionExecNode {
         if !self.expr_name.is_empty() {
             len += 1;
         }
+        if self.schema.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.ProjectionExecNode", len)?;
         if let Some(v) = self.input.as_ref() {
             struct_ser.serialize_field("input", v)?;
@@ -23536,6 +23539,9 @@ impl serde::Serialize for ProjectionExecNode {
         }
         if !self.expr_name.is_empty() {
             struct_ser.serialize_field("exprName", &self.expr_name)?;
+        }
+        if let Some(v) = self.schema.as_ref() {
+            struct_ser.serialize_field("schema", v)?;
         }
         struct_ser.end()
     }
@@ -23551,6 +23557,7 @@ impl<'de> serde::Deserialize<'de> for ProjectionExecNode {
             "expr",
             "expr_name",
             "exprName",
+            "schema",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -23558,6 +23565,7 @@ impl<'de> serde::Deserialize<'de> for ProjectionExecNode {
             Input,
             Expr,
             ExprName,
+            Schema,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -23582,6 +23590,7 @@ impl<'de> serde::Deserialize<'de> for ProjectionExecNode {
                             "input" => Ok(GeneratedField::Input),
                             "expr" => Ok(GeneratedField::Expr),
                             "exprName" | "expr_name" => Ok(GeneratedField::ExprName),
+                            "schema" => Ok(GeneratedField::Schema),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -23604,6 +23613,7 @@ impl<'de> serde::Deserialize<'de> for ProjectionExecNode {
                 let mut input__ = None;
                 let mut expr__ = None;
                 let mut expr_name__ = None;
+                let mut schema__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Input => {
@@ -23624,12 +23634,19 @@ impl<'de> serde::Deserialize<'de> for ProjectionExecNode {
                             }
                             expr_name__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Schema => {
+                            if schema__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("schema"));
+                            }
+                            schema__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(ProjectionExecNode {
                     input: input__,
                     expr: expr__.unwrap_or_default(),
                     expr_name: expr_name__.unwrap_or_default(),
+                    schema: schema__,
                 })
             }
         }

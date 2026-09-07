@@ -43,8 +43,175 @@ use datafusion_proto::physical_plan::{
 };
 use datafusion_proto::protobuf;
 use datafusion_proto::protobuf::PhysicalPlanNode;
+use prost::Message;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::vec;
+
+#[test]
+fn roundtrip_projection_metadata() -> Result<()> {
+    let input_schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Int32,
+        false,
+    )]));
+    let projected_schema = Schema::new_with_metadata(
+        vec![Field::new("value", DataType::Int32, false).with_metadata(
+            [("field-key".to_string(), "field-value".to_string())].into(),
+        )],
+        [("schema-key".to_string(), "schema-value".to_string())].into(),
+    );
+    let plan = Arc::new(ProjectionExec::try_new_with_schema_metadata(
+        vec![(col("value", &input_schema)?, "value".to_string())],
+        Arc::new(EmptyExec::new(input_schema)),
+        &projected_schema,
+    )?);
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let converter = DefaultPhysicalProtoConverter {};
+    let decoded = roundtrip_test_and_return(plan, &ctx, &codec, &converter)?;
+    assert_eq!(decoded.schema().as_ref(), &projected_schema);
+    Ok(())
+}
+
+#[test]
+fn roundtrip_projection_metadata_overrides() -> Result<()> {
+    let field_metadata = [("field-key".to_string(), "field-value".to_string())].into();
+    let extension_metadata = [
+        ("ARROW:extension:name".to_string(), "arrow.uuid".to_string()),
+        ("ARROW:extension:metadata".to_string(), String::new()),
+    ]
+    .into();
+    for (input_field, output_field, input_metadata) in [
+        (
+            Field::new("value", DataType::Int32, false).with_metadata(field_metadata),
+            Field::new("value", DataType::Int32, false),
+            [("input-schema".to_string(), "input-value".to_string())].into(),
+        ),
+        (
+            Field::new("value", DataType::FixedSizeBinary(16), true),
+            Field::new("value", DataType::FixedSizeBinary(16), true)
+                .with_metadata(extension_metadata),
+            HashMap::new(),
+        ),
+    ] {
+        let input_schema =
+            Arc::new(Schema::new_with_metadata(vec![input_field], input_metadata));
+        let projected_schema = Schema::new(vec![output_field]);
+        let plan = Arc::new(ProjectionExec::try_new_with_schema_metadata(
+            vec![(col("value", &input_schema)?, "value".to_string())],
+            Arc::new(EmptyExec::new(input_schema)),
+            &projected_schema,
+        )?);
+        let codec = DefaultPhysicalExtensionCodec {};
+        let ctx = SessionContext::new();
+        let node = PhysicalPlanNode::try_from_physical_plan(plan, &codec)?;
+        let Some(protobuf::physical_plan_node::PhysicalPlanType::Projection(projection)) =
+            node.physical_plan_type.as_ref()
+        else {
+            unreachable!("expected ProjectionExecNode")
+        };
+        assert!(projection.schema.is_some());
+        let node = PhysicalPlanNode::decode(node.encode_to_vec().as_slice()).unwrap();
+        #[cfg(feature = "json")]
+        let node: PhysicalPlanNode =
+            serde_json::from_str(&serde_json::to_string(&node).unwrap()).unwrap();
+        let decoded = node.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
+        assert_eq!(decoded.schema().as_ref(), &projected_schema);
+    }
+    Ok(())
+}
+
+#[test]
+fn roundtrip_projection_without_metadata_override() -> Result<()> {
+    let input_schema = Arc::new(Schema::new_with_metadata(
+        vec![Field::new("value", DataType::Int32, false).with_metadata(
+            [("field-key".to_string(), "field-value".to_string())].into(),
+        )],
+        [("schema-key".to_string(), "schema-value".to_string())].into(),
+    ));
+    let plan = Arc::new(ProjectionExec::try_new(
+        vec![(col("value", &input_schema)?, "value".to_string())],
+        Arc::new(EmptyExec::new(Arc::clone(&input_schema))),
+    )?);
+    let codec = DefaultPhysicalExtensionCodec {};
+    let ctx = SessionContext::new();
+    let node = PhysicalPlanNode::try_from_physical_plan(plan, &codec)?;
+    let Some(protobuf::physical_plan_node::PhysicalPlanType::Projection(projection)) =
+        node.physical_plan_type.as_ref()
+    else {
+        unreachable!("expected ProjectionExecNode")
+    };
+    // The payload also represents plans encoded before the schema field existed.
+    assert!(projection.schema.is_none());
+    let node = PhysicalPlanNode::decode(node.encode_to_vec().as_slice()).unwrap();
+    #[cfg(feature = "json")]
+    let node: PhysicalPlanNode =
+        serde_json::from_str(&serde_json::to_string(&node).unwrap()).unwrap();
+    let decoded = node.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
+    assert_eq!(decoded.schema(), input_schema);
+    Ok(())
+}
+
+#[test]
+fn decode_projection_schema_only_replaces_metadata() -> Result<()> {
+    let input_schema = Arc::new(Schema::new(vec![Field::new(
+        "input",
+        DataType::Int32,
+        false,
+    )]));
+    let plan = Arc::new(ProjectionExec::try_new(
+        vec![(col("input", &input_schema)?, "output".to_string())],
+        Arc::new(EmptyExec::new(input_schema)),
+    )?);
+    let codec = DefaultPhysicalExtensionCodec {};
+    let ctx = SessionContext::new();
+    let mut node = PhysicalPlanNode::try_from_physical_plan(plan, &codec)?;
+    let Some(protobuf::physical_plan_node::PhysicalPlanType::Projection(projection)) =
+        node.physical_plan_type.as_mut()
+    else {
+        unreachable!("expected ProjectionExecNode")
+    };
+    let field_metadata =
+        HashMap::from([("field-key".to_string(), "field-value".to_string())]);
+    let schema_metadata =
+        HashMap::from([("schema-key".to_string(), "schema-value".to_string())]);
+    let metadata_schema = Schema::new_with_metadata(
+        vec![
+            Field::new("ignored", DataType::Utf8, true)
+                .with_metadata(field_metadata.clone()),
+        ],
+        schema_metadata.clone(),
+    );
+    projection.schema = Some((&metadata_schema).try_into()?);
+    let decoded = node.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
+    assert_eq!(
+        decoded.schema().as_ref(),
+        &Schema::new_with_metadata(
+            vec![
+                Field::new("output", DataType::Int32, false)
+                    .with_metadata(field_metadata)
+            ],
+            schema_metadata,
+        ),
+    );
+
+    let Some(protobuf::physical_plan_node::PhysicalPlanType::Projection(projection)) =
+        node.physical_plan_type.as_mut()
+    else {
+        unreachable!("expected ProjectionExecNode")
+    };
+    projection.schema.as_mut().unwrap().columns.clear();
+    let error = node
+        .try_into_physical_plan(&ctx.task_ctx(), &codec)
+        .unwrap_err();
+    assert!(
+        error
+            .strip_backtrace()
+            .contains("Projection has 1 output fields but metadata schema has 0 fields")
+    );
+    Ok(())
+}
 
 #[test]
 fn roundtrip_date_time_interval() -> Result<()> {
