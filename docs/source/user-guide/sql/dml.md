@@ -182,7 +182,7 @@ Remove all rows:
 Changes the values of existing rows.
 
 <pre>
-UPDATE <i><b>table_name</i></b> SET <i><b>column</i></b> = <i><b>expression</i></b> [, ...] [ WHERE <i><b>condition</i></b> ]
+UPDATE <i><b>table_name</b></i> SET <i><b>column</b></i> = <i><b>expression</b></i> [, ...] [ WHERE <i><b>condition</b></i> ]
 </pre>
 
 `UPDATE` returns the number of changed rows in a column named `count`.
