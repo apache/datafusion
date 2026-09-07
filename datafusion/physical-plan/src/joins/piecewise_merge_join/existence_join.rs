@@ -337,7 +337,7 @@ impl ExistencePWMJStream {
                 }
             };
 
-            if row_idx < stream_values.len() && first_non_null_buffered < scan_limit {
+            if row_idx < stream_values.len() && first_non_null_buffered < buffered_len {
                 let cmp = JoinKeyComparator::new(
                     &[Arc::clone(stream_values)],
                     &[Arc::clone(buffered_values)],
@@ -350,42 +350,53 @@ impl ExistencePWMJStream {
                         || (match_on_equal && compare == Ordering::Equal)
                 };
 
-                // Because the buffered side is sorted, `is_match` is monotone over it:
-                // false while the buffered key has not yet passed the streamed key, true
-                // from there on. So the first match is a partition point and can be found
-                // by binary search instead of a walk -- `O(log buffered)` per batch rather
-                // than `O(buffered)`.
-                let mut lo = first_non_null_buffered;
-                let mut hi = scan_limit;
-                while lo < hi {
-                    let mid = lo + (hi - lo) / 2;
-                    if is_match(mid) {
-                        hi = mid;
-                    } else {
-                        lo = mid + 1;
-                    }
+                // Whether this batch matches *anything* is independent of the watermark:
+                // another partition's batch may have already marked this batch's true
+                // match point, leaving nothing left for the bounded search below to find.
+                // `is_match` is monotone over the whole buffered side, so checking the
+                // last row alone (rather than re-deriving `buffer_idx` unbounded) is
+                // enough to tell whether a match exists anywhere.
+                if is_match(buffered_len - 1) {
+                    self.join_metrics.probe_hit_rate.add_part(1);
                 }
 
-                // `lo` is now the first matching buffered index, or `scan_limit` if this
-                // batch matches nothing new.
-                let buffer_idx = lo;
-                if buffer_idx < scan_limit {
-                    self.join_metrics.probe_hit_rate.add_part(1);
-                    // Everything from `buffer_idx` on matches, so lowering the
-                    // watermark to it records the match: the marked set is exactly
-                    // `[min_marked, buffered_len)` and needs no bitmap.
-                    //
-                    // INVARIANT: sound only because the buffered side and each
-                    // streamed batch are sorted the same way for this operator
-                    // (`try_new` derives `sort_option`: descending for `<`/`<=`,
-                    // ascending for `>`/`>=`). That makes this the smallest reachable
-                    // `buffer_idx`, so the marked suffix is maximal. Only the ordering
-                    // *within* a batch matters; batches themselves may arrive in any
-                    // order, which is why the watermark takes a `min` rather than just
-                    // decreasing.
-                    buffered_data
-                        .min_marked
-                        .fetch_min(buffer_idx, AtomicOrdering::SeqCst);
+                if first_non_null_buffered < scan_limit {
+                    // Because the buffered side is sorted, `is_match` is monotone over
+                    // it: false while the buffered key has not yet passed the streamed
+                    // key, true from there on. So the first match is a partition point
+                    // and can be found by binary search instead of a walk --
+                    // `O(log buffered)` per batch rather than `O(buffered)`.
+                    let mut lo = first_non_null_buffered;
+                    let mut hi = scan_limit;
+                    while lo < hi {
+                        let mid = lo + (hi - lo) / 2;
+                        if is_match(mid) {
+                            hi = mid;
+                        } else {
+                            lo = mid + 1;
+                        }
+                    }
+
+                    // `lo` is now the first matching buffered index, or `scan_limit` if
+                    // this batch matches nothing new.
+                    let buffer_idx = lo;
+                    if buffer_idx < scan_limit {
+                        // Everything from `buffer_idx` on matches, so lowering the
+                        // watermark to it records the match: the marked set is exactly
+                        // `[min_marked, buffered_len)` and needs no bitmap.
+                        //
+                        // INVARIANT: sound only because the buffered side and each
+                        // streamed batch are sorted the same way for this operator
+                        // (`try_new` derives `sort_option`: descending for `<`/`<=`,
+                        // ascending for `>`/`>=`). That makes this the smallest
+                        // reachable `buffer_idx`, so the marked suffix is maximal. Only
+                        // the ordering *within* a batch matters; batches themselves may
+                        // arrive in any order, which is why the watermark takes a `min`
+                        // rather than just decreasing.
+                        buffered_data
+                            .min_marked
+                            .fetch_min(buffer_idx, AtomicOrdering::SeqCst);
+                    }
                 }
             }
         }
@@ -831,8 +842,8 @@ mod tests {
 
     /// Existence join never populated `probe_hit_rate`, so a streamed batch whose extreme
     /// key failed to lower the watermark was indistinguishable from one that did. Two
-    /// batches here: the first lowers the watermark, the second lands entirely inside the
-    /// already-marked region and must count as a miss.
+    /// batches here: the first lowers the watermark, the second matches nothing in the
+    /// buffered side and must count as a miss.
     #[tokio::test]
     async fn probe_hit_rate_counts_batches_that_advance_the_watermark() -> Result<()> {
         let left = build_table(
@@ -849,10 +860,9 @@ mod tests {
         // b1=3 lowers the watermark to buffered index 3 (value 4).
         let batch1 =
             build_table_i32(("a2", &vec![10]), ("b1", &vec![3]), ("c2", &vec![70]));
-        // b1=4 only matches within the already-marked suffix, so it can't lower the
-        // watermark further -- a miss.
+        // b1=10 matches no buffered value (max buffered value is 5) -- a genuine miss.
         let batch2 =
-            build_table_i32(("a2", &vec![20]), ("b1", &vec![4]), ("c2", &vec![80]));
+            build_table_i32(("a2", &vec![20]), ("b1", &vec![10]), ("c2", &vec![80]));
         let right = TestMemoryExec::try_new_exec(
             &[vec![batch1, batch2]],
             Arc::new(streamed_schema),
@@ -898,6 +908,185 @@ mod tests {
             })
             .expect("probe_hit_rate metric");
         assert_eq!(hit_rate, (1, 2), "one hit, one miss");
+
+        Ok(())
+    }
+
+    /// Runs an existence join over `left` against one streamed batch per entry in
+    /// `streamed_batches`, in the given order, and returns `probe_hit_rate` as
+    /// `(part, total)`.
+    async fn existence_probe_hit_rate(
+        left: Arc<dyn ExecutionPlan>,
+        streamed_schema: Arc<Schema>,
+        streamed_batches: Vec<RecordBatch>,
+    ) -> Result<(usize, usize)> {
+        let right =
+            TestMemoryExec::try_new_exec(&[streamed_batches], streamed_schema, None)?;
+
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+        let join = PiecewiseMergeJoinExec::try_new(
+            left,
+            right,
+            on,
+            Operator::Gt,
+            JoinType::LeftSemi,
+            1,
+        )?;
+
+        let stream = join.execute(0, Arc::new(TaskContext::default()))?;
+        common::collect(stream).await?;
+
+        let metrics = join.metrics().unwrap();
+        Ok(metrics
+            .iter()
+            .find_map(|m| match m.value() {
+                crate::metrics::MetricValue::Ratio {
+                    name,
+                    ratio_metrics,
+                } if name == "probe_hit_rate" => {
+                    Some((ratio_metrics.part(), ratio_metrics.total()))
+                }
+                _ => None,
+            })
+            .expect("probe_hit_rate metric"))
+    }
+
+    /// A batch's hit/miss must reflect whether it matches the buffered side at all, not
+    /// whether it was the one to lower the shared watermark. Both streamed batches here
+    /// (b1=3, b1=4) genuinely match buffered value 5 under `Gt`, so both are hits
+    /// regardless of which one lowers the watermark first -- the result must not change
+    /// when the batches are scanned in the opposite order.
+    #[tokio::test]
+    async fn probe_hit_rate_is_independent_of_batch_order() -> Result<()> {
+        let streamed_schema = Arc::new(Schema::new(vec![
+            Field::new("a2", DataType::Int32, false),
+            Field::new("b1", DataType::Int32, false),
+            Field::new("c2", DataType::Int32, false),
+        ]));
+        let batch1 =
+            build_table_i32(("a2", &vec![10]), ("b1", &vec![3]), ("c2", &vec![70]));
+        let batch2 =
+            build_table_i32(("a2", &vec![20]), ("b1", &vec![4]), ("c2", &vec![80]));
+
+        let make_left = || {
+            build_table(
+                ("a1", &vec![1, 2, 3, 4, 5]),
+                ("b1", &vec![1, 2, 3, 4, 5]),
+                ("c1", &vec![10, 20, 30, 40, 50]),
+            )
+        };
+
+        let forward = existence_probe_hit_rate(
+            make_left(),
+            Arc::clone(&streamed_schema),
+            vec![batch1.clone(), batch2.clone()],
+        )
+        .await?;
+        let reversed =
+            existence_probe_hit_rate(make_left(), streamed_schema, vec![batch2, batch1])
+                .await?;
+
+        assert_eq!(forward, (2, 2), "both batches match buffered value 5");
+        assert_eq!(forward, reversed, "hit rate must not depend on batch order");
+
+        Ok(())
+    }
+
+    /// Same property as `probe_hit_rate_is_independent_of_batch_order`, but across the
+    /// two *partitions* that actually share the watermark (`min_marked` lives in the
+    /// shared `BufferedData`, not per-partition state) rather than two batches on one
+    /// stream. Each partition gets a batch that genuinely matches buffered value 5 under
+    /// `Gt`; whichever partition runs first lowers the watermark, and the other's batch
+    /// must still count as a hit even though it can no longer lower the watermark further.
+    #[tokio::test]
+    async fn probe_hit_rate_is_independent_of_partition_order() -> Result<()> {
+        let streamed_schema = Arc::new(Schema::new(vec![
+            Field::new("a2", DataType::Int32, false),
+            Field::new("b1", DataType::Int32, false),
+            Field::new("c2", DataType::Int32, false),
+        ]));
+        // key=3 lowers the watermark to buffered value 4; key=4 also matches buffered
+        // value 5 but can't lower the watermark past what key=3 already reached.
+        let key_3 =
+            build_table_i32(("a2", &vec![10]), ("b1", &vec![3]), ("c2", &vec![70]));
+        let key_4 =
+            build_table_i32(("a2", &vec![20]), ("b1", &vec![4]), ("c2", &vec![80]));
+
+        let make_left = || {
+            build_table(
+                ("a1", &vec![1, 2, 3, 4, 5]),
+                ("b1", &vec![1, 2, 3, 4, 5]),
+                ("c1", &vec![10, 20, 30, 40, 50]),
+            )
+        };
+
+        async fn hit_rate_for(
+            left: Arc<dyn ExecutionPlan>,
+            streamed_schema: SchemaRef,
+            partition_0: RecordBatch,
+            partition_1: RecordBatch,
+        ) -> Result<(usize, usize)> {
+            let right = TestMemoryExec::try_new_exec(
+                &[vec![partition_0], vec![partition_1]],
+                streamed_schema,
+                None,
+            )?;
+            let on = (
+                Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+            );
+            let join = PiecewiseMergeJoinExec::try_new(
+                left,
+                right,
+                on,
+                Operator::Gt,
+                JoinType::LeftSemi,
+                2,
+            )?;
+
+            // Driven sequentially, partition 0 to completion before partition 1, so
+            // partition 0's watermark update is visible to partition 1 -- exercising
+            // the same shared-state ordering a real race would produce.
+            let task_ctx = Arc::new(TaskContext::default());
+            for partition in 0..2 {
+                let stream = join.execute(partition, Arc::clone(&task_ctx))?;
+                common::collect(stream).await?;
+            }
+
+            let metrics = join.metrics().unwrap().aggregate_by_name();
+            Ok(metrics
+                .iter()
+                .find_map(|m| match m.value() {
+                    crate::metrics::MetricValue::Ratio {
+                        name,
+                        ratio_metrics,
+                    } if name == "probe_hit_rate" => {
+                        Some((ratio_metrics.part(), ratio_metrics.total()))
+                    }
+                    _ => None,
+                })
+                .expect("probe_hit_rate metric"))
+        }
+
+        // Partition 0 = key_3 (lowers the watermark first).
+        let p0_first = hit_rate_for(
+            make_left(),
+            Arc::clone(&streamed_schema),
+            key_3.clone(),
+            key_4.clone(),
+        )
+        .await?;
+        // Partition 0 = key_4 (lowers the watermark first instead).
+        let p1_first = hit_rate_for(make_left(), streamed_schema, key_4, key_3).await?;
+
+        assert_eq!(p0_first, (2, 2), "both partitions' batches genuinely match");
+        assert_eq!(
+            p0_first, p1_first,
+            "hit rate must not depend on which partition races ahead"
+        );
 
         Ok(())
     }
