@@ -18,21 +18,26 @@
 //! [`BlockedArrowBytesViewMap`] and [`BlockedArrowBytesViewSet`] for storing maps/sets of values from
 //! `StringViewArray`/`BinaryViewArray`.
 
-use std::collections::VecDeque;
 use crate::binary_map::OutputType;
 use arrow::array::cast::AsArray;
-use arrow::array::{Array, ArrayRef, BinaryViewArray, ByteView, make_view};
-use arrow::buffer::Buffer;
+use arrow::array::{
+    Array, ArrayRef, BinaryViewArray, BooleanBufferBuilder, ByteView, NullBufferBuilder,
+    make_view,
+};
+use arrow::buffer::{Buffer, NullBuffer};
 use arrow::compute::concat;
 use arrow::datatypes::{BinaryViewType, ByteViewType, DataType, StringViewType};
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt, VecDequeAllocExt};
+use datafusion_expr_common::blocked_helpers::{
+    BlockedBytesBufferBuilder, BlockedNullsBuilder, CopyItemBlockedVecBuilder,
+};
+use datafusion_expr_common::groups_accumulator::BlocksIndex;
+use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::mem::size_of;
 use std::sync::Arc;
-use datafusion_expr_common::blocked_helpers::{BlockedBytesBufferBuilder, BlockedNullsBuilder, CopyItemBlockedVecBuilder};
-use datafusion_expr_common::groups_accumulator::BlocksIndex;
 
 /// HashSet optimized for storing string or binary values that can produce that
 /// the final set as a `GenericBinaryViewArray` with minimal copies.
@@ -143,8 +148,6 @@ where
     /// Views for all stored values (in insertion order)
     views: CopyItemBlockedVecBuilder<true, u128>,
     buffer: BlockedBytesBufferBuilder,
-    /// Tracks null values (true = null)
-    nulls: BlockedNullsBuilder<true>,
     num_buffer_blocks_per_block: VecDeque<usize>,
 
     /// random state used to generate hashes
@@ -177,7 +180,6 @@ where
             map_size,
             views: CopyItemBlockedVecBuilder::new(block_size),
             buffer: BlockedBytesBufferBuilder::new(),
-            nulls: BlockedNullsBuilder::new(block_size),
             // 1 empty block
             num_buffer_blocks_per_block: VecDeque::from(vec![1]),
             random_state: RandomState::default(),
@@ -301,7 +303,6 @@ where
                     let payload = make_payload_fn(None);
                     let null_index = self.next_index();
                     let should_start_new_block = self.views.push(0);
-                    self.nulls.push_null();
 
                     if should_start_new_block {
                         self.start_new_block();
@@ -342,7 +343,8 @@ where
                         let buffer_index = byte_view.buffer_index as usize;
                         let offset = byte_view.offset as usize;
 
-                        let block = self.buffer.block(header.start_block_index + buffer_index);
+                        let block =
+                            self.buffer.block(header.start_block_index + buffer_index);
 
                         let stored_value = &block[offset..offset + stored_len];
                         let input_value: &[u8] = values.value(i).as_ref();
@@ -402,6 +404,15 @@ where
         BlocksIndex::from_index_in_fixed_block_size(self.views.len(), self.block_size)
     }
 
+    fn build_null_buffer_with_null_at_index(buffer_len: usize, null_index: usize) -> NullBuffer {
+        let mut nulls = BooleanBufferBuilder::new(buffer_len);
+        nulls.append_n(buffer_len, true);
+        nulls.set_bit(null_index, false);
+        // SAFETY: sage as we just set a single bit as null
+        let nulls = unsafe { NullBuffer::new_unchecked(nulls.finish(), 1) };
+        nulls
+    }
+
     /// Converts this set into a `StringViewArray`, or `BinaryViewArray`,
     /// containing each distinct value
     /// that was inserted. This is done without copying the values.
@@ -410,10 +421,20 @@ where
     /// they were first seen.
     pub fn take_block(&mut self) -> Option<ArrayRef> {
         let views = self.views.take_block_finished()?;
-        let null_buffer = self
-            .nulls
-            .take_block()
-            .expect("nulls have the same blocks as the views");
+        let null_buffer = match self.null.as_mut() {
+            Some((_payload, null_index)) if null_index.is_in_block_0(self.block_size) => {
+                Some(Self::build_null_buffer_with_null_at_index(views.len(), null_index.index_in_block(self.block_size)))
+            }
+            Some((_payload, null_index)) => {
+                *null_index = null_index.prev_block(self.block_size);
+                None
+            }
+            None => None,
+        };
+
+        if null_buffer.is_some() {
+            self.null = None;
+        }
 
         // The buffer blocks of a views block may be empty when all its values are inline
         let num_blocks = self
@@ -435,7 +456,6 @@ where
 
         if self.views.is_empty() {
             self.map.clear();
-            self.null = None;
         } else {
             self.map.retain(|entry| {
                 if let Some(index) = entry.index.prev_block_checked(self.block_size) {
@@ -446,12 +466,10 @@ where
                     false
                 }
             });
-            self.null = self.null.and_then(|(payload, index)| {
-                index.prev_block_checked(self.block_size).map(|index| (payload, index))
-            });
         }
 
-        let array = unsafe { BinaryViewArray::new_unchecked(views, buffers, null_buffer) };
+        let array =
+            unsafe { BinaryViewArray::new_unchecked(views, buffers, null_buffer) };
 
         Some(match self.output_type {
             OutputType::BinaryView => Arc::new(array),
@@ -466,25 +484,41 @@ where
     /// Take every block, the map is empty afterwards
     pub fn take_all(&mut self) -> Vec<ArrayRef> {
         // Build null buffer if we have any nulls
-        let null_buffer_blocks = self.nulls.take_all();
         let views_blocks = self.views.take_all();
         let mut buffers = self.buffer.take_all().into_iter();
-        let number_of_buffers_per_block = std::mem::replace(&mut self.num_buffer_blocks_per_block, VecDeque::from(vec![1]));
+        let number_of_buffers_per_block = std::mem::replace(
+            &mut self.num_buffer_blocks_per_block,
+            VecDeque::from(vec![1]),
+        );
 
         self.map.clear();
-        self.null = None;
 
-        assert_eq!(null_buffer_blocks.len(), views_blocks.len());
+        let (null_block_index, null_index_in_block) = match self.null.take() {
+            Some((_payload, null_index)) => {
+                (null_index.block_index(self.block_size), null_index.index_in_block(self.block_size))
+            }
+            None => (usize::MAX, usize::MAX),
+        };
 
         let mut output_blocks = Vec::with_capacity(views_blocks.len());
 
-        for ((null_buffer, views), number_of_buffers) in null_buffer_blocks.into_iter().zip(views_blocks).zip(number_of_buffers_per_block.into_iter()) {
-            let block_buffers = buffers.by_ref().take(number_of_buffers).collect::<Vec<_>>();
+        for (index, (views, number_of_buffers)) in views_blocks.into_iter()
+            .zip(number_of_buffers_per_block.into_iter()).enumerate()
+        {
+            let block_buffers =
+                buffers.by_ref().take(number_of_buffers).collect::<Vec<_>>();
             assert_eq!(block_buffers.len(), number_of_buffers);
 
+            let null_buffer = if null_block_index == index {
+                Some(Self::build_null_buffer_with_null_at_index(views.len(), null_index_in_block))
+            } else {
+                None
+            };
+
             let views = views.into_scalar_buffer();
-            let array =
-              unsafe { BinaryViewArray::new_unchecked(views, block_buffers, null_buffer) };
+            let array = unsafe {
+                BinaryViewArray::new_unchecked(views, block_buffers, null_buffer)
+            };
 
             let output = match self.output_type {
                 OutputType::BinaryView => Arc::new(array) as ArrayRef,
@@ -526,11 +560,9 @@ where
 
     unsafe fn append_inline_view(&mut self, view: u128) -> u128 {
         let should_start_new_buffer = self.views.push(view);
-        self.nulls.push_non_null();
 
         if should_start_new_buffer {
             self.start_new_block();
-
         }
         view
     }
@@ -546,10 +578,12 @@ where
                 self.buffer.start_new_block();
                 let count = self.num_buffer_blocks_per_block.back_mut().unwrap();
                 *count += 1;
-                self.buffer.reserve_bytes_in_current_block(BYTE_VIEW_MAX_BLOCK_SIZE);
+                self.buffer
+                    .reserve_bytes_in_current_block(BYTE_VIEW_MAX_BLOCK_SIZE);
             }
 
-            let buffer_index = (self.num_buffer_blocks_per_block.back().unwrap() - 1) as u32;
+            let buffer_index =
+                (self.num_buffer_blocks_per_block.back().unwrap() - 1) as u32;
             let offset = self.buffer.current_block_len() as u32;
             self.buffer.extend_from_slice(value);
 
@@ -557,11 +591,9 @@ where
         };
 
         let should_start_new_block = self.views.push(view);
-        self.nulls.push_non_null();
 
         if should_start_new_block {
             self.start_new_block();
-
         }
         view
     }
@@ -596,7 +628,6 @@ where
             + self.num_buffer_blocks_per_block.allocated_size()
             + self.views.allocated_size()
             + self.buffer.allocated_size()
-            + self.nulls.allocated_size()
             + self.hashes_buffer.allocated_size()
     }
 }
@@ -1027,9 +1058,11 @@ mod tests {
         let array: ArrayRef = Arc::new(StringViewArray::from(values.to_vec()));
         let block_size = map.block_size;
         let mut out = vec![];
-        map.insert_if_new(&array, |_| (), |(), index| {
-            out.push(index.into_index_in_fixed_block_size(block_size))
-        });
+        map.insert_if_new(
+            &array,
+            |_| (),
+            |(), index| out.push(index.into_index_in_fixed_block_size(block_size)),
+        );
         out
     }
 
@@ -1062,7 +1095,10 @@ mod tests {
         assert_eq!(map.len(), 7);
 
         // seen values keep their position, new ones get the next
-        assert_eq!(positions(&mut map, &[Some("b"), None, Some("c")]), [5, 2, 7]);
+        assert_eq!(
+            positions(&mut map, &[Some("b"), None, Some("c")]),
+            [5, 2, 7]
+        );
 
         // emit the first block, everything shifts down by a block
         let block = map.take_block().unwrap();
@@ -1124,7 +1160,10 @@ mod tests {
     fn blocks_without_bytes_and_null_only_last_block() {
         // only inline values, the byte buffers stay empty
         let mut map = Map::new(OutputType::Utf8View, 2);
-        assert_eq!(positions(&mut map, &[Some("x"), Some("y"), None]), [0, 1, 2]);
+        assert_eq!(
+            positions(&mut map, &[Some("x"), Some("y"), None]),
+            [0, 1, 2]
+        );
         let blocks = map.take_all();
         assert_eq!(blocks.len(), 2);
         assert_eq!(strings(&blocks[0]), owned(&[Some("x"), Some("y")]));
@@ -1133,7 +1172,10 @@ mod tests {
         // a null seen again after its block was emitted is a new group
         let mut map = Map::new(OutputType::Utf8View, 2);
         positions(&mut map, &[None, Some("x")]);
-        assert_eq!(strings(&map.take_block().unwrap()), owned(&[None, Some("x")]));
+        assert_eq!(
+            strings(&map.take_block().unwrap()),
+            owned(&[None, Some("x")])
+        );
         assert_eq!(positions(&mut map, &[None, Some("x")]), [0, 1]);
     }
 
@@ -1181,6 +1223,15 @@ mod tests {
 
         let blocks = map.take_all();
         assert_eq!(blocks.len(), 1);
-        assert_eq!(strings(&blocks[0]), owned(&values[..3].iter().copied().chain([Some("y")]).collect::<Vec<_>>()));
+        assert_eq!(
+            strings(&blocks[0]),
+            owned(
+                &values[..3]
+                    .iter()
+                    .copied()
+                    .chain([Some("y")])
+                    .collect::<Vec<_>>()
+            )
+        );
     }
 }
