@@ -22,7 +22,7 @@ use arrow::array::{ArrayRef, AsArray, new_null_array};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use itertools::Itertools;
-use datafusion_common::{internal_datafusion_err, internal_err, Result, arrow_datafusion_err, DataFusionError};
+use datafusion_common::{internal_err, Result, arrow_datafusion_err};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_expr_common::groups_accumulator::{BlockedEmitTo, BlockedGroupsAccumulator, BlocksIndex};
@@ -339,71 +339,55 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         self.state.building().group_values.len()
     }
 
-    /// Takes every intermediate aggregate state and resets the table so it can
-    /// continue accumulating raw input.
+    /// Takes every intermediate aggregate state, one batch per block, and resets
+    /// the table so it can continue accumulating raw input.
     ///
     /// Unlike normal single aggregation output, this materializes intermediate
     /// states rather than final values. The states can therefore be merged after
     /// spilling without finalizing the same group more than once.
-    pub(in crate::aggregates_blocked) fn take_next_state_batch(
+    ///
+    /// Emitting everything at once is `O(groups)`. Emitting block by block would
+    /// rewrite the whole hash map for every block, i.e. `O(groups * blocks)`.
+    pub(in crate::aggregates_blocked) fn take_all_state_batches(
         &mut self,
-    ) -> Result<Option<RecordBatch>> {
+    ) -> Result<Vec<RecordBatch>> {
         let state_schema = Arc::clone(&self.state_schema);
         let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
         let state = self.state.building_mut();
-        if state.group_values.is_empty() {
 
-            // `emit(EmitTo::All)` resets accumulator state. Explicitly shrink the
-            // key/index buffers too so the memory reservation can be released
-            // before the batch is sorted for spilling.
-            state.group_values.clear_shrink(0);
-            state.batch_group_indices.clear();
-            state.batch_group_indices.shrink_to_fit();
-
-            return Ok(None);
-        }
-
-        // Accumulator output consumes internal state. Materialize all
-        // groups once, then slice the materialized batch on later polls.
         let timer = self.group_by_metrics.emitting_time.timer();
-        let emit_to = if state.group_values.len() <= self.batch_size {
-            BlockedEmitTo::All
-        } else {
-            BlockedEmitTo::NextBlock
-        };
-        let mut output = state.group_values.emit_block()?.expect("must have groups since checked before that len is not empty");
+        let mut columns_blocked = state.group_values.emit_all()?;
 
         for (idx, acc) in state.accumulators.iter_mut().enumerate() {
-            output.extend(accumulator_metrics.time(
-                idx,
-                AccumulatorPhase::State,
-                || {
-                    let state = acc.state(emit_to)?;
+            let blocks = accumulator_metrics.time(idx, AccumulatorPhase::State, || {
+                acc.state(BlockedEmitTo::All)
+            })?;
 
-                    assert_eq!(state.len(), 1, "must have 1 block");
-
-                    Ok::<_, DataFusionError>(state.into_iter().next().unwrap())
-                },
-            )?);
+            columns_blocked
+                .iter_mut()
+                .zip_eq(blocks)
+                .for_each(|(column_blocked, materialized)| {
+                    column_blocked.extend(materialized)
+                });
         }
-
         drop(timer);
 
-        let batch = RecordBatch::try_new(state_schema, output).map_err(|e| {
-            arrow_datafusion_err!(e)
-        })?;
-        debug_assert!(batch.num_rows() > 0);
+        // `emit_all` resets accumulator state. Explicitly shrink the key/index
+        // buffers too so the memory reservation can be released before the
+        // batches are sorted for spilling.
+        state.group_values.clear_shrink(0);
+        state.batch_group_indices.clear();
+        state.batch_group_indices.shrink_to_fit();
 
-        if emit_to == BlockedEmitTo::All {
-            // `emit(EmitTo::All)` resets accumulator state. Explicitly shrink the
-            // key/index buffers too so the memory reservation can be released
-            // before the batch is sorted for spilling.
-            state.group_values.clear_shrink(0);
-            state.batch_group_indices.clear();
-            state.batch_group_indices.shrink_to_fit();
-        }
-
-        Ok(Some(batch))
+        columns_blocked
+            .into_iter()
+            .map(|columns| {
+                let batch = RecordBatch::try_new(Arc::clone(&state_schema), columns)
+                    .map_err(|e| arrow_datafusion_err!(e))?;
+                debug_assert!(batch.num_rows() > 0);
+                Ok(batch)
+            })
+            .collect()
     }
 
     pub(in crate::aggregates_blocked) fn is_building(&self) -> bool {

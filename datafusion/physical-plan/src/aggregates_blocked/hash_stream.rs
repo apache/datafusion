@@ -353,15 +353,17 @@ impl FinalSpillContext {
         &mut self,
         hash_table: &mut AggregateHashTable<FinalMarker>,
     ) -> Result<()> {
-        while let Some(batch) = hash_table.take_next_state_batch()? {
+        // Take all blocks at once (O(groups)), then sort and spill each block on
+        // its own so its memory is released as soon as it is written.
+        for batch in hash_table.take_all_state_batches()? {
             let sorted_iter =
-              IncrementalSortIterator::new(batch, self.spill_expr.clone(), self.batch_size);
+                IncrementalSortIterator::new(batch, self.spill_expr.clone(), self.batch_size);
             let spill_file = self
-              .spill_manager
-              .spill_record_batch_iter_and_return_max_batch_memory(
-                  sorted_iter,
-                  "FinalHashAggregateSpill",
-              )?;
+                .spill_manager
+                .spill_record_batch_iter_and_return_max_batch_memory(
+                    sorted_iter,
+                    "FinalHashAggregateSpill",
+                )?;
 
             let Some((file, max_record_batch_memory)) = spill_file else {
                 return internal_err!("Final hash aggregation produced an empty spill");
@@ -649,29 +651,19 @@ impl PartialHashAggregateStream {
                             self.baseline_metrics.elapsed_compute().clone();
                         // Stops on drop
                         let _timer = elapsed_compute.timer();
-                        let mut state_batches = VecDeque::new();
-
-                        let mut accumulated = 0;
-
-                        loop {
-                            let next = hash_table.take_next_state_batch();
-
-                            let next_size = match &next {
-                                // Only account from the 2nd item
-                                // since the first item will be emitted right away
-                                Ok(Some(batch)) if !state_batches.is_empty() => batch.get_array_memory_size(),
-                                _ => 0
+                        let state_batches: VecDeque<_> =
+                            match hash_table.take_all_state_batches() {
+                                Ok(batches) => batches.into(),
+                                Err(e) => return Self::break_with_err(e),
                             };
 
-                            accumulated += next_size;
-                            match next {
-                                Ok(Some(batch)) => state_batches.push_back(batch),
-                                Ok(None) => {
-                                    break;
-                                }
-                                Err(e) => return Self::break_with_err(e),
-                            }
-                        }
+                        // Only account from the 2nd item since the first item
+                        // will be emitted right away
+                        let accumulated = state_batches
+                            .iter()
+                            .skip(1)
+                            .map(|batch| batch.get_array_memory_size())
+                            .sum::<usize>();
 
                         // Emitting clears the aggregate table and releases its
                         // accumulated memory. Update the reservation accordingly.
