@@ -642,6 +642,24 @@ impl ScalarUDFImpl for GetFieldFunc {
         self.doc()
     }
 
+    fn struct_field_access(
+        &self,
+        literal_args: &[Option<ScalarValue>],
+    ) -> Option<datafusion_expr::StructFieldAccess> {
+        let (_, keys) = literal_args.split_first()?;
+        if keys.is_empty() {
+            return None;
+        }
+        let field_path = keys
+            .iter()
+            .map(|key| Some(key.as_ref()?.try_as_str().flatten()?.to_owned()))
+            .collect::<Option<Vec<_>>>()?;
+        Some(datafusion_expr::StructFieldAccess {
+            source_arg: 0,
+            field_path,
+        })
+    }
+
     fn placement(&self, args: &[ExpressionPlacement]) -> ExpressionPlacement {
         // get_field can be pushed to leaves if:
         // 1. The base (first arg) is a column or already placeable at leaves

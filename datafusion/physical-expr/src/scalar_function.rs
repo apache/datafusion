@@ -158,6 +158,31 @@ impl ScalarFunctionExpr {
         &self.config_options
     }
 
+    /// Describe this call's struct-field access, if the UDF supports it.
+    /// Callers must also validate the path against their source schema; a
+    /// syntactically identical call may perform a Map lookup instead.
+    pub fn struct_field_access(&self) -> Option<datafusion_expr::StructFieldAccess> {
+        let literals = self
+            .args
+            .iter()
+            .map(|arg| {
+                arg.downcast_ref::<Literal>()
+                    .map(|literal| literal.value().clone())
+            })
+            .collect::<Vec<_>>();
+        let access = self.fun.struct_field_access(&literals)?;
+        if access.source_arg >= self.args.len()
+            || access.field_path.is_empty()
+            || literals
+                .iter()
+                .enumerate()
+                .any(|(index, literal)| index != access.source_arg && literal.is_none())
+        {
+            return None;
+        }
+        Some(access)
+    }
+
     /// Given an arbitrary PhysicalExpr attempt to downcast it to a ScalarFunctionExpr
     /// and verify that its inner function is of type T.
     /// If the downcast fails, or the function is not of type T, returns `None`.
@@ -383,6 +408,40 @@ mod tests {
         fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
             Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(42))))
         }
+    }
+
+    #[test]
+    fn struct_field_access_requires_literal_keys() {
+        let fun = datafusion_functions::core::get_field();
+        let source = Arc::new(Column::new("s", 0)) as Arc<dyn PhysicalExpr>;
+        let key = Arc::new(Literal::new(ScalarValue::Utf8(Some("a.b".into()))))
+            as Arc<dyn PhysicalExpr>;
+        let make_expr = |args| {
+            ScalarFunctionExpr::new(
+                "get_field",
+                Arc::clone(&fun),
+                args,
+                Arc::new(Field::new("result", DataType::Int32, true)),
+                Arc::new(ConfigOptions::default()),
+            )
+        };
+        assert_eq!(
+            make_expr(vec![Arc::clone(&source), key]).struct_field_access(),
+            Some(datafusion_expr::StructFieldAccess {
+                source_arg: 0,
+                field_path: vec!["a.b".into()],
+            })
+        );
+        assert!(
+            make_expr(vec![Arc::clone(&source)])
+                .struct_field_access()
+                .is_none()
+        );
+        assert!(
+            make_expr(vec![Arc::clone(&source), source])
+                .struct_field_access()
+                .is_none()
+        );
     }
 
     #[test]

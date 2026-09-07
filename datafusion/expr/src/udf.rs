@@ -57,6 +57,18 @@ pub struct StructFieldMapping {
     pub fields: Vec<(Vec<ScalarValue>, usize)>,
 }
 
+/// A struct field read by a scalar function. Field names are separate path
+/// components: a literal dot in a name is not a path separator.
+///
+/// See [`ScalarUDFImpl::struct_field_access`] for the semantic contract.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructFieldAccess {
+    /// Argument containing the struct.
+    pub source_arg: usize,
+    /// Non-empty path through struct fields beneath the source argument.
+    pub field_path: Vec<String>,
+}
+
 /// Logical representation of a Scalar User Defined Function.
 ///
 /// A scalar function produces a single row output for each row of input. This
@@ -318,6 +330,14 @@ impl ScalarUDF {
     /// then the output interval would be `[0, 3]`.
     pub fn evaluate_bounds(&self, inputs: &[&Interval]) -> Result<Interval> {
         self.inner.evaluate_bounds(inputs)
+    }
+
+    /// See [`ScalarUDFImpl::struct_field_access`] for more details.
+    pub fn struct_field_access(
+        &self,
+        literal_args: &[Option<ScalarValue>],
+    ) -> Option<StructFieldAccess> {
+        self.inner.struct_field_access(literal_args)
     }
 
     /// See [`ScalarUDFImpl::struct_field_mapping`] for more details.
@@ -998,6 +1018,30 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
         not_impl_err!("Function {} does not implement coerce_types", self.name())
     }
 
+    /// Describe this call as an exact struct-field extraction, if possible.
+    ///
+    /// `literal_args[i]` contains argument `i` when it is a known literal.
+    /// Returning `Some` lets readers decode only the selected field and lets
+    /// schema adapters narrow struct casts to that field. All arguments other
+    /// than `source_arg` must be literals. The source may itself be an expression.
+    ///
+    /// The function must return the selected field unchanged, including its
+    /// type, metadata, and nulls inherited from every struct ancestor. It must
+    /// work with reordered or narrowed source structs, resolving fields by name,
+    /// and cannot depend on siblings. It must not perform additional conversions,
+    /// introduce errors, or replace nulls with defaults. Readers validate that
+    /// the path traverses structs; this does not describe runtime Map lookups or
+    /// repeated List elements. Return `None` when these guarantees do not hold.
+    ///
+    /// This is independent of [`Self::placement`], which describes where an
+    /// expression should execute rather than which field it reads.
+    fn struct_field_access(
+        &self,
+        _literal_args: &[Option<ScalarValue>],
+    ) -> Option<StructFieldAccess> {
+        None
+    }
+
     /// For struct-producing functions, return how output fields map to input
     /// arguments. This enables the optimizer to propagate orderings through
     /// struct projections.
@@ -1161,6 +1205,13 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         inputs: &[&Interval],
     ) -> Result<Option<Vec<Interval>>> {
         self.inner.propagate_constraints(interval, inputs)
+    }
+
+    fn struct_field_access(
+        &self,
+        literal_args: &[Option<ScalarValue>],
+    ) -> Option<StructFieldAccess> {
+        self.inner.struct_field_access(literal_args)
     }
 
     fn struct_field_mapping(

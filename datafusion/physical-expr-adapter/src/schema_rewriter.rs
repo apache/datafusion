@@ -32,6 +32,7 @@ use datafusion_common::{
     nested_struct::{requires_nested_struct_cast, validate_data_type_compatibility},
     tree_node::{Transformed, TransformedResult, TreeNode},
 };
+#[cfg(test)]
 use datafusion_functions::core::getfield::GetFieldFunc;
 use datafusion_physical_expr::PhysicalExprSimplifier;
 use datafusion_physical_expr::expressions::Literal;
@@ -450,15 +451,13 @@ impl DefaultPhysicalExprAdapterRewriter {
         &self,
         expr: &Arc<dyn PhysicalExpr>,
     ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
-        let Some(get_field_expr) =
-            ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(expr.as_ref())
-        else {
+        let Some(get_field_expr) = expr.downcast_ref::<ScalarFunctionExpr>() else {
             return Ok(None);
         };
-        let Some((source_expr, field_name_exprs)) = get_field_expr.args().split_first()
-        else {
+        let Some(access) = get_field_expr.struct_field_access() else {
             return Ok(None);
         };
+        let source_expr = &get_field_expr.args()[access.source_arg];
         let Some(cast) = source_expr.downcast_ref::<CastExpr>() else {
             return Ok(None);
         };
@@ -469,19 +468,11 @@ impl DefaultPhysicalExprAdapterRewriter {
             return Ok(None);
         }
 
-        // Every key has to be a string literal, otherwise the leaf field
-        // cannot be resolved statically.
-        let mut field_path = Vec::with_capacity(field_name_exprs.len());
-        for field_name_expr in field_name_exprs {
-            let Some(field_name) = field_name_expr
-                .downcast_ref::<Literal>()
-                .and_then(|lit| lit.value().try_as_str().flatten())
-            else {
-                return Ok(None);
-            };
-            field_path.push(field_name);
-        }
-        // A `get_field` with no keys is not a field access we can narrow.
+        let field_path = access
+            .field_path
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
         let Some((first_key, rest_keys)) = field_path.split_first() else {
             return Ok(None);
         };
@@ -559,7 +550,7 @@ impl DefaultPhysicalExprAdapterRewriter {
                 return Ok(None);
             };
             let mut args = get_field_expr.args().to_vec();
-            args[0] = Arc::new(CastExpr::new_with_target_field(
+            args[access.source_arg] = Arc::new(CastExpr::new_with_target_field(
                 Arc::clone(inner),
                 target_field,
                 Some(cast.cast_options().clone()),
@@ -569,9 +560,8 @@ impl DefaultPhysicalExprAdapterRewriter {
 
         // Rebuild `get_field` over the uncast struct so its return field is
         // recomputed from the physical field type.
-        let mut args = Vec::with_capacity(get_field_expr.args().len());
-        args.push(Arc::clone(inner));
-        args.extend(field_name_exprs.iter().map(Arc::clone));
+        let mut args = get_field_expr.args().to_vec();
+        args[access.source_arg] = Arc::clone(inner);
         let extracted = Arc::new(ScalarFunctionExpr::try_new(
             Arc::new(get_field_expr.fun().clone()),
             args,
@@ -594,75 +584,57 @@ impl DefaultPhysicalExprAdapterRewriter {
         ))))
     }
 
-    /// Attempt to rewrite struct field access expressions to return null if the field does not exist in the physical schema.
-    /// Note that this does *not* handle nested struct fields, only top-level struct field access.
-    /// See <https://github.com/apache/datafusion/issues/17114> for more details.
+    /// Replace a field access with null when its path exists in the logical
+    /// schema but is missing from the physical struct.
     fn try_rewrite_struct_field_access(
         &self,
         expr: &Arc<dyn PhysicalExpr>,
     ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
-        let Some(get_field_expr) =
-            ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(expr.as_ref())
+        let Some(function) = expr.downcast_ref::<ScalarFunctionExpr>() else {
+            return Ok(None);
+        };
+        let Some(access) = function.struct_field_access() else {
+            return Ok(None);
+        };
+        let Some(column) = function.args()[access.source_arg].downcast_ref::<Column>()
         else {
             return Ok(None);
         };
-
-        let Some(source_expr) = get_field_expr.args().first() else {
-            return Ok(None);
-        };
-
-        let Some(field_name_expr) = get_field_expr.args().get(1) else {
-            return Ok(None);
-        };
-
-        let Some(lit) = field_name_expr.downcast_ref::<Literal>() else {
-            return Ok(None);
-        };
-
-        let Some(field_name) = lit.value().try_as_str().flatten() else {
-            return Ok(None);
-        };
-
-        let Some(column) = source_expr.downcast_ref::<Column>() else {
-            return Ok(None);
-        };
-
         let Ok(physical_field) = self.physical_file_schema.field_with_name(column.name())
         else {
             return Ok(None);
         };
-
-        let DataType::Struct(physical_struct_fields) = physical_field.data_type() else {
-            return Ok(None);
-        };
-
-        if physical_struct_fields
-            .iter()
-            .any(|f| f.name() == field_name)
-        {
-            return Ok(None);
-        }
-
         let Ok(logical_field) = self.logical_file_schema.field_with_name(column.name())
         else {
             return Ok(None);
         };
-
-        let DataType::Struct(logical_struct_fields) = logical_field.data_type() else {
-            return Ok(None);
-        };
-
-        let Some(logical_struct_field) = logical_struct_fields
-            .iter()
-            .find(|f| f.name() == field_name)
+        let (DataType::Struct(physical_fields), DataType::Struct(logical_fields)) =
+            (physical_field.data_type(), logical_field.data_type())
         else {
             return Ok(None);
         };
-
-        let null_value = ScalarValue::Null.cast_to(logical_struct_field.data_type())?;
+        let path = access
+            .field_path
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let Some((first, rest)) = path.split_first() else {
+            return Ok(None);
+        };
+        if !matches!(
+            resolve_field_path(logical_fields, first, rest),
+            FieldPathResolution::Found(_)
+        ) || !matches!(
+            resolve_field_path(physical_fields, first, rest),
+            FieldPathResolution::Missing
+        ) {
+            return Ok(None);
+        }
+        let return_field = expr.return_field(&self.logical_file_schema)?;
+        let null_value = ScalarValue::Null.cast_to(return_field.data_type())?;
         Ok(Some(Arc::new(Literal::new_with_metadata(
             null_value,
-            Some(FieldMetadata::from(logical_struct_field.as_ref())),
+            Some(FieldMetadata::from(return_field.as_ref())),
         ))))
     }
 

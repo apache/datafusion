@@ -809,3 +809,235 @@ async fn pushed_down_predicate_reports_the_original_error() {
         "expected the original cast error, got {root:?}"
     );
 }
+
+/// Uses a different UDF type and argument order from get_field. It deliberately
+/// does not simplify to get_field, so the physical consumers must use the capability.
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct FieldAt {
+    declare_access: bool,
+    signature: datafusion_expr::Signature,
+}
+
+impl datafusion_expr::ScalarUDFImpl for FieldAt {
+    fn name(&self) -> &str {
+        "field_at"
+    }
+
+    fn signature(&self) -> &datafusion_expr::Signature {
+        &self.signature
+    }
+
+    fn return_type(
+        &self,
+        _: &[arrow::datatypes::DataType],
+    ) -> datafusion_common::Result<arrow::datatypes::DataType> {
+        unreachable!("return_field_from_args is implemented")
+    }
+
+    fn return_field_from_args(
+        &self,
+        args: datafusion_expr::ReturnFieldArgs,
+    ) -> datafusion_common::Result<arrow::datatypes::FieldRef> {
+        datafusion_functions::core::get_field().return_field_from_args(
+            datafusion_expr::ReturnFieldArgs {
+                arg_fields: &[args.arg_fields[1].clone(), args.arg_fields[0].clone()],
+                scalar_arguments: &[args.scalar_arguments[1], args.scalar_arguments[0]],
+            },
+        )
+    }
+
+    fn invoke_with_args(
+        &self,
+        mut args: datafusion_expr::ScalarFunctionArgs,
+    ) -> datafusion_common::Result<datafusion_expr::ColumnarValue> {
+        args.args.swap(0, 1);
+        args.arg_fields.swap(0, 1);
+        datafusion_functions::core::get_field().invoke_with_args(args)
+    }
+
+    fn struct_field_access(
+        &self,
+        literals: &[Option<datafusion_common::ScalarValue>],
+    ) -> Option<datafusion_expr::StructFieldAccess> {
+        if !self.declare_access {
+            return None;
+        }
+        Some(datafusion_expr::StructFieldAccess {
+            source_arg: 1,
+            field_path: vec![
+                literals
+                    .first()?
+                    .as_ref()?
+                    .try_as_str()
+                    .flatten()?
+                    .to_owned(),
+            ],
+        })
+    }
+
+    fn placement(
+        &self,
+        args: &[datafusion_expr::ExpressionPlacement],
+    ) -> datafusion_expr::ExpressionPlacement {
+        use datafusion_expr::ExpressionPlacement;
+        if args[0] == ExpressionPlacement::Literal && args[1].should_push_to_leaves() {
+            ExpressionPlacement::MoveTowardsLeafNodes
+        } else {
+            ExpressionPlacement::KeepInPlace
+        }
+    }
+}
+
+#[tokio::test]
+async fn custom_struct_accessor_pushdown_and_schema_adaptation() {
+    use arrow::array::{Array, StructArray};
+    use arrow::buffer::NullBuffer;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_expr::{ScalarUDF, Signature, Volatility};
+
+    let values = Arc::new(Int32Array::from(vec![Some(0), Some(10), None, Some(99)]));
+    let deep = StructArray::from(vec![(
+        Arc::new(Field::new("value", DataType::Int32, true)),
+        values.clone() as ArrayRef,
+    )]);
+    let fields = vec![
+        Arc::new(Field::new("pad", DataType::Utf8, false)),
+        Arc::new(Field::new("value", DataType::Int32, true)),
+        Arc::new(Field::new("deep", deep.data_type().clone(), true)),
+        Arc::new(Field::new("dotted.name", DataType::Int32, true)),
+    ];
+    let s = StructArray::new(
+        fields.into(),
+        vec![
+            Arc::new(StringArray::from(vec!["pad"; 4])),
+            values.clone(),
+            Arc::new(deep),
+            values,
+        ],
+        Some(NullBuffer::from(vec![true, true, true, false])),
+    );
+    let batch = RecordBatch::try_from_iter(vec![
+        ("s", Arc::new(s) as ArrayRef),
+        (
+            "id",
+            Arc::new(Int32Array::from(vec![0, 1, 2, 3])) as ArrayRef,
+        ),
+    ])
+    .unwrap();
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("custom-access.parquet");
+    let mut writer =
+        ArrowWriter::try_new(File::create(&path).unwrap(), batch.schema(), None).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+    let evolved_schema = Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new(
+            "s",
+            DataType::Struct(
+                vec![
+                    Arc::new(Field::new(
+                        "deep",
+                        DataType::Struct(
+                            vec![Arc::new(Field::new("value", DataType::Int64, true))]
+                                .into(),
+                        ),
+                        true,
+                    )),
+                    Arc::new(Field::new("missing", DataType::Int32, true)),
+                    Arc::new(Field::new("dotted.name", DataType::Int64, true)),
+                    Arc::new(Field::new("value", DataType::Int64, true)),
+                ]
+                .into(),
+            ),
+            true,
+        ),
+    ]);
+    for evolved in [false, true] {
+        for declare_access in [false, true] {
+            for pushdown in [false, true] {
+                let mut config = SessionConfig::new().with_target_partitions(1);
+                config.options_mut().execution.parquet.pushdown_filters = pushdown;
+                let ctx = SessionContext::new_with_config(config);
+                ctx.register_udf(
+                    ScalarUDF::from(FieldAt {
+                        declare_access,
+                        signature: Signature::any(2, Volatility::Immutable),
+                    })
+                    .with_aliases(["alias_field_at"]),
+                );
+                let mut options = ParquetReadOptions::default();
+                if evolved {
+                    options = options.schema(&evolved_schema);
+                }
+                ctx.register_parquet("t", path.to_str().unwrap(), options)
+                    .await
+                    .unwrap();
+                for predicate in [
+                    "field_at('value', s) > 5",
+                    "alias_field_at('value', s) > 5",
+                    "field_at('value', field_at('deep', s)) > 5",
+                    "field_at('dotted.name', s) > 5",
+                ] {
+                    let plan = ctx
+                        .sql(&format!("SELECT id FROM t WHERE {predicate} ORDER BY id"))
+                        .await
+                        .unwrap()
+                        .create_physical_plan()
+                        .await
+                        .unwrap();
+                    let results = collect(plan.clone(), ctx.task_ctx()).await.unwrap();
+                    datafusion_common::assert_batches_eq!(
+                        ["+----+", "| id |", "+----+", "| 1  |", "+----+"],
+                        &results
+                    );
+                    let metrics = TestParquetFile::parquet_metrics(&plan).unwrap();
+                    assert_eq!(
+                        get_value(&metrics, "pushdown_rows_pruned"),
+                        if pushdown && declare_access { 3 } else { 0 },
+                        "evolved={evolved}, capability={declare_access}, pushdown={pushdown}, {predicate}\n{}",
+                        displayable(plan.as_ref()).indent(false)
+                    );
+                }
+                // An explicit cast must still evaluate an unselected sibling.
+                // Narrowing it to just `value` would silently hide the bad pad cast.
+                if !evolved && declare_access {
+                    let accessor = ScalarUDF::from(FieldAt {
+                        declare_access: true,
+                        signature: Signature::any(2, Volatility::Immutable),
+                    });
+                    let target = DataType::Struct(
+                        vec![
+                            Arc::new(Field::new("pad", DataType::Int32, true)),
+                            Arc::new(Field::new("value", DataType::Int32, true)),
+                        ]
+                        .into(),
+                    );
+                    let predicate = accessor
+                        .call(vec![lit("value"), datafusion_expr::cast(col("s"), target)])
+                        .gt(lit(5));
+                    let error = ctx
+                        .table("t")
+                        .await
+                        .unwrap()
+                        .filter(predicate)
+                        .unwrap()
+                        .collect()
+                        .await
+                        .unwrap_err();
+                    assert!(error.to_string().contains("pad"), "{error}");
+                }
+                if evolved {
+                    let results = ctx.sql("SELECT id FROM t WHERE field_at('missing', s) IS NULL ORDER BY id").await.unwrap().collect().await.unwrap();
+                    datafusion_common::assert_batches_eq!(
+                        [
+                            "+----+", "| id |", "+----+", "| 0  |", "| 1  |", "| 2  |",
+                            "| 3  |", "+----+"
+                        ],
+                        &results
+                    );
+                }
+            }
+        }
+    }
+}

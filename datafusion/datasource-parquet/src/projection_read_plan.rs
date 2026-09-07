@@ -38,8 +38,7 @@ use datafusion_common::Result;
 use datafusion_common::nested_struct::requires_nested_struct_cast;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_functions::core::file_row_index::FileRowIndexFunc;
-use datafusion_functions::core::getfield::GetFieldFunc;
-use datafusion_physical_expr::expressions::{CastExpr, Column, Literal};
+use datafusion_physical_expr::expressions::{CastExpr, Column};
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 
@@ -272,13 +271,11 @@ impl<'schema> PushdownChecker<'schema> {
     /// conversions still run.
     fn check_cast_struct_field_access(
         &mut self,
-        func: &ScalarFunctionExpr,
+        source: &Arc<dyn PhysicalExpr>,
+        field_path: &[String],
+        return_type: &DataType,
     ) -> Option<TreeNodeRecursion> {
         if !self.allow_struct_casts {
-            return None;
-        }
-        let (source, field_names) = func.args().split_first()?;
-        if field_names.is_empty() {
             return None;
         }
         let cast = source.downcast_ref::<CastExpr>()?;
@@ -290,7 +287,6 @@ impl<'schema> PushdownChecker<'schema> {
         ) {
             return None;
         }
-        let return_type = func.return_type();
         if DataType::is_nested(return_type) && !self.is_nested_type_supported(return_type)
         {
             return None;
@@ -299,12 +295,7 @@ impl<'schema> PushdownChecker<'schema> {
         // Every key must resolve through Struct fields in the cast target.
         // In particular, a key following a Map field is a runtime lookup.
         let mut data_type = cast.cast_type();
-        for field_name in field_names {
-            let name = field_name
-                .downcast_ref::<Literal>()?
-                .value()
-                .try_as_str()
-                .flatten()?;
+        for name in field_path {
             let DataType::Struct(fields) = data_type else {
                 return None;
             };
@@ -394,87 +385,55 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
     type Node = Arc<dyn PhysicalExpr>;
 
     fn f_down(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
-        // Handle struct field access like `s['foo']['bar'] > 10`.
-        //
-        // DataFusion represents nested field access as `get_field(Column("s"), "foo")`
-        // (or chained: `get_field(get_field(Column("s"), "foo"), "bar")`).
-        //
-        // We intercept the outermost `get_field` on the way *down* the tree so
-        // the visitor never reaches the raw `Column("s")` node. Without this,
-        // `check_single_column` would see that `s` is a Struct and reject it.
-        //
-        // The strategy:
-        //   1. Match `get_field` whose first arg is a `Column` (the struct root).
-        //   2. Check that the *resolved* return type is primitive — meaning we've
-        //      drilled all the way to a leaf (e.g. `s['foo']` → Utf8).
-        //   3. Record the root column index via `check_struct_field_column` and
-        //      return `Jump` to skip visiting the children (the Column and the
-        //      literal field-name args), since we've already handled them.
-        //
-        // If the return type is still nested (e.g. `s['nested_struct']` → Struct),
-        // we fall through and let normal traversal continue, which will
-        // eventually reject the expression when it hits the struct Column.
-        if let Some(func) =
-            ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(node.as_ref())
-        {
-            if let Some(recursion) = self.check_cast_struct_field_access(func) {
+        // Resolve capability-declaring accessors, including chains with
+        // different UDFs and argument layouts. Do not look through casts.
+        let mut source = node;
+        let mut paths = Vec::new();
+        while let Some(function) = source.downcast_ref::<ScalarFunctionExpr>() {
+            let Some(access) = function.struct_field_access() else {
+                break;
+            };
+            paths.push(access.field_path);
+            source = &function.args()[access.source_arg];
+        }
+        let field_path = paths.into_iter().rev().flatten().collect::<Vec<_>>();
+        if !field_path.is_empty() {
+            let return_type = node.data_type(self.file_schema)?;
+            if let Some(recursion) =
+                self.check_cast_struct_field_access(source, &field_path, &return_type)
+            {
                 return Ok(recursion);
             }
-            let args = func.args();
-
-            if let Some(column) = args.first().and_then(|a| a.downcast_ref::<Column>()) {
-                // for Map columns, get_field performs a runtime key lookup rather than a
-                // schema-level field access so the entire Map column must be read,
-                // we skip the struct field optimization and defer to normal Column traversal
-                let is_map_column = self
+            if let Some(column) = source.downcast_ref::<Column>() {
+                // Resolve by name: physical column indices may still refer to
+                // an unprojected schema. Map/List paths must remain opaque.
+                let leaf_type = self
                     .file_schema
-                    .index_of(column.name())
+                    .field_with_name(column.name())
                     .ok()
-                    .map(|idx| {
-                        matches!(
-                            self.file_schema.field(idx).data_type(),
-                            DataType::Map(_, _)
-                        )
-                    })
-                    .unwrap_or(false);
-
-                let return_type = func.return_type();
-
-                if !is_map_column
-                    && (!DataType::is_nested(return_type)
-                        || self.is_nested_type_supported(return_type))
-                {
-                    // if any field name argument is not a string literal we cannot
-                    // determine the exact leaf path, so we fall back to reading the
-                    // entire struct root column
-                    let field_path = args[1..]
-                        .iter()
-                        .map(|arg| {
-                            arg.downcast_ref::<Literal>().and_then(|lit| {
-                                lit.value().try_as_str().flatten().map(|s| s.to_string())
-                            })
+                    .and_then(|root| {
+                        field_path.iter().try_fold(root.data_type(), |ty, name| {
+                            let DataType::Struct(fields) = ty else {
+                                return None;
+                            };
+                            let mut matches =
+                                fields.iter().filter(|field| field.name() == name);
+                            let field = matches.next()?;
+                            if matches.next().is_some() {
+                                return None;
+                            }
+                            Some(field.data_type())
                         })
-                        .collect();
-
-                    match field_path {
-                        Some(path) => {
-                            if let Some(recursion) =
-                                self.check_struct_field_column(column.name(), path)
-                            {
-                                return Ok(recursion);
-                            }
-                        }
-                        None => {
-                            // Could not resolve field path — fall back to
-                            // reading the entire struct root column.
-                            if let Some(recursion) =
-                                self.check_single_column(column.name())
-                            {
-                                return Ok(recursion);
-                            }
-                        }
+                    });
+                if leaf_type.is_some()
+                    && (!return_type.is_nested()
+                        || self.is_nested_type_supported(&return_type))
+                {
+                    if let Some(recursion) =
+                        self.check_struct_field_column(column.name(), field_path)
+                    {
+                        return Ok(recursion);
                     }
-
                     return Ok(TreeNodeRecursion::Jump);
                 }
             }
@@ -1137,6 +1096,103 @@ mod test {
     use parquet::file::metadata::ParquetMetaData;
     use std::collections::HashMap;
     use tempfile::NamedTempFile;
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct CustomStructLabel;
+
+    impl datafusion_expr::ScalarUDFImpl for CustomStructLabel {
+        fn name(&self) -> &str {
+            "custom_struct_label"
+        }
+
+        fn signature(&self) -> &datafusion_expr::Signature {
+            static SIGNATURE: std::sync::LazyLock<datafusion_expr::Signature> =
+                std::sync::LazyLock::new(|| {
+                    datafusion_expr::Signature::any(
+                        1,
+                        datafusion_expr::Volatility::Immutable,
+                    )
+                });
+            &SIGNATURE
+        }
+
+        fn return_type(&self, _: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Utf8)
+        }
+
+        fn struct_field_access(
+            &self,
+            _: &[Option<ScalarValue>],
+        ) -> Option<datafusion_expr::StructFieldAccess> {
+            Some(datafusion_expr::StructFieldAccess {
+                source_arg: 0,
+                field_path: vec!["label".into()],
+            })
+        }
+
+        fn invoke_with_args(
+            &self,
+            mut args: datafusion_expr::ScalarFunctionArgs,
+        ) -> Result<datafusion_expr::ColumnarValue> {
+            args.args
+                .push(datafusion_expr::ColumnarValue::Scalar(ScalarValue::Utf8(
+                    Some("label".into()),
+                )));
+            args.arg_fields
+                .push(Arc::new(Field::new("key", DataType::Utf8, false)));
+            get_field().invoke_with_args(args)
+        }
+    }
+
+    #[test]
+    fn custom_struct_accessor_prunes_leaves_and_allows_row_filter() {
+        let (schema, metadata) = write_id_struct_file();
+        let expr = logical2physical(
+            &datafusion_expr::ScalarUDF::from(CustomStructLabel).call(vec![col("s")]),
+            &schema,
+        );
+        let schema_descr = metadata.file_metadata().schema_descr();
+        let plan = build_projection_read_plan(vec![expr.clone()], &schema, schema_descr);
+        assert_eq!(
+            plan.projection_mask,
+            ProjectionMask::leaves(schema_descr, [2])
+        );
+        let mut checker = PushdownChecker::new(&schema, false, false);
+        expr.visit(&mut checker).unwrap();
+        assert!(!checker.prevents_pushdown());
+    }
+
+    #[test]
+    fn custom_struct_accessor_does_not_prune_map_entries() {
+        let map = DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(
+                    vec![
+                        Arc::new(Field::new("key", DataType::Utf8, false)),
+                        Arc::new(Field::new("value", DataType::Utf8, true)),
+                    ]
+                    .into(),
+                ),
+                false,
+            )),
+            false,
+        );
+        let schema = Arc::new(Schema::new(vec![Field::new("m", map, true)]));
+        let parquet_schema = ArrowSchemaConverter::new().convert(&schema).unwrap();
+        let expr = logical2physical(
+            &datafusion_expr::ScalarUDF::from(CustomStructLabel).call(vec![col("m")]),
+            &schema,
+        );
+        let mut checker = PushdownChecker::new(&schema, false, false);
+        expr.visit(&mut checker).unwrap();
+        assert!(checker.prevents_pushdown());
+        let plan = build_projection_read_plan(vec![expr], &schema, &parquet_schema);
+        assert_eq!(
+            plan.projection_mask,
+            ProjectionMask::leaves(&parquet_schema, [0, 1])
+        );
+    }
 
     #[test]
     fn projection_read_plan_preserves_full_struct() {
