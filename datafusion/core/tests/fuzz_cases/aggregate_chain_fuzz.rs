@@ -236,19 +236,35 @@ fn never_out_of_memory(_params: &CaseParams) -> bool {
 }
 
 /// The chain starts with a grouped `Partial` aggregate reading the source, so
-/// with `SortedByFirstKey` input that stage sees `InputOrderMode::PartiallySorted`.
-///
-/// The legacy `GroupedHashAggregateStream` answers memory pressure there by
-/// emitting the groups whose sort prefix is complete, and when one prefix value
-/// spans the whole partition there is nothing it may emit, so it reports the
-/// error instead of degrading. The dedicated `OrderedPartialAggregateStream`
-/// emits everything. A `Partial` stage only reaches the legacy stream while
-/// `enable_migration_aggregate` is off, an option that goes away once the
-/// migration finishes, so this is accepted rather than fixed.
-fn legacy_partial_on_partially_sorted_input(params: &CaseParams) -> bool {
-    !params.migration_enabled
-        && params.memory == Memory::Limited
-        && params.order == Order::SortedByFirstKey
+/// with ordered input that stage cannot always survive memory pressure.
+fn partial_stage_starved_on_ordered_input(params: &CaseParams) -> bool {
+    params.memory == Memory::Limited
+        && match params.order {
+            // The stage sees `InputOrderMode::PartiallySorted`. The legacy
+            // `GroupedHashAggregateStream` emits only the groups whose sort
+            // prefix is complete, and when one prefix value spans the whole
+            // partition there is nothing it may emit, so it reports the error
+            // instead of degrading. The dedicated
+            // `OrderedPartialAggregateStream` emits everything there, so this
+            // only happens while `enable_migration_aggregate` is off, an option
+            // that goes away once the migration finishes.
+            Order::SortedByFirstKey => !params.migration_enabled,
+            // The stage sees `InputOrderMode::Sorted`, where
+            // `OrderedPartialAggregateStream` holds one group at a time and
+            // registers its reservation as unable to handle memory pressure.
+            // `FairSpillPool` caps the spillable consumers against each other
+            // but reserves nothing for the others, so whichever consumer took
+            // the pool first, a final hash stage or a `PartialReduce` stage,
+            // leaves nothing and this stage is refused the few kilobytes it
+            // needs. It is the victim rather than the cause. The legacy stream
+            // is spillable and can emit for a full ordering, so this one only
+            // happens with the migration enabled.
+            Order::SortedByAllKeys => params.migration_enabled,
+            // Linear input: the dedicated and the legacy stream both emit
+            // their state early and both register as spillable, so the stage
+            // always survives the pressure.
+            Order::Unordered => false,
+        }
 }
 
 const fn shape(
@@ -300,14 +316,14 @@ const SHAPES: &[Shape] = &[
         ],
         PARTITIONS,
         Query::Grouped,
-        legacy_partial_on_partially_sorted_input,
+        partial_stage_starved_on_ordered_input,
     ),
     shape(
         "partial_coalesce_final",
         &[Aggregate(Partial), CoalescePartitions, Aggregate(Final)],
         PARTITIONS,
         Query::Grouped,
-        legacy_partial_on_partially_sorted_input,
+        partial_stage_starved_on_ordered_input,
     ),
     shape(
         "partial_order_preserving_repartition_final",
@@ -318,21 +334,21 @@ const SHAPES: &[Shape] = &[
         ],
         PARTITIONS,
         Query::Grouped,
-        legacy_partial_on_partially_sorted_input,
+        partial_stage_starved_on_ordered_input,
     ),
     shape(
         "partial_sort_preserving_merge_final",
         &[Aggregate(Partial), SortPreservingMerge, Aggregate(Final)],
         PARTITIONS,
         Query::Grouped,
-        legacy_partial_on_partially_sorted_input,
+        partial_stage_starved_on_ordered_input,
     ),
     shape(
         "partial_final_single_partition",
         &[Aggregate(Partial), Aggregate(Final)],
         1,
         Query::Grouped,
-        legacy_partial_on_partially_sorted_input,
+        partial_stage_starved_on_ordered_input,
     ),
     shape(
         "partial_repartition_reduce_repartition_final",
@@ -345,7 +361,7 @@ const SHAPES: &[Shape] = &[
         ],
         PARTITIONS,
         Query::Grouped,
-        legacy_partial_on_partially_sorted_input,
+        partial_stage_starved_on_ordered_input,
     ),
     shape(
         "partial_repartition_reduce_coalesce_final",
@@ -358,7 +374,7 @@ const SHAPES: &[Shape] = &[
         ],
         PARTITIONS,
         Query::Grouped,
-        legacy_partial_on_partially_sorted_input,
+        partial_stage_starved_on_ordered_input,
     ),
     shape(
         "partial_local_reduce_repartition_final",
@@ -370,7 +386,7 @@ const SHAPES: &[Shape] = &[
         ],
         PARTITIONS,
         Query::Grouped,
-        legacy_partial_on_partially_sorted_input,
+        partial_stage_starved_on_ordered_input,
     ),
     // ordered PartialReduce has no dedicated stream, lands on the fallback
     shape(
@@ -384,7 +400,7 @@ const SHAPES: &[Shape] = &[
         ],
         PARTITIONS,
         Query::Grouped,
-        legacy_partial_on_partially_sorted_input,
+        partial_stage_starved_on_ordered_input,
     ),
     shape(
         "no_grouping_single",
@@ -519,7 +535,7 @@ const SHAPES: &[Shape] = &[
         ],
         PARTITIONS,
         Query::MixedKeys,
-        legacy_partial_on_partially_sorted_input,
+        partial_stage_starved_on_ordered_input,
     ),
     // ordered multi-column group values
     shape(
@@ -531,7 +547,7 @@ const SHAPES: &[Shape] = &[
         ],
         PARTITIONS,
         Query::MixedKeys,
-        legacy_partial_on_partially_sorted_input,
+        partial_stage_starved_on_ordered_input,
     ),
     shape(
         "struct_key_single",
