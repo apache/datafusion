@@ -345,7 +345,7 @@ impl PhysicalExpr for MeasuredConjunct {
 
 /// Adaptive evaluator for a single conjunctive predicate, owned per partition
 /// stream. Measurements are pooled into the shared [`AdaptiveFilterShared`];
-/// the per-stream state is just the current order and how far it has caught up.
+/// the per-stream state is just the chain this stream currently evaluates.
 #[derive(Debug)]
 pub(crate) struct AdaptiveConjunction {
     /// The split conjuncts, in written order.
@@ -1169,7 +1169,7 @@ mod tests {
     /// Contract scenario for the no-win case: interchangeable conjuncts settle
     /// on the written order, never a reorder.
     #[test]
-    fn scenario_measure_batches_then_settle_on_fused() {
+    fn scenario_measure_batches_then_settle_on_written_order() {
         let schema = schema();
         let p = predicate(&schema);
         let cs = split(&p);
