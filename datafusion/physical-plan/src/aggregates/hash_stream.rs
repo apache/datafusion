@@ -46,6 +46,7 @@ use super::aggregate_hash_table::{
     AggregateHashTable, FinalMarker, OrderedAggregateTableMetrics, PartialMarker,
     PartialSkipMarker,
 };
+use super::order::GroupCompletionMode;
 use super::ordered_final_stream::OrderedFinalAggregateStream;
 use super::skip_partial::SkipAggregationProbe;
 use crate::metrics::{
@@ -268,6 +269,7 @@ impl FinalSpillContext {
 
         let mut final_agg = agg.clone();
         final_agg.input_order_mode = InputOrderMode::Sorted;
+        final_agg.group_completion_mode = GroupCompletionMode::Full;
 
         Ok(Self {
             final_agg,
@@ -356,7 +358,7 @@ impl FinalSpillContext {
             &context,
             partition,
             merged,
-            &InputOrderMode::Sorted,
+            &GroupCompletionMode::Full,
             baseline_metrics.clone(),
             metrics,
             None,

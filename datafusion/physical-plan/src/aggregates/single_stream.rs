@@ -39,6 +39,7 @@ use futures::stream::{Stream, StreamExt};
 use super::aggregate_hash_table::{
     AggregateHashTable, OrderedAggregateTableMetrics, SingleMarker,
 };
+use super::order::GroupCompletionMode;
 use super::ordered_final_stream::OrderedFinalAggregateStream;
 use super::{AggregateExec, create_schema};
 use crate::aggregates::AggregateMode;
@@ -220,6 +221,7 @@ impl SingleSpillContext {
         };
         final_agg.group_by = Arc::new(agg.group_by.as_final());
         final_agg.input_order_mode = InputOrderMode::Sorted;
+        final_agg.group_completion_mode = GroupCompletionMode::Full;
 
         Ok(Self {
             final_agg,
@@ -308,7 +310,7 @@ impl SingleSpillContext {
             &context,
             partition,
             merged,
-            &InputOrderMode::Sorted,
+            &GroupCompletionMode::Full,
             baseline_metrics.clone(),
             metrics,
             None,

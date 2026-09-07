@@ -24,10 +24,12 @@ use arrow::compute::SortOptions;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
 mod class;
+mod grouping;
 mod ordering;
 mod properties;
 
 pub use class::{AcrossPartitions, ConstExpr, EquivalenceClass, EquivalenceGroup};
+pub use grouping::GroupingEquivalenceClass;
 pub use ordering::OrderingEquivalenceClass;
 // Re-export for backwards compatibility, we recommend importing from
 // datafusion_physical_expr::projection instead
@@ -57,11 +59,12 @@ pub fn convert_to_orderings<T: Borrow<Arc<dyn PhysicalExpr>>>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::{Column, col};
+    use crate::expressions::{BinaryExpr, Column, cast, col, lit};
     use crate::{LexRequirement, PhysicalSortExpr};
 
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::Result;
+    use datafusion_expr::Operator;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortRequirement;
 
     /// Converts a string to a physical sort expression
@@ -218,6 +221,183 @@ mod tests {
         assert!(eq_groups.contains(&col_x));
         assert!(eq_groups.contains(&col_y));
 
+        Ok(())
+    }
+
+    #[test]
+    fn grouping_satisfy_requires_the_complete_tuple() -> Result<()> {
+        let schema = create_test_schema()?;
+        let a = col("a", &schema)?;
+        let b = col("b", &schema)?;
+        let c = col("c", &schema)?;
+        let mut properties = EquivalenceProperties::new(schema);
+        properties.add_grouping([Arc::clone(&a), Arc::clone(&b)]);
+
+        assert!(properties.grouping_satisfy([Arc::clone(&a), Arc::clone(&b)])?);
+        assert!(properties.grouping_satisfy([Arc::clone(&b), Arc::clone(&a)])?);
+        assert!(!properties.grouping_satisfy([Arc::clone(&a)])?);
+        assert!(!properties.grouping_satisfy([Arc::clone(&b)])?);
+        assert!(!properties.grouping_satisfy([a, b, c])?);
+        Ok(())
+    }
+
+    #[test]
+    fn ordering_implies_grouped_prefixes() -> Result<()> {
+        let schema = create_test_schema()?;
+        let a = col("a", &schema)?;
+        let b = col("b", &schema)?;
+        let c = col("c", &schema)?;
+        let properties = EquivalenceProperties::new_with_orderings(
+            schema,
+            [[
+                PhysicalSortExpr::new_default(Arc::clone(&a)),
+                PhysicalSortExpr::new_default(Arc::clone(&b)),
+                PhysicalSortExpr::new_default(Arc::clone(&c)),
+            ]],
+        );
+
+        assert!(properties.grouping_satisfy([Arc::clone(&a)])?);
+        assert!(properties.grouping_satisfy([Arc::clone(&a), Arc::clone(&b)])?);
+        assert!(properties.grouping_satisfy([Arc::clone(&b), Arc::clone(&a)])?);
+        assert!(!properties.grouping_satisfy([Arc::clone(&b)])?);
+        assert!(!properties.grouping_satisfy([a, c])?);
+        Ok(())
+    }
+
+    #[test]
+    fn equivalent_orderings_can_jointly_satisfy_grouping() -> Result<()> {
+        let schema = create_test_schema()?;
+        let a = col("a", &schema)?;
+        let b = col("b", &schema)?;
+        let properties = EquivalenceProperties::new_with_orderings(
+            schema,
+            [
+                [PhysicalSortExpr::new_default(Arc::clone(&a))],
+                [PhysicalSortExpr::new_default(Arc::clone(&b))],
+            ],
+        );
+
+        assert!(properties.grouping_satisfy([b, a])?);
+        Ok(())
+    }
+
+    #[test]
+    fn reorder_clears_explicit_grouping() -> Result<()> {
+        let schema = create_test_schema()?;
+        let a = col("a", &schema)?;
+        let b = col("b", &schema)?;
+        let ordering = [PhysicalSortExpr::new_default(Arc::clone(&b))];
+        let mut properties =
+            EquivalenceProperties::new_with_orderings(schema, [ordering.clone()]);
+        properties.add_grouping([Arc::clone(&a)]);
+
+        // The ordering is already satisfied, but a physical sort may still
+        // rearrange equal `b` values and separate an `a` group.
+        assert!(!properties.reorder(ordering)?);
+        assert!(!properties.grouping_satisfy([a])?);
+        assert!(properties.grouping_satisfy([b])?);
+        Ok(())
+    }
+
+    #[test]
+    fn grouping_normalizes_equivalences_and_constants() -> Result<()> {
+        let schema = create_test_schema()?;
+        let a = col("a", &schema)?;
+        let b = col("b", &schema)?;
+        let c = col("c", &schema)?;
+        let mut properties = EquivalenceProperties::new(schema);
+        properties.add_equal_conditions(Arc::clone(&a), Arc::clone(&c))?;
+        properties.add_constants([ConstExpr::from(Arc::clone(&a))])?;
+        properties.add_grouping([Arc::clone(&a), Arc::clone(&b)]);
+
+        assert!(properties.grouping_satisfy([Arc::clone(&b)])?);
+        assert!(properties.grouping_satisfy([Arc::clone(&b), Arc::clone(&c)])?);
+
+        properties.clear_per_partition_constants();
+        assert!(!properties.grouping_satisfy([Arc::clone(&b)])?);
+        assert!(properties.grouping_satisfy([b, c])?);
+        Ok(())
+    }
+
+    #[test]
+    fn project_grouping_is_all_or_nothing() -> Result<()> {
+        let schema = create_test_schema()?;
+        let a = col("a", &schema)?;
+        let b = col("b", &schema)?;
+        let mut properties = EquivalenceProperties::new(Arc::clone(&schema));
+        properties.add_grouping([Arc::clone(&a), Arc::clone(&b)]);
+
+        let output_schema = Arc::new(Schema::new(vec![
+            Field::new("x", DataType::Int32, true),
+            Field::new("y", DataType::Int32, true),
+        ]));
+        let mapping = ProjectionMapping::try_new(
+            [
+                (Arc::clone(&b), "x".to_string()),
+                (Arc::clone(&a), "y".to_string()),
+            ],
+            &schema,
+        )?;
+        let projected = properties.project(&mapping, Arc::clone(&output_schema));
+        let x = col("x", &output_schema)?;
+        let y = col("y", &output_schema)?;
+        assert!(projected.grouping_satisfy([x, y])?);
+
+        let output_schema =
+            Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, true)]));
+        let mapping =
+            ProjectionMapping::try_new([(Arc::clone(&a), "x".to_string())], &schema)?;
+        let projected = properties.project(&mapping, Arc::clone(&output_schema));
+        assert!(projected.geq_class().is_empty());
+        assert!(!projected.grouping_satisfy([col("x", &output_schema)?])?);
+        Ok(())
+    }
+
+    #[test]
+    fn project_grouping_omits_constant_members() -> Result<()> {
+        let schema = create_test_schema()?;
+        let a = col("a", &schema)?;
+        let b = col("b", &schema)?;
+        let mut properties = EquivalenceProperties::new(Arc::clone(&schema));
+        properties.add_constants([ConstExpr::from(Arc::clone(&a))])?;
+        properties.add_grouping([a, Arc::clone(&b)]);
+
+        let output_schema =
+            Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, true)]));
+        let mapping = ProjectionMapping::try_new([(b, "x".to_string())], &schema)?;
+        let projected = properties.project(&mapping, Arc::clone(&output_schema));
+
+        assert!(projected.grouping_satisfy([col("x", &output_schema)?])?);
+        Ok(())
+    }
+
+    #[test]
+    fn project_grouped_expression_requires_an_injective_mapping() -> Result<()> {
+        let schema = create_test_schema()?;
+        let a = col("a", &schema)?;
+        let mut properties = EquivalenceProperties::new(Arc::clone(&schema));
+        properties.add_grouping([Arc::clone(&a)]);
+
+        let widened = cast(Arc::clone(&a), &schema, DataType::Int64)?;
+        let output_schema =
+            Arc::new(Schema::new(vec![Field::new("x", DataType::Int64, true)]));
+        let mapping = ProjectionMapping::try_new([(widened, "x".to_string())], &schema)?;
+        let projected = properties.project(&mapping, Arc::clone(&output_schema));
+        assert!(projected.grouping_satisfy([col("x", &output_schema)?])?);
+
+        let greater_than_one = Arc::new(BinaryExpr::new(a, Operator::Gt, lit(1_i32)))
+            as Arc<dyn PhysicalExpr>;
+        let output_schema = Arc::new(Schema::new(vec![Field::new(
+            "is_greater",
+            DataType::Boolean,
+            true,
+        )]));
+        let mapping = ProjectionMapping::try_new(
+            [(greater_than_one, "is_greater".to_string())],
+            &schema,
+        )?;
+        let projected = properties.project(&mapping, Arc::clone(&output_schema));
+        assert!(projected.geq_class().is_empty());
         Ok(())
     }
 }
