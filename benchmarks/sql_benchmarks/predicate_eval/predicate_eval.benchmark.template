@@ -12,6 +12,15 @@
 # readable on its own. The table is always named `t`, so the assert and cleanup
 # are uniform across datasets.
 #
+# Every query counts rows, so its result is a single number that is fixed by the
+# generated data: the checked-in results/${NAME}.csv turns `--result-mode
+# validate` into a cheap correctness check that a reordering under test still
+# produces the same rows. The counts were persisted at the suite defaults
+# (PRED_ROWS=1000000, PRED_FILL=30), so validation only holds there. The scale and
+# width subgroups pin their own PRED_ROWS / PRED_FILL in their .benchmark files
+# -- a template parameter wins over the environment -- so those validate at any
+# setting of the knobs.
+#
 # The suite is implementation-agnostic and sets no engine config of its own: it
 # measures DataFusion's built-in left-deep `AND` short-circuit by default. To
 # evaluate a predicate-ordering system under test, set its native config via the
@@ -30,5 +39,7 @@ SELECT count(*) > 0 FROM t;
 true
 
 run sql_benchmarks/predicate_eval/queries/${SUBGROUP}/q${QPAD}.sql
+
+result sql_benchmarks/predicate_eval/results/${NAME}.csv
 
 cleanup sql_benchmarks/predicate_eval/init/cleanup.sql

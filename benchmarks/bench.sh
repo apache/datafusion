@@ -106,7 +106,7 @@ wide_schema:            Small-projection queries on a wide synthetic dataset (10
                           (runs both 'wide' and 'narrow' subgroups: narrow is an internal baseline; the wide-vs-narrow ratio is the signal)
 predicate_eval:         Conjunctive (AND) filter-evaluation micro-benchmarks; each subgroup is a different predicate pattern, to test how an
                           adaptive predicate-ordering system behaves across them (see https://github.com/apache/datafusion/issues/11262)
-                          (subgroups via BENCH_SUBGROUP: costsel, cost, selectivity, cardinality, width, scale, neutral, correlation, drift)
+                          (subgroups via BENCH_SUBGROUP: costsel, cost, selectivity, cardinality, width, scale, neutral, correlation, drift, nulls)
                           (toggle a system under test with its native DATAFUSION_* env var; size data with PRED_ROWS, string width with PRED_FILL)
 parquet_row_filter_skip: Per-RG fully-matched RowFilter skip on Parquet (apache/datafusion#23696); clustered string key + low-selectivity
                           range filter + pushdown, so most row groups are fully matched and the per-row RowFilter is skipped on them
@@ -885,7 +885,7 @@ run_push_down_topk() {
 #   DATAFUSION_EXECUTION_ADAPTIVE_FILTER_REORDERING=true ./bench.sh run predicate_eval
 # Suite-specific knobs (string-substituted into the load SQL, not engine config):
 #   BENCH_SUBGROUP   run one subgroup (costsel, cost, selectivity, cardinality,
-#                    width, scale, neutral, correlation, drift)
+#                    width, scale, neutral, correlation, drift, nulls)
 #   PRED_ROWS        synthetic row count (default 1_000_000; the scale subgroup
 #                    overrides this per query)
 #   PRED_FILL        filler chars per marker = string-column width knob
