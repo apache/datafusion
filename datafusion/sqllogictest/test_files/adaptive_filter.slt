@@ -115,9 +115,9 @@ physical_plan
 # learned order flips the two. (Both conjuncts are "cheap" to the static
 # cheap-first `reorder_predicates` rule, which is cost-only and blind to
 # selectivity, so the written order reaches `FilterExec` untouched.) Each of the
-# 4 partition streams adopts the reorder exactly once — the first stream to
-# finish the pooled warm-up publishes the order and the others pick it up on
-# their next batch — so the aggregated counter is 4.
+# 4 partition streams adopts the reorder exactly once — the first to finish the
+# pooled warm-up settles the order and the others take it up on their next
+# batch — so the aggregated counter is 4.
 query I
 SELECT count(*) FROM t WHERE a % 97 + a % 89 + a % 83 + b % 13 >= 0 AND a > 3990;
 ----

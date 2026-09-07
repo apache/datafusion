@@ -18,23 +18,68 @@
 //! Runtime-adaptive evaluation of a conjunctive (`AND`) predicate in
 //! [`FilterExec`](crate::filter::FilterExec).
 //!
-//! Predicate evaluation order matters: a selective predicate run first gates
-//! the work of the predicates after it. DataFusion's `BinaryExpr` `AND`
-//! short-circuit only gates on the *leftmost* conjunct, so a conjunction whose
-//! selective member is written last (e.g.
-//! `regexp_like(s,'a') AND … AND regexp_like(s,'rare')`) evaluates every
-//! predicate against ~every row.
+//! Evaluation order matters: a selective conjunct run first gates the work of
+//! the conjuncts after it. Two mechanisms already order and gate conjuncts
+//! before this module sees them, and both decide statically:
+//!
+//! - the logical optimizer's `reorder_predicates` pass sorts the conjuncts
+//!   cheap-before-expensive by a static cost class
+//!   (<https://github.com/apache/datafusion/pull/22343>). It is blind to
+//!   selectivity, so a cheap-but-unselective conjunct still sorts ahead of an
+//!   expensive-but-very-selective one, and conjuncts in the same cost class
+//!   keep the order they were written in. That is the order this module calls
+//!   the *written order* and measures against.
+//! - [`BinaryExpr`](datafusion_physical_expr::expressions::BinaryExpr)'s `AND`
+//!   pre-selects: when the conjuncts evaluated so far keep at most 20% of the
+//!   rows and produce no nulls, it filters the batch down to those rows before
+//!   evaluating the next conjunct.
+//!
+//! Pre-selection can only gate a conjunct on the conjuncts written *before* it,
+//! never on a more selective one written after it; it does not fire while the
+//! accumulated result still has nulls; and in a left-nested `AND` chain each
+//! level filters the original batch and scatters its result back to full
+//! length, so survivors are not carried forward compacted from one level to
+//! the next.
+//!
+//! This module measures each conjunct's selectivity and cost at runtime,
+//! reorders them accordingly, and evaluates them through a loop that compacts
+//! the survivors once and keeps them compacted. Whether it runs at all is
+//! controlled by `datafusion.execution.adaptive_filter_reordering`.
+//!
+//! For example:
+//!
+//! ```sql
+//! WHERE regexp_like(s,'a') AND regexp_like(s,'b') AND regexp_like(s,'rare')
+//! ```
+//!
+//! All three conjuncts are equally expensive to the static cost class, so they
+//! reach `FilterExec` as written. The first two each keep most rows, so `AND`
+//! pre-selection never fires and every conjunct runs on the whole batch:
+//!
+//! ```text
+//! regexp_like(s,'a')     evaluated on every row
+//! regexp_like(s,'b')     evaluated on every row
+//! regexp_like(s,'rare')  evaluated on every row
+//! ```
+//!
+//! Once the warm-up has measured the three, the selective one is promoted and
+//! the batch is compacted behind it:
+//!
+//! ```text
+//! regexp_like(s,'rare')  evaluated on every row, keeps ~1% -> batch compacted
+//! regexp_like(s,'a')     evaluated on those survivors only
+//! regexp_like(s,'b')     evaluated on those survivors only
+//! ```
 //!
 //! ## How it evaluates: the compact-once loop
 //!
-//! The conjuncts are evaluated sequentially, combining their boolean results
+//! The conjuncts are evaluated one at a time, combining their boolean results
 //! with `AND`. The working batch is physically compacted to the surviving rows
-//! once the accumulated mask becomes selective enough — so a run of
-//! non-selective conjuncts costs only cheap bitwise `AND`s, while a selective
-//! conjunct shrinks the batch the conjuncts after it must decode. This
-//! compaction is what makes ordering pay off (and is itself a win even without
-//! reordering): a left-deep fused `BinaryExpr` `AND` does *not* compact between
-//! conjuncts, so it evaluates ~every conjunct on ~every row regardless of order.
+//! once the accumulated mask becomes selective enough
+//! ([`COMPACTION_SELECTIVITY_THRESHOLD`]), and every conjunct after that point
+//! is evaluated against the compacted batch. So a run of non-selective
+//! conjuncts costs only cheap bitwise `AND`s, and everything after a selective
+//! conjunct decodes just its survivors.
 //!
 //! ## How it orders
 //!
@@ -42,55 +87,47 @@
 //! its marginal selectivity and per-row cost. After a short warm-up the
 //! conjuncts are ranked by rows discarded per nanosecond
 //! (`(1 - pass_rate) / cost_per_row`, the classic optimal ordering key for
-//! independent conjuncts), and if the ranked order is *materially* cheaper than
-//! the written one it is adopted. The order then stays fixed.
+//! independent conjuncts), and the ranking is adopted only if it is materially
+//! cheaper than the written order ([`TIE_COST_FRACTION`]). The order then stays
+//! fixed.
 //!
-//! Compact-once is used **only in service of a reorder**: if the warm-up does
-//! not reorder the conjuncts (e.g. they are interchangeable), the written
-//! predicate is evaluated as-is, so once settled a conjunction that does not
-//! benefit from reordering pays no compact-once overhead and evaluates exactly
-//! as it would with the feature off. During the warm-up itself the conjuncts
-//! are necessarily evaluated individually (with compaction) so they can be
-//! measured — see the side-effects caveat below.
+//! The compact-once loop is used only in service of a reorder: if the warm-up
+//! does not reorder the conjuncts, the written predicate is from then on
+//! evaluated as one expression, exactly as it would be with the flag off.
+//! During the warm-up the conjuncts are necessarily evaluated one at a time so
+//! they can be measured individually.
 //!
 //! ## How it shares
 //!
 //! A `FilterExec` is split across many partition streams, each seeing only a
 //! slice of the data. Measurements are pooled into a shared
 //! [`AdaptiveFilterShared`] so the streams learn as one: the first stream to
-//! accumulate enough samples settles the order and publishes it, and the others
-//! adopt it on their next batch without each re-paying the warm-up — which is
-//! what makes the win materialise when each stream is only a handful of batches
-//! long. Only unsettled streams touch the shared mutex, and only to pool a
-//! batch's counts or pick up a published decision; a settled stream never
-//! locks it again.
-//!
-//! It is **off by default**
-//! (`datafusion.execution.adaptive_filter_reordering`) and never changes query
-//! results: a conjunction's value is independent of evaluation order. Predicates
-//! containing volatile expressions are never reordered (their observable side
-//! effects depend on order).
-//!
-//! Observable *side effects* of fallible predicates can change even when no
-//! reorder is adopted: whenever conjuncts are evaluated individually (during
-//! warm-up, or settled with a reorder), a conjunct after a compaction sees only
-//! the surviving rows, so an error a fused evaluation would have raised on an
-//! already-filtered row (e.g. `b <> 0 AND 1/b > 2` with the fused `AND`
-//! evaluating `1/b` on every row) may not occur.
+//! accumulate enough samples settles the order for all of them, and the rest
+//! adopt it on their next batch instead of each re-paying the warm-up — which
+//! is what makes the win materialise when each stream is only a handful of
+//! batches long. Only unsettled streams take the shared lock; a settled stream
+//! never touches it again.
 //!
 //! ## Known limitations
 //!
-//! The statistics are *conditional*: each conjunct is measured on the rows that
-//! survived the conjuncts before it in written order, and (after a compaction)
-//! on small survivor batches whose per-row cost is inflated by fixed overheads.
-//! Correlated conjuncts can therefore look more selective in a late position
-//! than they would be up front, and the settle decision is one-shot: once
-//! adopted, the order is never re-measured, so a misjudged reorder (or drifting
-//! data) is kept for the stream's lifetime. The material-win guard
-//! ([`TIE_COST_FRACTION`]) makes adoption conservative but cannot detect
-//! correlation. Further policies (drift re-measurement, confidence-interval
-//! statistics, A/B-validated adoption for the cases a cost model cannot
-//! separate) can build on top of this core.
+//! - Reordering never changes query *results* — the value of a conjunction does
+//!   not depend on evaluation order — but it can change the observable *side
+//!   effects* of fallible predicates, in either direction: a conjunct evaluated
+//!   after a compaction sees only the rows that survived, so an error the
+//!   written order raises can disappear and one it avoided can appear.
+//!   Predicates containing volatile expressions are never reordered.
+//! - The measurements are *conditional*: each conjunct is measured on the rows
+//!   that survived the conjuncts before it in written order, and after a
+//!   compaction on small survivor batches whose per-row cost is inflated by
+//!   fixed overheads. Correlated conjuncts can therefore look more selective in
+//!   a late position than they would be up front; the material-win guard makes
+//!   adoption conservative but cannot detect correlation.
+//! - The decision is one-shot: once settled, the order is never re-measured, so
+//!   a misjudged reorder — or data whose selectivity drifts — is kept for the
+//!   rest of the query.
+//!
+//! See <https://github.com/apache/datafusion/pull/22698> for the measurements
+//! behind this design.
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -178,13 +215,8 @@ impl ConjunctStats {
 
 /// State shared by every partition stream of one `FilterExec`, so the streams
 /// learn as one: per-conjunct measurements are pooled across streams and the
-/// first stream to accumulate enough samples settles the order for all of them.
-///
-/// This matters because a `FilterExec` is split across many partition streams,
-/// each seeing only a slice of the data. Without sharing, every stream pays its
-/// own warm-up — and when each stream is only a handful of batches long, that
-/// warm-up is most of its work, so the reordering win never materialises. With
-/// sharing the warm-up is paid roughly once per query, not once per stream.
+/// first stream to accumulate enough samples settles the order for all of them
+/// (see "How it shares" in the [module docs](self)).
 #[derive(Debug, Default)]
 pub(crate) struct AdaptiveFilterShared {
     inner: Mutex<SharedInner>,
@@ -201,28 +233,27 @@ struct SharedInner {
     settled: Option<Settled>,
 }
 
-/// How one batch was evaluated. Reported by
-/// [`AdaptiveConjunction::evaluate_traced`] so the evaluator's behaviour is
-/// observable batch by batch (its input/output contract is exercised by the
-/// `scenario_*` tests). Borrows the adopted order rather than cloning it, so
-/// reporting costs nothing on the per-batch path.
+/// How one batch was evaluated, reported by
+/// [`AdaptiveConjunction::evaluate_traced`] so the `scenario_*` tests can
+/// assert the strategy batch by batch. Borrows the adopted order rather than
+/// cloning it, so reporting costs nothing on the per-batch path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BatchStrategy<'a> {
     /// Still learning: the written order through the compact-once loop, each
     /// conjunct instrumented and its counts pooled. (Empty batches are
     /// evaluated but measure nothing and do not consume the warm-up.)
     Measure,
-    /// Settled without a reorder: the written fused predicate, exactly as if
-    /// the feature were off.
+    /// Settled without a reorder: the written predicate evaluated as one
+    /// expression, exactly as if the feature were off.
     Fused,
-    /// Settled on an adopted reorder, evaluated through the compact-once
-    /// loop. The payload is the adopted evaluation order: positions in the
-    /// written conjunct list, first-evaluated first.
+    /// Settled on an adopted reorder, evaluated through the compact-once loop.
+    /// The payload is the adopted order: positions in the written conjunct
+    /// list, first-evaluated first.
     Reordered(&'a [usize]),
 }
 
 /// The settled outcome of the warm-up: the evaluation order, and whether to run
-/// it through the compact-once loop or the plain predicate.
+/// it through the compact-once loop or as the written predicate.
 #[derive(Debug, Clone)]
 struct Settled {
     /// Evaluation order: indices into the conjunct list.
@@ -237,7 +268,7 @@ impl AdaptiveFilterShared {
         Self::default()
     }
 
-    /// The published settled decision, or `None` if streams are still learning.
+    /// The settled decision, or `None` if the streams are still learning.
     fn settled(&self) -> Option<Settled> {
         self.inner.lock().expect("poisoned").settled.clone()
     }
@@ -246,11 +277,11 @@ impl AdaptiveFilterShared {
     /// per conjunct and leave the pool exactly one batch short of the warm-up,
     /// so the next measured batch settles on the seeded decision.
     ///
-    /// The stand-in for a mocked clock: it lets a test pin the settle decision
-    /// instead of depending on real timer values, which on a shared CI runner
-    /// can be perturbed by a scheduling hiccup far larger than the evaluation
-    /// being measured. Used by `FilterExec`'s end-to-end tests; the tests in
-    /// this module use the equivalent `tests::seed`.
+    /// This stands in for a mocked clock: it pins the settle decision instead
+    /// of leaving it to real timer values, which a scheduling hiccup on a
+    /// shared CI runner can perturb by far more than the evaluation being
+    /// measured. Used by `FilterExec`'s end-to-end tests; the tests in this
+    /// module use the equivalent `tests::seed`.
     #[cfg(test)]
     pub(crate) fn seed_one_batch_short_of_warmup(
         &self,
@@ -276,9 +307,8 @@ impl AdaptiveFilterShared {
 pub(crate) struct AdaptiveConjunction {
     /// The split conjuncts. `order` indices refer to positions here.
     conjuncts: Vec<Arc<dyn PhysicalExpr>>,
-    /// The written predicate, evaluated as-is when the settled order does not
-    /// reorder it (so a settled non-reorder costs exactly what the flag-off path
-    /// costs — no compact-once overhead).
+    /// The written predicate as one expression, evaluated as-is when the
+    /// settled order does not reorder it.
     predicate: Arc<dyn PhysicalExpr>,
     /// Measurements and the settled decision, shared by every partition stream.
     shared: Arc<AdaptiveFilterShared>,
@@ -288,7 +318,7 @@ pub(crate) struct AdaptiveConjunction {
     /// Whether the settled order runs through the compact-once loop; `false`
     /// means evaluate [`predicate`](Self::predicate) directly.
     compact: bool,
-    /// Whether the order is settled (frozen): this stream no longer measures.
+    /// Whether the order is settled: this stream no longer measures.
     settled: bool,
     /// Set when this stream adopts a *reordered* decision, and cleared by
     /// [`take_adopted_reorder`](Self::take_adopted_reorder) — a one-shot
@@ -334,10 +364,9 @@ impl AdaptiveConjunction {
     /// Whether this stream has just adopted a reordered evaluation order,
     /// clearing the signal.
     ///
-    /// Fires exactly once per stream, on the batch at which the stream settles
-    /// on a reorder — whether it settled the order itself or picked up one
-    /// another stream published. A stream that settles on the written order
-    /// (no reorder) never fires.
+    /// Fires exactly once per stream, on the batch at which it adopts a
+    /// reorder — whether it settled the order itself or took up one another
+    /// stream settled. A stream that settles on the written order never fires.
     pub(crate) fn take_adopted_reorder(&mut self) -> bool {
         std::mem::take(&mut self.adopted_reorder)
     }
@@ -346,21 +375,19 @@ impl AdaptiveConjunction {
     /// (over the batch's rows) of rows that passed every conjunct.
     ///
     /// Until the order settles, each batch is measured and its counts pooled
-    /// into the shared registry; a stream adopts the settled order another
-    /// stream published on its next batch.
+    /// into the shared state.
     pub(crate) fn evaluate(&mut self, batch: &RecordBatch) -> Result<ArrayRef> {
         self.evaluate_traced(batch).map(|(mask, _)| mask)
     }
 
     /// [`evaluate`](Self::evaluate), additionally reporting the
-    /// [`BatchStrategy`] used for this batch, so the evaluator's behaviour is
-    /// observable batch by batch (see the scenario tests).
+    /// [`BatchStrategy`] used for this batch.
     fn evaluate_traced(
         &mut self,
         batch: &RecordBatch,
     ) -> Result<(ArrayRef, BatchStrategy<'_>)> {
-        // Adopt a settled order another stream published since our last batch.
-        // An unsettled stream already locks the shared state once per measured
+        // Take up an order another stream settled since our last batch. An
+        // unsettled stream already locks the shared state once per measured
         // batch to pool its counts, so this brief extra lock is in the same
         // cost class; a settled stream never touches it again.
         if !self.settled
@@ -395,8 +422,8 @@ impl AdaptiveConjunction {
     }
 
     /// Evaluate the settled arrangement with no instrumentation: the
-    /// compact-once loop when the order was reordered, or the written predicate
-    /// directly otherwise (identical to the feature being off).
+    /// compact-once loop when the order was reordered, the written predicate
+    /// directly otherwise.
     fn evaluate_settled(&self, batch: &RecordBatch) -> Result<ArrayRef> {
         if self.compact {
             eval_conjuncts(&self.conjuncts, &self.order, batch, None)
@@ -415,7 +442,8 @@ impl AdaptiveConjunction {
     }
 
     /// Merge this batch's measurements into the shared pool and, once enough
-    /// batches have accrued across all streams, decide and publish the order.
+    /// batches have accrued across all streams, settle the order for all of
+    /// them.
     fn pool_and_maybe_settle(&mut self, local: &[ConjunctStats]) {
         let mut inner = self.shared.inner.lock().expect("poisoned");
         if inner.stats.is_empty() {
@@ -449,14 +477,11 @@ impl AdaptiveConjunction {
 
 /// Decide the settled arrangement from the pooled measurements.
 ///
-/// Rank the conjuncts by effectiveness and adopt the ranking only if it is
-/// materially cheaper than the written order. A genuine reorder runs through the
-/// compact-once loop (the source of the win); otherwise the written predicate is
-/// kept and evaluated as-is. This is the guard: compact-once is only ever used
-/// in service of a reorder, so a conjunction that does not benefit from
-/// reordering (interchangeable conjuncts, e.g. several equally expensive
-/// unselective predicates) pays no compact-once overhead and behaves exactly as
-/// it would with the feature off.
+/// Rank the conjuncts by effectiveness and take the ranking only if it is
+/// materially cheaper than the written order; otherwise keep the written
+/// predicate and evaluate it as one expression. This is the guard that keeps
+/// the compact-once loop in service of a reorder, so a conjunction that does
+/// not benefit from reordering pays none of its overhead.
 fn settle(stats: &[ConjunctStats]) -> Settled {
     let identity: Vec<usize> = (0..stats.len()).collect();
     let candidate = rank_by_effectiveness(stats);
@@ -486,9 +511,8 @@ fn settle(stats: &[ConjunctStats]) -> Settled {
 /// the accumulated mask becomes selective enough (see
 /// [`COMPACTION_SELECTIVITY_THRESHOLD`]); until then masks are combined with a
 /// cheap bitwise `AND`, so a run of non-selective conjuncts pays no
-/// materialization cost. Unlike a fused `BinaryExpr` chain, survivors stay
-/// compacted across the remaining conjuncts instead of being re-evaluated on
-/// every row.
+/// materialization cost. Once compacted, the survivors stay compacted for the
+/// conjuncts that follow.
 fn eval_conjuncts(
     conjuncts: &[Arc<dyn PhysicalExpr>],
     order: &[usize],
@@ -776,7 +800,7 @@ mod tests {
         assert!((expected_cost_per_row(&s, &[1, 0]) - 10.5).abs() < 1e-9);
     }
 
-    /// The compact-once loop returns exactly the rows the plain predicate
+    /// The compact-once loop returns exactly the rows the written predicate
     /// keeps, in any order and whether or not compaction triggers.
     #[test]
     fn eval_conjuncts_matches_predicate_in_any_order() {
@@ -800,7 +824,7 @@ mod tests {
         }
     }
 
-    /// Across the warm-up boundary the mask must always equal the plain
+    /// Across the warm-up boundary the mask must always equal the written
     /// predicate's, before and after the order settles.
     #[test]
     fn evaluate_matches_predicate_across_warmup() {
@@ -826,7 +850,7 @@ mod tests {
     }
 
     /// A reorder is adopted only when materially cheaper; an already-good order
-    /// is left untouched and runs the plain predicate (no compact-once).
+    /// is left untouched and runs the written predicate (no compact-once).
     #[test]
     fn settle_keeps_order_when_not_materially_better() {
         // Two equally cheap, equally selective conjuncts: swapping cannot help,
@@ -847,11 +871,10 @@ mod tests {
         assert!(d.compact);
     }
 
-    /// When the order does not change, the settled evaluator runs the plain
-    /// predicate (compact-once is only used in service of a reorder), so an
-    /// interchangeable conjunction costs exactly what the flag-off path costs.
+    /// When the order does not change, the settled evaluator runs the written
+    /// predicate as one expression.
     ///
-    /// This one measures real timings on purpose and is still deterministic:
+    /// This test measures real timings on purpose and is still deterministic:
     /// both conjuncts pass the same ~96% of rows, and with a pass rate `p`
     /// above `1 - TIE_COST_FRACTION` the material-win guard
     /// (`c1 + p*c0 < 0.95 * (c0 + p*c1)`) cannot hold for any positive costs,
@@ -883,17 +906,13 @@ mod tests {
         );
     }
 
-    /// Two streams sharing one registry settle the order together: the pooled
-    /// warm-up is `WARMUP_BATCHES` total across both streams, and once one
-    /// stream publishes the order the other adopts it on its next batch.
+    /// Two streams sharing one pool settle the order together: the warm-up is
+    /// `WARMUP_BATCHES` batches total across both streams, and once one stream
+    /// settles the order the other adopts it on its next batch.
     ///
     /// The pool is seeded (see [`seed`]) two batches short of the warm-up, so
     /// the two real measured batches that complete it cannot move the ranking:
-    /// their counts are several orders of magnitude smaller than the seeded
-    /// ones. Deriving the ranking from the real `Instant` timings of two
-    /// hundred-row batches instead would make the assertions below depend on
-    /// the measured cost ratio staying inside the material-win guard, which a
-    /// scheduling hiccup on a shared runner can flip.
+    /// their counts are orders of magnitude smaller than the seeded ones.
     #[test]
     fn streams_pool_measurements_and_share_settled_order() {
         let schema = schema();
@@ -949,10 +968,10 @@ mod tests {
     /// The reorder-adoption signal (`take_adopted_reorder`, what `FilterExec`
     /// counts into its `adaptive_reorders` metric) fires exactly once per
     /// stream: once for the stream that settles the order, and once for a
-    /// stream that later picks up the decision that stream published.
+    /// stream that later takes it up.
     ///
-    /// The per-conjunct costs are seeded (see [`seed`]) so the settle decision
-    /// is a reorder deterministically, regardless of real timer values.
+    /// The per-conjunct costs are seeded (see [`seed`]) so the decision is a
+    /// reorder regardless of real timer values.
     #[test]
     fn adopted_reorder_signals_once_per_stream() {
         let schema = schema();
@@ -986,8 +1005,8 @@ mod tests {
         settler.evaluate(&rb).unwrap();
         assert!(!settler.take_adopted_reorder());
 
-        // `adopter` never measured its way to a decision: it picks up the
-        // published one on its next batch, and signals that once too.
+        // `adopter` never measured its way to a decision: it takes up the
+        // settled one on its next batch, and signals that once too.
         adopter.evaluate(&rb).unwrap();
         assert!(adopter.compact);
         assert!(adopter.take_adopted_reorder());
@@ -1020,16 +1039,13 @@ mod tests {
         assert!(!adaptive.take_adopted_reorder());
     }
 
-    /// End-to-end input/output-contract scenario: feed batches, observe the
-    /// strategy used for each one alongside the masks.
+    /// End-to-end contract scenario: feed batches, observe the strategy used
+    /// for each one alongside the masks.
     ///
-    /// Per-conjunct costs are injected by seeding the shared pool with
-    /// synthetic measurements (the stand-in for a mocked clock): conjunct 0 is
-    /// cheap but unselective, conjunct 1 is expensive but very selective, so
-    /// the warm-up must settle on promoting conjunct 1 and run the reorder
-    /// through the compact-once loop. The seeded magnitudes dominate the one
-    /// real measured batch, so the decision is deterministic regardless of
-    /// real timer values.
+    /// The seeded costs (see [`seed`]) make conjunct 0 cheap but unselective
+    /// and conjunct 1 expensive but very selective, so the warm-up must settle
+    /// on promoting conjunct 1 and run it through the compact-once loop,
+    /// regardless of real timer values.
     #[test]
     fn scenario_measure_batches_then_settle_on_reorder() {
         let schema = schema();
@@ -1068,8 +1084,8 @@ mod tests {
     }
 
     /// Contract scenario for the no-win case: interchangeable conjuncts settle
-    /// on the written fused predicate (as if the feature were off), never the
-    /// compact-once loop.
+    /// on the written predicate evaluated as one expression (as if the feature
+    /// were off), never the compact-once loop.
     #[test]
     fn scenario_measure_batches_then_settle_on_fused() {
         let schema = schema();
@@ -1178,8 +1194,8 @@ mod tests {
     /// reorder can introduce an error the written order avoided.
     ///
     /// `b <> 0 AND 1 / b > 2` on data where `b <> 0` holds for 15% of the rows.
-    /// The written fused `BinaryExpr` `AND` pre-selects (its own threshold is
-    /// also 20%), so `1 / b` never sees a zero and the flag-off query succeeds.
+    /// The written `BinaryExpr` `AND` pre-selects (its own threshold is also
+    /// 20%), so `1 / b` never sees a zero and the flag-off query succeeds.
     /// Once the conjuncts are reordered, `1 / b > 2` runs first — on every row,
     /// zeros included — and integer division by zero is an error.
     #[test]
@@ -1192,7 +1208,7 @@ mod tests {
         let b: Vec<i64> = (0..100).map(|i| i64::from(i < 15)).collect();
         let rb = int64_batch(&schema, a, b);
 
-        // Flag off: the fused predicate pre-selects on `b <> 0` (15 of 100
+        // Flag off: the written predicate pre-selects on `b <> 0` (15 of 100
         // rows, within its 20% threshold) and succeeds.
         assert!(p.evaluate(&rb).is_ok(), "flag-off evaluation must succeed");
 
@@ -1220,11 +1236,11 @@ mod tests {
         assert!(err.contains("Divide by zero"), "unexpected error: {err}");
     }
 
-    /// The mirror of the case above: an error the written fused order *does*
-    /// raise, which the reordered compact-once evaluation avoids.
+    /// The mirror of the case above: an error the written order *does* raise,
+    /// which the reordered compact-once evaluation avoids.
     ///
     /// `1 / b > 2 AND a < 10`, with `b = 0` on exactly the rows `a < 10`
-    /// discards. The fused `AND` evaluates its left side on every row and
+    /// discards. The written `AND` evaluates its left side on every row and
     /// errors; the adopted order runs `a < 10` first, compacts to its 10
     /// survivors (all with `b = 1`), and never divides by zero.
     #[test]
@@ -1266,7 +1282,7 @@ mod tests {
         let b: Vec<i64> = (0..100).map(|i| i64::from(i < 10)).collect();
         let rb = int64_batch(&schema, a, b);
 
-        // The written fused order divides by zero...
+        // The written order divides by zero...
         let err = p.evaluate(&rb).unwrap_err().to_string();
         assert!(err.contains("Divide by zero"), "unexpected error: {err}");
         // ...while the adopted order compacts `1 / b > 2` down to the rows
