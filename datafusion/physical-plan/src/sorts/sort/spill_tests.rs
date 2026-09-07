@@ -57,13 +57,13 @@ struct AllocationState {
 /// Existing allocations survive a lower limit, but fresh allocations must fit.
 /// The test changes the limit before insertion, independently of spill internals.
 #[derive(Debug)]
-struct AdjustablePool {
+pub(super) struct AdjustablePool {
     capacity: usize,
     state: Mutex<AllocationState>,
 }
 
 impl AdjustablePool {
-    fn new(capacity: usize) -> Arc<Self> {
+    pub(super) fn new(capacity: usize) -> Arc<Self> {
         Arc::new(Self {
             capacity,
             state: Mutex::new(AllocationState {
@@ -73,7 +73,7 @@ impl AdjustablePool {
         })
     }
 
-    fn set_limit(&self, limit: usize) {
+    pub(super) fn set_limit(&self, limit: usize) {
         assert!(limit <= self.capacity);
         self.state.lock().unwrap().limit = limit;
     }
