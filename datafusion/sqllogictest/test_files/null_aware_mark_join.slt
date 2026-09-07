@@ -215,6 +215,32 @@ WHERE (id NOT IN (
 )) IS FALSE;
 ----
 
+# Non-nullable membership values produce two-valued marks even when the
+# correlation expression is nullable. Group 2 is empty because NULLIF makes
+# its correlation predicate UNKNOWN.
+query T rowsort
+SELECT value
+FROM (SELECT COALESCE(id, 0) AS id, grp, value FROM outer_corr_table) o
+WHERE (id NOT IN (
+  SELECT COALESCE(id, 0) FROM inner_corr_table i
+  WHERE o.grp = NULLIF(i.grp, 2)
+)) IS NULL;
+----
+
+query T rowsort
+SELECT value
+FROM (SELECT COALESCE(id, 0) AS id, grp, value FROM outer_corr_table) o
+WHERE (id NOT IN (
+  SELECT COALESCE(id, 0) FROM inner_corr_table i
+  WHERE o.grp = NULLIF(i.grp, 2)
+)) IS TRUE;
+----
+a
+b
+c
+e
+g
+
 # WHERE EXISTS in a disjunction, the motivating mark join example from
 # "The Complete Story of Joins (in HyPer)" (Neumann, Leis, Kemper; BTW 2017),
 # Section 3.3. The OR prevents the semi join rewrite, so the EXISTS must run
