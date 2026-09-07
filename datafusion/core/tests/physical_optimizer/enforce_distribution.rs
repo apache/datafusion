@@ -72,6 +72,7 @@ use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::JoinOn;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
+use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{
@@ -4543,11 +4544,12 @@ fn test_replace_order_preserving_variants_with_fetch() -> Result<()> {
     // Apply the function
     let result = replace_order_preserving_variants(dist_context)?;
 
-    // Verify the plan was transformed to CoalescePartitionsExec
+    // A fetched ordered merge must still select the TopK rows.
+    let result = check_integrity(result)?;
     result
         .plan
-        .downcast_ref::<CoalescePartitionsExec>()
-        .expect("Expected CoalescePartitionsExec");
+        .downcast_ref::<SortExec>()
+        .expect("Expected a TopK SortExec");
 
     // Verify fetch was preserved
     assert_eq!(
@@ -4597,31 +4599,183 @@ fn preserve_fetch_when_reoptimizing_coalesce_partitions() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn move_fetch_to_replacement_sort() -> Result<()> {
-    let schema = schema();
-    let sort_key: LexOrdering =
-        [PhysicalSortExpr::new_default(col("c", &schema)?)].into();
-    let input = parquet_exec_multiple_sorted(vec![sort_key.clone()]);
-    let merge: Arc<dyn ExecutionPlan> = Arc::new(
-        SortPreservingMergeExec::new(sort_key.clone(), input).with_fetch(Some(5)),
-    );
-    let plan = sort_required_exec_with_req(merge, sort_key);
-
-    let optimized = ensure_distribution_helper(plan, 10, false)?;
-    let plan = displayable(optimized.as_ref()).indent(true).to_string();
-
-    assert!(
-        plan.contains(
-            "SortExec: TopK(fetch=5), expr=[c@2 ASC], preserve_partitioning=[false]"
+#[tokio::test]
+async fn move_fetch_to_replacement_sort() -> Result<()> {
+    for (options, partitions, expected) in [
+        (
+            SortOptions::default(),
+            [
+                vec![None, Some(1), Some(1), Some(6)],
+                vec![None, Some(1), Some(2), Some(7)],
+            ],
+            vec![None, None, Some(1), Some(1), Some(1)],
         ),
-        "expected the replacement sort to preserve fetch:\n{plan}"
-    );
-    assert!(
-        !plan.contains("CoalescePartitionsExec: fetch=5"),
-        "fetch below the replacement sort would change TopK results:\n{plan}"
-    );
+        (
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+            [vec![Some(7), Some(1), None], vec![Some(6), Some(1), None]],
+            vec![Some(7), Some(6), Some(1), Some(1), None],
+        ),
+    ] {
+        let (input, sort_key) = sorted_memory_input(partitions, options)?;
+        let merge: Arc<dyn ExecutionPlan> = Arc::new(
+            SortPreservingMergeExec::new(sort_key.clone(), input).with_fetch(Some(5)),
+        );
+        assert_eq!(fetch_test_values(Arc::clone(&merge)).await?, expected);
+        let plan = sort_required_exec_with_req(merge, sort_key);
+        let optimized = ensure_distribution_helper(plan, 10, false)?;
+        let replacement = Arc::clone(optimized.children()[0]);
+        let sort = replacement
+            .downcast_ref::<SortExec>()
+            .expect("expected a replacement sort");
+        assert_eq!(sort.fetch(), Some(5));
+        assert_eq!(fetch_test_values(replacement).await?, expected);
+    }
+    Ok(())
+}
 
+#[tokio::test]
+async fn preserve_fetch_in_nested_distribution_operators() -> Result<()> {
+    for outer_fetch in [0, 3, 10] {
+        let (input, sort_key) = sorted_memory_input(
+            [0, 1].map(|start| (start..10).step_by(2).map(Some).collect()),
+            SortOptions::default(),
+        )?;
+        let merge: Arc<dyn ExecutionPlan> =
+            Arc::new(SortPreservingMergeExec::new(sort_key, input).with_fetch(Some(5)));
+        let plan: Arc<dyn ExecutionPlan> =
+            Arc::new(CoalescePartitionsExec::new(merge).with_fetch(Some(outer_fetch)));
+        let expected = (0..outer_fetch.min(5))
+            .map(|value| Some(value as i64))
+            .collect::<Vec<_>>();
+        assert_reoptimized_fetch_values(plan, &expected).await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn preserve_topk_when_parent_changes_ordering() -> Result<()> {
+    let (input, sort_key) = sorted_memory_input(
+        [0, 1].map(|start| (start..10).step_by(2).map(Some).collect()),
+        SortOptions::default(),
+    )?;
+    let descending = [PhysicalSortExpr::new(
+        col("c", &input.schema())?,
+        SortOptions {
+            descending: true,
+            nulls_first: false,
+        },
+    )]
+    .into();
+    let merge: Arc<dyn ExecutionPlan> =
+        Arc::new(SortPreservingMergeExec::new(sort_key, input).with_fetch(Some(5)));
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(SortExec::new(descending, merge));
+    assert_reoptimized_fetch_values(plan, &[Some(4), Some(3), Some(2), Some(1), Some(0)])
+        .await
+}
+
+#[tokio::test]
+async fn preserve_fetch_when_parallelizing_sort_above_filter() -> Result<()> {
+    let (input, sort_key) = sorted_memory_input(
+        [
+            vec![Some(-4), Some(-2), Some(2), Some(4), Some(6)],
+            vec![Some(-3), Some(-1), Some(3), Some(5), Some(7)],
+        ],
+        SortOptions::default(),
+    )?;
+    let predicate = Arc::new(BinaryExpr::new(
+        col("c", &input.schema())?,
+        Operator::Gt,
+        lit(0_i64),
+    ));
+    let coalesce: Arc<dyn ExecutionPlan> =
+        Arc::new(CoalescePartitionsExec::new(input).with_fetch(Some(5)));
+    let filter: Arc<dyn ExecutionPlan> =
+        Arc::new(FilterExec::try_new(predicate, coalesce)?);
+    let mut plan: Arc<dyn ExecutionPlan> = Arc::new(SortExec::new(sort_key, filter));
+    let mut config = test_suite_default_config_options();
+    config.optimizer.enable_round_robin_repartition = false;
+    config.optimizer.repartition_sorts = true;
+    for iteration in 0..3 {
+        if iteration > 0 {
+            plan = EnsureRequirements::new().optimize(plan, &config)?;
+        }
+        // Either input batch can arrive first. Both contain three positive
+        // rows, so keeping the limit below the filter always returns three.
+        assert_eq!(
+            fetch_test_values(Arc::clone(&plan)).await?.len(),
+            3,
+            "iteration {iteration}:\n{}",
+            displayable(plan.as_ref()).indent(true)
+        );
+    }
+    Ok(())
+}
+
+fn sorted_memory_input(
+    partitions: [Vec<Option<i64>>; 2],
+    options: SortOptions,
+) -> Result<(Arc<dyn ExecutionPlan>, LexOrdering)> {
+    let schema = Arc::new(Schema::new(vec![Field::new("c", DataType::Int64, true)]));
+    let order: LexOrdering = [PhysicalSortExpr::new(col("c", &schema)?, options)].into();
+    let partitions = partitions
+        .into_iter()
+        .map(|values| {
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int64Array::from(values))],
+            )
+            .map(|batch| vec![batch])
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let source = MemorySourceConfig::try_new(&partitions, schema, None)?
+        .try_with_sort_information(vec![order.clone()])?;
+    Ok((DataSourceExec::from_data_source(source), order))
+}
+
+async fn fetch_test_values(plan: Arc<dyn ExecutionPlan>) -> Result<Vec<Option<i64>>> {
+    let batches = collect(plan, SessionContext::new().task_ctx()).await?;
+    Ok(batches
+        .iter()
+        .flat_map(|batch| {
+            batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .iter()
+        })
+        .collect())
+}
+
+async fn assert_reoptimized_fetch_values(
+    plan: Arc<dyn ExecutionPlan>,
+    expected: &[Option<i64>],
+) -> Result<()> {
+    for repartition_sorts in [false, true] {
+        let mut optimized = Arc::clone(&plan);
+        let mut config = test_suite_default_config_options();
+        config.optimizer.enable_round_robin_repartition = false;
+        config.optimizer.repartition_sorts = repartition_sorts;
+        for iteration in 0..3 {
+            if iteration > 0 {
+                let distribution =
+                    DistributionContext::new_default(Arc::clone(&optimized))
+                        .transform_up(|context| ensure_distribution(context, &config))?
+                        .data;
+                check_integrity(distribution)?;
+                optimized = EnsureRequirements::new().optimize(optimized, &config)?;
+            }
+            assert_eq!(
+                fetch_test_values(Arc::clone(&optimized)).await?,
+                expected,
+                "iteration {iteration}, repartition_sorts={repartition_sorts}:\n{}",
+                displayable(optimized.as_ref()).indent(true)
+            );
+        }
+    }
     Ok(())
 }
 
