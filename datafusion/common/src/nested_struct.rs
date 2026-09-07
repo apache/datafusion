@@ -698,13 +698,15 @@ pub fn validate_struct_compatibility(
     source_fields: &[FieldRef],
     target_fields: &[FieldRef],
 ) -> Result<()> {
-    let has_overlap = has_one_of_more_common_fields(source_fields, target_fields);
-    if !has_overlap {
-        return _plan_err!(
-            "Cannot cast struct with {} fields to {} fields because there is no field name overlap",
-            source_fields.len(),
-            target_fields.len()
-        );
+    if !source_fields.is_empty() {
+        let has_overlap = has_one_of_more_common_fields(source_fields, target_fields);
+        if !has_overlap {
+            return _plan_err!(
+                "Cannot cast struct with {} fields to {} fields because there is no field name overlap",
+                source_fields.len(),
+                target_fields.len()
+            );
+        }
     }
 
     // Check compatibility for each target field
@@ -1549,6 +1551,46 @@ mod tests {
         // and missing field 'b' is nullable
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_struct_compatibility_empty_source_and_target() {
+        // Source and target struct: {} (no fields)
+        let source_fields = vec![];
+        let target_fields = vec![];
+
+        // This should succeed - an empty struct is compatible with itself
+        let result = validate_struct_compatibility(&source_fields, &target_fields);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_struct_compatibility_empty_source_nullable_target() {
+        // Source and target struct: {} (no fields)
+        let source_fields = vec![];
+
+        // Target struct: {a: Int32}
+        let target_fields = vec![arc_field("a", DataType::Int32)];
+
+        // This should succeed - all target fields are nullable
+        let result = validate_struct_compatibility(&source_fields, &target_fields);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_struct_compatibility_empty_source_non_nullable_target() {
+        // Source and target struct: {} (no fields)
+        let source_fields = vec![];
+
+        // Target struct: {a: Int32 NOT NULL}
+        let target_fields = vec![
+            arc_field("a", DataType::Int32),
+            Arc::new(non_null_field("b", DataType::Utf8)),
+        ];
+
+        // This should fail - not all target fields are nullable
+        let result = validate_struct_compatibility(&source_fields, &target_fields);
+        assert!(result.is_err());
     }
 
     #[test]
