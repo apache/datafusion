@@ -32,7 +32,8 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
-    Constraints, DFSchema, SchemaExt, internal_datafusion_err, not_impl_err, plan_err,
+    Constraints, DFSchema, SchemaExt, internal_datafusion_err, internal_err,
+    not_impl_err, plan_err,
 };
 use datafusion_datasource::memory::{MemSink, MemorySourceConfig};
 use datafusion_datasource::sink::DataSinkExec;
@@ -608,9 +609,15 @@ impl ExecutionPlan for MemDeleteExec {
 
     fn execute(
         &self,
-        _partition: usize,
+        partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        if partition != 0 {
+            return internal_err!(
+                "MemDeleteExec has one partition, but partition {partition} was requested"
+            );
+        }
+
         let partitions = self.partitions.clone();
         let sort_order = Arc::clone(&self.sort_order);
         let predicates = self.predicates.clone();
@@ -806,9 +813,15 @@ impl ExecutionPlan for MemUpdateExec {
 
     fn execute(
         &self,
-        _partition: usize,
+        partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        if partition != 0 {
+            return internal_err!(
+                "MemUpdateExec has one partition, but partition {partition} was requested"
+            );
+        }
+
         let partitions = self.partitions.clone();
         let sort_order = Arc::clone(&self.sort_order);
         let table_schema = Arc::clone(&self.table_schema);
