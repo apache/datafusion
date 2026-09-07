@@ -74,17 +74,19 @@
 //!
 //! ## How it evaluates
 //!
-//! While the order is being learned, the conjuncts are evaluated one at a time
-//! so each can be timed and counted on exactly the rows that reached it. Their
-//! boolean results are combined with `AND`, and the working batch is
-//! physically compacted to the surviving rows once the accumulated mask
-//! becomes selective enough ([`COMPACTION_SELECTIVITY_THRESHOLD`]); every
-//! conjunct after that point is evaluated against the compacted batch. So a
-//! run of non-selective conjuncts costs only cheap bitwise `AND`s, everything
-//! after a selective conjunct decodes just its survivors, and each measurement
-//! is taken on the population that conjunct would really see.
+//! This module contains no evaluation logic of its own. Every batch, learning
+//! or settled, is evaluated by [`BinaryExpr`] as a right-nested `AND` chain.
 //!
-//! Once the order is settled that loop is gone. If the warm-up kept the
+//! While the order is being learned the chain is built over the *written*
+//! order, with each conjunct wrapped in a measuring expression that times the
+//! call and counts the rows it saw and the rows it kept. `BinaryExpr` is
+//! therefore what performs the compaction, exactly as it does for the plain
+//! predicate: its pre-selection filters the batch before evaluating the rest
+//! of the chain, so every conjunct is measured on precisely the rows
+//! `BinaryExpr` hands it — the population it would really see in that
+//! position.
+//!
+//! Once the order settles the wrappers are gone. If the warm-up kept the
 //! written order, the written predicate is evaluated as one expression,
 //! exactly as it would be with the flag off. If it adopted a reorder, the
 //! learned order is materialised once as a right-nested `AND` chain,
@@ -127,12 +129,12 @@
 //! - Reordering never changes query *results* — the value of a conjunction does
 //!   not depend on evaluation order — but it can change the observable *side
 //!   effects* of fallible predicates, in either direction: a conjunct evaluated
-//!   after a compaction sees only the rows that survived, so an error the
+//!   after a pre-selection sees only the rows that survived, so an error the
 //!   written order raises can disappear and one it avoided can appear.
 //!   Predicates containing volatile expressions are never reordered.
 //! - The measurements are *conditional*: each conjunct is measured on the rows
 //!   that survived the conjuncts before it in written order, and after a
-//!   compaction on small survivor batches whose per-row cost is inflated by
+//!   pre-selection on small survivor batches whose per-row cost is inflated by
 //!   fixed overheads. Correlated conjuncts can therefore look more selective in
 //!   a late position than they would be up front; the material-win guard makes
 //!   adoption conservative but cannot detect correlation.
@@ -143,18 +145,19 @@
 //! See <https://github.com/apache/datafusion/pull/22698> for the measurements
 //! behind this design.
 
+use std::fmt;
+use std::fmt::Formatter;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
-use arrow::array::{Array, ArrayRef, BooleanArray, BooleanBufferBuilder, UInt32Array};
-use arrow::buffer::BooleanBuffer;
-use arrow::compute::kernels::boolean::and;
-use arrow::compute::{filter, filter_record_batch, prep_null_mask_filter};
+use arrow::array::ArrayRef;
+use arrow::datatypes::{DataType, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::Result;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::instant::Instant;
-use datafusion_common::{Result, internal_err};
-use datafusion_expr::Operator;
+use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::utils::split_conjunction;
@@ -168,12 +171,6 @@ const WARMUP_BATCHES: u64 = 8;
 /// than `(1 - TIE_COST_FRACTION)` of the written order, so interchangeable
 /// conjuncts never trigger a reorder.
 const TIE_COST_FRACTION: f64 = 0.05;
-
-/// Physically compact the working batch to the surviving rows only when the
-/// accumulated mask keeps at most this fraction of them. Above this, the cost
-/// of materializing a barely-smaller batch is not repaid, so we keep evaluating
-/// against the full working batch and just `AND` the boolean masks.
-const COMPACTION_SELECTIVITY_THRESHOLD: f64 = 0.2;
 
 /// Per-conjunct measurement: marginal pass rate and per-row evaluation cost,
 /// accumulated over the warm-up window on exactly the rows that reached the
@@ -189,12 +186,6 @@ struct ConjunctStats {
 }
 
 impl ConjunctStats {
-    fn record(&mut self, matched: u64, rows: u64, nanos: u64) {
-        self.rows += rows;
-        self.matched += matched;
-        self.nanos += nanos;
-    }
-
     /// Fold another accumulator's counts into this one (they are plain sums, so
     /// merging is addition). Used to pool measurements across partition streams.
     fn merge(&mut self, other: &Self) {
@@ -255,9 +246,10 @@ struct SharedInner {
 /// cloning it, so reporting costs nothing on the per-batch path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BatchStrategy<'a> {
-    /// Still learning: the written order through the measuring loop, each
-    /// conjunct instrumented and its counts pooled. (Empty batches are
-    /// evaluated but measure nothing and do not consume the warm-up.)
+    /// Still learning: the written order as a right-nested `AND` chain over
+    /// the conjuncts wrapped in [`MeasuredConjunct`], their counts pooled.
+    /// (Empty batches are evaluated but measure nothing and do not consume the
+    /// warm-up.)
     Measure,
     /// Settled without a reorder: the written predicate evaluated as one
     /// expression, exactly as if the feature were off.
@@ -321,6 +313,120 @@ impl AdaptiveFilterShared {
     }
 }
 
+/// A conjunct wrapped so that evaluating it records what it saw.
+///
+/// This is the whole of the warm-up's instrumentation. The wrapped conjuncts
+/// are assembled into the written order's right-nested `AND` chain and handed
+/// to [`BinaryExpr`], which evaluates and pre-selects exactly as it would for
+/// the plain predicate; each wrapper therefore records the rows, matches and
+/// elapsed time of the population `BinaryExpr` actually handed its conjunct.
+/// The wrapper adds nothing but the counters: it returns the conjunct's own
+/// result unchanged, nulls included, because three-valued logic is
+/// `BinaryExpr`'s business and not this module's.
+///
+/// The counters are per stream and uncontended, so `Relaxed` ordering is
+/// enough; [`take`](Self::take) drains them.
+///
+/// `Display`, [`fmt_sql`](PhysicalExpr::fmt_sql), `data_type`, `nullable` and
+/// `return_field` all delegate to the wrapped conjunct, so a rendered warm-up
+/// predicate is indistinguishable from the plain one. Equality and hashing
+/// likewise consider only the wrapped conjunct: two wrappers around the same
+/// expression are the same expression, whatever their counters hold.
+#[derive(Debug)]
+struct MeasuredConjunct {
+    inner: Arc<dyn PhysicalExpr>,
+    /// Rows handed to the conjunct since the last [`take`](Self::take).
+    rows: AtomicU64,
+    /// Of those, the rows it kept: non-null `true`, matching SQL filter
+    /// semantics.
+    matched: AtomicU64,
+    /// Time spent inside the conjunct over those rows, in nanoseconds.
+    nanos: AtomicU64,
+}
+
+impl MeasuredConjunct {
+    fn new(inner: Arc<dyn PhysicalExpr>) -> Self {
+        Self {
+            inner,
+            rows: AtomicU64::new(0),
+            matched: AtomicU64::new(0),
+            nanos: AtomicU64::new(0),
+        }
+    }
+
+    /// Drain the counters, returning what they held.
+    fn take(&self) -> ConjunctStats {
+        ConjunctStats {
+            rows: self.rows.swap(0, Relaxed),
+            matched: self.matched.swap(0, Relaxed),
+            nanos: self.nanos.swap(0, Relaxed),
+        }
+    }
+}
+
+impl PartialEq for MeasuredConjunct {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner.eq(&other.inner)
+    }
+}
+
+impl Eq for MeasuredConjunct {}
+
+impl std::hash::Hash for MeasuredConjunct {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.inner.hash(state);
+    }
+}
+
+impl fmt::Display for MeasuredConjunct {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.inner)
+    }
+}
+
+impl PhysicalExpr for MeasuredConjunct {
+    fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
+        self.inner.data_type(input_schema)
+    }
+
+    fn nullable(&self, input_schema: &Schema) -> Result<bool> {
+        self.inner.nullable(input_schema)
+    }
+
+    fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
+        self.inner.return_field(input_schema)
+    }
+
+    fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        let rows = batch.num_rows();
+        let timer = Instant::now();
+        let array = self.inner.evaluate(batch)?.into_array(rows)?;
+        let nanos = timer.elapsed().as_nanos() as u64;
+        let matched = as_boolean_array(&array)?.true_count() as u64;
+
+        self.rows.fetch_add(rows as u64, Relaxed);
+        self.matched.fetch_add(matched, Relaxed);
+        self.nanos.fetch_add(nanos, Relaxed);
+
+        Ok(ColumnarValue::Array(array))
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+        vec![&self.inner]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(Arc::new(Self::new(Arc::clone(&children[0]))))
+    }
+
+    fn fmt_sql(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        self.inner.fmt_sql(f)
+    }
+}
+
 /// Adaptive evaluator for a single conjunctive predicate, owned per partition
 /// stream. Measurements are pooled into the shared [`AdaptiveFilterShared`];
 /// the per-stream state is just the current order and how far it has caught up.
@@ -334,6 +440,14 @@ pub(crate) struct AdaptiveConjunction {
     predicate: Arc<dyn PhysicalExpr>,
     /// Measurements and the settled decision, shared by every partition stream.
     shared: Arc<AdaptiveFilterShared>,
+    /// What the warm-up evaluates: the *written* order as a right-nested `AND`
+    /// chain over [`measured`](Self::measured), so [`BinaryExpr`] does the
+    /// evaluating and the pre-selection while the wrappers do the counting.
+    /// Unused once settled.
+    warmup_predicate: Arc<dyn PhysicalExpr>,
+    /// The wrappers inside [`warmup_predicate`](Self::warmup_predicate), in
+    /// written order, so each batch's counts can be drained out of them.
+    measured: Vec<Arc<MeasuredConjunct>>,
     /// The expression [`evaluate_settled`](Self::evaluate_settled) evaluates:
     /// the written predicate, or — once a reorder is adopted — the learned
     /// order as a right-nested `AND` chain. Unused until `settled`, and equal
@@ -377,11 +491,23 @@ impl AdaptiveConjunction {
         if conjuncts.len() < 2 || conjuncts.iter().any(is_volatile) {
             return None;
         }
-        let order = (0..conjuncts.len()).collect();
+        let order: Vec<usize> = (0..conjuncts.len()).collect();
+        let measured: Vec<Arc<MeasuredConjunct>> = conjuncts
+            .iter()
+            .map(|c| Arc::new(MeasuredConjunct::new(Arc::clone(c))))
+            .collect();
+        let wrapped: Vec<Arc<dyn PhysicalExpr>> = measured
+            .iter()
+            .map(|m| Arc::clone(m) as Arc<dyn PhysicalExpr>)
+            .collect();
+        let warmup_predicate =
+            right_nested_conjunction(&wrapped, &order).expect("at least two conjuncts");
         Some(Self {
             conjuncts,
             predicate: Arc::clone(predicate),
             shared,
+            warmup_predicate,
+            measured,
             settled_predicate: Arc::clone(predicate),
             order,
             reordered: false,
@@ -438,16 +564,35 @@ impl AdaptiveConjunction {
         // warm-up (a run of empty batches would otherwise settle the written
         // order on no evidence, permanently).
         if batch.num_rows() == 0 {
-            let mask = eval_conjuncts(&self.conjuncts, &self.order, batch, None)?;
+            let mask = self.evaluate_warmup(batch)?;
+            // Discard what the wrappers recorded: no rows, but a real call
+            // cost, which would otherwise inflate the next batch's per-row
+            // cost.
+            self.take_measurements();
             return Ok((mask, BatchStrategy::Measure));
         }
 
-        // Measure this batch into a local accumulator, then pool it.
-        let mut local = vec![ConjunctStats::default(); self.conjuncts.len()];
-        let result =
-            eval_conjuncts(&self.conjuncts, &self.order, batch, Some(&mut local))?;
+        // Evaluate the written order through the wrappers, then drain and pool
+        // what they recorded.
+        let result = self.evaluate_warmup(batch)?;
+        let local = self.take_measurements();
         self.pool_and_maybe_settle(&local);
         Ok((result, BatchStrategy::Measure))
+    }
+
+    /// Evaluate the warm-up arrangement: the written order as a right-nested
+    /// `AND` chain over the measuring wrappers, leaving this batch's counts in
+    /// them.
+    fn evaluate_warmup(&self, batch: &RecordBatch) -> Result<ArrayRef> {
+        self.warmup_predicate
+            .evaluate(batch)?
+            .into_array(batch.num_rows())
+    }
+
+    /// Drain the wrappers into per-conjunct counts, indexed by written
+    /// position.
+    fn take_measurements(&self) -> Vec<ConjunctStats> {
+        self.measured.iter().map(|m| m.take()).collect()
     }
 
     /// Evaluate the settled arrangement with no instrumentation: one
@@ -559,125 +704,6 @@ fn right_nested_conjunction(
     })
 }
 
-/// The measuring loop: evaluate `conjuncts` one at a time in `order` against
-/// `batch`, returning the boolean mask (over the batch's original rows) of rows
-/// that passed every conjunct. With `stats`, each conjunct is additionally
-/// timed and counted on exactly the rows it evaluated (its marginal selectivity
-/// and cost on the current working population) — which is why the warm-up
-/// evaluates conjunct by conjunct rather than handing the predicate to
-/// [`BinaryExpr`], as the settled path does.
-///
-/// The working batch is physically compacted to the surviving rows only once
-/// the accumulated mask becomes selective enough (see
-/// [`COMPACTION_SELECTIVITY_THRESHOLD`]); until then masks are combined with a
-/// cheap bitwise `AND`, so a run of non-selective conjuncts pays no
-/// materialization cost. Once compacted, the survivors stay compacted for the
-/// conjuncts that follow.
-fn eval_conjuncts(
-    conjuncts: &[Arc<dyn PhysicalExpr>],
-    order: &[usize],
-    batch: &RecordBatch,
-    mut stats: Option<&mut [ConjunctStats]>,
-) -> Result<ArrayRef> {
-    let num_rows = batch.num_rows();
-    if num_rows == 0 {
-        return Ok(Arc::new(BooleanArray::from(Vec::<bool>::new())));
-    }
-    // Live-row indices are tracked as `u32` (arrow's `filter`/`take` index
-    // space); a larger batch would silently wrap the indices, so refuse it.
-    if num_rows > u32::MAX as usize {
-        return internal_err!("adaptive filter: batch exceeds u32::MAX rows");
-    }
-
-    // `working` is the batch conjuncts are evaluated against. `acc` is the
-    // accumulated (`AND`-combined, null-free) result over `working`'s rows since
-    // the last compaction; `None` means all of them are still live. `live` maps
-    // `working`'s rows back to original row indices; `None` until a compaction
-    // first drops rows.
-    let mut working = batch.clone();
-    let mut acc: Option<BooleanArray> = None;
-    let mut live: Option<ArrayRef> = None;
-
-    for &id in order {
-        let rows_in = working.num_rows();
-
-        let timer = stats.is_some().then(Instant::now);
-        let array = conjuncts[id].evaluate(&working)?.into_array(rows_in)?;
-        let mask = as_boolean_array(&array)?;
-        // `matched` counts non-null trues (SQL filter semantics).
-        let matched = mask.true_count() as u64;
-
-        if let (Some(stats), Some(timer)) = (stats.as_deref_mut(), timer) {
-            let eval_nanos = timer.elapsed().as_nanos() as u64;
-            stats[id].record(matched, rows_in as u64, eval_nanos);
-        }
-
-        // An all-true mask leaves the accumulated result untouched.
-        if matched == rows_in as u64 && mask.null_count() == 0 {
-            continue;
-        }
-
-        // Fold this conjunct into the accumulated mask (null -> false).
-        let mask = if mask.null_count() > 0 {
-            prep_null_mask_filter(mask)
-        } else {
-            mask.clone()
-        };
-        let folded = match &acc {
-            None => mask,
-            Some(prev) => and(prev, &mask)?,
-        };
-
-        let alive = folded.true_count();
-        if alive == 0 {
-            // Nothing survives; the result is all-false over the original rows.
-            return Ok(Arc::new(BooleanArray::new(
-                BooleanBuffer::new_unset(num_rows),
-                None,
-            )));
-        }
-        // Compact only when the survivors are a small fraction of the working
-        // batch — otherwise the copy is not worth it.
-        if (alive as f64) <= COMPACTION_SELECTIVITY_THRESHOLD * rows_in as f64 {
-            working = filter_record_batch(&working, &folded)?;
-            let indices = live.take().unwrap_or_else(|| {
-                Arc::new(UInt32Array::from_iter_values(0..num_rows as u32))
-            });
-            live = Some(filter(&indices, &folded)?);
-            acc = None;
-        } else {
-            acc = Some(folded);
-        }
-    }
-
-    match live {
-        // Never compacted: `acc` (or all-true) already covers the original rows.
-        None => Ok(match acc {
-            Some(acc) => Arc::new(acc),
-            None => Arc::new(BooleanArray::new(BooleanBuffer::new_set(num_rows), None)),
-        }),
-        // Compacted at least once: scatter the surviving original indices
-        // (`live`, narrowed by any residual `acc`) into a full-length mask.
-        Some(indices) => {
-            let indices = match acc {
-                Some(acc) => filter(&indices, &acc)?,
-                None => indices,
-            };
-            let Some(indices) = indices.as_any().downcast_ref::<UInt32Array>() else {
-                return internal_err!(
-                    "adaptive filter: live row indices are not a UInt32Array"
-                );
-            };
-            let mut builder = BooleanBufferBuilder::new(num_rows);
-            builder.append_n(num_rows, false);
-            for &idx in indices.values() {
-                builder.set_bit(idx as usize, true);
-            }
-            Ok(Arc::new(BooleanArray::new(builder.finish(), None)))
-        }
-    }
-}
-
 /// Rank conjunct ids by effectiveness (discards per nanosecond) descending;
 /// ids without measurements sort last. Stable, so equal ids keep their order.
 fn rank_by_effectiveness(stats: &[ConjunctStats]) -> Vec<usize> {
@@ -715,7 +741,7 @@ fn expected_cost_per_row(stats: &[ConjunctStats], order: &[usize]) -> f64 {
 mod tests {
     use super::*;
 
-    use arrow::array::{Int32Array, Int64Array};
+    use arrow::array::{Array, Int32Array, Int64Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_physical_expr::expressions::{binary, col, lit};
 
@@ -750,10 +776,6 @@ mod tests {
             .into_iter()
             .map(Arc::clone)
             .collect()
-    }
-
-    fn conjuncts(schema: &Arc<Schema>) -> Vec<Arc<dyn PhysicalExpr>> {
-        split(&predicate(schema))
     }
 
     fn passing_rows(mask: &ArrayRef) -> Vec<usize> {
@@ -838,6 +860,57 @@ mod tests {
         assert_eq!(rank_by_effectiveness(&s), vec![0, 1]);
     }
 
+    /// The measuring wrapper counts the rows it was handed and the rows its
+    /// conjunct kept, returns the conjunct's own array untouched (nulls and
+    /// all), and drains to zero.
+    ///
+    /// The elapsed time is deliberately not asserted: on a coarse timer a
+    /// five-row evaluation can legitimately measure zero nanoseconds, which
+    /// [`ConjunctStats::cost_per_row`] already handles by clamping.
+    #[test]
+    fn measured_conjunct_counts_rows_and_matches() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let rb = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![
+                Some(1),
+                None,
+                Some(5),
+                Some(7),
+                None,
+            ]))],
+        )
+        .unwrap();
+        let inner =
+            binary(col("a", &schema).unwrap(), Operator::Gt, lit(2i32), &schema).unwrap();
+        let measured = Arc::new(MeasuredConjunct::new(Arc::clone(&inner)));
+
+        let got = measured
+            .evaluate(&rb)
+            .unwrap()
+            .into_array(rb.num_rows())
+            .unwrap();
+        let want = inner
+            .evaluate(&rb)
+            .unwrap()
+            .into_array(rb.num_rows())
+            .unwrap();
+        assert_eq!(&got, &want, "the conjunct's own result, unchanged");
+        assert_eq!(
+            as_boolean_array(&got).unwrap().null_count(),
+            2,
+            "nulls are left for `BinaryExpr` to interpret"
+        );
+
+        // Every row was handed to the conjunct; only the non-null trues count
+        // as matches.
+        let s = measured.take();
+        assert_eq!((s.rows, s.matched), (5, 2));
+        // ...and `take` drains.
+        let s = measured.take();
+        assert_eq!((s.rows, s.matched, s.nanos), (0, 0, 0));
+    }
+
     /// Empty batches measure nothing, so they must not consume the warm-up:
     /// a stream fed only empty batches keeps learning instead of settling the
     /// written order on no evidence.
@@ -865,30 +938,6 @@ mod tests {
         assert!((expected_cost_per_row(&s, &[1, 0]) - 10.5).abs() < 1e-9);
     }
 
-    /// The measuring loop returns exactly the rows the written predicate
-    /// keeps, in any order and whether or not compaction triggers.
-    #[test]
-    fn eval_conjuncts_matches_predicate_in_any_order() {
-        let schema = schema();
-        let cs = conjuncts(&schema);
-        let p = predicate(&schema);
-
-        // A batch where `b < 5` is rare (forces a compaction) and one where it
-        // is common (no compaction).
-        for b in [
-            (0..100).map(|x| x % 50).collect::<Vec<_>>(), // b<5 rare
-            (0..100).map(|x| x % 3).collect::<Vec<_>>(),  // b<5 common
-        ] {
-            let a: Vec<i32> = (0..100).collect();
-            let rb = batch(&schema, a, b);
-            let want = p.evaluate(&rb).unwrap().into_array(rb.num_rows()).unwrap();
-            for order in [vec![0, 1], vec![1, 0]] {
-                let got = eval_conjuncts(&cs, &order, &rb, None).unwrap();
-                assert_eq!(passing_rows(&got), passing_rows(&want), "order {order:?}");
-            }
-        }
-    }
-
     /// Across the warm-up boundary the mask must always equal the written
     /// predicate's, before and after the order settles.
     #[test]
@@ -902,6 +951,43 @@ mod tests {
             let a: Vec<i32> = (base..base + 10).collect();
             let b: Vec<i32> = (base..base + 10).map(|x| x.rem_euclid(9)).collect();
             let rb = batch(&schema, a, b);
+
+            let got = adaptive.evaluate(&rb).unwrap();
+            let want = p.evaluate(&rb).unwrap().into_array(rb.num_rows()).unwrap();
+            assert_eq!(
+                passing_rows(&got),
+                passing_rows(&want),
+                "mismatch on round {round}"
+            );
+        }
+        assert!(adaptive.settled);
+    }
+
+    /// A conjunct that produces nulls must come through the warm-up unchanged:
+    /// the wrapper hands `BinaryExpr` the conjunct's own three-valued result,
+    /// so the mask matches the plain predicate's on every batch.
+    #[test]
+    fn nullable_conjuncts_match_the_plain_predicate_across_warmup() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+        let p = predicate(&schema);
+        let mut adaptive = try_new(&p).unwrap();
+
+        for round in 0..(WARMUP_BATCHES as i32 + 4) {
+            let base = round * 10;
+            let a: Vec<Option<i32>> = (base..base + 10)
+                .map(|x| (x.rem_euclid(3) != 0).then_some(x))
+                .collect();
+            let b: Vec<Option<i32>> = (base..base + 10)
+                .map(|x| (x.rem_euclid(4) != 0).then_some(x.rem_euclid(9)))
+                .collect();
+            let rb = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int32Array::from(a)), Arc::new(Int32Array::from(b))],
+            )
+            .unwrap();
 
             let got = adaptive.evaluate(&rb).unwrap();
             let want = p.evaluate(&rb).unwrap().into_array(rb.num_rows()).unwrap();
@@ -1063,8 +1149,7 @@ mod tests {
         let mut s2 = AdaptiveConjunction::try_new(&p, Arc::clone(&shared)).unwrap();
 
         // `b < 5` (conjunct 1) is the selective one; drive both streams with
-        // batches where it keeps 5 rows in 25 (20%, exactly the compaction
-        // threshold).
+        // batches where it keeps 5 rows in 25.
         let mk = |round: i32| {
             let base = round * 100;
             let a: Vec<i32> = (base..base + 100).collect();
@@ -1271,8 +1356,8 @@ mod tests {
         let inner = shared.inner.lock().unwrap();
         assert_eq!(inner.stats.len(), 2, "sized to the conjunct count");
         assert_eq!(inner.measured_batches, 1);
-        // `a > 2` keeps 7 of 10 rows: too many to compact, so `b < 5` is
-        // evaluated on all 10 rows too and keeps 5 of them.
+        // `a > 2` keeps 7 of 10 rows: too many for `BinaryExpr` to pre-select
+        // on, so `b < 5` is evaluated on all 10 rows too and keeps 5 of them.
         assert_eq!((inner.stats[0].rows, inner.stats[0].matched), (10, 7));
         assert_eq!((inner.stats[1].rows, inner.stats[1].matched), (10, 5));
     }
@@ -1357,7 +1442,7 @@ mod tests {
         let mut adaptive = AdaptiveConjunction::try_new(&p, Arc::clone(&shared)).unwrap();
 
         // The settling batch is still measured in the written order, whose
-        // compaction on `b <> 0` also keeps `1 / b` away from the zeros.
+        // pre-selection on `b <> 0` also keeps `1 / b` away from the zeros.
         adaptive.evaluate(&rb).unwrap();
         assert_eq!(adaptive.order, vec![1, 0]);
         assert!(adaptive.reordered);
