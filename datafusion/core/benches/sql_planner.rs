@@ -85,27 +85,53 @@ fn physical_plan(ctx: &SessionContext, rt: &Runtime, sql: &str) {
     }));
 }
 
-/// Read the `q{N}.sql` query files from `dir`, starting at `q0.sql` and
-/// stopping at the first missing file.
+/// Read the `q{N}.sql` query files from `dir`, in ascending numeric order.
 ///
-/// This mirrors the discovery scheme used by the `dfbench clickbench` runner
-/// (see `get_query_sql` / `get_query_path` in `benchmarks/src/clickbench.rs`)
-/// so that newly added query files are picked up without changing this code.
+/// The files are discovered by listing the directory rather than by walking a
+/// hardcoded range, so newly added queries are picked up without changing this
+/// code. Entries that do not match `q{N}.sql` (such as the `sorted_data`
+/// directory alongside the ClickBench queries) are ignored.
+///
+/// Panics if `dir` contains no queries, or if the numbering is not contiguous
+/// starting at `q0.sql`. A gap almost certainly means a query file was lost, and
+/// silently benchmarking a subset would hide that.
 fn read_numbered_queries(dir: &str) -> Vec<String> {
-    let mut queries = Vec::new();
-    for q in 0.. {
-        let path = format!("{dir}q{q}.sql");
-        match std::fs::read_to_string(&path) {
-            Ok(sql) => queries.push(sql),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
-            Err(e) => panic!("Failed to read query file '{path}': {e}"),
-        }
-    }
+    let entries = std::fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("Failed to read query directory '{dir}': {e}"));
+
+    let mut numbers = entries
+        .map(|entry| {
+            entry.unwrap_or_else(|e| panic!("Failed to read entry in '{dir}': {e}"))
+        })
+        .filter_map(|entry| {
+            let file_name = entry.file_name();
+            let stem = file_name
+                .to_str()?
+                .strip_prefix('q')?
+                .strip_suffix(".sql")?;
+            stem.parse::<usize>().ok()
+        })
+        .collect::<Vec<_>>();
+    numbers.sort_unstable();
+
     assert!(
-        !queries.is_empty(),
-        "No `q*.sql` query files found in '{dir}'"
+        !numbers.is_empty(),
+        "No `q{{N}}.sql` query files found in '{dir}'"
     );
-    queries
+    assert_eq!(
+        numbers,
+        (0..numbers.len()).collect::<Vec<_>>(),
+        "Query files in '{dir}' are not numbered contiguously from q0.sql"
+    );
+
+    numbers
+        .into_iter()
+        .map(|q| {
+            let path = format!("{dir}q{q}.sql");
+            std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("Failed to read query file '{path}': {e}"))
+        })
+        .collect()
 }
 
 /// Create schema with the specified number of columns
