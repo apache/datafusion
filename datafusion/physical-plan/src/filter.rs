@@ -1637,8 +1637,11 @@ mod tests {
     use crate::expressions::*;
     use crate::statistics::{StatisticsArgs, StatisticsContext};
     use crate::test;
+    use crate::test::TestMemoryExec;
     use crate::test::exec::StatisticsExec;
+    use arrow::array::{Array, Int64Array};
     use arrow::datatypes::{Field, Schema, UnionFields, UnionMode};
+    use datafusion_execution::config::SessionConfig;
 
     #[test]
     fn filter_rejects_zero_batch_size() -> Result<()> {
@@ -2529,6 +2532,165 @@ mod tests {
         assert!(!Arc::ptr_eq(&filter.adaptive_stats, &reset.adaptive_stats));
         // ...while the predicate (which the reset does not touch) is preserved.
         assert!(Arc::ptr_eq(&filter.predicate, &reset.predicate));
+        Ok(())
+    }
+
+    /// End-to-end `FilterExec` run with `adaptive_filter_reordering` enabled:
+    /// four partitions of sixteen small batches, a nullable column, and a
+    /// conjunction written selective-*last*.
+    ///
+    /// Both conjuncts are cheap arithmetic, so real timings cannot separate
+    /// them reliably; the shared pool is therefore seeded one batch short of
+    /// the warm-up (the stand-in for a mocked clock) so the reorder is adopted
+    /// deterministically. Everything else — the streams, the metric, the
+    /// coalescer, the projection-free output path — is the real thing.
+    #[tokio::test]
+    async fn adaptive_filter_reordering_end_to_end() -> Result<()> {
+        const PARTITIONS: usize = 4;
+        const BATCHES: usize = 16;
+        const ROWS: i64 = 64;
+        // `b` is NULL on every 37th row, including inside the range the
+        // predicate selects, so the run exercises SQL filter semantics.
+        const NULL_EVERY: i64 = 37;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, true),
+        ]));
+
+        let mut partitions = Vec::with_capacity(PARTITIONS);
+        for p in 0..PARTITIONS {
+            let mut batches = Vec::with_capacity(BATCHES);
+            for batch in 0..BATCHES {
+                let base = (p * BATCHES + batch) as i64 * ROWS;
+                let a: Vec<i64> = (base..base + ROWS).collect();
+                let b: Vec<Option<i64>> = a
+                    .iter()
+                    .map(|&v| (v % NULL_EVERY != 0).then_some(v))
+                    .collect();
+                batches.push(RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(Int64Array::from(a)), Arc::new(Int64Array::from(b))],
+                )?);
+            }
+            partitions.push(batches);
+        }
+        let total_rows = (PARTITIONS * BATCHES) as i64 * ROWS;
+        let input: Arc<dyn ExecutionPlan> =
+            TestMemoryExec::try_new_exec(&partitions, Arc::clone(&schema), None)?;
+
+        // `(a % 97 + a % 89 >= 0) AND (b > 3990)`: the left conjunct is always
+        // true and the more expensive of the two, the right one keeps a
+        // hundred-odd rows out of four thousand — the selective conjunct is
+        // written last, and both are cheap arithmetic, so the logical
+        // heuristics would not have reordered this.
+        let threshold = total_rows - 106; // 3990
+        let cheap = binary(
+            binary(
+                binary(col("a", &schema)?, Operator::Modulo, lit(97i64), &schema)?,
+                Operator::Plus,
+                binary(col("a", &schema)?, Operator::Modulo, lit(89i64), &schema)?,
+                &schema,
+            )?,
+            Operator::GtEq,
+            lit(0i64),
+            &schema,
+        )?;
+        let selective =
+            binary(col("b", &schema)?, Operator::Gt, lit(threshold), &schema)?;
+        let predicate = binary(cheap, Operator::And, selective, &schema)?;
+        let filter = Arc::new(FilterExec::try_new(predicate, input)?);
+
+        // Execute every partition with the flag set as given and return the
+        // output rows, sorted so partition interleaving cannot matter.
+        async fn run(
+            filter: &Arc<FilterExec>,
+            adaptive: bool,
+        ) -> Result<Vec<(i64, i64)>> {
+            let mut config = SessionConfig::new();
+            config.options_mut().execution.adaptive_filter_reordering = adaptive;
+            let ctx = Arc::new(TaskContext::default().with_session_config(config));
+            let mut rows = vec![];
+            for partition in 0..PARTITIONS {
+                let stream = filter.execute(partition, Arc::clone(&ctx))?;
+                for batch in crate::common::collect(stream).await? {
+                    let a = batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap();
+                    let b = batch
+                        .column(1)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap();
+                    for i in 0..batch.num_rows() {
+                        // SQL filter semantics: `NULL > 3990` is not `true`.
+                        assert!(!b.is_null(i), "a NULL row survived the filter");
+                        rows.push((a.value(i), b.value(i)));
+                    }
+                }
+            }
+            rows.sort_unstable();
+            Ok(rows)
+        }
+
+        // The rows the predicate selects, computed independently: `b > 3990`
+        // spans 105 values, three of which have a NULL `b` and must be dropped.
+        let candidates: Vec<i64> = (threshold + 1..total_rows).collect();
+        assert_eq!(candidates.len(), 105);
+        let expected: Vec<(i64, i64)> = candidates
+            .into_iter()
+            .filter(|v| v % NULL_EVERY != 0)
+            .map(|v| (v, v))
+            .collect();
+        assert_eq!(expected.len(), 102, "three NULL `b` rows are dropped");
+
+        let flag_off = run(&filter, false).await?;
+        assert_eq!(flag_off, expected);
+        assert!(
+            filter
+                .metrics()
+                .unwrap()
+                .sum_by_name("adaptive_reorders")
+                .is_none(),
+            "the flag-off path must not register the adaptive metric"
+        );
+
+        // Seed the pooled measurements so the warm-up settles on promoting the
+        // selective conjunct: conjunct 0 keeps every row and is ~5x the cost of
+        // conjunct 1, which keeps 1%.
+        filter.adaptive_stats.seed_one_batch_short_of_warmup(&[
+            (70_000_000, 70_000_000, 350_000_000),
+            (70_000_000, 700_000, 70_000_000),
+        ]);
+
+        let flag_on = run(&filter, true).await?;
+        assert_eq!(flag_on, flag_off, "reordering must not change results");
+        let reorders = filter
+            .metrics()
+            .unwrap()
+            .sum_by_name("adaptive_reorders")
+            .map(|m| m.as_usize())
+            .unwrap_or(0);
+        assert!(reorders >= 1, "expected an adopted reorder, got {reorders}");
+
+        // Re-executing the same node keeps the learned state (the streams adopt
+        // the already-published order on their first batch) but cannot change
+        // the rows.
+        assert_eq!(run(&filter, true).await?, flag_off, "state persists");
+
+        // `reset_state` drops the pooled measurements, so the fresh node learns
+        // from scratch — and still produces the same rows.
+        let reset = Arc::clone(&filter).reset_state()?;
+        let reset: Arc<FilterExec> = Arc::new(
+            reset
+                .as_ref()
+                .downcast_ref::<FilterExec>()
+                .expect("reset_state returns a FilterExec")
+                .clone(),
+        );
+        assert_eq!(run(&reset, true).await?, flag_off, "after reset_state");
         Ok(())
     }
 
