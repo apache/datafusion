@@ -229,7 +229,7 @@ impl FilterExecBuilder {
             projection: self.projection,
             batch_size: self.batch_size,
             fetch: self.fetch,
-            adaptive_stats: Arc::new(AdaptiveFilterShared::new()),
+            adaptive_stats: Arc::new(AdaptiveFilterShared::default()),
         })
     }
 }
@@ -623,18 +623,13 @@ impl ExecutionPlan for FilterExec {
     }
 
     /// Reset per-execution state so an independent re-execution (e.g. a
-    /// recursive query) does not inherit runtime state from a prior run.
-    ///
-    /// The per-execution state is the pooled adaptive-conjunct measurements
-    /// (`AdaptiveFilterShared`) and the execution metrics; both are replaced
-    /// with fresh instances. The predicate, input, and cached plan properties
-    /// remain valid, so they are preserved (unlike
-    /// [`with_new_children`](Self::with_new_children), this does not recompute
-    /// them). Any dynamic filters *inside* the predicate are owned and reset by
-    /// the operator that created them, not by `FilterExec`.
+    /// recursive query) does not inherit runtime state from a prior run: the
+    /// pooled adaptive-conjunct measurements and the execution metrics are
+    /// replaced with fresh instances, while the predicate, input and cached
+    /// plan properties remain valid and are preserved.
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
         let mut new = (*self).clone();
-        new.adaptive_stats = Arc::new(AdaptiveFilterShared::new());
+        new.adaptive_stats = Arc::new(AdaptiveFilterShared::default());
         new.metrics = ExecutionPlanMetricsSet::new();
         Ok(Arc::new(new))
     }
@@ -655,20 +650,22 @@ impl ExecutionPlan for FilterExec {
             .options()
             .execution
             .adaptive_filter_reordering;
-        let adaptive = enabled
+        // The metric must exist before the evaluator that increments it, and
+        // must be registered exactly when the adaptive path is active.
+        let adaptive_applies = enabled && AdaptiveConjunction::applies(&self.predicate);
+        let mut metrics = FilterExecMetrics::new(&self.metrics, partition);
+        if adaptive_applies {
+            metrics = metrics.with_adaptive_reorder_metrics(&self.metrics, partition);
+        }
+        let adaptive = adaptive_applies
             .then(|| {
                 AdaptiveConjunction::try_new(
                     &self.predicate,
                     Arc::clone(&self.adaptive_stats),
+                    metrics.adaptive_reorders.clone(),
                 )
             })
             .flatten();
-        let metrics = FilterExecMetrics::new(&self.metrics, partition);
-        let metrics = if adaptive.is_some() {
-            metrics.with_adaptive_reorder_metrics(&self.metrics, partition)
-        } else {
-            metrics
-        };
         Ok(Box::pin(FilterExecStream {
             schema: self.schema(),
             predicate: Arc::clone(&self.predicate),
@@ -871,7 +868,7 @@ impl ExecutionPlan for FilterExec {
                 fetch: self.fetch,
                 // The predicate changed; pooled per-conjunct stats no longer
                 // describe it.
-                adaptive_stats: Arc::new(AdaptiveFilterShared::new()),
+                adaptive_stats: Arc::new(AdaptiveFilterShared::default()),
             };
             Some(Arc::new(new) as _)
         };
@@ -1432,13 +1429,6 @@ impl FilterExecMetrics {
         );
         self
     }
-
-    /// Record that this stream adopted a reordered evaluation order.
-    fn record_adaptive_reorder(&self) {
-        if let Some(count) = &self.adaptive_reorders {
-            count.add(1);
-        }
-    }
 }
 
 pub fn batch_filter(
@@ -1505,22 +1495,14 @@ impl Stream for FilterExecStream {
                 }
                 Some(Ok(batch)) => {
                     let timer = elapsed_compute.timer();
-                    let (array, adopted_reorder) = match self.adaptive.as_mut() {
-                        Some(adaptive) => {
-                            let array = adaptive.evaluate(&batch);
-                            (array, adaptive.take_adopted_reorder())
-                        }
-                        None => (
-                            self.predicate
-                                .as_ref()
-                                .evaluate(&batch)
-                                .and_then(|v| v.into_array(batch.num_rows())),
-                            false,
-                        ),
+                    let array = match self.adaptive.as_mut() {
+                        Some(adaptive) => adaptive.evaluate(&batch),
+                        None => self
+                            .predicate
+                            .as_ref()
+                            .evaluate(&batch)
+                            .and_then(|v| v.into_array(batch.num_rows())),
                     };
-                    if adopted_reorder {
-                        self.metrics.record_adaptive_reorder();
-                    }
                     let status = array
                         .and_then(|array| {
                             Ok(match self.projection.as_ref()  {
