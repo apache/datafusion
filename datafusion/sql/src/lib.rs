@@ -42,6 +42,7 @@
 //! [`LogicalPlan`]: datafusion_expr::logical_plan::LogicalPlan
 //! [`Expr`]: datafusion_expr::expr::Expr
 
+// SQL parsing and logical-plan construction modules.
 mod cte;
 mod expr;
 pub mod parser;
