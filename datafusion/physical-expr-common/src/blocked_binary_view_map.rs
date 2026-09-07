@@ -465,11 +465,41 @@ where
 
     /// Take every block, the map is empty afterwards
     pub fn take_all(&mut self) -> Vec<ArrayRef> {
-        let mut blocks = Vec::with_capacity(self.views.num_blocks());
-        while let Some(block) = self.take_block() {
-            blocks.push(block);
+        // Build null buffer if we have any nulls
+        let null_buffer_blocks = self.nulls.take_all();
+        let views_blocks = self.views.take_all();
+        let mut buffers = self.buffer.take_all().into_iter();
+        let number_of_buffers_per_block = std::mem::replace(&mut self.num_buffer_blocks_per_block, VecDeque::from(vec![1]));
+
+        self.map.clear();
+        self.null = None;
+
+        assert_eq!(null_buffer_blocks.len(), views_blocks.len());
+
+        let mut output_blocks = Vec::with_capacity(views_blocks.len());
+
+        for ((null_buffer, views), number_of_buffers) in null_buffer_blocks.into_iter().zip(views_blocks).zip(number_of_buffers_per_block.into_iter()) {
+            let block_buffers = buffers.by_ref().take(number_of_buffers).collect::<Vec<_>>();
+            assert_eq!(block_buffers.len(), number_of_buffers);
+
+            let views = views.into_scalar_buffer();
+            let array =
+              unsafe { BinaryViewArray::new_unchecked(views, block_buffers, null_buffer) };
+
+            let output = match self.output_type {
+                OutputType::BinaryView => Arc::new(array) as ArrayRef,
+                OutputType::Utf8View => {
+                    // SAFETY: all input was valid utf8
+                    let array = unsafe { array.to_string_view_unchecked() };
+                    Arc::new(array)
+                }
+                _ => unreachable!("Utf8/Binary should use `ArrowBytesMap`"),
+            };
+
+            output_blocks.push(output);
         }
-        blocks
+
+        output_blocks
     }
 
     /// Take the first `n` values, `n` must be less than the block size
