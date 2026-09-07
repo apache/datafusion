@@ -2163,6 +2163,7 @@ dependencies = [
  "arrow-schema",
  "async-trait",
  "chrono",
+ "criterion",
  "ctor",
  "datafusion-common",
  "datafusion-doc",
