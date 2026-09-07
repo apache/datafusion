@@ -80,21 +80,31 @@ impl Default for ParentRequirements {
 pub type SortPushDown = PlanContext<ParentRequirements>;
 
 /// Number of input rows `plan` needs from its children in order to produce
-/// its own `fetch` rows. This is `plan.fetch()` for every operator except
-/// [`GlobalLimitExec`], which discards `skip` rows first and therefore needs
-/// `skip + fetch` input rows. Using the bare `fetch` there would turn
-/// `LIMIT 10 OFFSET 5` into `TopK(10)` below the limit, i.e. 5 result rows.
+/// the rows its parent will consume.
 ///
-/// Note this is distinct from the fetch a parent imposes on `plan`'s *output*
-/// (`ParentRequirements::fetch`), for which `plan.fetch()` is the right bound.
+/// `parent_fetch` is the fetch a parent imposes on `plan`'s *output*
+/// (`ParentRequirements::fetch`). It bounds `plan.fetch()` directly because
+/// both count output rows, so the effective output fetch is
+/// `min(plan.fetch(), parent_fetch)`.
+///
+/// The input fetch is that output fetch for every operator except
+/// [`GlobalLimitExec`], which discards `skip` rows first and therefore needs
+/// `skip` more input rows. `skip` must be added *after* taking the minimum:
+/// `min(fetch + skip, parent_fetch)` would be too small whenever the parent
+/// fetch is the tighter bound. Using the bare `fetch` would be wrong too, as
+/// it would turn `LIMIT 10 OFFSET 5` into `TopK(10)` below the limit, i.e. 5
+/// result rows.
 ///
 /// `skip` and `fetch` are independent `usize`s, so their sum can overflow. Like
 /// [`combine_limit`], we saturate: `usize::MAX` input rows is never a smaller
 /// bound than the real one, so the pushed-down fetch stays correct.
 ///
 /// [`combine_limit`]: datafusion_common::utils::combine_limit
-fn input_fetch(plan: &Arc<dyn ExecutionPlan>) -> Option<usize> {
-    let fetch = plan.fetch()?;
+fn input_fetch(
+    plan: &Arc<dyn ExecutionPlan>,
+    parent_fetch: Option<usize>,
+) -> Option<usize> {
+    let fetch = min_fetch(plan.fetch(), parent_fetch)?;
     let skip = plan
         .downcast_ref::<GlobalLimitExec>()
         .map_or(0, |limit| limit.skip());
@@ -386,7 +396,7 @@ fn pushdown_sorts_helper(
         // For operators that can take a sort pushdown, continue with updated
         // requirements. If this node already outputs single partition (e.g. SPM),
         // don't push SinglePartition to children.
-        let current_fetch = input_fetch(&sort_push_down.plan);
+        let current_fetch = input_fetch(&sort_push_down.plan, parent_fetch);
         let dists = sort_push_down
             .plan
             .input_distribution_requirements()
@@ -401,7 +411,7 @@ fn pushdown_sorts_helper(
             sort_push_down.children.iter_mut().zip(adjusted).enumerate()
         {
             child.data.ordering_requirement = order;
-            child.data.fetch = min_fetch(current_fetch, parent_fetch);
+            child.data.fetch = current_fetch;
             child.data.distribution_requirement = stronger_distribution(
                 &effective_dist,
                 dists
@@ -1243,7 +1253,32 @@ mod tests {
         let limit: Arc<dyn ExecutionPlan> =
             Arc::new(GlobalLimitExec::new(input, 5, Some(10)));
 
-        assert_eq!(input_fetch(&limit), Some(15));
+        assert_eq!(input_fetch(&limit, None), Some(15));
+    }
+
+    /// A parent fetch bounds the limit's *output*, so it is applied before
+    /// `skip` is added: `min(10, 3) + 5 = 8`, not `min(10 + 5, 3) = 3`.
+    #[test]
+    fn input_fetch_applies_parent_fetch_before_adding_skip() {
+        let input = Arc::new(EmptyExec::new(child_schema()));
+        let limit: Arc<dyn ExecutionPlan> =
+            Arc::new(GlobalLimitExec::new(input, 5, Some(10)));
+
+        assert_eq!(input_fetch(&limit, Some(3)), Some(8));
+        // A looser parent fetch changes nothing.
+        assert_eq!(input_fetch(&limit, Some(20)), Some(15));
+    }
+
+    /// `OFFSET` without `LIMIT` has no fetch of its own, but a parent fetch
+    /// still needs `skip` extra input rows.
+    #[test]
+    fn input_fetch_adds_skip_to_parent_fetch_without_own_fetch() {
+        let input = Arc::new(EmptyExec::new(child_schema()));
+        let limit: Arc<dyn ExecutionPlan> =
+            Arc::new(GlobalLimitExec::new(input, 5, None));
+
+        assert_eq!(input_fetch(&limit, None), None);
+        assert_eq!(input_fetch(&limit, Some(3)), Some(8));
     }
 
     /// `skip` and `fetch` are unrelated `usize`s, so `skip + fetch` can exceed
@@ -1256,7 +1291,7 @@ mod tests {
         let limit: Arc<dyn ExecutionPlan> =
             Arc::new(GlobalLimitExec::new(input, usize::MAX, Some(1)));
 
-        assert_eq!(input_fetch(&limit), Some(usize::MAX));
+        assert_eq!(input_fetch(&limit, None), Some(usize::MAX));
     }
 
     /// Child (input) schema fed to the projections under test: `[a, b, c]`.
