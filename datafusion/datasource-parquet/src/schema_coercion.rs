@@ -236,7 +236,12 @@ fn can_promote_to_dictionary_type(
         return common_dictionary_key_type(file_key, table_key)
             .is_some_and(|common| &common == table_key.as_ref());
     }
-    true
+    // Plain file field: only allow promotion if the table key is at least Int32 wide.
+    // A plain column can have any number of distinct values, so narrow keys (Int8, Int16)
+    // are unsafe — uniform_dict_schemas widens to Int32 when a plain file is present, so
+    // this guard handles the case where can_promote_to_dictionary_type is called directly.
+    common_dictionary_key_type(&DataType::Int32, table_key)
+        .is_some_and(|common| &common == table_key.as_ref())
 }
 
 /// Normalize per-file schemas so that a column promoted to `Dictionary` in
@@ -276,7 +281,14 @@ pub(crate) fn uniform_dict_schemas(schemas: Vec<Schema>) -> Vec<Schema> {
                     .map(Box::new)
                     .unwrap_or_else(|| key_type.clone())
             } else {
-                key_type.clone()
+                // Plain field: treat as Int32 key capacity since we don't know how
+                // many distinct values it has. This prevents a narrow key (e.g. Int8)
+                // from being selected as the common type when one file uses a narrow
+                // dictionary and another uses a plain encoding with potentially more
+                // values than the key can represent.
+                common_dictionary_key_type(&key_type, &DataType::Int32)
+                    .map(Box::new)
+                    .unwrap_or_else(|| Box::new(DataType::Int32))
             };
             if let Some(common_type) =
                 common_dictionary_value_type(field.data_type(), &value_type)
@@ -620,7 +632,11 @@ pub fn transform_schema_to_view(schema: &Schema) -> Schema {
     Schema::new_with_metadata(transformed_fields, schema.metadata.clone())
 }
 
-/// Transform a schema so that any binary types are strings
+/// Transform a schema so that any binary types are strings.
+///
+/// Also handles `Dictionary(key, binary)` produced by `enable_rle_to_dictionary`,
+/// converting the dictionary value type so `binary_as_string` applies consistently
+/// regardless of whether the physical encoding triggered dictionary promotion.
 pub fn transform_binary_to_string(schema: &Schema) -> Schema {
     let transformed_fields: Vec<Arc<Field>> = schema
         .fields
@@ -629,6 +645,21 @@ pub fn transform_binary_to_string(schema: &Schema) -> Schema {
             DataType::Binary => field_with_new_type(field, DataType::Utf8),
             DataType::LargeBinary => field_with_new_type(field, DataType::LargeUtf8),
             DataType::BinaryView => field_with_new_type(field, DataType::Utf8View),
+            DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
+                DataType::Binary => field_with_new_type(
+                    field,
+                    DataType::Dictionary(key_type.clone(), Box::new(DataType::Utf8)),
+                ),
+                DataType::LargeBinary => field_with_new_type(
+                    field,
+                    DataType::Dictionary(key_type.clone(), Box::new(DataType::LargeUtf8)),
+                ),
+                DataType::BinaryView => field_with_new_type(
+                    field,
+                    DataType::Dictionary(key_type.clone(), Box::new(DataType::Utf8View)),
+                ),
+                _ => Arc::clone(field),
+            },
             _ => Arc::clone(field),
         })
         .collect();
@@ -1302,6 +1333,51 @@ mod tests {
     }
 
     #[test]
+    fn uniform_dict_schemas_plain_field_widens_key_to_int32() {
+        // A plain field mixed with a narrow-key dictionary must widen the key to at
+        // least Int32 so that the plain file (with unknown cardinality) can be
+        // represented safely.
+        let cases = [
+            (
+                "int8_dict + plain → int32",
+                DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
+                DataType::Utf8,
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            ),
+            (
+                "int16_dict + plain → int32",
+                DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+                DataType::Utf8,
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            ),
+            (
+                "int32_dict + plain stays int32",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                DataType::Utf8,
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            ),
+            (
+                "int64_dict + plain stays int64",
+                DataType::Dictionary(Box::new(DataType::Int64), Box::new(DataType::Utf8)),
+                DataType::Utf8,
+                DataType::Dictionary(Box::new(DataType::Int64), Box::new(DataType::Utf8)),
+                DataType::Dictionary(Box::new(DataType::Int64), Box::new(DataType::Utf8)),
+            ),
+        ];
+        for (name, dict_type, plain_type, exp_dict, exp_plain) in cases {
+            let result = uniform_dict_schemas(vec![
+                one_field_schema(dict_type),
+                one_field_schema(plain_type),
+            ]);
+            assert_eq!(result[0].field(0).data_type(), &exp_dict, "{name}");
+            assert_eq!(result[1].field(0).data_type(), &exp_plain, "{name}");
+        }
+    }
+
+    #[test]
     fn rle_schema_coercion_rejects_key_narrowing() {
         let coerce = |table: DataType, file: DataType| {
             let t = one_field_schema(table);
@@ -1316,10 +1392,72 @@ mod tests {
             coerce(dk(DataType::Int8), dk(DataType::Int32)),
             dk(DataType::Int32)
         );
-        // Plain Utf8 file is still promoted to a narrow-key dict (no file key to narrow from).
+        // Plain Utf8 file must NOT be promoted to a narrow-key dict: we cannot know how
+        // many distinct values the file has, so Int8 capacity is unsafe.
+        assert_eq!(coerce(dk(DataType::Int8), DataType::Utf8), DataType::Utf8);
+    }
+
+    #[test]
+    fn transform_binary_to_string_handles_dictionary_value_types() {
+        let schema = Schema::new(vec![
+            Field::new(
+                "a",
+                DataType::Dictionary(
+                    Box::new(DataType::Int32),
+                    Box::new(DataType::Binary),
+                ),
+                true,
+            ),
+            Field::new(
+                "b",
+                DataType::Dictionary(
+                    Box::new(DataType::Int32),
+                    Box::new(DataType::LargeBinary),
+                ),
+                true,
+            ),
+            Field::new(
+                "c",
+                DataType::Dictionary(
+                    Box::new(DataType::Int32),
+                    Box::new(DataType::BinaryView),
+                ),
+                true,
+            ),
+            Field::new(
+                "d",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                true,
+            ),
+            Field::new("e", DataType::Binary, true),
+        ]);
+
+        let result = transform_binary_to_string(&schema);
+
         assert_eq!(
-            coerce(dk(DataType::Int8), DataType::Utf8),
-            dk(DataType::Int8)
+            result.field(0).data_type(),
+            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
         );
+        assert_eq!(
+            result.field(1).data_type(),
+            &DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::LargeUtf8)
+            ),
+        );
+        assert_eq!(
+            result.field(2).data_type(),
+            &DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Utf8View)
+            ),
+        );
+        // Dictionary(_, Utf8) is left unchanged
+        assert_eq!(
+            result.field(3).data_type(),
+            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        );
+        // Plain Binary is converted as before
+        assert_eq!(result.field(4).data_type(), &DataType::Utf8);
     }
 }
