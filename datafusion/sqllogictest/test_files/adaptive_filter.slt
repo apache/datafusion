@@ -18,10 +18,7 @@
 # Tests for execution.adaptive_filter_reordering. Runtime reordering of a
 # conjunction must never change query results, only evaluation order.
 
-# Store the table as many small batches so that, with the flag on, the
-# adaptive evaluator's warm-up (8 measured batches) completes and the settled
-# (possibly reordered) path is exercised end-to-end — not just the measuring
-# path a single-batch table would reach.
+# Small batches, so the 8-batch warm-up completes and the settled path runs.
 statement ok
 SET datafusion.execution.batch_size = 64;
 
@@ -41,8 +38,7 @@ SELECT count(*) FROM t WHERE b = 3 AND s LIKE '1%';
 ----
 160
 
-# Baseline plan (flag off), so the "EXPLAIN is identical on and off" claim
-# below is asserted against something rather than merely stated.
+# Baseline plan (flag off); the flag-on plan below must be identical.
 query TT
 EXPLAIN SELECT count(*) FROM t WHERE b = 3 AND s LIKE '1%';
 ----
@@ -108,16 +104,11 @@ physical_plan
 05)--------FilterExec: b@0 = 3 AND s@1 LIKE 1%, projection=[]
 06)----------DataSourceExec: partitions=4, partition_sizes=[16, 16, 16, 15]
 
-# EXPLAIN ANALYZE: the `adaptive_reorders` metric makes a reorder that actually
-# happened at runtime visible. The predicate is written selective-conjunct-last:
-# the arithmetic chain is the more expensive conjunct and matches every row,
-# while `a > 3990` is a single comparison keeping 10 rows in 4000 — so the
-# learned order flips the two. (Both conjuncts are "cheap" to the static
-# cheap-first `reorder_predicates` rule, which is cost-only and blind to
-# selectivity, so the written order reaches `FilterExec` untouched.) Each of the
-# 4 partition streams adopts the reorder exactly once — the first to finish the
-# pooled warm-up settles the order and the others take it up on their next
-# batch — so the aggregated counter is 4.
+# EXPLAIN ANALYZE shows the reorder via `adaptive_reorders`. The predicate is
+# written selective-last: the arithmetic chain matches every row and costs
+# more than `a > 3990`, which keeps 10 rows in 4000. Both are cheap to the
+# static `reorder_predicates` rule, so the written order reaches `FilterExec`.
+# Each of the 4 partition streams adopts the reorder once, hence 4.
 query I
 SELECT count(*) FROM t WHERE a % 97 + a % 89 + a % 83 + b % 13 >= 0 AND a > 3990;
 ----
