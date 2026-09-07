@@ -23,7 +23,16 @@
 
 # Create function will fail unless a user supplied function factory is supplied
 statement error DataFusion error: Invalid or Unsupported Configuration: Function factory has not been configured
+CREATE FUNCTION foo (DOUBLE) RETURNS DOUBLE RETURN $1;
+
+# Invalid placeholders in the body are rejected during planning, before a
+# function factory is consulted (see issue #25038)
+statement error DataFusion error: Error during planning: Invalid placeholder, out of range: \$2
 CREATE FUNCTION foo (DOUBLE) RETURNS DOUBLE RETURN $1 + $2;
+
+# A zero-argument function cannot reference arguments in its body either
+statement error DataFusion error: Error during planning: Invalid placeholder, out of range: \$1
+CREATE FUNCTION foo_zero () RETURNS DOUBLE RETURN $1;
 
 # multi-part identifiers are not supported
 statement error DataFusion error: This feature is not implemented: Qualified functions are not supported
