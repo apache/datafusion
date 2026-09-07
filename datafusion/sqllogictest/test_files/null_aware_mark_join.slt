@@ -131,6 +131,18 @@ WHERE (id NOT IN (SELECT id FROM inner_table_no_null)) IS NULL;
 ----
 e
 
+# COALESCE makes both input keys non-nullable, but NULLIF introduces a NULL
+# for row 'a'. The mark must preserve UNKNOWN for that row.
+query T rowsort
+SELECT value
+FROM (SELECT COALESCE(id, 0) AS id, value FROM outer_table) AS non_null_outer
+WHERE (NULLIF(id, 1) NOT IN (
+  SELECT COALESCE(id, 0) FROM inner_table_no_null
+)) IS NULL;
+----
+
+
+
 query T rowsort
 SELECT value
 FROM outer_table

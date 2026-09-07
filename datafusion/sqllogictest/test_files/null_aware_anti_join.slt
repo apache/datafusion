@@ -137,6 +137,19 @@ SELECT * FROM outer_table WHERE id + 1 NOT IN (SELECT id FROM inner_table_no_nul
 2 b
 4 d
 
+# COALESCE makes both input keys non-nullable, but NULLIF introduces a NULL
+# for row 'a'. NOT IN is UNKNOWN for that row, so the anti join must drop it.
+query T rowsort
+SELECT value
+FROM (SELECT COALESCE(id, 0) AS id, value FROM outer_table) AS non_null_outer
+WHERE NULLIF(id, 1) NOT IN (
+  SELECT COALESCE(id, 0) FROM inner_table_no_null
+);
+----
+a
+c
+e
+
 #############
 ## Test 7: NOT IN with complex expression and NULL in subquery
 #############
