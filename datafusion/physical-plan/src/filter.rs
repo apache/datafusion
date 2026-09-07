@@ -100,11 +100,9 @@ pub struct FilterExec {
     batch_size: usize,
     /// Number of rows to fetch
     fetch: Option<usize>,
-    /// Per-execution measurements pooled across this node's partition streams
-    /// by adaptive conjunct reordering (see [`AdaptiveConjunction`]). Not part
-    /// of the plan shape. `Clone` shares it, since a clone filters the same
-    /// predicate; [`reset_state`](ExecutionPlan::reset_state) and predicate
-    /// rewrites replace it with a fresh instance.
+    /// Adaptive conjunct reordering state (see [`AdaptiveConjunction`]),
+    /// pooled across partition streams. Shared by `Clone`; replaced by
+    /// [`reset_state`](ExecutionPlan::reset_state) and predicate rewrites.
     adaptive_stats: Arc<AdaptiveFilterShared>,
 }
 
@@ -584,9 +582,7 @@ impl ExecutionPlan for FilterExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         validate_child_count!(self, children);
         match options.children_properties {
-            // `adaptive_stats` is carried over by the struct update: the
-            // predicate is unchanged, so any pooled measurements still
-            // describe it.
+            // `adaptive_stats` is kept: the predicate is unchanged.
             ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
                 input: children.swap_remove(0),
                 metrics: ExecutionPlanMetricsSet::new(),
@@ -622,11 +618,8 @@ impl ExecutionPlan for FilterExec {
         )
     }
 
-    /// Reset per-execution state so an independent re-execution (e.g. a
-    /// recursive query) does not inherit runtime state from a prior run: the
-    /// pooled adaptive-conjunct measurements and the execution metrics are
-    /// replaced with fresh instances, while the predicate, input and cached
-    /// plan properties remain valid and are preserved.
+    /// Fresh adaptive-reordering state and metrics for a re-execution; the
+    /// predicate, input and cached properties are still valid and kept.
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
         let mut new = (*self).clone();
         new.adaptive_stats = Arc::new(AdaptiveFilterShared::default());
@@ -650,8 +643,7 @@ impl ExecutionPlan for FilterExec {
             .options()
             .execution
             .adaptive_filter_reordering;
-        // The metric must exist before the evaluator that increments it, and
-        // must be registered exactly when the adaptive path is active.
+        // Register the counter exactly when the adaptive path is active.
         let adaptive_applies = enabled && AdaptiveConjunction::applies(&self.predicate);
         let mut metrics = FilterExecMetrics::new(&self.metrics, partition);
         if adaptive_applies {
@@ -866,8 +858,7 @@ impl ExecutionPlan for FilterExec {
                 projection: self.projection.clone(),
                 batch_size: self.batch_size,
                 fetch: self.fetch,
-                // The predicate changed; pooled per-conjunct stats no longer
-                // describe it.
+                // The predicate changed.
                 adaptive_stats: Arc::new(AdaptiveFilterShared::default()),
             };
             Some(Arc::new(new) as _)
@@ -1373,8 +1364,7 @@ struct FilterExecStream {
     schema: SchemaRef,
     /// The expression to filter on. This expression must evaluate to a boolean value.
     predicate: Arc<dyn PhysicalExpr>,
-    /// When set, the predicate is a reorderable conjunction evaluated
-    /// adaptively instead of via `predicate`.
+    /// Evaluates `predicate` adaptively when set.
     adaptive: Option<AdaptiveConjunction>,
     /// The input partition to filter.
     input: SendableRecordBatchStream,
@@ -1392,11 +1382,8 @@ struct FilterExecMetrics {
     baseline_metrics: BaselineMetrics,
     /// Selectivity of the filter, calculated as output_rows / input_rows
     selectivity: RatioMetrics,
-    /// Number of partition streams that adopted an adaptively reordered
-    /// evaluation order for the predicate's conjuncts (at most one per
-    /// stream). Registered only when adaptive conjunct reordering is enabled
-    /// and the predicate is a reorderable conjunction, so the flag-off path's
-    /// metrics are unchanged.
+    /// Partition streams that adopted an adaptively reordered conjunct order.
+    /// Registered only when adaptive reordering applies.
     adaptive_reorders: Option<Count>,
     // Remember to update `docs/source/user-guide/metrics.md` when adding new metrics,
     // or modifying metrics comments
@@ -1422,8 +1409,6 @@ impl FilterExecMetrics {
     ) -> Self {
         self.adaptive_reorders = Some(
             MetricBuilder::new(metrics)
-                // A deterministic, dimensionless counter: it depends on
-                // the plan and the data, not on wall-clock timings.
                 .with_category(MetricCategory::Rows)
                 .counter("adaptive_reorders", partition),
         );
@@ -2515,30 +2500,20 @@ mod tests {
             .downcast_ref::<FilterExec>()
             .expect("reset_state returns a FilterExec");
 
-        // The per-execution adaptive state is a fresh instance, so learning
-        // cannot leak across independent executions...
         assert!(!Arc::ptr_eq(&filter.adaptive_stats, &reset.adaptive_stats));
-        // ...while the predicate (which the reset does not touch) is preserved.
         assert!(Arc::ptr_eq(&filter.predicate, &reset.predicate));
         Ok(())
     }
 
-    /// End-to-end `FilterExec` run with `adaptive_filter_reordering` enabled:
-    /// four partitions of sixteen small batches, a nullable column, and a
-    /// conjunction written selective-*last*.
-    ///
-    /// Both conjuncts are cheap arithmetic, so real timings cannot separate
-    /// them reliably; the shared pool is therefore seeded one batch short of
-    /// the warm-up so the reorder is adopted deterministically. Everything
-    /// else — the streams, the metric, the coalescer, the projection-free
-    /// output path — is the real thing.
+    /// `FilterExec` with the flag on: four partitions, a nullable column, a
+    /// conjunction written selective-last. The pool is seeded so the reorder
+    /// is adopted regardless of timings; everything else is the real path.
     #[tokio::test]
     async fn adaptive_filter_reordering_end_to_end() -> Result<()> {
         const PARTITIONS: usize = 4;
         const BATCHES: usize = 16;
         const ROWS: i64 = 64;
-        // `b` is NULL on every 37th row, including inside the range the
-        // predicate selects, so the run exercises SQL filter semantics.
+        // `b` is NULL on every 37th row, including inside the selected range.
         const NULL_EVERY: i64 = 37;
 
         let schema = Arc::new(Schema::new(vec![
@@ -2567,11 +2542,8 @@ mod tests {
         let input: Arc<dyn ExecutionPlan> =
             TestMemoryExec::try_new_exec(&partitions, Arc::clone(&schema), None)?;
 
-        // `(a % 97 + a % 89 >= 0) AND (b > 3990)`: the left conjunct is always
-        // true and the more expensive of the two, the right one keeps a
-        // hundred-odd rows out of four thousand — the selective conjunct is
-        // written last, and both are cheap arithmetic, so the logical
-        // heuristics would not have reordered this.
+        // `(a % 97 + a % 89 >= 0) AND (b > 3990)`: the always-true conjunct is
+        // written first; both are cheap, so the static heuristic leaves them.
         let threshold = total_rows - 106; // 3990
         let cheap = binary(
             binary(
@@ -2589,8 +2561,7 @@ mod tests {
         let predicate = binary(cheap, Operator::And, selective, &schema)?;
         let filter = Arc::new(FilterExec::try_new(predicate, input)?);
 
-        // Execute every partition with the flag set as given and return the
-        // output rows, sorted so partition interleaving cannot matter.
+        // Output rows across all partitions, sorted.
         async fn run(
             filter: &Arc<FilterExec>,
             adaptive: bool,
@@ -2613,7 +2584,6 @@ mod tests {
                         .downcast_ref::<Int64Array>()
                         .unwrap();
                     for i in 0..batch.num_rows() {
-                        // SQL filter semantics: `NULL > 3990` is not `true`.
                         assert!(!b.is_null(i), "a NULL row survived the filter");
                         rows.push((a.value(i), b.value(i)));
                     }
@@ -2623,8 +2593,7 @@ mod tests {
             Ok(rows)
         }
 
-        // The rows the predicate selects, computed independently: `b > 3990`
-        // spans 105 values, three of which have a NULL `b` and must be dropped.
+        // Expected rows: 105 values of `b > 3990`, three of them NULL.
         let candidates: Vec<i64> = (threshold + 1..total_rows).collect();
         assert_eq!(candidates.len(), 105);
         let expected: Vec<(i64, i64)> = candidates
@@ -2645,9 +2614,7 @@ mod tests {
             "the flag-off path must not register the adaptive metric"
         );
 
-        // Seed the pooled measurements so the warm-up settles on promoting the
-        // selective conjunct: conjunct 0 keeps every row and is ~5x the cost of
-        // conjunct 1, which keeps 1%.
+        // Conjunct 0 keeps every row at ~5x the cost of conjunct 1 (keeps 1%).
         filter.adaptive_stats.seed_one_batch_short_of_warmup(&[
             (70_000_000, 70_000_000, 350_000_000),
             (70_000_000, 700_000, 70_000_000),
@@ -2663,13 +2630,10 @@ mod tests {
             .unwrap_or(0);
         assert!(reorders >= 1, "expected an adopted reorder, got {reorders}");
 
-        // Re-executing the same node keeps the learned state (the streams
-        // adopt the settled order on their first batch) but cannot change the
-        // rows.
+        // Re-executing the same node keeps the learned state; same rows.
         assert_eq!(run(&filter, true).await?, flag_off, "state persists");
 
-        // `reset_state` drops the pooled measurements, so the fresh node learns
-        // from scratch — and still produces the same rows.
+        // A reset node learns from scratch; same rows.
         let reset = Arc::clone(&filter).reset_state()?;
         let reset: Arc<FilterExec> = Arc::new(
             reset
