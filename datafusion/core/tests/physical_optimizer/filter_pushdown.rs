@@ -4133,3 +4133,95 @@ fn test_pushdown_through_struct_unnest_shifts_column_indices() {
     "
     );
 }
+
+#[test]
+fn test_no_pushdown_when_unnested_struct_field_name_collides() {
+    // Unnesting struct `s` synthesizes an output column named `s.f1`, which
+    // collides with the genuine passthrough column physically named `s.f1`.
+    // The output then holds two `s.f1` fields, distinguished only by index.
+    // A filter on the *generated* one (`s.f1@0`) must not be pushed: resolving
+    // by name would hand it the unrelated passthrough input column instead.
+    use datafusion_common::UnnestOptions;
+    use datafusion_physical_plan::unnest::UnnestExec;
+
+    let input_schema = Arc::new(Schema::new(vec![
+        Field::new(
+            "s",
+            DataType::Struct(vec![Field::new("f1", DataType::Utf8, true)].into()),
+            true,
+        ),
+        Field::new("s.f1", DataType::Utf8, false),
+    ]));
+    // `s` expands in place, so the generated `s.f1` lands at index 0 and the
+    // passthrough column of the same name is pushed to index 1.
+    let output_schema = Arc::new(Schema::new(vec![
+        Field::new("s.f1", DataType::Utf8, true),
+        Field::new("s.f1", DataType::Utf8, false),
+    ]));
+
+    let scan = TestScanBuilder::new(Arc::clone(&input_schema))
+        .with_support(true)
+        .build();
+    let unnest = Arc::new(
+        UnnestExec::new(
+            scan,
+            vec![],
+            vec![0],
+            Arc::clone(&output_schema),
+            UnnestOptions::default(),
+        )
+        .unwrap(),
+    );
+
+    // Filter on the generated column: must stay above the unnest.
+    let generated = Arc::new(
+        FilterExec::try_new(
+            col_lit_predicate("s.f1", "x", &output_schema),
+            Arc::clone(&unnest) as Arc<dyn ExecutionPlan>,
+        )
+        .unwrap(),
+    );
+    insta::assert_snapshot!(
+        OptimizationTest::new(generated, FilterPushdown::new(), true),
+        @"
+    OptimizationTest:
+      input:
+        - FilterExec: s.f1@0 = x
+        -   UnnestExec
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[s, s.f1], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - FilterExec: s.f1@0 = x
+          -   UnnestExec
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[s, s.f1], file_type=test, pushdown_supported=true
+    "
+    );
+
+    // Filter on the real passthrough column at index 1: safe to push, and must
+    // be rewritten to that column's index in the input schema.
+    let passthrough = Arc::new(
+        FilterExec::try_new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("s.f1", 1)),
+                Operator::Eq,
+                Arc::new(Literal::new(ScalarValue::from("x"))),
+            )),
+            unnest,
+        )
+        .unwrap(),
+    );
+    insta::assert_snapshot!(
+        OptimizationTest::new(passthrough, FilterPushdown::new(), true),
+        @"
+    OptimizationTest:
+      input:
+        - FilterExec: s.f1@1 = x
+        -   UnnestExec
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[s, s.f1], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - UnnestExec
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[s, s.f1], file_type=test, pushdown_supported=true, predicate=s.f1@1 = x
+    "
+    );
+}
