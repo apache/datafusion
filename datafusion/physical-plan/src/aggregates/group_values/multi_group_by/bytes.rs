@@ -29,10 +29,21 @@ use arrow::datatypes::{ByteArrayType, DataType, GenericBinaryType};
 use datafusion_common::utils::proxy::VecAllocExt;
 use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_common::{Result, exec_datafusion_err};
+use datafusion_expr::GroupSelection;
 use datafusion_physical_expr_common::binary_map::{INITIAL_BUFFER_CAPACITY, OutputType};
 use std::mem::size_of;
 use std::sync::Arc;
 use std::vec;
+
+fn checked_output_offset<O: OffsetSizeTrait>(
+    current_len: usize,
+    additional_len: usize,
+) -> Result<O> {
+    current_len
+        .checked_add(additional_len)
+        .and_then(O::from_usize)
+        .ok_or_else(|| exec_datafusion_err!("Offset overflow while copying group values"))
+}
 
 /// An implementation of [`GroupColumn`] for binary and utf8 types.
 ///
@@ -263,7 +274,7 @@ where
                 self.append_val_inner::<GenericStringType<O>>(column, row)?
             }
             _ => unreachable!("View types should use `ArrowBytesViewMap`"),
-        };
+        }
 
         Ok(())
     }
@@ -322,7 +333,7 @@ where
                 self.vectorized_append_inner::<GenericStringType<O>>(column, rows)?
             }
             _ => unreachable!("View types should use `ArrowBytesViewMap`"),
-        };
+        }
 
         Ok(())
     }
@@ -372,6 +383,39 @@ where
             }
             _ => unreachable!("View types should use `ArrowBytesViewMap`"),
         }
+    }
+
+    fn values_preserving(&self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
+        selection.validate_num_groups(self.len())?;
+        let mut buffer = BufferBuilder::<u8>::new(0);
+        let mut offsets = Vec::with_capacity(selection.len() + 1);
+        let mut nulls = NullBufferBuilder::new(selection.len());
+        offsets.push(O::default());
+
+        for index in selection.iter() {
+            let is_null = self.nulls.is_null(index);
+            let value = if is_null { &[] } else { self.value(index) };
+            let offset = checked_output_offset::<O>(buffer.len(), value.len())?;
+
+            nulls.append(!is_null);
+            buffer.append_slice(value);
+            offsets.push(offset);
+        }
+
+        // SAFETY: every offset was checked for representability and is the
+        // monotonically increasing length of `buffer` after an append.
+        let offsets = unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(offsets)) };
+        let values = buffer.finish();
+        let nulls = nulls.build();
+        Ok(match self.output_type {
+            OutputType::Binary => Arc::new(unsafe {
+                GenericBinaryArray::new_unchecked(offsets, values, nulls)
+            }),
+            OutputType::Utf8 => Arc::new(unsafe {
+                GenericStringArray::new_unchecked(offsets, values, nulls)
+            }),
+            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
+        })
     }
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
@@ -434,7 +478,7 @@ mod tests {
     use datafusion_common::DataFusionError;
     use datafusion_physical_expr::binary_map::OutputType;
 
-    use super::GroupColumn;
+    use super::{GroupColumn, checked_output_offset};
 
     fn make_true_buffer(n: usize) -> BooleanBufferBuilder {
         let mut buf = BooleanBufferBuilder::new(n);
@@ -444,6 +488,19 @@ mod tests {
 
     fn to_vec(buf: &BooleanBufferBuilder) -> Vec<bool> {
         (0..buf.len()).map(|i| buf.get_bit(i)).collect()
+    }
+
+    #[test]
+    fn test_selected_copy_offset_overflow_is_checked() {
+        assert_eq!(
+            checked_output_offset::<i32>(i32::MAX as usize, 0).unwrap(),
+            i32::MAX
+        );
+        assert!(matches!(
+            checked_output_offset::<i32>(i32::MAX as usize, 1),
+            Err(DataFusionError::Execution(e)) if e.contains("Offset overflow")
+        ));
+        assert!(checked_output_offset::<i64>(usize::MAX, 1).is_err());
     }
 
     #[test]

@@ -48,11 +48,11 @@ pub mod expr_fn {
         let mut args = vec![values, regex];
         if let Some(start) = start {
             args.push(start);
-        };
+        }
 
         if let Some(flags) = flags {
             args.push(flags);
-        };
+        }
         super::regexp_count().call(args)
     }
 
@@ -61,7 +61,7 @@ pub mod expr_fn {
         let mut args = vec![values, regex];
         if let Some(flags) = flags {
             args.push(flags);
-        };
+        }
         super::regexp_match().call(args)
     }
 
@@ -78,19 +78,19 @@ pub mod expr_fn {
         let mut args = vec![values, regex];
         if let Some(start) = start {
             args.push(start);
-        };
+        }
         if let Some(n) = n {
             args.push(n);
-        };
+        }
         if let Some(endoption) = endoption {
             args.push(endoption);
-        };
+        }
         if let Some(flags) = flags {
             args.push(flags);
-        };
+        }
         if let Some(subexpr) = subexpr {
             args.push(subexpr);
-        };
+        }
         super::regexp_instr().call(args)
     }
     /// Returns true if a regex has at least one match in a string, false otherwise.
@@ -98,7 +98,7 @@ pub mod expr_fn {
         let mut args = vec![values, regex];
         if let Some(flags) = flags {
             args.push(flags);
-        };
+        }
         super::regexp_like().call(args)
     }
 
@@ -112,7 +112,7 @@ pub mod expr_fn {
         let mut args = vec![string, pattern, replacement];
         if let Some(flags) = flags {
             args.push(flags);
-        };
+        }
         super::regexp_replace().call(args)
     }
 }
@@ -166,7 +166,7 @@ pub fn compile_regex(regex: &str, flags: Option<&str>) -> Result<Regex, ArrowErr
     let pattern = match flags {
         None | Some("") => regex.to_string(),
         Some(flags) => {
-            if flags.contains("g") {
+            if flags.contains('g') {
                 return Err(ArrowError::ComputeError(
                     "regexp_count()/regexp_instr() does not support the global flag"
                         .to_string(),

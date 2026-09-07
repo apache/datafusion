@@ -44,8 +44,8 @@ pub async fn from_read_rel(
         consumer: &impl SubstraitConsumer,
         table_ref: TableReference,
         schema: DFSchema,
-        projection: &Option<MaskExpression>,
-        filter: &Option<Box<Expression>>,
+        projection: Option<&MaskExpression>,
+        filter: Option<&Expression>,
     ) -> datafusion::common::Result<LogicalPlan> {
         let schema = schema.replace_qualifier(table_ref.clone());
 
@@ -108,8 +108,8 @@ pub async fn from_read_rel(
                 consumer,
                 table_reference,
                 substrait_schema,
-                &read.projection,
-                &read.filter,
+                read.projection.as_ref(),
+                read.filter.as_deref(),
             )
             .await
         }
@@ -240,8 +240,8 @@ pub async fn from_read_rel(
                 consumer,
                 table_reference,
                 substrait_schema,
-                &read.projection,
-                &read.filter,
+                read.projection.as_ref(),
+                read.filter.as_deref(),
             )
             .await
         }
@@ -293,7 +293,7 @@ fn convert_literal_rows(
 
 pub fn apply_masking(
     schema: DFSchema,
-    mask_expression: &::core::option::Option<MaskExpression>,
+    mask_expression: Option<&MaskExpression>,
 ) -> datafusion::common::Result<DFSchema> {
     match mask_expression {
         Some(MaskExpression { select, .. }) => match &select.as_ref() {

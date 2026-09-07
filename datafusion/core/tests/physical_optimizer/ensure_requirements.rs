@@ -30,6 +30,9 @@ use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion_physical_optimizer::ensure_requirements::enforce_sorting::{
     PlanWithCorrespondingCoalescePartitions, parallelize_sorts,
 };
+use datafusion_physical_optimizer::ensure_requirements::enforce_sorting::sort_pushdown::{
+    SortPushDown, assign_initial_requirements, pushdown_sorts,
+};
 
 use std::sync::Arc;
 
@@ -41,7 +44,7 @@ use datafusion_physical_expr::{
     EquivalenceProperties, LexOrdering, PhysicalExpr, PhysicalSortExpr,
 };
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion_physical_plan::limit::GlobalLimitExec;
+use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{
@@ -833,6 +836,102 @@ fn test_idempotent_sort_aggregate_sort_aggregate() {
     let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(10)));
 
     assert_idempotent(limit);
+}
+
+/// Verifies the safe fallback for an already ordered, multi-partition plan that
+/// can neither retain a fetch nor pass it to its children. The fetch must stay
+/// above that plan in a `LocalLimitExec`, retain the ordering needed by the
+/// merge, and produce exactly the same plan on the next optimizer pass.
+///
+/// This prevents a late fallback from creating a temporary plan shape that
+/// `EnsureRequirements` rewrites when applied again.
+#[test]
+fn test_fetch_fallback_is_stable() {
+    let source: Arc<dyn ExecutionPlan> = Arc::new(MockMultiPartitionExec::new(4));
+    let union = UnionExec::try_new(vec![Arc::clone(&source), source]).unwrap();
+    let ordering = sort_expr_on("a", 0, false, false);
+    let sort: Arc<dyn ExecutionPlan> = Arc::new(
+        SortExec::new(ordering.clone(), union)
+            .with_fetch(Some(10))
+            .with_preserve_partitioning(true),
+    );
+    let merge: Arc<dyn ExecutionPlan> = Arc::new(
+        SortPreservingMergeExec::new(ordering.clone(), sort).with_fetch(Some(10)),
+    );
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(OutputRequirementExec::new(
+        merge,
+        Some(OrderingRequirements::from(ordering.clone())),
+        Distribution::SinglePartition,
+        Some(10),
+    ));
+
+    // Exercise sort pushdown directly so the earlier sort-cleanup phase does
+    // not canonicalize the redundant TopK before it reaches this fallback.
+    let mut sort_push_down = SortPushDown::new_default(plan);
+    assign_initial_requirements(&mut sort_push_down);
+    let pushed_down = pushdown_sorts(sort_push_down).unwrap().plan;
+
+    // This fallback runs at the end of EnsureRequirements, so its output must
+    // already be stable when the complete rule runs again.
+    let next_pass = optimize_and_sanity_check(Arc::clone(&pushed_down)).unwrap();
+
+    let output_children = pushed_down.children();
+    let merge_children = output_children[0].children();
+    let limit = merge_children[0]
+        .downcast_ref::<LocalLimitExec>()
+        .expect("the fetch should be carried by a local limit");
+    assert_eq!(limit.required_ordering(), &Some(ordering));
+
+    let pushed_down = plan_string(&pushed_down);
+    let next_pass = plan_string(&next_pass);
+    assert_snapshot!(pushed_down, @r"
+    OutputRequirementExec: order_by=[(a@0, asc)], dist_by=SinglePartition
+      SortPreservingMergeExec: [a@0 ASC NULLS LAST], fetch=10
+        LocalLimitExec: fetch=10
+          UnionExec
+            MockMultiPartitionExec
+            MockMultiPartitionExec
+    ");
+    assert_eq!(pushed_down, next_pass);
+}
+
+/// Verifies the complementary safe path. Before it has a fetch, a
+/// `SortPreservingMergeExec` returns one row per input row, so it may take the
+/// parent TopK fetch and forward that fetch to its input sort. Safety must be
+/// decided before adding the fetch, which changes the merge's cardinality.
+#[test]
+fn test_unfetched_spm_absorbs_and_forwards_fetch() {
+    let source: Arc<dyn ExecutionPlan> = Arc::new(MockMultiPartitionExec::new(4));
+    let ordering = sort_expr_on("a", 0, true, false);
+    let sort: Arc<dyn ExecutionPlan> = Arc::new(
+        SortExec::new(ordering.clone(), source).with_preserve_partitioning(true),
+    );
+    let merge: Arc<dyn ExecutionPlan> =
+        Arc::new(SortPreservingMergeExec::new(ordering.clone(), sort));
+    let topk: Arc<dyn ExecutionPlan> =
+        Arc::new(SortExec::new(ordering, merge).with_fetch(Some(10)));
+
+    let mut sort_push_down = SortPushDown::new_default(topk);
+    assign_initial_requirements(&mut sort_push_down);
+    let optimized = pushdown_sorts(sort_push_down).unwrap().plan;
+
+    let merge = optimized
+        .downcast_ref::<SortPreservingMergeExec>()
+        .expect("the merge should retain the fetch");
+    assert_eq!(merge.fetch(), Some(10));
+    let sort = merge
+        .input()
+        .downcast_ref::<SortExec>()
+        .expect("the fetch should be pushed to the input sort");
+    assert_eq!(sort.fetch(), Some(10));
+
+    // The merge retains the global fetch while the input sort retains the
+    // per-partition TopK optimization.
+    assert_snapshot!(plan_string(&optimized), @r"
+    SortPreservingMergeExec: [a@0 DESC NULLS LAST], fetch=10
+      SortExec: TopK(fetch=10), expr=[a@0 DESC NULLS LAST], preserve_partitioning=[true]
+        MockMultiPartitionExec
+    ");
 }
 
 /// Stress test: idempotency with ALL partition counts from 1 to 64

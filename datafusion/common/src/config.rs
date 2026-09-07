@@ -1031,6 +1031,25 @@ config_namespace! {
         /// Default: 128 MB
         pub max_spill_file_size_bytes: ConfigNonZeroUsize, default = non_zero_usize_default(128 * 1024 * 1024)
 
+        /// Enables the memory-limited fallback for `NestedLoopJoinExec` join
+        /// types that emit unmatched left rows in the final output (LEFT, LEFT
+        /// SEMI, LEFT ANTI, LEFT MARK, FULL) when the right side has multiple
+        /// partitions.
+        ///
+        /// This fallback coordinates per-chunk left state (visited bitmap and
+        /// probe-thread counter) across all right-side partitions, which
+        /// assumes every partition runs in the same process. Distributed
+        /// engines that execute each output partition as an independent task
+        /// (e.g. Ballista, datafusion-distributed) build a separate coordinator
+        /// per task and poll only one partition, so the cross-partition
+        /// counter never reaches zero and the fallback would stall. Such
+        /// engines should set this to `false`: the coordinated fallback is then
+        /// disabled for left-emitting multi-partition joins, which instead fail
+        /// with a resource-exhaustion error under memory pressure rather than
+        /// deadlocking. Single-partition and non-left-emitting joins are
+        /// unaffected and always keep the fallback.
+        pub enable_nlj_coordinated_fallback: bool, default = true
+
         /// Number of files to read in parallel when inferring schema and statistics
         pub meta_fetch_concurrency: ConfigNonZeroUsize, default = non_zero_usize_default(32)
 
@@ -1373,10 +1392,12 @@ config_namespace! {
         /// rewrite; other predicates and Bloom-filter pruning remain available.
         ///
         /// Within the cap, nonempty lists of at most 20 values use the existing
-        /// per-value rewrite. Larger positive, non-null literal string lists
-        /// on a string column use a compact sorted domain. Other lists retain
-        /// the existing per-value rewrite, so raising the cap can make those
-        /// predicates expensive to build and evaluate.
+        /// per-value rewrite. Larger literal string lists on a string column use
+        /// a compact representation, for both `IN` and `NOT IN`, including lists
+        /// with NULL members. `NOT IN` with NULL and all-NULL `IN` lists cannot
+        /// match any rows. Other lists retain the existing per-value rewrite, so
+        /// raising the cap can make those predicates expensive to build and
+        /// evaluate.
         ///
         /// Defaults to 20.
         pub max_in_list_size: usize, default = 20
@@ -3418,7 +3439,7 @@ impl ConfigField for ConfigFileEncryptionProperties {
         if key.contains("::") {
             // Handle any column specific properties
             return self.column_encryption_properties.set(key, value);
-        };
+        }
 
         let (key, rem) = key.split_once('.').unwrap_or((key, ""));
         match key {
@@ -3598,7 +3619,7 @@ impl ConfigField for ConfigFileDecryptionProperties {
         if key.contains("::") {
             // Handle any column specific properties
             return self.column_decryption_properties.set(key, value);
-        };
+        }
 
         let (key, rem) = key.split_once('.').unwrap_or((key, ""));
         match key {

@@ -29,6 +29,7 @@ use datafusion::execution::context::SessionContext;
 use datafusion_common::{ScalarValue, config::Dialect};
 use datafusion_expr::col;
 use rand_distr::num_traits::NumCast;
+use std::fmt::Write as _;
 use std::hint::black_box;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -290,15 +291,17 @@ fn union_orderby_query(n: usize) -> String {
             })
             .collect::<Vec<_>>()
             .join(", ");
-        query.push_str(&format!("(SELECT {select_list} FROM t ORDER BY c{i})"));
+        write!(query, "(SELECT {select_list} FROM t ORDER BY c{i})").ok();
     }
-    query.push_str(&format!(
+    write!(
+        query,
         "\nORDER BY {}",
         (0..n)
             .map(|i| format!("c{i}"))
             .collect::<Vec<_>>()
             .join(", ")
-    ));
+    )
+    .ok();
     query
 }
 
@@ -394,9 +397,10 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 let source = format!(
                     "SELECT 1 AS n{}",
-                    (0..partitioning_columns)
-                        .map(|i| format!(", {i} AS c{i}"))
-                        .collect::<String>()
+                    (0..partitioning_columns).fold(String::new(), |mut acc, i| {
+                        write!(acc, ", {i} AS c{i}").ok();
+                        acc
+                    })
                 );
                 let window = format!(
                     "SUM(n) OVER (PARTITION BY {}) AS sum_n",

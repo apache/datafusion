@@ -232,6 +232,12 @@ impl ScalarUDF {
         self.inner.return_field_from_args(args)
     }
 
+    /// Returns whether this scalar function should be evaluated during
+    /// constant folding for the specified literal arguments.
+    pub fn should_evaluate_const(&self, args: &[&ScalarValue]) -> bool {
+        self.inner.should_evaluate_const(args)
+    }
+
     /// Returns this scalar function's simplification result.
     ///
     /// See [`ScalarUDFImpl::simplify`] for more details.
@@ -690,6 +696,17 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// to arrays, which will likely be simpler code, but be slower.
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue>;
 
+    /// Returns whether this function should be evaluated during constant
+    /// folding for the specified literal arguments.
+    ///
+    /// Implementations can return `false` when evaluation is valid but may be
+    /// too expensive for planning. The expression is then preserved for
+    /// runtime evaluation. The default preserves the existing behavior of
+    /// evaluating immutable functions with literal arguments.
+    fn should_evaluate_const(&self, _args: &[&ScalarValue]) -> bool {
+        true
+    }
+
     /// Optionally apply per-UDF simplification / rewrite rules.
     ///
     /// This can be used to apply function specific simplification rules during
@@ -1092,6 +1109,10 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         self.inner.invoke_with_args(args)
+    }
+
+    fn should_evaluate_const(&self, args: &[&ScalarValue]) -> bool {
+        self.inner.should_evaluate_const(args)
     }
 
     fn with_updated_config(&self, _config: &ConfigOptions) -> Option<ScalarUDF> {

@@ -1,0 +1,12 @@
+# ROW_NUMBER top-2, ~100K partitions. Fewest rows per partition on the sweep,
+# so per-partition bookkeeping is amortized over the least work.
+
+subgroup window_sorted
+
+template sql_benchmarks/h2o/window_sorted.benchmark.template
+QPAD=04
+FN=ROW_NUMBER
+PK_MOD=100000
+OB_EXPR=v2
+OB_BOUND=count(DISTINCT ob) > 1000
+NAME=window_sorted_q04_row_number_100k_partitions

@@ -45,7 +45,10 @@ use datafusion_expr::{
     BinaryExpr, Case, ColumnarValue, Expr, ExprSchemable, Like, Operator, Volatility,
     and, binary::BinaryTypeCoercer, lit, or, preimage::PreimageResult,
 };
-use datafusion_expr::{Cast, TryCast, simplify::ExprSimplifyResult};
+use datafusion_expr::{
+    Cast, TryCast,
+    simplify::{ExprSimplifyResult, REGEX_PLANNING_SIZE_LIMIT_BYTES},
+};
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_expr::{
     expr::{InList, InSubquery},
@@ -69,7 +72,7 @@ use crate::{
 use datafusion_expr::expr_rewriter::rewrite_with_guarantees_map;
 use datafusion_expr_common::casts::try_cast_literal_to_type;
 use indexmap::IndexSet;
-use regex::Regex;
+use regex::{Error as RegexError, Regex, RegexBuilder};
 
 /// This structure handles API for expression simplification
 ///
@@ -494,6 +497,8 @@ enum ConstSimplifyResult {
     NotSimplified(ScalarValue, Option<FieldMetadata>),
     // Evaluation encountered an error, contains the original expression
     SimplifyRuntimeError(DataFusionError, Expr),
+    // Evaluation was deliberately deferred to runtime
+    Deferred(Expr),
 }
 
 impl TreeNodeRewriter for ConstEvaluator {
@@ -551,6 +556,14 @@ impl TreeNodeRewriter for ConstEvaluator {
                     // For other expressions (like CASE, COALESCE), preserve the original
                     // to allow short-circuit evaluation at execution time
                     Ok(Transformed::yes(expr))
+                }
+                ConstSimplifyResult::Deferred(expr) => {
+                    // Prevent an evaluatable parent (for example, an Alias)
+                    // from evaluating this deferred subtree indirectly.
+                    self.can_evaluate.iter_mut().for_each(|can_evaluate| {
+                        *can_evaluate = false;
+                    });
+                    Ok(Transformed::no(expr))
                 }
             },
             Some(false) => Ok(Transformed::no(expr)),
@@ -691,6 +704,10 @@ impl ConstEvaluator {
             return ConstSimplifyResult::NotSimplified(s, m);
         }
 
+        if !should_evaluate_const_expr(&expr) {
+            return ConstSimplifyResult::Deferred(expr);
+        }
+
         let phys_expr = match create_physical_expr(
             &expr,
             &DUMMY_DF_SCHEMA,
@@ -745,6 +762,51 @@ impl ConstEvaluator {
             ColumnarValue::Scalar(s) => ConstSimplifyResult::Simplified(s, metadata),
         }
     }
+}
+
+fn should_evaluate_const_expr(expr: &Expr) -> bool {
+    match expr {
+        Expr::ScalarFunction(ScalarFunction { func, args }) => {
+            let Some(args) = args
+                .iter()
+                .map(|arg| match arg {
+                    Expr::Literal(value, _) => Some(value),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()
+            else {
+                return true;
+            };
+            func.should_evaluate_const(&args)
+        }
+        Expr::BinaryExpr(BinaryExpr { op, right, .. })
+            if matches!(
+                op,
+                Operator::RegexMatch
+                    | Operator::RegexNotMatch
+                    | Operator::RegexIMatch
+                    | Operator::RegexNotIMatch
+            ) =>
+        {
+            regex_is_within_planning_budget(op, right)
+        }
+        _ => true,
+    }
+}
+
+fn regex_is_within_planning_budget(op: &Operator, pattern: &Expr) -> bool {
+    let Expr::Literal(pattern, _) = pattern else {
+        return true;
+    };
+    let Some(pattern) = pattern.try_as_str().flatten() else {
+        return true;
+    };
+    let mut builder = RegexBuilder::new(pattern);
+    builder.size_limit(REGEX_PLANNING_SIZE_LIMIT_BYTES);
+    if matches!(op, Operator::RegexIMatch | Operator::RegexNotIMatch) {
+        builder.case_insensitive(true);
+    }
+    !matches!(builder.build(), Err(RegexError::CompiledTooBig(_)))
 }
 
 /// Simplifies [`Expr`]s by applying algebraic transformation rules
@@ -1649,7 +1711,17 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 left,
                 op: op @ (RegexMatch | RegexNotMatch | RegexIMatch | RegexNotIMatch),
                 right,
-            }) => simplify_regex_expr(left, op, right)?,
+            }) => {
+                // Non-constant regexes are not evaluated during planning, so
+                // avoid adding a compilation preflight to their normal path.
+                if !matches!(left.as_ref(), Expr::Literal(_, _))
+                    || regex_is_within_planning_budget(&op, &right)
+                {
+                    simplify_regex_expr(left, op, right)?
+                } else {
+                    Transformed::no(Expr::BinaryExpr(BinaryExpr { left, op, right }))
+                }
+            }
 
             // Rules for Like
             Expr::Like(like) => {
@@ -2512,6 +2584,77 @@ mod tests {
             let expected = col("c2").lt(col("c1"));
             assert_eq!(simplify(expr), expected);
         }
+    }
+
+    #[test]
+    fn test_simplify_swapped_operands_in_and_or_no_canonicalize() {
+        // Regression test for https://github.com/apache/datafusion/issues/14943
+        //
+        // `SimplifyExpressions` disables canonicalization for `LogicalPlan::Join`
+        // (see https://github.com/apache/datafusion/pull/8780), so commutative
+        // operands like `A = B` and `B = A` cannot be normalized to a single
+        // form before AND/OR dedup runs. The dedup itself must therefore
+        // recognize commutative equivalence directly.
+
+        // c3 = 5 AND 5 = c3 --> c3 = 5
+        let expr = col("c3_non_null")
+            .eq(lit(5_i64))
+            .and(lit(5_i64).eq(col("c3_non_null")));
+        let expected = col("c3_non_null").eq(lit(5_i64));
+        assert_eq!(simplify_no_canonicalize(expr), expected);
+
+        // 5 = c3 AND c3 = 5 --> 5 = c3
+        let expr = lit(5_i64)
+            .eq(col("c3_non_null"))
+            .and(col("c3_non_null").eq(lit(5_i64)));
+        let expected = lit(5_i64).eq(col("c3_non_null"));
+        assert_eq!(simplify_no_canonicalize(expr), expected);
+
+        // c3 = 5 OR 5 = c3 --> c3 = 5
+        let expr = col("c3_non_null")
+            .eq(lit(5_i64))
+            .or(lit(5_i64).eq(col("c3_non_null")));
+        let expected = col("c3_non_null").eq(lit(5_i64));
+        assert_eq!(simplify_no_canonicalize(expr), expected);
+
+        // (c3 = 5 AND c4 > 0) AND (5 = c3) --> c3 = 5 AND c4 > 0
+        let expr = col("c3_non_null")
+            .eq(lit(5_i64))
+            .and(col("c4_non_null").gt(lit(0_u32)))
+            .and(lit(5_i64).eq(col("c3_non_null")));
+        let expected = col("c3_non_null")
+            .eq(lit(5_i64))
+            .and(col("c4_non_null").gt(lit(0_u32)));
+        assert_eq!(simplify_no_canonicalize(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_swapped_operands_in_xor_no_canonicalize() {
+        // `expr_contains` guards the XOR rules, so `delete_xor_in_complex_expr` has to
+        // use the same equality relation. Comparing structurally there while the guard
+        // normalizes makes the rule rebuild its input and still report `Transformed::yes`,
+        // which spins the simplifier until it hits the cycle limit.
+        //
+        // Operands are non-nullable so the expected results do not depend on how the XOR
+        // rules treat a NULL operand, which is a separate question from the cycle.
+
+        // (c4_non_null + 1) ^ (1 + c4_non_null) --> 0
+        let expr = bitwise_xor(
+            col("c4_non_null") + lit(1_u32),
+            lit(1_u32) + col("c4_non_null"),
+        );
+        let (simplified, cycles) = simplify_no_canonicalize_with_cycle_count(expr);
+        assert_eq!(simplified, lit(0_u32));
+        assert_eq!(cycles, 2);
+
+        // (c4_non_null + 1) ^ ((1 + c4_non_null) ^ c4_non_null) --> c4_non_null
+        let expr = bitwise_xor(
+            col("c4_non_null") + lit(1_u32),
+            bitwise_xor(lit(1_u32) + col("c4_non_null"), col("c4_non_null")),
+        );
+        let (simplified, cycles) = simplify_no_canonicalize_with_cycle_count(expr);
+        assert_eq!(simplified, col("c4_non_null"));
+        assert_eq!(cycles, 2);
     }
 
     #[test]
@@ -3388,6 +3531,60 @@ mod tests {
     }
 
     #[test]
+    fn test_constant_regex_respects_planning_budget() {
+        // Small regexes retain the common-case constant folding behavior.
+        assert_eq!(simplify(regex_match(lit("aaaaa"), lit("^a+$"))), lit(true));
+
+        // Six nested repetitions fit under the runtime regex limit, but exceed
+        // the smaller planning budget and therefore remain for execution.
+        let pattern = "a{5}{5}{5}{5}{5}{5}";
+        let binary_expr = regex_match(lit("aaaaa"), lit(pattern));
+        assert_eq!(simplify(binary_expr.clone()), binary_expr);
+
+        // Deferring a subtree must also prevent an evaluatable parent from
+        // invoking it indirectly during constant folding.
+        let aliased = regex_match(lit("aaaaa"), lit(pattern)).alias("matched");
+        assert_eq!(simplify(aliased.clone()), aliased);
+
+        #[derive(Debug, PartialEq, Eq, Hash)]
+        struct DeferredConstUdf {
+            signature: Signature,
+        }
+
+        impl ScalarUDFImpl for DeferredConstUdf {
+            fn name(&self) -> &str {
+                "deferred_const"
+            }
+
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+
+            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+                Ok(DataType::Boolean)
+            }
+
+            fn invoke_with_args(
+                &self,
+                _args: ScalarFunctionArgs,
+            ) -> Result<ColumnarValue> {
+                panic!("deferred UDF must not be evaluated during planning")
+            }
+
+            fn should_evaluate_const(&self, _args: &[&ScalarValue]) -> bool {
+                false
+            }
+        }
+
+        // UDFs can use the same hook when their literal inputs are expensive.
+        let udf = ScalarUDF::new_from_impl(DeferredConstUdf {
+            signature: Signature::exact(vec![DataType::Utf8], Volatility::Immutable),
+        });
+        let udf_expr = udf.call(vec![lit("value")]);
+        assert_eq!(simplify(udf_expr.clone()), udf_expr);
+    }
+
+    #[test]
     fn test_simplify_regex() {
         // malformed regex
         assert_contains!(
@@ -3665,6 +3862,20 @@ mod tests {
 
     fn simplify(expr: Expr) -> Expr {
         try_simplify(expr).unwrap()
+    }
+
+    fn simplify_no_canonicalize(expr: Expr) -> Expr {
+        simplify_no_canonicalize_with_cycle_count(expr).0
+    }
+
+    fn simplify_no_canonicalize_with_cycle_count(expr: Expr) -> (Expr, u32) {
+        let schema = expr_test_schema();
+        let (transformed, count) =
+            ExprSimplifier::new(SimplifyContext::builder().with_schema(schema).build())
+                .with_canonicalize(false)
+                .simplify_with_cycle_count_transformed(expr)
+                .unwrap();
+        (transformed.data, count)
     }
 
     fn try_simplify_with_cycle_count(expr: Expr) -> Result<(Expr, u32)> {

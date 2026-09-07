@@ -22,7 +22,7 @@ use arrow::array::{
 use arrow::datatypes::DataType;
 use datafusion_common::hash_map::Entry;
 use datafusion_common::{HashMap, Result, internal_err};
-use datafusion_expr::{EmitTo, GroupsAccumulator};
+use datafusion_expr::{EmitTo, GroupSelection, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::apply_filter_as_nulls;
 use std::mem::size_of;
 use std::sync::Arc;
@@ -61,6 +61,100 @@ impl MinMaxBytesAccumulator {
             inner: MinMaxBytesState::new(data_type),
             is_min: false,
         }
+    }
+
+    fn build_array<'a>(
+        &self,
+        min_maxes: impl Iterator<Item = Option<&'a [u8]>>,
+        num_values: usize,
+        data_capacity: usize,
+    ) -> Result<ArrayRef> {
+        let result: ArrayRef = match self.inner.data_type {
+            DataType::Utf8 => {
+                let mut builder = StringBuilder::with_capacity(num_values, data_capacity);
+                for value in min_maxes {
+                    match value {
+                        None => builder.append_null(),
+                        // SAFETY: update_batch only accepts the configured input type.
+                        Some(value) => builder.append_value(unsafe {
+                            std::str::from_utf8_unchecked(value)
+                        }),
+                    }
+                }
+                Arc::new(builder.finish())
+            }
+            DataType::LargeUtf8 => {
+                let mut builder =
+                    LargeStringBuilder::with_capacity(num_values, data_capacity);
+                for value in min_maxes {
+                    match value {
+                        None => builder.append_null(),
+                        // SAFETY: update_batch only accepts the configured input type.
+                        Some(value) => builder.append_value(unsafe {
+                            std::str::from_utf8_unchecked(value)
+                        }),
+                    }
+                }
+                Arc::new(builder.finish())
+            }
+            DataType::Utf8View => {
+                let block_size = capacity_to_view_block_size(data_capacity);
+                let mut builder = StringViewBuilder::with_capacity(num_values)
+                    .with_fixed_block_size(block_size);
+                for value in min_maxes {
+                    match value {
+                        None => builder.append_null(),
+                        // SAFETY: update_batch only accepts the configured input type.
+                        Some(value) => builder.append_value(unsafe {
+                            std::str::from_utf8_unchecked(value)
+                        }),
+                    }
+                }
+                Arc::new(builder.finish())
+            }
+            DataType::Binary => {
+                let mut builder = BinaryBuilder::with_capacity(num_values, data_capacity);
+                for value in min_maxes {
+                    match value {
+                        None => builder.append_null(),
+                        Some(value) => builder.append_value(value),
+                    }
+                }
+                Arc::new(builder.finish())
+            }
+            DataType::LargeBinary => {
+                let mut builder =
+                    LargeBinaryBuilder::with_capacity(num_values, data_capacity);
+                for value in min_maxes {
+                    match value {
+                        None => builder.append_null(),
+                        Some(value) => builder.append_value(value),
+                    }
+                }
+                Arc::new(builder.finish())
+            }
+            DataType::BinaryView => {
+                let block_size = capacity_to_view_block_size(data_capacity);
+                let mut builder = BinaryViewBuilder::with_capacity(num_values)
+                    .with_fixed_block_size(block_size);
+                for value in min_maxes {
+                    match value {
+                        None => builder.append_null(),
+                        Some(value) => builder.append_value(value),
+                    }
+                }
+                Arc::new(builder.finish())
+            }
+            _ => {
+                return internal_err!(
+                    "Unexpected data type for MinMaxBytesAccumulator: {:?}",
+                    self.inner.data_type
+                );
+            }
+        };
+
+        assert_eq!(&self.inner.data_type, result.data_type());
+        Ok(result)
     }
 }
 
@@ -203,106 +297,45 @@ impl GroupsAccumulator for MinMaxBytesAccumulator {
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         let (data_capacity, min_maxes) = self.inner.emit_to(emit_to);
+        self.build_array(
+            min_maxes.iter().map(|value| value.as_deref()),
+            min_maxes.len(),
+            data_capacity,
+        )
+    }
 
-        // Convert the Vec of bytes to a vec of Strings (at no cost)
-        fn bytes_to_str(
-            min_maxes: Vec<Option<Vec<u8>>>,
-        ) -> impl Iterator<Item = Option<String>> {
-            min_maxes.into_iter().map(|opt| {
-                opt.map(|bytes| {
-                    // Safety: only called on data added from update_batch which ensures
-                    // the input type matched the output type
-                    unsafe { String::from_utf8_unchecked(bytes) }
-                })
-            })
-        }
+    fn evaluate_preserving(&mut self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
+        let num_groups = self.inner.min_max.len();
+        selection.validate_num_groups(num_groups)?;
+        let num_values = selection.len();
+        let data_capacity = selection
+            .iter()
+            .filter_map(|index| self.inner.min_max[index].as_ref().map(Vec::len))
+            .sum();
+        let min_maxes = selection
+            .iter()
+            .map(|index| self.inner.min_max[index].as_deref());
+        self.build_array(min_maxes, num_values, data_capacity)
+    }
 
-        let result: ArrayRef = match self.inner.data_type {
-            DataType::Utf8 => {
-                let mut builder =
-                    StringBuilder::with_capacity(min_maxes.len(), data_capacity);
-                for opt in bytes_to_str(min_maxes) {
-                    match opt {
-                        None => builder.append_null(),
-                        Some(s) => builder.append_value(s.as_str()),
-                    }
-                }
-                Arc::new(builder.finish())
-            }
-            DataType::LargeUtf8 => {
-                let mut builder =
-                    LargeStringBuilder::with_capacity(min_maxes.len(), data_capacity);
-                for opt in bytes_to_str(min_maxes) {
-                    match opt {
-                        None => builder.append_null(),
-                        Some(s) => builder.append_value(s.as_str()),
-                    }
-                }
-                Arc::new(builder.finish())
-            }
-            DataType::Utf8View => {
-                let block_size = capacity_to_view_block_size(data_capacity);
-
-                let mut builder = StringViewBuilder::with_capacity(min_maxes.len())
-                    .with_fixed_block_size(block_size);
-                for opt in bytes_to_str(min_maxes) {
-                    match opt {
-                        None => builder.append_null(),
-                        Some(s) => builder.append_value(s.as_str()),
-                    }
-                }
-                Arc::new(builder.finish())
-            }
-            DataType::Binary => {
-                let mut builder =
-                    BinaryBuilder::with_capacity(min_maxes.len(), data_capacity);
-                for opt in min_maxes {
-                    match opt {
-                        None => builder.append_null(),
-                        Some(s) => builder.append_value(s.as_ref() as &[u8]),
-                    }
-                }
-                Arc::new(builder.finish())
-            }
-            DataType::LargeBinary => {
-                let mut builder =
-                    LargeBinaryBuilder::with_capacity(min_maxes.len(), data_capacity);
-                for opt in min_maxes {
-                    match opt {
-                        None => builder.append_null(),
-                        Some(s) => builder.append_value(s.as_ref() as &[u8]),
-                    }
-                }
-                Arc::new(builder.finish())
-            }
-            DataType::BinaryView => {
-                let block_size = capacity_to_view_block_size(data_capacity);
-
-                let mut builder = BinaryViewBuilder::with_capacity(min_maxes.len())
-                    .with_fixed_block_size(block_size);
-                for opt in min_maxes {
-                    match opt {
-                        None => builder.append_null(),
-                        Some(s) => builder.append_value(s.as_ref() as &[u8]),
-                    }
-                }
-                Arc::new(builder.finish())
-            }
-            _ => {
-                return internal_err!(
-                    "Unexpected data type for MinMaxBytesAccumulator: {:?}",
-                    self.inner.data_type
-                );
-            }
-        };
-
-        assert_eq!(&self.inner.data_type, result.data_type());
-        Ok(result)
+    fn supports_evaluate_preserving(&self) -> bool {
+        true
     }
 
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         // min/max are their own states (no transition needed)
         self.evaluate(emit_to).map(|arr| vec![arr])
+    }
+
+    fn state_preserving(
+        &mut self,
+        selection: GroupSelection<'_>,
+    ) -> Result<Vec<ArrayRef>> {
+        self.evaluate_preserving(selection).map(|array| vec![array])
+    }
+
+    fn supports_state_preserving(&self) -> bool {
+        true
     }
 
     fn merge_batch(
@@ -463,7 +496,7 @@ impl MinMaxBytesState {
                         vacant_entry.insert(new_val);
                     }
                 }
-            };
+            }
         }
 
         // Update self.min_max with any new min/max values we found in the input
@@ -502,5 +535,48 @@ impl MinMaxBytesState {
 
     fn size(&self) -> usize {
         self.total_data_bytes + self.min_max.len() * size_of::<Option<Vec<u8>>>()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::StringArray;
+
+    #[test]
+    fn preserving_selected_min_values() -> Result<()> {
+        let mut accumulator = MinMaxBytesAccumulator::new_min(DataType::Utf8);
+        let values = Arc::new(StringArray::from(vec![
+            Some("z"),
+            Some("b"),
+            None,
+            Some("c"),
+            Some("a"),
+            Some("x"),
+        ]));
+        accumulator.update_batch(&[values], &[0, 0, 1, 2, 2, 3], None, 4)?;
+
+        let selection = GroupSelection::try_from_indices(&[3, 0, 1, 2, 3], 4)?;
+        let expected =
+            StringArray::from(vec![Some("x"), Some("b"), None, Some("a"), Some("x")]);
+        for _ in 0..2 {
+            assert_eq!(
+                accumulator
+                    .evaluate_preserving(selection)?
+                    .as_string::<i32>(),
+                &expected
+            );
+        }
+
+        let values = Arc::new(StringArray::from(vec!["aa", "w"]));
+        accumulator.update_batch(&[values], &[0, 3], None, 4)?;
+        let expected = StringArray::from(vec![Some("aa"), None, Some("a"), Some("w")]);
+        assert_eq!(
+            accumulator
+                .evaluate_preserving(GroupSelection::all(4))?
+                .as_string::<i32>(),
+            &expected
+        );
+        Ok(())
     }
 }
