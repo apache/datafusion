@@ -1464,11 +1464,12 @@ pub(crate) struct FallbackCoordinator {
     /// `cancelled`, so a cancellation landing between those two steps is
     /// delivered rather than lost.
     cancel_notify: tokio::sync::Notify,
-    /// Test seam for cancelling at an interleaving a test cannot otherwise hit.
+    /// Test seam that reproduces one cancellation interleaving deterministically.
     ///
     /// Set to `1` to make the leader cancel after claiming the load but before
-    /// it registers its cancellation watcher -- the window where a lost
-    /// notification would strand every other partition. Consumed when it fires,
+    /// it registers its cancellation watcher. A cancellation lost in that window
+    /// strands the loader itself -- other observers may already be returning
+    /// errors -- which is what the paired test checks. Consumed when it fires,
     /// so one store arms it once.
     #[cfg(test)]
     cancel_at_leader_claim: AtomicUsize,
@@ -5839,13 +5840,6 @@ pub(crate) mod tests {
         )
     }
 
-    /// Run a NLJ across 4 right partitions, collecting every output
-    /// partition CONCURRENTLY. This is required for the multi-chunk
-    /// coordinator path: a chunk is not released until all partitions
-    /// finish probing it, and a partition cannot advance to the next chunk
-    /// until the current one is released. Collecting partitions
-    /// sequentially would therefore deadlock; concurrent collection mirrors
-    /// how partitions actually run under the runtime.
     /// Waker that counts how often it is woken.
     ///
     /// Cancellation tests assert that a parked stream is *woken*, not merely that
@@ -6001,7 +5995,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn nlj_normal_completion_leaves_coordinator_usable() -> Result<()> {
+    async fn nlj_normal_completion_does_not_cancel_peers() -> Result<()> {
         tokio::time::timeout(Duration::from_secs(5), async {
             let (plan, ctx) = cancellation_test_plan()?;
             let mut rows = 0;
@@ -6350,7 +6344,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn nlj_drop_while_pending_releases_chunk() -> Result<()> {
+    async fn nlj_drop_pending_partition_does_not_retain_chunk_memory() -> Result<()> {
         tokio::time::timeout(Duration::from_secs(5), async {
             let (plan, ctx) = cancellation_test_plan()?;
             let abandoned = plan.execute(0, Arc::clone(&ctx))?;
@@ -6577,7 +6571,7 @@ pub(crate) mod tests {
 
         // A plain sanity check that nothing marks the coordinator cancelled on
         // its own. Real stream drops are covered by
-        // `nlj_normal_completion_leaves_coordinator_usable`, which runs both partitions
+        // `nlj_normal_completion_does_not_cancel_peers`, which runs both partitions
         // to completion and drops them.
         let (chunk, _) = Arc::clone(&coordinator)
             .next_chunk(0, Arc::clone(&spill), Arc::clone(&task_ctx), Time::new())
@@ -6717,6 +6711,13 @@ pub(crate) mod tests {
         assert_final_chunk_released(JoinType::Full).await
     }
 
+    /// Run a NLJ across 4 right partitions, collecting every output
+    /// partition CONCURRENTLY. This is required for the multi-chunk
+    /// coordinator path: a chunk is not released until all partitions
+    /// finish probing it, and a partition cannot advance to the next chunk
+    /// until the current one is released. Collecting partitions
+    /// sequentially would therefore deadlock; concurrent collection mirrors
+    /// how partitions actually run under the runtime.
     async fn multi_partition_memory_limited_join_collect_concurrent(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
