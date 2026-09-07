@@ -228,9 +228,15 @@ fn map_extract_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 mod tests {
     use super::*;
     use arrow::array::{Float64Array, Int32Array, StructArray};
+    use arrow::buffer::NullBuffer;
     use arrow::datatypes::Int32Type;
 
-    fn make_map(keys: ArrayRef, values: Vec<i32>, offsets: Vec<i32>) -> MapArray {
+    fn make_map(
+        keys: ArrayRef,
+        values: Vec<i32>,
+        offsets: Vec<i32>,
+        nulls: Option<NullBuffer>,
+    ) -> MapArray {
         let entries = StructArray::from(vec![
             (
                 Arc::new(Field::new("key", keys.data_type().clone(), false)),
@@ -245,7 +251,7 @@ mod tests {
             Arc::new(Field::new("entries", entries.data_type().clone(), false)),
             OffsetBuffer::new(offsets.into()),
             entries,
-            None,
+            nulls,
             false,
         )
     }
@@ -256,6 +262,7 @@ mod tests {
             Arc::new(Int32Array::from(vec![0, 1, 2, 3])),
             vec![0, 10, 20, 30],
             vec![0, 1, 3, 4],
+            None,
         );
         let query_keys = Int32Array::from(vec![0, 2, 9]);
 
@@ -276,6 +283,23 @@ mod tests {
     }
 
     #[test]
+    fn map_extract_all_empty_maps_with_nulls() -> Result<()> {
+        // No entries exist to scan, but the null map must still produce NULL
+        // rather than an empty list.
+        let map = make_map(
+            Arc::new(Int32Array::from(Vec::<i32>::new())),
+            vec![],
+            vec![0, 0, 0],
+            Some(NullBuffer::from(vec![true, false])),
+        );
+        let result = general_map_extract_inner(&map, &Int32Array::from(vec![1, 1]))?;
+        let expected =
+            ListArray::from_iter_primitive::<Int32Type, _, _>([Some(vec![]), None]);
+        assert_eq!(result.as_ref(), &expected);
+        Ok(())
+    }
+
+    #[test]
     fn map_extract_float_keys() -> Result<()> {
         let nan = f64::NAN;
         let other_nan = f64::from_bits(nan.to_bits() + 1);
@@ -283,6 +307,7 @@ mod tests {
             Arc::new(Float64Array::from(vec![-0.0, 0.0, nan, other_nan])),
             vec![1, 2, 3, 4],
             vec![0, 4],
+            None,
         );
 
         // Signed zeros and distinct NaN payloads identify different keys.
