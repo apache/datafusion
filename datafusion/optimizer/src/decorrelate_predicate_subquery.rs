@@ -646,6 +646,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_expr::builder::table_source;
     use datafusion_expr::{and, binary_expr, col, out_ref_col, table_scan};
+    use datafusion_functions_aggregate::expr_fn::count;
 
     macro_rules! assert_optimized_plan_equal {
         (
@@ -705,6 +706,110 @@ mod tests {
             DecorrelatePredicateSubquery::new(),
         )]);
         optimizer.optimize(plan, &crate::OptimizerContext::new(), |_, _| {})
+    }
+
+    fn correlated_count_subquery() -> Result<Arc<LogicalPlan>> {
+        Ok(Arc::new(
+            LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
+                .filter(col("sq.a").eq(out_ref_col(DataType::UInt32, "test.a")))?
+                .aggregate(Vec::<Expr>::new(), vec![count(lit(1))])?
+                .build()?,
+        ))
+    }
+
+    #[test]
+    fn single_row_cardinality_through_transparent_wrappers() -> Result<()> {
+        let aggregate = correlated_count_subquery()?;
+        assert!(guaranteed_single_row(aggregate.as_ref()));
+
+        let projection = LogicalPlanBuilder::from(aggregate.as_ref().clone())
+            .project(vec![lit(1)])?
+            .build()?;
+        assert!(guaranteed_single_row(&projection));
+
+        let alias = LogicalPlanBuilder::from(projection)
+            .alias("single")?
+            .build()?;
+        assert!(guaranteed_single_row(&alias));
+
+        let having = LogicalPlanBuilder::from(aggregate.as_ref().clone())
+            .filter(lit(true))?
+            .build()?;
+        assert!(!guaranteed_single_row(&having));
+        assert!(!guaranteed_single_row(&test_table_scan()?));
+
+        Ok(())
+    }
+
+    #[test]
+    fn correlated_single_row_top_level_predicates() -> Result<()> {
+        let predicates = [
+            (
+                exists(correlated_count_subquery()?),
+                "Filter: Boolean(true)",
+            ),
+            (
+                not_exists(correlated_count_subquery()?),
+                "Filter: Boolean(false)",
+            ),
+            (
+                in_subquery(col("test.b"), correlated_count_subquery()?),
+                "Filter: test.b = (<subquery>)",
+            ),
+            (
+                not_in_subquery(col("test.b"), correlated_count_subquery()?),
+                "Filter: test.b != (<subquery>)",
+            ),
+        ];
+
+        for (predicate, expected_filter) in predicates {
+            let plan = LogicalPlanBuilder::from(test_table_scan()?)
+                .filter(predicate)?
+                .build()?;
+            let optimized = optimize_with_decorrelate(plan)?;
+            let display = optimized.display_indent().to_string();
+
+            assert!(display.starts_with(expected_filter), "{display}");
+            assert!(!display.contains("LeftSemi Join"), "{display}");
+            assert!(!display.contains("LeftAnti Join"), "{display}");
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn correlated_single_row_embedded_predicates() -> Result<()> {
+        let predicates = [
+            (
+                exists(correlated_count_subquery()?),
+                "Filter: test.c = UInt32(1) OR Boolean(true)",
+            ),
+            (
+                not_exists(correlated_count_subquery()?),
+                "Filter: test.c = UInt32(1) OR Boolean(false)",
+            ),
+            (
+                in_subquery(col("test.b"), correlated_count_subquery()?),
+                "Filter: test.c = UInt32(1) OR test.b = (<subquery>)",
+            ),
+            (
+                not_in_subquery(col("test.b"), correlated_count_subquery()?),
+                "Filter: test.c = UInt32(1) OR test.b != (<subquery>)",
+            ),
+        ];
+
+        for (predicate, expected_filter) in predicates {
+            let plan = LogicalPlanBuilder::from(test_table_scan()?)
+                .filter(col("test.c").eq(lit(1u32)).or(predicate))?
+                .build()?;
+            let optimized = optimize_with_decorrelate(plan)?;
+            let display = optimized.display_indent().to_string();
+
+            assert!(display.starts_with(expected_filter), "{display}");
+            assert!(!display.contains("LeftMark Join"), "{display}");
+        }
+
+        Ok(())
     }
 
     /// Test for several IN subquery expressions
