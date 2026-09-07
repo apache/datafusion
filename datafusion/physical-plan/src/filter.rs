@@ -100,12 +100,11 @@ pub struct FilterExec {
     batch_size: usize,
     /// Number of rows to fetch
     fetch: Option<usize>,
-    /// Measurements shared by all partition streams, used by adaptive conjunct
-    /// reordering (see [`AdaptiveConjunction`]) so the streams learn as one.
-    /// Fresh per plan node; never affects the plan. `Clone` deliberately shares
-    /// it (the clone filters the same predicate over the same input, so pooled
-    /// learning still applies); [`reset_state`](ExecutionPlan::reset_state)
-    /// and predicate rewrites replace it with a fresh instance.
+    /// Per-execution measurements pooled across this node's partition streams
+    /// by adaptive conjunct reordering (see [`AdaptiveConjunction`]). Not part
+    /// of the plan shape. `Clone` shares it, since a clone filters the same
+    /// predicate; [`reset_state`](ExecutionPlan::reset_state) and predicate
+    /// rewrites replace it with a fresh instance.
     adaptive_stats: Arc<AdaptiveFilterShared>,
 }
 
@@ -585,9 +584,9 @@ impl ExecutionPlan for FilterExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         validate_child_count!(self, children);
         match options.children_properties {
-            // `adaptive_stats` is deliberately carried over by the struct
-            // update: the predicate is unchanged, and no measurements exist
-            // before execution. `reset_state` is what replaces it.
+            // `adaptive_stats` is carried over by the struct update: the
+            // predicate is unchanged, so any pooled measurements still
+            // describe it.
             ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
                 input: children.swap_remove(0),
                 metrics: ExecutionPlanMetricsSet::new(),
@@ -626,11 +625,10 @@ impl ExecutionPlan for FilterExec {
     /// Reset per-execution state so an independent re-execution (e.g. a
     /// recursive query) does not inherit runtime state from a prior run.
     ///
-    /// The pooled adaptive-conjunct measurements (`AdaptiveFilterShared`) and
-    /// the execution metrics are the per-execution state that must be reset —
-    /// otherwise the adaptive reordering learned in one execution would leak
-    /// into the next. The predicate, input, and cached plan properties are
-    /// unchanged and remain valid, so they are preserved (unlike
+    /// The per-execution state is the pooled adaptive-conjunct measurements
+    /// (`AdaptiveFilterShared`) and the execution metrics; both are replaced
+    /// with fresh instances. The predicate, input, and cached plan properties
+    /// remain valid, so they are preserved (unlike
     /// [`with_new_children`](Self::with_new_children), this does not recompute
     /// them). Any dynamic filters *inside* the predicate are owned and reset by
     /// the operator that created them, not by `FilterExec`.
@@ -1375,8 +1373,7 @@ struct FilterExecStream {
     /// The expression to filter on. This expression must evaluate to a boolean value.
     predicate: Arc<dyn PhysicalExpr>,
     /// When set, the predicate is a reorderable conjunction evaluated
-    /// adaptively (conjuncts measured, then reordered) instead of via
-    /// `predicate`.
+    /// adaptively instead of via `predicate`.
     adaptive: Option<AdaptiveConjunction>,
     /// The input partition to filter.
     input: SendableRecordBatchStream,
@@ -1397,8 +1394,8 @@ struct FilterExecMetrics {
     /// Number of partition streams that adopted an adaptively reordered
     /// evaluation order for the predicate's conjuncts (at most one per
     /// stream). Registered only when adaptive conjunct reordering is enabled
-    /// for this execution, so the metrics of the (default) flag-off path are
-    /// unchanged.
+    /// and the predicate is a reorderable conjunction, so the flag-off path's
+    /// metrics are unchanged.
     adaptive_reorders: Option<Count>,
     // Remember to update `docs/source/user-guide/metrics.md` when adding new metrics,
     // or modifying metrics comments
@@ -1500,8 +1497,6 @@ impl Stream for FilterExecStream {
                     let (array, adopted_reorder) = match self.adaptive.as_mut() {
                         Some(adaptive) => {
                             let array = adaptive.evaluate(&batch);
-                            // Report the settle-on-a-reorder transition, which
-                            // fires at most once per stream.
                             (array, adaptive.take_adopted_reorder())
                         }
                         None => (
@@ -2541,9 +2536,9 @@ mod tests {
     ///
     /// Both conjuncts are cheap arithmetic, so real timings cannot separate
     /// them reliably; the shared pool is therefore seeded one batch short of
-    /// the warm-up (the stand-in for a mocked clock) so the reorder is adopted
-    /// deterministically. Everything else — the streams, the metric, the
-    /// coalescer, the projection-free output path — is the real thing.
+    /// the warm-up so the reorder is adopted deterministically. Everything
+    /// else — the streams, the metric, the coalescer, the projection-free
+    /// output path — is the real thing.
     #[tokio::test]
     async fn adaptive_filter_reordering_end_to_end() -> Result<()> {
         const PARTITIONS: usize = 4;
@@ -2675,9 +2670,9 @@ mod tests {
             .unwrap_or(0);
         assert!(reorders >= 1, "expected an adopted reorder, got {reorders}");
 
-        // Re-executing the same node keeps the learned state (the streams adopt
-        // the already-published order on their first batch) but cannot change
-        // the rows.
+        // Re-executing the same node keeps the learned state (the streams
+        // adopt the settled order on their first batch) but cannot change the
+        // rows.
         assert_eq!(run(&filter, true).await?, flag_off, "state persists");
 
         // `reset_state` drops the pooled measurements, so the fresh node learns
