@@ -585,6 +585,9 @@ impl ExecutionPlan for FilterExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         validate_child_count!(self, children);
         match options.children_properties {
+            // `adaptive_stats` is deliberately carried over by the struct
+            // update: the predicate is unchanged, and no measurements exist
+            // before execution. `reset_state` is what replaces it.
             ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
                 input: children.swap_remove(0),
                 metrics: ExecutionPlanMetricsSet::new(),
