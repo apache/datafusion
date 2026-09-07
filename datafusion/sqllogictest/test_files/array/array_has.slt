@@ -51,6 +51,23 @@ query error array_has does not support type 'Null'
 select array_has_all([], null),
        array_has_all([1, 2, 3], null);
 
+# Preserve NULL rows when all needles are NULL or empty
+query BB
+WITH t(id, haystack, needle) AS (
+  VALUES
+    (1, [1, 2], arrow_cast(NULL, 'List(Int64)')),
+    (2, arrow_cast(NULL, 'List(Int64)'), arrow_cast([], 'List(Int64)')),
+    (3, [3, 4], arrow_cast([], 'List(Int64)'))
+)
+SELECT array_has_any(haystack, needle),
+       array_has_all(haystack, needle)
+FROM t
+ORDER BY id;
+----
+NULL NULL
+NULL NULL
+false true
+
 query BBBBBBBBBBBB
 select array_has(make_array(1,2), 1),
        array_has(make_array(1,2,NULL), 1),

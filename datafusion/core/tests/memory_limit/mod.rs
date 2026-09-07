@@ -28,7 +28,7 @@ mod union_nullable_spill;
 mod view_spill_compaction;
 use arrow::array::{
     ArrayRef, DictionaryArray, Int32Array, Int64Array, Int64Builder, ListBuilder,
-    RecordBatch, StringViewArray, StructArray,
+    RecordBatch, StringViewArray, StructArray, StringArray
 };
 use arrow::buffer::NullBuffer;
 use arrow::compute::SortOptions;
@@ -224,6 +224,69 @@ mod count_distinct_spill {
     }
 }
 
+/// A grouped `COUNT(DISTINCT <string>)` gets one accumulator per group, and
+/// each of those owns a hash set of the distinct values it has seen. Those
+/// sets used to be created pre-allocated, which costs far more than the
+/// handful of values a group typically holds, so the query's memory use
+/// tracked the number of groups rather than the amount of data.
+///
+/// With 4,000 groups holding 2 distinct values each, this query needed about
+/// 35.5 MB of budget before the per group pre-allocation was removed and
+/// about 1.9 MB after, so an 8 MB limit is a failure before the change and a
+/// success after it. Spilling is disabled, so completing means the query
+/// genuinely fit in the budget.
+///
+/// The `avg(payload)` is load bearing, and `avg` specifically. Without a
+/// second aggregate, `single_distinct_aggregation_to_group_by` rewrites the
+/// distinct aggregate into a plain two stage `GROUP BY` that does not use
+/// these accumulators at all. That rule tolerates a non-distinct `sum`, `min`
+/// or `max` beside the distinct aggregate, because it re-aggregates its own
+/// partial results over the deduplicated inner group by, and those three
+/// compose with themselves. `avg` does not: averaging per group averages of
+/// different sizes gives the wrong answer, so the rule can never accept it.
+/// That is why ClickBench Q9 keeps its distinct aggregate. Do not replace
+/// this with `count(*)`: `count` is only incidentally rejected today, and
+/// <https://github.com/apache/datafusion/pull/24859> proposes accepting it,
+/// which would rewrite the query and leave this test passing by construction.
+#[tokio::test]
+async fn group_by_count_distinct_utf8() {
+    TestCase::new()
+        .with_query(
+            "select group_key, count(distinct value), avg(payload) from t group by group_key",
+        )
+        .with_scenario(Scenario::GroupedDistinctStrings {
+            groups: 4_000,
+            string_view: false,
+        })
+        .with_config(SessionConfig::new().with_target_partitions(1))
+        .with_memory_limit(8_000_000)
+        .with_expected_success()
+        .run()
+        .await
+}
+
+/// The `Utf8View` counterpart of [`group_by_count_distinct_utf8`], covering
+/// the separate view flavoured hash set. The same query over a `Utf8View`
+/// column needed about 123 MB of budget before the change and about 2.5 MB
+/// after, so 16 MB separates the two.
+#[tokio::test]
+async fn group_by_count_distinct_utf8_view() {
+    TestCase::new()
+        .with_query(
+            "select group_key, count(distinct value), avg(payload) from t group by group_key",
+        )
+        .with_scenario(Scenario::GroupedDistinctStrings {
+            groups: 4_000,
+            string_view: true,
+        })
+        .with_config(SessionConfig::new().with_target_partitions(1))
+        .with_memory_limit(16_000_000)
+        .with_expected_success()
+        .run()
+        .await
+}
+
+
 /// `GROUP BY` on a single nested key in the legacy `GroupedHashAggregateStream`
 /// under a memory limit.
 ///
@@ -245,57 +308,57 @@ const NESTED_KEY_BATCH_ROWS: usize = 8_192;
 const NESTED_KEY_MEMORY_LIMIT: usize = 4 * 1024 * 1024;
 
 fn nested_key_struct_fields() -> Fields {
-    Fields::from(vec![
-        Field::new("list", DataType::new_list(DataType::Int64, true), true),
-        Field::new("num", DataType::Int64, true),
-    ])
+  Fields::from(vec![
+    Field::new("list", DataType::new_list(DataType::Int64, true), true),
+    Field::new("num", DataType::Int64, true),
+  ])
 }
 
 /// `st` is mostly `{list: [g, g + 1], num: g}` for group `g`, with a sprinkle
 /// of null lists, empty lists, null nums and null structs so that keys of
 /// different shapes meet in the same batches. `v` is unique.
 fn nested_key_table() -> MemTable {
-    let schema = Arc::new(Schema::new(vec![
-        Field::new_struct("st", nested_key_struct_fields(), true),
-        Field::new("v", DataType::Int64, false),
-    ]));
-    let batches = (0..NESTED_KEY_ROWS)
-        .step_by(NESTED_KEY_BATCH_ROWS)
-        .map(|start| {
-            let rows = start..(start + NESTED_KEY_BATCH_ROWS).min(NESTED_KEY_ROWS);
-            let mut list = ListBuilder::new(Int64Builder::new());
-            let mut num = Vec::with_capacity(rows.len());
-            let mut valid = Vec::with_capacity(rows.len());
-            for row in rows.clone() {
-                let group = row as i64 % NESTED_KEY_GROUPS;
-                match row % 37 {
-                    0 => list.append_null(),
-                    1 => list.append(true),
-                    _ => {
-                        list.values().append_value(group);
-                        list.values().append_value(group + 1);
-                        list.append(true);
-                    }
-                }
-                num.push((row % 41 != 0).then_some(group));
-                valid.push(row % 43 != 0);
-            }
-            let st = StructArray::new(
-                nested_key_struct_fields(),
-                vec![Arc::new(list.finish()), Arc::new(Int64Array::from(num))],
-                Some(NullBuffer::from(valid)),
-            );
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(st),
-                    Arc::new(Int64Array::from_iter_values(rows.map(|row| row as i64))),
-                ],
-            )
-            .unwrap()
-        })
-        .collect();
-    MemTable::try_new(schema, vec![batches]).unwrap()
+  let schema = Arc::new(Schema::new(vec![
+    Field::new_struct("st", nested_key_struct_fields(), true),
+    Field::new("v", DataType::Int64, false),
+  ]));
+  let batches = (0..NESTED_KEY_ROWS)
+    .step_by(NESTED_KEY_BATCH_ROWS)
+    .map(|start| {
+      let rows = start..(start + NESTED_KEY_BATCH_ROWS).min(NESTED_KEY_ROWS);
+      let mut list = ListBuilder::new(Int64Builder::new());
+      let mut num = Vec::with_capacity(rows.len());
+      let mut valid = Vec::with_capacity(rows.len());
+      for row in rows.clone() {
+        let group = row as i64 % NESTED_KEY_GROUPS;
+        match row % 37 {
+          0 => list.append_null(),
+          1 => list.append(true),
+          _ => {
+            list.values().append_value(group);
+            list.values().append_value(group + 1);
+            list.append(true);
+          }
+        }
+        num.push((row % 41 != 0).then_some(group));
+        valid.push(row % 43 != 0);
+      }
+      let st = StructArray::new(
+        nested_key_struct_fields(),
+        vec![Arc::new(list.finish()), Arc::new(Int64Array::from(num))],
+        Some(NullBuffer::from(valid)),
+      );
+      RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+          Arc::new(st),
+          Arc::new(Int64Array::from_iter_values(rows.map(|row| row as i64))),
+        ],
+      )
+        .unwrap()
+    })
+    .collect();
+  MemTable::try_new(schema, vec![batches]).unwrap()
 }
 
 const NESTED_KEY_QUERY: &str = "select st, count(v), count(distinct v), sum(v), avg(v), min(v), max(v) \
@@ -303,36 +366,36 @@ const NESTED_KEY_QUERY: &str = "select st, count(v), count(distinct v), sum(v), 
 
 /// Runs the query on the legacy stream, with or without a memory limit.
 async fn run_nested_key_query(memory_limit: Option<usize>) -> String {
-    let mut runtime =
-        RuntimeEnvBuilder::new().with_disk_manager_builder(DiskManagerBuilder::default());
-    if let Some(limit) = memory_limit {
-        runtime = runtime.with_memory_pool(Arc::new(FairSpillPool::new(limit)));
-    }
-    let config = SessionConfig::new()
-        .with_target_partitions(4)
-        // small batches: the merged spill stream arrives in many batches and
-        // groups span batch boundaries
-        .with_batch_size(64)
-        .set_bool("datafusion.execution.enable_migration_aggregate", false);
-    let ctx = SessionContext::new_with_config_rt(config, runtime.build_arc().unwrap());
-    ctx.register_table("t", Arc::new(nested_key_table()))
-        .unwrap();
-    let batches = ctx
-        .sql(NESTED_KEY_QUERY)
-        .await
-        .unwrap()
-        .collect()
-        .await
-        .unwrap();
-    batches_to_sort_string(&batches)
+  let mut runtime =
+    RuntimeEnvBuilder::new().with_disk_manager_builder(DiskManagerBuilder::default());
+  if let Some(limit) = memory_limit {
+    runtime = runtime.with_memory_pool(Arc::new(FairSpillPool::new(limit)));
+  }
+  let config = SessionConfig::new()
+    .with_target_partitions(4)
+    // small batches: the merged spill stream arrives in many batches and
+    // groups span batch boundaries
+    .with_batch_size(64)
+    .set_bool("datafusion.execution.enable_migration_aggregate", false);
+  let ctx = SessionContext::new_with_config_rt(config, runtime.build_arc().unwrap());
+  ctx.register_table("t", Arc::new(nested_key_table()))
+    .unwrap();
+  let batches = ctx
+    .sql(NESTED_KEY_QUERY)
+    .await
+    .unwrap()
+    .collect()
+    .await
+    .unwrap();
+  batches_to_sort_string(&batches)
 }
 
 #[tokio::test]
 async fn legacy_stream_nested_key_spill_keeps_groups_unique() {
-    let expected = run_nested_key_query(None).await;
-    let actual = run_nested_key_query(Some(NESTED_KEY_MEMORY_LIMIT)).await;
-    // A duplicated group shows up as extra rows with the counts split
-    assert_eq!(actual, expected);
+  let expected = run_nested_key_query(None).await;
+  let actual = run_nested_key_query(Some(NESTED_KEY_MEMORY_LIMIT)).await;
+  // A duplicated group shows up as extra rows with the counts split
+  assert_eq!(actual, expected);
 }
 
 #[tokio::test]
@@ -1192,6 +1255,14 @@ enum Scenario {
         /// If true, splits all input batches into 1 row each
         single_row_batches: bool,
     },
+
+    /// `groups` distinct integer keys paired with a short string value, for
+    /// grouped aggregates that build one accumulator per group.
+    GroupedDistinctStrings {
+        groups: usize,
+        /// If true, the value column is `Utf8View` rather than `Utf8`
+        string_view: bool,
+    },
 }
 
 impl Scenario {
@@ -1266,6 +1337,15 @@ impl Scenario {
                 let table = SortedTableProvider::new(batches, sort_information);
                 Arc::new(table)
             }
+            Self::GroupedDistinctStrings {
+                groups,
+                string_view,
+            } => {
+                let batches = grouped_distinct_string_batches(*groups, *string_view);
+                let table =
+                    MemTable::try_new(batches[0].schema(), vec![batches]).unwrap();
+                Arc::new(table)
+            }
         }
     }
 
@@ -1289,8 +1369,62 @@ impl Scenario {
                 // Use default rules
                 None
             }
+            Self::GroupedDistinctStrings { .. } => {
+                // Disable the rules that would add a repartition, so the test
+                // measures the aggregate's budget rather than a repartition's
+                Some(vec![Arc::new(JoinSelection::new())])
+            }
         }
     }
+}
+
+/// Number of distinct string values held by every group produced by
+/// [`grouped_distinct_string_batches`]
+const DISTINCT_VALUES_PER_GROUP: usize = 2;
+
+/// Returns batches of 1024 rows with `groups` distinct keys in `group_key`,
+/// each key paired with [`DISTINCT_VALUES_PER_GROUP`] distinct short strings
+/// in `value` and an `Int64` `payload` to aggregate over. The values are
+/// `Utf8View` if `string_view` is set, `Utf8` otherwise.
+fn grouped_distinct_string_batches(groups: usize, string_view: bool) -> Vec<RecordBatch> {
+    let value_type = if string_view {
+        DataType::Utf8View
+    } else {
+        DataType::Utf8
+    };
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("group_key", DataType::Int32, false),
+        Field::new("value", value_type, false),
+        Field::new("payload", DataType::Int64, false),
+    ]));
+
+    const ROWS_PER_BATCH: usize = 1024;
+
+    let rows = groups * DISTINCT_VALUES_PER_GROUP;
+    let mut keys = Vec::with_capacity(rows);
+    let mut values = Vec::with_capacity(rows);
+    for value in 0..DISTINCT_VALUES_PER_GROUP {
+        for group in 0..groups {
+            keys.push(group as i32);
+            values.push(format!("value-{value}"));
+        }
+    }
+
+    keys.chunks(ROWS_PER_BATCH)
+        .zip(values.chunks(ROWS_PER_BATCH))
+        .map(|(keys, values)| {
+            let payloads: ArrayRef =
+                Arc::new(Int64Array::from_iter_values(keys.iter().map(|k| *k as i64)));
+            let keys: ArrayRef = Arc::new(Int32Array::from(keys.to_vec()));
+            let values: ArrayRef = if string_view {
+                Arc::new(StringViewArray::from_iter_values(values))
+            } else {
+                Arc::new(StringArray::from_iter_values(values))
+            };
+            RecordBatch::try_new(Arc::clone(&schema), vec![keys, values, payloads])
+                .unwrap()
+        })
+        .collect()
 }
 
 fn access_log_batches() -> Vec<RecordBatch> {
