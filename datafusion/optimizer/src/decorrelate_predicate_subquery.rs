@@ -443,7 +443,7 @@ fn build_join(
                 None => equijoin_filters_may_be_null(
                     equinjoin_predicates,
                     left.schema(),
-                    right_schema,
+                    right_projected.schema(),
                 )?,
             }
         } else {
@@ -478,17 +478,14 @@ fn build_join(
     // Additionally, if the join keys are non-nullable on both sides, we don't need
     // null-aware semantics because NULLs cannot exist in the data.
     let null_aware = if join_type == JoinType::LeftAnti && in_predicate_opt.is_some() {
+        let right_schema = sub_query_alias.schema();
         let (equinjoin_predicates, _) = split_eq_and_noneq_join_predicate(
             join_filter.clone(),
             left.schema(),
-            sub_query_alias.schema(),
+            right_schema,
         )?;
 
-        equijoin_filters_may_be_null(
-            equinjoin_predicates,
-            left.schema(),
-            sub_query_alias.schema(),
-        )?
+        equijoin_filters_may_be_null(equinjoin_predicates, left.schema(), right_schema)?
     } else {
         false
     };
@@ -1256,6 +1253,44 @@ mod tests {
                 TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
         "
         )
+    }
+
+    #[test]
+    fn mark_join_preserves_right_key_nullability_after_projection() -> Result<()> {
+        let left = test_table_scan()?;
+
+        for key_nullable in [false, true] {
+            let right_schema = Schema::new(vec![
+                Field::new("unused", DataType::UInt32, !key_nullable),
+                Field::new("id", DataType::UInt32, key_nullable),
+            ]);
+            let right = table_scan(Some("sq"), &right_schema, None)?.build()?;
+            let in_predicate = col("test.c").eq(col("sq.id"));
+
+            // The non-nullable left key forces the right key's nullability to
+            // determine whether the mark join needs null-aware execution.
+            let plan = build_join(
+                &left,
+                &right,
+                Some(&in_predicate),
+                JoinType::LeftMark,
+                "__correlated_sq_1".to_string(),
+            )?
+            .expect("mark join should be decorrelated");
+            let LogicalPlan::Join(join) = plan else {
+                panic!("expected a mark join");
+            };
+
+            // Dropping the unrelated column moves the key from index 1 to 0.
+            assert_eq!(join.right.schema().fields().len(), 1);
+            let key = join.right.schema().field(0);
+            assert_eq!(key.name(), "id");
+            assert_eq!(key.is_nullable(), key_nullable);
+            assert_eq!(join.join_type, JoinType::LeftMark);
+            assert_eq!(join.null_aware, key_nullable);
+        }
+
+        Ok(())
     }
 
     #[test]
