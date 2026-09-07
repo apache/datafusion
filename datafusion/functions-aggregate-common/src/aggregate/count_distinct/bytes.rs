@@ -179,7 +179,7 @@ mod tests {
 
     /// Distinct value counts spanning both sides of the warm up capacity, up to
     /// ones where the two constructors have converged.
-    const CARDINALITIES: [usize; 7] = [0, 1, 100, 1_000, 10_000, 100_000, 500_000];
+    const CARDINALITIES: [usize; 7] = [0, 1, 100, 1_000, 10_000, 100_000, 500_001];
 
     /// Cardinalities small enough that the warm up dominates what the set
     /// holds. This is the per group population, where `GroupsAccumulatorAdapter`
