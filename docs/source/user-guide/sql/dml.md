@@ -142,7 +142,7 @@ INSERT INTO <i><b>table_name</i></b> { VALUES ( <i><b>expression</i></b> [, ...]
 Removes rows from a table.
 
 <pre>
-DELETE FROM <i><b>table_name</i></b> [ WHERE <i><b>condition</i></b> ]
+DELETE FROM <i><b>table_name</b></i> [ WHERE <i><b>condition</b></i> ]
 </pre>
 
 `DELETE` returns the number of removed rows in a column named `count`.
