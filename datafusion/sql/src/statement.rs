@@ -1462,6 +1462,45 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     None => None,
                 };
 
+                // Reject placeholders in the RETURN body that do not reference
+                // a declared argument. Without this check, an invalid
+                // definition such as `RETURN $1 + $3` for a function declared
+                // with two arguments is only rejected when the function is
+                // invoked (by FunctionFactories that substitute placeholders
+                // at call time), rather than at CREATE FUNCTION time.
+                if let Some(body) = &function_body {
+                    let arg_count = args.as_ref().map_or(0, |declared| declared.len());
+                    body.apply(|expr| {
+                        if let Expr::Placeholder(placeholder) = expr {
+                            match placeholder
+                                .id
+                                .strip_prefix('$')
+                                .and_then(|id| id.parse::<usize>().ok())
+                            {
+                                // Positional placeholder within the declared
+                                // argument list (e.g. `$2` with two arguments)
+                                Some(idx) if (1..=arg_count).contains(&idx) => {}
+                                // Positional placeholder that is out of range
+                                Some(_) => {
+                                    return plan_err!(
+                                        "Invalid placeholder, out of range: {}",
+                                        placeholder.id
+                                    );
+                                }
+                                // A named placeholder can only survive parsing
+                                // when no arguments were declared
+                                None => {
+                                    return plan_err!(
+                                        "Unknown placeholder: {}",
+                                        placeholder.id
+                                    );
+                                }
+                            }
+                        }
+                        Ok(TreeNodeRecursion::Continue)
+                    })?;
+                }
+
                 let params = CreateFunctionBody {
                     language,
                     behavior: behavior.map(|b| match b {
