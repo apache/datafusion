@@ -187,7 +187,7 @@ use datafusion_common::{
     assert_eq_or_internal_err, internal_err, not_impl_err,
 };
 use datafusion_execution::TaskContext;
-use datafusion_expr::{Accumulator, Aggregate};
+use datafusion_expr::{Accumulator, Aggregate, AggregateMetrics};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, lit};
@@ -3021,6 +3021,18 @@ pub fn create_accumulators(
     aggr_expr
         .iter()
         .map(|expr| expr.create_accumulator())
+        .collect()
+}
+
+pub(crate) fn create_accumulators_with_metrics(
+    aggr_expr: &[Arc<AggregateFunctionExpr>],
+    aggregate_metrics: &[Arc<dyn AggregateMetrics>],
+) -> Result<Vec<AccumulatorItem>> {
+    debug_assert_eq!(aggr_expr.len(), aggregate_metrics.len());
+    aggr_expr
+        .iter()
+        .zip(aggregate_metrics)
+        .map(|(expr, metrics)| expr.create_accumulator_with_metrics(Arc::clone(metrics)))
         .collect()
 }
 

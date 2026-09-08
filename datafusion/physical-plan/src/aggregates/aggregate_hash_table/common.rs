@@ -88,6 +88,9 @@ pub(in crate::aggregates) struct AggregateHashTable<AggrMode> {
     /// Per-aggregate timing metrics for accumulator operations.
     pub(super) aggregate_accumulator_metrics: Arc<AggregateAccumulatorMetrics>,
 
+    /// Optional internal metrics owned by each aggregate expression.
+    pub(super) aggregate_submetrics: Vec<Arc<dyn datafusion_expr::AggregateMetrics>>,
+
     /// Raw input schema, used to evaluate expressions and synthesize empty
     /// grouping-set rows.
     pub(super) input_schema: SchemaRef,
@@ -123,6 +126,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         }
 
         let input_schema = agg.input().schema();
+        let metrics = AggregateTableMetrics::new(agg, partition);
         let aggregate_arguments = aggregate_expressions(
             &agg.aggr_expr,
             &agg.mode,
@@ -133,13 +137,16 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             .iter()
             .zip(aggregate_arguments)
             .zip(filters)
-            .map(|((agg_expr, arguments), filter)| {
-                let accumulator = create_group_accumulator(agg_expr)?;
+            .zip(metrics.submetrics.iter())
+            .map(|(((agg_expr, arguments), filter), submetrics)| {
+                let accumulator =
+                    create_group_accumulator(agg_expr, Arc::clone(submetrics))?;
                 Ok(HashAggregateAccumulator::new(
                     Arc::clone(agg_expr),
                     arguments,
                     filter,
                     accumulator,
+                    Arc::clone(submetrics),
                 ))
             })
             .collect::<Result<_>>()?;
@@ -147,12 +154,11 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         let group_schema = agg.group_by.group_schema(&input_schema)?;
         let group_values = new_group_values(group_schema, &GroupOrdering::None)?;
 
-        let metrics = AggregateTableMetrics::new(agg, partition);
-
         Ok(Self {
             group_by_metrics: metrics.group_by,
             aggregate_argument_metrics: metrics.aggregate_arguments,
             aggregate_accumulator_metrics: metrics.accumulator,
+            aggregate_submetrics: metrics.submetrics,
             input_schema,
             output_schema,
             state_schema,
@@ -502,6 +508,9 @@ pub(super) struct HashAggregateAccumulator {
 
     /// Accumulator state for all groups for one aggregate expression.
     accumulator: Box<dyn GroupsAccumulator>,
+
+    /// Optional internal metrics owned by this aggregate expression.
+    submetrics: Arc<dyn datafusion_expr::AggregateMetrics>,
 }
 
 pub(super) type AggregateAccumulator = HashAggregateAccumulator;
@@ -639,24 +648,28 @@ impl HashAggregateAccumulator {
         arguments: Vec<Arc<dyn PhysicalExpr>>,
         filter: Option<Arc<dyn PhysicalExpr>>,
         accumulator: Box<dyn GroupsAccumulator>,
+        submetrics: Arc<dyn datafusion_expr::AggregateMetrics>,
     ) -> Self {
         Self {
             aggregate_expr,
             arguments,
             filter,
             accumulator,
+            submetrics,
         }
     }
 
     /// Construct a new accumulator with the same definition, but with empty internal
     /// state buffers (empty [`GroupsAccumulator`]).
     pub(super) fn empty_like(&self) -> Result<Self> {
-        let accumulator = create_group_accumulator(&self.aggregate_expr)?;
+        let accumulator =
+            create_group_accumulator(&self.aggregate_expr, Arc::clone(&self.submetrics))?;
         Ok(Self::new(
             Arc::clone(&self.aggregate_expr),
             self.arguments.clone(),
             self.filter.clone(),
             accumulator,
+            Arc::clone(&self.submetrics),
         ))
     }
 

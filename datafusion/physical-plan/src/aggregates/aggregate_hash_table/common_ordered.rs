@@ -52,6 +52,7 @@ pub(in crate::aggregates) struct OrderedAggregateTableMetrics {
     pub(super) group_by: GroupByMetrics,
     pub(super) aggregate_arguments: AggregateArgumentMetrics,
     pub(super) accumulator: Arc<AggregateAccumulatorMetrics>,
+    pub(super) submetrics: Vec<Arc<dyn datafusion_expr::AggregateMetrics>>,
 }
 
 impl OrderedAggregateTableMetrics {
@@ -61,6 +62,7 @@ impl OrderedAggregateTableMetrics {
             group_by: metrics.group_by,
             aggregate_arguments: metrics.aggregate_arguments,
             accumulator: metrics.accumulator,
+            submetrics: metrics.submetrics,
         }
     }
 
@@ -71,6 +73,7 @@ impl OrderedAggregateTableMetrics {
             group_by: table.group_by_metrics.clone(),
             aggregate_arguments: table.aggregate_argument_metrics.clone(),
             accumulator: Arc::clone(&table.aggregate_accumulator_metrics),
+            submetrics: table.aggregate_submetrics.clone(),
         }
     }
 }
@@ -137,6 +140,9 @@ pub(in crate::aggregates) struct OrderedAggregateTable<OrderedAggrMode> {
 
     /// Per-aggregate timing metrics for accumulator operations.
     pub(super) aggregate_accumulator_metrics: Arc<AggregateAccumulatorMetrics>,
+
+    /// Optional internal metrics owned by each aggregate expression.
+    pub(super) aggregate_submetrics: Vec<Arc<dyn datafusion_expr::AggregateMetrics>>,
 
     /// Group keys, ordering state, and accumulator states.
     pub(super) buffer: OrderedAggregateTableBuffer,
@@ -207,13 +213,16 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             .iter()
             .zip(aggregate_arguments)
             .zip(filters)
-            .map(|((agg_expr, arguments), filter)| {
-                let accumulator = create_group_accumulator(agg_expr)?;
+            .zip(metrics.submetrics.iter())
+            .map(|(((agg_expr, arguments), filter), submetrics)| {
+                let accumulator =
+                    create_group_accumulator(agg_expr, Arc::clone(submetrics))?;
                 Ok(AggregateAccumulator::new(
                     Arc::clone(agg_expr),
                     arguments,
                     filter,
                     accumulator,
+                    Arc::clone(submetrics),
                 ))
             })
             .collect::<Result<_>>()?;
@@ -225,6 +234,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             group_by_metrics: metrics.group_by,
             aggregate_argument_metrics: metrics.aggregate_arguments,
             aggregate_accumulator_metrics: metrics.accumulator,
+            aggregate_submetrics: metrics.submetrics,
             buffer: OrderedAggregateTableBuffer {
                 group_by: Arc::clone(&agg.group_by),
                 group_ordering,
@@ -308,6 +318,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             group_by: self.group_by_metrics.clone(),
             aggregate_arguments: self.aggregate_argument_metrics.clone(),
             accumulator: Arc::clone(&self.aggregate_accumulator_metrics),
+            submetrics: self.aggregate_submetrics.clone(),
         }
     }
 
