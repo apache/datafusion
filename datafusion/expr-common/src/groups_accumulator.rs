@@ -571,12 +571,22 @@ impl BlocksIndex {
 
     #[inline(always)]
     pub fn block_index(&self, block_size: usize) -> usize {
-        self.flat_index / block_size
+        // Block sizes are batch sizes, almost always a power of two, and this runs per
+        // row in every accumulator and group values loop: a shift beats a division
+        if block_size.is_power_of_two() {
+            self.flat_index >> block_size.trailing_zeros()
+        } else {
+            self.flat_index / block_size
+        }
     }
 
     #[inline(always)]
     pub fn index_in_block(&self, block_size: usize) -> usize {
-        self.flat_index % block_size
+        if block_size.is_power_of_two() {
+            self.flat_index & (block_size - 1)
+        } else {
+            self.flat_index % block_size
+        }
     }
 
     #[inline(always)]

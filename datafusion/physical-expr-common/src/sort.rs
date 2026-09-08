@@ -24,6 +24,7 @@
 //! Adapted from `arrow_ord::sort`.
 
 use std::cmp::Ordering;
+use std::sync::Arc;
 
 use arrow::array::{
     Array, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, BooleanArray, ByteView,
@@ -37,6 +38,7 @@ use arrow::datatypes::{
 };
 use arrow::downcast_primitive_array;
 use arrow::error::ArrowError;
+use arrow::row::{RowConverter, Rows, SortField};
 
 /// `(array index, row index in that array)`, the shape [`interleave`] takes
 pub type ArrayRowIndex = (usize, usize);
@@ -152,8 +154,23 @@ pub fn lexsort_to_indices(
             ));
         }
     }
+    if first.values.is_empty() {
+        return Ok(Vec::new());
+    }
     if columns.len() == 1 {
         return sort_to_indices(&first.values, first.options, limit);
+    }
+    let fields = columns
+        .iter()
+        .map(|column| {
+            SortField::new_with_options(
+                column.values[0].data_type().clone(),
+                column.options.unwrap_or_default(),
+            )
+        })
+        .collect::<Vec<_>>();
+    if RowConverter::supports_fields(&fields) {
+        return sort_by_rows(columns, fields, limit);
     }
     sort_by_comparators(columns, limit)
 }
@@ -383,6 +400,95 @@ fn sort_impl<K: Copy>(
 
 /// Sorts every row of `columns` with one arrow comparator per column and pair of arrays,
 /// the fallback for types without a typed path and for multi column sorts
+/// Multi column sort through the row format: every array is encoded to rows on its own
+/// (nothing is concatenated) and rows compare as plain bytes, which is far cheaper than
+/// a chain of dynamic comparators per column
+fn sort_by_rows(
+    columns: &[SortColumn],
+    fields: Vec<SortField>,
+    limit: Option<usize>,
+) -> Result<Vec<ArrayRowIndex>, ArrowError> {
+    let converter = RowConverter::new(fields)?;
+    let rows = (0..columns[0].values.len())
+        .map(|array_index| {
+            let arrays = columns
+                .iter()
+                .map(|column| Arc::clone(&column.values[array_index]))
+                .collect::<Vec<_>>();
+            converter.convert_columns(&arrays)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Fixed width rows are compared as one or two big endian integers carried next to
+    // the index, which beats a `memcmp` through two pointer chases per comparison
+    let fixed_width = columns
+        .iter()
+        .map(|column| match column.values[0].data_type() {
+            DataType::Boolean => Some(1 + 1),
+            data_type => data_type.primitive_width().map(|width| 1 + width),
+        })
+        .sum::<Option<usize>>();
+    match fixed_width {
+        Some(width) if width <= 16 => {
+            return Ok(sort_by_fixed_rows(&rows, limit, |row| {
+                let mut key = [0u8; 16];
+                key[..width].copy_from_slice(row);
+                u128::from_be_bytes(key)
+            }));
+        }
+        Some(width) if width <= 32 => {
+            return Ok(sort_by_fixed_rows(&rows, limit, |row| {
+                let mut key = [0u8; 32];
+                key[..width].copy_from_slice(row);
+                let (high, low) = key.split_at(16);
+                (
+                    u128::from_be_bytes(high.try_into().unwrap()),
+                    u128::from_be_bytes(low.try_into().unwrap()),
+                )
+            }));
+        }
+        _ => {}
+    }
+
+    let mut indices: Vec<ArrayRowIndex> = rows
+        .iter()
+        .enumerate()
+        .flat_map(|(array_index, rows)| (0..rows.num_rows()).map(move |row| (array_index, row)))
+        .collect();
+    let len = limit.unwrap_or(indices.len()).min(indices.len());
+    sort_unstable_by(&mut indices, len, |a, b| {
+        // SAFETY: the indices were built from the row counts of these very `rows`
+        unsafe {
+            rows.get_unchecked(a.0)
+                .row_unchecked(a.1)
+                .cmp(&rows.get_unchecked(b.0).row_unchecked(b.1))
+        }
+    });
+    indices.truncate(len);
+    Ok(indices)
+}
+
+/// Sorts rows of one fixed width by the integer key `make_key` builds from their bytes
+fn sort_by_fixed_rows<K: Ord + Copy>(
+    rows: &[Rows],
+    limit: Option<usize>,
+    make_key: impl Fn(&[u8]) -> K,
+) -> Vec<ArrayRowIndex> {
+    let make_key = &make_key;
+    let mut keyed: Vec<(K, ArrayRowIndex)> = rows
+        .iter()
+        .enumerate()
+        .flat_map(|(array_index, rows)| {
+            rows.iter()
+                .enumerate()
+                .map(move |(row_index, row)| (make_key(row.as_ref()), (array_index, row_index)))
+        })
+        .collect();
+    let len = limit.unwrap_or(keyed.len()).min(keyed.len());
+    sort_unstable_by(&mut keyed, len, |a, b| a.0.cmp(&b.0));
+    keyed.into_iter().take(len).map(|(_, index)| index).collect()
+}
+
 fn sort_by_comparators(
     columns: &[SortColumn],
     limit: Option<usize>,
@@ -457,7 +563,8 @@ where
 mod tests {
     use super::*;
     use arrow::array::{
-        ArrayRef, BooleanArray, DictionaryArray, Int32Array, StringArray, StringViewArray,
+        ArrayRef, BooleanArray, DictionaryArray, Int32Array, Int64Array, StringArray,
+        StringViewArray,
     };
     use arrow::compute::{
         SortColumn as ArrowSortColumn, cast, concat, lexsort_to_indices as arrow_lexsort_to_indices,
@@ -656,6 +763,71 @@ mod tests {
                         &concat(&gathered).unwrap(),
                         &take(&whole_views, &expected, None).unwrap()
                     );
+                }
+            }
+        }
+    }
+
+    /// Fixed width columns take the integer key paths (one `u128` up to 16 bytes of row,
+    /// two above that), check both against arrow on the concatenated input
+    #[test]
+    fn fixed_width_lexsort_matches_arrow_on_concatenated_input() {
+        let mut rng = Lcg(29);
+        let mut column = |distinct: u64, wide: bool| -> Vec<ArrayRef> {
+            LENGTHS
+                .iter()
+                .map(|&len| {
+                    if wide {
+                        let values = (0..len).map(|_| {
+                            let value = rng.below(distinct) as i64 - 1;
+                            rng.maybe(value)
+                        });
+                        Arc::new(Int64Array::from(values.collect::<Vec<_>>())) as ArrayRef
+                    } else {
+                        let values = (0..len).map(|_| {
+                            let value = rng.below(distinct) as i32 - 1;
+                            rng.maybe(value)
+                        });
+                        Arc::new(Int32Array::from(values.collect::<Vec<_>>())) as ArrayRef
+                    }
+                })
+                .collect()
+        };
+        // 5 + 9 = 14 bytes per row, and 5 + 9 + 9 = 23 bytes per row
+        let two = vec![column(3, false), column(4, true)];
+        let three = vec![column(3, false), column(3, true), column(50, true)];
+        for columns in [two, three] {
+            let whole: Vec<ArrayRef> = columns
+                .iter()
+                .map(|arrays| {
+                    let refs: Vec<&dyn Array> = arrays.iter().map(|a| a.as_ref()).collect();
+                    concat(&refs).unwrap()
+                })
+                .collect();
+            for first_options in all_options() {
+                for rest_options in all_options() {
+                    for limit in [None, Some(7)] {
+                        let options = |i: usize| if i == 0 { first_options } else { rest_options };
+                        let sort_columns: Vec<SortColumn> = columns
+                            .iter()
+                            .enumerate()
+                            .map(|(i, values)| SortColumn { values: values.clone(), options: options(i) })
+                            .collect();
+                        let ours = lexsort_to_indices(&sort_columns, limit).unwrap();
+                        let arrow_columns: Vec<ArrowSortColumn> = whole
+                            .iter()
+                            .enumerate()
+                            .map(|(i, values)| ArrowSortColumn { values: Arc::clone(values), options: options(i) })
+                            .collect();
+                        let expected = arrow_lexsort_to_indices(&arrow_columns, limit).unwrap();
+                        for (arrays, whole) in columns.iter().zip(&whole) {
+                            let refs: Vec<&dyn Array> = arrays.iter().map(|a| a.as_ref()).collect();
+                            assert_eq!(
+                                &interleave(&refs, &ours).unwrap(),
+                                &take(whole, &expected, None).unwrap()
+                            );
+                        }
+                    }
                 }
             }
         }

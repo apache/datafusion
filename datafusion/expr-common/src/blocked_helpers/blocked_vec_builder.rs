@@ -17,6 +17,24 @@ const RESERVED_BYTES: usize = 10 << 30;
 /// Smallest reservation worth falling back to
 const MIN_RESERVED_BYTES: usize = 64 << 20;
 
+/// Every builder starts in a small mapping on 4K pages and relocates into a
+/// `RESERVED_BYTES` huge page mapping only once it outgrows it. Tearing down a mapping
+/// costs the kernel time proportional to its size (page table walk, TLB shootdown), so
+/// the hundreds of tiny builders a small aggregation creates per query must not each
+/// map and unmap gigabytes, and must not each hold a 2MB huge page either
+const SMALL_REGION_BYTES: usize = 256 << 10;
+
+/// Retired small mappings kept for reuse, dirty, so reusing one costs no syscall at
+/// all. Bounded, the rest are unmapped as usual. Shared across threads because tokio
+/// moves a partition between workers, so per thread pools drain on some and overflow
+/// on others
+static POOL: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+const POOL_MAX: usize = 256;
+
+fn pool() -> std::sync::MutexGuard<'static, Vec<usize>> {
+    POOL.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// Anonymous private mapping shared between a builder and the blocks it handed out.
 ///
 /// Pages are returned to the OS from the front once neither the builder (everything
@@ -26,6 +44,8 @@ struct Region {
     base: *mut u8,
     cap: usize,
     page: usize,
+    /// A `SMALL_REGION_BYTES` mapping on 4K pages, pooled when dropped
+    small: bool,
     state: Mutex<RegionState>,
 }
 
@@ -49,6 +69,12 @@ impl Region {
     /// Reserve `cap` bytes, settling for less (down to `min`) when the kernel refuses
     fn map(cap: usize, min: usize) -> Arc<Self> {
         let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
+        let small = cap == SMALL_REGION_BYTES;
+        if small {
+            if let Some(base) = pool().pop() {
+                return Self::new(base as *mut u8, cap, page, small);
+            }
+        }
         let mut cap = cap.next_multiple_of(page);
         let base = loop {
             let base = unsafe {
@@ -72,13 +98,20 @@ impl Region {
         // many more TLB misses on the random access the hash tables do, while the
         // global allocator's memory is already huge page backed
         #[cfg(target_os = "linux")]
-        unsafe {
-            libc::madvise(base, cap, libc::MADV_HUGEPAGE);
+        if !small {
+            unsafe {
+                libc::madvise(base, cap, libc::MADV_HUGEPAGE);
+            }
         }
+        Self::new(base.cast::<u8>(), cap, page, small)
+    }
+
+    fn new(base: *mut u8, cap: usize, page: usize, small: bool) -> Arc<Self> {
         Arc::new(Self {
-            base: base.cast::<u8>(),
+            base,
             cap,
             page,
+            small,
             state: Mutex::new(RegionState {
                 head: 0,
                 unmapped: 0,
@@ -125,6 +158,10 @@ impl Region {
     /// Return every whole page nobody needs anymore to the OS
     fn sweep(&self, state: &mut RegionState) {
         let first_live_block = state.live_blocks.keys().next().copied();
+        // A small region is pooled or unmapped whole once nothing uses it anymore
+        if self.small {
+            return;
+        }
         let free_end =
             state.head.min(first_live_block.unwrap_or(usize::MAX)) & !(self.page - 1);
         if free_end > state.unmapped {
@@ -142,9 +179,21 @@ impl Region {
 
 impl Drop for Region {
     fn drop(&mut self) {
-        let unmapped = self.state.lock().unwrap().unmapped;
-        if self.cap > unmapped {
-            unsafe { libc::munmap(self.base.add(unmapped).cast(), self.cap - unmapped) };
+        let state = match self.state.get_mut() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if self.small {
+            let mut pool = pool();
+            if pool.len() < POOL_MAX {
+                pool.push(self.base as usize);
+                return;
+            }
+        }
+        if self.cap > state.unmapped {
+            unsafe {
+                libc::munmap(self.base.add(state.unmapped).cast(), self.cap - state.unmapped)
+            };
         }
     }
 }
@@ -287,7 +336,7 @@ impl<const FIXED_BLOCK_SIZING: bool, T: Copy>
     const ITEM: usize = size_of::<T>();
 
     pub fn new(block_size: usize) -> Self {
-        Self::with_reservation(block_size, RESERVED_BYTES)
+        Self::with_reservation(block_size, SMALL_REGION_BYTES)
     }
 
     /// Reserve `reserved_bytes` of address space instead of the default
@@ -576,7 +625,8 @@ impl<const FIXED_BLOCK_SIZING: bool, T: Copy>
     fn relocate(&mut self, extra: usize) {
         let live = self.len();
         let need = (live + extra) * Self::ITEM;
-        let mut cap = self.region.cap;
+        // Leaving the small mapping goes straight to the full reservation
+        let mut cap = self.region.cap.max(RESERVED_BYTES);
         while cap < need.saturating_mul(2) {
             cap *= 2;
         }

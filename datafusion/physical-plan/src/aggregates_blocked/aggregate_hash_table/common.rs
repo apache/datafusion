@@ -353,6 +353,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
     ) -> Result<Vec<RecordBatch>> {
         let state_schema = Arc::clone(&self.state_schema);
         let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
+        let batch_size = self.batch_size;
         let state = self.state.building_mut();
 
         let timer = self.group_by_metrics.emitting_time.timer();
@@ -372,10 +373,11 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         }
         drop(timer);
 
-        // `emit_all` resets accumulator state. Explicitly shrink the key/index
-        // buffers too so the memory reservation can be released before the
-        // batches are sorted for spilling.
-        state.group_values.clear_shrink(0);
+        // `emit_all` resets accumulator state. Shrink the key/index buffers to one
+        // batch worth of groups (what the non blocked path does): enough to skip the
+        // first few rehashes when the groups come back after a spill, small enough that
+        // the released memory lets the partial side keep going under a tight pool
+        state.group_values.clear_shrink(batch_size);
         state.batch_group_indices.clear();
         state.batch_group_indices.shrink_to_fit();
 
