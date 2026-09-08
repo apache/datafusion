@@ -183,8 +183,8 @@ fn common_dictionary_value_type(
 }
 
 // Same family (both signed or both unsigned): return the wider member.
-// Mixed: return the smallest signed type covering the larger capacity; Int64 is the ceiling
-// because Parquet only supports signed integer dictionary key types.
+// Mixed: return the type with the larger capacity. For the UInt64+Int64 case
+// this is UInt64 since arrow-rs supports both signed and unsigned dictionary keys.
 // Returns None only for non-integer key types.
 fn common_dictionary_key_type(a: &DataType, b: &DataType) -> Option<DataType> {
     fn key_capacity(dt: &DataType) -> Option<u128> {
@@ -216,7 +216,8 @@ fn common_dictionary_key_type(a: &DataType, b: &DataType) -> Option<DataType> {
         c if c <= (1u128 << 7) => DataType::Int8,
         c if c <= (1u128 << 15) => DataType::Int16,
         c if c <= (1u128 << 31) => DataType::Int32,
-        _ => DataType::Int64,
+        c if c <= (1u128 << 63) => DataType::Int64,
+        _ => DataType::UInt64,
     })
 }
 
@@ -1317,11 +1318,11 @@ mod tests {
                 dk(DataType::Int16),
             ),
             (
-                "uint64+int64→int64",
+                "uint64+int64→uint64",
                 dk(DataType::UInt64),
                 dk(DataType::Int64),
-                dk(DataType::Int64),
-                dk(DataType::Int64),
+                dk(DataType::UInt64),
+                dk(DataType::UInt64),
             ),
         ];
         for (name, a, b, exp_a, exp_b) in cases {
