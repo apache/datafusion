@@ -5884,7 +5884,7 @@ dependencies = [
 [[package]]
 name = "sqlparser"
 version = "0.63.0"
-source = "git+https://github.com/alamb/sqlparser-rs?rev=6f9dfd3611449d142208946ba74ffc6687e6c4aa#6f9dfd3611449d142208946ba74ffc6687e6c4aa"
+source = "git+https://github.com/alamb/sqlparser-rs?rev=1bff16cd9af5319ee854755e695869246ebcd180#1bff16cd9af5319ee854755e695869246ebcd180"
 dependencies = [
  "log",
  "recursive",
@@ -5893,8 +5893,8 @@ dependencies = [
 
 [[package]]
 name = "sqlparser_derive"
-version = "0.5.0"
-source = "git+https://github.com/alamb/sqlparser-rs?rev=6f9dfd3611449d142208946ba74ffc6687e6c4aa#6f9dfd3611449d142208946ba74ffc6687e6c4aa"
+version = "0.6.0"
+source = "git+https://github.com/alamb/sqlparser-rs?rev=1bff16cd9af5319ee854755e695869246ebcd180#1bff16cd9af5319ee854755e695869246ebcd180"
 dependencies = [
  "proc-macro2",
  "quote",
