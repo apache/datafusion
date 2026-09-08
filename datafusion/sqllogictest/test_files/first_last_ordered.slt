@@ -95,3 +95,46 @@ FROM multiple_ordered_table GROUP BY a ORDER BY a;
 
 statement ok
 DROP TABLE multiple_ordered_table;
+
+# With grouping sets the same rows are fed once per grouping set, and within a
+# coarser set's group the rows are ordered by the full group-by prefix rather
+# than the aggregate's ORDER BY. The rule must not mark first/last aggregates
+# pre-ordered there (github.com/apache/datafusion/pull/25050 review): input
+# below is ordered on (a, b, c) but within the ROLLUP's (a) set, group a=1
+# arrives ordered by (b, c), so FIRST/LAST over `ORDER BY c` need comparisons.
+
+statement ok
+COPY (VALUES (1, 1, 5, 100), (1, 1, 6, 101), (1, 2, 1, 200), (1, 2, 2, 201))
+TO 'test_files/scratch/first_last_ordered/rollup.csv'
+OPTIONS ('format.has_header' 'false');
+
+statement ok
+CREATE EXTERNAL TABLE rollup_source (a INT, b INT, c INT, d INT)
+STORED AS CSV
+LOCATION 'test_files/scratch/first_last_ordered/rollup.csv'
+WITH ORDER (a ASC, b ASC, c ASC)
+OPTIONS ('format.has_header' 'false');
+
+query IIII
+SELECT a, b, FIRST_VALUE(d ORDER BY c), LAST_VALUE(d ORDER BY c)
+FROM rollup_source GROUP BY ROLLUP(a, b) ORDER BY a NULLS FIRST, b NULLS FIRST;
+----
+NULL NULL 200 101
+1 NULL 200 101
+1 1 100 101
+1 2 200 201
+
+# An aggregate ORDER BY that is satisfied without any group-by prefix stays on
+# the fast path even under ROLLUP: `a` leads the input ordering, so it is
+# ordered inside every group of every grouping set.
+query III
+SELECT a, b, LAST_VALUE(d ORDER BY a)
+FROM rollup_source GROUP BY ROLLUP(a, b) ORDER BY a NULLS FIRST, b NULLS FIRST;
+----
+NULL NULL 201
+1 NULL 201
+1 1 101
+1 2 201
+
+statement ok
+DROP TABLE rollup_source;
