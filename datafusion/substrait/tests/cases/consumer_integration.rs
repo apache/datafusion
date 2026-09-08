@@ -79,12 +79,18 @@ mod tests {
 
     #[tokio::test]
     async fn tpch_test_01() -> Result<()> {
-        // This fixture declares a decimal result type the native operator cannot provide.
-        let err = tpch_plan_to_string(1).await.unwrap_err();
+        let plan_str = tpch_plan_to_string(1).await?;
         assert_snapshot!(
-            err,
-            @"Substrait error: Decimal return type mismatch for multiply:dec_dec (function reference 2): declared Decimal128(19, 4), but native expression LINEITEM.L_EXTENDEDPRICE * (CAST(Int32(1) AS Decimal128(15, 2)) - LINEITEM.L_DISCOUNT) derives Decimal128(32, 4); this conversion is unsupported"
-        );
+        plan_str,
+        @r#"
+        Projection: LINEITEM.L_RETURNFLAG, LINEITEM.L_LINESTATUS, sum(LINEITEM.L_QUANTITY) AS SUM_QTY, sum(LINEITEM.L_EXTENDEDPRICE) AS SUM_BASE_PRICE, sum(multiply(LINEITEM.L_EXTENDEDPRICE,Int32(1) - LINEITEM.L_DISCOUNT)) AS SUM_DISC_PRICE, sum(multiply(multiply(LINEITEM.L_EXTENDEDPRICE,Int32(1) - LINEITEM.L_DISCOUNT),Int32(1) + LINEITEM.L_TAX)) AS SUM_CHARGE, avg(LINEITEM.L_QUANTITY) AS AVG_QTY, avg(LINEITEM.L_EXTENDEDPRICE) AS AVG_PRICE, avg(LINEITEM.L_DISCOUNT) AS AVG_DISC, count(Int64(1)) AS COUNT_ORDER
+          Sort: LINEITEM.L_RETURNFLAG ASC NULLS LAST, LINEITEM.L_LINESTATUS ASC NULLS LAST
+            Aggregate: groupBy=[[LINEITEM.L_RETURNFLAG, LINEITEM.L_LINESTATUS]], aggr=[[sum(LINEITEM.L_QUANTITY), sum(LINEITEM.L_EXTENDEDPRICE), sum(multiply(LINEITEM.L_EXTENDEDPRICE,Int32(1) - LINEITEM.L_DISCOUNT)), sum(multiply(multiply(LINEITEM.L_EXTENDEDPRICE,Int32(1) - LINEITEM.L_DISCOUNT),Int32(1) + LINEITEM.L_TAX)), avg(LINEITEM.L_QUANTITY), avg(LINEITEM.L_EXTENDEDPRICE), avg(LINEITEM.L_DISCOUNT), count(Int64(1))]]
+              Projection: LINEITEM.L_RETURNFLAG, LINEITEM.L_LINESTATUS, LINEITEM.L_QUANTITY, LINEITEM.L_EXTENDEDPRICE, multiply(LINEITEM.L_EXTENDEDPRICE, CAST(Int32(1) AS Decimal128(15, 2)) - LINEITEM.L_DISCOUNT), multiply(multiply(LINEITEM.L_EXTENDEDPRICE, CAST(Int32(1) AS Decimal128(15, 2)) - LINEITEM.L_DISCOUNT), CAST(Int32(1) AS Decimal128(15, 2)) + LINEITEM.L_TAX), LINEITEM.L_DISCOUNT
+                Filter: LINEITEM.L_SHIPDATE <= Date32("1998-12-01") - IntervalDayTime("IntervalDayTime { days: 0, milliseconds: 10368000 }")
+                  TableScan: LINEITEM
+        "#
+                );
         Ok(())
     }
 
@@ -125,12 +131,24 @@ mod tests {
 
     #[tokio::test]
     async fn tpch_test_03() -> Result<()> {
-        // This fixture declares a decimal result type the native operator cannot provide.
-        let err = tpch_plan_to_string(3).await.unwrap_err();
+        let plan_str = tpch_plan_to_string(3).await?;
         assert_snapshot!(
-            err,
-            @"Substrait error: Decimal return type mismatch for multiply:dec_dec (function reference 4): declared Decimal128(19, 4), but native expression LINEITEM.L_EXTENDEDPRICE * (CAST(Int32(1) AS Decimal128(15, 2)) - LINEITEM.L_DISCOUNT) derives Decimal128(32, 4); this conversion is unsupported"
-        );
+        plan_str,
+        @r#"
+        Projection: LINEITEM.L_ORDERKEY, sum(multiply(LINEITEM.L_EXTENDEDPRICE,Int32(1) - LINEITEM.L_DISCOUNT)) AS REVENUE, ORDERS.O_ORDERDATE, ORDERS.O_SHIPPRIORITY
+          Limit: skip=0, fetch=10
+            Sort: sum(multiply(LINEITEM.L_EXTENDEDPRICE,Int32(1) - LINEITEM.L_DISCOUNT)) DESC NULLS FIRST, ORDERS.O_ORDERDATE ASC NULLS LAST
+              Projection: LINEITEM.L_ORDERKEY, sum(multiply(LINEITEM.L_EXTENDEDPRICE,Int32(1) - LINEITEM.L_DISCOUNT)), ORDERS.O_ORDERDATE, ORDERS.O_SHIPPRIORITY
+                Aggregate: groupBy=[[LINEITEM.L_ORDERKEY, ORDERS.O_ORDERDATE, ORDERS.O_SHIPPRIORITY]], aggr=[[sum(multiply(LINEITEM.L_EXTENDEDPRICE,Int32(1) - LINEITEM.L_DISCOUNT))]]
+                  Projection: LINEITEM.L_ORDERKEY, ORDERS.O_ORDERDATE, ORDERS.O_SHIPPRIORITY, multiply(LINEITEM.L_EXTENDEDPRICE, CAST(Int32(1) AS Decimal128(15, 2)) - LINEITEM.L_DISCOUNT)
+                    Filter: CUSTOMER.C_MKTSEGMENT = Utf8("BUILDING") AND CUSTOMER.C_CUSTKEY = ORDERS.O_CUSTKEY AND LINEITEM.L_ORDERKEY = ORDERS.O_ORDERKEY AND ORDERS.O_ORDERDATE < CAST(Utf8("1995-03-15") AS Date32) AND LINEITEM.L_SHIPDATE > CAST(Utf8("1995-03-15") AS Date32)
+                      Cross Join:
+                        Cross Join:
+                          TableScan: LINEITEM
+                          TableScan: CUSTOMER
+                        TableScan: ORDERS
+        "#
+                );
         Ok(())
     }
 
@@ -156,23 +174,43 @@ mod tests {
 
     #[tokio::test]
     async fn tpch_test_05() -> Result<()> {
-        // This fixture declares a decimal result type the native operator cannot provide.
-        let err = tpch_plan_to_string(5).await.unwrap_err();
+        let plan_str = tpch_plan_to_string(5).await?;
         assert_snapshot!(
-            err,
-            @"Substrait error: Decimal return type mismatch for multiply:dec_dec (function reference 4): declared Decimal128(19, 4), but native expression LINEITEM.L_EXTENDEDPRICE * (CAST(Int32(1) AS Decimal128(15, 2)) - LINEITEM.L_DISCOUNT) derives Decimal128(32, 4); this conversion is unsupported"
-        );
+        plan_str,
+        @r#"
+        Projection: NATION.N_NAME, sum(multiply(LINEITEM.L_EXTENDEDPRICE,Int32(1) - LINEITEM.L_DISCOUNT)) AS REVENUE
+          Sort: sum(multiply(LINEITEM.L_EXTENDEDPRICE,Int32(1) - LINEITEM.L_DISCOUNT)) DESC NULLS FIRST
+            Aggregate: groupBy=[[NATION.N_NAME]], aggr=[[sum(multiply(LINEITEM.L_EXTENDEDPRICE,Int32(1) - LINEITEM.L_DISCOUNT))]]
+              Projection: NATION.N_NAME, multiply(LINEITEM.L_EXTENDEDPRICE, CAST(Int32(1) AS Decimal128(15, 2)) - LINEITEM.L_DISCOUNT)
+                Filter: CUSTOMER.C_CUSTKEY = ORDERS.O_CUSTKEY AND LINEITEM.L_ORDERKEY = ORDERS.O_ORDERKEY AND LINEITEM.L_SUPPKEY = SUPPLIER.S_SUPPKEY AND CUSTOMER.C_NATIONKEY = SUPPLIER.S_NATIONKEY AND SUPPLIER.S_NATIONKEY = NATION.N_NATIONKEY AND NATION.N_REGIONKEY = REGION.R_REGIONKEY AND REGION.R_NAME = Utf8("ASIA") AND ORDERS.O_ORDERDATE >= CAST(Utf8("1994-01-01") AS Date32) AND ORDERS.O_ORDERDATE < CAST(Utf8("1995-01-01") AS Date32)
+                  Cross Join:
+                    Cross Join:
+                      Cross Join:
+                        Cross Join:
+                          Cross Join:
+                            TableScan: CUSTOMER
+                            TableScan: ORDERS
+                          TableScan: LINEITEM
+                        TableScan: SUPPLIER
+                      TableScan: NATION
+                    TableScan: REGION
+        "#
+                );
         Ok(())
     }
 
     #[tokio::test]
     async fn tpch_test_06() -> Result<()> {
-        // This fixture declares a decimal result type the native operator cannot provide.
-        let err = tpch_plan_to_string(6).await.unwrap_err();
+        let plan_str = tpch_plan_to_string(6).await?;
         assert_snapshot!(
-            err,
-            @"Substrait error: Decimal return type mismatch for multiply:dec_dec (function reference 6): declared Decimal128(19, 4), but native expression LINEITEM.L_EXTENDEDPRICE * LINEITEM.L_DISCOUNT derives Decimal128(31, 4); this conversion is unsupported"
-        );
+        plan_str,
+        @r#"
+        Aggregate: groupBy=[[]], aggr=[[sum(multiply(LINEITEM.L_EXTENDEDPRICE,LINEITEM.L_DISCOUNT)) AS REVENUE]]
+          Projection: multiply(LINEITEM.L_EXTENDEDPRICE, LINEITEM.L_DISCOUNT)
+            Filter: LINEITEM.L_SHIPDATE >= CAST(Utf8("1994-01-01") AS Date32) AND LINEITEM.L_SHIPDATE < CAST(Utf8("1995-01-01") AS Date32) AND LINEITEM.L_DISCOUNT >= Decimal128(0.05,3,2) AND LINEITEM.L_DISCOUNT <= Decimal128(0.07,3,2) AND LINEITEM.L_QUANTITY < CAST(Int32(24) AS Decimal128(15, 2))
+              TableScan: LINEITEM
+        "#
+                );
         Ok(())
     }
 
@@ -202,23 +240,58 @@ mod tests {
 
     #[tokio::test]
     async fn tpch_test_10() -> Result<()> {
-        // This fixture declares a decimal result type the native operator cannot provide.
-        let err = tpch_plan_to_string(10).await.unwrap_err();
+        let plan_str = tpch_plan_to_string(10).await?;
         assert_snapshot!(
-            err,
-            @"Substrait error: Decimal return type mismatch for multiply:dec_dec (function reference 4): declared Decimal128(19, 4), but native expression LINEITEM.L_EXTENDEDPRICE * (CAST(Int32(1) AS Decimal128(15, 2)) - LINEITEM.L_DISCOUNT) derives Decimal128(32, 4); this conversion is unsupported"
-        );
+        plan_str,
+        @r#"
+        Projection: CUSTOMER.C_CUSTKEY, CUSTOMER.C_NAME, sum(multiply(LINEITEM.L_EXTENDEDPRICE,Int32(1) - LINEITEM.L_DISCOUNT)) AS REVENUE, CUSTOMER.C_ACCTBAL, NATION.N_NAME, CUSTOMER.C_ADDRESS, CUSTOMER.C_PHONE, CUSTOMER.C_COMMENT
+          Limit: skip=0, fetch=20
+            Sort: sum(multiply(LINEITEM.L_EXTENDEDPRICE,Int32(1) - LINEITEM.L_DISCOUNT)) DESC NULLS FIRST
+              Projection: CUSTOMER.C_CUSTKEY, CUSTOMER.C_NAME, sum(multiply(LINEITEM.L_EXTENDEDPRICE,Int32(1) - LINEITEM.L_DISCOUNT)), CUSTOMER.C_ACCTBAL, NATION.N_NAME, CUSTOMER.C_ADDRESS, CUSTOMER.C_PHONE, CUSTOMER.C_COMMENT
+                Aggregate: groupBy=[[CUSTOMER.C_CUSTKEY, CUSTOMER.C_NAME, CUSTOMER.C_ACCTBAL, CUSTOMER.C_PHONE, NATION.N_NAME, CUSTOMER.C_ADDRESS, CUSTOMER.C_COMMENT]], aggr=[[sum(multiply(LINEITEM.L_EXTENDEDPRICE,Int32(1) - LINEITEM.L_DISCOUNT))]]
+                  Projection: CUSTOMER.C_CUSTKEY, CUSTOMER.C_NAME, CUSTOMER.C_ACCTBAL, CUSTOMER.C_PHONE, NATION.N_NAME, CUSTOMER.C_ADDRESS, CUSTOMER.C_COMMENT, multiply(LINEITEM.L_EXTENDEDPRICE, CAST(Int32(1) AS Decimal128(15, 2)) - LINEITEM.L_DISCOUNT)
+                    Filter: CUSTOMER.C_CUSTKEY = ORDERS.O_CUSTKEY AND LINEITEM.L_ORDERKEY = ORDERS.O_ORDERKEY AND ORDERS.O_ORDERDATE >= CAST(Utf8("1993-10-01") AS Date32) AND ORDERS.O_ORDERDATE < CAST(Utf8("1994-01-01") AS Date32) AND LINEITEM.L_RETURNFLAG = Utf8("R") AND CUSTOMER.C_NATIONKEY = NATION.N_NATIONKEY
+                      Cross Join:
+                        Cross Join:
+                          Cross Join:
+                            TableScan: CUSTOMER
+                            TableScan: ORDERS
+                          TableScan: LINEITEM
+                        TableScan: NATION
+        "#
+                );
         Ok(())
     }
 
     #[tokio::test]
     async fn tpch_test_11() -> Result<()> {
-        // This fixture declares a decimal result type the native operator cannot provide.
-        let err = tpch_plan_to_string(11).await.unwrap_err();
+        let plan_str = tpch_plan_to_string(11).await?;
         assert_snapshot!(
-            err,
-            @"Substrait error: Decimal return type mismatch for multiply:dec_dec (function reference 2): declared Decimal128(19, 2), but native expression PARTSUPP.PS_SUPPLYCOST * CAST(PARTSUPP.PS_AVAILQTY AS Decimal128(19, 0)) derives Decimal128(35, 2); this conversion is unsupported"
-        );
+        plan_str,
+        @r#"
+        Projection: PARTSUPP.PS_PARTKEY, sum(multiply(PARTSUPP.PS_SUPPLYCOST,PARTSUPP.PS_AVAILQTY)) AS value
+          Sort: sum(multiply(PARTSUPP.PS_SUPPLYCOST,PARTSUPP.PS_AVAILQTY)) DESC NULLS FIRST
+            Filter: sum(multiply(PARTSUPP.PS_SUPPLYCOST,PARTSUPP.PS_AVAILQTY)) > (<subquery>)
+              Subquery:
+                Projection: multiply(sum(multiply(PARTSUPP.PS_SUPPLYCOST,PARTSUPP.PS_AVAILQTY)), Decimal128(0.0001000000,11,10))
+                  Aggregate: groupBy=[[]], aggr=[[sum(multiply(PARTSUPP.PS_SUPPLYCOST,PARTSUPP.PS_AVAILQTY))]]
+                    Projection: multiply(PARTSUPP.PS_SUPPLYCOST, CAST(PARTSUPP.PS_AVAILQTY AS Decimal128(19, 0)))
+                      Filter: PARTSUPP.PS_SUPPKEY = SUPPLIER.S_SUPPKEY AND SUPPLIER.S_NATIONKEY = NATION.N_NATIONKEY AND NATION.N_NAME = Utf8("JAPAN")
+                        Cross Join:
+                          Cross Join:
+                            TableScan: PARTSUPP
+                            TableScan: SUPPLIER
+                          TableScan: NATION
+              Aggregate: groupBy=[[PARTSUPP.PS_PARTKEY]], aggr=[[sum(multiply(PARTSUPP.PS_SUPPLYCOST,PARTSUPP.PS_AVAILQTY))]]
+                Projection: PARTSUPP.PS_PARTKEY, multiply(PARTSUPP.PS_SUPPLYCOST, CAST(PARTSUPP.PS_AVAILQTY AS Decimal128(19, 0)))
+                  Filter: PARTSUPP.PS_SUPPKEY = SUPPLIER.S_SUPPKEY AND SUPPLIER.S_NATIONKEY = NATION.N_NATIONKEY AND NATION.N_NAME = Utf8("JAPAN")
+                    Cross Join:
+                      Cross Join:
+                        TableScan: PARTSUPP
+                        TableScan: SUPPLIER
+                      TableScan: NATION
+        "#
+                );
         Ok(())
     }
 
@@ -263,12 +336,19 @@ mod tests {
 
     #[tokio::test]
     async fn tpch_test_14() -> Result<()> {
-        // This fixture declares a decimal result type the native operator cannot provide.
-        let err = tpch_plan_to_string(14).await.unwrap_err();
+        let plan_str = tpch_plan_to_string(14).await?;
         assert_snapshot!(
-            err,
-            @"Substrait error: Decimal return type mismatch for multiply:dec_dec (function reference 5): declared Decimal128(19, 4), but native expression LINEITEM.L_EXTENDEDPRICE * (CAST(Int32(1) AS Decimal128(15, 2)) - LINEITEM.L_DISCOUNT) derives Decimal128(32, 4); this conversion is unsupported"
-        );
+        plan_str,
+        @r#"
+        Projection: divide(multiply(Decimal128(100.00,5,2), sum(CASE WHEN PART.P_TYPE LIKE Utf8("PROMO%") THEN multiply(LINEITEM.L_EXTENDEDPRICE,Int32(1) - LINEITEM.L_DISCOUNT) ELSE Decimal128(0.0000,19,4) END)), sum(multiply(LINEITEM.L_EXTENDEDPRICE,Int32(1) - LINEITEM.L_DISCOUNT))) AS PROMO_REVENUE
+          Aggregate: groupBy=[[]], aggr=[[sum(CASE WHEN PART.P_TYPE LIKE Utf8("PROMO%") THEN multiply(LINEITEM.L_EXTENDEDPRICE,Int32(1) - LINEITEM.L_DISCOUNT) ELSE Decimal128(0.0000,19,4) END), sum(multiply(LINEITEM.L_EXTENDEDPRICE,Int32(1) - LINEITEM.L_DISCOUNT))]]
+            Projection: CASE WHEN PART.P_TYPE LIKE CAST(Utf8("PROMO%") AS Utf8) THEN multiply(LINEITEM.L_EXTENDEDPRICE, CAST(Int32(1) AS Decimal128(15, 2)) - LINEITEM.L_DISCOUNT) ELSE Decimal128(0.0000,19,4) END, multiply(LINEITEM.L_EXTENDEDPRICE, CAST(Int32(1) AS Decimal128(15, 2)) - LINEITEM.L_DISCOUNT)
+              Filter: LINEITEM.L_PARTKEY = PART.P_PARTKEY AND LINEITEM.L_SHIPDATE >= Date32("1995-09-01") AND LINEITEM.L_SHIPDATE < CAST(Utf8("1995-10-01") AS Date32)
+                Cross Join:
+                  TableScan: LINEITEM
+                  TableScan: PART
+        "#
+                );
         Ok(())
     }
 
@@ -305,12 +385,25 @@ mod tests {
 
     #[tokio::test]
     async fn tpch_test_17() -> Result<()> {
-        // This fixture declares a decimal result type the native operator cannot provide.
-        let err = tpch_plan_to_string(17).await.unwrap_err();
+        let plan_str = tpch_plan_to_string(17).await?;
         assert_snapshot!(
-            err,
-            @"Substrait error: Decimal return type mismatch for multiply:dec_dec (function reference 4): declared Decimal128(17, 3), but native expression Decimal128(0.2,2,1) * avg(LINEITEM.L_QUANTITY) derives Decimal128(22, 7); this conversion is unsupported"
-        );
+        plan_str,
+        @r#"
+        Projection: divide(sum(LINEITEM.L_EXTENDEDPRICE), Decimal128(7.0,2,1)) AS AVG_YEARLY
+          Aggregate: groupBy=[[]], aggr=[[sum(LINEITEM.L_EXTENDEDPRICE)]]
+            Projection: LINEITEM.L_EXTENDEDPRICE
+              Filter: PART.P_PARTKEY = LINEITEM.L_PARTKEY AND PART.P_BRAND = Utf8("Brand#23") AND PART.P_CONTAINER = Utf8("MED BOX") AND LINEITEM.L_QUANTITY < (<subquery>)
+                Subquery:
+                  Projection: multiply(Decimal128(0.2,2,1), avg(LINEITEM.L_QUANTITY))
+                    Aggregate: groupBy=[[]], aggr=[[avg(LINEITEM.L_QUANTITY)]]
+                      Projection: LINEITEM.L_QUANTITY
+                        Filter: LINEITEM.L_PARTKEY = outer_ref(PART.P_PARTKEY)
+                          TableScan: LINEITEM
+                Cross Join:
+                  TableScan: LINEITEM
+                  TableScan: PART
+        "#
+                );
         Ok(())
     }
 
@@ -343,23 +436,49 @@ mod tests {
     }
     #[tokio::test]
     async fn tpch_test_19() -> Result<()> {
-        // This fixture declares a decimal result type the native operator cannot provide.
-        let err = tpch_plan_to_string(19).await.unwrap_err();
+        let plan_str = tpch_plan_to_string(19).await?;
         assert_snapshot!(
-            err,
-            @"Substrait error: Decimal return type mismatch for multiply:dec_dec (function reference 6): declared Decimal128(19, 4), but native expression LINEITEM.L_EXTENDEDPRICE * (CAST(Int32(1) AS Decimal128(15, 2)) - LINEITEM.L_DISCOUNT) derives Decimal128(32, 4); this conversion is unsupported"
-        );
+        plan_str,
+        @r#"
+        Aggregate: groupBy=[[]], aggr=[[sum(multiply(LINEITEM.L_EXTENDEDPRICE,Int32(1) - LINEITEM.L_DISCOUNT)) AS REVENUE]]
+          Projection: multiply(LINEITEM.L_EXTENDEDPRICE, CAST(Int32(1) AS Decimal128(15, 2)) - LINEITEM.L_DISCOUNT)
+            Filter: PART.P_PARTKEY = LINEITEM.L_PARTKEY AND PART.P_BRAND = Utf8("Brand#12") AND (PART.P_CONTAINER = CAST(Utf8("SM CASE") AS Utf8) OR PART.P_CONTAINER = CAST(Utf8("SM BOX") AS Utf8) OR PART.P_CONTAINER = CAST(Utf8("SM PACK") AS Utf8) OR PART.P_CONTAINER = CAST(Utf8("SM PKG") AS Utf8)) AND LINEITEM.L_QUANTITY >= CAST(Int32(1) AS Decimal128(15, 2)) AND LINEITEM.L_QUANTITY <= CAST(Int32(1) + Int32(10) AS Decimal128(15, 2)) AND PART.P_SIZE >= Int32(1) AND PART.P_SIZE <= Int32(5) AND (LINEITEM.L_SHIPMODE = CAST(Utf8("AIR") AS Utf8) OR LINEITEM.L_SHIPMODE = CAST(Utf8("AIR REG") AS Utf8)) AND LINEITEM.L_SHIPINSTRUCT = Utf8("DELIVER IN PERSON") OR PART.P_PARTKEY = LINEITEM.L_PARTKEY AND PART.P_BRAND = Utf8("Brand#23") AND (PART.P_CONTAINER = CAST(Utf8("MED BAG") AS Utf8) OR PART.P_CONTAINER = CAST(Utf8("MED BOX") AS Utf8) OR PART.P_CONTAINER = CAST(Utf8("MED PKG") AS Utf8) OR PART.P_CONTAINER = CAST(Utf8("MED PACK") AS Utf8)) AND LINEITEM.L_QUANTITY >= CAST(Int32(10) AS Decimal128(15, 2)) AND LINEITEM.L_QUANTITY <= CAST(Int32(10) + Int32(10) AS Decimal128(15, 2)) AND PART.P_SIZE >= Int32(1) AND PART.P_SIZE <= Int32(10) AND (LINEITEM.L_SHIPMODE = CAST(Utf8("AIR") AS Utf8) OR LINEITEM.L_SHIPMODE = CAST(Utf8("AIR REG") AS Utf8)) AND LINEITEM.L_SHIPINSTRUCT = Utf8("DELIVER IN PERSON") OR PART.P_PARTKEY = LINEITEM.L_PARTKEY AND PART.P_BRAND = Utf8("Brand#34") AND (PART.P_CONTAINER = CAST(Utf8("LG CASE") AS Utf8) OR PART.P_CONTAINER = CAST(Utf8("LG BOX") AS Utf8) OR PART.P_CONTAINER = CAST(Utf8("LG PACK") AS Utf8) OR PART.P_CONTAINER = CAST(Utf8("LG PKG") AS Utf8)) AND LINEITEM.L_QUANTITY >= CAST(Int32(20) AS Decimal128(15, 2)) AND LINEITEM.L_QUANTITY <= CAST(Int32(20) + Int32(10) AS Decimal128(15, 2)) AND PART.P_SIZE >= Int32(1) AND PART.P_SIZE <= Int32(15) AND (LINEITEM.L_SHIPMODE = CAST(Utf8("AIR") AS Utf8) OR LINEITEM.L_SHIPMODE = CAST(Utf8("AIR REG") AS Utf8)) AND LINEITEM.L_SHIPINSTRUCT = Utf8("DELIVER IN PERSON")
+              Cross Join:
+                TableScan: LINEITEM
+                TableScan: PART
+        "#
+                );
         Ok(())
     }
 
     #[tokio::test]
     async fn tpch_test_20() -> Result<()> {
-        // This fixture declares a decimal result type the native operator cannot provide.
-        let err = tpch_plan_to_string(20).await.unwrap_err();
+        let plan_str = tpch_plan_to_string(20).await?;
         assert_snapshot!(
-            err,
-            @"Substrait error: Decimal return type mismatch for multiply:dec_dec (function reference 7): declared Decimal128(17, 3), but native expression Decimal128(0.5,2,1) * sum(LINEITEM.L_QUANTITY) derives Decimal128(28, 3); this conversion is unsupported"
-        );
+        plan_str,
+        @r#"
+        Sort: SUPPLIER.S_NAME ASC NULLS LAST
+          Projection: SUPPLIER.S_NAME, SUPPLIER.S_ADDRESS
+            Filter: SUPPLIER.S_SUPPKEY IN (<subquery>) AND SUPPLIER.S_NATIONKEY = NATION.N_NATIONKEY AND NATION.N_NAME = Utf8("CANADA")
+              Subquery:
+                Projection: PARTSUPP.PS_SUPPKEY
+                  Filter: PARTSUPP.PS_PARTKEY IN (<subquery>) AND CAST(PARTSUPP.PS_AVAILQTY AS Decimal128(19, 0)) > (<subquery>)
+                    Subquery:
+                      Projection: PART.P_PARTKEY
+                        Filter: PART.P_NAME LIKE CAST(Utf8("forest%") AS Utf8)
+                          TableScan: PART
+                    Subquery:
+                      Projection: multiply(Decimal128(0.5,2,1), sum(LINEITEM.L_QUANTITY))
+                        Aggregate: groupBy=[[]], aggr=[[sum(LINEITEM.L_QUANTITY)]]
+                          Projection: LINEITEM.L_QUANTITY
+                            Filter: LINEITEM.L_PARTKEY = outer_ref(PARTSUPP.PS_PARTKEY) AND LINEITEM.L_SUPPKEY = outer_ref(PARTSUPP.PS_SUPPKEY) AND LINEITEM.L_SHIPDATE >= CAST(Utf8("1994-01-01") AS Date32) AND LINEITEM.L_SHIPDATE < CAST(Utf8("1995-01-01") AS Date32)
+                              TableScan: LINEITEM
+                    TableScan: PARTSUPP
+              Cross Join:
+                TableScan: SUPPLIER
+                TableScan: NATION
+        "#
+                );
         Ok(())
     }
 

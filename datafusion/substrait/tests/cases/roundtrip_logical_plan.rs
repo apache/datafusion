@@ -539,12 +539,28 @@ async fn decimal_arithmetic_output_type_contract() -> Result<()> {
         };
         decimal.precision = declared.0;
         decimal.scale = declared.1;
-        let result = from_substrait_plan(&ctx.state(), &proto).await;
-        if native == (declared.0 as u8, declared.1 as i8) {
-            assert_eq!(result?.schema().field(0).data_type(), &expected_type);
-        } else {
-            let err = result.unwrap_err().to_string();
-            assert!(err.contains("Decimal return type mismatch"), "{err}");
+        let result = from_substrait_plan(&ctx.state(), &proto).await?;
+        let declared = (declared.0 as u8, declared.1 as i8);
+        assert_eq!(
+            result.schema().field(0).data_type(),
+            &DataType::Decimal128(declared.0, declared.1)
+        );
+        // Serialize and import again, preserving the declared type and the
+        // decimal function's chosen overflow behavior.
+        let exported = to_substrait_plan(&result, &ctx.state())?;
+        let reimported = from_substrait_plan(&ctx.state(), &exported).await?;
+        for plan in [result, reimported] {
+            let batches = ctx.execute_logical_plan(plan).await?.collect().await?;
+            let value = match op {
+                "+" => 4 * 10_i128.pow(declared.1 as u32),
+                "*" => 3 * 10_i128.pow(declared.1 as u32),
+                "/" => 33_333_333,
+                _ => unreachable!(),
+            };
+            assert_eq!(
+                ScalarValue::try_from_array(batches[0].column(0), 0)?,
+                ScalarValue::Decimal128(Some(value), declared.0, declared.1)
+            );
         }
     }
     Ok(())

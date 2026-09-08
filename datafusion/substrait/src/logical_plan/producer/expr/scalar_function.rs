@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::logical_plan::decimal::DecimalArithmetic;
 use crate::logical_plan::producer::{
     SubstraitProducer, to_substrait_literal_expr, to_substrait_type,
 };
@@ -36,6 +37,25 @@ pub fn from_scalar_function(
     schema: &DFSchemaRef,
 ) -> datafusion::common::Result<Expression> {
     let (_, output_field) = Expr::ScalarFunction(fun.clone()).to_field(schema)?;
+    if let Some(decimal) = fun.func.inner().downcast_ref::<DecimalArithmetic>() {
+        let mut expression = from_function(
+            producer,
+            decimal.function_signature(),
+            &fun.args,
+            output_field.data_type(),
+            output_field.is_nullable(),
+            schema,
+        )?;
+        if let Some(RexType::ScalarFunction(function)) = &mut expression.rex_type {
+            // Preserve the chosen overflow behavior even if the output type
+            // happens to match a native operator on the next import.
+            function.options = vec![substrait::proto::FunctionOption {
+                name: "overflow".into(),
+                preference: vec!["ERROR".into()],
+            }];
+        }
+        return Ok(expression);
+    }
     from_function(
         producer,
         fun.name(),
