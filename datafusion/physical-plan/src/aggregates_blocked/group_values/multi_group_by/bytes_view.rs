@@ -26,11 +26,14 @@ use arrow::buffer::{Buffer, NullBuffer, ScalarBuffer};
 use arrow::datatypes::ByteViewType;
 use datafusion_common::Result;
 use datafusion_common::utils::proxy::VecDequeAllocExt;
-use datafusion_expr_common::blocked_helpers::{BlockedNullsBuilder, CopyItemBlockedVecBuilder, MmapVec};
+use datafusion_expr_common::blocked_helpers::{
+    BlockedBytesBufferBuilder, BlockedNullsBuilder, CopyItemBlockedVecBuilder,
+};
 use datafusion_expr_common::groups_accumulator::{BlockedGroupSelection, BlocksIndex};
 use std::collections::VecDeque;
+use std::iter::once;
 use std::marker::PhantomData;
-use std::mem::{replace, size_of};
+use std::mem::size_of;
 use std::sync::Arc;
 
 const BYTE_VIEW_MAX_BLOCK_SIZE: usize = 2 * 1024 * 1024;
@@ -42,8 +45,8 @@ const BYTE_VIEW_MAX_BLOCK_SIZE: usize = 2 * 1024 * 1024;
 ///
 /// 1. Efficient comparison of incoming rows to existing rows
 /// 2. Efficient construction of the final output array
-/// 3. Efficient `take_n` / `take_next_block`, the views are moved between blocks
-///    without touching the bytes since they reference the buffers by an absolute index
+/// 3. Zero copy `take_next_block`: every views block owns whole bytes blocks, so an
+///    emitted block never shares (or keeps alive) the bytes of another one
 pub struct ByteViewGroupValueBuilder<const FIXED_BLOCK_SIZING: bool, B: ByteViewType> {
     /// The views of string values
     ///
@@ -53,29 +56,24 @@ pub struct ByteViewGroupValueBuilder<const FIXED_BLOCK_SIZING: bool, B: ByteView
     /// If string len > 12, its format will be:
     ///     offset(4B) | buffer_index(4B) | prefix(4B) | len(4B)
     ///
-    /// where `buffer_index` is absolute: `completed_base + position in completed`,
-    /// or one past the last completed buffer for `in_progress`
+    /// where `buffer_index` is relative to the first bytes block of the views block
+    /// the value is in
     views: CopyItemBlockedVecBuilder<FIXED_BLOCK_SIZING, u128>,
 
-    /// The progressing block
-    ///
-    /// New values will be inserted into it until its capacity
-    /// is not enough(detail can see `max_block_size`).
-    in_progress: Vec<u8>,
+    /// The bytes of the non inlined values, every views block owns whole bytes blocks
+    bytes: BlockedBytesBufferBuilder,
 
-    /// The completed blocks
-    ///
-    /// Buffers that no stored view references anymore are dropped from the front
-    completed: VecDeque<Buffer>,
+    /// Number of bytes blocks of every views block, the open one included
+    num_bytes_blocks_per_block: VecDeque<usize>,
 
-    /// The buffer index of `completed[0]`, grows as dropped buffers leave the front
-    completed_base: usize,
+    /// Index of the first bytes block of every views block, parallel to
+    /// `num_bytes_blocks_per_block`
+    block_starts: VecDeque<usize>,
 
-    /// The max size of `in_progress`
+    /// The max size of a bytes block
     ///
-    /// `in_progress` will be flushed into `completed`, and create new `in_progress`
-    /// when found its remaining capacity(`max_block_size` - `len(in_progress)`),
-    /// is no enough to store the appended value.
+    /// A new bytes block is started when the current one has not enough remaining
+    /// capacity (`max_block_size` - its len) to store the appended value.
     ///
     /// Currently it is fixed at 2MB.
     max_block_size: usize,
@@ -97,9 +95,9 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType>
 
         Self {
             views: CopyItemBlockedVecBuilder::new(block_size),
-            in_progress: Vec::new(),
-            completed: VecDeque::new(),
-            completed_base: 0,
+            bytes: BlockedBytesBufferBuilder::new(),
+            num_bytes_blocks_per_block: VecDeque::from(vec![1]),
+            block_starts: VecDeque::from(vec![0]),
             max_block_size: BYTE_VIEW_MAX_BLOCK_SIZE,
             nulls: BlockedNullsBuilder::new(block_size),
             _phantom: PhantomData {},
@@ -112,23 +110,38 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType>
         self
     }
 
-    /// The buffer index views of values in `in_progress` get
-    fn in_progress_index(&self) -> usize {
-        self.completed_base + self.completed.len()
+    /// The bytes block referenced by `view`, which belongs to the value at `index`
+    #[inline]
+    fn bytes_block_of(&self, index: BlocksIndex, view: &ByteView) -> usize {
+        let views_block = self.nulls.locate(index).0;
+        self.block_starts[views_block] + view.buffer_index as usize
     }
 
-    /// The bytes of the buffer with the absolute `buffer_index`
-    fn buffer(&self, buffer_index: usize) -> &[u8] {
-        if buffer_index == self.in_progress_index() {
-            &self.in_progress
-        } else {
-            &self.completed[buffer_index - self.completed_base]
+    /// A views block was completed, the next one starts with a fresh bytes block
+    fn open_views_block(&mut self) {
+        self.bytes.start_new_block();
+        self.block_starts.push_back(self.bytes.num_blocks() - 1);
+        self.num_bytes_blocks_per_block.push_back(1);
+    }
+
+    #[inline]
+    fn push_view(&mut self, view: u128) {
+        if self.views.push(view) {
+            self.open_views_block();
+        }
+    }
+
+    /// Bulk appends with fixed sizing cross views block boundaries silently, open the
+    /// bytes blocks they need
+    fn sync_bytes_blocks(&mut self) {
+        while self.num_bytes_blocks_per_block.len() < self.views.num_blocks() {
+            self.open_views_block();
         }
     }
 
     fn append_null(&mut self) {
         self.nulls.push_null();
-        self.views.push(0);
+        self.push_view(0);
     }
 
     /// Copies the bytes of a non inlined value and returns the `(buffer_index, offset)`
@@ -136,26 +149,22 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType>
     fn append_bytes(&mut self, value: &[u8]) -> (u32, u32) {
         debug_assert!(value.len() > 12);
 
-        // If current block isn't big enough, flush it and create a new in progress block
-        if !self.in_progress.is_empty()
-            && self.in_progress.len() + value.len() > self.max_block_size
-        {
-            self.flush_in_progress();
+        // If the current bytes block isn't big enough, start a new one for this views block
+        let current_len = self.bytes.current_block_len();
+        if current_len > 0 && current_len + value.len() > self.max_block_size {
+            self.bytes.start_new_block();
+            *self
+                .num_bytes_blocks_per_block
+                .back_mut()
+                .expect("always has the open views block") += 1;
         }
 
-        let buffer_index = self.in_progress_index() as u32;
-        let offset = self.in_progress.len() as u32;
-        self.in_progress.extend_from_slice(value);
+        let buffer_index = (self.num_bytes_blocks_per_block.back().unwrap() - 1) as u32;
+        let offset = u32::try_from(self.bytes.current_block_len())
+            .expect("a single value exceeds u32::MAX bytes");
+        self.bytes.extend_from_slice(value);
 
         (buffer_index, offset)
-    }
-
-    fn flush_in_progress(&mut self) {
-        let flushed_block = replace(
-            &mut self.in_progress,
-            Vec::with_capacity(self.max_block_size),
-        );
-        self.completed.push_back(Buffer::from_vec(flushed_block));
     }
 
     /// Appends a non null value given as bytes
@@ -166,7 +175,7 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType>
             let (buffer_index, offset) = self.append_bytes(value);
             make_view(value, buffer_index, offset)
         };
-        self.views.push(view);
+        self.push_view(view);
     }
 
     fn equal_to_inner(&self, lhs_row: BlocksIndex, array: &ArrayRef, rhs_row: usize) -> bool {
@@ -236,6 +245,7 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType>
                     // Fast path: all strings are inline (<= 12 bytes) so the input views
                     // can be copied as is
                     self.views.extend(rows.iter().map(|&row| arr.views()[row]));
+                    self.sync_bytes_blocks();
                 } else {
                     for &row in rows {
                         self.do_append_val_inner(arr, row);
@@ -246,6 +256,7 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType>
             Nulls::All => {
                 self.nulls.push_n_nulls(rows.len());
                 self.views.push_value_n(0, rows.len());
+                self.sync_bytes_blocks();
             }
         }
     }
@@ -257,11 +268,11 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType>
 
         if (view as u32) <= 12 {
             // Inline value: the view is already self-contained, push as-is
-            self.views.push(view);
+            self.push_view(view);
             return;
         }
 
-        // Non-inline value: copy the bytes and point the view into our own buffers
+        // Non-inline value: copy the bytes and point the view into our own bytes blocks
         let value: &[u8] = unsafe { array.value_unchecked(row).as_ref() };
         let (buffer_index, offset) = self.append_bytes(value);
 
@@ -273,13 +284,18 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType>
             offset,
         }
         .as_u128();
-        self.views.push(new_view);
+        self.push_view(new_view);
     }
 
-    /// The bytes referenced by a non inlined view
-    fn non_inlined_value(&self, view: ByteView) -> &[u8] {
+    /// The bytes referenced by the non inlined view of the value at `index`
+    #[inline]
+    fn non_inlined_value(&self, index: BlocksIndex, view: ByteView) -> &[u8] {
         let offset = view.offset as usize;
-        &self.buffer(view.buffer_index as usize)[offset..offset + view.length as usize]
+        let length = view.length as usize;
+        let block = self.bytes.block(self.bytes_block_of(index, &view));
+        debug_assert!(offset + length <= block.len());
+        // SAFETY: views only ever point into bytes this builder appended to that block
+        unsafe { block.get_unchecked(offset..offset + length) }
     }
 
     /// Compare the value at `lhs_row` in this builder with
@@ -304,7 +320,9 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType>
         }
 
         // Otherwise, we need to check their values
-        let exist_view = self.views[lhs_row];
+
+        // SAFETY: `lhs_row` is a live group index
+        let exist_view = unsafe { *self.views.get_unchecked(lhs_row) };
         let exist_view_len = exist_view as u32;
 
         // SAFETY: `rhs_row` is valid
@@ -340,7 +358,7 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType>
             }
 
             // get the full values and compare
-            let exist_full = self.non_inlined_value(ByteView::from(exist_view));
+            let exist_full = self.non_inlined_value(lhs_row, ByteView::from(exist_view));
             let input_full: &[u8] = unsafe { array.value_unchecked(rhs_row).as_ref() };
             exist_full == input_full
         }
@@ -355,7 +373,7 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType>
             // SAFETY: `view` is a valid inline view with `length` bytes.
             unsafe { GenericByteViewArray::<B>::inline_value(view, length) }
         } else {
-            self.non_inlined_value(byte_view)
+            self.non_inlined_value(index, byte_view)
         }
     }
 
@@ -380,83 +398,17 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType>
             .unwrap_or_else(|| Arc::new(GenericByteViewArray::<B>::new_null(0))))
     }
 
-    /// Builds the array for views that were taken out of `self.views`
-    ///
-    /// The completed buffers they reference are shared, `in_progress` is only copied
-    /// up to the last referenced byte (or flushed when everything in it is referenced),
-    /// and the buffer indexes are rebased so the array starts at buffer 0
-    fn build_taken(&mut self, mut views: MmapVec<u128>, nulls: Option<NullBuffer>) -> ArrayRef {
-        let mut min_buffer = usize::MAX;
-        let mut max_buffer = 0;
-        // the end of the referenced bytes in the last referenced buffer
-        let mut max_buffer_end = 0;
-        for view in views.iter().filter(|view| (**view as u32) > 12) {
-            let view = ByteView::from(*view);
-            let buffer_index = view.buffer_index as usize;
-            let end = (view.offset + view.length) as usize;
-            min_buffer = min_buffer.min(buffer_index);
-            if buffer_index > max_buffer {
-                max_buffer = buffer_index;
-                max_buffer_end = end;
-            } else if buffer_index == max_buffer {
-                max_buffer_end = max_buffer_end.max(end);
-            }
-        }
-
-        if min_buffer == usize::MAX {
-            // Everything inlined
-            return Self::build(views.into(), Vec::new(), nulls);
-        }
-
-        if max_buffer == self.in_progress_index() && max_buffer_end == self.in_progress.len() {
-            // Everything in `in_progress` is taken, share it instead of copying it
-            self.flush_in_progress();
-        }
-
-        let buffers = (min_buffer..=max_buffer)
-            .map(|buffer_index| {
-                if buffer_index == self.in_progress_index() {
-                    Buffer::from(&self.in_progress[..max_buffer_end])
-                } else {
-                    self.completed[buffer_index - self.completed_base].clone()
-                }
-            })
-            .collect();
-
-        for view in views.iter_mut().filter(|view| (**view as u32) > 12) {
-            let mut byte_view = ByteView::from(*view);
-            byte_view.buffer_index -= min_buffer as u32;
-            *view = byte_view.as_u128();
-        }
-
-        Self::build(views.into(), buffers, nulls)
-    }
-
-    /// Drops the completed buffers that no stored view references anymore
-    ///
-    /// Values are appended in order so the first non inlined view references the
-    /// smallest buffer index
-    fn drop_unreferenced_buffers(&mut self) {
-        if self.completed.is_empty() {
-            return;
-        }
-
-        let first_referenced = (0..self.views.num_blocks())
-            .flat_map(|block| self.views.block(block).iter())
-            .find(|view| (**view as u32) > 12)
-            .map(|view| ByteView::from(*view).buffer_index as usize)
-            .unwrap_or_else(|| self.in_progress_index());
-
-        let to_drop = first_referenced - self.completed_base;
-        self.completed.drain(..to_drop);
-        self.completed_base = first_referenced;
-    }
-
     fn build(
         views: ScalarBuffer<u128>,
         buffers: Vec<Buffer>,
         nulls: Option<NullBuffer>,
     ) -> ArrayRef {
+        // A block of inlined values only does not need data buffers
+        let buffers = if buffers.iter().all(Buffer::is_empty) {
+            vec![]
+        } else {
+            buffers
+        };
         // Safety:
         // * all views were correctly made
         // * (if utf8): Input was valid Utf8 so buffer contents are
@@ -532,9 +484,9 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType> BlockedGroupColumn<FIXED_B
     fn size(&self) -> usize {
         self.nulls.allocated_size()
             + self.views.allocated_size()
-            + self.in_progress.capacity()
-            + self.completed.iter().map(|b| b.capacity()).sum::<usize>()
-            + self.completed.allocated_size()
+            + self.bytes.allocated_size()
+            + self.num_bytes_blocks_per_block.allocated_size()
+            + self.block_starts.allocated_size()
             + size_of::<Self>()
     }
 
@@ -544,30 +496,115 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType> BlockedGroupColumn<FIXED_B
 
     fn take_all(self: Box<Self>) -> Vec<ArrayRef> {
         let mut this = *self;
-        let views_blocks = this.views.take_all();
-        let nulls_blocks = this.nulls.take_all();
-
-        let blocks = views_blocks
-            .into_iter()
-            .zip(nulls_blocks)
-            .map(|(views, nulls)| this.build_taken(views, nulls))
-            .collect();
-
-        this.completed_base = this.in_progress_index();
-        this.completed.clear();
-        this.in_progress.clear();
-
+        let mut blocks = Vec::with_capacity(this.views.num_blocks());
+        while let Some(block) = this.take_next_block() {
+            // manual sizing may have opened a block and never filled it
+            if !block.is_empty() {
+                blocks.push(block);
+            }
+        }
         blocks
     }
 
+    /// Take the first `n` values, the remaining values shift down by `n`
+    ///
+    /// Nothing is copied: the taken views and bytes are a prefix of the builders. The
+    /// remaining bytes are only re-blocked so that every views block still owns whole
+    /// bytes blocks, which means rewriting the buffer index and offset of the remaining
+    /// non inlined views
     fn take_n(&mut self, n: usize) -> ArrayRef {
         debug_assert!(self.len() >= n);
-        let views = self.views.take_n(n, None::<std::iter::Empty<_>>);
+        let block_size = self.views.block_size();
+        let taken_views = self.views.take_n(n, None::<std::iter::Empty<_>>);
         let nulls = self.nulls.take_n(n, None::<std::iter::Empty<_>>);
 
-        let array = self.build_taken(views, nulls);
-        self.drop_unreferenced_buffers();
-        array
+        // Bytes are appended in value order, so the taken values own a prefix of the
+        // bytes ending where the last non inlined taken value ends, in bytes block `b` of
+        // the first views block whose bytes blocks start at 0
+        let (b, end) = taken_views
+            .iter()
+            .rev()
+            .find(|view| (**view as u32) > 12)
+            .map(|view| {
+                let view = ByteView::from(*view);
+                (view.buffer_index as usize, (view.offset + view.length) as usize)
+            })
+            .unwrap_or((0, 0));
+
+        let old_block_lens: Vec<usize> =
+            (0..self.bytes.num_blocks()).map(|i| self.bytes.block(i).len()).collect();
+        let taken_bytes = old_block_lens[..b].iter().sum::<usize>() + end;
+        let remaining_bytes = self.bytes.len() - taken_bytes;
+
+        // Old block boundaries that fall in the remaining bytes, relative to their start
+        let mut old_boundaries = old_block_lens[b..]
+            .iter()
+            .scan(0usize, |acc, len| {
+                *acc += len;
+                Some(*acc - end)
+            })
+            .filter(|&boundary| boundary > 0 && boundary < remaining_bytes)
+            .peekable();
+
+        // New layout: a bytes block starts at every views block and at every old
+        // boundary that is kept, views are rewritten to point into it
+        let mut starts: Vec<usize> = vec![];
+        let mut per_views_block: VecDeque<usize> = VecDeque::new();
+        let mut pos = 0usize;
+        let mut first_block_of_current = 0usize;
+        for (k, view) in self.views.as_mut_slice().iter_mut().enumerate() {
+            if k % block_size == 0 {
+                first_block_of_current = starts.len();
+                starts.push(pos);
+                per_views_block.push_back(1);
+            }
+            let len = *view as u32;
+            if len <= 12 {
+                continue;
+            }
+            while old_boundaries.peek().is_some_and(|&boundary| boundary <= pos) {
+                let boundary = old_boundaries.next().unwrap();
+                if boundary == pos && starts.last() != Some(&pos) {
+                    starts.push(pos);
+                    *per_views_block.back_mut().unwrap() += 1;
+                }
+            }
+            let mut byte_view = ByteView::from(*view);
+            byte_view.buffer_index = (starts.len() - 1 - first_block_of_current) as u32;
+            byte_view.offset = (pos - starts[starts.len() - 1]) as u32;
+            *view = byte_view.as_u128();
+            pos += len as usize;
+        }
+        debug_assert_eq!(pos, remaining_bytes);
+        // The views block being written to always owns a bytes block, even when empty
+        if self.views.len().is_multiple_of(block_size) {
+            starts.push(pos);
+            per_views_block.push_back(1);
+        }
+        let sizes: Vec<usize> = starts
+            .iter()
+            .zip(starts.iter().skip(1).chain(once(&remaining_bytes)))
+            .map(|(start, next)| next - start)
+            .collect();
+
+        let mut buffers: Vec<Buffer> =
+            (0..b).map(|_| self.bytes.take_first_block()).collect();
+        let last = self.bytes.take_n(end, sizes.into_iter());
+        if !last.is_empty() {
+            buffers.push(last);
+        }
+
+        // First bytes block of every new views block
+        self.block_starts = once(0)
+            .chain(per_views_block.iter().scan(0, |acc, c| {
+                *acc += c;
+                Some(*acc)
+            }))
+            .take(per_views_block.len())
+            .collect();
+        self.num_bytes_blocks_per_block = per_views_block;
+
+        Self::build(taken_views.into(), buffers, nulls)
     }
 
     fn take_next_block(&mut self) -> Option<ArrayRef> {
@@ -577,14 +614,31 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType> BlockedGroupColumn<FIXED_B
             .take_block()
             .expect("nulls have the same blocks as the views");
 
-        let array = self.build_taken(views, nulls);
-        self.drop_unreferenced_buffers();
-        Some(array)
+        // The bytes blocks may be empty when every value of the block is inlined or null
+        let count = self
+            .num_bytes_blocks_per_block
+            .pop_front()
+            .expect("a views block owns bytes blocks");
+        let buffers = (0..count).map(|_| self.bytes.take_first_block()).collect();
+
+        // The taken bytes blocks shift every remaining block index down
+        self.block_starts.pop_front();
+        for start in &mut self.block_starts {
+            *start -= count;
+        }
+        if self.num_bytes_blocks_per_block.is_empty() {
+            // the bytes builder keeps one open block after everything was taken
+            self.num_bytes_blocks_per_block.push_back(1);
+            self.block_starts.push_back(0);
+        }
+
+        Some(Self::build(views.into(), buffers, nulls))
     }
 
     fn start_new_block(&mut self) {
         self.views.start_new_block();
         self.nulls.start_new_block();
+        self.open_views_block();
     }
 }
 
@@ -662,8 +716,9 @@ mod tests {
         let mut builder = fixed_with(4, &values);
         assert_eq!(builder.batch_size(), 4);
         assert_eq!(stored(&builder, 4), owned(&values));
-        // the long values do not fit the tiny max block size together
-        assert!(!builder.completed.is_empty());
+        // one bytes block per views block, both counting the open one
+        assert_eq!(builder.views.num_blocks(), 3);
+        assert_eq!(builder.bytes.num_blocks(), 3);
 
         let input = array(&values);
         for (row, _) in values.iter().enumerate() {
@@ -744,42 +799,68 @@ mod tests {
     }
 
     #[test]
-    fn taken_arrays_share_buffers_and_dead_buffers_are_dropped() {
-        // long values only, two per data block
+    fn taken_blocks_own_exactly_their_bytes() {
+        // long values only, 4 per views block
         let values: Vec<String> = (0..12).map(|i| format!("long value number {i:02}")).collect();
         let values: Vec<Option<&str>> = values.iter().map(|v| Some(v.as_str())).collect();
-        let mut builder = Fixed::new(4).with_max_block_size(45);
+        let value_len = values[0].unwrap().len();
+        // two values per bytes block, so two bytes blocks per views block
+        let mut builder = Fixed::new(4).with_max_block_size(2 * value_len + 1);
         let input = array(&values);
         for row in 0..values.len() {
             builder.append_val(&input, row).unwrap();
         }
-        assert_eq!(builder.completed.len(), 5);
+        // 3 full views blocks with 2 bytes blocks each plus the open one
+        assert_eq!(builder.bytes.num_blocks(), 7);
+        assert_eq!(builder.num_bytes_blocks_per_block, VecDeque::from(vec![2, 2, 2, 1]));
+        assert_eq!(builder.block_starts, VecDeque::from(vec![0, 2, 4, 6]));
+        assert_eq!(builder.bytes.len(), 12 * value_len);
         let size_before = builder.size();
 
-        // the first block references the first two completed buffers, both are shared
+        // a taken block owns its two bytes blocks and nothing else
         let block = builder.take_next_block().unwrap();
         assert_eq!(strings(&block), owned(&values[..4]));
-        assert_eq!(block.as_string_view().data_buffers().len(), 2);
-        assert_eq!(builder.completed.len(), 3);
-        assert_eq!(builder.completed_base, 2);
-        assert!(builder.size() < size_before);
+        let buffers = block.as_string_view().data_buffers();
+        assert_eq!(buffers.len(), 2);
+        assert_eq!(buffers[0].len() + buffers[1].len(), 4 * value_len);
+        assert_eq!(builder.bytes.num_blocks(), 5);
+        assert_eq!(builder.block_starts, VecDeque::from(vec![0, 2, 4]));
+        assert_eq!(builder.bytes.len(), 8 * value_len);
+        // mapped pages are released at page granularity, never grow
+        assert!(builder.size() <= size_before);
         assert_eq!(stored(&builder, 4), owned(&values[4..]));
 
-        // taking one value keeps its buffer alive for the value that shares it
+        // taking values releases exactly their bytes and keeps the rest addressable
         let taken = builder.take_n(1);
         assert_eq!(strings(&taken), owned(&values[4..5]));
-        assert_eq!(builder.completed.len(), 3);
+        assert_eq!(taken.as_string_view().data_buffers()[0].len(), value_len);
+        assert_eq!(builder.bytes.len(), 7 * value_len);
+        // the old bytes block boundary after value 5 is kept, value 8 moved into block 0
+        assert_eq!(builder.num_bytes_blocks_per_block, VecDeque::from(vec![3, 2]));
+        assert_eq!(stored(&builder, 4), owned(&values[5..]));
         let taken = builder.take_n(1);
         assert_eq!(strings(&taken), owned(&values[5..6]));
-        assert_eq!(builder.completed.len(), 2);
         assert_eq!(stored(&builder, 4), owned(&values[6..]));
+        for (row, value) in values.iter().enumerate().skip(6) {
+            let index = BlocksIndex::from_index_in_fixed_block_size(row - 6, 4);
+            assert!(builder.equal_to(index, &input, row), "{value:?}");
+        }
 
-        // the last value lives in `in_progress`, taking it does not copy but shares
         let taken = builder.take_n(3);
         assert_eq!(strings(&taken), owned(&values[6..9]));
         let blocks = Box::new(builder).take_all();
         let all: Vec<Option<String>> = blocks.iter().flat_map(strings).collect();
         assert_eq!(all, owned(&values[9..]));
+    }
+
+    #[test]
+    fn inline_only_block_has_no_data_buffer() {
+        let values = [Some("a"), Some("bb"), None, Some("exactly12byt")];
+        let mut builder = fixed_with(4, &values);
+        let block = builder.take_next_block().unwrap();
+        assert_eq!(strings(&block), owned(&values));
+        assert!(block.as_string_view().data_buffers().is_empty());
+        assert!(builder.take_next_block().is_none());
     }
 
     #[test]
