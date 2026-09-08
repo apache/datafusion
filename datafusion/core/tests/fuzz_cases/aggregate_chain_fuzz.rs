@@ -1112,6 +1112,14 @@ fn expected_orders(shape: &Shape, source_order: Order) -> Vec<Order> {
     for operator in shape.operators {
         match operator {
             HashRepartition | CoalescePartitions => current = Order::Unordered,
+            // `AggregateExec::try_new` forces `InputOrderMode::Linear` for
+            // partial reduce, since it emits its groups in hash table order,
+            // and it advertises no output ordering either. Everything above it
+            // is unordered until something sorts again.
+            Aggregate(PartialReduce) => {
+                expected.push(Order::Unordered);
+                current = Order::Unordered;
+            }
             Aggregate(_) | TopK(_) => expected.push(current),
             OrderPreservingHashRepartition | SortPreservingMerge => {}
         }
@@ -1136,18 +1144,15 @@ fn order_matches(query: Query, expected: Order, actual: &InputOrderMode) -> bool
 
 /// Whether this stage's stream is allowed to spill. See the memory table in
 /// AGGREGATE_CHAINS.md.
-fn can_spill(case: &Case, aggregate: &AggregateExec) -> bool {
+fn can_spill(aggregate: &AggregateExec) -> bool {
     if aggregate.limit_options().is_some() {
         // GroupedTopKAggregateStream keeps a bounded heap and never spills
         return false;
     }
     let spilling_mode = match aggregate.mode() {
         Final | FinalPartitioned | Single | SinglePartitioned => true,
-        // The dedicated PartialReduce stream emits early and only exists for
-        // Linear input; ordered input or migration off run the legacy stream,
-        // which spills.
-        PartialReduce => *aggregate.input_order_mode() != InputOrderMode::Linear,
-        Partial => false,
+        // Both partial streams emit their state early instead of spilling.
+        PartialReduce | Partial => false,
     };
     let has_groups = !aggregate.group_expr().is_empty();
     spilling_mode && has_groups && *aggregate.input_order_mode() != InputOrderMode::Sorted
@@ -1208,7 +1213,7 @@ fn check_metrics(case: &Case, plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
                 // Whether a spilling-capable stage actually spills depends on
                 // the pool geometry, so only the run-wide coverage check in the
                 // driver requires it. Streams that cannot spill must not.
-                if !can_spill(case, aggregate) {
+                if !can_spill(aggregate) {
                     assert_eq!(spill_count, 0, "{case:?}: {mode:?} must never spill");
                 }
             }

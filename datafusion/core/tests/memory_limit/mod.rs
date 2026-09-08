@@ -28,7 +28,7 @@ mod union_nullable_spill;
 mod view_spill_compaction;
 use arrow::array::{
     ArrayRef, DictionaryArray, Int32Array, Int64Array, Int64Builder, ListBuilder,
-    RecordBatch, StringViewArray, StructArray, StringArray
+    RecordBatch, StringArray, StringViewArray, StructArray,
 };
 use arrow::buffer::NullBuffer;
 use arrow::compute::SortOptions;
@@ -286,7 +286,6 @@ async fn group_by_count_distinct_utf8_view() {
         .await
 }
 
-
 /// `GROUP BY` on a single nested key in the legacy `GroupedHashAggregateStream`
 /// under a memory limit.
 ///
@@ -308,57 +307,57 @@ const NESTED_KEY_BATCH_ROWS: usize = 8_192;
 const NESTED_KEY_MEMORY_LIMIT: usize = 4 * 1024 * 1024;
 
 fn nested_key_struct_fields() -> Fields {
-  Fields::from(vec![
-    Field::new("list", DataType::new_list(DataType::Int64, true), true),
-    Field::new("num", DataType::Int64, true),
-  ])
+    Fields::from(vec![
+        Field::new("list", DataType::new_list(DataType::Int64, true), true),
+        Field::new("num", DataType::Int64, true),
+    ])
 }
 
 /// `st` is mostly `{list: [g, g + 1], num: g}` for group `g`, with a sprinkle
 /// of null lists, empty lists, null nums and null structs so that keys of
 /// different shapes meet in the same batches. `v` is unique.
 fn nested_key_table() -> MemTable {
-  let schema = Arc::new(Schema::new(vec![
-    Field::new_struct("st", nested_key_struct_fields(), true),
-    Field::new("v", DataType::Int64, false),
-  ]));
-  let batches = (0..NESTED_KEY_ROWS)
-    .step_by(NESTED_KEY_BATCH_ROWS)
-    .map(|start| {
-      let rows = start..(start + NESTED_KEY_BATCH_ROWS).min(NESTED_KEY_ROWS);
-      let mut list = ListBuilder::new(Int64Builder::new());
-      let mut num = Vec::with_capacity(rows.len());
-      let mut valid = Vec::with_capacity(rows.len());
-      for row in rows.clone() {
-        let group = row as i64 % NESTED_KEY_GROUPS;
-        match row % 37 {
-          0 => list.append_null(),
-          1 => list.append(true),
-          _ => {
-            list.values().append_value(group);
-            list.values().append_value(group + 1);
-            list.append(true);
-          }
-        }
-        num.push((row % 41 != 0).then_some(group));
-        valid.push(row % 43 != 0);
-      }
-      let st = StructArray::new(
-        nested_key_struct_fields(),
-        vec![Arc::new(list.finish()), Arc::new(Int64Array::from(num))],
-        Some(NullBuffer::from(valid)),
-      );
-      RecordBatch::try_new(
-        Arc::clone(&schema),
-        vec![
-          Arc::new(st),
-          Arc::new(Int64Array::from_iter_values(rows.map(|row| row as i64))),
-        ],
-      )
-        .unwrap()
-    })
-    .collect();
-  MemTable::try_new(schema, vec![batches]).unwrap()
+    let schema = Arc::new(Schema::new(vec![
+        Field::new_struct("st", nested_key_struct_fields(), true),
+        Field::new("v", DataType::Int64, false),
+    ]));
+    let batches = (0..NESTED_KEY_ROWS)
+        .step_by(NESTED_KEY_BATCH_ROWS)
+        .map(|start| {
+            let rows = start..(start + NESTED_KEY_BATCH_ROWS).min(NESTED_KEY_ROWS);
+            let mut list = ListBuilder::new(Int64Builder::new());
+            let mut num = Vec::with_capacity(rows.len());
+            let mut valid = Vec::with_capacity(rows.len());
+            for row in rows.clone() {
+                let group = row as i64 % NESTED_KEY_GROUPS;
+                match row % 37 {
+                    0 => list.append_null(),
+                    1 => list.append(true),
+                    _ => {
+                        list.values().append_value(group);
+                        list.values().append_value(group + 1);
+                        list.append(true);
+                    }
+                }
+                num.push((row % 41 != 0).then_some(group));
+                valid.push(row % 43 != 0);
+            }
+            let st = StructArray::new(
+                nested_key_struct_fields(),
+                vec![Arc::new(list.finish()), Arc::new(Int64Array::from(num))],
+                Some(NullBuffer::from(valid)),
+            );
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(st),
+                    Arc::new(Int64Array::from_iter_values(rows.map(|row| row as i64))),
+                ],
+            )
+            .unwrap()
+        })
+        .collect();
+    MemTable::try_new(schema, vec![batches]).unwrap()
 }
 
 const NESTED_KEY_QUERY: &str = "select st, count(v), count(distinct v), sum(v), avg(v), min(v), max(v) \
@@ -366,36 +365,36 @@ const NESTED_KEY_QUERY: &str = "select st, count(v), count(distinct v), sum(v), 
 
 /// Runs the query on the legacy stream, with or without a memory limit.
 async fn run_nested_key_query(memory_limit: Option<usize>) -> String {
-  let mut runtime =
-    RuntimeEnvBuilder::new().with_disk_manager_builder(DiskManagerBuilder::default());
-  if let Some(limit) = memory_limit {
-    runtime = runtime.with_memory_pool(Arc::new(FairSpillPool::new(limit)));
-  }
-  let config = SessionConfig::new()
-    .with_target_partitions(4)
-    // small batches: the merged spill stream arrives in many batches and
-    // groups span batch boundaries
-    .with_batch_size(64)
-    .set_bool("datafusion.execution.enable_migration_aggregate", false);
-  let ctx = SessionContext::new_with_config_rt(config, runtime.build_arc().unwrap());
-  ctx.register_table("t", Arc::new(nested_key_table()))
-    .unwrap();
-  let batches = ctx
-    .sql(NESTED_KEY_QUERY)
-    .await
-    .unwrap()
-    .collect()
-    .await
-    .unwrap();
-  batches_to_sort_string(&batches)
+    let mut runtime =
+        RuntimeEnvBuilder::new().with_disk_manager_builder(DiskManagerBuilder::default());
+    if let Some(limit) = memory_limit {
+        runtime = runtime.with_memory_pool(Arc::new(FairSpillPool::new(limit)));
+    }
+    let config = SessionConfig::new()
+        .with_target_partitions(4)
+        // small batches: the merged spill stream arrives in many batches and
+        // groups span batch boundaries
+        .with_batch_size(64)
+        .set_bool("datafusion.execution.enable_migration_aggregate", false);
+    let ctx = SessionContext::new_with_config_rt(config, runtime.build_arc().unwrap());
+    ctx.register_table("t", Arc::new(nested_key_table()))
+        .unwrap();
+    let batches = ctx
+        .sql(NESTED_KEY_QUERY)
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    batches_to_sort_string(&batches)
 }
 
 #[tokio::test]
 async fn legacy_stream_nested_key_spill_keeps_groups_unique() {
-  let expected = run_nested_key_query(None).await;
-  let actual = run_nested_key_query(Some(NESTED_KEY_MEMORY_LIMIT)).await;
-  // A duplicated group shows up as extra rows with the counts split
-  assert_eq!(actual, expected);
+    let expected = run_nested_key_query(None).await;
+    let actual = run_nested_key_query(Some(NESTED_KEY_MEMORY_LIMIT)).await;
+    // A duplicated group shows up as extra rows with the counts split
+    assert_eq!(actual, expected);
 }
 
 #[tokio::test]
