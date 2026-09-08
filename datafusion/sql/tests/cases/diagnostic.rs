@@ -150,7 +150,7 @@ fn get_spans(query: &'static str) -> HashMap<String, Span> {
     let mut stack: Vec<(String, usize)> = vec![];
     for c in re.captures_iter(query) {
         let m = c.get(0).unwrap();
-        let tags = c.get(1).unwrap().as_str().split("+").collect::<Vec<_>>();
+        let tags = c.get(1).unwrap().as_str().split('+').collect::<Vec<_>>();
 
         for tag in tags {
             if stack.last().map(|(top_tag, _)| top_tag.as_str()) == Some(tag) {
@@ -170,9 +170,7 @@ fn get_spans(query: &'static str) -> HashMap<String, Span> {
         }
     }
 
-    if !stack.is_empty() {
-        panic!("unbalanced tags");
-    }
+    assert!(stack.is_empty(), "unbalanced tags");
 
     spans
 }

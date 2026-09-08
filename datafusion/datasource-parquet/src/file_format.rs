@@ -17,6 +17,7 @@
 
 //! [`ParquetFormat`]: Parquet [`FileFormat`] abstractions
 
+use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Debug;
 use std::ops::Range;
@@ -37,7 +38,9 @@ use datafusion_datasource::TableSchema;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_sink_config::FileSinkConfig;
 
-use datafusion_datasource::file_format::{FileFormat, FileFormatFactory};
+use datafusion_datasource::file_format::{
+    FileFormat, FileFormatFactory, ensure_unique_field_names,
+};
 
 use datafusion_common::Statistics;
 use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions};
@@ -387,6 +390,17 @@ impl FileFormat for ParquetFormat {
         // https://github.com/apache/datafusion/pull/6629
         schemas
             .sort_unstable_by(|(location1, _), (location2, _)| location1.cmp(location2));
+
+        let mut seen = HashSet::new();
+        for (location, schema) in &schemas {
+            ensure_unique_field_names(schema, &mut seen).map_err(|err| {
+                DataFusionError::Context(
+                    format!("Error when processing Parquet file {location}"),
+                    Box::new(err),
+                )
+            })?;
+        }
+        drop(seen);
 
         let schemas = schemas.into_iter().map(|(_, schema)| schema);
 

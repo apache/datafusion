@@ -1051,7 +1051,7 @@ pub fn binary_numeric_coercion(
 ) -> Option<DataType> {
     if !lhs_type.is_numeric() || !rhs_type.is_numeric() {
         return None;
-    };
+    }
 
     // same type => all good
     if lhs_type == rhs_type {
@@ -1484,7 +1484,7 @@ fn mathematics_numerical_coercion(
     // Error on any non-numeric type
     if !both_numeric_or_null_and_numeric(lhs_type, rhs_type) {
         return None;
-    };
+    }
 
     // These are ordered from most informative to least informative so
     // that the coercion removes the least amount of information

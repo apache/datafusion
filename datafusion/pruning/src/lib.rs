@@ -19,6 +19,7 @@
 
 mod file_pruner;
 mod pruning_predicate;
+mod string_in_list;
 
 pub use file_pruner::FilePruner;
 pub use pruning_predicate::{

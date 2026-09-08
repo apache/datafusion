@@ -104,8 +104,8 @@ impl TaskContext {
         runtime: Arc<RuntimeEnv>,
     ) -> Self {
         Self {
-            task_id,
             session_id,
+            task_id,
             session_config,
             scalar_functions,
             higher_order_functions,

@@ -290,7 +290,7 @@ impl ExecutionPlan for DataSinkExec {
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         // The required input ordering is set externally (e.g. by a `ListingTable`).
         // Otherwise, there is no specific requirement (i.e. `sort_order` is `None`).
-        vec![self.sort_order.as_ref().cloned().map(Into::into)]
+        vec![self.sort_order.clone().map(Into::into)]
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {

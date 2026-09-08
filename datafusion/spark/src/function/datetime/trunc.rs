@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
+use std::{str::FromStr, sync::Arc};
 
+use arrow::compute::DatePart;
 use arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 use datafusion_common::types::{NativeType, logical_date, logical_string};
 use datafusion_common::utils::take_function_args;
@@ -109,13 +110,22 @@ impl ScalarUDFImpl for SparkTrunc {
         let fmt = match fmt.as_str() {
             "yy" | "yyyy" => "year",
             "mm" | "mon" => "month",
-            "year" | "month" | "day" | "week" | "quarter" => fmt.as_str(),
-            _ => {
-                return plan_err!(
-                    "The format argument of `TRUNC` must be one of: year, yy, yyyy, month, mm, mon, day, week, quarter."
-                );
-            }
+            other => other,
         };
+
+        // Accept shared DatePart aliases for the date parts supported by TRUNC.
+        if !matches!(
+            DatePart::from_str(fmt),
+            Ok(DatePart::Year
+                | DatePart::Month
+                | DatePart::Day
+                | DatePart::Week
+                | DatePart::Quarter)
+        ) {
+            return plan_err!(
+                "The format argument of `TRUNC` must represent a year, month, day, week, or quarter."
+            );
+        }
         let return_type = dt_expr.get_type(info.schema())?;
 
         let fmt_expr = Expr::Literal(ScalarValue::new_utf8(fmt), None);

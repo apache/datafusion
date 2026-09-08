@@ -220,8 +220,8 @@ impl ListingTableUrl {
     pub fn file_extension(&self) -> Option<&str> {
         if let Some(mut segments) = self.url.path_segments()
             && let Some(last_segment) = segments.next_back()
-            && last_segment.contains(".")
-            && !last_segment.ends_with(".")
+            && last_segment.contains('.')
+            && !last_segment.ends_with('.')
         {
             return last_segment.split('.').next_back();
         }

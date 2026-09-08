@@ -23,10 +23,10 @@ use arrow::datatypes::Fields;
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
 use datafusion::logical_expr::Operator;
-use datafusion::physical_expr::expressions::Literal;
+use datafusion::physical_expr::expressions::{LambdaVariable, Literal, lambda};
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{
-    BinaryExpr, Column, PhysicalSortExpr, binary, col, like, lit,
+    BinaryExpr, Column, PhysicalSortExpr, SqlSimilarToPattern, binary, col, like, lit,
 };
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
@@ -39,7 +39,7 @@ use datafusion::scalar::ScalarValue;
 use datafusion_common::Result;
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, DefaultPhysicalProtoConverter,
-    PhysicalProtoConverterExtension,
+    PhysicalPlanDecodeContext, PhysicalProtoConverterExtension,
 };
 use datafusion_proto::protobuf;
 use datafusion_proto::protobuf::PhysicalPlanNode;
@@ -196,11 +196,12 @@ fn roundtrip_range_expr() -> Result<()> {
             ScalarValue::Float64(Some(1.0)),
         ])],
     )?;
-    let range_expr: Arc<dyn PhysicalExpr> = Arc::new(RangeExpr::try_new(
+    let range_expr: Arc<dyn PhysicalExpr> = Arc::new(RangeExpr::try_new_with_schema(
         // Expression remapping may produce duplicate children. Preserve both
         // so their sort options stay aligned with the split-point values.
         vec![col("a", &schema)?, col("a", &schema)?],
         &range_partitioning,
+        &schema,
     )?);
     let filter_expr = binary(range_expr, Operator::Eq, lit(0u64), &schema)?;
     let plan = Arc::new(FilterExec::try_new(
@@ -227,6 +228,42 @@ fn roundtrip_range_expr() -> Result<()> {
         assert_eq!((column.name(), column.index()), ("a", 0));
     }
 
+    Ok(())
+}
+
+#[test]
+fn roundtrip_sql_similar_to_pattern() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, true)]));
+    let expr: Arc<dyn PhysicalExpr> =
+        Arc::new(SqlSimilarToPattern::new(col("a", &schema)?));
+
+    let codec = DefaultPhysicalExtensionCodec {};
+    let converter = DefaultPhysicalProtoConverter {};
+    let proto = converter.physical_expr_to_proto(&expr, &codec)?;
+    let ctx = SessionContext::new();
+    let task_ctx = ctx.task_ctx();
+    let decode_ctx = PhysicalPlanDecodeContext::new(task_ctx.as_ref(), &codec);
+    let decoded = converter.proto_to_physical_expr(&proto, &schema, &decode_ctx)?;
+
+    assert_eq!(format!("{expr:?}"), format!("{decoded:?}"));
+    Ok(())
+}
+
+#[test]
+fn roundtrip_lambda_with_variable_dispatch() -> Result<()> {
+    let field = Arc::new(Field::new("v", DataType::Int32, true));
+    let expr = lambda(["v"], Arc::new(LambdaVariable::new(0, field)))?;
+
+    let codec = DefaultPhysicalExtensionCodec {};
+    let converter = DefaultPhysicalProtoConverter {};
+    let proto = converter.physical_expr_to_proto(&expr, &codec)?;
+    let ctx = SessionContext::new();
+    let task_ctx = ctx.task_ctx();
+    let decode_ctx = PhysicalPlanDecodeContext::new(task_ctx.as_ref(), &codec);
+    let decoded =
+        converter.proto_to_physical_expr(&proto, &Schema::empty(), &decode_ctx)?;
+
+    assert!(decoded.as_ref().eq(expr.as_ref()));
     Ok(())
 }
 

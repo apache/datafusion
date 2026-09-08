@@ -314,4 +314,3 @@ DROP TABLE t2_int_float;
 
 statement ok
 DROP TABLE t3_int_bigint;
-

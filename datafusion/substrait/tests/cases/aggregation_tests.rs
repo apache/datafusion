@@ -68,4 +68,42 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn multiple_grouping_sets_follow_substrait_output_order() -> Result<()> {
+        let proto_plan = read_json(
+            "tests/testdata/test_plans/aggregate_groupings/multiple_groupings.json",
+        );
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+        assert_snapshot!(
+            plan,
+            @r"
+        Projection: c0, c1, sum(c0) AS summation
+          Aggregate: groupBy=[[GROUPING SETS ((c0), (c1), (c0, c1))]], aggr=[[sum(c0)]]
+            Values: (Int64(1), Int64(10)), (Int64(1), Int64(20)), (Int64(2), Int64(10))
+        "
+        );
+
+        let results = DataFrame::new(ctx.state(), plan).collect().await?;
+        datafusion::assert_batches_sorted_eq!(
+            [
+                "+----+----+-----------+",
+                "| c0 | c1 | summation |",
+                "+----+----+-----------+",
+                "|    | 10 | 3         |",
+                "|    | 20 | 1         |",
+                "| 1  |    | 2         |",
+                "| 1  | 10 | 1         |",
+                "| 1  | 20 | 1         |",
+                "| 2  |    | 2         |",
+                "| 2  | 10 | 2         |",
+                "+----+----+-----------+",
+            ],
+            &results
+        );
+
+        Ok(())
+    }
 }

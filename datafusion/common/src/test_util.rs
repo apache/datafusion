@@ -259,7 +259,7 @@ pub fn parquet_test_data() -> String {
             let mut path = pb.display().to_string();
             if cfg!(target_os = "windows") {
                 // Replace backslashes (Windows paths; avoids some test issues).
-                path = path.replace("\\", "/");
+                path = path.replace('\\', "/");
             }
             path
         }

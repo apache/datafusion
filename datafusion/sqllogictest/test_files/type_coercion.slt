@@ -329,8 +329,10 @@ NULL
 statement ok
 CREATE TABLE t AS SELECT * FROM (VALUES ('user auth failed')) v(s);
 
+# `SIMILAR TO` matches against the whole string, so the alternation is wrapped
+# in `%` wildcards to still match a substring of the value.
 statement ok
-CREATE TABLE p AS SELECT * FROM (VALUES ('(auth|login)')) v(pat);
+CREATE TABLE p AS SELECT * FROM (VALUES ('%(auth|login)%')) v(pat);
 
 # Utf8View value with a non-scalar Utf8 pattern (issue repro)
 query B

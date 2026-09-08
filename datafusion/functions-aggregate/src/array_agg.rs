@@ -77,7 +77,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 +-----------------------------------------------+
 > SELECT array_agg(DISTINCT column_name ORDER BY column_name) FROM table_name;
 +--------------------------------------------------------+
-| array_agg(DISTINCT column_name ORDER BY column_name)  |
+| array_agg(DISTINCT column_name ORDER BY column_name)   |
 +--------------------------------------------------------+
 | [element1, element2, element3]                         |
 +--------------------------------------------------------+

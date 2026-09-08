@@ -38,16 +38,23 @@ pub struct WindowAggState {
     /// The range that we calculate the window function
     pub window_frame_range: Range<usize>,
     pub window_frame_ctx: Option<WindowFrameContext>,
-    /// The index of the last row that its result is calculated inside the partition record batch buffer.
+    /// The index of the first row in the partition's buffered record batch
+    /// whose result has not been calculated yet; equivalently, the number
+    /// of buffered rows with calculated results. The next evaluation pass
+    /// resumes from this index.
     pub last_calculated_index: usize,
     /// The offset of the deleted row number
     pub offset_pruned_rows: usize,
     /// Stores the results calculated by window frame
     pub out_col: ArrayRef,
-    /// Keeps track of how many rows should be generated to be in sync with input record_batch.
+    /// Keeps track of how many rows should be generated to be in sync with input record_batch
     // (For each row in the input record batch we need to generate a window result).
     pub n_row_result_missing: usize,
-    /// Flag indicating whether we have received all data for this partition
+    /// Snapshot of [`PartitionBatchState::n_rows_received`] as of this
+    /// partition's last evaluation pass
+    pub n_rows_received: usize,
+    /// Snapshot of [`PartitionBatchState::is_end`] as of this partition's
+    /// last evaluation pass
     pub is_end: bool,
 }
 
@@ -80,7 +87,7 @@ impl WindowAggState {
                 state.current_group_idx -= n_group_to_del;
             }
             None => {}
-        };
+        }
     }
 
     pub fn update(
@@ -97,6 +104,7 @@ impl WindowAggState {
         }
         self.n_row_result_missing =
             partition_batch_state.record_batch.num_rows() - self.last_calculated_index;
+        self.n_rows_received = partition_batch_state.n_rows_received;
         self.is_end = partition_batch_state.is_end;
         Ok(())
     }
@@ -126,6 +134,24 @@ impl WindowAggState {
         all_rows_have_results && !partition_just_ended
     }
 
+    /// Returns true when the partition's input is unchanged since the last
+    /// evaluation pass: no new rows have arrived and the end flag has not
+    /// changed.
+    ///
+    /// Standard (non-aggregate) window functions read nothing outside their
+    /// partition, so we can skip re-evaluating them when their input hasn't
+    /// changed. Aggregate window functions cannot use this test to skip
+    /// evaluation, because they also consult the ORDER BY values of the most
+    /// recent input row across *all* partitions.
+    #[inline]
+    pub fn is_input_unchanged(
+        &self,
+        partition_batch_state: &PartitionBatchState,
+    ) -> bool {
+        self.n_rows_received == partition_batch_state.n_rows_received
+            && self.is_end == partition_batch_state.is_end
+    }
+
     pub fn new(out_type: &DataType) -> Result<Self> {
         let empty_out_col = ScalarValue::try_from(out_type)?.to_array_of_size(0)?;
         Ok(Self {
@@ -135,6 +161,7 @@ impl WindowAggState {
             offset_pruned_rows: 0,
             out_col: empty_out_col,
             n_row_result_missing: 0,
+            n_rows_received: 0,
             is_end: false,
         })
     }
@@ -273,6 +300,8 @@ impl WindowFrameContext {
 pub struct PartitionBatchState {
     /// The record batch belonging to current partition
     pub record_batch: RecordBatch,
+    /// Total number of rows this partition has ever received
+    pub n_rows_received: usize,
     /// Flag indicating whether we have received all data for this partition
     pub is_end: bool,
     /// Number of rows emitted for this partition since the last pruning pass
@@ -283,14 +312,17 @@ impl PartitionBatchState {
     pub fn new(schema: SchemaRef) -> Self {
         Self {
             record_batch: RecordBatch::new_empty(schema),
+            n_rows_received: 0,
             is_end: false,
             n_out_row: 0,
         }
     }
 
     pub fn new_with_batch(batch: RecordBatch) -> Self {
+        let n_rows_received = batch.num_rows();
         Self {
             record_batch: batch,
+            n_rows_received,
             is_end: false,
             n_out_row: 0,
         }
@@ -299,6 +331,7 @@ impl PartitionBatchState {
     pub fn extend(&mut self, batch: &RecordBatch) -> Result<()> {
         self.record_batch =
             concat_batches(&self.record_batch.schema(), [&self.record_batch, batch])?;
+        self.n_rows_received += batch.num_rows();
         Ok(())
     }
 }
@@ -697,7 +730,8 @@ fn check_equality(current: &[ScalarValue], target: &[ScalarValue]) -> Result<boo
 mod tests {
     use super::*;
 
-    use arrow::array::Float64Array;
+    use arrow::array::{Float64Array, UInt64Array};
+    use arrow::datatypes::{Field, Schema};
 
     fn get_test_data() -> (Vec<ArrayRef>, Vec<SortOptions>) {
         let range_columns: Vec<ArrayRef> = vec![Arc::new(Float64Array::from(vec![
@@ -709,6 +743,62 @@ mod tests {
         }];
 
         (range_columns, sort_options)
+    }
+
+    #[test]
+    fn test_is_input_unchanged() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("ts", DataType::UInt64, false)]));
+        let batch = |values: &[u64]| -> Result<RecordBatch> {
+            Ok(RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(UInt64Array::from(values.to_vec()))],
+            )?)
+        };
+        let results = |n: usize| ScalarValue::UInt64(Some(0)).to_array_of_size(n);
+
+        let mut partition = PartitionBatchState::new_with_batch(batch(&[1, 2, 3])?);
+        assert_eq!(partition.n_rows_received, 3);
+
+        // A freshly created state has seen none of the partition's rows, so
+        // it must not report the input as unchanged.
+        let mut state = WindowAggState::new(&DataType::UInt64)?;
+        assert!(!state.is_input_unchanged(&partition));
+
+        // After an evaluation pass (here producing results for two of the
+        // three rows), the state has seen the partition's current input.
+        state.update(&results(2)?, &partition)?;
+        assert!(state.is_input_unchanged(&partition));
+
+        // New rows must be detected...
+        partition.extend(&batch(&[4])?)?;
+        assert_eq!(partition.n_rows_received, 4);
+        assert!(!state.is_input_unchanged(&partition));
+        // ...until the next evaluation pass catches up again.
+        state.update(&results(2)?, &partition)?;
+        assert!(state.is_input_unchanged(&partition));
+
+        // Pruning rows whose results are already calculated shrinks the
+        // buffer but not the received-row count, so it must not make the
+        // input appear changed.
+        let n_prune = 2;
+        let batch_ref = &partition.record_batch;
+        partition.record_batch = batch_ref.slice(n_prune, batch_ref.num_rows() - n_prune);
+        // An evaluator would have advanced the frame at least past the
+        // pruned rows; prune_state requires this.
+        state.window_frame_range = n_prune..n_prune;
+        state.prune_state(n_prune);
+        assert_eq!(partition.n_rows_received, 4);
+        assert!(state.is_input_unchanged(&partition));
+
+        // The end-of-partition transition must trigger one final pass, even
+        // though no rows arrived.
+        partition.is_end = true;
+        assert!(!state.is_input_unchanged(&partition));
+        state.update(&results(0)?, &partition)?;
+        assert!(state.is_input_unchanged(&partition));
+
+        Ok(())
     }
 
     fn assert_group_ranges(

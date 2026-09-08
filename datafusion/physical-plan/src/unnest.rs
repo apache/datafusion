@@ -23,10 +23,10 @@ use std::task::{Poll, ready};
 
 use super::metrics::{
     self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
-    MetricsSet, RecordOutput,
+    MetricsSet, SplitMetrics,
 };
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
-use crate::stream::EmptyRecordBatchStream;
+use crate::stream::{BatchSplitStream, EmptyRecordBatchStream, ObservedStream};
 use crate::{
     ChildrenPropertiesMode, DisplayFormatType, Distribution, ExecutionPlan,
     RecordBatchStream, ReplaceChildrenOptions, SendableRecordBatchStream,
@@ -293,17 +293,35 @@ impl ExecutionPlan for UnnestExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        let batch_size = context.session_config().batch_size();
         let input = self.input.execute(partition, context)?;
         let metrics = UnnestMetrics::new(partition, &self.metrics);
+        let baseline_metrics = metrics.baseline_metrics.clone();
 
-        Ok(Box::pin(UnnestStream {
+        let stream = Box::pin(UnnestStream {
             input,
             schema: Arc::clone(&self.schema),
             list_type_columns: self.list_column_indices.clone(),
             struct_column_indices: self.struct_column_indices.iter().copied().collect(),
             options: self.options.clone(),
             metrics,
-        }))
+            batch_size,
+            pending_input: None,
+        });
+
+        // Chunking the input bounds each build to roughly `batch_size` rows, but two cases
+        // can still produce an oversized batch (see `predict_output_lens`), so the output
+        // goes through the shared splitter to make the bound unconditional.
+        let stream = Box::pin(BatchSplitStream::new(
+            stream,
+            batch_size,
+            SplitMetrics::new(&self.metrics, partition),
+        ));
+        Ok(Box::pin(ObservedStream::new(
+            stream,
+            baseline_metrics,
+            None,
+        )))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -396,6 +414,7 @@ impl UnnestExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::utils::usize_from_wire;
         use datafusion_proto_models::protobuf;
 
         let unnest = crate::expect_plan_variant!(
@@ -431,8 +450,8 @@ impl UnnestExec {
             .collect();
         let struct_column_indices = struct_type_columns
             .iter()
-            .map(|index| *index as _)
-            .collect();
+            .map(|index| usize_from_wire(*index, "UnnestExec", "struct_type_columns"))
+            .collect::<Result<Vec<_>>>()?;
         let options = options.as_ref().ok_or_else(|| {
             datafusion_common::internal_datafusion_err!(
                 "UnnestExec is missing required field 'options'"
@@ -518,6 +537,67 @@ struct UnnestStream {
     options: UnnestOptions,
     /// Metrics
     metrics: UnnestMetrics,
+    /// Target number of rows per output batch, from `datafusion.execution.batch_size`.
+    batch_size: usize,
+    /// Rows of the current input batch that have not been unnested yet. Unnesting one
+    /// input batch can produce arbitrarily many output rows, so the input is consumed in
+    /// chunks small enough that each chunk's output stays near `batch_size`.
+    ///
+    /// Note the scope of the memory bound this buys: chunking removes the input batch size
+    /// from the peak, but not the length of an individual list. A single row whose list is
+    /// longer than `batch_size`, and recursive unnesting (where the expansion cannot be
+    /// predicted up front), both still materialize their full expansion in one build.
+    pending_input: Option<PendingInput>,
+}
+
+/// An input batch being unnested incrementally, a chunk of rows at a time.
+struct PendingInput {
+    /// The full input batch. Rows before `row_offset` have already been unnested.
+    batch: RecordBatch,
+    /// Index of the next input row to unnest.
+    row_offset: usize,
+    /// How many output rows each input row expands into, indexed by input row.
+    ///
+    /// `None` when the expansion cannot be predicted from the input alone, in which case
+    /// the whole remaining input is unnested in one call and only the output is split.
+    /// See [`UnnestStream::predict_output_lens`].
+    output_lens: Option<PrimitiveArray<Int64Type>>,
+}
+
+impl PendingInput {
+    fn remaining_rows(&self) -> usize {
+        self.batch.num_rows() - self.row_offset
+    }
+
+    /// How many input rows to unnest next so the resulting batch holds at most
+    /// `batch_size` rows.
+    fn next_chunk_rows(&self, batch_size: usize) -> usize {
+        let Some(output_lens) = &self.output_lens else {
+            return self.remaining_rows();
+        };
+
+        let lens = &output_lens.values()[self.row_offset..];
+        let batch_size = batch_size as i64;
+        let mut output_rows = 0i64;
+        for (rows, len) in lens.iter().enumerate() {
+            // The first row is always taken, even if it alone overshoots `batch_size`: an
+            // input row is never split across builds, so this is what guarantees progress.
+            // An oversized build is sliced down by `BatchSplitStream` on the way out.
+            if rows > 0 && output_rows + len > batch_size {
+                return rows;
+            }
+            output_rows += len;
+        }
+        lens.len()
+    }
+
+    /// The per-row output lengths covering the next `rows` input rows, so the unnesting
+    /// does not have to recompute what `predict_output_lens` already derived.
+    fn chunk_lengths(&self, rows: usize) -> Option<PrimitiveArray<Int64Type>> {
+        self.output_lens
+            .as_ref()
+            .map(|lens| lens.slice(self.row_offset, rows))
+    }
 }
 
 impl RecordBatchStream for UnnestStream {
@@ -546,30 +626,59 @@ impl UnnestStream {
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Result<RecordBatch>>> {
         loop {
-            return Poll::Ready(match ready!(self.input.poll_next_unpin(cx)) {
+            // Unnest the next chunk of the input batch already in hand.
+            if let Some(pending) = self.pending_input.as_mut() {
+                // `PendingInput` is only built from a non-empty batch and `next_chunk_rows`
+                // always consumes at least one row, so it is dropped the moment it drains.
+                debug_assert!(pending.remaining_rows() > 0);
+
+                let rows = pending.next_chunk_rows(self.batch_size);
+                let chunk = pending.batch.slice(pending.row_offset, rows);
+                let chunk_lengths = pending.chunk_lengths(rows);
+                pending.row_offset += rows;
+                let drained = pending.remaining_rows() == 0;
+
+                let timer = self.metrics.baseline_metrics.elapsed_compute().timer();
+                let result = build_batch(
+                    &chunk,
+                    &self.schema,
+                    &self.list_type_columns,
+                    &self.struct_column_indices,
+                    &self.options,
+                    chunk_lengths.as_ref(),
+                );
+                timer.done();
+
+                if drained {
+                    self.pending_input = None;
+                }
+
+                // A chunk can legitimately produce no rows at all, for example when every
+                // list in it is empty under `NullHandling::Drop`; `build_batch` signals
+                // that with `None` rather than an empty batch.
+                if let Some(batch) = result? {
+                    debug_assert!(batch.num_rows() > 0);
+                    return Poll::Ready(Some(Ok(batch)));
+                }
+                continue;
+            }
+
+            // Otherwise pull the next input batch.
+            match ready!(self.input.poll_next_unpin(cx)) {
                 Some(Ok(batch)) => {
-                    let elapsed_compute =
-                        self.metrics.baseline_metrics.elapsed_compute().clone();
-                    let timer = elapsed_compute.timer();
                     self.metrics.input_batches.add(1);
                     self.metrics.input_rows.add(batch.num_rows());
-                    let result = build_batch(
-                        &batch,
-                        &self.schema,
-                        &self.list_type_columns,
-                        &self.struct_column_indices,
-                        &self.options,
-                    )?;
-                    timer.done();
-                    let Some(result_batch) = result else {
-                        continue;
-                    };
-                    (&result_batch).record_output(&self.metrics.baseline_metrics);
-
-                    // Empty record batches should not be emitted.
-                    // They need to be treated as  [`Option<RecordBatch>`]es and handled separately
-                    debug_assert!(result_batch.num_rows() > 0);
-                    Some(Ok(result_batch))
+                    if batch.num_rows() > 0 {
+                        let timer =
+                            self.metrics.baseline_metrics.elapsed_compute().timer();
+                        let output_lens = self.predict_output_lens(&batch);
+                        timer.done();
+                        self.pending_input = Some(PendingInput {
+                            batch,
+                            row_offset: 0,
+                            output_lens: output_lens?,
+                        });
+                    }
                 }
                 // If the stream is depleted or returned an error, log the finish message:
                 other => {
@@ -590,10 +699,47 @@ impl UnnestStream {
                         self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
                     }
 
-                    other
+                    return Poll::Ready(other);
                 }
-            });
+            }
         }
+    }
+
+    /// Compute how many output rows each input row of `batch` will expand into, so the
+    /// input can be chunked to keep each build bounded.
+    ///
+    /// Returns `None` when the count cannot be derived from the input alone, which is the
+    /// signal to unnest the whole batch in one call:
+    ///
+    /// * With no list columns, unnesting only widens structs and leaves the row count
+    ///   alone, so the output is already bounded by the input batch size.
+    /// * With recursion (`depth > 1`), a row's expansion depends on the lengths of inner
+    ///   lists that only exist after the outer levels have been unnested, so it cannot be
+    ///   predicted up front.
+    fn predict_output_lens(
+        &self,
+        batch: &RecordBatch,
+    ) -> Result<Option<PrimitiveArray<Int64Type>>> {
+        if self.list_type_columns.is_empty()
+            || self
+                .list_type_columns
+                .iter()
+                .any(|unnest| unnest.depth != 1)
+        {
+            return Ok(None);
+        }
+
+        let list_arrays: Vec<ArrayRef> = self
+            .list_type_columns
+            .iter()
+            .map(|unnest| Arc::clone(batch.column(unnest.index_in_input_schema)))
+            .collect();
+
+        // This is exactly the per-row length that `list_unnest_at_level` derives when it
+        // actually unnests, so the chunk boundaries are exact rather than estimated, and
+        // each chunk's slice of it is handed back to `build_batch` instead of recomputed.
+        let longest_length = find_longest_length(&list_arrays, &self.options)?;
+        Ok(Some(longest_length.as_primitive::<Int64Type>().clone()))
     }
 }
 
@@ -686,6 +832,7 @@ fn list_unnest_at_level(
     temp_unnested_arrs: &mut HashMap<ListUnnest, ArrayRef>,
     level_to_unnest: usize,
     options: &UnnestOptions,
+    precomputed_lengths: Option<&PrimitiveArray<Int64Type>>,
 ) -> Result<Option<Vec<ArrayRef>>> {
     // Extract unnestable columns at this level
     let (arrs_to_unnest, list_unnest_specs): (Vec<Arc<dyn Array>>, Vec<_>) =
@@ -712,8 +859,17 @@ fn list_unnest_at_level(
 
     // Filter out so that list_arrays only contain column with the highest depth
     // at the same time, during iteration remove this depth so next time we don't have to unnest them again
-    let longest_length = find_longest_length(&arrs_to_unnest, options)?;
-    let unnested_length = longest_length.as_primitive::<Int64Type>();
+    //
+    // The caller may already have computed these lengths to decide how many input rows to
+    // feed us; reusing them avoids running the kernel chain twice over the same rows.
+    // Cloning is an `Arc` bump on the underlying buffer, not a copy.
+    let longest_length = match precomputed_lengths {
+        Some(lengths) => lengths.clone(),
+        None => find_longest_length(&arrs_to_unnest, options)?
+            .as_primitive::<Int64Type>()
+            .clone(),
+    };
+    let unnested_length = &longest_length;
     let total_length = if unnested_length.is_empty() {
         0
     } else {
@@ -830,6 +986,7 @@ fn build_batch(
     list_type_columns: &[ListUnnest],
     struct_column_indices: &HashSet<usize>,
     options: &UnnestOptions,
+    precomputed_lengths: Option<&PrimitiveArray<Int64Type>>,
 ) -> Result<Option<RecordBatch>> {
     let transformed = match list_type_columns.len() {
         0 => flatten_struct_cols(batch.columns(), schema, struct_column_indices),
@@ -851,12 +1008,21 @@ fn build_batch(
                     true => batch.columns(),
                     false => &flatten_arrs,
                 };
+                // Only sound for a single non-recursive level: with recursion the deeper
+                // levels' lengths depend on arrays that do not exist yet, which is also why
+                // the caller does not predict lengths in that case.
+                let level_lengths = if max_recursion == 1 {
+                    precomputed_lengths
+                } else {
+                    None
+                };
                 let Some(temp_result) = list_unnest_at_level(
                     input,
                     list_type_columns,
                     &mut temp_unnested_result,
                     depth,
                     options,
+                    level_lengths,
                 )?
                 else {
                     return Ok(None);
@@ -1269,12 +1435,13 @@ fn repeat_arrs_from_indices(
 mod tests {
     use super::*;
     use arrow::array::{
-        GenericListArray, NullBufferBuilder, OffsetSizeTrait, StringArray,
+        GenericListArray, Int32Array, NullBufferBuilder, OffsetSizeTrait, StringArray,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer};
     use arrow::datatypes::{Field, Int32Type};
     use datafusion_common::NullHandling;
     use datafusion_common::test_util::batches_to_string;
+    use datafusion_physical_expr_common::metrics::MetricValue;
     use insta::assert_snapshot;
 
     // Create a GenericListArray with the following list values:
@@ -1459,6 +1626,7 @@ mod tests {
                 null_handling: NullHandling::Preserve,
                 recursions: vec![],
             },
+            None,
         )?
         .unwrap();
 
@@ -1503,8 +1671,7 @@ mod tests {
         //   NULL      -> one  row  with c2 = 5 and unnested value NULL
         //   [NULL, F] -> two  rows with c2 = 6, 6
         let list_array = Arc::new(make_generic_array::<i32>()) as ArrayRef;
-        let other =
-            Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3, 4, 5, 6])) as ArrayRef;
+        let other = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6])) as ArrayRef;
         let in_schema = Arc::new(Schema::new(vec![
             Field::new(
                 "c1",
@@ -1535,6 +1702,7 @@ mod tests {
                 null_handling: NullHandling::PreserveAndExpandEmpty,
                 recursions: vec![],
             },
+            None,
         )?
         .unwrap();
 
@@ -1562,8 +1730,7 @@ mod tests {
     #[test]
     fn test_build_batch_preserve_and_expand_empty_largelist() -> Result<()> {
         let list_array = Arc::new(make_generic_array::<i64>()) as ArrayRef;
-        let other =
-            Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3, 4, 5, 6])) as ArrayRef;
+        let other = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6])) as ArrayRef;
         let in_schema = Arc::new(Schema::new(vec![
             Field::new(
                 "c1",
@@ -1597,6 +1764,7 @@ mod tests {
                 null_handling: NullHandling::PreserveAndExpandEmpty,
                 recursions: vec![],
             },
+            None,
         )?
         .unwrap();
 
@@ -1647,8 +1815,7 @@ mod tests {
             b.append(false);
             b.finish()
         };
-        let id =
-            Arc::new(arrow::array::Int32Array::from(vec![10, 20, 30, 40])) as ArrayRef;
+        let id = Arc::new(Int32Array::from(vec![10, 20, 30, 40])) as ArrayRef;
 
         let in_schema = Arc::new(Schema::new(vec![
             Field::new(
@@ -1696,6 +1863,7 @@ mod tests {
                 null_handling: NullHandling::PreserveAndExpandEmpty,
                 recursions: vec![],
             },
+            None,
         )?
         .unwrap();
 
@@ -1817,6 +1985,7 @@ mod tests {
                 null_handling: NullHandling::PreserveAndExpandEmpty,
                 recursions: vec![],
             },
+            None,
         )?
         .unwrap();
 
@@ -2003,6 +2172,293 @@ mod tests {
         let take_indices = create_take_indices(&length_array, 6);
         let expected = Int64Array::from(vec![0, 0, 1, 1, 1, 2]);
         assert_eq!(take_indices, expected);
+        Ok(())
+    }
+
+    /// Build a single-column `List<Int32>` batch where row `i` holds `lens[i]` elements,
+    /// numbered consecutively from 0 across the whole batch. A `None` length is a NULL
+    /// list.
+    fn list_batch(lens: &[Option<usize>]) -> RecordBatch {
+        let mut next = 0i32;
+        let rows: Vec<Option<Vec<Option<i32>>>> = lens
+            .iter()
+            .map(|len| {
+                len.map(|len| {
+                    (0..len)
+                        .map(|_| {
+                            next += 1;
+                            Some(next - 1)
+                        })
+                        .collect()
+                })
+            })
+            .collect();
+        let list = ListArray::from_iter_primitive::<Int32Type, _, _>(rows);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "l",
+            list.data_type().clone(),
+            true,
+        )]));
+        RecordBatch::try_new(schema, vec![Arc::new(list)]).unwrap()
+    }
+
+    /// Run a depth-1 unnest of column "l" over `input`, with the given
+    /// `datafusion.execution.batch_size`, and return the output batches.
+    async fn unnest_with_batch_size(
+        input: Vec<RecordBatch>,
+        batch_size: usize,
+        options: UnnestOptions,
+    ) -> Result<Vec<RecordBatch>> {
+        unnest_at_depth(input, batch_size, options, 1).await
+    }
+
+    /// Unnest column "l" of `input` to `depth`, with the given
+    /// `datafusion.execution.batch_size`, and return the output batches.
+    async fn unnest_at_depth(
+        input: Vec<RecordBatch>,
+        batch_size: usize,
+        options: UnnestOptions,
+        depth: usize,
+    ) -> Result<Vec<RecordBatch>> {
+        Ok(
+            unnest_at_depth_with_metrics(input, batch_size, options, depth)
+                .await?
+                .0,
+        )
+    }
+
+    async fn unnest_at_depth_with_metrics(
+        input: Vec<RecordBatch>,
+        batch_size: usize,
+        options: UnnestOptions,
+        depth: usize,
+    ) -> Result<(Vec<RecordBatch>, MetricsSet)> {
+        let input_schema = input[0].schema();
+        let output_schema =
+            Arc::new(Schema::new(vec![Field::new("l", DataType::Int32, true)]));
+        let source =
+            crate::test::TestMemoryExec::try_new_exec(&[input], input_schema, None)?;
+        let unnest = UnnestExec::new(
+            source,
+            vec![ListUnnest {
+                index_in_input_schema: 0,
+                depth,
+            }],
+            vec![],
+            output_schema,
+            options,
+        )?;
+        let task_ctx = Arc::new(
+            TaskContext::default().with_session_config(
+                datafusion_execution::config::SessionConfig::new()
+                    .with_batch_size(batch_size),
+            ),
+        );
+        let batches = crate::common::collect(unnest.execute(0, task_ctx)?).await?;
+        let metrics = unnest.metrics().expect("UnnestExec exposes metrics");
+        Ok((batches, metrics))
+    }
+
+    /// The values an unnest produces, flattened across all output batches.
+    fn output_values(batches: &[RecordBatch]) -> Vec<Option<i32>> {
+        batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_primitive::<Int32Type>()
+                    .iter()
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// Output batch sizes are fully determined by the input lengths and `batch_size`, so
+    /// assert the exact shapes rather than just the `<= batch_size` bound. Each case pins a
+    /// distinct path through `next_chunk_rows`.
+    #[tokio::test]
+    async fn test_unnest_stream_output_batch_shapes() -> Result<()> {
+        struct Case {
+            /// One inner slice per input batch, each of that batch's per-row list lengths.
+            lens_per_batch: &'static [&'static [Option<usize>]],
+            batch_size: usize,
+            expected_sizes: &'static [usize],
+        }
+        let cases: &[Case] = &[
+            // Chunks pack several input rows. This is the case that distinguishes chunking
+            // the input from building everything and slicing: slicing a single 30-row build
+            // would give [8, 8, 8, 6].
+            Case {
+                lens_per_batch: &[&[Some(3); 10]],
+                batch_size: 8,
+                expected_sizes: &[6, 6, 6, 6, 6],
+            },
+            // Output smaller than batch_size comes back as one batch.
+            Case {
+                lens_per_batch: &[&[Some(3), Some(2)]],
+                batch_size: 1024,
+                expected_sizes: &[5],
+            },
+            // One row expanding past batch_size cannot be chunked on the input side, so the
+            // oversized build is sliced on the way out instead.
+            Case {
+                lens_per_batch: &[&[Some(25)]],
+                batch_size: 10,
+                expected_sizes: &[10, 10, 5],
+            },
+            // Chunk boundaries are per input batch, so each batch contributes a short tail.
+            Case {
+                lens_per_batch: &[&[Some(5), Some(5)], &[Some(1)], &[Some(7), Some(2)]],
+                batch_size: 4,
+                expected_sizes: &[4, 1, 4, 1, 1, 4, 3, 2],
+            },
+        ];
+
+        for case in cases {
+            let input: Vec<RecordBatch> = case
+                .lens_per_batch
+                .iter()
+                .map(|lens| list_batch(lens))
+                .collect();
+            let batches =
+                unnest_with_batch_size(input, case.batch_size, UnnestOptions::default())
+                    .await?;
+
+            let sizes: Vec<usize> = batches.iter().map(|b| b.num_rows()).collect();
+            assert_eq!(
+                sizes, case.expected_sizes,
+                "lens={:?} batch_size={}",
+                case.lens_per_batch, case.batch_size
+            );
+
+            // `list_batch` numbers each batch's elements from 0, so the expected values are
+            // one run per input batch. Splitting must not perturb values or their order.
+            let expected_values: Vec<Option<i32>> = case
+                .lens_per_batch
+                .iter()
+                .flat_map(|lens| {
+                    (0..lens.iter().flatten().sum::<usize>() as i32).map(Some)
+                })
+                .collect();
+            assert_eq!(
+                output_values(&batches),
+                expected_values,
+                "lens={:?} batch_size={}",
+                case.lens_per_batch,
+                case.batch_size
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_unnest_stream_output_metrics_after_split() -> Result<()> {
+        let (batches, metrics) = unnest_at_depth_with_metrics(
+            vec![list_batch(&[Some(25)])],
+            10,
+            UnnestOptions::default(),
+            1,
+        )
+        .await?;
+
+        assert_eq!(
+            batches
+                .iter()
+                .map(RecordBatch::num_rows)
+                .collect::<Vec<_>>(),
+            vec![10, 10, 5]
+        );
+        let output_batches = metrics
+            .sum(|metric| matches!(metric.value(), MetricValue::OutputBatches(_)))
+            .expect("output_batches metric exists")
+            .as_usize();
+        assert_eq!(output_batches, batches.len());
+        let output_rows = metrics
+            .sum(|metric| matches!(metric.value(), MetricValue::OutputRows(_)))
+            .expect("output_rows metric exists")
+            .as_usize();
+        assert_eq!(
+            output_rows,
+            batches.iter().map(RecordBatch::num_rows).sum::<usize>()
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_unnest_stream_chunking_preserves_null_handling() -> Result<()> {
+        // NULL and empty lists each contribute one NULL output row under
+        // PreserveAndExpandEmpty, and the per-row output counts that drive chunking must
+        // agree with that or chunk boundaries would drift out of step with the unnesting.
+        let lens = &[Some(3), Some(0), None, Some(2), None, Some(0)];
+        let options =
+            UnnestOptions::new().with_null_handling(NullHandling::PreserveAndExpandEmpty);
+
+        let chunked =
+            unnest_with_batch_size(vec![list_batch(lens)], 2, options.clone()).await?;
+        let whole = unnest_with_batch_size(vec![list_batch(lens)], 1024, options).await?;
+
+        assert!(chunked.iter().all(|b| b.num_rows() <= 2));
+        // 3 + 1 + 1 + 2 + 1 + 1
+        assert_eq!(chunked.iter().map(|b| b.num_rows()).sum::<usize>(), 9);
+        assert_eq!(output_values(&chunked), output_values(&whole));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_unnest_stream_drop_null_handling() -> Result<()> {
+        // Under Drop, NULL and empty lists produce nothing. Chunks made up entirely of
+        // such rows yield no batch at all, and must not stall the stream or leak an
+        // empty batch into the output.
+        let lens = &[None, Some(0), None, Some(4), Some(0), None];
+        let options = UnnestOptions::new().with_null_handling(NullHandling::Drop);
+
+        let batches = unnest_with_batch_size(vec![list_batch(lens)], 2, options).await?;
+
+        assert!(batches.iter().all(|b| b.num_rows() > 0));
+        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 4);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_unnest_stream_recursive_respects_batch_size() -> Result<()> {
+        // Recursive unnest cannot have its expansion predicted from the input, so it falls
+        // back to unnesting a whole input batch and slicing the output. The batch_size
+        // guarantee has to hold on that path too.
+        let inner = Field::new_list_field(DataType::Int32, true);
+        let outer =
+            Field::new_list_field(DataType::new_list(DataType::Int32, true), true);
+        let values = Int32Array::from((0..24).collect::<Vec<_>>());
+        // 12 inner lists of 2 elements each...
+        let inner_list = ListArray::new(
+            Arc::new(inner),
+            OffsetBuffer::new((0..=12).map(|i| i * 2).collect::<Vec<i32>>().into()),
+            Arc::new(values),
+            None,
+        );
+        // ...grouped 3 to a row, so 4 input rows expand to 24 output rows at depth 2.
+        let outer_list = ListArray::new(
+            Arc::new(outer),
+            OffsetBuffer::new((0..=4).map(|i| i * 3).collect::<Vec<i32>>().into()),
+            Arc::new(inner_list),
+            None,
+        );
+        let input_schema = Arc::new(Schema::new(vec![Field::new(
+            "l",
+            outer_list.data_type().clone(),
+            true,
+        )]));
+        let input = RecordBatch::try_new(input_schema, vec![Arc::new(outer_list)])?;
+
+        let batches =
+            unnest_at_depth(vec![input], 7, UnnestOptions::default(), 2).await?;
+
+        let sizes: Vec<usize> = batches.iter().map(|b| b.num_rows()).collect();
+        assert_eq!(sizes, vec![7, 7, 7, 3]);
+        assert_eq!(
+            output_values(&batches),
+            (0..24).map(Some).collect::<Vec<_>>()
+        );
         Ok(())
     }
 }
