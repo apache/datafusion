@@ -57,6 +57,7 @@ use half::f16;
 use std::collections::VecDeque;
 use std::mem::{size_of, size_of_val};
 use std::ops::Deref;
+use arrow::datatypes::DataType::{Binary, BinaryView, LargeBinary, LargeUtf8, Utf8, Utf8View};
 use datafusion_expr::groups_accumulator::BlockedGroupsAccumulator;
 use datafusion_functions_aggregate_common::accumulator::BlockedAccumulatorArgs;
 
@@ -857,6 +858,11 @@ impl AggregateUDFImpl for Min {
                 | Time32(_)
                 | Time64(_)
                 | Timestamp(_, _)
+                | Utf8
+                | LargeUtf8
+                | Utf8View
+                | Binary
+                | LargeBinary
         )
     }
 
@@ -935,6 +941,9 @@ impl AggregateUDFImpl for Min {
             }
             Decimal256(_, _) => {
                 primitive_min_blocked_accumulator!(data_type, i256, Decimal256Type, batch_size)
+            }
+            Utf8 | LargeUtf8 | Utf8View | Binary | LargeBinary | BinaryView => {
+                Ok(Box::new(MinMaxBytesBlockedAccumulator::new_min(data_type.clone(), args.batch_size)))
             }
             // This is only reached if blocked_groups_accumulator_supported is out of sync
             _ => internal_err!("BlockedGroupsAccumulator not supported for min({})", data_type),
@@ -1314,6 +1323,7 @@ make_udaf_expr_and_func!(
 pub use datafusion_functions_aggregate_common::min_max::{
     MaxAccumulator, MinAccumulator,
 };
+use crate::min_max::blocked_min_max_bytes::MinMaxBytesBlockedAccumulator;
 
 #[cfg(test)]
 mod tests {
