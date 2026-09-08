@@ -1089,6 +1089,23 @@ impl BufferedExtreme {
     }
 }
 
+/// Folds `next` into `running`, re-reducing the pair rather than comparing them directly so
+/// the combined value is ordered exactly as each single reduction was. `extreme_key` ignores
+/// nulls, so a null from an all-NULL batch or partition never displaces a real key.
+fn fold_extreme(
+    running: Option<ArrayRef>,
+    next: ArrayRef,
+    descending: bool,
+) -> Result<ArrayRef> {
+    match running {
+        Some(running) => {
+            let pair = concat(&[running.as_ref(), next.as_ref()])?;
+            extreme_key(&pair, descending)
+        }
+        None => Ok(next),
+    }
+}
+
 /// Reduces one buffered partition to a single extreme key, dropping each batch as it goes.
 /// `None` when the partition produced no batch at all.
 async fn partition_extreme(
@@ -1112,17 +1129,7 @@ async fn partition_extreme(
         reservation.try_resize(keys.get_array_memory_size())?;
 
         let batch_extreme = extreme_key(&keys, descending)?;
-
-        // Re-reduced as a pair rather than compared, so the running value is ordered exactly
-        // as each single reduction was. `extreme_key` ignores nulls, so a null from an
-        // all-NULL batch never displaces a real key.
-        extreme = Some(match extreme {
-            Some(running) => {
-                let pair = concat(&[running.as_ref(), batch_extreme.as_ref()])?;
-                extreme_key(&pair, descending)?
-            }
-            None => batch_extreme,
-        });
+        extreme = Some(fold_extreme(extreme, batch_extreme, descending)?);
     }
 
     Ok(extreme)
@@ -1175,15 +1182,9 @@ async fn build_buffered_extreme(
             internal_datafusion_err!("buffered extreme task failed: {e}")
         })??;
         if let Some(partition_extreme) = partition_extreme {
-            // Re-reduced as a pair, exactly as the batches within a partition were, so a value
-            // accumulated across partitions is ordered by the same rule.
-            extreme = Some(match extreme {
-                Some(running) => {
-                    let pair = concat(&[running.as_ref(), partition_extreme.as_ref()])?;
-                    extreme_key(&pair, descending)?
-                }
-                None => partition_extreme,
-            });
+            // Same fold as within a partition, so a value accumulated across partitions is
+            // ordered by the same rule.
+            extreme = Some(fold_extreme(extreme, partition_extreme, descending)?);
         }
     }
 
