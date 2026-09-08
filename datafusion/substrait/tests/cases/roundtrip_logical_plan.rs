@@ -465,6 +465,92 @@ async fn decimal_literal() -> Result<()> {
 }
 
 #[tokio::test]
+async fn decimal_arithmetic_output_type_contract() -> Result<()> {
+    use datafusion::arrow::array::Decimal128Array;
+    use datafusion::arrow::record_batch::RecordBatch;
+    use substrait::proto::expression::RexType;
+    use substrait::proto::r#type::Kind;
+
+    for (left, right, op, native, declared, expected) in [
+        ((10, 2), (5, 1), "+", (11, 2), (11, 2), 400_i128),
+        ((38, 10), (38, 10), "+", (38, 10), (38, 9), 40_000_000_000),
+        ((10, 2), (5, 1), "*", (16, 3), (16, 3), 3000),
+        (
+            (38, 10),
+            (38, 10),
+            "*",
+            (38, 20),
+            (38, 6),
+            300_000_000_000_000_000_000,
+        ),
+        ((10, 2), (5, 1), "/", (15, 6), (21, 8), 333_333),
+    ] {
+        let ctx = SessionContext::new();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Decimal128(left.0, left.1), false),
+            Field::new("b", DataType::Decimal128(right.0, right.1), false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(
+                    Decimal128Array::from(vec![10_i128.pow(left.1 as u32)])
+                        .with_precision_and_scale(left.0, left.1)?,
+                ),
+                Arc::new(
+                    Decimal128Array::from(vec![3 * 10_i128.pow(right.1 as u32)])
+                        .with_precision_and_scale(right.0, right.1)?,
+                ),
+            ],
+        )?;
+        ctx.register_batch("decimals", batch)?;
+        let df = ctx
+            .sql(&format!("SELECT a {op} b AS result FROM decimals"))
+            .await?;
+        let mut proto = to_substrait_plan(df.logical_plan(), &ctx.state())?;
+
+        // DataFusion-produced declarations retain their schema and execution.
+        let consumed = from_substrait_plan(&ctx.state(), &proto).await?;
+        let expected_type = DataType::Decimal128(native.0, native.1);
+        assert_eq!(consumed.schema().field(0).data_type(), &expected_type);
+        let batches = ctx.execute_logical_plan(consumed).await?.collect().await?;
+        assert_eq!(
+            ScalarValue::try_from_array(batches[0].column(0), 0)?,
+            ScalarValue::Decimal128(Some(expected), native.0, native.1)
+        );
+
+        // Replace the producer's return type with the Substrait decimal rule.
+        let Some(plan_rel::RelType::Root(root)) = &mut proto.relations[0].rel_type else {
+            panic!("expected root relation")
+        };
+        let Some(RelType::Project(project)) = &mut root.input.as_mut().unwrap().rel_type
+        else {
+            panic!("expected projection")
+        };
+        let Some(RexType::ScalarFunction(function)) =
+            &mut project.expressions[0].rex_type
+        else {
+            panic!("expected scalar function")
+        };
+        let Some(Kind::Decimal(decimal)) =
+            &mut function.output_type.as_mut().unwrap().kind
+        else {
+            panic!("expected decimal output type")
+        };
+        decimal.precision = declared.0;
+        decimal.scale = declared.1;
+        let result = from_substrait_plan(&ctx.state(), &proto).await;
+        if native == (declared.0 as u8, declared.1 as i8) {
+            assert_eq!(result?.schema().field(0).data_type(), &expected_type);
+        } else {
+            let err = result.unwrap_err().to_string();
+            assert!(err.contains("Decimal return type mismatch"), "{err}");
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn null_decimal_literal() -> Result<()> {
     roundtrip("SELECT *, CAST(NULL AS decimal(10, 2)) FROM data").await
 }
