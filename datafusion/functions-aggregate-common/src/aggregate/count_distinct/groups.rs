@@ -89,7 +89,10 @@ where
 
         match emit_to {
             EmitTo::All => {
-                self.seen.clear();
+                // Release the capacity, not just the entries: `size()` reports
+                // capacity, and the aggregate streams rely on it dropping after
+                // emitting everything.
+                self.seen = HashSet::default();
             }
             EmitTo::First(n) => {
                 let mut remaining = HashSet::default();
@@ -145,7 +148,9 @@ where
                 all_values[pos] = value;
                 cursors[group_idx] += 1;
             }
-            self.counts.clear();
+            // Release the capacity, see `evaluate`.
+            self.seen = HashSet::default();
+            self.counts = Vec::new();
         } else {
             let mut remaining = HashSet::default();
             for (group_idx, value) in self.seen.drain() {

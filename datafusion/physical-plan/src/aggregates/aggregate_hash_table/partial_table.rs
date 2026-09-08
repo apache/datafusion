@@ -15,24 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, new_null_array};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, assert_eq_or_internal_err};
 
 use crate::aggregates::group_values::{AccumulatorPhase, new_group_values};
 use crate::aggregates::order::GroupOrdering;
-use crate::aggregates::{
-    AggregateExec, evaluate_group_by, group_id_array, max_duplicate_ordinal,
-};
+use crate::aggregates::{AggregateExec, evaluate_group_by};
 
 use super::common::{
     AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState,
-    CompactedAccumulatorArgs, HashAggregateAccumulator, PartialMarker, PartialSkipMarker,
+    HashAggregateAccumulator, PartialMarker, PartialSkipMarker,
 };
 
 /// Implementation specific to partial aggregation, where the table stores
@@ -127,75 +123,6 @@ impl AggregateHashTable<PartialMarker> {
         self.start_outputting();
         Ok(())
     }
-
-    /// Creates the required empty grouping-set rows when the input is empty.
-    ///
-    /// For example, this query must still produce one grand-total group even if
-    /// `t` has no rows:
-    ///
-    /// ```sql
-    /// SELECT COUNT(v)
-    /// FROM t
-    /// GROUP BY GROUPING SETS (());
-    /// ```
-    ///
-    /// Accumulators receive zero argument rows and zero group IDs, together with the
-    /// full registered group count, so they produce the same state as empty input.
-    fn init_empty_grouping_sets(&mut self) -> Result<()> {
-        let state = self.state.building_mut();
-        if !state.group_by.has_grouping_set() || !state.group_values.is_empty() {
-            return Ok(());
-        }
-
-        let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
-        let max_ordinal = max_duplicate_ordinal(state.group_by.groups());
-        let mut ordinals: HashMap<&[bool], usize> = HashMap::new();
-        let group_schema = state.group_by.group_schema(&self.input_schema)?;
-        let n_expr = state.group_by.expr().len();
-        let mut any_interned = false;
-
-        for group in state.group_by.groups() {
-            let ordinal = {
-                let entry = ordinals.entry(group.as_slice()).or_insert(0);
-                let ordinal = *entry;
-                *entry += 1;
-                ordinal
-            };
-
-            if !group.iter().all(|&is_null| is_null) {
-                continue;
-            }
-
-            let mut cols: Vec<ArrayRef> = group_schema
-                .fields()
-                .iter()
-                .take(n_expr)
-                .map(|field| new_null_array(field.data_type(), 1))
-                .collect();
-            cols.push(group_id_array(group, ordinal, max_ordinal, 1)?);
-
-            state
-                .group_values
-                .intern(&cols, &mut state.batch_group_indices)?;
-            any_interned = true;
-        }
-
-        if any_interned {
-            let total_groups = state.group_values.len();
-            for (idx, acc) in state.accumulators.iter_mut().enumerate() {
-                let null_args = acc.null_arguments(&self.input_schema, 0)?;
-                let values = CompactedAccumulatorArgs {
-                    arguments: null_args,
-                    selection: None,
-                };
-                accumulator_metrics.time(idx, AccumulatorPhase::Update, || {
-                    acc.update_batch(&values, &[], total_groups)
-                })?;
-            }
-        }
-
-        Ok(())
-    }
 }
 
 impl AggregateHashTable<PartialSkipMarker> {
@@ -204,9 +131,9 @@ impl AggregateHashTable<PartialSkipMarker> {
         batch: &RecordBatch,
     ) -> Result<RecordBatch> {
         let state = self.state.building();
-        let timer = self.group_by_metrics.time_calculating_group_ids.timer();
-        let grouping_set_args = evaluate_group_by(&state.group_by, batch)?;
-        drop(timer);
+        let grouping_set_args = self
+            .group_by_metrics
+            .time_group_key_preparation(|| evaluate_group_by(&state.group_by, batch))?;
 
         assert_eq_or_internal_err!(
             grouping_set_args.len(),
@@ -217,11 +144,10 @@ impl AggregateHashTable<PartialSkipMarker> {
 
         let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
         for (idx, acc) in state.accumulators.iter().enumerate() {
-            let values = {
-                let _timer = self.group_by_metrics.aggregate_arguments_time.timer();
+            let values = self.group_by_metrics.time_aggregate_arguments(|| {
                 self.aggregate_argument_metrics
                     .time(idx, || acc.evaluate_row_aligned_args(batch))
-            }?;
+            })?;
 
             output.extend(accumulator_metrics.time(
                 idx,
