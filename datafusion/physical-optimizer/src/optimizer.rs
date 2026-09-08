@@ -152,6 +152,9 @@ impl PhysicalOptimizer {
             // This can possibly be combined with [LimitPushdown]
             // It needs to come after [EnsureRequirements] (which handles sort enforcement)
             Arc::new(LimitPushPastWindows::new()),
+            // The BufferInsertion rule adds BufferExec nodes to eagerly buffer the probe side of hash joins
+            // and/or small data source scans.
+            Arc::new(BufferInsertion::new()),
             // The LimitPushdown rule tries to push limits down as far as possible,
             // replacing operators with fetching variants, or adding limits
             // past operators that support limit pushdown.
@@ -170,9 +173,6 @@ impl PhysicalOptimizer {
             Arc::new(ProjectionPushdown::new()),
             // PushdownSort: Detect sorts that can be pushed down to data sources.
             Arc::new(PushdownSort::new()),
-            // The BufferingRule adds BufferExec nodes to eagerly buffer the probe side of hash joins
-            // and/or small data source scans.
-            Arc::new(BufferInsertion::new()),
             Arc::new(EnsureCooperative::new()),
             // This FilterPushdown handles dynamic filters that may have references to the source ExecutionPlan.
             // Therefore, it should be run at the end of the optimization process since any changes to the plan may break the dynamic filter's references.
