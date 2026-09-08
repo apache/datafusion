@@ -1422,6 +1422,26 @@ struct FallbackCoordinatorInner {
     /// True while a partition has claimed leader role for the next
     /// chunk and is loading it; prevents two partitions from racing.
     loader_in_flight: bool,
+    /// A partition was dropped while still `Pending`, before the shared load
+    /// decided whether the left side spills.
+    ///
+    /// `Pending` is entered by every eligible execution, including those whose
+    /// left side ends up fitting in memory -- and those never build a shared
+    /// chunk counter, so their right partitions stay independent and a dropped
+    /// peer has nothing to coordinate. Cancelling on such a drop would fail a
+    /// query that had no fallback at all, so it is only recorded here.
+    ///
+    /// Paired with `coordination_started`: whichever of the two happens second
+    /// performs the cancellation, so the drop is honoured whether it precedes or
+    /// follows the execution becoming coordinated. A bool suffices -- one lost
+    /// partition is enough to cancel, and nothing reads a count.
+    pending_drop: bool,
+    /// Set once any partition has entered the coordinated path.
+    ///
+    /// Remembered rather than checked in the moment, because a `Pending` drop can
+    /// arrive after a peer is already coordinating; that drop must cancel, and
+    /// without this flag there would be nobody left to notice.
+    coordination_started: bool,
     /// Set when a stream is dropped before finishing, which cancels the whole
     /// coordinated fallback.
     ///
@@ -1489,6 +1509,8 @@ impl FallbackCoordinator {
                 next_chunk_index: 0,
                 current: None,
                 loader_in_flight: false,
+                pending_drop: false,
+                coordination_started: false,
                 cancelled: false,
             }),
             notify: tokio::sync::Notify::new(),
@@ -1548,6 +1570,55 @@ impl FallbackCoordinator {
             notified.await;
         }
         .boxed()
+    }
+
+    /// Records a partition dropped before the shared load decided whether the
+    /// left side spills.
+    ///
+    /// Whether this cancels depends on what the surviving partitions are doing,
+    /// which is why the drop is recorded rather than acted on unconditionally:
+    ///
+    /// * No peer has coordinated yet -- only `pending_drop` is set. If the load
+    ///   resolves to `InMemory` nobody ever coordinates and this stays inert, so
+    ///   an execution that never needed the coordinator is not failed by it.
+    /// * A peer is already coordinating -- cancel now. That peer is waiting on a
+    ///   probe report this partition will never make.
+    ///
+    /// The second case is the mirror of [`Self::begin_coordination`]: the two
+    /// share `pending_drop` and `coordination_started` under one lock, so
+    /// whichever runs second performs the cancellation and neither order is lost.
+    fn record_pending_drop(self: &Arc<Self>) {
+        let cancel_now = {
+            let mut inner = self.inner.lock();
+            if inner.cancelled {
+                return;
+            }
+            inner.pending_drop = true;
+            // A peer may already be coordinating, in which case this drop is not
+            // hypothetical: that peer is waiting on a report this partition will
+            // never make.
+            inner.coordination_started
+        };
+        if cancel_now {
+            self.cancel();
+        }
+    }
+
+    /// Records that this execution is now coordinating, and honours any drop that
+    /// happened while it was not.
+    ///
+    /// Called when a stream enters memory-limited mode. Setting the flag matters
+    /// as much as the check: a `Pending` partition dropped *after* this point has
+    /// to cancel too, and `record_pending_drop` reads this flag to decide that.
+    fn begin_coordination(self: &Arc<Self>) {
+        let cancel_now = {
+            let mut inner = self.inner.lock();
+            inner.coordination_started = true;
+            !inner.cancelled && inner.pending_drop
+        };
+        if cancel_now {
+            self.cancel();
+        }
     }
 
     /// Cancels the coordinated fallback and drops everything the coordinator
@@ -2099,6 +2170,14 @@ pub(crate) struct NestedLoopJoinStream {
     // ========================================================================
     /// State Tracking
     state: NLJState,
+    /// Set when the stream terminated by reporting a cancellation.
+    ///
+    /// `Done` normally means "finished cleanly", and `handle_done` pads an empty
+    /// result with one empty batch so an all-filtered join still carries its
+    /// schema. A cancelled stream has already returned an error and must not then
+    /// emit anything, empty batch included, so it takes the terminal path
+    /// directly.
+    cancelled_terminally: bool,
     /// Registered watcher for the coordinator's cancellation broadcast.
     ///
     /// Polled on every `poll_next` iteration so a stream parked on its own input
@@ -2240,6 +2319,7 @@ impl Stream for NestedLoopJoinStream {
                 };
                 if cancelled {
                     self.state = NLJState::Done;
+                    self.cancelled_terminally = true;
                     self.cancel_watch = None;
                     return Poll::Ready(Some(exec_err!(
                         "NestedLoopJoin coordinated fallback was cancelled because \
@@ -2454,20 +2534,24 @@ impl Drop for NestedLoopJoinStream {
         if matches!(self.state, NLJState::Done) {
             return;
         }
-        // Both states matter. `Active` means this stream was probing chunks;
-        // `Pending` means the fallback was set up but this stream had not taken
-        // one yet, and a partition that vanishes at that point still owes the
-        // report the others are waiting on.
-        let coordinator = match &self.spill_state {
-            SpillState::Active(active) => Some(Arc::clone(&active.coordinator)),
+        // `Active` means this stream was probing shared chunks, so its peers are
+        // already relying on coordination and have to be told now.
+        //
+        // `Pending` is different: it is entered before the shared load decides
+        // whether the left side spills at all, so it does not yet imply a
+        // coordinated execution. Record the drop instead and let the shared
+        // `coordination_started` flag decide: if a peer already coordinates, the
+        // recording call itself cancels; if none has yet, the next one to enter
+        // the coordinated path does. An execution whose left side fits in memory
+        // never enters it and so never cancels -- which is the point, since it
+        // has no coordination to lose.
+        match &self.spill_state {
+            SpillState::Active(active) => Arc::clone(&active.coordinator).cancel(),
             SpillState::Pending {
                 fallback_coordinator,
                 ..
-            } => Some(Arc::clone(fallback_coordinator)),
-            SpillState::Disabled => None,
-        };
-        if let Some(coordinator) = coordinator {
-            coordinator.cancel();
+            } => Arc::clone(fallback_coordinator).record_pending_drop(),
+            SpillState::Disabled => {}
         }
     }
 }
@@ -2499,6 +2583,7 @@ impl NestedLoopJoinStream {
             current_right_batch: None,
             current_right_batch_matched: None,
             state: NLJState::BufferingLeft,
+            cancelled_terminally: false,
             cancel_watch: None,
             left_probe_idx: 0,
             left_emit_idx: 0,
@@ -2612,7 +2697,15 @@ impl NestedLoopJoinStream {
                              entering memory-limited mode"
                         );
                         match self.enter_memory_limited_mode(Arc::clone(left_spill)) {
-                            Ok(()) => ControlFlow::Continue(()),
+                            Ok(()) => {
+                                // Now that this execution is known to coordinate,
+                                // a partition dropped while still `Pending`
+                                // becomes a cancellation.
+                                if let SpillState::Active(active) = &self.spill_state {
+                                    Arc::clone(&active.coordinator).begin_coordination();
+                                }
+                                ControlFlow::Continue(())
+                            }
                             Err(e) => ControlFlow::Break(Poll::Ready(Some(Err(e)))),
                         }
                     }
@@ -3095,6 +3188,12 @@ impl NestedLoopJoinStream {
 
     /// Handle Done state - final state processing
     fn handle_done(&mut self) -> Poll<Option<Result<RecordBatch>>> {
+        // A cancelled stream already reported its error. Nothing may follow it --
+        // not buffered output, and not the empty-result padding below.
+        if self.cancelled_terminally {
+            return Poll::Ready(None);
+        }
+
         // Return any remaining completed batches before final termination
         if let Some(poll) = self.maybe_flush_ready_batch() {
             return poll;
@@ -5938,6 +6037,17 @@ pub(crate) mod tests {
         assert!(matches!(survivor.state, NLJState::BufferingLeft));
         wakes.reset();
         drop(peer);
+        // Both streams are parked on a build load that never resolves, so neither
+        // ever enters the coordinated path and the drop is only recorded -- which
+        // is the correct behaviour, since an execution whose left side might still
+        // fit in memory has no coordination to lose.
+        assert!(
+            !coordinator.is_cancelled(),
+            "a pending drop must not cancel before anything coordinates"
+        );
+        // Once some partition does begin coordinating, the recorded drop applies
+        // and has to reach this parked stream.
+        Arc::clone(&coordinator).begin_coordination();
         assert!(coordinator.is_cancelled());
         assert!(
             wakes.count() > 0,
@@ -6153,6 +6263,13 @@ pub(crate) mod tests {
         assert!(matches!(survivor.state, NLJState::EmitGlobalRightUnmatched));
         wakes.reset();
 
+        // Poll the peer into `Active` first, so its drop exercises the real
+        // wiring: an `Active` partition disappearing cancels immediately, with no
+        // test standing in for the coordinated path being entered.
+        let mut peer = peer;
+        assert!(peer.poll_next_unpin(&mut cx).is_pending());
+        assert!(matches!(peer.spill_state, SpillState::Active(_)));
+        wakes.reset();
         drop(peer);
         assert!(coordinator.is_cancelled());
         assert!(
@@ -6211,11 +6328,91 @@ pub(crate) mod tests {
         assert!(survivor.poll_next_unpin(&mut cx).is_pending());
         assert!(matches!(survivor.state, NLJState::FetchingRight));
         wakes.reset();
+        // Poll the peer into `Active` first, so its drop exercises the real
+        // wiring: an `Active` partition disappearing cancels immediately, with no
+        // test standing in for the coordinated path being entered.
+        let mut peer = peer;
+        assert!(peer.poll_next_unpin(&mut cx).is_pending());
+        assert!(matches!(peer.spill_state, SpillState::Active(_)));
+        wakes.reset();
         drop(peer);
         assert!(coordinator.is_cancelled());
         assert!(
             wakes.count() > 0,
             "cancel must wake the survivor waiting on right input"
+        );
+        Ok(())
+    }
+
+    /// Same terminal behaviour once a partition has already emitted output.
+    ///
+    /// A cancellation that arrives before any row is produced is the easy case.
+    /// Here both partitions emit first -- which is also what carries them into
+    /// the coordinated path -- and the survivor must still end in an error
+    /// followed by `None`, not resume delivering rows from a left side that is
+    /// now missing a prober.
+    ///
+    /// This does not assert that the coalescer holds a partial batch at the
+    /// moment of cancellation; nothing here forces it to. The buffered case is
+    /// covered by `nlj_cancellation_after_buffered_rows_ends_without_output`,
+    /// which establishes that premise before checking the terminal sequence.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn nlj_cancellation_after_emitting_output_ends_in_error() -> Result<()> {
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(50, 1.0)
+            .build_arc()?;
+        // Large enough that the coalescer batches rows rather than emitting each
+        // one, so this exercises a different output path than the shared
+        // `batch_size = 1` fixtures.
+        let cfg = TaskContext::default()
+            .session_config()
+            .clone()
+            .with_batch_size(8192);
+        let ctx = Arc::new(
+            TaskContext::default()
+                .with_runtime(runtime)
+                .with_session_config(cfg),
+        );
+        let right = Arc::new(RepartitionExec::try_new(
+            build_right_table_one_batch_per_row(),
+            Partitioning::RoundRobinBatch(2),
+        )?) as Arc<dyn ExecutionPlan>;
+        let plan = Arc::new(NestedLoopJoinExec::try_new(
+            build_left_table(),
+            right,
+            None,
+            &JoinType::Left,
+            None,
+        )?);
+
+        let mut peer = plan.execute(0, Arc::clone(&ctx))?;
+        let mut survivor = plan.execute(1, Arc::clone(&ctx))?;
+
+        // Both partitions produce output first, which is what carries them into
+        // the coordinated path -- a peer dropped while still `Pending` would only
+        // record the drop, since the left side might not spill at all.
+        peer.next().await.expect("peer output")?;
+        survivor.next().await.expect("survivor output")?;
+
+        drop(peer);
+
+        // Terminal behaviour must be an error, then nothing -- never a flush of
+        // rows produced before a partition went missing.
+        let mut saw_error = false;
+        for _ in 0..8 {
+            match survivor.next().await {
+                Some(Err(_)) => {
+                    saw_error = true;
+                    break;
+                }
+                Some(Ok(_)) => {}
+                None => break,
+            }
+        }
+        assert!(saw_error, "the survivor must report the cancellation");
+        assert!(
+            survivor.next().await.is_none(),
+            "nothing may follow the cancellation error"
         );
         Ok(())
     }
@@ -6313,6 +6510,184 @@ pub(crate) mod tests {
             .expect("a parked loader must observe cancellation");
         assert!(result.is_err());
         assert!(coordinator.inner.lock().current.is_none());
+        Ok(())
+    }
+
+    /// Entering the coordinated path applies a drop recorded before it.
+    ///
+    /// This is the drop-then-coordinate direction: the deferral holds while
+    /// nobody coordinates, and `begin_coordination` converts it. The opposite
+    /// order -- a peer already `Active` when the drop happens -- runs on a real
+    /// plan in `nlj_pending_drop_cancels_active_peer_real_plan`, since the two
+    /// orders take different branches and only both together cover the flags.
+    #[tokio::test]
+    async fn nlj_begin_coordination_applies_prior_pending_drop() -> Result<()> {
+        let coordinator = Arc::new(FallbackCoordinator::new(2, true));
+
+        // A partition goes away while still `Pending`: recorded, not applied.
+        Arc::clone(&coordinator).record_pending_drop();
+        assert!(
+            !coordinator.is_cancelled(),
+            "a pending drop must not cancel before anything coordinates"
+        );
+
+        // A peer then enters the coordinated path and picks the drop up.
+        Arc::clone(&coordinator).begin_coordination();
+        assert!(
+            coordinator.is_cancelled(),
+            "entering the coordinated path must apply a recorded pending drop"
+        );
+        Ok(())
+    }
+
+    /// A recorded pending drop is inert if the execution never coordinates.
+    #[tokio::test]
+    async fn nlj_pending_drop_stays_inert_without_coordination() -> Result<()> {
+        let runtime = RuntimeEnvBuilder::new().build_arc()?;
+        let ctx = Arc::new(TaskContext::default().with_runtime(runtime));
+        let coordinator = Arc::new(FallbackCoordinator::new(2, true));
+        let spill = spill_left_for_test(build_left_table(), Arc::clone(&ctx)).await?;
+
+        Arc::clone(&coordinator).record_pending_drop();
+        // Nobody calls `begin_coordination`, so chunks are still served.
+        let served = Arc::clone(&coordinator)
+            .next_chunk(0, spill, Arc::clone(&ctx), Time::new())
+            .await?;
+        assert!(
+            served.is_some(),
+            "a recorded pending drop must not block chunk service on its own"
+        );
+        assert!(!coordinator.is_cancelled());
+        Ok(())
+    }
+
+    /// Dropping an unfinished partition must not fail its peers when the left
+    /// side turns out to fit in memory.
+    ///
+    /// Every eligible execution passes through `SpillState::Pending` before the
+    /// shared load decides between `InMemory` and `Spilled`. With an ample pool
+    /// the load resolves to `InMemory`, there is no shared chunk counter, and the
+    /// right partitions stay independent -- so a dropped peer has nothing to
+    /// coordinate and must not cancel anything.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn nlj_drop_pending_partition_does_not_cancel_when_left_fits_in_memory()
+    -> Result<()> {
+        // Ample pool: the left side never spills, so the fallback is never used.
+        let runtime = RuntimeEnvBuilder::new().build_arc()?;
+        let task_ctx = Arc::new(TaskContext::default().with_runtime(runtime));
+        let right = Arc::new(RepartitionExec::try_new(
+            build_right_table_one_batch_per_row(),
+            Partitioning::RoundRobinBatch(2),
+        )?) as Arc<dyn ExecutionPlan>;
+        let plan = Arc::new(NestedLoopJoinExec::try_new(
+            build_left_table(),
+            right,
+            None,
+            &JoinType::Left,
+            None,
+        )?);
+
+        let abandoned = plan.execute(0, Arc::clone(&task_ctx))?;
+        let survivor = plan.execute(1, Arc::clone(&task_ctx))?;
+        drop(abandoned);
+
+        let batches = common::collect(survivor).await?;
+        assert!(
+            batches.iter().map(RecordBatch::num_rows).sum::<usize>() > 0,
+            "the survivor must still produce its rows when nothing spilled"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn nlj_pending_drop_cancels_active_peer_real_plan() -> Result<()> {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let (plan, ctx) = cancellation_test_plan()?;
+            let pending = plan.execute(0, Arc::clone(&ctx))?;
+            let mut active = plan.execute(1, Arc::clone(&ctx))?;
+            active.next().await.expect("active output")?;
+            assert!(plan.fallback_coordinator.inner.lock().current.is_some());
+            drop(pending);
+            // The drop must have cancelled immediately: a peer is already
+            // coordinating, so this is not a deferred record.
+            assert!(
+                plan.fallback_coordinator.is_cancelled(),
+                "dropping a pending peer must cancel once a peer coordinates"
+            );
+            let result = common::collect(active).await;
+            assert!(
+                result.is_err(),
+                "already-active survivor must fail when pending peer disappears"
+            );
+            assert_eq!(ctx.memory_pool().reserved(), 0);
+            Ok(())
+        })
+        .await
+        .expect("survivor hung")
+    }
+
+    #[tokio::test]
+    async fn nlj_cancellation_after_buffered_rows_ends_without_output() -> Result<()> {
+        let runtime = RuntimeEnvBuilder::new().build_arc()?;
+        let ctx = Arc::new(TaskContext::default().with_runtime(runtime));
+        let coordinator = Arc::new(FallbackCoordinator::new(2, true));
+        let spill = spill_left_for_test(build_left_table(), Arc::clone(&ctx)).await?;
+        let _chunk = Arc::clone(&coordinator)
+            .next_chunk(0, Arc::clone(&spill), Arc::clone(&ctx), Time::new())
+            .await?
+            .expect("chunk");
+        let right_batches =
+            common::collect(build_right_table().execute(0, Arc::clone(&ctx))?).await?;
+        let make_stream = |emit_input: bool| {
+            let right_schema = build_right_table().schema();
+            let (schema, columns) =
+                build_join_schema(&spill.schema, &right_schema, &JoinType::Left);
+            let left_spill = Arc::clone(&spill);
+            let batches = if emit_input {
+                vec![Ok(right_batches[0].slice(0, 1))]
+            } else {
+                vec![]
+            };
+            NestedLoopJoinStream::new(
+                Arc::new(schema),
+                None,
+                JoinType::Left,
+                Box::pin(crate::stream::RecordBatchStreamAdapter::new(
+                    right_schema,
+                    futures::stream::iter(batches)
+                        .chain(futures::stream::pending::<Result<RecordBatch>>()),
+                )),
+                OnceFut::new(async move { Ok(LeftLoad::Spilled(left_spill)) }),
+                columns,
+                NestedLoopJoinMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
+                8192,
+                SpillState::Pending {
+                    task_context: Arc::clone(&ctx),
+                    fallback_coordinator: Arc::clone(&coordinator),
+                },
+            )
+        };
+        let mut peer = make_stream(false);
+        let mut survivor = make_stream(true);
+        let waker = futures::task::noop_waker();
+        let mut cx = std::task::Context::from_waker(&waker);
+        assert!(peer.poll_next_unpin(&mut cx).is_pending());
+        assert!(matches!(peer.spill_state, SpillState::Active(_)));
+        assert!(survivor.poll_next_unpin(&mut cx).is_pending());
+        let buffered = survivor.output_buffer.get_buffered_rows();
+        assert!(buffered > 0 && buffered < 8192);
+        assert!(!survivor.output_buffer.has_completed_batch());
+        drop(peer);
+        assert!(coordinator.is_cancelled());
+        assert!(matches!(
+            survivor.poll_next_unpin(&mut cx),
+            Poll::Ready(Some(Err(_)))
+        ));
+        let after = survivor.poll_next_unpin(&mut cx);
+        assert!(
+            matches!(after, Poll::Ready(None)),
+            "cancellation must terminate without an output batch"
+        );
         Ok(())
     }
 
