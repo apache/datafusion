@@ -1076,6 +1076,7 @@ mod tests {
                 "field {path} changed shape: {original_type} -> {coerced_type}",
             ),
         }
+    }
 
     fn dict(value_type: DataType) -> DataType {
         DataType::Dictionary(Box::new(DataType::Int32), Box::new(value_type))
