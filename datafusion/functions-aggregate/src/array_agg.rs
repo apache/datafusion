@@ -1178,9 +1178,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
     }
 
     fn size(&self) -> usize {
-        // `distinct_metric` is execution-owned observability state, not
-        // accumulator state retained by this aggregate.
-        (size_of_val(self) - size_of_val(&self.distinct_metric))
+        size_of_val(self)
             + self
                 .state
                 .as_ref()
@@ -1488,6 +1486,15 @@ mod tests {
     use datafusion_physical_expr::expressions::Column;
 
     #[test]
+    fn distinct_accumulator_size_includes_metric_handle() -> Result<()> {
+        let accumulator =
+            DistinctArrayAggAccumulator::try_new(&DataType::Int32, None, false)?;
+
+        assert_eq!(accumulator.size(), size_of_val(&accumulator));
+        Ok(())
+    }
+
+    #[test]
     fn no_duplicates_no_distinct() -> Result<()> {
         let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::string().build_two()?;
 
@@ -1773,7 +1780,7 @@ mod tests {
         acc2.update_batch(&[string_list_data([vec!["e", "f", "g"]])])?;
         acc1 = merge(acc1, acc2)?;
 
-        assert_eq!(acc1.size(), 2274);
+        assert_eq!(acc1.size(), 2290);
 
         Ok(())
     }
