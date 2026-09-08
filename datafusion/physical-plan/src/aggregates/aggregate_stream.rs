@@ -761,8 +761,9 @@ mod tests {
         )
         .await?;
 
+        let metrics = aggregate.metrics().unwrap();
         assert_eq!(
-            aggregate_metrics(&aggregate.metrics().unwrap(), "internal_distinct"),
+            aggregate_metrics(&metrics, "internal_distinct"),
             vec![
                 (
                     "agg_expr_0_internal_distinct_time".to_string(),
@@ -774,6 +775,15 @@ mod tests {
                 ),
             ]
         );
+        for index in 0..2 {
+            assert!(
+                metrics
+                    .sum_by_name(&format!("agg_expr_{index}_internal_distinct_time"))
+                    .expect("internal distinct time metric")
+                    .as_usize()
+                    > 0
+            );
+        }
         assert_eq!(
             aggregate_metrics(&aggregate.metrics().unwrap(), "update").len(),
             2
