@@ -30,16 +30,16 @@ use std::time::Duration;
 /// implementations can only supply stable subphase identifiers through
 /// [`AggregateMetrics`].
 #[derive(Debug)]
-pub(crate) struct AggregateSubMetrics {
+struct AggregateSubMetrics {
     metrics: ExecutionPlanMetricsSet,
     partition: usize,
     index: usize,
     aggregate_label: String,
-    subphase_times: Mutex<HashMap<&'static str, Time>>,
+    subphase_metrics: Mutex<HashMap<&'static str, Arc<dyn AggregateMetric>>>,
 }
 
 impl AggregateSubMetrics {
-    pub(crate) fn new(
+    fn new(
         metrics: &ExecutionPlanMetricsSet,
         partition: usize,
         index: usize,
@@ -50,7 +50,7 @@ impl AggregateSubMetrics {
             partition,
             index,
             aggregate_label: aggregate_label.into(),
-            subphase_times: Mutex::new(HashMap::new()),
+            subphase_metrics: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -68,19 +68,16 @@ impl AggregateMetric for AggregateSubMetric {
 
 impl AggregateMetrics for AggregateSubMetrics {
     fn metric(&self, subphase: &'static str) -> Arc<dyn AggregateMetric> {
-        let mut subphase_times = self.subphase_times.lock();
-        let time = subphase_times
-            .entry(subphase)
-            .or_insert_with(|| {
-                MetricBuilder::new(&self.metrics)
-                    .with_new_label("aggregate", self.aggregate_label.clone())
-                    .subset_time(
-                        format!("agg_expr_{}_internal_{}_time", self.index, subphase),
-                        self.partition,
-                    )
-            })
-            .clone();
-        Arc::new(AggregateSubMetric { time })
+        let mut subphase_metrics = self.subphase_metrics.lock();
+        Arc::clone(subphase_metrics.entry(subphase).or_insert_with(|| {
+            let time = MetricBuilder::new(&self.metrics)
+                .with_new_label("aggregate", self.aggregate_label.clone())
+                .subset_time(
+                    format!("agg_expr_{}_internal_{}_time", self.index, subphase),
+                    self.partition,
+                );
+            Arc::new(AggregateSubMetric { time })
+        }))
     }
 }
 
@@ -334,13 +331,16 @@ mod tests {
         partition_0[0]
             .metric("distinct")
             .add_duration(Duration::from_nanos(1));
-        partition_1[0]
+        partition_0[0]
             .metric("distinct")
             .add_duration(Duration::from_nanos(2));
+        partition_1[0]
+            .metric("distinct")
+            .add_duration(Duration::from_nanos(3));
 
         let metrics = metrics.clone_inner();
         let metric_name = "agg_expr_0_internal_distinct_time";
-        assert_eq!(metrics.sum_by_name(metric_name).unwrap().as_usize(), 3);
+        assert_eq!(metrics.sum_by_name(metric_name).unwrap().as_usize(), 6);
         assert!(metrics.iter().all(|metric| {
             metric.value().name() == metric_name
                 && metric.labels().iter().any(|label| {
