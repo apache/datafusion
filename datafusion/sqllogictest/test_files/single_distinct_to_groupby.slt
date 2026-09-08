@@ -63,7 +63,7 @@ logical_plan
 03)----Aggregate: groupBy=[[t.g, t.x AS alias1]], aggr=[[count(Int64(1)) AS alias2]]
 04)------TableScan: t projection=[g, x]
 
-# The production shape: a count next to min, max, sum and the distinct count
+# A count next to min, max and sum, all beside the distinct count
 query TT
 EXPLAIN
 SELECT g, count(*) AS records, count(DISTINCT x) AS distinct_x,
@@ -318,14 +318,14 @@ ORDER BY count(*) DESC, g;
 1 4 2
 
 ########
-# The whole production shape, aggregating over a join
+# The same set of aggregates, over a join rather than a bare scan
 ########
 
 statement ok
-CREATE TABLE failed(x VARCHAR);
+CREATE TABLE join_t(x VARCHAR);
 
 statement ok
-INSERT INTO failed VALUES ('10'), ('30');
+INSERT INTO join_t VALUES ('10'), ('30');
 
 statement ok
 set datafusion.optimizer.max_passes = 0;
@@ -333,7 +333,7 @@ set datafusion.optimizer.max_passes = 0;
 query IIIIII
 SELECT t.g, count(*) AS records, count(DISTINCT t.x) AS distinct_x,
        min(t.v) AS min_v, max(t.v) AS max_v, sum(t.v) AS sum_v
-FROM t JOIN failed f ON t.x = f.x
+FROM t JOIN join_t f ON t.x = f.x
 GROUP BY t.g ORDER BY t.g;
 ----
 1 2 1 100 100 100
@@ -345,7 +345,7 @@ set datafusion.optimizer.max_passes = 3;
 query IIIIII
 SELECT t.g, count(*) AS records, count(DISTINCT t.x) AS distinct_x,
        min(t.v) AS min_v, max(t.v) AS max_v, sum(t.v) AS sum_v
-FROM t JOIN failed f ON t.x = f.x
+FROM t JOIN join_t f ON t.x = f.x
 GROUP BY t.g ORDER BY t.g;
 ----
 1 2 1 100 100 100
@@ -444,7 +444,7 @@ FROM t GROUP BY g ORDER BY g;
 3 1 1
 
 statement ok
-DROP TABLE failed;
+DROP TABLE join_t;
 
 statement ok
 DROP TABLE empty_t;
