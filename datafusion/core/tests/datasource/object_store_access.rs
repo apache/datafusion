@@ -929,6 +929,10 @@ struct Test {
     /// * `None`: uses the default (does not set a size_hint)
     /// * `Some(None)`L: set prefetch hint to None (prefetching)
     /// * `Some(Some(size))`: set prefetch hint to size
+    #[expect(
+        clippy::option_option,
+        reason = "The nesting is meaningful, see the doc comment above"
+    )]
     parquet_metadata_size_hint: Option<Option<usize>>,
 }
 
@@ -1065,7 +1069,7 @@ impl Test {
             );
             self = self
                 .with_bytes(
-                    &format!("/data/a={i}/b={}/c={}/file_{i}.csv", i * 10, i * 100,),
+                    &format!("/data/a={i}/b={}/c={}/file_{i}.csv", i * 10, i * 100),
                     csv_data1,
                 )
                 .await;

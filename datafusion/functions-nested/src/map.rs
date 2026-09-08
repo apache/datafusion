@@ -745,9 +745,8 @@ mod tests {
         assert!(result.is_ok(), "Should handle NULL maps correctly");
 
         // Verify the result
-        let map_array = match result.unwrap() {
-            ColumnarValue::Array(arr) => arr,
-            _ => panic!("Expected Array result"),
+        let ColumnarValue::Array(map_array) = result.unwrap() else {
+            panic!("Expected Array result")
         };
 
         assert_eq!(map_array.len(), 3, "Should have 3 maps");
@@ -851,9 +850,8 @@ mod tests {
         );
 
         // Verify the result
-        let map_array = match result.unwrap() {
-            ColumnarValue::Array(arr) => arr,
-            _ => panic!("Expected Array result"),
+        let ColumnarValue::Array(map_array) = result.unwrap() else {
+            panic!("Expected Array result")
         };
 
         assert_eq!(map_array.len(), 2, "Should have 2 maps");
@@ -924,9 +922,8 @@ mod tests {
         );
 
         // Verify the result
-        let map_array = match result.unwrap() {
-            ColumnarValue::Array(arr) => arr,
-            _ => panic!("Expected Array result"),
+        let ColumnarValue::Array(map_array) = result.unwrap() else {
+            panic!("Expected Array result")
         };
 
         assert_eq!(map_array.len(), 3, "Should have 3 maps");

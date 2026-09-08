@@ -36,7 +36,7 @@ impl TryFrom<&Interval> for FFI_Interval {
         let upper = value.upper().try_into()?;
         let lower = value.lower().try_into()?;
 
-        Ok(FFI_Interval { upper, lower })
+        Ok(FFI_Interval { lower, upper })
     }
 }
 impl TryFrom<Interval> for FFI_Interval {

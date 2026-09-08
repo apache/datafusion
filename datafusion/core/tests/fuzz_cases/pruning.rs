@@ -361,7 +361,7 @@ static VALUES: LazyLock<Vec<String>> = LazyLock::new(|| {
         values.extend(
             characters
                 .iter()
-                .cloned()
+                .copied()
                 .combinations(*length)
                 // now get all permutations of each combination
                 .flat_map(|c| c.into_iter().permutations(*length))

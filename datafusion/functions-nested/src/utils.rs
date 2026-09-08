@@ -277,9 +277,8 @@ pub(crate) fn compare_element_to_list(
 pub(crate) fn compute_array_dims(
     arr: Option<ArrayRef>,
 ) -> Result<Option<Vec<Option<u64>>>> {
-    let mut value = match arr {
-        Some(arr) => arr,
-        None => return Ok(None),
+    let Some(mut value) = arr else {
+        return Ok(None);
     };
     if value.is_empty() {
         return Ok(None);

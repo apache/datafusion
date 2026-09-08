@@ -141,7 +141,7 @@ impl<'a> ColumnReference<'a> {
 }
 
 /// Returns references to all columns in the schema
-pub(crate) fn schema_columns<'a>(schema: &'a DFSchema) -> HashSet<ColumnReference<'a>> {
+pub(crate) fn schema_columns(schema: &DFSchema) -> HashSet<ColumnReference<'_>> {
     schema
         .iter()
         .flat_map(|(qualifier, field)| {

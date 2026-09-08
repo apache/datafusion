@@ -27,8 +27,8 @@
     "datafusion-wasmtest": "../pkg"
   },
   "devDependencies": {
-    "webpack": "5.109.2",
-    "webpack-cli": "7.2.2",
+    "webpack": "5.110.1",
+    "webpack-cli": "7.2.3",
     "webpack-dev-server": "6.0.0",
     "copy-webpack-plugin": "14.0.0"
   }

@@ -15,8 +15,10 @@
 # specific language governing permissions and limitations
 # under the License.
 
-headerPath = "Apache-2.0-ASF.txt"
+[header]
+builtin = "Apache-2.0-ASF"
 
+[files]
 includes = [
     "*.rs",
     "*.py",
@@ -25,7 +27,7 @@ includes = [
 
 excludes = [
     # generated code
-    "datafusion/proto/src/generated/",
-    "datafusion/proto-common/src/generated/",
-    "datafusion/proto-models/src/generated/",
+    "datafusion/proto/src/generated/**",
+    "datafusion/proto-common/src/generated/**",
+    "datafusion/proto-models/src/generated/**",
 ]

@@ -41,7 +41,8 @@ use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::filter::FilterExecBuilder;
 use crate::physical_plan::joins::utils as join_utils;
 use crate::physical_plan::joins::{
-    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
+    AsOfJoinExec, AsOfMatchExpr, CrossJoinExec, HashJoinExec, NestedLoopJoinExec,
+    PartitionMode, SortMergeJoinExec,
 };
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::{ProjectionExec, ProjectionExpr};
@@ -620,14 +621,11 @@ impl DefaultPhysicalPlanner {
                             .await?;
                     }
 
-                    let plan = match maybe_plan {
-                        Some(plan) => plan,
-                        None => {
-                            return plan_err!(
-                                "No installed planner was able to plan TableScan for custom TableSource: {:?}",
-                                scan.table_name
-                            );
-                        }
+                    let Some(plan) = maybe_plan else {
+                        return plan_err!(
+                            "No installed planner was able to plan TableScan for custom TableSource: {:?}",
+                            scan.table_name
+                        );
                     };
 
                     self.ensure_schema_matches(projected_schema, &plan, || {
@@ -1221,7 +1219,8 @@ impl DefaultPhysicalPlanner {
                     .config()
                     .options()
                     .optimizer
-                    .default_filter_selectivity;
+                    .default_filter_selectivity
+                    .get();
                 let filter_exec: Arc<dyn ExecutionPlan> =
                     Arc::new(filter.with_default_selectivity(selectivity)?);
                 filter_exec
@@ -1243,9 +1242,7 @@ impl DefaultPhysicalPlanner {
                     physical_partitioning,
                 )?)
             }
-            LogicalPlan::Sort(Sort {
-                expr, input, fetch, ..
-            }) => {
+            LogicalPlan::Sort(Sort { expr, input, fetch }) => {
                 let physical_input = children.one()?;
                 let input_dfschema = input.as_ref().schema();
                 let sort_exprs = create_physical_sort_exprs(
@@ -1596,6 +1593,12 @@ impl DefaultPhysicalPlanner {
 
                 let prefer_hash_join =
                     session_state.config_options().optimizer.prefer_hash_join;
+                // Null-aware joins are pinned to CollectLeft hash joins (see
+                // `HashJoinExec::null_aware`): never repartition them, and
+                // never route them to the sort-merge path below.
+                let can_repartition_join = session_state.config().target_partitions() > 1
+                    && session_state.config().repartition_joins()
+                    && !*null_aware;
 
                 // TODO: Allow PWMJ to deal with residual equijoin conditions
                 let join: Arc<dyn ExecutionPlan> = if join_on.is_empty() {
@@ -1748,24 +1751,15 @@ impl DefaultPhysicalPlanner {
                         vec![SortOptions::default(); join_on_len],
                         *null_equality,
                     )?)
-                } else if session_state.config().target_partitions() > 1
-                    && session_state.config().repartition_joins()
-                    && prefer_hash_join
-                    && !*null_aware
-                // Null-aware joins must use CollectLeft
-                {
-                    Arc::new(HashJoinExec::try_new(
-                        physical_left,
-                        physical_right,
-                        join_on,
-                        join_filter,
-                        join_type,
-                        None,
-                        PartitionMode::Auto,
-                        *null_equality,
-                        *null_aware,
-                    )?)
                 } else {
+                    // Null-aware joins need global probe-side state, so keep
+                    // them in CollectLeft mode.
+                    let partition_mode = if can_repartition_join {
+                        PartitionMode::Auto
+                    } else {
+                        PartitionMode::CollectLeft
+                    };
+
                     Arc::new(HashJoinExec::try_new(
                         physical_left,
                         physical_right,
@@ -1773,7 +1767,7 @@ impl DefaultPhysicalPlanner {
                         join_filter,
                         join_type,
                         None,
-                        PartitionMode::CollectLeft,
+                        partition_mode,
                         *null_equality,
                         *null_aware,
                     )?)
@@ -1793,6 +1787,51 @@ impl DefaultPhysicalPlanner {
                 } else {
                     join
                 }
+            }
+            LogicalPlan::AsOfJoin(join) => {
+                let [physical_left, physical_right] = children.two()?;
+                let join_on = join
+                    .on
+                    .iter()
+                    .map(|(left, right)| {
+                        Ok((
+                            create_physical_expr(
+                                left,
+                                join.left.schema(),
+                                execution_props,
+                                planning_ctx,
+                            )?,
+                            create_physical_expr(
+                                right,
+                                join.right.schema(),
+                                execution_props,
+                                planning_ctx,
+                            )?,
+                        ))
+                    })
+                    .collect::<Result<join_utils::JoinOn>>()?;
+                let match_condition = AsOfMatchExpr::new(
+                    create_physical_expr(
+                        &join.match_condition.left,
+                        join.left.schema(),
+                        execution_props,
+                        planning_ctx,
+                    )?,
+                    join.match_condition.op,
+                    create_physical_expr(
+                        &join.match_condition.right,
+                        join.right.schema(),
+                        execution_props,
+                        planning_ctx,
+                    )?,
+                );
+                Arc::new(AsOfJoinExec::try_new(
+                    physical_left,
+                    physical_right,
+                    join_on,
+                    match_condition,
+                    None,
+                )?)
             }
             LogicalPlan::RecursiveQuery(RecursiveQuery {
                 name,
@@ -2058,7 +2097,9 @@ fn create_cube_physical_expr(
     for null_count in 1..=num_of_exprs {
         for null_idx in (0..num_of_exprs).combinations(null_count) {
             let mut next_group: Vec<bool> = vec![false; num_of_exprs];
-            null_idx.into_iter().for_each(|i| next_group[i] = true);
+            for i in null_idx {
+                next_group[i] = true;
+            }
             groups.push(next_group);
         }
     }
@@ -2293,6 +2334,7 @@ fn extract_dml_filters(
             | LogicalPlan::Sort(_)
             | LogicalPlan::Union(_)
             | LogicalPlan::Join(_)
+            | LogicalPlan::AsOfJoin(_)
             | LogicalPlan::Repartition(_)
             | LogicalPlan::Aggregate(_)
             | LogicalPlan::Window(_)
@@ -2562,7 +2604,7 @@ type AggregateExprWithOptionalArgs = (
 );
 
 /// Create an aggregate expression with a name from a logical expression
-#[deprecated(note = "use LoweredAggregateBuilder")]
+#[deprecated(since = "54.0.0", note = "use LoweredAggregateBuilder")]
 pub fn create_aggregate_expr_with_name_and_maybe_filter(
     e: &Expr,
     name: Option<String>,
@@ -2589,7 +2631,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
 }
 
 /// Create an aggregate expression from a logical expression or an alias
-#[deprecated(note = "use LoweredAggregateBuilder")]
+#[deprecated(since = "54.0.0", note = "use LoweredAggregateBuilder")]
 pub fn create_aggregate_expr_and_maybe_filter(
     e: &Expr,
     logical_input_schema: &DFSchema,
@@ -2667,6 +2709,10 @@ impl DefaultPhysicalPlanner {
         let explain_format = &e.explain_format;
         // Statement-level override wins over session config for show_statistics.
         let show_statistics = e.show_statistics.unwrap_or(config.show_statistics);
+        let statistics_registry = session_state
+            .statistics_registry()
+            .cloned()
+            .unwrap_or_default();
 
         if !e.logical_optimization_succeeded {
             return Ok(Arc::new(ExplainExec::new(
@@ -2710,7 +2756,7 @@ impl DefaultPhysicalPlanner {
                     e.plan.display_graphviz().to_string(),
                 ));
             }
-        };
+        }
 
         if !stringified_plans.is_empty() {
             return Ok(Arc::new(ExplainExec::new(
@@ -2730,6 +2776,15 @@ impl DefaultPhysicalPlanner {
         }
 
         if !config.logical_plan_only && e.logical_optimization_succeeded {
+            let render_indent =
+                |plan: &dyn ExecutionPlan, show_statistics: bool, show_schema: bool| {
+                    displayable(plan)
+                        .set_show_statistics(show_statistics)
+                        .set_statistics_registry(statistics_registry.clone())
+                        .set_show_schema(show_schema)
+                        .indent(e.verbose)
+                        .to_string()
+                };
             match self
                 .create_initial_plan(e.plan.as_ref(), session_state)
                 .await
@@ -2738,11 +2793,11 @@ impl DefaultPhysicalPlanner {
                     // Include statistics / schema if enabled
                     stringified_plans.push(StringifiedPlan::new(
                         InitialPhysicalPlan,
-                        displayable(input.as_ref())
-                            .set_show_statistics(show_statistics)
-                            .set_show_schema(config.show_schema)
-                            .indent(e.verbose)
-                            .to_string(),
+                        render_indent(
+                            input.as_ref(),
+                            show_statistics,
+                            config.show_schema,
+                        ),
                     ));
 
                     // Show statistics + schema in verbose output even if not
@@ -2751,15 +2806,14 @@ impl DefaultPhysicalPlanner {
                         if !show_statistics {
                             stringified_plans.push(StringifiedPlan::new(
                                 InitialPhysicalPlanWithStats,
-                                displayable(input.as_ref())
-                                    .set_show_statistics(true)
-                                    .indent(e.verbose)
-                                    .to_string(),
+                                render_indent(input.as_ref(), true, false),
                             ));
                         }
                         if !config.show_schema {
                             stringified_plans.push(StringifiedPlan::new(
                                 InitialPhysicalPlanWithSchema,
+                                // Schema only: statistics are off, so this
+                                // renders without the registry.
                                 displayable(input.as_ref())
                                     .set_show_schema(true)
                                     .indent(e.verbose)
@@ -2776,11 +2830,7 @@ impl DefaultPhysicalPlanner {
                             let plan_type = OptimizedPhysicalPlan { optimizer_name };
                             stringified_plans.push(StringifiedPlan::new(
                                 plan_type,
-                                displayable(plan)
-                                    .set_show_statistics(show_statistics)
-                                    .set_show_schema(config.show_schema)
-                                    .indent(e.verbose)
-                                    .to_string(),
+                                render_indent(plan, show_statistics, config.show_schema),
                             ));
                         },
                     );
@@ -2789,11 +2839,11 @@ impl DefaultPhysicalPlanner {
                             // This plan will includes statistics if show_statistics is on
                             stringified_plans.push(StringifiedPlan::new(
                                 FinalPhysicalPlan,
-                                displayable(input.as_ref())
-                                    .set_show_statistics(show_statistics)
-                                    .set_show_schema(config.show_schema)
-                                    .indent(e.verbose)
-                                    .to_string(),
+                                render_indent(
+                                    input.as_ref(),
+                                    show_statistics,
+                                    config.show_schema,
+                                ),
                             ));
 
                             // Show statistics + schema in verbose output even if not
@@ -2802,10 +2852,7 @@ impl DefaultPhysicalPlanner {
                                 if !show_statistics {
                                     stringified_plans.push(StringifiedPlan::new(
                                         FinalPhysicalPlanWithStats,
-                                        displayable(input.as_ref())
-                                            .set_show_statistics(true)
-                                            .indent(e.verbose)
-                                            .to_string(),
+                                        render_indent(input.as_ref(), true, false),
                                     ));
                                 }
                                 if !config.show_schema {
@@ -2869,11 +2916,16 @@ impl DefaultPhysicalPlanner {
             ExplainAnalyzeCategories::All => None,
             ExplainAnalyzeCategories::Only(cats) => Some(cats),
         };
+        let statistics_registry = session_state
+            .statistics_registry()
+            .cloned()
+            .unwrap_or_default();
         Ok(Arc::new(
             AnalyzeExec::builder(a.verbose, show_statistics, input, schema)
                 .with_metric_types(metric_types)
                 .with_metric_categories(metric_categories)
                 .with_format(a.format.clone())
+                .with_statistics_registry(statistics_registry)
                 .build(),
         ))
     }
@@ -3984,6 +4036,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn correlated_not_in_is_null_uses_null_aware_hash_mark_join() -> Result<()> {
+        let query = "
+            SELECT value
+            FROM (
+              VALUES
+                (1, 1, 'a'),
+                (3, 1, 'b'),
+                (1, 2, 'c'),
+                (NULL, 1, 'd'),
+                (5, 3, 'e'),
+                (2, 1, 'f'),
+                (NULL, 2, 'g')
+            ) AS outer_corr_table(id, grp, value)
+            WHERE (id NOT IN (
+              SELECT id
+              FROM (
+                VALUES
+                  (2, 1),
+                  (NULL, 1),
+                  (1, 2)
+              ) AS inner_corr_table(id, grp)
+              WHERE inner_corr_table.grp = outer_corr_table.grp
+            )) IS NULL
+            ORDER BY value";
+
+        let config = SessionConfig::new()
+            .with_target_partitions(4)
+            .set_bool("datafusion.optimizer.prefer_hash_join", false);
+        let ctx = SessionContext::new_with_config(config);
+
+        let plan = ctx.sql(query).await?.create_physical_plan().await?;
+        let formatted = displayable(plan.as_ref()).indent(true).to_string();
+        assert_contains!(
+            &formatted,
+            "HashJoinExec: mode=CollectLeft, join_type=LeftMark"
+        );
+        assert!(!formatted.contains("SortMergeJoinExec"), "{formatted}");
+
+        let batches = ctx.sql(query).await?.collect().await?;
+        assert_batches_eq!(
+            &[
+                "+-------+",
+                "| value |",
+                "+-------+",
+                "| a     |",
+                "| b     |",
+                "| d     |",
+                "| g     |",
+                "+-------+",
+            ],
+            &batches
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn scalar_subquery_in_projection_and_filter_plans() -> Result<()> {
         let plan = plan_sql(
             "SELECT x + (SELECT max(y) FROM (VALUES (10), (20)) AS u(y)) \
@@ -4272,9 +4381,6 @@ mod tests {
 
         let plan = plan(&logical_plan).await?;
 
-        // c12 is f64, c7 is u8 -> cast c7 to f64
-        // the cast here is implicit so has CastOptions with safe=true
-        let _expected = "predicate: BinaryExpr { left: TryCastExpr { expr: Column { name: \"c7\", index: 6 }, cast_type: Float64 }, op: Lt, right: Column { name: \"c12\", index: 11 } }";
         let plan_debug_str = format!("{plan:?}");
         assert!(plan_debug_str.contains("GlobalLimitExec"));
         assert!(plan_debug_str.contains("skip: 3"));

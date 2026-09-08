@@ -332,13 +332,24 @@ impl ExecutionPlan for BufferExec {
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
-        let input = ctx.encode_child(self.input())?;
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `BufferExec` is a compile error here until it is either serialized or
+        // explicitly documented as not needing to be.
+        let Self {
+            input,
+            // Derived from the input's properties at construction time.
+            properties: _,
+            capacity,
+            // Runtime metrics, not part of the plan shape.
+            metrics: _,
+        } = self;
+        let input = ctx.encode_child(input)?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Buffer(Box::new(
                     protobuf::BufferExecNode {
                         input: Some(Box::new(input)),
-                        capacity: self.capacity() as u64,
+                        capacity: *capacity as u64,
                     },
                 )),
             ),
@@ -357,15 +368,19 @@ impl BufferExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::utils::usize_from_wire;
         use datafusion_proto_models::protobuf;
         let buffer = crate::expect_plan_variant!(
             node,
             protobuf::physical_plan_node::PhysicalPlanType::Buffer,
             "BufferExec",
         );
-        let input =
-            ctx.decode_required_child(buffer.input.as_deref(), "BufferExec", "input")?;
-        Ok(Arc::new(BufferExec::new(input, buffer.capacity as usize)))
+        // Destructure exhaustively so that a new field on `BufferExecNode` is a
+        // compile error here rather than a silently dropped field.
+        let protobuf::BufferExecNode { input, capacity } = &**buffer;
+        let input = ctx.decode_required_child(input.as_deref(), "BufferExec", "input")?;
+        let capacity = usize_from_wire(*capacity, "BufferExec", "capacity")?;
+        Ok(Arc::new(BufferExec::new(input, capacity)))
     }
 }
 
@@ -463,7 +478,7 @@ impl<T: Send + SizedMessage + 'static> MemoryBufferedStream<T> {
 
                 if batch_tx.send(Ok((item, permit))).is_err() {
                     break; // stream was closed
-                };
+                }
             }
         });
 
@@ -650,9 +665,7 @@ mod tests {
         // A panic while polling the input must surface as a stream error, not a
         // silent end-of-stream that drops the rest of the partition's output.
         let input = futures::stream::iter([1, 2, 3, 4]).map(|v| {
-            if v == 3 {
-                panic!("boom on 3");
-            }
+            assert!(v != 3, "boom on 3");
             Ok(v)
         });
         let (_, res) = memory_pool_and_reservation();

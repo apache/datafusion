@@ -86,7 +86,7 @@ async fn count_only_nulls() -> Result<()> {
     let column = only(result.columns());
 
     assert_eq!(field.data_type(), &DataType::Int64); // TODO should be UInt64
-    assert_eq!(column.deref(), &Int64Array::from(vec![0]));
+    assert_eq!(&**column, &Int64Array::from(vec![0]));
 
     Ok(())
 }

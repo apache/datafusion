@@ -212,7 +212,7 @@ pub fn replace_with_partial_sort(
 
     let mut common_prefix_length = 0;
     while child_eq_properties
-        .ordering_satisfy(sort_exprs[0..common_prefix_length + 1].to_vec())?
+        .ordering_satisfy(sort_exprs[0..=common_prefix_length].to_vec())?
     {
         common_prefix_length += 1;
     }
@@ -782,7 +782,7 @@ fn remove_corresponding_sort_from_sub_plan(
                 repartition.properties().output_partitioning().clone(),
             )?) as _;
         }
-    };
+    }
     // Deleting a merging sort may invalidate distribution requirements.
     // Ensure that we stay compliant with such requirements:
     if requires_single_partition && node.plan.output_partitioning().partition_count() > 1

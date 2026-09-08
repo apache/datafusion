@@ -15,6 +15,13 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# duplicate_header_is_rejected
+statement error Schema contains duplicate unqualified field name value
+CREATE EXTERNAL TABLE csv_with_duplicate_header
+STORED AS CSV
+LOCATION '../core/tests/data/duplicate_header.csv'
+OPTIONS ('format.has_header' 'true');
+
 # create_external_table_with_quote_escape
 statement ok
 CREATE EXTERNAL TABLE csv_with_quote (

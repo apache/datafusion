@@ -51,21 +51,3 @@ pub(super) fn is_supported_existence_join(join_type: JoinType) -> bool {
 pub(super) fn need_produce_result_in_final(join_type: JoinType) -> bool {
     matches!(join_type, JoinType::Full | JoinType::Left)
 }
-
-// Returns boolean for whether or not we need to build the buffered side
-// bitmap for marking matched rows on the buffered side.
-//
-// `LeftSemi`/`LeftAnti` are absent on purpose: `ExistencePWMJStream` only ever marks a
-// contiguous suffix of the buffered side, so it tracks the boundary as a single index
-// (`BufferedSideData::existence_min_marked`) and needs no bitmap.
-pub(super) fn build_visited_indices_map(join_type: JoinType) -> bool {
-    matches!(
-        join_type,
-        JoinType::Full
-            | JoinType::Left
-            | JoinType::RightAnti
-            | JoinType::RightSemi
-            | JoinType::LeftMark
-            | JoinType::RightMark
-    )
-}

@@ -37,12 +37,16 @@ use datafusion_physical_expr::expressions::{BinaryExpr, Column, NegativeExpr};
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+use datafusion_physical_optimizer::PhysicalOptimizerContext;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::joins::utils::ColumnIndex;
 use datafusion_physical_plan::joins::utils::JoinFilter;
 use datafusion_physical_plan::joins::{HashJoinExec, NestedLoopJoinExec, PartitionMode};
+use datafusion_physical_plan::operator_statistics::{
+    ClosureStatisticsProvider, StatisticsRegistry, StatisticsResult,
+};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{
@@ -73,6 +77,16 @@ fn get_thresholds() -> (usize, usize) {
         optimizer_options.hash_join_single_partition_threshold_rows,
         optimizer_options.hash_join_single_partition_threshold,
     )
+}
+
+/// The byte size [`small_statistics`] derives from the configured threshold.
+fn small_byte_size() -> usize {
+    get_thresholds().1 / 128
+}
+
+/// The byte size [`big_statistics`] derives from the configured threshold.
+fn big_byte_size() -> usize {
+    get_thresholds().1 * 2
 }
 
 /// Return statistics for small table
@@ -258,14 +272,14 @@ async fn test_join_with_swap() {
             .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
-        Precision::Inexact(8192)
+        Precision::Inexact(small_byte_size())
     );
     assert_eq!(
         StatisticsContext::new()
             .compute(swapped_join.right().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
-        Precision::Inexact(2097152)
+        Precision::Inexact(big_byte_size())
     );
 }
 
@@ -382,14 +396,14 @@ async fn test_left_join_no_swap() {
             .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
-        Precision::Inexact(8192)
+        Precision::Inexact(small_byte_size())
     );
     assert_eq!(
         StatisticsContext::new()
             .compute(swapped_join.right().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
-        Precision::Inexact(2097152)
+        Precision::Inexact(big_byte_size())
     );
 }
 
@@ -431,17 +445,269 @@ async fn test_join_with_swap_semi() {
                 .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
                 .unwrap()
                 .total_byte_size,
-            Precision::Inexact(8192)
+            Precision::Inexact(small_byte_size())
         );
         assert_eq!(
             StatisticsContext::new()
                 .compute(swapped_join.right().as_ref(), &StatisticsArgs::new())
                 .unwrap()
                 .total_byte_size,
-            Precision::Inexact(2097152)
+            Precision::Inexact(big_byte_size())
         );
         assert_eq!(original_schema, swapped_join.schema());
     }
+}
+
+#[rstest]
+#[case(PartitionMode::CollectLeft)]
+#[case(PartitionMode::Auto)]
+#[case(PartitionMode::Partitioned)]
+#[tokio::test]
+async fn test_null_aware_left_anti_swaps_to_right_anti(
+    #[case] partition_mode: PartitionMode,
+) -> Result<()> {
+    let (big, small) = create_big_and_small();
+    let join = HashJoinExec::try_new(
+        Arc::clone(&big),
+        Arc::clone(&small),
+        vec![(
+            Arc::new(Column::new_with_schema("big_col", &big.schema())?),
+            Arc::new(Column::new_with_schema("small_col", &small.schema())?),
+        )],
+        None,
+        &JoinType::LeftAnti,
+        None,
+        partition_mode,
+        NullEquality::NullEqualsNothing,
+        true,
+    )?;
+    let original_schema = join.schema();
+
+    let optimized_join =
+        JoinSelection::new().optimize(Arc::new(join), &ConfigOptions::new())?;
+    let swapped_join = optimized_join
+        .downcast_ref::<HashJoinExec>()
+        .expect("anti join swap should not require a projection");
+
+    assert_eq!(*swapped_join.join_type(), JoinType::RightAnti);
+    assert_eq!(*swapped_join.partition_mode(), PartitionMode::CollectLeft);
+    assert!(swapped_join.null_aware);
+    assert_eq!(swapped_join.left().schema().field(0).name(), "small_col");
+    assert_eq!(swapped_join.right().schema().field(0).name(), "big_col");
+    assert_eq!(swapped_join.schema(), original_schema);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_null_aware_auto_large_inputs_swaps_to_collect_left() -> Result<()> {
+    let bigger: Arc<dyn ExecutionPlan> = Arc::new(StatisticsExec::new(
+        bigger_statistics(),
+        Schema::new(vec![Field::new("bigger_col", DataType::Int32, false)]),
+    ));
+    let big: Arc<dyn ExecutionPlan> = Arc::new(StatisticsExec::new(
+        big_statistics(),
+        Schema::new(vec![Field::new("big_col", DataType::Int32, false)]),
+    ));
+    let join = HashJoinExec::try_new(
+        Arc::clone(&bigger),
+        Arc::clone(&big),
+        vec![(
+            Arc::new(Column::new_with_schema("bigger_col", &bigger.schema())?),
+            Arc::new(Column::new_with_schema("big_col", &big.schema())?),
+        )],
+        None,
+        &JoinType::LeftAnti,
+        None,
+        PartitionMode::Auto,
+        NullEquality::NullEqualsNothing,
+        true,
+    )?;
+
+    let optimized_join =
+        JoinSelection::new().optimize(Arc::new(join), &ConfigOptions::new())?;
+    let swapped_join = optimized_join
+        .downcast_ref::<HashJoinExec>()
+        .expect("anti join swap should not require a projection");
+
+    assert_eq!(*swapped_join.join_type(), JoinType::RightAnti);
+    assert_eq!(*swapped_join.partition_mode(), PartitionMode::CollectLeft);
+    assert!(swapped_join.null_aware);
+    assert_eq!(swapped_join.left().schema().field(0).name(), "big_col");
+    assert_eq!(swapped_join.right().schema().field(0).name(), "bigger_col");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_null_aware_left_anti_does_not_swap_when_left_is_smaller() -> Result<()> {
+    let (big, small) = create_big_and_small();
+    let join = HashJoinExec::try_new(
+        Arc::clone(&small),
+        Arc::clone(&big),
+        vec![(
+            Arc::new(Column::new_with_schema("small_col", &small.schema())?),
+            Arc::new(Column::new_with_schema("big_col", &big.schema())?),
+        )],
+        None,
+        &JoinType::LeftAnti,
+        None,
+        PartitionMode::CollectLeft,
+        NullEquality::NullEqualsNothing,
+        true,
+    )?;
+
+    let optimized_join =
+        JoinSelection::new().optimize(Arc::new(join), &ConfigOptions::new())?;
+    let unswapped_join = optimized_join
+        .downcast_ref::<HashJoinExec>()
+        .expect("join type should remain unchanged");
+
+    assert_eq!(*unswapped_join.join_type(), JoinType::LeftAnti);
+    assert_eq!(*unswapped_join.partition_mode(), PartitionMode::CollectLeft);
+    assert!(unswapped_join.null_aware);
+    assert_eq!(unswapped_join.left().schema().field(0).name(), "small_col");
+    assert_eq!(unswapped_join.right().schema().field(0).name(), "big_col");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_null_aware_left_anti_respects_disabled_join_reordering() -> Result<()> {
+    let (big, small) = create_big_and_small();
+    let join = HashJoinExec::try_new(
+        Arc::clone(&big),
+        Arc::clone(&small),
+        vec![(
+            Arc::new(Column::new_with_schema("big_col", &big.schema())?),
+            Arc::new(Column::new_with_schema("small_col", &small.schema())?),
+        )],
+        None,
+        &JoinType::LeftAnti,
+        None,
+        PartitionMode::CollectLeft,
+        NullEquality::NullEqualsNothing,
+        true,
+    )?;
+    let mut config = ConfigOptions::new();
+    config.optimizer.join_reordering = false;
+
+    let optimized_join = JoinSelection::new().optimize(Arc::new(join), &config)?;
+    let unswapped_join = optimized_join
+        .downcast_ref::<HashJoinExec>()
+        .expect("join type should remain unchanged");
+
+    assert_eq!(*unswapped_join.join_type(), JoinType::LeftAnti);
+    assert_eq!(*unswapped_join.partition_mode(), PartitionMode::CollectLeft);
+    assert!(unswapped_join.null_aware);
+    assert_eq!(unswapped_join.left().schema().field(0).name(), "big_col");
+    assert_eq!(unswapped_join.right().schema().field(0).name(), "small_col");
+
+    Ok(())
+}
+
+/// A filtered null-aware `LeftAnti` (produced by decorrelating a correlated
+/// `NOT IN`) must not be swapped to `RightAnti`: the swap is only valid for
+/// unfiltered null-aware joins, since a filtered `RightAnti` would apply its
+/// build-side NULL short-circuit before the filter.
+#[tokio::test]
+async fn test_null_aware_left_anti_with_filter_does_not_swap() -> Result<()> {
+    let (big, small) = create_big_and_small();
+    let join = HashJoinExec::try_new(
+        Arc::clone(&big),
+        Arc::clone(&small),
+        vec![(
+            Arc::new(Column::new_with_schema("big_col", &big.schema())?),
+            Arc::new(Column::new_with_schema("small_col", &small.schema())?),
+        )],
+        nl_join_filter(),
+        &JoinType::LeftAnti,
+        None,
+        PartitionMode::CollectLeft,
+        NullEquality::NullEqualsNothing,
+        true,
+    )?;
+
+    let optimized_join =
+        JoinSelection::new().optimize(Arc::new(join), &ConfigOptions::new())?;
+    let unswapped_join = optimized_join
+        .downcast_ref::<HashJoinExec>()
+        .expect("filtered null-aware anti join should not swap");
+
+    assert_eq!(*unswapped_join.join_type(), JoinType::LeftAnti);
+    assert_eq!(*unswapped_join.partition_mode(), PartitionMode::CollectLeft);
+    assert!(unswapped_join.null_aware);
+    assert!(unswapped_join.filter().is_some());
+    assert_eq!(unswapped_join.left().schema().field(0).name(), "big_col");
+    assert_eq!(unswapped_join.right().schema().field(0).name(), "small_col");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_join_swap_uses_context_statistics_registry() -> Result<()> {
+    let left: Arc<dyn ExecutionPlan> = Arc::new(StatisticsExec::new(
+        big_statistics(),
+        Schema::new(vec![Field::new("left_col", DataType::Int32, false)]),
+    ));
+    let right: Arc<dyn ExecutionPlan> = Arc::new(StatisticsExec::new(
+        big_statistics(),
+        Schema::new(vec![Field::new("right_col", DataType::Int32, false)]),
+    ));
+    let join = HashJoinExec::try_new(
+        Arc::clone(&left),
+        Arc::clone(&right),
+        vec![(
+            Arc::new(Column::new_with_schema("left_col", &left.schema())?),
+            Arc::new(Column::new_with_schema("right_col", &right.schema())?),
+        )],
+        None,
+        &JoinType::LeftAnti,
+        None,
+        PartitionMode::Auto,
+        NullEquality::NullEqualsNothing,
+        false,
+    )?;
+
+    // Reports `right` as much smaller than its real stats: the swap below only
+    // happens if `context`'s registry is actually threaded through.
+    let mut registry = StatisticsRegistry::new();
+    registry.register(Arc::new(ClosureStatisticsProvider::with_matches(
+        |plan| plan.schema().field(0).name() == "right_col",
+        |_plan, _child_stats| Ok(StatisticsResult::Computed(small_statistics().into())),
+    )));
+
+    struct ContextWithRegistry {
+        config: ConfigOptions,
+        registry: StatisticsRegistry,
+    }
+
+    impl PhysicalOptimizerContext for ContextWithRegistry {
+        fn config_options(&self) -> &ConfigOptions {
+            &self.config
+        }
+
+        fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
+            Some(&self.registry)
+        }
+    }
+
+    let context = ContextWithRegistry {
+        config: ConfigOptions::new(),
+        registry,
+    };
+
+    let optimized_join =
+        JoinSelection::new().optimize_with_context(Arc::new(join), &context)?;
+    let swapped_join = optimized_join
+        .downcast_ref::<HashJoinExec>()
+        .expect("optimize_with_context should return a HashJoinExec");
+
+    assert_eq!(*swapped_join.join_type(), JoinType::RightAnti);
+    assert_eq!(swapped_join.left().schema().field(0).name(), "right_col");
+    assert_eq!(swapped_join.right().schema().field(0).name(), "left_col");
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -482,14 +748,14 @@ async fn test_join_with_swap_mark() {
                 .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
                 .unwrap()
                 .total_byte_size,
-            Precision::Inexact(8192)
+            Precision::Inexact(small_byte_size())
         );
         assert_eq!(
             StatisticsContext::new()
                 .compute(swapped_join.right().as_ref(), &StatisticsArgs::new())
                 .unwrap()
                 .total_byte_size,
-            Precision::Inexact(2097152)
+            Precision::Inexact(big_byte_size())
         );
         assert_eq!(original_schema, swapped_join.schema());
     }
@@ -608,14 +874,14 @@ async fn test_join_no_swap() {
             .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
-        Precision::Inexact(8192)
+        Precision::Inexact(small_byte_size())
     );
     assert_eq!(
         StatisticsContext::new()
             .compute(swapped_join.right().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
-        Precision::Inexact(2097152)
+        Precision::Inexact(big_byte_size())
     );
 }
 
@@ -681,14 +947,14 @@ async fn test_nl_join_with_swap(join_type: JoinType) {
             .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
-        Precision::Inexact(8192)
+        Precision::Inexact(small_byte_size())
     );
     assert_eq!(
         StatisticsContext::new()
             .compute(swapped_join.right().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
-        Precision::Inexact(2097152)
+        Precision::Inexact(big_byte_size())
     );
 }
 
@@ -752,14 +1018,14 @@ async fn test_nl_join_with_swap_no_proj(join_type: JoinType) {
             .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
-        Precision::Inexact(8192)
+        Precision::Inexact(small_byte_size())
     );
     assert_eq!(
         StatisticsContext::new()
             .compute(swapped_join.right().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
-        Precision::Inexact(2097152)
+        Precision::Inexact(big_byte_size())
     );
 }
 
@@ -1700,6 +1966,6 @@ fn test_join_with_maybe_swap_unbounded_case(t: TestCase) -> Result<()> {
                 t.expecting_swap
             )
         );
-    };
+    }
     Ok(())
 }

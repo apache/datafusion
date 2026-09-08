@@ -43,12 +43,13 @@ use object_store::{ObjectMeta, ObjectStore};
 use parquet::DecodeResult;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::{parquet_column, parquet_to_arrow_schema};
+use parquet::basic::{ColumnOrder, SortOrder, Type as PhysicalType};
 use parquet::file::metadata::{
     PageIndexPolicy, ParquetMetaData, ParquetMetaDataPushDecoder, ParquetMetaDataReader,
     RowGroupMetaData, SortingColumn,
 };
 use parquet::file::statistics::Statistics as ParquetStatistics;
-use parquet::schema::types::SchemaDescriptor;
+use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -56,6 +57,60 @@ use std::sync::Arc;
 /// merged result to be `Inexact` rather than `Absent`, as the estimate
 /// would be too unreliable otherwise.
 const PARTIAL_NDV_THRESHOLD: f64 = 0.75;
+
+fn requires_unsigned_byte_array_order(column: &ColumnDescriptor) -> bool {
+    matches!(
+        column.physical_type(),
+        PhysicalType::BYTE_ARRAY | PhysicalType::FIXED_LEN_BYTE_ARRAY
+    ) && column.sort_order() != SortOrder::SIGNED
+}
+
+/// Whether a column's min/max bounds lack a comparison order matching Arrow's.
+///
+/// The deprecated Parquet `min`/`max` fields use signed comparison, unlike
+/// Arrow's string and binary comparisons. Even the modern bounds cannot be
+/// interpreted without the corresponding footer `column_orders` entry.
+/// Signed logical types, such as decimals, retain their existing behavior.
+/// Columns with undefined sort orders, such as `INT96`, never have usable
+/// min/max bounds regardless of their physical type. The `INT96` check is
+/// defensive because parquet-rs does not currently expose those bounds.
+pub(crate) fn has_untrusted_min_max_order(
+    parquet_schema: &SchemaDescriptor,
+    column_orders: Option<&[ColumnOrder]>,
+    parquet_column_index: usize,
+) -> bool {
+    let column = parquet_schema.column(parquet_column_index);
+    if column.sort_order() == SortOrder::UNDEFINED {
+        return true;
+    }
+    requires_unsigned_byte_array_order(&column)
+        && (column.sort_order() != SortOrder::UNSIGNED
+            || column_orders
+                .and_then(|orders| orders.get(parquet_column_index))
+                .copied()
+                != Some(ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNSIGNED)))
+}
+
+/// Whether any row group provides byte-array bounds in the deprecated signed
+/// order, or the column's logical order is undefined.
+pub(crate) fn has_untrusted_byte_array_stats<'a>(
+    parquet_schema: &SchemaDescriptor,
+    parquet_column_index: Option<usize>,
+    row_groups: impl IntoIterator<Item = &'a RowGroupMetaData>,
+) -> bool {
+    parquet_column_index.is_some_and(|index| {
+        let column = parquet_schema.column(index);
+        requires_unsigned_byte_array_order(&column)
+            && (column.sort_order() != SortOrder::UNSIGNED
+                || row_groups.into_iter().any(|group| {
+                    group.column(index).statistics().is_some_and(|stats| {
+                        stats.is_min_max_deprecated()
+                            && (stats.min_bytes_opt().is_some()
+                                || stats.max_bytes_opt().is_some())
+                    })
+                }))
+    })
+}
 
 /// Handles fetching Parquet file schema, metadata and statistics
 /// from object store.
@@ -496,6 +551,23 @@ impl<'a> DFParquetMetadata<'a> {
                         file_metadata.schema_descr(),
                     ) {
                         Ok(stats_converter) => {
+                            let parquet_index = stats_converter.parquet_column_index();
+                            if parquet_index.is_some_and(|index| {
+                                has_untrusted_min_max_order(
+                                    file_metadata.schema_descr(),
+                                    file_metadata.column_orders().map(Vec::as_slice),
+                                    index,
+                                )
+                            }) || has_untrusted_byte_array_stats(
+                                file_metadata.schema_descr(),
+                                parquet_index,
+                                row_groups_metadata,
+                            ) {
+                                // The remaining row groups cannot establish bounds
+                                // for the whole file. Keep unrelated statistics.
+                                min_accs[idx] = None;
+                                max_accs[idx] = None;
+                            }
                             let mut accumulators = StatisticsAccumulators {
                                 min_accs: &mut min_accs,
                                 max_accs: &mut max_accs,

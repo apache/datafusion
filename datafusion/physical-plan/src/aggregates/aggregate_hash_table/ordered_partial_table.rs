@@ -37,11 +37,11 @@ use datafusion_common::Result;
 
 use crate::aggregates::{
     AggregateExec, AggregateMode, aggregate_hash_table::PartialMarker,
-    group_values::GroupByMetrics,
+    group_values::AccumulatorPhase,
 };
 
 use super::common::HashAggregateAccumulator;
-use super::common_ordered::OrderedAggregateTable;
+use super::common_ordered::{OrderedAggregateTable, OrderedAggregateTableMetrics};
 
 /// Implementation specific to partial aggregation, where the table stores
 /// partial aggregate states and the input rows are raw rows.
@@ -61,7 +61,7 @@ impl OrderedAggregateTable<PartialMarker> {
     ) -> Result<Self> {
         let input_schema = agg.input().schema();
         let state_schema = Arc::clone(&output_schema);
-        let group_by_metrics = GroupByMetrics::new(&agg.metrics, partition);
+        let metrics = OrderedAggregateTableMetrics::new(agg, partition);
         Self::new_for_mode(
             agg,
             &input_schema,
@@ -71,7 +71,7 @@ impl OrderedAggregateTable<PartialMarker> {
             &agg.input_order_mode,
             &AggregateMode::Partial,
             agg.filter_expr.iter().cloned().collect(),
-            group_by_metrics,
+            metrics,
         )
     }
 
@@ -85,6 +85,7 @@ impl OrderedAggregateTable<PartialMarker> {
         self.aggregate_evaluated_batch(
             &evaluated_batch,
             HashAggregateAccumulator::update_batch,
+            AccumulatorPhase::Update,
         )
     }
 
@@ -105,6 +106,9 @@ impl OrderedAggregateTable<PartialMarker> {
     pub(in crate::aggregates) fn next_output_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
-        self.next_output_batch_inner(HashAggregateAccumulator::state)
+        self.next_output_batch_inner(
+            HashAggregateAccumulator::state,
+            AccumulatorPhase::State,
+        )
     }
 }

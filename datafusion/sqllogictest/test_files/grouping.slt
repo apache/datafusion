@@ -48,6 +48,97 @@ NULL A 1 0 2 1
 NULL B 1 0 2 1
 NULL NULL 1 1 3 3
 
+# Grouping sets must not use the ordered aggregation optimization even when the
+# input is ordered by a grouping expression that is present in every set.
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+SET datafusion.execution.enable_migration_aggregate = false;
+
+statement ok
+CREATE EXTERNAL TABLE grouping_set_ordered (
+  a0 INTEGER,
+  a INTEGER,
+  b INTEGER,
+  c INTEGER,
+  d INTEGER
+)
+STORED AS CSV
+WITH ORDER (c)
+LOCATION '../core/tests/data/window_2.csv'
+OPTIONS ('format.has_header' 'true');
+
+# An unordered AggregateExec omits `ordering_mode`; its absence below ensures
+# that grouping sets do not select ordered/streaming aggregation.
+query TT
+EXPLAIN
+SELECT b, c, grouping(b, c) AS gid
+FROM grouping_set_ordered
+GROUP BY GROUPING SETS ((b, c), (c));
+----
+logical_plan
+01)Projection: grouping_set_ordered.b, grouping_set_ordered.c, CAST(__grouping_id & UInt8(3) AS Int32) AS gid
+02)--Aggregate: groupBy=[[GROUPING SETS ((grouping_set_ordered.b, grouping_set_ordered.c), (grouping_set_ordered.c))]], aggr=[[]]
+03)----TableScan: grouping_set_ordered projection=[b, c]
+physical_plan
+01)ProjectionExec: expr=[b@0 as b, c@1 as c, CAST(__grouping_id@2 & 3 AS Int32) as gid]
+02)--AggregateExec: mode=Final, gby=[b@0 as b, c@1 as c, __grouping_id@2 as __grouping_id], aggr=[]
+03)----AggregateExec: mode=Partial, gby=[(b@0 as b, c@1 as c), (NULL as b, c@1 as c)], aggr=[]
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c], output_ordering=[c@1 ASC NULLS LAST], file_type=csv, has_header=true
+
+# The grouping sets produce two rows for each value of c.
+query I
+SELECT c
+FROM (
+  SELECT b, c, grouping(b, c) AS gid
+  FROM grouping_set_ordered
+  GROUP BY GROUPING SETS ((b, c), (c))
+)
+ORDER BY c
+LIMIT 10;
+----
+0
+0
+1
+1
+2
+2
+3
+3
+4
+4
+
+statement ok
+SET datafusion.execution.enable_migration_aggregate = true;
+
+query I
+SELECT c
+FROM (
+  SELECT b, c, grouping(b, c) AS gid
+  FROM grouping_set_ordered
+  GROUP BY GROUPING SETS ((b, c), (c))
+)
+ORDER BY c
+LIMIT 10;
+----
+0
+0
+1
+1
+2
+2
+3
+3
+4
+4
+
+statement ok
+RESET datafusion.execution.enable_migration_aggregate;
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
 # grouping_with_cube
 query TTIIII
 select

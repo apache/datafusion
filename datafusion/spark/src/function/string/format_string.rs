@@ -1000,16 +1000,32 @@ impl ConversionSpecifier {
                     self.format_string(string, &value.unwrap_or(false).to_string())
                 }
 
-                _ => self.format_boolean(string, value),
+                _ => self.format_boolean(string, value.as_ref()),
             },
-            ScalarValue::Int8(value) => self.format_integer(string, value, "Int8"),
-            ScalarValue::Int16(value) => self.format_integer(string, value, "Int16"),
-            ScalarValue::Int32(value) => self.format_integer(string, value, "Int32"),
-            ScalarValue::Int64(value) => self.format_integer(string, value, "Int64"),
-            ScalarValue::UInt8(value) => self.format_integer(string, value, "UInt8"),
-            ScalarValue::UInt16(value) => self.format_integer(string, value, "UInt16"),
-            ScalarValue::UInt32(value) => self.format_integer(string, value, "UInt32"),
-            ScalarValue::UInt64(value) => self.format_integer(string, value, "UInt64"),
+            ScalarValue::Int8(value) => {
+                self.format_integer(string, value.as_ref(), "Int8")
+            }
+            ScalarValue::Int16(value) => {
+                self.format_integer(string, value.as_ref(), "Int16")
+            }
+            ScalarValue::Int32(value) => {
+                self.format_integer(string, value.as_ref(), "Int32")
+            }
+            ScalarValue::Int64(value) => {
+                self.format_integer(string, value.as_ref(), "Int64")
+            }
+            ScalarValue::UInt8(value) => {
+                self.format_integer(string, value.as_ref(), "UInt8")
+            }
+            ScalarValue::UInt16(value) => {
+                self.format_integer(string, value.as_ref(), "UInt16")
+            }
+            ScalarValue::UInt32(value) => {
+                self.format_integer(string, value.as_ref(), "UInt32")
+            }
+            ScalarValue::UInt64(value) => {
+                self.format_integer(string, value.as_ref(), "UInt64")
+            }
             ScalarValue::Float16(value) => match (self.conversion_type, value) {
                 (
                     ConversionType::DecFloatLower
@@ -1183,7 +1199,7 @@ impl ConversionSpecifier {
                 (
                     ConversionType::TimeLower(_) | ConversionType::TimeUpper(_),
                     Some(value),
-                ) => self.format_time(string, *value as i64 * 1000000000, &None),
+                ) => self.format_time(string, *value as i64 * 1000000000, None),
                 (
                     ConversionType::StringLower | ConversionType::StringUpper,
                     Some(value),
@@ -1201,7 +1217,7 @@ impl ConversionSpecifier {
                     (
                         ConversionType::TimeLower(_) | ConversionType::TimeUpper(_),
                         Some(value),
-                    ) => self.format_time(string, *value as i64 * 1000000, &None),
+                    ) => self.format_time(string, *value as i64 * 1000000, None),
                     (
                         ConversionType::StringLower | ConversionType::StringUpper,
                         Some(value),
@@ -1220,7 +1236,7 @@ impl ConversionSpecifier {
                     (
                         ConversionType::TimeLower(_) | ConversionType::TimeUpper(_),
                         Some(value),
-                    ) => self.format_time(string, *value * 1000, &None),
+                    ) => self.format_time(string, *value * 1000, None),
                     (
                         ConversionType::StringLower | ConversionType::StringUpper,
                         Some(value),
@@ -1238,7 +1254,7 @@ impl ConversionSpecifier {
                 (
                     ConversionType::TimeLower(_) | ConversionType::TimeUpper(_),
                     Some(value),
-                ) => self.format_time(string, *value, &None),
+                ) => self.format_time(string, *value, None),
                 (
                     ConversionType::StringLower | ConversionType::StringUpper,
                     Some(value),
@@ -1256,7 +1272,7 @@ impl ConversionSpecifier {
                     (
                         ConversionType::TimeLower(_) | ConversionType::TimeUpper(_),
                         Some(value),
-                    ) => self.format_time(string, value * 1000000000, zone),
+                    ) => self.format_time(string, value * 1000000000, zone.as_ref()),
                     (
                         ConversionType::StringLower | ConversionType::StringUpper,
                         Some(value),
@@ -1275,7 +1291,7 @@ impl ConversionSpecifier {
                     (
                         ConversionType::TimeLower(_) | ConversionType::TimeUpper(_),
                         Some(value),
-                    ) => self.format_time(string, *value * 1000000, zone),
+                    ) => self.format_time(string, *value * 1000000, zone.as_ref()),
                     (
                         ConversionType::StringLower | ConversionType::StringUpper,
                         Some(value),
@@ -1295,7 +1311,7 @@ impl ConversionSpecifier {
                     (
                         ConversionType::TimeLower(_) | ConversionType::TimeUpper(_),
                         Some(value),
-                    ) => self.format_time(string, value * 1000, zone),
+                    ) => self.format_time(string, value * 1000, zone.as_ref()),
                     (
                         ConversionType::StringLower | ConversionType::StringUpper,
                         Some(value),
@@ -1315,7 +1331,7 @@ impl ConversionSpecifier {
                     (
                         ConversionType::TimeLower(_) | ConversionType::TimeUpper(_),
                         Some(value),
-                    ) => self.format_time(string, *value, zone),
+                    ) => self.format_time(string, *value, zone.as_ref()),
                     (
                         ConversionType::StringLower | ConversionType::StringUpper,
                         Some(value),
@@ -1374,13 +1390,13 @@ impl ConversionSpecifier {
     fn format_integer<T>(
         &self,
         writer: &mut String,
-        value: &Option<T>,
+        value: Option<&T>,
         type_name: &str,
     ) -> Result<()>
     where
         T: Copy + IntegerFormatValue,
     {
-        let Some(value) = *value else {
+        let Some(value) = value.copied() else {
             return if self.conversion_type.supports_integer() {
                 self.format_string(writer, "null")
             } else {
@@ -1565,7 +1581,7 @@ impl ConversionSpecifier {
                     temp = format!("{prefix}p{iexp}");
                 }
             }
-        };
+        }
 
         if self.conversion_type.is_upper() {
             temp = temp.to_ascii_uppercase();
@@ -1598,7 +1614,7 @@ impl ConversionSpecifier {
                 temp = " ".to_owned() + &temp;
             }
             writer.push_str(&temp);
-        };
+        }
         Ok(())
     }
 
@@ -1644,8 +1660,8 @@ impl ConversionSpecifier {
         }
     }
 
-    fn format_boolean(&self, writer: &mut String, value: &Option<bool>) -> Result<()> {
-        let value = value.unwrap_or(false);
+    fn format_boolean(&self, writer: &mut String, value: Option<&bool>) -> Result<()> {
+        let value = value.copied().unwrap_or(false);
 
         let formatted = match self.conversion_type {
             ConversionType::BooleanUpper => {
@@ -1796,9 +1812,9 @@ impl ConversionSpecifier {
 
     fn format_signed(&self, writer: &mut String, value: i64) -> Result<()> {
         let negative = value < 0;
-        let abs_val = value.abs();
+        let abs_val = value.unsigned_abs();
 
-        let (sign_prefix, sign_suffix) = if negative && self.negative_in_parentheses {
+        let (prefix, suffix) = if negative && self.negative_in_parentheses {
             ("(".to_owned(), ")".to_owned())
         } else if negative {
             ("-".to_owned(), "".to_owned())
@@ -1810,60 +1826,31 @@ impl ConversionSpecifier {
             ("".to_owned(), "".to_owned())
         };
 
-        let mut mod_spec = *self;
-        mod_spec.width = match self.width {
-            NumericParam::Literal(w) => NumericParam::Literal(
-                w - sign_prefix.len() as i32 - sign_suffix.len() as i32,
-            ),
-            _ => NumericParam::FromArgument,
-        };
-        let mut formatted = String::new();
-        mod_spec.format_unsigned(&mut formatted, abs_val as u64)?;
-        // put the sign a after any leading spaces
-        let mut actual_number = &formatted[0..];
-        let mut leading_spaces = &formatted[0..0];
-        if let Some(first_non_space) = formatted.find(|c| c != ' ') {
-            actual_number = &formatted[first_non_space..];
-            leading_spaces = &formatted[0..first_non_space];
-        }
-        write!(
-            writer,
-            "{}{}{}{}",
-            leading_spaces.to_owned(),
-            sign_prefix,
-            actual_number,
-            sign_suffix
-        )
-        .map_err(|e| exec_datafusion_err!("Write error: {}", e))?;
+        self.format_decimal_integer(writer, abs_val, prefix, &suffix);
         Ok(())
     }
 
     fn format_unsigned(&self, writer: &mut String, value: u64) -> Result<()> {
         let mut s = String::new();
-        let mut alt_prefix = "";
-        match self.conversion_type {
+        let alt_prefix = match self.conversion_type {
             ConversionType::DecInt => {
-                let num_str = format!("{value}");
-                s = if self.grouping_separator {
-                    insert_thousands_separator(&num_str)
-                } else {
-                    num_str
-                };
+                self.format_decimal_integer(writer, value, String::new(), "");
+                return Ok(());
             }
             ConversionType::HexIntLower => {
-                alt_prefix = "0x";
                 write!(&mut s, "{value:x}")
                     .map_err(|e| exec_datafusion_err!("Write error: {}", e))?;
+                "0x"
             }
             ConversionType::HexIntUpper => {
-                alt_prefix = "0X";
                 write!(&mut s, "{value:X}")
                     .map_err(|e| exec_datafusion_err!("Write error: {}", e))?;
+                "0X"
             }
             ConversionType::OctInt => {
-                alt_prefix = "0";
                 write!(&mut s, "{value:o}")
                     .map_err(|e| exec_datafusion_err!("Write error: {}", e))?;
+                "0"
             }
             _ => {
                 return exec_err!(
@@ -1871,7 +1858,7 @@ impl ConversionSpecifier {
                     self.conversion_type
                 );
             }
-        }
+        };
         let mut prefix = if self.alt_form {
             alt_prefix.to_owned()
         } else {
@@ -1903,6 +1890,22 @@ impl ConversionSpecifier {
         write!(writer, "{formatted}")
             .map_err(|e| exec_datafusion_err!("Write error: {}", e))?;
         Ok(())
+    }
+
+    fn format_decimal_integer(
+        &self,
+        writer: &mut String,
+        value: u64,
+        prefix: String,
+        suffix: &str,
+    ) {
+        let number = value.to_string();
+        let number = if self.grouping_separator {
+            insert_thousands_separator(&number)
+        } else {
+            number
+        };
+        self.write_numeric_parts(writer, prefix, &number, suffix, true);
     }
 
     fn format_str(&self, writer: &mut String, value: &str) -> Result<()> {
@@ -2107,7 +2110,7 @@ impl ConversionSpecifier {
         &self,
         writer: &mut String,
         timestamp_nanos: i64,
-        timezone: &Option<Arc<str>>,
+        timezone: Option<&Arc<str>>,
     ) -> Result<()> {
         let upper = self.conversion_type.is_upper();
         match &self.conversion_type {
@@ -2134,14 +2137,14 @@ impl ConversionSpecifier {
     fn format_date(&self, writer: &mut String, date_days: i64) -> Result<()> {
         // Convert days since epoch to timestamp in nanoseconds
         let timestamp_nanos = date_days * 24 * 60 * 60 * 1_000_000_000;
-        self.format_time(writer, timestamp_nanos, &None)
+        self.format_time(writer, timestamp_nanos, None)
     }
 
     fn format_time_component(
         &self,
         timestamp_nanos: i64,
         time_format: TimeFormat,
-        _timezone: &Option<Arc<str>>,
+        _timezone: Option<&Arc<str>>,
     ) -> Result<String> {
         // Convert nanoseconds to seconds and nanoseconds remainder
         let secs = timestamp_nanos / 1_000_000_000;
@@ -2569,6 +2572,80 @@ mod tests {
             let formatter = Formatter::parse(fmt, &data_types)?;
             let args = vec![value; arg_count];
             assert_eq!(formatter.format(&args)?, expected, "{fmt}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_numeric_final_assembly() -> Result<()> {
+        let cases = [
+            ("%(08d", ScalarValue::Int64(Some(-12)), "(000012)"),
+            ("%+08d", ScalarValue::Int64(Some(12)), "+0000012"),
+            ("%+08d", ScalarValue::Int64(Some(-12)), "-0000012"),
+            ("% 08d", ScalarValue::Int64(Some(12)), " 0000012"),
+            (
+                "%+,12d",
+                ScalarValue::Int64(Some(1_234_567)),
+                "  +1,234,567",
+            ),
+            (
+                "%+,12d",
+                ScalarValue::Int64(Some(-1_234_567)),
+                "  -1,234,567",
+            ),
+            (
+                "%(012.2f",
+                ScalarValue::Decimal128(Some(-123450), 10, 2),
+                "(0001234.50)",
+            ),
+            (
+                "%(012.2f",
+                ScalarValue::Decimal256(Some(i256::from(-123450)), 10, 2),
+                "(0001234.50)",
+            ),
+            (
+                "%010.2f",
+                ScalarValue::Float64(Some(f64::NAN)),
+                "       NaN",
+            ),
+            (
+                "%010.2f",
+                ScalarValue::Float64(Some(f64::INFINITY)),
+                "  Infinity",
+            ),
+            (
+                "%010.2f",
+                ScalarValue::Float64(Some(f64::NEG_INFINITY)),
+                " -Infinity",
+            ),
+            ("%-(8d", ScalarValue::Int64(Some(-12)), "(12)    "),
+        ];
+
+        for (format, value, expected) in cases {
+            let formatter = Formatter::parse(format, &[value.data_type()])?;
+            assert_eq!(formatter.format(&[value])?, expected, "{format}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_unsigned_decimal_final_assembly_policy() -> Result<()> {
+        let cases = [
+            ("%0,12d", 1_234_567, "0001,234,567"),
+            ("%-,12d", 1_234_567, "1,234,567   "),
+            ("%12d", 1_234_567, "     1234567"),
+            ("%+08d", 42, "00000042"),
+            ("% 08d", 42, "00000042"),
+            ("%(08d", 42, "00000042"),
+        ];
+
+        for (format, value, expected) in cases {
+            let formatter = Formatter::parse(format, &[DataType::UInt64])?;
+            assert_eq!(
+                formatter.format(&[ScalarValue::UInt64(Some(value))])?,
+                expected,
+                "{format}"
+            );
         }
         Ok(())
     }

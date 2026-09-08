@@ -2693,12 +2693,38 @@ fn roundtrip_cast() {
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
+
+    let field =
+        Field::new("", DataType::Boolean, false).with_metadata(HashMap::from([(
+            String::from("key"),
+            String::from("value"),
+        )]));
+    let test_expr = Expr::Cast(Cast::new_from_field(
+        Box::new(lit(1.0_f32)),
+        Arc::new(field),
+    ));
+
+    let ctx = SessionContext::new();
+    roundtrip_expr_test(test_expr, ctx);
 }
 
 #[test]
 fn roundtrip_try_cast() {
     let test_expr =
         Expr::TryCast(TryCast::new(Box::new(lit(1.0_f32)), DataType::Boolean));
+
+    let ctx = SessionContext::new();
+    roundtrip_expr_test(test_expr, ctx);
+
+    let field =
+        Field::new("", DataType::Boolean, false).with_metadata(HashMap::from([(
+            String::from("key"),
+            String::from("value"),
+        )]));
+    let test_expr = Expr::TryCast(TryCast::new_from_field(
+        Box::new(lit(1.0_f32)),
+        Arc::new(field),
+    ));
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
@@ -3556,6 +3582,50 @@ async fn roundtrip_custom_listing_tables_schema() -> Result<()> {
     let bytes = logical_plan_to_bytes(&plan)?;
     let new_plan = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(plan, new_plan);
+    Ok(())
+}
+
+#[test]
+fn logical_values_reject_nonempty_rows_with_zero_columns() {
+    let node = protobuf::LogicalPlanNode {
+        logical_plan_type: Some(protobuf::logical_plan_node::LogicalPlanType::Values(
+            protobuf::ValuesNode {
+                n_cols: 0,
+                values_list: vec![protobuf::LogicalExprNode::default()],
+            },
+        )),
+    };
+    let ctx = SessionContext::new();
+    let err =
+        logical_plan_from_bytes(&node.encode_to_vec(), &ctx.task_ctx()).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("ValuesNode n_cols must be greater than 0")
+    );
+}
+
+#[test]
+fn roundtrip_logical_limit_without_fetch() -> Result<()> {
+    let plan = LogicalPlanBuilder::empty(false).limit(7, None)?.build()?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let ctx = SessionContext::new();
+    let round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+
+    assert_eq!(plan, round_trip);
+    Ok(())
+}
+
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn roundtrip_logical_limit_at_i64_max() -> Result<()> {
+    let plan = LogicalPlanBuilder::empty(false)
+        .limit(0, Some(i64::MAX as usize))?
+        .build()?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let ctx = SessionContext::new();
+    let round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+
+    assert_eq!(plan, round_trip);
     Ok(())
 }
 

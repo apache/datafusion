@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::ops::Deref;
 use std::sync::Arc;
 
 use arrow::array::{Int32Builder, Int64Array};
@@ -95,7 +94,7 @@ impl DisplayAs for CustomPlan {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "CustomPlan: batch_size={}", self.batches.len(),)
+                write!(f, "CustomPlan: batch_size={}", self.batches.len())
             }
             DisplayFormatType::TreeRender => {
                 // TODO: collect info
@@ -204,7 +203,7 @@ impl TableProvider for CustomProvider {
                     Expr::Literal(ScalarValue::Int16(Some(i)), _) => *i as i64,
                     Expr::Literal(ScalarValue::Int32(Some(i)), _) => *i as i64,
                     Expr::Literal(ScalarValue::Int64(Some(i)), _) => *i,
-                    Expr::Cast(Cast { expr, field: _ }) => match expr.deref() {
+                    Expr::Cast(Cast { expr, field: _ }) => match &**expr {
                         Expr::Literal(lit_value, _) => match lit_value {
                             ScalarValue::Int8(Some(v)) => *v as i64,
                             ScalarValue::Int16(Some(v)) => *v as i64,

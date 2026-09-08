@@ -66,6 +66,7 @@ members = [
     "benchmarks",
     "datafusion/macros",
     "datafusion/doc",
+    "xtask",
 ]
 exclude = ["dev/depcheck"]
 resolver = "2"
@@ -80,7 +81,7 @@ repository = "https://github.com/apache/datafusion"
 # Define Minimum Supported Rust Version (MSRV)
 rust-version = "1.94.0"
 # Define DataFusion version
-version = "54.1.0"
+version = "55.0.0"
 
 [workspace.dependencies]
 # We turn off default-features for some dependencies here so the workspaces which inherit them can
@@ -121,44 +122,44 @@ chrono = { version = "0.4.45", default-features = false }
 criterion = "0.8"
 ctor = "1.0.7"
 dashmap = "6.2.1"
-datafusion = { path = "datafusion/core", version = "54.1.0", default-features = false }
-datafusion-catalog = { path = "datafusion/catalog", version = "54.1.0" }
-datafusion-catalog-listing = { path = "datafusion/catalog-listing", version = "54.1.0" }
-datafusion-common = { path = "datafusion/common", version = "54.1.0", default-features = false }
-datafusion-common-runtime = { path = "datafusion/common-runtime", version = "54.1.0" }
-datafusion-datasource = { path = "datafusion/datasource", version = "54.1.0", default-features = false }
-datafusion-datasource-arrow = { path = "datafusion/datasource-arrow", version = "54.1.0", default-features = false }
-datafusion-datasource-avro = { path = "datafusion/datasource-avro", version = "54.1.0", default-features = false }
-datafusion-datasource-csv = { path = "datafusion/datasource-csv", version = "54.1.0", default-features = false }
-datafusion-datasource-json = { path = "datafusion/datasource-json", version = "54.1.0", default-features = false }
-datafusion-datasource-parquet = { path = "datafusion/datasource-parquet", version = "54.1.0", default-features = false }
-datafusion-doc = { path = "datafusion/doc", version = "54.1.0" }
-datafusion-execution = { path = "datafusion/execution", version = "54.1.0", default-features = false }
-datafusion-expr = { path = "datafusion/expr", version = "54.1.0", default-features = false }
-datafusion-expr-common = { path = "datafusion/expr-common", version = "54.1.0" }
-datafusion-ffi = { path = "datafusion/ffi", version = "54.1.0" }
-datafusion-functions = { path = "datafusion/functions", version = "54.1.0" }
-datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "54.1.0" }
-datafusion-functions-aggregate-common = { path = "datafusion/functions-aggregate-common", version = "54.1.0" }
-datafusion-functions-nested = { path = "datafusion/functions-nested", version = "54.1.0", default-features = false }
-datafusion-functions-table = { path = "datafusion/functions-table", version = "54.1.0" }
-datafusion-functions-window = { path = "datafusion/functions-window", version = "54.1.0" }
-datafusion-functions-window-common = { path = "datafusion/functions-window-common", version = "54.1.0" }
-datafusion-macros = { path = "datafusion/macros", version = "54.1.0" }
-datafusion-optimizer = { path = "datafusion/optimizer", version = "54.1.0", default-features = false }
-datafusion-physical-expr = { path = "datafusion/physical-expr", version = "54.1.0", default-features = false }
-datafusion-physical-expr-adapter = { path = "datafusion/physical-expr-adapter", version = "54.1.0", default-features = false }
-datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "54.1.0", default-features = false }
-datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", version = "54.1.0" }
-datafusion-physical-plan = { path = "datafusion/physical-plan", version = "54.1.0" }
-datafusion-proto = { path = "datafusion/proto", version = "54.1.0", default-features = false }
-datafusion-proto-common = { path = "datafusion/proto-common", version = "54.1.0" }
-datafusion-proto-models = { path = "datafusion/proto-models", version = "54.1.0" }
-datafusion-pruning = { path = "datafusion/pruning", version = "54.1.0" }
-datafusion-session = { path = "datafusion/session", version = "54.1.0" }
-datafusion-spark = { path = "datafusion/spark", version = "54.1.0" }
-datafusion-sql = { path = "datafusion/sql", version = "54.1.0" }
-datafusion-substrait = { path = "datafusion/substrait", version = "54.1.0" }
+datafusion = { path = "datafusion/core", version = "55.0.0", default-features = false }
+datafusion-catalog = { path = "datafusion/catalog", version = "55.0.0" }
+datafusion-catalog-listing = { path = "datafusion/catalog-listing", version = "55.0.0" }
+datafusion-common = { path = "datafusion/common", version = "55.0.0", default-features = false }
+datafusion-common-runtime = { path = "datafusion/common-runtime", version = "55.0.0" }
+datafusion-datasource = { path = "datafusion/datasource", version = "55.0.0", default-features = false }
+datafusion-datasource-arrow = { path = "datafusion/datasource-arrow", version = "55.0.0", default-features = false }
+datafusion-datasource-avro = { path = "datafusion/datasource-avro", version = "55.0.0", default-features = false }
+datafusion-datasource-csv = { path = "datafusion/datasource-csv", version = "55.0.0", default-features = false }
+datafusion-datasource-json = { path = "datafusion/datasource-json", version = "55.0.0", default-features = false }
+datafusion-datasource-parquet = { path = "datafusion/datasource-parquet", version = "55.0.0", default-features = false }
+datafusion-doc = { path = "datafusion/doc", version = "55.0.0" }
+datafusion-execution = { path = "datafusion/execution", version = "55.0.0", default-features = false }
+datafusion-expr = { path = "datafusion/expr", version = "55.0.0", default-features = false }
+datafusion-expr-common = { path = "datafusion/expr-common", version = "55.0.0" }
+datafusion-ffi = { path = "datafusion/ffi", version = "55.0.0" }
+datafusion-functions = { path = "datafusion/functions", version = "55.0.0" }
+datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "55.0.0" }
+datafusion-functions-aggregate-common = { path = "datafusion/functions-aggregate-common", version = "55.0.0" }
+datafusion-functions-nested = { path = "datafusion/functions-nested", version = "55.0.0", default-features = false }
+datafusion-functions-table = { path = "datafusion/functions-table", version = "55.0.0" }
+datafusion-functions-window = { path = "datafusion/functions-window", version = "55.0.0" }
+datafusion-functions-window-common = { path = "datafusion/functions-window-common", version = "55.0.0" }
+datafusion-macros = { path = "datafusion/macros", version = "55.0.0" }
+datafusion-optimizer = { path = "datafusion/optimizer", version = "55.0.0", default-features = false }
+datafusion-physical-expr = { path = "datafusion/physical-expr", version = "55.0.0", default-features = false }
+datafusion-physical-expr-adapter = { path = "datafusion/physical-expr-adapter", version = "55.0.0", default-features = false }
+datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "55.0.0", default-features = false }
+datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", version = "55.0.0" }
+datafusion-physical-plan = { path = "datafusion/physical-plan", version = "55.0.0" }
+datafusion-proto = { path = "datafusion/proto", version = "55.0.0", default-features = false }
+datafusion-proto-common = { path = "datafusion/proto-common", version = "55.0.0" }
+datafusion-proto-models = { path = "datafusion/proto-models", version = "55.0.0" }
+datafusion-pruning = { path = "datafusion/pruning", version = "55.0.0" }
+datafusion-session = { path = "datafusion/session", version = "55.0.0" }
+datafusion-spark = { path = "datafusion/spark", version = "55.0.0" }
+datafusion-sql = { path = "datafusion/sql", version = "55.0.0" }
+datafusion-substrait = { path = "datafusion/substrait", version = "55.0.0" }
 
 doc-comment = "0.3"
 env_logger = "0.11"
@@ -213,42 +214,33 @@ zstd = { version = "0.13", default-features = false }
 # See https://github.com/apache/datafusion/issues/18467 for the ongoing effort of
 # picking useful non-default lints.
 [workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
 # https://github.com/apache/datafusion/issues/18881
 allow_attributes = "warn"
 as_ptr_cast_mut = "warn"
-assigning_clones = "warn"
+branches_sharing_code = "warn"
 clear_with_drain = "warn"
 coerce_container_to_any = "warn"
 debug_assert_with_mut_call = "warn"
-decimal_bitwise_operands = "warn"
 default_union_representation = "warn"
 doc_include_without_cfg = "warn"
 empty_enum_variants_with_brackets = "warn"
+equatable_if_let = "warn"
 exit = "warn"
-flat_map_option = "warn"
 fn_to_numeric_cast_any = "warn"
 imprecise_flops = "warn"
-index_refutable_slice = "warn"
-inefficient_to_string = "warn"
 infinite_loop = "warn"
-invalid_upcast_comparisons = "warn"
-ip_constant = "warn"
-iter_filter_is_ok = "warn"
-iter_filter_is_some = "warn"
 iter_on_empty_collections = "warn"
-# Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)
-large_futures = "warn"
+iter_on_single_items = "warn"
 large_include_file = "warn"
-macro_use_imports = "warn"
-manual_ilog2 = "warn"
-manual_instant_elapsed = "warn"
-manual_is_power_of_two = "warn"
-match_wild_err_arm = "warn"
+# Guards against stack overflows
+large_stack_frames = "warn"
+# Catches `"{foo}"` where the string is never actually formatted
+literal_string_with_formatting_args = "warn"
 mem_forget = "warn"
-mismatching_type_param_order = "warn"
-mut_mut = "warn"
-# https://github.com/apache/datafusion/issues/18503
-needless_pass_by_value = "warn"
+needless_type_cast = "warn"
 negative_feature_names = "warn"
 non_zero_suggestions = "warn"
 nonstandard_macro_braces = "warn"
@@ -256,25 +248,74 @@ or_fun_call = "warn"
 path_buf_push_overwrite = "warn"
 pathbuf_init_then_push = "warn"
 precedence_bits = "warn"
-pub_underscore_fields = "warn"
+pub_without_shorthand = "warn"
 rc_mutex = "warn"
-ref_option_ref = "warn"
-same_length_and_capacity = "warn"
-str_split_at_newline = "warn"
-string_add_assign = "warn"
+rest_pat_in_fully_bound_structs = "warn"
+# Avoids hashing the key twice
+set_contains_or_insert = "warn"
+single_option_map = "warn"
+string_lit_as_bytes = "warn"
+string_lit_chars_any = "warn"
 suspicious_xor_used_as_pow = "warn"
 trailing_empty_array = "warn"
-transmute_ptr_to_ptr = "warn"
+trait_duplication_in_bounds = "warn"
 uninhabited_references = "warn"
-uninlined_format_args = "warn"
-unnecessary_lazy_evaluations = "warn"
+unnecessary_safety_doc = "warn"
 unnecessary_self_imports = "warn"
-unused_async = "warn"
+unnecessary_struct_initialization = "warn"
+unused_peekable = "warn"
 unused_rounding = "warn"
-used_underscore_binding = "warn"
 verbose_file_reads = "warn"
 wildcard_dependencies = "warn"
-zero_sized_map_values = "warn"
+
+# Pedantic lints we opt out of, with the number of hits at the time we enabled `pedantic`.
+# Some of these we should consider enabling.
+cast_lossless = "allow"                      # 361 hits
+cast_possible_truncation = "allow"           # 911 hits
+cast_possible_wrap = "allow"                 # 493 hits
+cast_precision_loss = "allow"                # 266 hits
+cast_sign_loss = "allow"                     # 440 hits
+default_trait_access = "allow"               # 221 hits
+doc_markdown = "allow"                       # 4933 hits; needs a long `doc-valid-idents` list in `clippy.toml`
+enum_glob_use = "allow"                      # 98 hits
+explicit_into_iter_loop = "allow"            # 55 hits
+explicit_iter_loop = "allow"                 # 189 hits
+float_cmp = "allow"                          # 8 hits; exact float comparisons are often intentional here
+from_iter_instead_of_collect = "allow"       # 51 hits
+if_not_else = "allow"                        # 133 hits
+ignored_unit_patterns = "allow"              # 52 hits
+implicit_clone = "allow"                     # 198 hits
+implicit_hasher = "allow"                    # 17 hits; some sites feed arrow APIs that require the default hasher
+inline_always = "allow"                      # 45 hits
+items_after_statements = "allow"             # 171 hits
+manual_string_new = "allow"                  # 84 hits
+many_single_char_names = "allow"             # 12 hits; short names are idiomatic in the numeric kernels
+map_unwrap_or = "allow"                      # 198 hits
+match_bool = "allow"                         # 46 hits
+match_same_arms = "allow"                    # 261 hits
+match_wildcard_for_single_variants = "allow" # 132 hits
+missing_errors_doc = "allow"                 # 1807 hits
+missing_fields_in_debug = "allow"            # 29 hits
+missing_panics_doc = "allow"                 # 244 hits
+must_use_candidate = "allow"                 # 2726 hits
+needless_raw_string_hashes = "allow"         # 540 hits
+redundant_closure_for_method_calls = "allow" # 686 hits
+redundant_else = "allow"                     # 48 hits
+return_self_not_must_use = "allow"           # 644 hits
+semicolon_if_nothing_returned = "allow"      # 1353 hits
+similar_names = "allow"                      # 228 hits; too many false positives, e.g. `expr`/`exprs`
+single_match_else = "allow"                  # 155 hits
+struct_excessive_bools = "allow"             # 24 hits
+struct_field_names = "allow"                 # 14 hits
+too_many_lines = "allow"                     # 484 hits
+trivially_copy_pass_by_ref = "allow"         # 74 hits
+unnecessary_literal_bound = "allow"          # 471 hits
+unnecessary_wraps = "allow"                  # 427 hits
+unnested_or_patterns = "allow"               # 68 hits
+unreadable_literal = "allow"                 # 502 hits
+unused_self = "allow"                        # 69 hits
+used_underscore_items = "allow"              # 28 hits
+wildcard_imports = "allow"                   # 48 hits; `use crate::prelude::*` is idiomatic
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [

@@ -356,9 +356,8 @@ mod test {
         let columnar_value = ColumnarValue::Array(Arc::new(input));
         let result = super::spark_hex(&[columnar_value]).unwrap();
 
-        let result = match result {
-            ColumnarValue::Array(array) => array,
-            _ => panic!("Expected array"),
+        let ColumnarValue::Array(result) = result else {
+            panic!("Expected array")
         };
 
         let result = as_dictionary_array(&result).unwrap();
@@ -385,9 +384,8 @@ mod test {
         let columnar_value = ColumnarValue::Array(Arc::new(input));
         let result = super::spark_hex(&[columnar_value]).unwrap();
 
-        let result = match result {
-            ColumnarValue::Array(array) => array,
-            _ => panic!("Expected array"),
+        let ColumnarValue::Array(result) = result else {
+            panic!("Expected array")
         };
 
         let result = as_dictionary_array(&result).unwrap();
@@ -414,9 +412,8 @@ mod test {
         let columnar_value = ColumnarValue::Array(Arc::new(input));
         let result = super::spark_hex(&[columnar_value]).unwrap();
 
-        let result = match result {
-            ColumnarValue::Array(array) => array,
-            _ => panic!("Expected array"),
+        let ColumnarValue::Array(result) = result else {
+            panic!("Expected array")
         };
 
         let result = as_dictionary_array(&result).unwrap();
@@ -473,9 +470,8 @@ mod test {
 
         let result =
             super::spark_hex(&[ColumnarValue::Array(Arc::new(bin_array))]).unwrap();
-        let array = match result {
-            ColumnarValue::Array(array) => array,
-            _ => panic!("Expected array"),
+        let ColumnarValue::Array(array) = result else {
+            panic!("Expected array")
         };
         let strings = as_string_array(&array);
         let mut expected = String::with_capacity(512);
@@ -495,9 +491,8 @@ mod test {
         ]);
 
         let result = super::spark_hex(&[ColumnarValue::Array(Arc::new(input))]).unwrap();
-        let array = match result {
-            ColumnarValue::Array(array) => array,
-            _ => panic!("Expected array"),
+        let ColumnarValue::Array(array) = result else {
+            panic!("Expected array")
         };
         let strings = as_string_array(&array);
 
@@ -521,9 +516,8 @@ mod test {
         let input_nulls = input.nulls().unwrap().clone();
 
         let result = super::spark_hex(&[ColumnarValue::Array(Arc::new(input))]).unwrap();
-        let array = match result {
-            ColumnarValue::Array(array) => array,
-            _ => panic!("Expected array"),
+        let ColumnarValue::Array(array) = result else {
+            panic!("Expected array")
         };
         let strings = as_string_array(&array);
         let output_nulls = strings.nulls().unwrap();
@@ -542,9 +536,8 @@ mod test {
         let columnar_value = ColumnarValue::Array(Arc::new(int_array));
 
         let result = super::spark_hex(&[columnar_value]).unwrap();
-        let result = match result {
-            ColumnarValue::Array(array) => array,
-            _ => panic!("Expected array"),
+        let ColumnarValue::Array(result) = result else {
+            panic!("Expected array")
         };
 
         let string_array = as_string_array(&result);
@@ -568,9 +561,8 @@ mod test {
         let columnar_value = ColumnarValue::Array(Arc::new(dict));
         let result = super::spark_hex(&[columnar_value]).unwrap();
 
-        let result = match result {
-            ColumnarValue::Array(array) => array,
-            _ => panic!("Expected array"),
+        let ColumnarValue::Array(result) = result else {
+            panic!("Expected array")
         };
 
         let result = as_dictionary_array(&result).unwrap();
@@ -590,9 +582,8 @@ mod test {
         let dict = DictionaryArray::new(keys, Arc::new(vals));
 
         let result = super::spark_hex(&[ColumnarValue::Array(Arc::new(dict))]).unwrap();
-        let result = match result {
-            ColumnarValue::Array(array) => array,
-            _ => panic!("Expected array"),
+        let ColumnarValue::Array(result) = result else {
+            panic!("Expected array")
         };
         let result = as_dictionary_array(&result).unwrap();
 

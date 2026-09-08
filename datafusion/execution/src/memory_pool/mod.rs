@@ -24,6 +24,7 @@ use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use std::{cmp::Ordering, sync::Arc, sync::atomic};
 
+mod merge_memory_pool;
 mod peak_recording;
 mod pool;
 
@@ -37,6 +38,7 @@ pub mod proxy {
 pub use datafusion_common::{
     human_readable_count, human_readable_duration, human_readable_size, units,
 };
+pub use merge_memory_pool::{MergeMemoryPool, WorkspaceLoan};
 pub use peak_recording::*;
 pub use pool::*;
 
@@ -185,6 +187,9 @@ pub use pool::*;
 ///
 /// * [`TrackConsumersPool`]: Wraps another [`MemoryPool`] and tracks consumers,
 ///   providing better error messages on the largest memory users.
+///
+/// * [`MergeMemoryPool`]: Shares retained workspace across child reservations and
+///   temporary loans, charging a single consumer in its parent pool.
 pub trait MemoryPool: Any + Send + Sync + std::fmt::Debug + Display {
     /// Return pool name
     fn name(&self) -> &str;
@@ -457,7 +462,7 @@ impl MemoryReservation {
                 self.try_shrink(size - capacity)?;
             }
             _ => {}
-        };
+        }
         Ok(())
     }
 

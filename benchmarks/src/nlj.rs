@@ -226,7 +226,7 @@ impl RunOpt {
                 }
                 Err(e) => {
                     return Err(DataFusionError::Context(
-                        "NLJ benchmark Q{query_id} failed with error:".to_string(),
+                        format!("NLJ benchmark Q{query_id} failed with error:"),
                         Box::new(e),
                     ));
                 }

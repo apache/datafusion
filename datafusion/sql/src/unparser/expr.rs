@@ -443,10 +443,7 @@ impl Unparser<'_> {
             }
             Expr::ScalarSubquery(subq) => {
                 let sub_statement = self.plan_to_sql(subq.subquery.as_ref())?;
-                let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
-                {
-                    inner_query
-                } else {
+                let ast::Statement::Query(sub_query) = sub_statement else {
                     return plan_err!(
                         "Subquery must be a Query, but found {sub_statement:?}"
                     );
@@ -457,10 +454,7 @@ impl Unparser<'_> {
                 let inexpr = Box::new(self.expr_to_sql_inner(insubq.expr.as_ref())?);
                 let sub_statement =
                     self.plan_to_sql(insubq.subquery.subquery.as_ref())?;
-                let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
-                {
-                    inner_query
-                } else {
+                let ast::Statement::Query(sub_query) = sub_statement else {
                     return plan_err!(
                         "Subquery must be a Query, but found {sub_statement:?}"
                     );
@@ -475,10 +469,7 @@ impl Unparser<'_> {
                 let left = Box::new(self.expr_to_sql_inner(set_cmp.expr.as_ref())?);
                 let sub_statement =
                     self.plan_to_sql(set_cmp.subquery.subquery.as_ref())?;
-                let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
-                {
-                    inner_query
-                } else {
+                let ast::Statement::Query(sub_query) = sub_statement else {
                     return plan_err!(
                         "Subquery must be a Query, but found {sub_statement:?}"
                     );
@@ -500,10 +491,7 @@ impl Unparser<'_> {
             }
             Expr::Exists(Exists { subquery, negated }) => {
                 let sub_statement = self.plan_to_sql(subquery.subquery.as_ref())?;
-                let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
-                {
-                    inner_query
-                } else {
+                let ast::Statement::Query(sub_query) = sub_statement else {
                     return plan_err!(
                         "Subquery must be a Query, but found {sub_statement:?}"
                     );
@@ -1214,19 +1202,16 @@ impl Unparser<'_> {
     fn handle_timestamp<T: ArrowTemporalType>(
         &self,
         v: &ScalarValue,
-        tz: &Option<Arc<str>>,
+        tz: Option<&Arc<str>>,
     ) -> Result<ast::Expr>
     where
         i64: From<T::Native>,
     {
-        let time_unit = match T::DATA_TYPE {
-            DataType::Timestamp(unit, _) => unit,
-            _ => {
-                return Err(internal_datafusion_err!(
-                    "Expected Timestamp, got {:?}",
-                    T::DATA_TYPE
-                ));
-            }
+        let DataType::Timestamp(time_unit, _) = T::DATA_TYPE else {
+            return Err(internal_datafusion_err!(
+                "Expected Timestamp, got {:?}",
+                T::DATA_TYPE
+            ));
         };
 
         let ts = if let Some(tz) = tz {
@@ -1513,25 +1498,25 @@ impl Unparser<'_> {
             }
             ScalarValue::Time64Nanosecond(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::TimestampSecond(Some(_ts), tz) => {
-                self.handle_timestamp::<TimestampSecondType>(v, tz)
+                self.handle_timestamp::<TimestampSecondType>(v, tz.as_ref())
             }
             ScalarValue::TimestampSecond(None, _) => {
                 Ok(ast::Expr::value(ast::Value::Null))
             }
             ScalarValue::TimestampMillisecond(Some(_ts), tz) => {
-                self.handle_timestamp::<TimestampMillisecondType>(v, tz)
+                self.handle_timestamp::<TimestampMillisecondType>(v, tz.as_ref())
             }
             ScalarValue::TimestampMillisecond(None, _) => {
                 Ok(ast::Expr::value(ast::Value::Null))
             }
             ScalarValue::TimestampMicrosecond(Some(_ts), tz) => {
-                self.handle_timestamp::<TimestampMicrosecondType>(v, tz)
+                self.handle_timestamp::<TimestampMicrosecondType>(v, tz.as_ref())
             }
             ScalarValue::TimestampMicrosecond(None, _) => {
                 Ok(ast::Expr::value(ast::Value::Null))
             }
             ScalarValue::TimestampNanosecond(Some(_ts), tz) => {
-                self.handle_timestamp::<TimestampNanosecondType>(v, tz)
+                self.handle_timestamp::<TimestampNanosecondType>(v, tz.as_ref())
             }
             ScalarValue::TimestampNanosecond(None, _) => {
                 Ok(ast::Expr::value(ast::Value::Null))
@@ -2947,10 +2932,16 @@ mod tests {
                 "EXTRACT(MONTH FROM x)",
             ),
             (
+                DateFieldExtractStyle::Extract,
+                "MONS",
+                "EXTRACT(MONTH FROM x)",
+            ),
+            (
                 DateFieldExtractStyle::Strftime,
                 "MONTH",
                 "strftime('%m', x)",
             ),
+            (DateFieldExtractStyle::Strftime, "YRS", "strftime('%Y', x)"),
             (
                 DateFieldExtractStyle::DatePart,
                 "DAY",

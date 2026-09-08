@@ -27,11 +27,10 @@ use datafusion_common::Result;
 
 use crate::InputOrderMode;
 use crate::aggregates::aggregate_hash_table::FinalMarker;
-use crate::aggregates::group_values::GroupByMetrics;
-use crate::aggregates::{AggregateExec, AggregateMode};
+use crate::aggregates::{AggregateExec, AggregateMode, group_values::AccumulatorPhase};
 
 use super::common::HashAggregateAccumulator;
-use super::common_ordered::OrderedAggregateTable;
+use super::common_ordered::{OrderedAggregateTable, OrderedAggregateTableMetrics};
 
 /// Implementation specific to final aggregation, where the table stores partial
 /// aggregate states and the input rows are also partial states.
@@ -49,7 +48,7 @@ impl OrderedAggregateTable<FinalMarker> {
         output_schema: SchemaRef,
         batch_size: usize,
         input_order_mode: &InputOrderMode,
-        group_by_metrics: GroupByMetrics,
+        metrics: OrderedAggregateTableMetrics,
     ) -> Result<Self> {
         Self::new_for_mode(
             agg,
@@ -60,7 +59,7 @@ impl OrderedAggregateTable<FinalMarker> {
             input_order_mode,
             &AggregateMode::Final,
             vec![None; agg.aggr_expr.len()],
-            group_by_metrics,
+            metrics,
         )
     }
 
@@ -77,6 +76,7 @@ impl OrderedAggregateTable<FinalMarker> {
         self.aggregate_evaluated_batch(
             &evaluated_batch,
             HashAggregateAccumulator::merge_batch,
+            AccumulatorPhase::Merge,
         )
     }
 
@@ -84,6 +84,9 @@ impl OrderedAggregateTable<FinalMarker> {
     pub(in crate::aggregates) fn next_output_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
-        self.next_output_batch_inner(HashAggregateAccumulator::evaluate_to_columns)
+        self.next_output_batch_inner(
+            HashAggregateAccumulator::evaluate_to_columns,
+            AccumulatorPhase::Evaluate,
+        )
     }
 }

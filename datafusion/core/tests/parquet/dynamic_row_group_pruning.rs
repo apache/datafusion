@@ -91,7 +91,7 @@ async fn dynamic_rg_pruning_metric_fires_for_topk_descending_limit() {
 
     let output = ctx.query("SELECT v FROM t ORDER BY v DESC LIMIT 5").await;
 
-    assert_eq!(output.result_rows, 5, "query must return LIMIT rows",);
+    assert_eq!(output.result_rows, 5, "query must return LIMIT rows");
 
     let pruned = output
         .row_groups_pruned_dynamic_filter()
@@ -639,6 +639,94 @@ fn build_q26_batches(schema: &Arc<Schema>) -> Vec<RecordBatch> {
             .unwrap()
         })
         .collect()
+}
+
+/// Per-RG `fully_matched` `RowFilter` skip optimization.
+///
+/// Stats prove that every row of a fully-matched row group satisfies the
+/// pushdown predicate, so the parquet decoder can skip the per-row
+/// `RowFilter` for that RG entirely. The stream rebuilds the decoder at
+/// the boundary with an empty `RowFilter` and toggles back to the real
+/// one at the next non-fully-matched RG.
+///
+/// Layout: 4 RGs of 3 values each. Predicate `v >= 3 AND v <= 10` makes
+/// RG 0 a straddler (1, 2 fail the lower bound), RGs 1..=2 fully matched
+/// (every value in [3, 10] by stats), and RG 3 a straddler again (11, 12
+/// fail the upper bound). This exercises the full toggle lifecycle:
+/// filter ON (RG 0) → OFF across the fully-matched run (RGs 1..=2) → back
+/// ON (RG 3), covering both the fully-matched → non-fully-matched and the
+/// reverse transition.
+///
+/// Expected behavior:
+/// - the static prune marks RGs 1..=2 as fully_matched at file open;
+/// - the stream installs the real `RowFilter` initially (RG 0 not fm);
+/// - at the RG 0 → RG 1 boundary the toggle rebuilds with an empty filter
+///   and bumps `row_filter_skipped_fully_matched`;
+/// - at the RG 2 → RG 3 boundary the toggle reinstalls the real filter, so
+///   11 and 12 are correctly excluded;
+/// - the query result is identical to running with the filter on.
+#[tokio::test]
+async fn fully_matched_rgs_skip_row_filter() {
+    let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+    // 4 RGs of 3 rows each. Predicate `v >= 3 AND v <= 10`:
+    //   RG 0: 1, 2, 3   ← keeps {3}; min=1,max=3 → straddler, filter ON
+    //   RG 1: 4, 5, 6   ← all in [3,10] → fully matched, filter OFF
+    //   RG 2: 7, 8, 9   ← fully matched, filter OFF
+    //   RG 3: 10,11,12  ← keeps {10}; 11,12 fail v<=10 → straddler, filter back ON
+    let groups: [[i64; 3]; 4] = [[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]];
+    let batches: Vec<RecordBatch> = groups
+        .iter()
+        .map(|vals| {
+            let col: ArrayRef = Arc::new(Int64Array::from(vals.to_vec()));
+            RecordBatch::try_new(Arc::clone(&schema), vec![col]).unwrap()
+        })
+        .collect();
+
+    let mut ctx = ContextWithParquet::with_custom_data(
+        Scenario::Int,
+        RowGroup(3),
+        Arc::clone(&schema),
+        batches,
+    )
+    .await;
+
+    let output = ctx
+        .query("SELECT v FROM t WHERE v >= 3 AND v <= 10 ORDER BY v ASC")
+        .await;
+
+    // Correctness: every value in [3, 10], ascending.
+    let expected_rows: Vec<i64> = (3..=10).collect();
+    assert_eq!(output.result_rows, expected_rows.len());
+    let formatted = output.pretty_results();
+    for v in expected_rows {
+        assert!(
+            formatted.contains(&format!("| {v} ")),
+            "output must contain {v}; got:\n{formatted}",
+        );
+    }
+    // The RG 2 → RG 3 transition (fully-matched → non-fully-matched) must
+    // reinstall the real filter, so 11 and 12 are filtered out. If the
+    // toggle failed to restore the filter they would leak through.
+    for v in [11i64, 12] {
+        assert!(
+            !formatted.contains(&format!("| {v} ")),
+            "value {v} must be filtered out by the reinstalled RowFilter; \
+             got:\n{formatted}",
+        );
+    }
+
+    // Behavior: the per-RG `RowFilter` toggle must have fired at least
+    // once when transitioning from RG 0 (not fm) into the fully-matched
+    // run RGs 1..=2.
+    let skipped = output
+        .metric_value("row_filter_skipped_fully_matched")
+        .unwrap_or(0);
+    assert!(
+        skipped >= 1,
+        "row_filter_skipped_fully_matched must fire at least once; \
+         skipped={skipped}\n{}",
+        output.description(),
+    );
 }
 
 /// Regression for #24352: with `pushdown_filters` + TopK dynamic filter, a row

@@ -18,11 +18,29 @@
 use crate::logical_plan::producer::{SubstraitProducer, negate};
 use datafusion::common::{DFSchemaRef, substrait_err};
 use datafusion::logical_expr::expr::{Exists, InSubquery, SetComparison, SetQuantifier};
-use datafusion::logical_expr::{Operator, Subquery};
-use substrait::proto::Expression;
+use datafusion::logical_expr::{LogicalPlan, Operator, Subquery};
+use std::sync::Arc;
 use substrait::proto::expression::RexType;
 use substrait::proto::expression::subquery::set_comparison::{ComparisonOp, ReductionOp};
 use substrait::proto::expression::subquery::{InPredicate, Scalar, SetPredicate};
+use substrait::proto::{Expression, Rel};
+
+/// Serialize a subquery plan, making the enclosing query's schema available
+/// for resolving correlated column references.
+///
+/// Substrait represents correlated references using `OuterReference` field
+/// references with a `steps_out` depth. To produce these, the producer
+/// maintains a stack of outer schemas.
+fn produce_subquery_rel(
+    producer: &mut impl SubstraitProducer,
+    plan: &LogicalPlan,
+    outer_schema: &DFSchemaRef,
+) -> datafusion::common::Result<Box<Rel>> {
+    producer.push_outer_schema(Arc::clone(outer_schema));
+    let result = producer.handle_plan(plan);
+    producer.pop_outer_schema();
+    result
+}
 
 pub fn from_in_subquery(
     producer: &mut impl SubstraitProducer,
@@ -36,7 +54,8 @@ pub fn from_in_subquery(
     } = subquery;
     let substrait_expr = producer.handle_expr(expr, schema)?;
 
-    let subquery_plan = producer.handle_plan(subquery.subquery.as_ref())?;
+    let subquery_plan =
+        produce_subquery_rel(producer, subquery.subquery.as_ref(), schema)?;
 
     let substrait_subquery = Expression {
         rex_type: Some(RexType::Subquery(Box::new(
@@ -88,8 +107,11 @@ pub fn from_set_comparison(
     let comparison_op = comparison_op_to_proto(&set_comparison.op)? as i32;
     let reduction_op = reduction_op_to_proto(&set_comparison.quantifier)? as i32;
     let left = producer.handle_expr(set_comparison.expr.as_ref(), schema)?;
-    let subquery_plan =
-        producer.handle_plan(set_comparison.subquery.subquery.as_ref())?;
+    let subquery_plan = produce_subquery_rel(
+        producer,
+        set_comparison.subquery.subquery.as_ref(),
+        schema,
+    )?;
 
     Ok(Expression {
         rex_type: Some(RexType::Subquery(Box::new(
@@ -113,9 +135,10 @@ pub fn from_set_comparison(
 pub fn from_scalar_subquery(
     producer: &mut impl SubstraitProducer,
     subquery: &Subquery,
-    _schema: &DFSchemaRef,
+    schema: &DFSchemaRef,
 ) -> datafusion::common::Result<Expression> {
-    let subquery_plan = producer.handle_plan(subquery.subquery.as_ref())?;
+    let subquery_plan =
+        produce_subquery_rel(producer, subquery.subquery.as_ref(), schema)?;
 
     Ok(Expression {
         rex_type: Some(RexType::Subquery(Box::new(
@@ -136,9 +159,10 @@ pub fn from_scalar_subquery(
 pub fn from_exists(
     producer: &mut impl SubstraitProducer,
     exists: &Exists,
-    _schema: &DFSchemaRef,
+    schema: &DFSchemaRef,
 ) -> datafusion::common::Result<Expression> {
-    let subquery_plan = producer.handle_plan(exists.subquery.subquery.as_ref())?;
+    let subquery_plan =
+        produce_subquery_rel(producer, exists.subquery.subquery.as_ref(), schema)?;
 
     let substrait_exists = Expression {
         rex_type: Some(RexType::Subquery(Box::new(

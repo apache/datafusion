@@ -78,15 +78,13 @@ pub fn schema_add_window_field(
         .map(|f| f.as_ref().clone())
         .collect_vec();
     // Skip extending schema for UDAF
-    if let WindowFunctionDefinition::AggregateUDF(_) = window_fn {
-        Ok(Arc::new(Schema::new(window_fields)))
-    } else {
+    if !matches!(window_fn, WindowFunctionDefinition::AggregateUDF(_)) {
         window_fields.extend_from_slice(&[window_expr_return_field
             .as_ref()
             .clone()
             .with_name(fn_name)]);
-        Ok(Arc::new(Schema::new(window_fields)))
     }
+    Ok(Arc::new(Schema::new(window_fields)))
 }
 
 /// Create a physical expression for window function
@@ -570,7 +568,7 @@ pub(crate) fn window_equivalence_properties(
                                 Arc::new(window_col),
                                 SortOptions::new(true, false),
                             )]);
-                        };
+                        }
                     }
                 }
             }
@@ -607,20 +605,17 @@ pub fn get_best_fitting_window(
     // of the window_exprs are same.
     let partitionby_exprs = window_exprs[0].partition_by();
     let orderby_keys = window_exprs[0].order_by();
-    let (should_reverse, input_order_mode) =
-        if let Some((should_reverse, input_order_mode)) =
-            get_window_mode(partitionby_exprs, orderby_keys, input)?
-        {
-            (should_reverse, input_order_mode)
-        } else {
-            return Ok(None);
-        };
+    let Some((should_reverse, input_order_mode)) =
+        get_window_mode(partitionby_exprs, orderby_keys, input)?
+    else {
+        return Ok(None);
+    };
     let is_unbounded = input.boundedness().is_unbounded();
     if !is_unbounded && input_order_mode != InputOrderMode::Sorted {
         // Executor has bounded input and `input_order_mode` is not `InputOrderMode::Sorted`
         // in this case removing the sort is not helpful, return:
         return Ok(None);
-    };
+    }
 
     let window_expr = if should_reverse {
         if let Some(reversed_window_expr) = window_exprs

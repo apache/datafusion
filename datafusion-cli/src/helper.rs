@@ -75,14 +75,11 @@ impl CliHelper {
 
     fn validate_input(&self, input: &str) -> Result<ValidationResult> {
         if let Some(sql) = input.strip_suffix(';') {
-            let dialect = match dialect_from_str(self.dialect) {
-                Some(dialect) => dialect,
-                None => {
-                    return Ok(ValidationResult::Invalid(Some(format!(
-                        "  🤔 Invalid dialect: {}",
-                        self.dialect
-                    ))));
-                }
+            let Some(dialect) = dialect_from_str(self.dialect) else {
+                return Ok(ValidationResult::Invalid(Some(format!(
+                    "  🤔 Invalid dialect: {}",
+                    self.dialect
+                ))));
             };
             let lines = split_from_semicolon(sql);
             for line in lines {
@@ -308,16 +305,14 @@ mod tests {
         let mut validator = CliHelper::default();
 
         // should be invalid in generic dialect
-        let result =
-            readline_direct(Cursor::new(r"select 1 # 2;".as_bytes()), &validator)?;
+        let result = readline_direct(Cursor::new(br"select 1 # 2;"), &validator)?;
         assert!(
             matches!(result, ValidationResult::Invalid(Some(e)) if e.contains("Invalid statement"))
         );
 
         // valid in postgresql dialect
         validator.set_dialect(&Dialect::PostgreSQL);
-        let result =
-            readline_direct(Cursor::new(r"select 1 # 2;".as_bytes()), &validator)?;
+        let result = readline_direct(Cursor::new(br"select 1 # 2;"), &validator)?;
         assert!(matches!(result, ValidationResult::Valid(None)));
 
         Ok(())
