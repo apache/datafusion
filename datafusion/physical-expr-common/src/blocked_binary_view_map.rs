@@ -148,6 +148,10 @@ where
     views: CopyItemBlockedVecBuilder<true, u128>,
     buffer: BlockedBytesBufferBuilder,
     num_buffer_blocks_per_block: VecDeque<usize>,
+    /// First buffer block index of every views block, parallel to
+    /// `num_buffer_blocks_per_block`. Looked up by `Entry::index` instead of
+    /// storing it per entry, which keeps `Entry` at 32 bytes (2 per cache line).
+    block_starts: VecDeque<usize>,
 
     /// random state used to generate hashes
     random_state: RandomState,
@@ -181,6 +185,7 @@ where
             buffer: BlockedBytesBufferBuilder::new(),
             // 1 empty block
             num_buffer_blocks_per_block: VecDeque::from(vec![1]),
+            block_starts: VecDeque::from(vec![0]),
             random_state: RandomState::default(),
             hashes_buffer: vec![],
             null: None,
@@ -290,6 +295,7 @@ where
         // Ensure lengths are equivalent
         assert_eq!(values.len(), self.hashes_buffer.len());
 
+        let block_size = self.block_size;
         for i in 0..values.len() {
             let view_u128 = input_views[i];
             let hash = self.hashes_buffer[i];
@@ -342,8 +348,9 @@ where
                         let buffer_index = byte_view.buffer_index as usize;
                         let offset = byte_view.offset as usize;
 
-                        let block =
-                            self.buffer.block(header.start_block_index + buffer_index);
+                        let start_block_index =
+                            self.block_starts[header.index.block_index(block_size)];
+                        let block = self.buffer.block(start_block_index + buffer_index);
 
                         let stored_value = &block[offset..offset + stored_len];
                         let input_value: &[u8] = values.value(i).as_ref();
@@ -357,9 +364,6 @@ where
             } else {
                 // no existing value, make a new one
                 let index = self.next_index();
-                // The bytes go into the buffers of the views block the value is appended to,
-                // appending it may complete that block and move `current_start_block_index` on
-                let start_block_index = self.current_start_block_index;
                 let (new_view, payload) = if len <= 12 {
                     // Inline path: bytes are already packed in view_u128.
                     // The inline ByteView format is [len:u32 LE][data:12 bytes zero-padded],
@@ -383,7 +387,6 @@ where
                 };
 
                 let new_header = Entry {
-                    start_block_index,
                     index,
                     view: new_view,
                     hash,
@@ -452,6 +455,14 @@ where
                 .num_buffer_blocks_per_block
                 .back()
                 .expect("always has the current block");
+        // The taken buffer blocks shift every remaining block index down
+        self.block_starts.pop_front();
+        for start in &mut self.block_starts {
+            *start -= num_blocks;
+        }
+        if self.block_starts.is_empty() {
+            self.block_starts.push_back(self.current_start_block_index);
+        }
 
         if self.views.is_empty() {
             self.map.clear();
@@ -459,7 +470,6 @@ where
             self.map.retain(|entry| {
                 if let Some(index) = entry.index.prev_block_checked(self.block_size) {
                     entry.index = index;
-                    entry.start_block_index -= num_blocks;
                     true
                 } else {
                     false
@@ -478,6 +488,7 @@ where
             &mut self.num_buffer_blocks_per_block,
             VecDeque::from(vec![1]),
         );
+        self.block_starts = VecDeque::from(vec![0]);
 
         self.map.clear();
 
@@ -610,6 +621,7 @@ where
                 Some(*acc)
             }))
             .collect();
+        self.block_starts = block_firsts[..per_views_block.len()].iter().copied().collect();
         self.num_buffer_blocks_per_block = per_views_block;
         self.current_start_block_index = self.buffer.num_blocks()
             - self.num_buffer_blocks_per_block.back().expect("always has the current block");
@@ -620,7 +632,6 @@ where
                 return false;
             }
             entry.index = entry.index.sub_flat(n, block_size);
-            entry.start_block_index = block_firsts[entry.index.block_index(block_size)];
             entry.view = views[entry.index];
             true
         });
@@ -701,6 +712,7 @@ where
         self.num_buffer_blocks_per_block.push_back(1);
         self.buffer.start_new_block();
         self.current_start_block_index = self.buffer.num_blocks() - 1;
+        self.block_starts.push_back(self.current_start_block_index);
     }
 
     /// Total number of entries (including null, if present)
@@ -762,11 +774,6 @@ where
     /// this contains the complete value. For larger strings, this contains
     /// the buffer_index/offset into our completed/in_progress buffers.
     view: u128,
-
-    /// The starting block index for buffers for the current block in views
-    ///
-    /// TODO - add example with multiple blocks for buffer when reach size but only some for view
-    start_block_index: usize,
 
     /// Position of the value in the output blocks
     index: BlocksIndex,
