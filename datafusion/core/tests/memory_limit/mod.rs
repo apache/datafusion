@@ -27,11 +27,10 @@ mod repartition_mem_limit;
 mod union_nullable_spill;
 mod view_spill_compaction;
 use arrow::array::{
-    ArrayRef, DictionaryArray, Int32Array, Int64Array, RecordBatch, StringArray,
-    StringViewArray, StructArray
+    ArrayRef, DictionaryArray, Int32Array, Int64Array, Int64Builder, ListBuilder,
+    RecordBatch, StringArray, StringViewArray, StructArray,
 };
 use arrow::buffer::NullBuffer;
-use arrow::array::{ListBuilder, Int64Builder};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Fields, Int32Type, SchemaRef};
 use arrow_schema::{DataType, Field, Schema};
@@ -225,16 +224,19 @@ mod count_distinct_spill {
     }
 }
 
+/// `GROUP BY` on a single nested key under a memory limit, on both the legacy
+/// `GroupedHashAggregateStream` and the migrated streams. The legacy stream used
+/// to emit duplicate groups after spilling.
 #[tokio::test]
-async fn legacy_stream_nested_key_spill_keeps_groups_unique() {
-    /// `GROUP BY` on a single nested key under a memory limit.
+async fn nested_key_spill_keeps_groups_unique() {
     const NESTED_KEY_ROWS: usize = 200_000;
     const NESTED_KEY_GROUPS: i64 = 16;
     const NESTED_KEY_BATCH_ROWS: usize = 8_192;
 
     /// Small enough that the final stages must spill their `count(distinct)`
-    /// state, large enough for the merge of the spilled runs.
-    const NESTED_KEY_MEMORY_LIMIT: usize = 4 * 1024 * 1024;
+    /// state, large enough that the migrated final stream can hold one merged
+    /// batch under a `FairSpillPool` shared by four partitions.
+    const NESTED_KEY_MEMORY_LIMIT: usize = 8 * 1024 * 1024;
 
     fn nested_key_struct_fields() -> Fields {
         Fields::from(vec![
@@ -318,15 +320,19 @@ async fn legacy_stream_nested_key_spill_keeps_groups_unique() {
         batches_to_sort_string(&batches)
     }
 
-    let expected = run_nested_key_query(None, true).await;
-    let actual_bounded = run_nested_key_query(Some(NESTED_KEY_MEMORY_LIMIT), false).await;
-    let actual_unbounded_legacy = run_nested_key_query(None, true).await;
-    let actual_bounded_legacy =
-        run_nested_key_query(Some(NESTED_KEY_MEMORY_LIMIT), true).await;
-
-    assert_eq!(actual_bounded_legacy, expected);
-    assert_eq!(actual_unbounded_legacy, expected);
-    assert_eq!(actual_bounded, expected);
+    let expected = run_nested_key_query(None, false).await;
+    for legacy in [true, false] {
+        assert_eq!(
+            run_nested_key_query(None, legacy).await,
+            expected,
+            "unbounded, legacy={legacy}"
+        );
+        assert_eq!(
+            run_nested_key_query(Some(NESTED_KEY_MEMORY_LIMIT), legacy).await,
+            expected,
+            "spilling, legacy={legacy}"
+        );
+    }
 }
 
 /// A grouped `COUNT(DISTINCT <string>)` gets one accumulator per group, and
