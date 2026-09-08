@@ -25,7 +25,6 @@ use arrow::array::{
     make_view,
 };
 use arrow::buffer::{Buffer, NullBuffer, ScalarBuffer};
-use arrow::compute::concat;
 use arrow::datatypes::{BinaryViewType, ByteViewType, DataType, StringViewType};
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
@@ -515,23 +514,133 @@ where
     /// Take the first `n` values, `n` must be less than the block size
     ///
     /// The remaining values keep their order so their positions shift down by `n`,
-    /// their payloads are reset to the default
+    /// nothing is copied: the taken views and bytes are a prefix of the builders and
+    /// are handed out as is, the remaining bytes are only re-blocked so that every
+    /// views block still owns whole buffer blocks
     pub fn take_n(&mut self, n: usize) -> ArrayRef {
         assert!(
             n < self.block_size,
             "n ({n}) must be less than the block size ({})",
             self.block_size
         );
+        assert!(n <= self.views.len(), "n ({n}) must be <= len ({})", self.views.len());
+        let block_size = self.block_size;
 
-        // TODO - AVOID THIS TAKE ALL, CONCAT AND SLICE, IT DEFEAT THE PURPOSE
-        let blocks = self.take_all();
-        let all = concat(&blocks.iter().map(|b| b.as_ref()).collect::<Vec<_>>())
-          .expect("blocks have the same type");
-        let rest = all.slice(n, all.len() - n);
-        self.insert_if_new(&rest, |_| V::default(), |_, _| {});
+        // Byte blocks are appended in value order, so the taken values own a prefix of the
+        // bytes ending where the last non inline taken value ends, in block `b` of the
+        // first views block whose buffer blocks start at 0
+        let taken_views = self.views.take_n_fixed(n);
+        let (b, end) = taken_views
+            .as_slice()
+            .iter()
+            .rev()
+            .find(|view| (**view as u32) > 12)
+            .map(|view| {
+                let view = ByteView::from(*view);
+                (view.buffer_index as usize, (view.offset + view.length) as usize)
+            })
+            .unwrap_or((0, 0));
 
-        all.slice(0, n)
+        let old_block_lens: Vec<usize> =
+            (0..self.buffer.num_blocks()).map(|i| self.buffer.block(i).len()).collect();
+        let taken_bytes = old_block_lens[..b].iter().sum::<usize>() + end;
+        let remaining_bytes = self.buffer.len() - taken_bytes;
 
+        // Old block boundaries that fall in the remaining bytes, relative to their start
+        let mut old_boundaries = old_block_lens[b..]
+            .iter()
+            .scan(0usize, |acc, len| {
+                *acc += len;
+                Some(*acc - end)
+            })
+            .filter(|&boundary| boundary > 0 && boundary < remaining_bytes)
+            .peekable();
+
+        // New layout: a buffer block starts at every new views block and at every old
+        // boundary that is kept, views are rewritten to point into it
+        let mut starts: Vec<usize> = vec![];
+        let mut per_views_block: VecDeque<usize> = VecDeque::new();
+        let mut pos = 0usize;
+        let mut first_block_of_current = 0usize;
+        for (k, view) in self.views.as_mut_slice().iter_mut().enumerate() {
+            if k % block_size == 0 {
+                first_block_of_current = starts.len();
+                starts.push(pos);
+                per_views_block.push_back(1);
+            }
+            let len = *view as u32;
+            if len <= 12 {
+                continue;
+            }
+            while old_boundaries.peek().is_some_and(|&boundary| boundary <= pos) {
+                let boundary = old_boundaries.next().unwrap();
+                if boundary == pos && starts.last() != Some(&pos) {
+                    starts.push(pos);
+                    *per_views_block.back_mut().unwrap() += 1;
+                }
+            }
+            let mut byte_view = ByteView::from(*view);
+            byte_view.buffer_index = (starts.len() - 1 - first_block_of_current) as u32;
+            byte_view.offset = (pos - starts[starts.len() - 1]) as u32;
+            *view = byte_view.as_u128();
+            pos += len as usize;
+        }
+        debug_assert_eq!(pos, remaining_bytes);
+        // The views block being written to always owns a buffer block, even when empty
+        if self.views.len().is_multiple_of(block_size) {
+            starts.push(pos);
+            per_views_block.push_back(1);
+        }
+        let sizes: Vec<usize> = starts
+            .iter()
+            .zip(starts.iter().skip(1).chain(std::iter::once(&remaining_bytes)))
+            .map(|(start, next)| next - start)
+            .collect();
+
+        let mut buffers: Vec<Buffer> = (0..b).map(|_| self.buffer.take_first_block()).collect();
+        let last = self.buffer.take_n(end, sizes.into_iter());
+        if !last.is_empty() {
+            buffers.push(last);
+        }
+
+        // First buffer block of every new views block
+        let block_firsts: Vec<usize> = std::iter::once(0)
+            .chain(per_views_block.iter().scan(0, |acc, c| {
+                *acc += c;
+                Some(*acc)
+            }))
+            .collect();
+        self.num_buffer_blocks_per_block = per_views_block;
+        self.current_start_block_index = self.buffer.num_blocks()
+            - self.num_buffer_blocks_per_block.back().expect("always has the current block");
+
+        let views = &self.views;
+        self.map.retain(|entry| {
+            if entry.index.lt_flat(n, block_size) {
+                return false;
+            }
+            entry.index = entry.index.sub_flat(n, block_size);
+            entry.start_block_index = block_firsts[entry.index.block_index(block_size)];
+            entry.view = views[entry.index];
+            true
+        });
+
+        let null_buffer = match self.null {
+            Some((_payload, null_index)) if null_index.lt_flat(n, block_size) => {
+                self.null = None;
+                Some(Self::build_null_buffer_with_null_at_index(
+                    n,
+                    null_index.into_index_in_fixed_block_size(block_size),
+                ))
+            }
+            Some((payload, null_index)) => {
+                self.null = Some((payload, null_index.sub_flat(n, block_size)));
+                None
+            }
+            None => None,
+        };
+
+        self.build_output(taken_views.into_scalar_buffer(), buffers, null_buffer)
     }
 
     fn build_output(&self, views: ScalarBuffer<u128>, buffers: Vec<Buffer>, null_buffer: Option<NullBuffer>) -> ArrayRef {
@@ -1223,5 +1332,63 @@ mod tests {
                     .collect::<Vec<_>>()
             )
         );
+    }
+
+    #[test]
+    fn take_n_only_take_n() {
+        // every distinct value the map has seen and not emitted, in order, is the model
+        let big = "z".repeat(BYTE_VIEW_MAX_BLOCK_SIZE / 2 + 1);
+        let value = |i: usize| -> Option<String> {
+            match i % 7 {
+                0 => None,
+                1 => Some(String::new()),
+                2 => Some(format!("in{i}")),
+                3 => Some(format!("{big}{i}")),
+                _ => Some(format!("long value that is not inline {i}")),
+            }
+        };
+        for block_size in [1, 2, 3, 5, 8] {
+            let mut map = Map::new(OutputType::Utf8View, block_size);
+            let mut model: Vec<Option<String>> = vec![];
+            let mut next = 0usize;
+            let mut step = 0usize;
+            while next < 60 {
+                step += 1;
+                // insert a batch that repeats some old values and adds new ones
+                let batch: Vec<Option<String>> = (next.saturating_sub(4)..next + 1 + step % 6)
+                    .map(value)
+                    .collect();
+                next += 1 + step % 6;
+                let refs: Vec<Option<&str>> = batch.iter().map(|v| v.as_deref()).collect();
+                let got = positions(&mut map, &refs);
+                for (v, pos) in batch.iter().zip(got) {
+                    let expected = match model.iter().position(|m| m == v) {
+                        Some(pos) => pos,
+                        None => {
+                            model.push(v.clone());
+                            model.len() - 1
+                        }
+                    };
+                    assert_eq!(pos, expected, "block_size {block_size} step {step} value {v:?}");
+                }
+                assert_eq!(map.len(), model.len());
+
+                match step % 3 {
+                    0 => {
+                        let n = (step * 7 % block_size).min(model.len());
+                        let taken = map.take_n(n);
+                        assert_eq!(strings(&taken), model.drain(..n).collect::<Vec<_>>());
+                    }
+                    1 if model.len() >= block_size => {
+                        let taken = map.take_block().unwrap();
+                        assert_eq!(strings(&taken), model.drain(..block_size).collect::<Vec<_>>());
+                    }
+                    _ => {}
+                }
+                assert_eq!(map.len(), model.len());
+            }
+            let all: Vec<Option<String>> = map.take_all().iter().flat_map(strings).collect();
+            assert_eq!(all, model);
+        }
     }
 }
