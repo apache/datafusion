@@ -521,6 +521,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_insert_overwrite_replaces_multiple_partitions() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch = |values| {
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int32Array::from(values))],
+            )
+        };
+
+        let resulting_data = experiment_with_insert_op(
+            Arc::clone(&schema),
+            vec![vec![batch(vec![1])?], vec![batch(vec![2])?]],
+            vec![vec![
+                batch(vec![10])?,
+                batch(vec![20])?,
+                batch(vec![30])?,
+                batch(vec![40])?,
+            ]],
+            InsertOp::Overwrite,
+        )
+        .await?;
+
+        assert_eq!(resulting_data.len(), 2);
+        for (partition, expected) in resulting_data.iter().zip([[10, 30], [20, 40]]) {
+            let actual = partition
+                .iter()
+                .flat_map(|batch| {
+                    batch
+                        .column(0)
+                        .as_primitive::<Int32Type>()
+                        .values()
+                        .iter()
+                        .copied()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_insert_overwrite_with_empty_input_clears_table() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
         let initial_batch = RecordBatch::try_new(
