@@ -26,7 +26,7 @@ use crate::physical_optimizer::test_utils::{
     sort_merge_join_exec, sort_preserving_merge_exec, union_exec,
 };
 
-use arrow::array::{RecordBatch, UInt8Array, UInt64Array};
+use arrow::array::{Int32Array, RecordBatch, UInt8Array, UInt64Array};
 use arrow::compute::SortOptions;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion::config::ConfigOptions;
@@ -4821,42 +4821,318 @@ fn get_schema() -> SchemaRef {
         Field::new("bank_account", DataType::UInt64, true),
     ]))
 }
+async fn collect_i32(
+    plan: Arc<dyn ExecutionPlan>,
+    task_ctx: Arc<datafusion::execution::TaskContext>,
+) -> Result<Vec<i32>> {
+    Ok(datafusion_physical_plan::collect(plan, task_ctx)
+        .await?
+        .iter()
+        .flat_map(|batch| {
+            batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .expect("test plan produces Int32")
+                .values()
+                .to_vec()
+        })
+        .collect())
+}
+
 #[test]
-fn test_replace_order_preserving_variants_with_fetch() -> Result<()> {
-    // Create a base plan
-    let parquet_exec = parquet_exec();
+fn replace_order_preserving_variants_preserves_fetched_merge_before_recursing()
+-> Result<()> {
+    for fetch in [None, Some(0), Some(5)] {
+        let ordering: LexOrdering =
+            [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into();
+        let input: Arc<dyn ExecutionPlan> =
+            parquet_exec_multiple_sorted(vec![ordering.clone()]);
+        let repartition = Arc::new(
+            RepartitionExec::try_new(
+                Arc::clone(&input),
+                Partitioning::RoundRobinBatch(2),
+            )?
+            .with_preserve_order(),
+        );
+        let child = DistributionContext::new(
+            repartition,
+            true,
+            vec![DistributionContext::new(input, false, vec![])],
+        );
+        let context = DistributionContext::new(
+            Arc::new(
+                SortPreservingMergeExec::new(ordering, Arc::clone(&child.plan))
+                    .with_fetch(fetch),
+            ),
+            true,
+            vec![child],
+        );
+        let result = replace_order_preserving_variants(context)?;
+        assert_eq!(result.plan.fetch(), fetch);
+        assert_eq!(result.plan.is::<SortPreservingMergeExec>(), fetch.is_some());
+        assert_eq!(result.plan.is::<CoalescePartitionsExec>(), fetch.is_none());
+        assert_eq!(
+            result.children[0]
+                .plan
+                .downcast_ref::<RepartitionExec>()
+                .unwrap()
+                .preserve_order(),
+            fetch.is_some()
+        );
+    }
+    Ok(())
+}
 
-    let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("id", 0)));
+/// Each case executes unoptimized, then two complete physical-optimizer passes.
+#[tokio::test]
+async fn fetched_coalesce_survives_distribution_rewrites() -> Result<()> {
+    use datafusion::physical_planner::DefaultPhysicalPlanner;
+    use datafusion_physical_plan::test::TestMemoryExec;
 
-    // Create a SortPreservingMergeExec with fetch=5
-    let spm_exec = Arc::new(
-        SortPreservingMergeExec::new([sort_expr].into(), parquet_exec.clone())
-            .with_fetch(Some(5)),
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int32Array::from(vec![1, 1, 1]))],
+    )?;
+    let state =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(3))
+            .state();
+    let planner = DefaultPhysicalPlanner::default();
+    let mut failures = vec![];
+
+    for partitions in [1, 3] {
+        for fetch in [0, 1] {
+            let input = Arc::new(TestMemoryExec::try_new(
+                &vec![vec![batch.clone()]; partitions],
+                Arc::clone(&schema),
+                None,
+            )?);
+            let unoptimized: Arc<dyn ExecutionPlan> =
+                Arc::new(CoalescePartitionsExec::new(input).with_fetch(Some(fetch)));
+            assert_eq!(
+                collect_i32(Arc::clone(&unoptimized), state.task_ctx()).await?,
+                vec![1; fetch]
+            );
+            let first = planner.optimize_physical_plan(unoptimized, &state, |_, _| {})?;
+            let second =
+                planner.optimize_physical_plan(Arc::clone(&first), &state, |_, _| {})?;
+            let first_rows = collect_i32(first, state.task_ctx()).await?;
+            let second_rows = collect_i32(second, state.task_ctx()).await?;
+            eprintln!(
+                "fetched_coalesce partitions={partitions}, fetch={fetch}, first={first_rows:?}, second={second_rows:?}"
+            );
+            if first_rows.len() != fetch || second_rows.len() != fetch {
+                failures.push(format!("partitions={partitions}, fetch={fetch}, first={first_rows:?}, second={second_rows:?}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+    Ok(())
+}
+
+/// A fetched TopK must remain ordered even when its aggregate parent cannot use that ordering.
+#[tokio::test]
+async fn fetched_topk_preserves_selected_rows_under_unordered_parent() -> Result<()> {
+    use datafusion::physical_planner::DefaultPhysicalPlanner;
+    use datafusion_physical_plan::test::TestMemoryExec;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Int32, false),
+    ]));
+    let partitions = [vec![(1, 10), (100, 99)], vec![(2, 20), (200, 98)]]
+        .into_iter()
+        .map(|rows| {
+            Ok(vec![RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(
+                        rows.iter().map(|(a, _)| *a).collect::<Vec<_>>(),
+                    )),
+                    Arc::new(Int32Array::from(
+                        rows.iter().map(|(_, b)| *b).collect::<Vec<_>>(),
+                    )),
+                ],
+            )?])
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let ordering: LexOrdering =
+        [PhysicalSortExpr::new_default(col("a", &schema)?)].into();
+    let input = Arc::new(
+        TestMemoryExec::try_new(&partitions, Arc::clone(&schema), None)?
+            .try_with_sort_information(vec![ordering.clone()])?,
     );
-
-    // Create distribution context
-    let dist_context = DistributionContext::new(
-        spm_exec,
-        true,
-        vec![DistributionContext::new(parquet_exec, false, vec![])],
+    let repartition = Arc::new(
+        RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(2))?
+            .with_preserve_order(),
     );
+    let topk =
+        Arc::new(SortPreservingMergeExec::new(ordering, repartition).with_fetch(Some(2)));
+    // Grouping by b (rather than the a sort key) makes this a genuinely unordered parent.
+    let unoptimized: Arc<dyn ExecutionPlan> = Arc::new(AggregateExec::try_new(
+        AggregateMode::Single,
+        PhysicalGroupBy::new_single(vec![(col("b", &schema)?, "b".to_string())]),
+        vec![],
+        vec![],
+        topk,
+        schema,
+    )?);
+    let state =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(2))
+            .state();
+    let planner = DefaultPhysicalPlanner::default();
+    let mut original_rows =
+        collect_i32(Arc::clone(&unoptimized), state.task_ctx()).await?;
+    original_rows.sort_unstable();
+    assert_eq!(original_rows, [10, 20]);
+    let first = planner.optimize_physical_plan(unoptimized, &state, |_, _| {})?;
+    let second = planner.optimize_physical_plan(Arc::clone(&first), &state, |_, _| {})?;
+    let mut first_rows = collect_i32(first, state.task_ctx()).await?;
+    let mut second_rows = collect_i32(second, state.task_ctx()).await?;
+    first_rows.sort_unstable();
+    second_rows.sort_unstable();
+    eprintln!("fetched_topk first={first_rows:?}, second={second_rows:?}");
+    assert_eq!(first_rows, [10, 20]);
+    assert_eq!(second_rows, [10, 20]);
+    Ok(())
+}
 
-    // Apply the function
-    let result = replace_order_preserving_variants(dist_context)?;
+/// LIMIT, OFFSET + LIMIT, and OFFSET-only retain their global cardinality on reoptimization.
+#[tokio::test]
+async fn global_limit_over_single_partitioned_aggregate_survives_reoptimization()
+-> Result<()> {
+    use datafusion::physical_planner::DefaultPhysicalPlanner;
+    use datafusion_physical_plan::test::TestMemoryExec;
 
-    // Verify the plan was transformed to CoalescePartitionsExec
-    result
-        .plan
-        .downcast_ref::<CoalescePartitionsExec>()
-        .expect("Expected CoalescePartitionsExec");
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+    let partitions = [1, 2, 3]
+        .into_iter()
+        .map(|value| {
+            Ok(vec![RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int32Array::from(vec![value]))],
+            )?])
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let state =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(3))
+            .state();
+    let planner = DefaultPhysicalPlanner::default();
+    for (skip, fetch, expected) in [(0, Some(1), 1), (1, Some(1), 1), (1, None, 2)] {
+        let input = Arc::new(TestMemoryExec::try_new(
+            &partitions,
+            Arc::clone(&schema),
+            None,
+        )?);
+        let aggregate = Arc::new(AggregateExec::try_new(
+            AggregateMode::SinglePartitioned,
+            PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]),
+            vec![],
+            vec![],
+            input,
+            Arc::clone(&schema),
+        )?);
+        let unoptimized: Arc<dyn ExecutionPlan> =
+            Arc::new(GlobalLimitExec::new(aggregate, skip, fetch));
+        let first = planner.optimize_physical_plan(unoptimized, &state, |_, _| {})?;
+        let second =
+            planner.optimize_physical_plan(Arc::clone(&first), &state, |_, _| {})?;
+        let first_rows = collect_i32(first, state.task_ctx()).await?.len();
+        let second_rows = collect_i32(second, state.task_ctx()).await?.len();
+        eprintln!(
+            "global_limit skip={skip}, fetch={fetch:?}, first={first_rows}, second={second_rows}"
+        );
+        assert_eq!(first_rows, expected);
+        assert_eq!(second_rows, expected);
+    }
+    Ok(())
+}
 
-    // Verify fetch was preserved
-    assert_eq!(
-        result.plan.fetch(),
-        Some(5),
-        "Fetch value was not preserved after transformation"
+/// A local limit still caps each partition, rather than the combined stream.
+#[tokio::test]
+async fn local_limit_remains_per_partition_after_reoptimization() -> Result<()> {
+    use datafusion::physical_planner::DefaultPhysicalPlanner;
+    use datafusion_physical_plan::test::TestMemoryExec;
+
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+    let partitions = [vec![1, 10], vec![2, 20], vec![3, 30]]
+        .into_iter()
+        .map(|values| {
+            Ok(vec![RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(Int32Array::from(values))],
+            )?])
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let input = Arc::new(TestMemoryExec::try_new(&partitions, schema, None)?);
+    let mut plan: Arc<dyn ExecutionPlan> = Arc::new(LocalLimitExec::new(input, 1));
+    let state =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(3))
+            .state();
+    for pass in 0..=2 {
+        if pass > 0 {
+            plan = DefaultPhysicalPlanner::default().optimize_physical_plan(
+                plan,
+                &state,
+                |_, _| {},
+            )?;
+        }
+        let mut rows = collect_i32(plan.clone(), state.task_ctx()).await?;
+        rows.sort_unstable();
+        assert_eq!(rows, [1, 2, 3], "pass={pass}");
+    }
+    Ok(())
+}
+
+/// OFFSET must discard the same ordered rows exactly once, with or without LIMIT.
+#[tokio::test]
+async fn ordered_offset_preserves_rows_after_reoptimization() -> Result<()> {
+    use datafusion::physical_planner::DefaultPhysicalPlanner;
+    use datafusion_physical_plan::test::TestMemoryExec;
+
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+    let partitions = [vec![1, 3], vec![2]]
+        .into_iter()
+        .map(|values| {
+            Ok(vec![RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(Int32Array::from(values))],
+            )?])
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let ordering: LexOrdering =
+        [PhysicalSortExpr::new_default(col("a", &schema)?)].into();
+    let input = Arc::new(
+        TestMemoryExec::try_new(&partitions, schema, None)?
+            .try_with_sort_information(vec![ordering.clone()])?,
     );
-
+    let state =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(2))
+            .state();
+    for (fetch, expected) in [(Some(1), vec![2]), (None, vec![2, 3])] {
+        let merge = Arc::new(
+            SortPreservingMergeExec::new(ordering.clone(), input.clone())
+                .with_fetch(fetch.map(|n| n + 1)),
+        );
+        let mut limit = GlobalLimitExec::new(merge, 1, fetch);
+        limit.set_required_ordering(Some(ordering.clone()));
+        let mut plan: Arc<dyn ExecutionPlan> = Arc::new(limit);
+        for pass in 0..=2 {
+            if pass > 0 {
+                plan = DefaultPhysicalPlanner::default().optimize_physical_plan(
+                    plan,
+                    &state,
+                    |_, _| {},
+                )?;
+            }
+            assert_eq!(
+                collect_i32(plan.clone(), state.task_ctx()).await?,
+                expected,
+                "fetch={fetch:?}, pass={pass}"
+            );
+        }
+    }
     Ok(())
 }
 
