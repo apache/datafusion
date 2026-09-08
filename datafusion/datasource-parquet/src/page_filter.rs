@@ -234,7 +234,7 @@ impl PagePruningAccessPlanFilter {
                 parquet_metadata.column_index().is_some()
             );
             return PagePruningResult::new(access_plan, 0);
-        };
+        }
 
         // track the total number of rows that should be skipped
         let mut total_skip = 0;

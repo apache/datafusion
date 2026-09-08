@@ -27,7 +27,7 @@
 //! Each subcommand runs a corresponding example:
 //! - `all` — run all examples included in this module
 //!
-//! - `cache_factory`  
+//! - `cache_factory`
 //!   (file: cache_factory.rs, desc: Custom lazy caching for DataFrames using `CacheFactory`)
 //
 //! - `dataframe`

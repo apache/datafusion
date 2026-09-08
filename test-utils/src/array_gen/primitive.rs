@@ -110,7 +110,7 @@ impl PrimitiveArrayGenerator {
         let mut timezone_options: Vec<Option<&Tz>> = vec![None];
         timezone_options.extend(TZ_VARIANTS.iter().map(Some));
 
-        let selected_option = timezone_options.choose(&mut rng).cloned().flatten(); // random timezone/None
+        let selected_option = timezone_options.choose(&mut rng).copied().flatten(); // random timezone/None
 
         selected_option.map(|tz| Arc::from(tz.name()))
     }

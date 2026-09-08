@@ -108,7 +108,7 @@ pub fn reverse_row_selection(
     let mut reversed_selectors = Vec::new();
     for &rg_idx in row_groups_to_scan.iter().rev() {
         if let Some(selectors) = rg_selections.get(&rg_idx) {
-            reversed_selectors.extend(selectors.iter().cloned());
+            reversed_selectors.extend(selectors.iter().copied());
         } else {
             // No specific selection for this row group means select all rows in it
             if let Some((_, start, end)) =

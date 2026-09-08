@@ -73,6 +73,14 @@ use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream};
 /// This stream implements the complete aggregation without a partial/final
 /// split. It consumes raw input rows and emits final aggregate values.
 ///
+/// # Grouping Sets
+///
+/// `GROUPING SETS`, `CUBE` and `ROLLUP` are expanded while consuming raw input:
+/// every grouping set of an input batch is evaluated and interned into the same
+/// hash table, the same way [`super::hash_stream::PartialHashAggregateStream`]
+/// does it. When spilling, the expanded keys are sorted and replayed as a plain
+/// group by.
+///
 /// # Spilling
 ///
 /// During aggregation, group keys and states accumulate. If memory usage exceeds
@@ -806,7 +814,6 @@ impl Stream for SingleHashAggregateStream {
             match next_state {
                 ControlFlow::Continue(next_state) => {
                     self.state = Some(next_state);
-                    continue;
                 }
                 ControlFlow::Break((Poll::Ready(Some(Err(e))), next_state)) => {
                     debug_assert!(matches!(next_state, SingleHashAggregateState::Error));

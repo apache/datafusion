@@ -51,8 +51,8 @@ macro_rules! min_max {
 }
 
 fn min_max_option<T: Clone + Ord>(
-    lhs: &Option<T>,
-    rhs: &Option<T>,
+    lhs: Option<&T>,
+    rhs: Option<&T>,
     ordering: Ordering,
 ) -> Option<T> {
     match (lhs, rhs) {
@@ -65,8 +65,8 @@ fn min_max_option<T: Clone + Ord>(
 }
 
 fn min_max_float_option<T: Copy>(
-    lhs: &Option<T>,
-    rhs: &Option<T>,
+    lhs: Option<&T>,
+    rhs: Option<&T>,
     ordering: Ordering,
     cmp: impl Fn(&T, &T) -> Ordering,
 ) -> Option<T> {
@@ -204,88 +204,107 @@ fn min_max_scalar_same_variant(
             ScalarValue::Decimal32(rhsv, rhsp, rhss),
         ) => {
             ensure_decimal_compatibility(lhs, rhs, (*lhsp, *lhss), (*rhsp, *rhss))?;
-            ScalarValue::Decimal32(min_max_option(lhsv, rhsv, ordering), *lhsp, *lhss)
+            ScalarValue::Decimal32(
+                min_max_option(lhsv.as_ref(), rhsv.as_ref(), ordering),
+                *lhsp,
+                *lhss,
+            )
         }
         (
             ScalarValue::Decimal64(lhsv, lhsp, lhss),
             ScalarValue::Decimal64(rhsv, rhsp, rhss),
         ) => {
             ensure_decimal_compatibility(lhs, rhs, (*lhsp, *lhss), (*rhsp, *rhss))?;
-            ScalarValue::Decimal64(min_max_option(lhsv, rhsv, ordering), *lhsp, *lhss)
+            ScalarValue::Decimal64(
+                min_max_option(lhsv.as_ref(), rhsv.as_ref(), ordering),
+                *lhsp,
+                *lhss,
+            )
         }
         (
             ScalarValue::Decimal128(lhsv, lhsp, lhss),
             ScalarValue::Decimal128(rhsv, rhsp, rhss),
         ) => {
             ensure_decimal_compatibility(lhs, rhs, (*lhsp, *lhss), (*rhsp, *rhss))?;
-            ScalarValue::Decimal128(min_max_option(lhsv, rhsv, ordering), *lhsp, *lhss)
+            ScalarValue::Decimal128(
+                min_max_option(lhsv.as_ref(), rhsv.as_ref(), ordering),
+                *lhsp,
+                *lhss,
+            )
         }
         (
             ScalarValue::Decimal256(lhsv, lhsp, lhss),
             ScalarValue::Decimal256(rhsv, rhsp, rhss),
         ) => {
             ensure_decimal_compatibility(lhs, rhs, (*lhsp, *lhss), (*rhsp, *rhss))?;
-            ScalarValue::Decimal256(min_max_option(lhsv, rhsv, ordering), *lhsp, *lhss)
+            ScalarValue::Decimal256(
+                min_max_option(lhsv.as_ref(), rhsv.as_ref(), ordering),
+                *lhsp,
+                *lhss,
+            )
         }
         (ScalarValue::Boolean(lhs), ScalarValue::Boolean(rhs)) => {
-            ScalarValue::Boolean(min_max_option(lhs, rhs, ordering))
+            ScalarValue::Boolean(min_max_option(lhs.as_ref(), rhs.as_ref(), ordering))
         }
-        (ScalarValue::Float64(lhs), ScalarValue::Float64(rhs)) => {
-            ScalarValue::Float64(min_max_float_option(lhs, rhs, ordering, f64::total_cmp))
-        }
-        (ScalarValue::Float32(lhs), ScalarValue::Float32(rhs)) => {
-            ScalarValue::Float32(min_max_float_option(lhs, rhs, ordering, f32::total_cmp))
-        }
-        (ScalarValue::Float16(lhs), ScalarValue::Float16(rhs)) => {
-            ScalarValue::Float16(min_max_float_option(lhs, rhs, ordering, |a, b| {
+        (ScalarValue::Float64(lhs), ScalarValue::Float64(rhs)) => ScalarValue::Float64(
+            min_max_float_option(lhs.as_ref(), rhs.as_ref(), ordering, f64::total_cmp),
+        ),
+        (ScalarValue::Float32(lhs), ScalarValue::Float32(rhs)) => ScalarValue::Float32(
+            min_max_float_option(lhs.as_ref(), rhs.as_ref(), ordering, f32::total_cmp),
+        ),
+        (ScalarValue::Float16(lhs), ScalarValue::Float16(rhs)) => ScalarValue::Float16(
+            min_max_float_option(lhs.as_ref(), rhs.as_ref(), ordering, |a, b| {
                 a.total_cmp(b)
-            }))
-        }
+            }),
+        ),
         (ScalarValue::UInt64(lhs), ScalarValue::UInt64(rhs)) => {
-            ScalarValue::UInt64(min_max_option(lhs, rhs, ordering))
+            ScalarValue::UInt64(min_max_option(lhs.as_ref(), rhs.as_ref(), ordering))
         }
         (ScalarValue::UInt32(lhs), ScalarValue::UInt32(rhs)) => {
-            ScalarValue::UInt32(min_max_option(lhs, rhs, ordering))
+            ScalarValue::UInt32(min_max_option(lhs.as_ref(), rhs.as_ref(), ordering))
         }
         (ScalarValue::UInt16(lhs), ScalarValue::UInt16(rhs)) => {
-            ScalarValue::UInt16(min_max_option(lhs, rhs, ordering))
+            ScalarValue::UInt16(min_max_option(lhs.as_ref(), rhs.as_ref(), ordering))
         }
         (ScalarValue::UInt8(lhs), ScalarValue::UInt8(rhs)) => {
-            ScalarValue::UInt8(min_max_option(lhs, rhs, ordering))
+            ScalarValue::UInt8(min_max_option(lhs.as_ref(), rhs.as_ref(), ordering))
         }
         (ScalarValue::Int64(lhs), ScalarValue::Int64(rhs)) => {
-            ScalarValue::Int64(min_max_option(lhs, rhs, ordering))
+            ScalarValue::Int64(min_max_option(lhs.as_ref(), rhs.as_ref(), ordering))
         }
         (ScalarValue::Int32(lhs), ScalarValue::Int32(rhs)) => {
-            ScalarValue::Int32(min_max_option(lhs, rhs, ordering))
+            ScalarValue::Int32(min_max_option(lhs.as_ref(), rhs.as_ref(), ordering))
         }
         (ScalarValue::Int16(lhs), ScalarValue::Int16(rhs)) => {
-            ScalarValue::Int16(min_max_option(lhs, rhs, ordering))
+            ScalarValue::Int16(min_max_option(lhs.as_ref(), rhs.as_ref(), ordering))
         }
         (ScalarValue::Int8(lhs), ScalarValue::Int8(rhs)) => {
-            ScalarValue::Int8(min_max_option(lhs, rhs, ordering))
+            ScalarValue::Int8(min_max_option(lhs.as_ref(), rhs.as_ref(), ordering))
         }
         (ScalarValue::Utf8(lhs), ScalarValue::Utf8(rhs)) => {
-            ScalarValue::Utf8(min_max_option(lhs, rhs, ordering))
+            ScalarValue::Utf8(min_max_option(lhs.as_ref(), rhs.as_ref(), ordering))
         }
         (ScalarValue::LargeUtf8(lhs), ScalarValue::LargeUtf8(rhs)) => {
-            ScalarValue::LargeUtf8(min_max_option(lhs, rhs, ordering))
+            ScalarValue::LargeUtf8(min_max_option(lhs.as_ref(), rhs.as_ref(), ordering))
         }
         (ScalarValue::Utf8View(lhs), ScalarValue::Utf8View(rhs)) => {
-            ScalarValue::Utf8View(min_max_option(lhs, rhs, ordering))
+            ScalarValue::Utf8View(min_max_option(lhs.as_ref(), rhs.as_ref(), ordering))
         }
         (ScalarValue::Binary(lhs), ScalarValue::Binary(rhs)) => {
-            ScalarValue::Binary(min_max_option(lhs, rhs, ordering))
+            ScalarValue::Binary(min_max_option(lhs.as_ref(), rhs.as_ref(), ordering))
         }
         (ScalarValue::LargeBinary(lhs), ScalarValue::LargeBinary(rhs)) => {
-            ScalarValue::LargeBinary(min_max_option(lhs, rhs, ordering))
+            ScalarValue::LargeBinary(min_max_option(lhs.as_ref(), rhs.as_ref(), ordering))
         }
         (
             ScalarValue::FixedSizeBinary(lsize, lhs),
             ScalarValue::FixedSizeBinary(rsize, rhs),
         ) => {
             if lsize == rsize {
-                ScalarValue::FixedSizeBinary(*lsize, min_max_option(lhs, rhs, ordering))
+                ScalarValue::FixedSizeBinary(
+                    *lsize,
+                    min_max_option(lhs.as_ref(), rhs.as_ref(), ordering),
+                )
             } else {
                 return internal_err!(
                     "MIN/MAX is not expected to receive FixedSizeBinary of incompatible sizes {:?}",
@@ -294,62 +313,91 @@ fn min_max_scalar_same_variant(
             }
         }
         (ScalarValue::BinaryView(lhs), ScalarValue::BinaryView(rhs)) => {
-            ScalarValue::BinaryView(min_max_option(lhs, rhs, ordering))
+            ScalarValue::BinaryView(min_max_option(lhs.as_ref(), rhs.as_ref(), ordering))
         }
         (
             ScalarValue::TimestampSecond(lhs, l_tz),
             ScalarValue::TimestampSecond(rhs, _),
-        ) => {
-            ScalarValue::TimestampSecond(min_max_option(lhs, rhs, ordering), l_tz.clone())
-        }
+        ) => ScalarValue::TimestampSecond(
+            min_max_option(lhs.as_ref(), rhs.as_ref(), ordering),
+            l_tz.clone(),
+        ),
         (
             ScalarValue::TimestampMillisecond(lhs, l_tz),
             ScalarValue::TimestampMillisecond(rhs, _),
         ) => ScalarValue::TimestampMillisecond(
-            min_max_option(lhs, rhs, ordering),
+            min_max_option(lhs.as_ref(), rhs.as_ref(), ordering),
             l_tz.clone(),
         ),
         (
             ScalarValue::TimestampMicrosecond(lhs, l_tz),
             ScalarValue::TimestampMicrosecond(rhs, _),
         ) => ScalarValue::TimestampMicrosecond(
-            min_max_option(lhs, rhs, ordering),
+            min_max_option(lhs.as_ref(), rhs.as_ref(), ordering),
             l_tz.clone(),
         ),
         (
             ScalarValue::TimestampNanosecond(lhs, l_tz),
             ScalarValue::TimestampNanosecond(rhs, _),
         ) => ScalarValue::TimestampNanosecond(
-            min_max_option(lhs, rhs, ordering),
+            min_max_option(lhs.as_ref(), rhs.as_ref(), ordering),
             l_tz.clone(),
         ),
         (ScalarValue::Date32(lhs), ScalarValue::Date32(rhs)) => {
-            ScalarValue::Date32(min_max_option(lhs, rhs, ordering))
+            ScalarValue::Date32(min_max_option(lhs.as_ref(), rhs.as_ref(), ordering))
         }
         (ScalarValue::Date64(lhs), ScalarValue::Date64(rhs)) => {
-            ScalarValue::Date64(min_max_option(lhs, rhs, ordering))
+            ScalarValue::Date64(min_max_option(lhs.as_ref(), rhs.as_ref(), ordering))
         }
         (ScalarValue::Time32Second(lhs), ScalarValue::Time32Second(rhs)) => {
-            ScalarValue::Time32Second(min_max_option(lhs, rhs, ordering))
+            ScalarValue::Time32Second(min_max_option(
+                lhs.as_ref(),
+                rhs.as_ref(),
+                ordering,
+            ))
         }
         (ScalarValue::Time32Millisecond(lhs), ScalarValue::Time32Millisecond(rhs)) => {
-            ScalarValue::Time32Millisecond(min_max_option(lhs, rhs, ordering))
+            ScalarValue::Time32Millisecond(min_max_option(
+                lhs.as_ref(),
+                rhs.as_ref(),
+                ordering,
+            ))
         }
         (ScalarValue::Time64Microsecond(lhs), ScalarValue::Time64Microsecond(rhs)) => {
-            ScalarValue::Time64Microsecond(min_max_option(lhs, rhs, ordering))
+            ScalarValue::Time64Microsecond(min_max_option(
+                lhs.as_ref(),
+                rhs.as_ref(),
+                ordering,
+            ))
         }
         (ScalarValue::Time64Nanosecond(lhs), ScalarValue::Time64Nanosecond(rhs)) => {
-            ScalarValue::Time64Nanosecond(min_max_option(lhs, rhs, ordering))
+            ScalarValue::Time64Nanosecond(min_max_option(
+                lhs.as_ref(),
+                rhs.as_ref(),
+                ordering,
+            ))
         }
         (ScalarValue::IntervalYearMonth(lhs), ScalarValue::IntervalYearMonth(rhs)) => {
-            ScalarValue::IntervalYearMonth(min_max_option(lhs, rhs, ordering))
+            ScalarValue::IntervalYearMonth(min_max_option(
+                lhs.as_ref(),
+                rhs.as_ref(),
+                ordering,
+            ))
         }
         (
             ScalarValue::IntervalMonthDayNano(lhs),
             ScalarValue::IntervalMonthDayNano(rhs),
-        ) => ScalarValue::IntervalMonthDayNano(min_max_option(lhs, rhs, ordering)),
+        ) => ScalarValue::IntervalMonthDayNano(min_max_option(
+            lhs.as_ref(),
+            rhs.as_ref(),
+            ordering,
+        )),
         (ScalarValue::IntervalDayTime(lhs), ScalarValue::IntervalDayTime(rhs)) => {
-            ScalarValue::IntervalDayTime(min_max_option(lhs, rhs, ordering))
+            ScalarValue::IntervalDayTime(min_max_option(
+                lhs.as_ref(),
+                rhs.as_ref(),
+                ordering,
+            ))
         }
         (ScalarValue::IntervalYearMonth(_), ScalarValue::IntervalMonthDayNano(_))
         | (ScalarValue::IntervalYearMonth(_), ScalarValue::IntervalDayTime(_))
@@ -360,18 +408,34 @@ fn min_max_scalar_same_variant(
             return min_max_interval_scalar(lhs, rhs, ordering);
         }
         (ScalarValue::DurationSecond(lhs), ScalarValue::DurationSecond(rhs)) => {
-            ScalarValue::DurationSecond(min_max_option(lhs, rhs, ordering))
+            ScalarValue::DurationSecond(min_max_option(
+                lhs.as_ref(),
+                rhs.as_ref(),
+                ordering,
+            ))
         }
         (
             ScalarValue::DurationMillisecond(lhs),
             ScalarValue::DurationMillisecond(rhs),
-        ) => ScalarValue::DurationMillisecond(min_max_option(lhs, rhs, ordering)),
+        ) => ScalarValue::DurationMillisecond(min_max_option(
+            lhs.as_ref(),
+            rhs.as_ref(),
+            ordering,
+        )),
         (
             ScalarValue::DurationMicrosecond(lhs),
             ScalarValue::DurationMicrosecond(rhs),
-        ) => ScalarValue::DurationMicrosecond(min_max_option(lhs, rhs, ordering)),
+        ) => ScalarValue::DurationMicrosecond(min_max_option(
+            lhs.as_ref(),
+            rhs.as_ref(),
+            ordering,
+        )),
         (ScalarValue::DurationNanosecond(lhs), ScalarValue::DurationNanosecond(rhs)) => {
-            ScalarValue::DurationNanosecond(min_max_option(lhs, rhs, ordering))
+            ScalarValue::DurationNanosecond(min_max_option(
+                lhs.as_ref(),
+                rhs.as_ref(),
+                ordering,
+            ))
         }
         (ScalarValue::Struct(_), ScalarValue::Struct(_))
         | (ScalarValue::List(_), ScalarValue::List(_))

@@ -45,6 +45,7 @@ use crate::postgres_container::{
 };
 use datafusion::common::runtime::SpawnedTask;
 use futures::FutureExt;
+use std::fmt::Write as _;
 use std::fs;
 use std::io::{IsTerminal, Write, stderr, stdout};
 use std::path::{Path, PathBuf};
@@ -360,11 +361,13 @@ async fn run_tests() -> Result<()> {
                             test_file_path.display()
                         )))
                     } else {
-                        let sqls = current_sql
-                            .iter()
-                            .enumerate()
-                            .map(|(i, sql)| format!("\n[{}]: {}", i + 1, sql))
-                            .collect::<String>();
+                        let sqls = current_sql.iter().enumerate().fold(
+                            String::new(),
+                            |mut acc, (i, sql)| {
+                                write!(acc, "\n[{}]: {}", i + 1, sql).ok();
+                                acc
+                            },
+                        );
                         Some(error.context(format!(
                             "failure in {} for multiple currently running sqls: {}",
                             test_file_path.display(),
@@ -738,14 +741,16 @@ where
         let mut msg = format!("{} errors in file {}\n\n", errs.len(), path.display());
         for (i, err) in errs.iter().enumerate() {
             if i >= ERRS_PER_FILE_LIMIT {
-                msg.push_str(&format!(
+                write!(
+                    msg,
                     "... other {} errors in {} not shown ...\n\n",
                     errs.len() - ERRS_PER_FILE_LIMIT,
                     path.display()
-                ));
+                )
+                .ok();
                 break;
             }
-            msg.push_str(&format!("{}. {err}\n\n", i + 1));
+            write!(msg, "{}. {err}\n\n", i + 1).ok();
         }
         return Err(DataFusionError::External(msg.into()));
     }

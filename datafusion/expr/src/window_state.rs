@@ -87,7 +87,7 @@ impl WindowAggState {
                 state.current_group_idx -= n_group_to_del;
             }
             None => {}
-        };
+        }
     }
 
     pub fn update(

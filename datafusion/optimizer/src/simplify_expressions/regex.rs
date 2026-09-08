@@ -211,7 +211,7 @@ fn is_anchored_literal(v: &[Hir]) -> bool {
     match v.len() {
         2..=3 => (),
         _ => return false,
-    };
+    }
 
     let first_last = (
         v.first().expect("length checked"),

@@ -680,7 +680,7 @@ impl Accumulator for SlidingDistinctSumAccumulator {
         let keys = self
             .counts
             .keys()
-            .cloned()
+            .copied()
             .map(Some)
             .map(ScalarValue::Int64)
             .collect::<Vec<_>>();

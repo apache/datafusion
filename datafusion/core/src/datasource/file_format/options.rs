@@ -581,7 +581,7 @@ impl<'a> JsonReadOptions<'a> {
 }
 
 #[async_trait]
-/// ['ReadOptions'] is implemented by Options like ['CsvReadOptions'] that control the reading of respective files/sources.
+/// [`ReadOptions`] is implemented by Options like [`CsvReadOptions`] that control the reading of respective files/sources.
 pub trait ReadOptions<'a> {
     /// Helper to convert these user facing options to `ListingTable` options
     fn to_listing_options(

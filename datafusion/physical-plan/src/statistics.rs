@@ -40,7 +40,7 @@ type CacheKey = (usize, Option<usize>);
 
 fn cache_key(plan: &dyn ExecutionPlan, partition: Option<usize>) -> CacheKey {
     (
-        from_ref::<dyn ExecutionPlan>(plan) as *const () as usize,
+        from_ref::<dyn ExecutionPlan>(plan).cast::<()>() as usize,
         partition,
     )
 }
