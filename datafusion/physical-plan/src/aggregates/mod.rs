@@ -1425,6 +1425,19 @@ impl AggregateExec {
             .equivalence_properties()
             .project(group_expr_mapping, schema);
 
+        // An aggregation that does not maintain its input order must not
+        // advertise the input's ordering either. `maintains_input_order`
+        // reports `false` for `InputOrderMode::Linear`, and a hash aggregation
+        // emits its groups in hash table order. `PartialReduce` is forced to
+        // `Linear` in `try_new` for exactly this reason, but the projection
+        // above still carries the input orderings over, so drop them here.
+        // Otherwise a consumer may take the early emit path on an ordering the
+        // aggregation does not keep, and flush a group before all of its rows
+        // have arrived.
+        if *input_order_mode == InputOrderMode::Linear {
+            eq_properties.clear_orderings();
+        }
+
         // True no-group aggregates produce only one row in each output
         // partition, so aggregate outputs are constants within the partition.
         // Grouping sets with empty grouping expressions are not covered here:
@@ -4591,6 +4604,54 @@ mod tests {
         let finite_memory_task_ctx = new_finite_memory_migrated_hash_ctx(2, 1024 * 1024)?;
         let stream = aggregate.execute_typed(0, &finite_memory_task_ctx)?;
         assert!(matches!(stream, StreamType::OrderedSingleAggregate(_)));
+
+        Ok(())
+    }
+
+    /// A `PartialReduce` aggregation emits its groups in hash table order, and
+    /// `try_new` forces its [`InputOrderMode`] to `Linear` to say so. It must
+    /// not advertise its input's ordering as its own output ordering either:
+    /// a consumer that believed it could take the early emit path and flush a
+    /// group before all of its rows had arrived.
+    #[test]
+    fn partial_reduce_does_not_advertise_input_ordering() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::Float64, false),
+        ]));
+        let ordering = LexOrdering::new([PhysicalSortExpr::new_default(Arc::new(
+            Column::new("a", 0),
+        ))])
+        .unwrap();
+        let input = TestMemoryExec::try_new(&[vec![]], Arc::clone(&schema), None)?
+            .try_with_sort_information(vec![ordering])?;
+        let input = Arc::new(TestMemoryExec::update_cache(&Arc::new(input)));
+        assert!(
+            input.properties().output_ordering().is_some(),
+            "test setup: the input is ordered by the group key"
+        );
+
+        let partial_reduce = AggregateExec::try_new(
+            AggregateMode::PartialReduce,
+            PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]),
+            vec![Arc::new(
+                AggregateExprBuilder::new(sum_udaf(), vec![col("b", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("SUM(b)")
+                    .build()?,
+            )],
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?;
+
+        assert_eq!(partial_reduce.input_order_mode(), &InputOrderMode::Linear);
+        assert_eq!(partial_reduce.maintains_input_order(), vec![false]);
+        assert!(
+            partial_reduce.properties().output_ordering().is_none(),
+            "partial reduce advertised an ordering it does not maintain: {:?}",
+            partial_reduce.properties().output_ordering()
+        );
 
         Ok(())
     }

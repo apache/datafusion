@@ -32,8 +32,8 @@ use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef, SortOptions};
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::prelude::SessionConfig;
+use datafusion_common::Result;
 use datafusion_common::test_util::batches_to_sort_string;
-use datafusion_common::{DataFusionError, Result};
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{FairSpillPool, TrackConsumersPool};
@@ -218,38 +218,6 @@ struct Shape {
     /// Source partition count.
     source_partitions: usize,
     query: Query,
-    /// Whether a resources-exhausted error is an accepted outcome for this
-    /// chain instead of a result, given the rest of the case parameters.
-    /// Every shape declares its own, so nothing is accepted by derivation.
-    accepts_out_of_memory: fn(&CaseParams) -> bool,
-}
-
-/// A chain never runs out of memory: every stage spills, emits early, or is
-/// bounded.
-fn never_out_of_memory(_params: &CaseParams) -> bool {
-    false
-}
-
-/// The chain starts with a grouped `Partial` aggregate reading the source, so
-/// with ordered input that stage cannot always survive memory pressure.
-fn partial_stage_starved_on_ordered_input(params: &CaseParams) -> bool {
-    params.memory == Memory::Limited
-        && match params.order {
-            // the impl emit its state early
-            Order::SortedByFirstKey => false,
-            // The stage sees `InputOrderMode::Sorted`, where
-            // `OrderedPartialAggregateStream` holds one group at a time and
-            // registers its reservation as unable to handle memory pressure.
-            // `FairSpillPool` caps the spillable consumers against each other
-            // but reserves nothing for the others, so whichever consumer took
-            // the pool first, a final hash stage or a `PartialReduce` stage,
-            // leaves nothing and this stage is refused the few kilobytes it
-            // needs. It is the victim rather than the cause.
-            Order::SortedByAllKeys => true,
-            // Linear input: the impl emit its state early and register as spillable, so the stage
-            // always survives the pressure.
-            Order::Unordered => false,
-        }
 }
 
 const fn shape(
@@ -257,40 +225,30 @@ const fn shape(
     operators: &'static [Operator],
     source_partitions: usize,
     query: Query,
-    accepts_out_of_memory: fn(&CaseParams) -> bool,
 ) -> Shape {
     Shape {
         name,
         operators,
         source_partitions,
         query,
-        accepts_out_of_memory,
     }
 }
 
 /// Every shape from AGGREGATE_CHAINS.md. The ordering variants there come from
 /// crossing a shape with `Order`, so one entry here covers several rows.
 const SHAPES: &[Shape] = &[
-    shape(
-        "single",
-        &[Aggregate(Single)],
-        1,
-        Query::Grouped,
-        never_out_of_memory,
-    ),
+    shape("single", &[Aggregate(Single)], 1, Query::Grouped),
     shape(
         "single_partitioned",
         &[HashRepartition, Aggregate(SinglePartitioned)],
         PARTITIONS,
         Query::Grouped,
-        never_out_of_memory,
     ),
     shape(
         "single_partitioned_order_preserving",
         &[OrderPreservingHashRepartition, Aggregate(SinglePartitioned)],
         PARTITIONS,
         Query::Grouped,
-        never_out_of_memory,
     ),
     shape(
         "partial_repartition_final",
@@ -301,14 +259,12 @@ const SHAPES: &[Shape] = &[
         ],
         PARTITIONS,
         Query::Grouped,
-        partial_stage_starved_on_ordered_input,
     ),
     shape(
         "partial_coalesce_final",
         &[Aggregate(Partial), CoalescePartitions, Aggregate(Final)],
         PARTITIONS,
         Query::Grouped,
-        partial_stage_starved_on_ordered_input,
     ),
     shape(
         "partial_order_preserving_repartition_final",
@@ -319,21 +275,18 @@ const SHAPES: &[Shape] = &[
         ],
         PARTITIONS,
         Query::Grouped,
-        partial_stage_starved_on_ordered_input,
     ),
     shape(
         "partial_sort_preserving_merge_final",
         &[Aggregate(Partial), SortPreservingMerge, Aggregate(Final)],
         PARTITIONS,
         Query::Grouped,
-        partial_stage_starved_on_ordered_input,
     ),
     shape(
         "partial_final_single_partition",
         &[Aggregate(Partial), Aggregate(Final)],
         1,
         Query::Grouped,
-        partial_stage_starved_on_ordered_input,
     ),
     shape(
         "partial_repartition_reduce_repartition_final",
@@ -346,7 +299,6 @@ const SHAPES: &[Shape] = &[
         ],
         PARTITIONS,
         Query::Grouped,
-        partial_stage_starved_on_ordered_input,
     ),
     shape(
         "partial_repartition_reduce_coalesce_final",
@@ -359,7 +311,6 @@ const SHAPES: &[Shape] = &[
         ],
         PARTITIONS,
         Query::Grouped,
-        partial_stage_starved_on_ordered_input,
     ),
     shape(
         "partial_local_reduce_repartition_final",
@@ -371,7 +322,6 @@ const SHAPES: &[Shape] = &[
         ],
         PARTITIONS,
         Query::Grouped,
-        partial_stage_starved_on_ordered_input,
     ),
     // ordered PartialReduce has no dedicated stream, lands on the fallback
     shape(
@@ -385,51 +335,34 @@ const SHAPES: &[Shape] = &[
         ],
         PARTITIONS,
         Query::Grouped,
-        partial_stage_starved_on_ordered_input,
     ),
     shape(
         "no_grouping_single",
         &[Aggregate(Single)],
         1,
         Query::NoGrouping,
-        never_out_of_memory,
     ),
     // TopK: same query without a limit is the reference for the TopK chains
-    shape(
-        "top_k_query_single",
-        &[Aggregate(Single)],
-        1,
-        Query::TopK,
-        never_out_of_memory,
-    ),
-    shape(
-        "top_k_single",
-        &[TopK(Single)],
-        1,
-        Query::TopK,
-        never_out_of_memory,
-    ),
+    shape("top_k_query_single", &[Aggregate(Single)], 1, Query::TopK),
+    shape("top_k_single", &[TopK(Single)], 1, Query::TopK),
     // planner shape: the limit lands on the aggregate under the sort
     shape(
         "top_k_partial_repartition_final",
         &[Aggregate(Partial), HashRepartition, TopK(FinalPartitioned)],
         PARTITIONS,
         Query::TopK,
-        never_out_of_memory,
     ),
     shape(
         "top_k_partial_coalesce_final",
         &[Aggregate(Partial), CoalescePartitions, TopK(Final)],
         PARTITIONS,
         Query::TopK,
-        never_out_of_memory,
     ),
     shape(
         "top_k_both_stages",
         &[TopK(Partial), HashRepartition, TopK(FinalPartitioned)],
         PARTITIONS,
         Query::TopK,
-        never_out_of_memory,
     ),
     // group key types: single stage and the default two-stage planner shape
     shape(
@@ -437,7 +370,6 @@ const SHAPES: &[Shape] = &[
         &[Aggregate(Single)],
         1,
         Query::BooleanKey,
-        never_out_of_memory,
     ),
     shape(
         "boolean_key_partial_repartition_final",
@@ -448,15 +380,8 @@ const SHAPES: &[Shape] = &[
         ],
         PARTITIONS,
         Query::BooleanKey,
-        never_out_of_memory,
     ),
-    shape(
-        "bytes_key_single",
-        &[Aggregate(Single)],
-        1,
-        Query::BytesKey,
-        never_out_of_memory,
-    ),
+    shape("bytes_key_single", &[Aggregate(Single)], 1, Query::BytesKey),
     shape(
         "bytes_key_partial_repartition_final",
         &[
@@ -466,14 +391,12 @@ const SHAPES: &[Shape] = &[
         ],
         PARTITIONS,
         Query::BytesKey,
-        never_out_of_memory,
     ),
     shape(
         "bytes_view_key_single",
         &[Aggregate(Single)],
         1,
         Query::BytesViewKey,
-        never_out_of_memory,
     ),
     shape(
         "bytes_view_key_partial_repartition_final",
@@ -484,14 +407,12 @@ const SHAPES: &[Shape] = &[
         ],
         PARTITIONS,
         Query::BytesViewKey,
-        never_out_of_memory,
     ),
     shape(
         "primitive_key_single",
         &[Aggregate(Single)],
         1,
         Query::PrimitiveKey,
-        never_out_of_memory,
     ),
     shape(
         "primitive_key_partial_repartition_final",
@@ -502,14 +423,12 @@ const SHAPES: &[Shape] = &[
         ],
         PARTITIONS,
         Query::PrimitiveKey,
-        never_out_of_memory,
     ),
     shape(
         "mixed_keys_single",
         &[Aggregate(Single)],
         1,
         Query::MixedKeys,
-        never_out_of_memory,
     ),
     shape(
         "mixed_keys_partial_repartition_final",
@@ -520,7 +439,6 @@ const SHAPES: &[Shape] = &[
         ],
         PARTITIONS,
         Query::MixedKeys,
-        partial_stage_starved_on_ordered_input,
     ),
     // ordered multi-column group values
     shape(
@@ -532,14 +450,12 @@ const SHAPES: &[Shape] = &[
         ],
         PARTITIONS,
         Query::MixedKeys,
-        partial_stage_starved_on_ordered_input,
     ),
     shape(
         "struct_key_single",
         &[Aggregate(Single)],
         1,
         Query::StructKey,
-        never_out_of_memory,
     ),
     shape(
         "struct_key_partial_repartition_final",
@@ -550,14 +466,12 @@ const SHAPES: &[Shape] = &[
         ],
         PARTITIONS,
         Query::StructKey,
-        never_out_of_memory,
     ),
     shape(
         "no_grouping_partial_coalesce_final",
         &[Aggregate(Partial), CoalescePartitions, Aggregate(Final)],
         PARTITIONS,
         Query::NoGrouping,
-        never_out_of_memory,
     ),
     shape(
         "no_grouping_partial_reduce_final",
@@ -570,14 +484,12 @@ const SHAPES: &[Shape] = &[
         ],
         PARTITIONS,
         Query::NoGrouping,
-        never_out_of_memory,
     ),
     shape(
         "no_grouping_partial_final_single_partition",
         &[Aggregate(Partial), Aggregate(Final)],
         1,
         Query::NoGrouping,
-        never_out_of_memory,
     ),
 ];
 
@@ -616,14 +528,6 @@ impl Shape {
 struct Case {
     shape: &'static Shape,
     params: CaseParams,
-}
-
-impl Case {
-    /// Whether a resources-exhausted error is accepted for this case instead
-    /// of a result, as declared by its shape.
-    fn accepts_out_of_memory(&self) -> bool {
-        (self.shape.accepts_out_of_memory)(&self.params)
-    }
 }
 
 impl Shape {
@@ -1243,23 +1147,17 @@ fn check_metrics(case: &Case, plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
 // Driver
 // ---------------------------------------------------------------------------
 
-enum Outcome {
-    /// Sorted output plus the stages that spilled, empty if none did.
-    Finished {
-        output: String,
-        spilled: Vec<String>,
-    },
-    /// Ran out of memory, and the case was built to accept that. See
-    /// [`Shape::accepts_out_of_memory`].
-    OutOfMemory,
+/// Sorted output plus the stages that spilled, empty if none did.
+struct Outcome {
+    output: String,
+    spilled: Vec<String>,
 }
 
 /// Runs one case, checks plan shape and metrics, and returns its outcome.
 ///
-/// Running out of memory fails the run unless the case was built with
-/// `accepts_out_of_memory`: every other stream either spills, emits early, or
-/// is bounded, so an error there is a bug in a stream's memory handling or in
-/// how stages share the pool.
+/// Running out of memory is never accepted: every stream either spills, emits
+/// early, or is bounded, so an error there is a bug in a stream's memory
+/// handling or in how the stages share the pool.
 async fn run_case(case: Case, rows: Arc<RecordBatch>) -> Outcome {
     log::debug!("start {case:?}");
     let outcome = run_case_inner(&case, rows).await;
@@ -1294,19 +1192,13 @@ async fn run_case_inner(case: &Case, rows: Arc<RecordBatch>) -> Outcome {
     });
     let batches = match collected {
         Ok(batches) => batches,
-        Err(error)
-            if matches!(error.find_root(), DataFusionError::ResourcesExhausted(_))
-                && case.accepts_out_of_memory() =>
-        {
-            return Outcome::OutOfMemory;
-        }
         Err(error) => panic!(
             "{case:?} failed: {error}\n{}",
             displayable(plan.as_ref()).indent(true)
         ),
     };
     let spilled = check_metrics(case, &plan);
-    Outcome::Finished {
+    Outcome {
         output: batches_to_sort_string(&batches),
         spilled,
     }
@@ -1338,12 +1230,7 @@ async fn reference(
         rows,
     )
     .await;
-    match outcome {
-        Outcome::Finished { output, .. } => output,
-        Outcome::OutOfMemory => {
-            unreachable!("the reference runs with unlimited memory")
-        }
-    }
+    outcome.output
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1368,7 +1255,7 @@ async fn aggregate_chain_fuzz() {
         }
 
         let mut join_set = JoinSet::new();
-        let (mut spilled, mut finished, mut out_of_memory) = (vec![], vec![], vec![]);
+        let (mut spilled, mut finished) = (vec![], vec![]);
         for case in all_cases()
             .into_iter()
             .filter(|case| case.params.cardinality == cardinality)
@@ -1386,38 +1273,22 @@ async fn aggregate_chain_fuzz() {
                     &mut join_set,
                     &mut spilled,
                     &mut finished,
-                    &mut out_of_memory,
                     &mut failures,
                 )
                 .await;
             }
             join_set.spawn(async move {
-                match run_case(case.clone(), rows).await {
-                    Outcome::Finished { output, spilled } => {
-                        assert_eq!(output, expected, "{case:?} (seed {seed})");
-                        (case, Some(spilled))
-                    }
-                    Outcome::OutOfMemory => (case, None),
-                }
+                let outcome = run_case(case.clone(), rows).await;
+                assert_eq!(outcome.output, expected, "{case:?} (seed {seed})");
+                (case, outcome.spilled)
             });
         }
         while !join_set.is_empty() {
-            collect_finished(
-                &mut join_set,
-                &mut spilled,
-                &mut finished,
-                &mut out_of_memory,
-                &mut failures,
-            )
-            .await;
+            collect_finished(&mut join_set, &mut spilled, &mut finished, &mut failures)
+                .await;
         }
         print_cases(cardinality, "spilled", &spilled);
         print_cases(cardinality, "finished without spilling", &finished);
-        print_cases(
-            cardinality,
-            "ran out of memory (accepted, legacy partial stream)",
-            &out_of_memory,
-        );
         total_spilled += spilled.len();
     }
     // A shape filter may select only shapes that cannot spill
@@ -1441,19 +1312,17 @@ const CASE_TIMEOUT_SECS: u64 = 60;
 /// Waits for one case and files it under spilled, finished or failed. A
 /// failure does not stop the run, so one run reports every failing case.
 async fn collect_finished(
-    join_set: &mut JoinSet<(Case, Option<Vec<String>>)>,
+    join_set: &mut JoinSet<(Case, Vec<String>)>,
     spilled: &mut Vec<(Case, Vec<String>)>,
     finished: &mut Vec<(Case, Vec<String>)>,
-    out_of_memory: &mut Vec<(Case, Vec<String>)>,
     failures: &mut Vec<String>,
 ) {
     let Some(result) = join_set.join_next().await else {
         return;
     };
     match result {
-        Ok((case, None)) => out_of_memory.push((case, vec![])),
-        Ok((case, Some(stages))) if stages.is_empty() => finished.push((case, stages)),
-        Ok((case, Some(stages))) => spilled.push((case, stages)),
+        Ok((case, stages)) if stages.is_empty() => finished.push((case, stages)),
+        Ok((case, stages)) => spilled.push((case, stages)),
         Err(error) => failures.push(error.to_string()),
     }
 }
@@ -1517,8 +1386,6 @@ async fn run_single_case(
         rows,
     )
     .await;
-    if let Outcome::Finished { output, .. } = actual {
-        assert_eq!(output, expected);
-    }
+    assert_eq!(actual.output, expected);
     Ok(())
 }
