@@ -19,6 +19,6 @@ use crate::buffering::BufferInsertion;
 
 #[deprecated(
     since = "56.0.0",
-    note = "Use the more general BufferingRule instead. This is only an alias."
+    note = "Use the more general BufferInsertion rule instead. This is only an alias."
 )]
 pub type HashJoinBuffering = BufferInsertion;

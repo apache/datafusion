@@ -468,7 +468,6 @@ impl ExecutionPlan for DataSourceExec {
         let args = OpenArgs::new(partition, Arc::clone(&context))
             .with_shared_state(shared_state);
         let stream = self.data_source.open_with_args(args)?;
-
         let batch_size = context.session_config().batch_size();
 
         log::debug!(

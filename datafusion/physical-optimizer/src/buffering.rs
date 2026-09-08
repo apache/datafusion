@@ -36,11 +36,8 @@ use std::sync::Arc;
 ///    capacity `config.execution.hash_join_buffering_capacity` so that the probe side can
 ///    be eagerly polled while the build side is concurrently being built.
 /// 2. **Small Scan Buffering**: For data source scans whose statistics indicate that they
-///    are smaller than `config.execution.small_scan_partition_threshold`, we wrap them in
+///    are smaller than `config.execution.small_scan_buffering_threshold`, we wrap them in
 ///    a [`BufferExec`].
-///
-/// If the probe side of a hash join is buffered by (1), scans within that probe
-/// side are not double-buffered.
 ///
 /// ## `HashJoinExec` Buffering
 ///
@@ -66,10 +63,10 @@ use std::sync::Arc;
 ///
 /// ## Small Scan Buffering
 ///
-/// The buffering of small scans works independently of the hash join buffering. Whenever a small
-/// scan is detected, a [`BufferExec`] is inserted with the goal of reducing query latency as the
-/// I/O of the small scan is triggered eagerly. As the scan is considered small, dynamic filters may
-/// not yield significant improvements that warrant delaying the I/O until they are fully available.
+/// Whenever a small "scan" (leaf node) is detected, a [`BufferExec`] is inserted with the goal of
+/// reducing query latency as the I/O of the small scan is executed eagerly. As the scan is
+/// considered small, dynamic filters may not yield significant improvements that warrant delaying
+/// the I/O until they are fully available.
 ///
 /// ```text
 ///            ┌───────────────────┐
@@ -172,7 +169,7 @@ fn transform_plan(
         let (transformed_probe, probe_transformed) =
             if hash_join_capacity > 0 && !probe_child.is::<BufferExec>() {
                 // Buffer the probe side. Since the probe child is wrapped in BufferExec,
-                // scans within that probe side must NOT be double-buffered (`in_buffer: true`).
+                // scans within that probe side should NOT be double-buffered (`in_buffer: true`).
                 let probe_inner = transform_plan(
                     Arc::clone(probe_child),
                     hash_join_capacity,
