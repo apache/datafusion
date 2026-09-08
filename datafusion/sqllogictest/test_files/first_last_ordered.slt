@@ -34,7 +34,7 @@ CREATE EXTERNAL TABLE multiple_ordered_table (
 STORED AS CSV
 WITH ORDER (a ASC, b ASC)
 WITH ORDER (c ASC)
-LOCATION '../../datafusion/core/tests/data/window_2.csv'
+LOCATION '../core/tests/data/window_2.csv'
 OPTIONS ('format.has_header' 'true');
 
 # Direct match: requirement (a) ++ (c ASC) is satisfied by the declared
