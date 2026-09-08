@@ -423,6 +423,8 @@ impl DataSink for ParquetSink {
         use datafusion_proto_models::protobuf;
         use protobuf::physical_plan_node::PhysicalPlanType;
 
+        // Keep the active hook exhaustive while centralizing field mapping in
+        // the exhaustive `TryFrom<&ParquetSink>` below.
         let Self {
             config: _,
             parquet_options: _,
