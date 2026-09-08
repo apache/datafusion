@@ -31,4 +31,6 @@ true
 
 run sql_benchmarks/predicate_eval/queries/${SUBGROUP}/q${QPAD}.sql
 
+result sql_benchmarks/predicate_eval/results/${NAME}.csv
+
 cleanup sql_benchmarks/predicate_eval/init/cleanup.sql

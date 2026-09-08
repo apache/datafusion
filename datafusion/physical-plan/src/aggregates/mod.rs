@@ -4420,6 +4420,13 @@ mod tests {
 | 2 |
 +---+
 ");
+        assert!(
+            partial_aggregate
+                .metrics()
+                .unwrap()
+                .sum_by_name("topk_maintenance_time")
+                .is_none()
+        );
 
         let final_input =
             TestMemoryExec::try_new_exec(&[input_batches], Arc::clone(&schema), None)?;
@@ -4454,6 +4461,13 @@ mod tests {
 | 2 |
 +---+
 ");
+        assert!(
+            final_aggregate
+                .metrics()
+                .unwrap()
+                .sum_by_name("topk_maintenance_time")
+                .is_none()
+        );
 
         Ok(())
     }

@@ -179,6 +179,13 @@ pub trait PhysicalExprAdapterFactory: Send + Sync + std::fmt::Debug {
         logical_file_schema: SchemaRef,
         physical_file_schema: SchemaRef,
     ) -> Result<Arc<dyn PhysicalExprAdapter>>;
+
+    /// Whether replacing this factory with [`DefaultPhysicalExprAdapterFactory`]
+    /// preserves execution behavior. Plan serializers may safely omit factories
+    /// that return `true` because decoders use the default when none is configured.
+    fn is_equivalent_to_default(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -194,6 +201,10 @@ impl PhysicalExprAdapterFactory for DefaultPhysicalExprAdapterFactory {
             logical_file_schema,
             physical_file_schema,
         }))
+    }
+
+    fn is_equivalent_to_default(&self) -> bool {
+        true
     }
 }
 
