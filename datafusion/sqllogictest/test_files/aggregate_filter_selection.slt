@@ -59,6 +59,35 @@ ORDER BY g;
 3 NULL NULL
 4 NULL true
 
+# NULL and false predicates must reject rows before evaluating 10 / v.
+# Interleaved groups keep argument and group-ID compaction observable; groups
+# with no selected rows must still appear in the output.
+statement ok
+CREATE TABLE aggregate_filter_selection_nullable (g INT, v BIGINT, keep BOOLEAN);
+
+statement ok
+INSERT INTO aggregate_filter_selection_nullable VALUES
+  (1, 0, NULL),
+  (2, 2, true),
+  (1, 5, true),
+  (3, 0, NULL),
+  (2, 0, false),
+  (4, 0, false);
+
+query III
+SELECT g, SUM(10 / v) FILTER (WHERE keep), COUNT(*) FILTER (WHERE keep)
+FROM aggregate_filter_selection_nullable
+GROUP BY g
+ORDER BY g;
+----
+1 2 1
+2 5 1
+3 NULL 0
+4 NULL 0
+
+statement ok
+DROP TABLE aggregate_filter_selection_nullable;
+
 statement ok
 SET datafusion.execution.target_partitions = 1;
 
