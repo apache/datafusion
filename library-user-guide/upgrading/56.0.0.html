@@ -637,6 +637,32 @@ terminal provider instead (the walk falls back on its own).</p></li>
 <p><strong>Migration guide:</strong></p>
 <p>Change the expected type or wrap the expression in <code class="docutils literal notranslate"><span class="pre">CAST</span></code>. It’s recommended to avoid relying on decimal’s exact precision and scale.</p>
 </section>
+<section id="map-extract-element-at-return-an-empty-list-for-absent-keys">
+<h3><code class="docutils literal notranslate"><span class="pre">map_extract</span></code> / <code class="docutils literal notranslate"><span class="pre">element_at</span></code> return an empty list for absent keys<a class="headerlink" href="#map-extract-element-at-return-an-empty-list-for-absent-keys" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">map_extract</span></code> (and its alias <code class="docutils literal notranslate"><span class="pre">element_at</span></code>) previously returned a single-element
+list containing <code class="docutils literal notranslate"><span class="pre">NULL</span></code> when the key was not present in the map. It now returns
+an empty list, matching the documented behavior and DuckDB. Two related cases
+changed at the same time, also matching DuckDB:</p>
+<ul class="simple">
+<li><p>A <code class="docutils literal notranslate"><span class="pre">NULL</span></code> map input now yields <code class="docutils literal notranslate"><span class="pre">NULL</span></code> instead of <code class="docutils literal notranslate"><span class="pre">[NULL]</span></code>.</p></li>
+<li><p>A <code class="docutils literal notranslate"><span class="pre">NULL</span></code> lookup key now yields <code class="docutils literal notranslate"><span class="pre">[]</span></code> instead of <code class="docutils literal notranslate"><span class="pre">[NULL]</span></code>.</p></li>
+</ul>
+<p>A key that is present with a <code class="docutils literal notranslate"><span class="pre">NULL</span></code> value still returns <code class="docutils literal notranslate"><span class="pre">[NULL]</span></code>, so absent
+keys and <code class="docutils literal notranslate"><span class="pre">NULL</span></code> values are now distinguishable.</p>
+<p><strong>Migration guide:</strong></p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- Before</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">map_extract</span><span class="p">(</span><span class="k">MAP</span><span class="w"> </span><span class="err">{</span><span class="s1">&#39;a&#39;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="err">}</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;missing&#39;</span><span class="p">);</span><span class="w">  </span><span class="c1">-- [NULL]</span>
+
+<span class="c1">-- After</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">map_extract</span><span class="p">(</span><span class="k">MAP</span><span class="w"> </span><span class="err">{</span><span class="s1">&#39;a&#39;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="err">}</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;missing&#39;</span><span class="p">);</span><span class="w">  </span><span class="c1">-- []</span>
+</pre></div>
+</div>
+<p>Expressions that assumed the result always has exactly one element, for
+example by checking its length, unnesting it, or comparing it to <code class="docutils literal notranslate"><span class="pre">[NULL]</span></code>,
+should treat an empty list as the absent-key case instead.</p>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/24981">issue #24981</a> and
+<a class="reference external" href="https://github.com/apache/datafusion/issues/24983">issue #24983</a> for details.</p>
+</section>
 <section id="dataframe-from-columns-accepts-intoiterator">
 <h3><code class="docutils literal notranslate"><span class="pre">DataFrame::from_columns</span></code> accepts <code class="docutils literal notranslate"><span class="pre">IntoIterator</span></code><a class="headerlink" href="#dataframe-from-columns-accepts-intoiterator" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">DataFrame::from_columns</span></code> now accepts any <code class="docutils literal notranslate"><span class="pre">IntoIterator&lt;Item</span> <span class="pre">=</span> <span class="pre">(&amp;str,</span> <span class="pre">ArrayRef)&gt;</span></code>
@@ -718,6 +744,7 @@ to be updated to account for the new generic API.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#defaultstatisticsprovider-is-deprecated"><code class="docutils literal notranslate"><span class="pre">DefaultStatisticsProvider</span></code> is deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#statisticsregistry-compute-and-compute-base-are-deprecated"><code class="docutils literal notranslate"><span class="pre">StatisticsRegistry::compute</span></code> and <code class="docutils literal notranslate"><span class="pre">compute_base</span></code> are deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#api-change-for-floor-and-ceil-udf">API change for <code class="docutils literal notranslate"><span class="pre">floor</span></code> and <code class="docutils literal notranslate"><span class="pre">ceil</span></code> UDF</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#map-extract-element-at-return-an-empty-list-for-absent-keys"><code class="docutils literal notranslate"><span class="pre">map_extract</span></code> / <code class="docutils literal notranslate"><span class="pre">element_at</span></code> return an empty list for absent keys</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dataframe-from-columns-accepts-intoiterator"><code class="docutils literal notranslate"><span class="pre">DataFrame::from_columns</span></code> accepts <code class="docutils literal notranslate"><span class="pre">IntoIterator</span></code></a></li>
 </ul>
 </li>
