@@ -1280,6 +1280,10 @@ message ParquetScanExecNode {
   PhysicalExprNode predicate = 3;
 
   datafusion_common.TableParquetOptions parquet_options = 4;
+
+  PhysicalSortExprNodeCollection sort_order_for_reorder = 5;
+
+  bool reverse_row_groups = 6;
 }
 
 message CsvScanExecNode {
@@ -1738,4 +1742,6 @@ message PhysicalScalarSubqueryExprNode {
   datafusion_common.ArrowType data_type = 1;
   bool nullable = 2;
   uint32 index = 3;
+  // Serialized separately from data_type to keep older wire formats valid.
+  map<string, string> metadata = 4;
 }

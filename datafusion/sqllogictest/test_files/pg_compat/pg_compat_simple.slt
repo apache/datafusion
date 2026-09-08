@@ -73,15 +73,17 @@ OPTIONS ('format.has_header' 'true');
 
 
 
-query RRRRR
+# float formats to 12 points, numeric to explicit precision
+query RRRRRR
 SELECT
   abs(-1.1) as abs,
-  exp(2.0) as exp,
+  cast(exp(2.0) as double precision) as exp_double,
+  cast(exp(2.0) as numeric(38,10)) as exp_numeric,
   sin(3.0) as sin,
   cos(4.0) as cos,
   tan(5.0) as tan;
 ----
-1.1 7.389056098931 0.14112000806 -0.653643620864 -3.380515006247
+1.1 7.389056098931 7.3890560989 0.14112000806 -0.653643620864 -3.380515006247
 
 
 query I
@@ -316,20 +318,31 @@ ORDER BY c5 ASC, c4 DESC, c10;
 2143473091 -14704 4602675983996931623
 
 
+# floats are numerics by default in postgres
+onlyif postgres
 query IRII rowsort
 SELECT * FROM
 (VALUES (1,2.0,-3,1+1),(10,20.0,-30,2+2))
 AS tbl(int_col, float_col, negative_col, summation);
 ----
-1 2 -3 2
-10 20 -30 4
+1 2.0 -3 2
+10 20.0 -30 4
 
+# explicit float and numeric behaviour
+query IRRII rowsort
+SELECT * FROM
+(VALUES (1,2.0::double precision,2.0::numeric(4,1),-3,1+1),(10,20.0::double precision,20.0::numeric(4,1),-30,2+2))
+AS tbl(int_col, float_col, numeric_col, negative_col, summation);
+----
+1 2 2.0 -3 2
+10 20 20.0 -30 4
 
+# note: cast avg result since Postgres avg returns numeric by default
 query IIRIIIIII
 SELECT
   count(*) AS count_all,
   count(c3) AS count_c3,
-  avg(c3) AS avg,
+  cast(avg(c3) as double precision) AS avg_double,
   sum(c3) AS sum,
   max(c3) AS max,
   min(c3) AS min,
@@ -340,12 +353,11 @@ FROM aggregate_test_100_by_sql;
 ----
 100 100 7.81 781 125 -117 0 -1 -61
 
-
 query IIRIIIIII
 select
   c2,
   sum(c3) sum_c3,
-  avg(c3) avg_c3,
+  cast(avg(c3) as double precision) AS avg_c3,
   max(c3) max_c3,
   min(c3) min_c3,
   count(c3) count_c3,
