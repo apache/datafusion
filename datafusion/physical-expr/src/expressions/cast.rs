@@ -51,12 +51,7 @@ const DEFAULT_SAFE_CAST_OPTIONS: CastOptions<'static> = CastOptions {
 #[derive(Debug, Clone)]
 struct OwnedCastOptions {
     safe: bool,
-    format_options: OwnedFormatOptions,
-}
-
-#[derive(Debug, Clone)]
-struct OwnedFormatOptions {
-    safe: bool,
+    format_safe: bool,
     null: String,
     date_format: Option<String>,
     datetime_format: Option<String>,
@@ -77,21 +72,17 @@ impl From<CastOptions<'static>> for OwnedCastOptions {
         } = options;
         Self {
             safe,
-            format_options: OwnedFormatOptions {
-                safe: format_options.safe(),
-                null: format_options.null().to_owned(),
-                date_format: format_options.date_format().map(str::to_owned),
-                datetime_format: format_options.datetime_format().map(str::to_owned),
-                timestamp_format: format_options.timestamp_format().map(str::to_owned),
-                timestamp_tz_format: format_options
-                    .timestamp_tz_format()
-                    .map(str::to_owned),
-                time_format: format_options.time_format().map(str::to_owned),
-                duration_format: format_options.duration_format(),
-                types_info: format_options.types_info(),
-                quoted_strings: format_options.quoted_strings(),
-                formatter_factory: format_options.formatter_factory(),
-            },
+            format_safe: format_options.safe(),
+            null: format_options.null().to_owned(),
+            date_format: format_options.date_format().map(str::to_owned),
+            datetime_format: format_options.datetime_format().map(str::to_owned),
+            timestamp_format: format_options.timestamp_format().map(str::to_owned),
+            timestamp_tz_format: format_options.timestamp_tz_format().map(str::to_owned),
+            time_format: format_options.time_format().map(str::to_owned),
+            duration_format: format_options.duration_format(),
+            types_info: format_options.types_info(),
+            quoted_strings: format_options.quoted_strings(),
+            formatter_factory: format_options.formatter_factory(),
         }
     }
 }
@@ -100,19 +91,7 @@ impl OwnedCastOptions {
     fn as_arrow(&self) -> CastOptions<'_> {
         let Self {
             safe,
-            format_options,
-        } = self;
-        CastOptions {
-            safe: *safe,
-            format_options: format_options.as_arrow(),
-        }
-    }
-}
-
-impl OwnedFormatOptions {
-    fn as_arrow(&self) -> FormatOptions<'_> {
-        let Self {
-            safe,
+            format_safe,
             null,
             date_format,
             datetime_format,
@@ -124,18 +103,21 @@ impl OwnedFormatOptions {
             quoted_strings,
             formatter_factory,
         } = self;
-        FormatOptions::new()
-            .with_display_error(*safe)
-            .with_null(null)
-            .with_date_format(date_format.as_deref())
-            .with_datetime_format(datetime_format.as_deref())
-            .with_timestamp_format(timestamp_format.as_deref())
-            .with_timestamp_tz_format(timestamp_tz_format.as_deref())
-            .with_time_format(time_format.as_deref())
-            .with_duration_format(*duration_format)
-            .with_types_info(*types_info)
-            .with_quoted_strings(*quoted_strings)
-            .with_formatter_factory(*formatter_factory)
+        CastOptions {
+            safe: *safe,
+            format_options: FormatOptions::new()
+                .with_display_error(*format_safe)
+                .with_null(null)
+                .with_date_format(date_format.as_deref())
+                .with_datetime_format(datetime_format.as_deref())
+                .with_timestamp_format(timestamp_format.as_deref())
+                .with_timestamp_tz_format(timestamp_tz_format.as_deref())
+                .with_time_format(time_format.as_deref())
+                .with_duration_format(*duration_format)
+                .with_types_info(*types_info)
+                .with_quoted_strings(*quoted_strings)
+                .with_formatter_factory(*formatter_factory),
+        }
     }
 }
 
@@ -519,21 +501,19 @@ fn deserialize_cast_options(
 
     Ok(OwnedCastOptions {
         safe: *safe,
-        format_options: OwnedFormatOptions {
-            safe: *format_safe,
-            null: null.clone(),
-            date_format: date_format.clone(),
-            datetime_format: datetime_format.clone(),
-            timestamp_format: timestamp_format.clone(),
-            timestamp_tz_format: timestamp_tz_format.clone(),
-            time_format: time_format.clone(),
-            duration_format,
-            types_info: *types_info,
-            quoted_strings: *quoted_strings,
-            // Runtime formatter factories have no protobuf representation; the
-            // encoder rejects them rather than silently dropping behavior.
-            formatter_factory: None,
-        },
+        format_safe: *format_safe,
+        null: null.clone(),
+        date_format: date_format.clone(),
+        datetime_format: datetime_format.clone(),
+        timestamp_format: timestamp_format.clone(),
+        timestamp_tz_format: timestamp_tz_format.clone(),
+        time_format: time_format.clone(),
+        duration_format,
+        types_info: *types_info,
+        quoted_strings: *quoted_strings,
+        // Runtime formatter factories have no protobuf representation; the
+        // encoder rejects them rather than silently dropping behavior.
+        formatter_factory: None,
     })
 }
 
@@ -680,27 +660,25 @@ impl CastExpr {
         node: &datafusion_proto_models::protobuf::PhysicalExprNode,
         ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        use datafusion_common::internal_datafusion_err;
         use datafusion_common::internal_err;
+        use datafusion_physical_expr_common::expect_expr_variant;
+        use datafusion_physical_expr_common::physical_expr::proto_decode::require_proto_field;
         use datafusion_proto_models::protobuf;
 
-        let cast_expr = match &node.expr_type {
-            Some(protobuf::physical_expr_node::ExprType::Cast(cast_expr)) => {
-                cast_expr.as_ref()
-            }
-            _ => return internal_err!("PhysicalExprNode is not a CastExpr"),
-        };
-
+        let cast_expr = expect_expr_variant!(
+            node,
+            protobuf::physical_expr_node::ExprType::Cast,
+            "CastExpr",
+        );
         let protobuf::PhysicalCastNode {
             expr,
             arrow_type,
             target_field,
             cast_options,
-        } = cast_expr;
+        } = &**cast_expr;
         let expr = ctx.decode_required_expression(expr.as_deref(), "CastExpr", "expr")?;
-        let arrow_type = arrow_type.as_ref().ok_or_else(|| {
-            internal_datafusion_err!("CastExpr is missing required field 'arrow_type'")
-        })?;
+        let arrow_type =
+            require_proto_field(arrow_type.as_ref(), "CastExpr", "arrow_type")?;
         let cast_type: DataType = arrow_type.try_into()?;
         let target_field = target_field
             .as_ref()
@@ -1882,23 +1860,11 @@ mod proto_tests {
     }
 
     fn round_trip_cast(cast: &CastExpr, schema: &Schema) -> CastExpr {
-        let PhysicalCastNode {
-            expr: _,
-            arrow_type,
-            target_field,
-            cast_options,
-        } = encode_cast(cast);
-        let node = PhysicalExprNode {
-            expr_id: None,
-            expr_type: Some(physical_expr_node::ExprType::Cast(Box::new(
-                PhysicalCastNode {
-                    expr: Some(Box::new(column_node("a"))),
-                    arrow_type,
-                    target_field,
-                    cast_options,
-                },
-            ))),
-        };
+        let encoder = StubEncoder::ok();
+        let node = cast
+            .try_to_proto(&PhysicalExprEncodeCtx::new(&encoder))
+            .unwrap()
+            .expect("CastExpr should encode to Some(node)");
         let decoder = StubDecoder::ok();
         CastExpr::try_from_proto(&node, &PhysicalExprDecodeCtx::new(schema, &decoder))
             .unwrap()

@@ -1038,21 +1038,11 @@ mod proto_tests {
     }
 
     fn round_trip_try_cast(try_cast: &TryCastExpr, schema: &Schema) -> TryCastExpr {
-        let PhysicalTryCastNode {
-            expr: _,
-            arrow_type,
-            target_field,
-        } = encode_try_cast(try_cast);
-        let node = PhysicalExprNode {
-            expr_id: None,
-            expr_type: Some(physical_expr_node::ExprType::TryCast(Box::new(
-                PhysicalTryCastNode {
-                    expr: Some(Box::new(column_node("a"))),
-                    arrow_type,
-                    target_field,
-                },
-            ))),
-        };
+        let encoder = StubEncoder::ok();
+        let node = try_cast
+            .try_to_proto(&PhysicalExprEncodeCtx::new(&encoder))
+            .unwrap()
+            .expect("TryCastExpr should encode to Some(node)");
         let decoder = StubDecoder::ok();
         TryCastExpr::try_from_proto(&node, &PhysicalExprDecodeCtx::new(schema, &decoder))
             .unwrap()
