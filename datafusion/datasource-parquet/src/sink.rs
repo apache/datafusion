@@ -453,6 +453,8 @@ impl TryFrom<&ParquetSink> for datafusion_proto_models::protobuf::ParquetSink {
     type Error = DataFusionError;
 
     fn try_from(value: &ParquetSink) -> Result<Self> {
+        use datafusion_proto_models::protobuf;
+
         let ParquetSink {
             config,
             parquet_options,
@@ -462,20 +464,27 @@ impl TryFrom<&ParquetSink> for datafusion_proto_models::protobuf::ParquetSink {
             // Runtime metrics are recreated on decode.
             metrics: _,
         } = value;
-        let sorting_columns = sorting_columns.as_ref().map(|columns| {
-            datafusion_proto_models::protobuf::ParquetSortingColumns {
-                columns: columns
-                    .iter()
-                    .map(|column| {
-                        datafusion_proto_models::protobuf::ParquetSortingColumn {
-                            column_idx: column.column_idx,
-                            descending: column.descending,
-                            nulls_first: column.nulls_first,
-                        }
-                    })
-                    .collect(),
-            }
-        });
+        let sorting_columns =
+            sorting_columns
+                .as_ref()
+                .map(|columns| protobuf::ParquetSortingColumns {
+                    columns: columns
+                        .iter()
+                        .map(
+                            |&SortingColumn {
+                                 column_idx,
+                                 descending,
+                                 nulls_first,
+                             }| {
+                                protobuf::ParquetSortingColumn {
+                                    column_idx,
+                                    descending,
+                                    nulls_first,
+                                }
+                            },
+                        )
+                        .collect(),
+                });
 
         Ok(Self {
             config: Some(config.try_into()?),
@@ -490,7 +499,9 @@ impl TryFrom<&datafusion_proto_models::protobuf::ParquetSink> for ParquetSink {
     type Error = DataFusionError;
 
     fn try_from(value: &datafusion_proto_models::protobuf::ParquetSink) -> Result<Self> {
-        let datafusion_proto_models::protobuf::ParquetSink {
+        use datafusion_proto_models::protobuf;
+
+        let protobuf::ParquetSink {
             config,
             parquet_options,
             sorting_columns,
@@ -508,17 +519,24 @@ impl TryFrom<&datafusion_proto_models::protobuf::ParquetSink> for ParquetSink {
                 )
             })?
             .try_into()?;
-        let sorting_columns = sorting_columns.as_ref().map(|columns| {
-            columns
-                .columns
-                .iter()
-                .map(|column| SortingColumn {
-                    column_idx: column.column_idx,
-                    descending: column.descending,
-                    nulls_first: column.nulls_first,
-                })
-                .collect()
-        });
+        let sorting_columns = sorting_columns.as_ref().map(
+            |protobuf::ParquetSortingColumns { columns }| {
+                columns
+                    .iter()
+                    .map(
+                        |&protobuf::ParquetSortingColumn {
+                             column_idx,
+                             descending,
+                             nulls_first,
+                         }| SortingColumn {
+                            column_idx,
+                            descending,
+                            nulls_first,
+                        },
+                    )
+                    .collect()
+            },
+        );
 
         Ok(Self::new(config, parquet_options).with_sorting_columns(sorting_columns))
     }

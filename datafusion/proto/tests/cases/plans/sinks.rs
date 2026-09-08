@@ -331,7 +331,7 @@ fn roundtrip_parquet_sink() -> Result<()> {
     let field_a = Field::new("plan_type", DataType::Utf8, false);
     let field_b = Field::new("plan", DataType::Utf8, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
-    let input = Arc::new(PlaceholderRowExec::new(schema.clone()));
+    let input: Arc<dyn ExecutionPlan> = Arc::new(PlaceholderRowExec::new(schema.clone()));
 
     let file_sink_config = FileSinkConfig {
         original_url: String::default(),
@@ -345,15 +345,7 @@ fn roundtrip_parquet_sink() -> Result<()> {
         file_extension: "parquet".into(),
         file_output_mode: FileOutputMode::Automatic,
     };
-    let data_sink = Arc::new(
-        ParquetSink::new(file_sink_config, TableParquetOptions::default())
-            .with_sorting_columns(Some(vec![SortingColumn {
-                column_idx: 0,
-                descending: true,
-                nulls_first: false,
-            }])),
-    );
-    let sort_order = [PhysicalSortRequirement::new(
+    let sort_order: LexRequirement = [PhysicalSortRequirement::new(
         Arc::new(Column::new("plan_type", 0)),
         Some(SortOptions {
             descending: true,
@@ -365,30 +357,62 @@ fn roundtrip_parquet_sink() -> Result<()> {
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
     let proto_converter = DefaultPhysicalProtoConverter {};
-    let roundtripped = roundtrip_test_and_return(
-        Arc::new(DataSinkExec::new(input, data_sink, Some(sort_order))),
-        &ctx,
-        &codec,
-        &proto_converter,
-    )?;
-    let node = PhysicalPlanNode::try_from_physical_plan(roundtripped, &codec)?;
-    let Some(protobuf::physical_plan_node::PhysicalPlanType::ParquetSink(node)) =
-        node.physical_plan_type
-    else {
-        panic!("expected ParquetSink node");
-    };
-    let sorting_columns = node
-        .sink
-        .expect("ParquetSinkExecNode should contain a sink")
-        .sorting_columns
-        .expect("ParquetSink should preserve sorting columns");
-    assert_eq!(
-        sorting_columns.columns,
-        vec![protobuf::ParquetSortingColumn {
+    let sorting_columns = vec![
+        SortingColumn {
             column_idx: 0,
             descending: true,
             nulls_first: false,
-        }]
-    );
+        },
+        SortingColumn {
+            column_idx: 1,
+            descending: false,
+            nulls_first: true,
+        },
+    ];
+    for sorting_columns in [
+        None,
+        Some(vec![]),
+        Some(sorting_columns[..1].to_vec()),
+        Some(sorting_columns),
+    ] {
+        let data_sink = Arc::new(
+            ParquetSink::new(file_sink_config.clone(), TableParquetOptions::default())
+                .with_sorting_columns(sorting_columns.clone()),
+        );
+        let roundtripped = roundtrip_test_and_return(
+            Arc::new(DataSinkExec::new(
+                Arc::clone(&input),
+                data_sink,
+                Some(sort_order.clone()),
+            )),
+            &ctx,
+            &codec,
+            &proto_converter,
+        )?;
+        #[cfg(feature = "json")]
+        let roundtripped = super::roundtrip_test_json_and_return(roundtripped, &ctx)?;
+        let node = PhysicalPlanNode::try_from_physical_plan(roundtripped, &codec)?;
+        let Some(protobuf::physical_plan_node::PhysicalPlanType::ParquetSink(node)) =
+            node.physical_plan_type
+        else {
+            panic!("expected ParquetSink node");
+        };
+        let actual = node
+            .sink
+            .expect("ParquetSinkExecNode should contain a sink")
+            .sorting_columns
+            .map(|columns| {
+                columns
+                    .columns
+                    .into_iter()
+                    .map(|column| SortingColumn {
+                        column_idx: column.column_idx,
+                        descending: column.descending,
+                        nulls_first: column.nulls_first,
+                    })
+                    .collect::<Vec<_>>()
+            });
+        assert_eq!(actual, sorting_columns);
+    }
     Ok(())
 }

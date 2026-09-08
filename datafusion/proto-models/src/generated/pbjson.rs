@@ -16392,7 +16392,7 @@ impl<'de> serde::Deserialize<'de> for ParquetScanExecNode {
                             if metadata_size_hint__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("metadataSizeHint"));
                             }
-                            metadata_size_hint__ =
+                            metadata_size_hint__ = 
                                 map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
@@ -16783,7 +16783,7 @@ impl<'de> serde::Deserialize<'de> for ParquetSortingColumn {
                             if column_idx__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("columnIdx"));
                             }
-                            column_idx__ =
+                            column_idx__ = 
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }

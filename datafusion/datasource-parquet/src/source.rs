@@ -1105,7 +1105,7 @@ impl FileSource for ParquetSource {
             metadata_size_hint,
             // Carried by `base` as projection expressions.
             projection: _,
-            // Runtime factory configured by the receiving process.
+            // Not serialized or restored by the default decoder.
             #[cfg(feature = "parquet_encryption")]
                 encryption_factory: _,
             reverse_row_groups,
@@ -1150,6 +1150,8 @@ impl ParquetSource {
     /// Reconstructs a `DataSourceExec` from a protobuf `ParquetScan`.
     ///
     /// Rebuilds the reader factory from the decode context because it is not serialized.
+    /// Encryption factories and crypto options are not serialized or restored;
+    /// plans that rely on them require custom handling.
     pub fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
@@ -1256,9 +1258,7 @@ impl ParquetSource {
             .with_table_parquet_options(options);
         source.sort_order_for_reorder = sort_order_for_reorder;
         source.reverse_row_groups = *reverse_row_groups;
-        if let Some(metadata_size_hint) = metadata_size_hint {
-            source = source.with_metadata_size_hint(metadata_size_hint);
-        }
+        source.metadata_size_hint = metadata_size_hint;
 
         if let Some(predicate) = predicate {
             source = source.with_predicate(predicate);
