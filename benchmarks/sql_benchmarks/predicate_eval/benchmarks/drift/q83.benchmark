@@ -3,5 +3,9 @@ subgroup drift
 template sql_benchmarks/predicate_eval/predicate_eval.benchmark.template
 SUBGROUP=drift
 QPAD=83
-DATASET=drift_files
+DATASET=drift_split
 NAME=drift_q83_per_partition_skew
+
+# One file per stream: each stream sees a single profile.
+init
+set datafusion.execution.target_partitions = 16;

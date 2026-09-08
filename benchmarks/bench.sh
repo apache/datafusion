@@ -876,10 +876,11 @@ run_push_down_topk() {
 # micro-benchmarks where each subgroup is a different predicate pattern, used to
 # test how an adaptive predicate-ordering system behaves across them (see
 # https://github.com/apache/datafusion/issues/11262). Data is generated inline
-# by the suite's load SQL, so there is no data step (drift q83 writes 16 small
-# Parquet files into sql_benchmarks/predicate_eval/scratch/, which is gitignored,
-# and pins target_partitions to 16 for itself so that its skew is per scan
-# partition rather than per batch).
+# by the suite's load SQL, so there is no data step (drift q82 and q83 share 16
+# small Parquet files written into sql_benchmarks/predicate_eval/scratch/, which
+# is gitignored; q82 reads them with target_partitions=1, so the selectivity flip
+# lands halfway through one stream, and q83 with 16, so each stream gets one whole
+# file and a fixed profile).
 #
 # By default the suite measures DataFusion's built-in left-deep AND short-circuit
 # and sets no engine config of its own. To evaluate a system under test, export

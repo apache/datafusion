@@ -8,8 +8,9 @@
 --   b_sel = 0  is the mirror: unselective early, selective late.
 --
 -- The flip is early on purpose: at the default PRED_ROWS it lands a few batches
--- into the scan. `drift_half.sql` moves it to the halfway point and
--- `drift_files.sql` drops the time axis entirely and skews per partition.
+-- into the scan. `drift_split.sql` builds the same rates out of whole Parquet
+-- files instead, so the flip can land halfway through a one-partition scan (q82)
+-- or per scan partition rather than over time (q83).
 --
 -- PRED_ROWS sizes the table.
 CREATE TABLE t AS
