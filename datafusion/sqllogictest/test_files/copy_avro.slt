@@ -145,3 +145,22 @@ Plan with Metrics
 # Error case: Format not explicitly set and unable to infer extension from output path
 query error DataFusion error: Invalid or Unsupported Configuration: Format not explicitly set and unable to get file extension! Use STORED AS to define file format.
 EXPLAIN COPY source_table to 'test_files/scratch/copy_avro/no_format_specified';
+
+# The following test writes sufficient data to exceed `datasource::file_format::avro::BUFFER_FLUSH_BYTES`
+# so that we excercise the intermediate flush code path.
+statement ok
+CREATE EXTERNAL TABLE repeat_much STORED AS PARQUET LOCATION 'data/repeat_much.snappy.parquet';
+
+query I
+COPY repeat_much TO 'test_files/scratch/copy_avro/repeat_much.avro' STORED AS AVRO;
+----
+1957500
+
+statement ok
+CREATE EXTERNAL TABLE repeat_much_copy STORED AS AVRO LOCATION 'test_files/scratch/copy_avro/repeat_much.avro';
+
+query I
+SELECT sum(a) FROM repeat_much UNION ALL SELECT sum(a) FROM repeat_much_copy;
+----
+4798655628750
+4798655628750
