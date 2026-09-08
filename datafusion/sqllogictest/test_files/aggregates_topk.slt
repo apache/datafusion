@@ -789,3 +789,118 @@ drop table topk_two_groups;
 
 statement ok
 drop table t0;
+
+# A window result depends on every group, so the TopK limit must not pass
+# through either window implementation to the aggregate below it.
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE TABLE topk_window_groups(g int) AS VALUES (1), (2);
+
+statement ok
+set datafusion.optimizer.enable_topk_aggregation = false;
+
+# Control: without the outer limit, both groups contribute to the window value.
+query II
+SELECT g, COUNT(*) OVER () AS n
+FROM topk_window_groups
+GROUP BY g
+ORDER BY g ASC;
+----
+1 2
+2 2
+
+query II
+SELECT g, COUNT(*) OVER () AS n
+FROM topk_window_groups
+GROUP BY g
+ORDER BY g ASC
+LIMIT 1;
+----
+1 2
+
+statement ok
+set datafusion.optimizer.enable_topk_aggregation = true;
+
+query II
+SELECT g, COUNT(*) OVER () AS n
+FROM topk_window_groups
+GROUP BY g
+ORDER BY g ASC
+LIMIT 1;
+----
+1 2
+
+# WindowAggExec must prevent a TopK aggregate limit.
+query TT
+EXPLAIN SELECT g, COUNT(*) OVER () AS n
+FROM topk_window_groups
+GROUP BY g
+ORDER BY g ASC
+LIMIT 1;
+----
+logical_plan
+01)Sort: topk_window_groups.g ASC NULLS LAST, fetch=1
+02)--Projection: topk_window_groups.g, count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS count(*) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS n
+03)----WindowAggr: windowExpr=[[count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+04)------Aggregate: groupBy=[[topk_window_groups.g]], aggr=[[]]
+05)--------TableScan: topk_window_groups projection=[g]
+physical_plan
+01)ProjectionExec: expr=[g@0 as g, count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as n]
+02)--SortExec: TopK(fetch=1), expr=[g@0 ASC NULLS LAST], preserve_partitioning=[false]
+03)----WindowAggExec: wdw=[count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+04)------AggregateExec: mode=Single, gby=[g@0 as g], aggr=[]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+set datafusion.optimizer.enable_topk_aggregation = false;
+
+query II
+SELECT g, COUNT(*) OVER (ORDER BY g DESC ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS n
+FROM topk_window_groups
+GROUP BY g
+ORDER BY g ASC
+LIMIT 1;
+----
+1 2
+
+statement ok
+set datafusion.optimizer.enable_topk_aggregation = true;
+
+query II
+SELECT g, COUNT(*) OVER (ORDER BY g DESC ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS n
+FROM topk_window_groups
+GROUP BY g
+ORDER BY g ASC
+LIMIT 1;
+----
+1 2
+
+# The preceding-row frame selects BoundedWindowAggExec, which must also stop TopK.
+query TT
+EXPLAIN SELECT g, COUNT(*) OVER (ORDER BY g DESC ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS n
+FROM topk_window_groups
+GROUP BY g
+ORDER BY g ASC
+LIMIT 1;
+----
+logical_plan
+01)Sort: topk_window_groups.g ASC NULLS LAST, fetch=1
+02)--Projection: topk_window_groups.g, count(Int64(1)) ORDER BY [topk_window_groups.g DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW AS count(*) ORDER BY [topk_window_groups.g DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW AS n
+03)----WindowAggr: windowExpr=[[count(Int64(1)) ORDER BY [topk_window_groups.g DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW]]
+04)------Aggregate: groupBy=[[topk_window_groups.g]], aggr=[[]]
+05)--------TableScan: topk_window_groups projection=[g]
+physical_plan
+01)ProjectionExec: expr=[g@0 as g, count(Int64(1)) ORDER BY [topk_window_groups.g DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW@1 as n]
+02)--SortExec: TopK(fetch=1), expr=[g@0 ASC NULLS LAST], preserve_partitioning=[false]
+03)----BoundedWindowAggExec: wdw=[count(Int64(1)) ORDER BY [topk_window_groups.g DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW: Field { "count(Int64(1)) ORDER BY [topk_window_groups.g DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW": Int64 }, frame: ROWS BETWEEN 1 PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[g@0 DESC], preserve_partitioning=[false]
+05)--------AggregateExec: mode=Single, gby=[g@0 as g], aggr=[]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table topk_window_groups;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
