@@ -24,3 +24,4 @@ mod run;
 pub use memory::print_memory_stats;
 pub use options::CommonOpt;
 pub use run::{BenchQuery, BenchmarkRun, QueryResult};
+pub(crate) use run::run_with_debug;

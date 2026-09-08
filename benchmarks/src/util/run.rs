@@ -26,6 +26,11 @@ use std::{
     sync::Arc,
     time::{Duration, SystemTime},
 };
+use arrow::array::RecordBatch;
+use datafusion::physical_plan::{collect, displayable};
+use datafusion::physical_plan::display::DisplayableExecutionPlan;
+use datafusion::prelude::SessionContext;
+use datafusion_common::instant::Instant;
 
 fn serialize_start_time<S>(start_time: &SystemTime, ser: S) -> Result<S::Ok, S::Error>
 where
@@ -234,6 +239,42 @@ impl BenchmarkRun {
         }
         Ok(())
     }
+}
+
+pub(crate) async fn run_with_debug(
+    ctx: &SessionContext,
+    sql: &str,
+    debug: bool
+) -> Result<(Duration, Vec<RecordBatch>)> {
+    let start = Instant::now();
+
+    let plan = ctx.sql(sql).await?;
+    let (state, logical_plan) = plan.into_parts();
+
+
+    let optimized_logical_plan = state.optimize(&logical_plan)?;
+
+    let physical_plan = state.create_physical_plan(&optimized_logical_plan).await?;
+    let result = collect(physical_plan.clone(), state.task_ctx()).await?;
+    let elapsed = start.elapsed();
+
+
+    if debug {
+        println!("=== Logical plan ===\n{logical_plan}\n");
+
+        println!("=== Optimized logical plan ===\n{optimized_logical_plan}\n");
+        println!(
+            "=== Physical plan ===\n{}\n",
+            displayable(physical_plan.as_ref()).indent(true)
+        );
+        println!(
+            "=== Physical plan with metrics ===\n{}\n",
+            DisplayableExecutionPlan::with_metrics(physical_plan.as_ref())
+              .indent(true)
+        );
+    }
+
+    Ok((elapsed, result))
 }
 
 #[cfg(test)]
