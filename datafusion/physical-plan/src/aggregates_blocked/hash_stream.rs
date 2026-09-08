@@ -31,6 +31,8 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use arrow::array::Array;
+use arrow::compute::interleave;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result, internal_datafusion_err, internal_err};
@@ -38,6 +40,7 @@ use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr_common::sort::{SortColumn, lexsort_to_indices};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::stream::{Stream, StreamExt};
 
@@ -51,11 +54,65 @@ use super::skip_partial::SkipAggregationProbe;
 use crate::metrics::{
     BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput, SpillMetrics,
 };
-use crate::sorts::IncrementalSortIterator;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::spill_manager::SpillManager;
 use crate::stream::EmptyRecordBatchStream;
 use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream, metrics};
+
+/// Blocks per spill file. Every spill file costs the merge a read buffer reservation, so
+/// blocks are sorted together in groups. A group is small enough that sorting its rows is
+/// cheap, and its blocks are released as soon as its file is written.
+// ponytail: fixed count, make it byte based if block sizes vary a lot
+pub(super) const SPILL_BLOCKS_PER_FILE: usize = 16;
+
+/// Sorts `blocks` by `spill_expr` into one spill file without concatenating or slicing
+/// them: the rows of all blocks are sorted in place and gathered `batch_size` at a time
+/// while the file is written
+pub(super) fn spill_sorted_blocks(
+    spill_manager: &SpillManager,
+    spill_expr: &LexOrdering,
+    blocks: &[RecordBatch],
+    batch_size: usize,
+    request_description: &str,
+) -> Result<Option<SortedSpillFile>> {
+    let Some(first) = blocks.first() else {
+        return Ok(None);
+    };
+    let schema = first.schema();
+
+    let columns = spill_expr
+        .iter()
+        .map(|sort_expr| {
+            let values = blocks
+                .iter()
+                .map(|block| sort_expr.expr.evaluate(block)?.into_array(block.num_rows()))
+                .collect::<Result<Vec<_>>>()?;
+            Ok(SortColumn {
+                values,
+                options: Some(sort_expr.options),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let order = lexsort_to_indices(&columns, None)?;
+    drop(columns);
+
+    let arrays: Vec<Vec<&dyn Array>> = (0..schema.fields().len())
+        .map(|column| blocks.iter().map(|block| block.column(column).as_ref()).collect())
+        .collect();
+    let sorted = order.chunks(batch_size).map(|positions| -> Result<RecordBatch> {
+        let columns = arrays
+            .iter()
+            .map(|column| interleave(column, positions))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(RecordBatch::try_new(Arc::clone(&schema), columns)?)
+    });
+    let spilled = spill_manager
+        .spill_record_batch_iter_and_return_max_batch_memory(sorted, request_description)?;
+    Ok(spilled.map(|(file, max_record_batch_memory)| SortedSpillFile {
+        file,
+        max_record_batch_memory,
+    }))
+}
 
 /// Hash aggregation is implemented in two stages: partial and final. This
 /// stream implements the partial stage.
@@ -353,26 +410,23 @@ impl FinalSpillContext {
         &mut self,
         hash_table: &mut AggregateHashTable<FinalMarker>,
     ) -> Result<()> {
-        // Take all blocks at once (O(groups)), then sort and spill each block on
-        // its own so its memory is released as soon as it is written.
-        for batch in hash_table.take_all_state_batches()? {
-            let sorted_iter =
-                IncrementalSortIterator::new(batch, self.spill_expr.clone(), self.batch_size);
-            let spill_file = self
-                .spill_manager
-                .spill_record_batch_iter_and_return_max_batch_memory(
-                    sorted_iter,
-                    "FinalHashAggregateSpill",
-                )?;
-
-            let Some((file, max_record_batch_memory)) = spill_file else {
-                return internal_err!("Final hash aggregation produced an empty spill");
-            };
-
-            self.spills.push(SortedSpillFile {
-                file,
-                max_record_batch_memory,
-            });
+        // Blocks are dropped group by group as their file is written
+        let mut blocks = hash_table.take_all_state_batches()?.into_iter();
+        loop {
+            let group: Vec<RecordBatch> =
+                blocks.by_ref().take(SPILL_BLOCKS_PER_FILE).collect();
+            if group.is_empty() {
+                break;
+            }
+            if let Some(file) = spill_sorted_blocks(
+                &self.spill_manager,
+                &self.spill_expr,
+                &group,
+                self.batch_size,
+                "FinalHashAggregateSpill",
+            )? {
+                self.spills.push(file);
+            }
         }
 
         Ok(())

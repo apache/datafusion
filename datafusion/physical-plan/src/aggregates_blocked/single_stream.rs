@@ -36,6 +36,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::stream::{Stream, StreamExt};
 
+use super::hash_stream::{SPILL_BLOCKS_PER_FILE, spill_sorted_blocks};
 use super::aggregate_hash_table::{
     AggregateHashTable, OrderedAggregateTableMetrics, SingleMarker,
 };
@@ -43,7 +44,6 @@ use super::ordered_final_stream::OrderedFinalAggregateStream;
 use super::{BlockedAggregateExec, create_schema};
 use crate::aggregates_blocked::AggregateMode;
 use crate::metrics::{BaselineMetrics, RecordOutput, SpillMetrics};
-use crate::sorts::IncrementalSortIterator;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::spill_manager::SpillManager;
 use crate::stream::EmptyRecordBatchStream;
@@ -238,26 +238,23 @@ impl SingleSpillContext {
         &mut self,
         hash_table: &mut AggregateHashTable<SingleMarker>,
     ) -> Result<()> {
-        // Take all blocks at once (O(groups)), then sort and spill each block on
-        // its own so its memory is released as soon as it is written.
-        for batch in hash_table.take_all_state_batches()? {
-            let sorted_iter =
-                IncrementalSortIterator::new(batch, self.spill_expr.clone(), self.batch_size);
-            let spill_file = self
-                .spill_manager
-                .spill_record_batch_iter_and_return_max_batch_memory(
-                    sorted_iter,
-                    "SingleHashAggregateSpill",
-                )?;
-
-            let Some((file, max_record_batch_memory)) = spill_file else {
-                return internal_err!("Single hash aggregation produced an empty spill");
-            };
-
-            self.spills.push(SortedSpillFile {
-                file,
-                max_record_batch_memory,
-            });
+        // Blocks are dropped group by group as their file is written
+        let mut blocks = hash_table.take_all_state_batches()?.into_iter();
+        loop {
+            let group: Vec<RecordBatch> =
+                blocks.by_ref().take(SPILL_BLOCKS_PER_FILE).collect();
+            if group.is_empty() {
+                break;
+            }
+            if let Some(file) = spill_sorted_blocks(
+                &self.spill_manager,
+                &self.spill_expr,
+                &group,
+                self.batch_size,
+                "SingleHashAggregateSpill",
+            )? {
+                self.spills.push(file);
+            }
         }
 
         Ok(())
