@@ -20,6 +20,26 @@
 use arrow::array::ArrayRef;
 use datafusion_common::{Result, ScalarValue, internal_err};
 use std::fmt::Debug;
+use std::sync::Arc;
+use std::time::Duration;
+
+/// A metric owned by one aggregate implementation.
+///
+/// Aggregate implementations use this interface for optional internal
+/// subphases. The execution engine owns metric registration and aggregation.
+pub trait AggregateMetric: Debug + Send + Sync {
+    /// Adds elapsed time to this metric.
+    fn add_duration(&self, duration: Duration);
+}
+
+/// Factory for optional metrics owned by one aggregate expression.
+///
+/// `subphase` must be a stable static identifier. An implementation may request
+/// no metrics. The execution engine assigns the aggregate expression identity.
+pub trait AggregateMetrics: Debug + Send + Sync {
+    /// Returns the metric for an aggregate-owned internal subphase.
+    fn metric(&self, subphase: &'static str) -> Arc<dyn AggregateMetric>;
+}
 
 /// Tracks an aggregate function's state.
 ///
@@ -49,6 +69,12 @@ use std::fmt::Debug;
 /// [`merge_batch`]: Self::merge_batch
 /// [window function]: https://en.wikipedia.org/wiki/Window_function_(SQL)
 pub trait Accumulator: Send + Sync + Debug + std::any::Any {
+    /// Supplies optional metrics owned by this aggregate expression.
+    ///
+    /// The default preserves compatibility for accumulators without internal
+    /// submetrics.
+    fn set_metrics(&mut self, _metrics: Arc<dyn AggregateMetrics>) {}
+
     /// Updates the accumulator's state from its input.
     ///
     /// `values` contains the arguments to this aggregate function.

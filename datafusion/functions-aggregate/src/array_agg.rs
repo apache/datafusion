@@ -38,13 +38,14 @@ use datafusion_common::utils::{
     SingleRowListArrayBuilder, compare_rows, get_row_at_idx, take_function_args,
 };
 use datafusion_common::{
-    Result, ScalarValue, assert_eq_or_internal_err, exec_err, internal_err,
+    Result, ScalarValue, assert_eq_or_internal_err, exec_err, instant::Instant,
+    internal_err,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, EmitTo, GroupsAccumulator, Signature,
-    Volatility,
+    Accumulator, AggregateMetric, AggregateMetrics, AggregateUDFImpl, Documentation,
+    EmitTo, GroupsAccumulator, Signature, Volatility,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filter_to_nulls;
 use datafusion_functions_aggregate_common::merge_arrays::merge_ordered_arrays;
@@ -853,6 +854,7 @@ pub struct DistinctArrayAggAccumulator {
     datatype: DataType,
     sort_options: Option<SortOptions>,
     ignore_nulls: bool,
+    distinct_metric: Option<Arc<dyn AggregateMetric>>,
 }
 
 /// Returns `true` if `dt` is, or recursively contains, a `Dictionary` type.
@@ -888,6 +890,7 @@ impl DistinctArrayAggAccumulator {
             datatype: datatype.clone(),
             sort_options,
             ignore_nulls,
+            distinct_metric: None,
         })
     }
 
@@ -914,6 +917,10 @@ impl DistinctArrayAggAccumulator {
 }
 
 impl Accumulator for DistinctArrayAggAccumulator {
+    fn set_metrics(&mut self, metrics: Arc<dyn AggregateMetrics>) {
+        self.distinct_metric = Some(metrics.metric("distinct"));
+    }
+
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![self.evaluate()?])
     }
@@ -948,6 +955,8 @@ impl Accumulator for DistinctArrayAggAccumulator {
             return Ok(());
         }
 
+        let distinct_metric = self.distinct_metric.clone();
+        let distinct_start = Instant::now();
         self.ensure_state(col.data_type())?;
 
         // Encode the entire incoming batch into rows_buffer in one pass.
@@ -993,6 +1002,9 @@ impl Accumulator for DistinctArrayAggAccumulator {
                     );
                 }
             }
+        }
+        if let Some(metric) = distinct_metric {
+            metric.add_duration(distinct_start.elapsed());
         }
         Ok(())
     }
@@ -1167,7 +1179,9 @@ impl Accumulator for DistinctArrayAggAccumulator {
     }
 
     fn size(&self) -> usize {
-        size_of_val(self)
+        // `distinct_metric` is execution-owned observability state, not
+        // accumulator state retained by this aggregate.
+        (size_of_val(self) - size_of_val(&self.distinct_metric))
             + self
                 .state
                 .as_ref()
