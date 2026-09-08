@@ -74,7 +74,19 @@ fn resolve_outer_reference(
     outer_ref: &substrait::proto::expression::field_reference::OuterReference,
     field_idx: usize,
 ) -> datafusion::common::Result<Expr> {
-    let steps_out = outer_ref.steps_out as usize;
+    use substrait::proto::expression::field_reference::outer_reference::OuterReferenceType;
+    // `StepsOut` is deprecated in favour of `RelReference`, but a relation
+    // reference needs anchors that DataFusion does not assign.
+    #[expect(deprecated)]
+    let steps_out = match outer_ref.outer_reference_type {
+        Some(OuterReferenceType::StepsOut(steps_out)) => steps_out as usize,
+        Some(OuterReferenceType::RelReference(_)) => {
+            return not_impl_err!(
+                "OuterReference by relation reference is not supported"
+            );
+        }
+        None => return substrait_err!("OuterReference without a reference type"),
+    };
     let Some(outer_schema) = consumer.get_outer_schema(steps_out) else {
         return substrait_err!(
             "OuterReference with steps_out={steps_out} \

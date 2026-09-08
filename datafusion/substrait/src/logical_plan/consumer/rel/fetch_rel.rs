@@ -18,8 +18,8 @@
 use crate::logical_plan::consumer::SubstraitConsumer;
 use async_recursion::async_recursion;
 use datafusion::common::{DFSchema, DFSchemaRef, not_impl_err};
-use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder, lit};
-use substrait::proto::{FetchRel, fetch_rel};
+use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
+use substrait::proto::FetchRel;
 
 #[async_recursion]
 pub async fn from_fetch_rel(
@@ -29,23 +29,14 @@ pub async fn from_fetch_rel(
     if let Some(input) = fetch.input.as_ref() {
         let input = LogicalPlanBuilder::from(consumer.consume_rel(input).await?);
         let empty_schema = DFSchemaRef::new(DFSchema::empty());
-        let offset = match &fetch.offset_mode {
-            #[expect(deprecated)]
-            Some(fetch_rel::OffsetMode::Offset(offset)) => Some(lit(*offset)),
-            Some(fetch_rel::OffsetMode::OffsetExpr(expr)) => {
-                Some(consumer.consume_expression(expr, &empty_schema).await?)
-            }
+        // Unset offset is treated as 0 and unset count signals that ALL records
+        // should be returned, so an absent expression maps to None either way.
+        let offset = match &fetch.offset_expr {
+            Some(expr) => Some(consumer.consume_expression(expr, &empty_schema).await?),
             None => None,
         };
-        let count = match &fetch.count_mode {
-            #[expect(deprecated)]
-            Some(fetch_rel::CountMode::Count(count)) => {
-                // -1 means that ALL records should be returned, equivalent to None
-                (*count != -1).then(|| lit(*count))
-            }
-            Some(fetch_rel::CountMode::CountExpr(expr)) => {
-                Some(consumer.consume_expression(expr, &empty_schema).await?)
-            }
+        let count = match &fetch.count_expr {
+            Some(expr) => Some(consumer.consume_expression(expr, &empty_schema).await?),
             None => None,
         };
         input.limit_by_expr(offset, count)?.build()

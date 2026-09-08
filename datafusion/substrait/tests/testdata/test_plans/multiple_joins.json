@@ -72,46 +72,28 @@
                                 }
                               },
                               "virtualTable": {
-                                "expressions": [
-                                  {
-                                    "fields": [
-                                      {
-                                        "literal": {
-                                          "i64": "1",
-                                          "nullable": true,
-                                          "typeVariationReference": 0
-                                        }
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "fields": [
-                                      {
-                                        "literal": {
-                                          "i64": "2",
-                                          "nullable": true,
-                                          "typeVariationReference": 0
-                                        }
-                                      }
-                                    ]
-                                  }
-                                ]
+                                "expressions": [{
+                                  "fields": [{
+                                    "literal": {
+                                      "i64": "1",
+                                      "nullable": true,
+                                      "typeVariationReference": 0
+                                    }
+                                  }]
+                                }, {
+                                  "fields": [{
+                                    "literal": {
+                                      "i64": "2",
+                                      "nullable": true,
+                                      "typeVariationReference": 0
+                                    }
+                                  }]
+                                }]
                               }
                             }
                           },
                           "groupings": [{
-                            "groupingExpressions": [{
-                              "selection": {
-                                "directReference": {
-                                  "structField": {
-                                    "field": 0
-                                  }
-                                },
-                                "rootReference": {
-                                }
-                              }
-                            }],
-                            "expressionReferences": []
+                            "expressionReferences": [0]
                           }],
                           "measures": [{
                             "measure": {
@@ -130,7 +112,17 @@
                               "options": []
                             }
                           }],
-                          "groupingExpressions": []
+                          "groupingExpressions": [{
+                            "selection": {
+                              "directReference": {
+                                "structField": {
+                                  "field": 0
+                                }
+                              },
+                              "rootReference": {
+                              }
+                            }
+                          }]
                         }
                       },
                       "right": {
@@ -164,73 +156,63 @@
                                 }
                               },
                               "virtualTable": {
-                                "expressions": [
-                                  {
-                                    "fields": [
-                                      {
-                                        "literal": {
-                                          "i64": "1",
-                                          "nullable": true,
-                                          "typeVariationReference": 0
-                                        }
-                                      },
-                                      {
-                                        "literal": {
-                                          "string": "info",
-                                          "nullable": true,
-                                          "typeVariationReference": 0
-                                        }
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "fields": [
-                                      {
-                                        "literal": {
-                                          "i64": "2",
-                                          "nullable": true,
-                                          "typeVariationReference": 0
-                                        }
-                                      },
-                                      {
-                                        "literal": {
-                                          "string": "low",
-                                          "nullable": true,
-                                          "typeVariationReference": 0
-                                        }
-                                      }
-                                    ]
-                                  }
-                                ]
+                                "expressions": [{
+                                  "fields": [{
+                                    "literal": {
+                                      "i64": "1",
+                                      "nullable": true,
+                                      "typeVariationReference": 0
+                                    }
+                                  }, {
+                                    "literal": {
+                                      "string": "info",
+                                      "nullable": true,
+                                      "typeVariationReference": 0
+                                    }
+                                  }]
+                                }, {
+                                  "fields": [{
+                                    "literal": {
+                                      "i64": "2",
+                                      "nullable": true,
+                                      "typeVariationReference": 0
+                                    }
+                                  }, {
+                                    "literal": {
+                                      "string": "low",
+                                      "nullable": true,
+                                      "typeVariationReference": 0
+                                    }
+                                  }]
+                                }]
                               }
                             }
                           },
                           "groupings": [{
-                            "groupingExpressions": [{
-                              "selection": {
-                                "directReference": {
-                                  "structField": {
-                                    "field": 0
-                                  }
-                                },
-                                "rootReference": {
-                                }
-                              }
-                            }, {
-                              "selection": {
-                                "directReference": {
-                                  "structField": {
-                                    "field": 1
-                                  }
-                                },
-                                "rootReference": {
-                                }
-                              }
-                            }],
-                            "expressionReferences": []
+                            "expressionReferences": [0, 1]
                           }],
                           "measures": [],
-                          "groupingExpressions": []
+                          "groupingExpressions": [{
+                            "selection": {
+                              "directReference": {
+                                "structField": {
+                                  "field": 0
+                                }
+                              },
+                              "rootReference": {
+                              }
+                            }
+                          }, {
+                            "selection": {
+                              "directReference": {
+                                "structField": {
+                                  "field": 1
+                                }
+                              },
+                              "rootReference": {
+                              }
+                            }
+                          }]
                         }
                       },
                       "expression": {
@@ -300,46 +282,28 @@
                             }
                           },
                           "virtualTable": {
-                            "expressions": [
-                              {
-                                "fields": [
-                                  {
-                                    "literal": {
-                                      "i64": "1",
-                                      "nullable": true,
-                                      "typeVariationReference": 0
-                                    }
-                                  }
-                                ]
-                              },
-                              {
-                                "fields": [
-                                  {
-                                    "literal": {
-                                      "i64": "2",
-                                      "nullable": true,
-                                      "typeVariationReference": 0
-                                    }
-                                  }
-                                ]
-                              }
-                            ]
+                            "expressions": [{
+                              "fields": [{
+                                "literal": {
+                                  "i64": "1",
+                                  "nullable": true,
+                                  "typeVariationReference": 0
+                                }
+                              }]
+                            }, {
+                              "fields": [{
+                                "literal": {
+                                  "i64": "2",
+                                  "nullable": true,
+                                  "typeVariationReference": 0
+                                }
+                              }]
+                            }]
                           }
                         }
                       },
                       "groupings": [{
-                        "groupingExpressions": [{
-                          "selection": {
-                            "directReference": {
-                              "structField": {
-                                "field": 0
-                              }
-                            },
-                            "rootReference": {
-                            }
-                          }
-                        }],
-                        "expressionReferences": []
+                        "expressionReferences": [0]
                       }],
                       "measures": [{
                         "measure": {
@@ -358,7 +322,17 @@
                           "options": []
                         }
                       }],
-                      "groupingExpressions": []
+                      "groupingExpressions": [{
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 0
+                            }
+                          },
+                          "rootReference": {
+                          }
+                        }
+                      }]
                     }
                   },
                   "expression": {
@@ -428,46 +402,28 @@
                         }
                       },
                       "virtualTable": {
-                        "expressions": [
-                          {
-                            "fields": [
-                              {
-                                "literal": {
-                                  "i64": "1",
-                                  "nullable": true,
-                                  "typeVariationReference": 0
-                                }
-                              }
-                            ]
-                          },
-                          {
-                            "fields": [
-                              {
-                                "literal": {
-                                  "i64": "2",
-                                  "nullable": true,
-                                  "typeVariationReference": 0
-                                }
-                              }
-                            ]
-                          }
-                        ]
+                        "expressions": [{
+                          "fields": [{
+                            "literal": {
+                              "i64": "1",
+                              "nullable": true,
+                              "typeVariationReference": 0
+                            }
+                          }]
+                        }, {
+                          "fields": [{
+                            "literal": {
+                              "i64": "2",
+                              "nullable": true,
+                              "typeVariationReference": 0
+                            }
+                          }]
+                        }]
                       }
                     }
                   },
                   "groupings": [{
-                    "groupingExpressions": [{
-                      "selection": {
-                        "directReference": {
-                          "structField": {
-                            "field": 0
-                          }
-                        },
-                        "rootReference": {
-                        }
-                      }
-                    }],
-                    "expressionReferences": []
+                    "expressionReferences": [0]
                   }],
                   "measures": [{
                     "measure": {
@@ -486,7 +442,17 @@
                       "options": []
                     }
                   }],
-                  "groupingExpressions": []
+                  "groupingExpressions": [{
+                    "selection": {
+                      "directReference": {
+                        "structField": {
+                          "field": 0
+                        }
+                      },
+                      "rootReference": {
+                      }
+                    }
+                  }]
                 }
               },
               "expression": {
