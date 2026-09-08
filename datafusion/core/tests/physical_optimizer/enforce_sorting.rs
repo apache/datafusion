@@ -2321,13 +2321,15 @@ async fn test_remove_unnecessary_spm2() -> Result<()> {
     );
 
     let test = EnforceSortingTest::new(input.clone()).with_repartition_sorts(true);
-    assert_snapshot!(test.run(), @r"
+    assert_snapshot!(test.run(), @"
     Input Plan:
     SortPreservingMergeExec: [non_nullable_col@1 ASC], fetch=100
       DataSourceExec: partitions=1, partition_sizes=[0]
 
     Optimized Plan:
-    DataSourceExec: partitions=1, partition_sizes=[0]
+    LocalLimitExec: fetch=100
+      SortExec: expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]
+        DataSourceExec: partitions=1, partition_sizes=[0]
     ");
 
     Ok(())
