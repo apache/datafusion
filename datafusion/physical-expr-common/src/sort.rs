@@ -19,11 +19,12 @@
 
 use std::cmp::Ordering;
 use std::sync::Arc;
-use arrow::array::{new_empty_array, Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray, BooleanBufferBuilder, ArrowNativeTypeOp, UInt32Array, AsArray, BooleanArray, GenericByteArray, GenericByteViewArray, MAX_INLINE_VIEW_LEN, ByteView, FixedSizeBinaryArray, DictionaryArray, OffsetSizeTrait, GenericListArray, GenericListViewArray, FixedSizeListArray, RunArray, ArrayDataBuilder, DynComparator, make_comparator};
-use arrow::compute::{take, SortOptions, rank};
-use arrow::datatypes::{ArrowDictionaryKeyType, ArrowNativeType, ByteArrayType, ByteViewType, DataType, Int16Type, Int32Type, Int64Type, RunEndIndexType, UInt32Type};
+use arrow::array::*;
+use arrow::compute::{take, SortOptions};
+use arrow::datatypes::*;
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
 use arrow::error::ArrowError;
+use crate::rank::{can_rank, rank};
 
 /// Sort the `ArrayRef` using `SortOptions`.
 ///
@@ -664,19 +665,6 @@ fn sort_impl<T: Copy>(
     out
 }
 
-/// Whether `arrow_ord::rank` can rank an array of given data type.
-pub(crate) fn can_rank(data_type: &DataType) -> bool {
-    data_type.is_primitive()
-      || matches!(
-            data_type,
-            DataType::Boolean
-                | DataType::Utf8
-                | DataType::LargeUtf8
-                | DataType::Binary
-                | DataType::LargeBinary
-        )
-}
-
 /// Computes the rank for a set of child values
 fn child_rank(values: &dyn Array, options: SortOptions) -> Result<Vec<u32>, ArrowError> {
     // If parent sort order is descending we need to invert the value of nulls_first so that
@@ -1208,16 +1196,17 @@ impl<const N: usize> FixedLexicographicalComparator<N> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::builder::{
+    use arrow::array::builder::{
         BooleanBuilder, FixedSizeListBuilder, GenericListBuilder, Int64Builder, ListBuilder,
         PrimitiveRunBuilder,
     };
-    use arrow_buffer::{NullBuffer, i256};
-    use arrow_schema::Field;
+    use arrow::array::Decimal256Array;
+    use arrow::buffer::{NullBuffer};
+    use arrow::datatypes::{DecimalType, Field, Float16Type, Int8Type};
     use half::f16;
     use rand::rngs::StdRng;
     use rand::seq::SliceRandom;
-    use rand::{Rng, RngExt, SeedableRng};
+    use rand::{Rng, RngCore, SeedableRng};
 
     fn create_decimal_array<T: DecimalType>(
         data: Vec<Option<usize>>,

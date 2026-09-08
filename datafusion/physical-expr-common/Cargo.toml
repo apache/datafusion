@@ -57,6 +57,7 @@ indexmap = { workspace = true }
 itertools = { workspace = true }
 parking_lot = { workspace = true }
 pin-project = { workspace = true }
+half = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

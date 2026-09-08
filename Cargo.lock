@@ -2449,6 +2449,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr-common",
  "datafusion-proto-models",
+ "half",
  "hashbrown 0.17.1",
  "indexmap 2.14.1",
  "itertools 0.15.0",
