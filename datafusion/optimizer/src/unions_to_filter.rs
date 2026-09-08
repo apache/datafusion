@@ -182,8 +182,14 @@ fn extract_branch(plan: LogicalPlan) -> Result<Option<UnionBranch>> {
                 );
                 return Ok(None);
             }
+            let Some(source) = strip_passthrough_nodes(Arc::unwrap_or_clone(input)) else {
+                debug!(
+                    "unions_to_filter skipped: filter input contains a projection"
+                );
+                return Ok(None);
+            };
             Ok(Some(UnionBranch {
-                source: strip_passthrough_nodes(Arc::unwrap_or_clone(input)),
+                source,
                 predicate,
                 wrappers,
             }))
@@ -200,14 +206,22 @@ fn extract_branch(plan: LogicalPlan) -> Result<Option<UnionBranch>> {
             debug!("unions_to_filter skipped: branch contains ORDER BY / SORT");
             Ok(None)
         }
-        other => Ok(Some(UnionBranch {
-            source: strip_passthrough_nodes(other),
-            predicate: Expr::Literal(
-                datafusion_common::ScalarValue::Boolean(Some(true)),
-                None,
-            ),
-            wrappers,
-        })),
+        other => {
+            let Some(source) = strip_passthrough_nodes(other) else {
+                debug!(
+                    "unions_to_filter skipped: branch source contains a projection"
+                );
+                return Ok(None);
+            };
+            Ok(Some(UnionBranch {
+                source,
+                predicate: Expr::Literal(
+                    datafusion_common::ScalarValue::Boolean(Some(true)),
+                    None,
+                ),
+                wrappers,
+            }))
+        }
     }
 }
 
@@ -278,16 +292,18 @@ fn wrap_branch(mut plan: LogicalPlan, wrappers: &[Wrapper]) -> Result<LogicalPla
     Ok(plan)
 }
 
-fn strip_passthrough_nodes(mut plan: LogicalPlan) -> LogicalPlan {
+/// Removes aliases below a branch filter, but refuses to remove projections.
+///
+/// A projection may compute new values, so dropping it can make branches with
+/// different results appear equivalent to `unions_to_filter`.
+fn strip_passthrough_nodes(mut plan: LogicalPlan) -> Option<LogicalPlan> {
     loop {
         plan = match plan {
-            LogicalPlan::Projection(Projection { input, .. }) => {
-                Arc::unwrap_or_clone(input)
-            }
+            LogicalPlan::Projection(_) => return None,
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => {
                 Arc::unwrap_or_clone(input)
             }
-            other => return other,
+            other => return Some(other),
         };
     }
 }
@@ -348,6 +364,8 @@ fn expr_contains_subquery(expr: &Expr) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Add;
+
     use super::*;
     use crate::OptimizerContext;
     use crate::assert_optimized_plan_eq_snapshot;
@@ -495,6 +513,42 @@ mod tests {
           Projection: emp.a AS mgr, emp.b AS comm
             Filter: Boolean(true) OR emp.b = Int32(5)
               TableScan: emp
+        ")?;
+        Ok(())
+    }
+
+    #[test]
+    fn keep_union_distinct_with_computed_projection_below_filter() -> Result<()> {
+        let left = LogicalPlanBuilder::from(test_table_scan_with_name("prices")?)
+            .project(vec![col("a").add(lit(100)).alias("amount")])?
+            .alias("prices")?
+            .filter(col("amount").gt(lit(0)))?
+            .project(vec![col("amount")])?
+            .build()?;
+        let right = LogicalPlanBuilder::from(test_table_scan_with_name("prices")?)
+            .project(vec![col("a").add(lit(200)).alias("amount")])?
+            .alias("prices")?
+            .filter(col("amount").gt(lit(1)))?
+            .project(vec![col("amount")])?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(left)
+            .union_distinct(right)?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Distinct:
+          Union
+            Projection: prices.amount
+              Filter: prices.amount > Int32(0)
+                SubqueryAlias: prices
+                  Projection: prices.a + Int32(100) AS amount
+                    TableScan: prices
+            Projection: prices.amount
+              Filter: prices.amount > Int32(1)
+                SubqueryAlias: prices
+                  Projection: prices.a + Int32(200) AS amount
+                    TableScan: prices
         ")?;
         Ok(())
     }
