@@ -2580,6 +2580,7 @@ dependencies = [
  "pbjson 0.9.0",
  "prost",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
