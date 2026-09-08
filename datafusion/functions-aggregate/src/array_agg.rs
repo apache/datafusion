@@ -955,8 +955,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
             return Ok(());
         }
 
-        let distinct_metric = self.distinct_metric.clone();
-        let distinct_start = Instant::now();
+        let distinct_start = self.distinct_metric.is_some().then(Instant::now);
         self.ensure_state(col.data_type())?;
 
         // Encode the entire incoming batch into rows_buffer in one pass.
@@ -1003,8 +1002,8 @@ impl Accumulator for DistinctArrayAggAccumulator {
                 }
             }
         }
-        if let Some(metric) = distinct_metric {
-            metric.add_duration(distinct_start.elapsed());
+        if let (Some(metric), Some(start)) = (&self.distinct_metric, distinct_start) {
+            metric.add_duration(start.elapsed());
         }
         Ok(())
     }
