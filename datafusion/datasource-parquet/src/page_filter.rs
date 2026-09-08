@@ -287,6 +287,7 @@ impl PagePruningAccessPlanFilter {
         let mut fully_matched_page_selections = inverted_predicates
             .as_ref()
             .map(|_| vec![None; groups.len()]);
+        let mut guaranteed_rows = 0;
 
         // for each row group specified in the access plan
         let row_group_indexes = access_plan.row_group_indexes();
@@ -297,6 +298,10 @@ impl PagePruningAccessPlanFilter {
                 let page_count =
                     fully_matched_page_count(row_group_index, parquet_metadata);
                 total_pages_skipped_by_fully_matched += page_count;
+                guaranteed_rows += selected_rows_in_access(
+                    &access_plan.inner()[row_group_index],
+                    &groups[row_group_index],
+                );
 
                 continue;
             }
@@ -381,7 +386,8 @@ impl PagePruningAccessPlanFilter {
                     parquet_metadata.row_group(row_group_index).num_rows() as usize;
             }
 
-            if access_plan.should_scan(row_group_index)
+            if guaranteed_rows < limit.unwrap_or(0)
+                && access_plan.should_scan(row_group_index)
                 && let Some(inverted_predicates) = &inverted_predicates
             {
                 let mut fully_matched_selection = None;
@@ -404,12 +410,28 @@ impl PagePruningAccessPlanFilter {
                         fully_matched_selection,
                         complement_selection(selection),
                     );
+
+                    // An empty intersection cannot gain rows from later conjuncts.
+                    if !fully_matched_selection
+                        .as_ref()
+                        .is_some_and(|selection| selection.selects_any())
+                    {
+                        break;
+                    }
                 }
 
                 if complete
                     && let Some(selections) = fully_matched_page_selections.as_mut()
+                    && let Some(selection) = fully_matched_selection
                 {
-                    selections[row_group_index] = fully_matched_selection;
+                    guaranteed_rows += match &access_plan.inner()[row_group_index] {
+                        RowGroupAccess::Skip => 0,
+                        RowGroupAccess::Scan => selection.row_count(),
+                        RowGroupAccess::Selection(existing) => {
+                            existing.intersection(&selection).row_count()
+                        }
+                    };
+                    selections[row_group_index] = Some(selection);
                 }
             }
 
@@ -591,6 +613,9 @@ fn prune_pages_for_predicate(
     parquet_metadata: &ParquetMetaData,
     metrics: &ParquetFileMetrics,
 ) -> Option<(RowSelection, Vec<bool>)> {
+    #[cfg(test)]
+    tests::PAGE_PREDICATE_CALLS.set(tests::PAGE_PREDICATE_CALLS.get() + 1);
+
     let column = predicate.required_columns().single_column()?;
     let converter =
         match StatisticsConverter::try_new(column.name(), arrow_schema, parquet_schema) {
@@ -850,9 +875,115 @@ impl PruningStatistics for PagesPruningStatistics<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::Int32Array;
+    use arrow::datatypes::{DataType, Field};
+    use arrow::record_batch::RecordBatch;
+    use bytes::Bytes;
+    use datafusion_expr::Operator;
+    use datafusion_physical_expr::expressions::{BinaryExpr, Column, lit};
+    use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+    use parquet::arrow::ArrowWriter;
+    use parquet::arrow::arrow_reader::{
+        ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
+    };
     use parquet::basic::Type as PhysicalType;
-    use parquet::file::metadata::ColumnChunkMetaData;
+    use parquet::file::metadata::{ColumnChunkMetaData, PageIndexPolicy};
+    use parquet::file::properties::WriterProperties;
     use parquet::schema::types::{SchemaDescriptor, Type as SchemaType};
+
+    thread_local! {
+        pub(super) static PAGE_PREDICATE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    #[test]
+    fn inverse_pruning_short_circuits() {
+        // Each row group has three two-row pages. Only the middle page can
+        // prove a > 5; mixed pages must still be scanned by ordinary pruning.
+        for (middle, limit, selected, fully_matched, expected_calls, expected_rows) in [
+            ([0, 10], Some(2), 6, false, 9, 18), // Empty inverse: skip the second conjunct.
+            ([10, 10], Some(2), 6, false, 8, 2), // First group covers LIMIT.
+            ([10, 10], Some(3), 6, false, 10, 4), // Two groups cover LIMIT.
+            ([10, 10], Some(7), 6, false, 12, 18), // Insufficient proof: retain the plan.
+            ([10, 10], None, 6, false, 6, 18),   // Ordinary pruning only.
+            ([10, 10], Some(0), 6, false, 6, 0),
+            ([10, 10], Some(2), 3, false, 10, 3), // Only one guaranteed row in RG0.
+            ([10, 10], Some(2), 1, true, 6, 3), // Fully matched RG0 contributes one row.
+        ] {
+            let schema =
+                Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+            let props = WriterProperties::builder()
+                .set_data_page_row_count_limit(2)
+                .set_write_batch_size(2)
+                .build();
+            let mut writer =
+                ArrowWriter::try_new(Vec::new(), Arc::clone(&schema), Some(props))
+                    .unwrap();
+            for row_group in 0..3 {
+                let values = if fully_matched && row_group == 0 {
+                    vec![10; 6]
+                } else {
+                    vec![0, 10, middle[0], middle[1], 0, 10]
+                };
+                let batch = RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(Int32Array::from(values))],
+                )
+                .unwrap();
+                writer.write(&batch).unwrap();
+                writer.flush().unwrap();
+            }
+            let options = ArrowReaderOptions::new()
+                .with_page_index_policy(PageIndexPolicy::Required);
+            let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(
+                Bytes::from(writer.into_inner().unwrap()),
+                options,
+            )
+            .unwrap();
+            let column: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+            let expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+                Arc::new(BinaryExpr::new(
+                    Arc::clone(&column),
+                    Operator::Gt,
+                    lit(5i32),
+                )),
+                Operator::And,
+                Arc::new(BinaryExpr::new(column, Operator::Lt, lit(20i32))),
+            ));
+            let filter = PagePruningAccessPlanFilter::new(&expr, Arc::clone(&schema));
+            let mut plan = ParquetAccessPlan::new_all(3);
+            plan.scan_selection(
+                0,
+                vec![
+                    RowSelector::select(selected),
+                    RowSelector::skip(6 - selected),
+                ]
+                .into(),
+            );
+            if fully_matched {
+                plan.mark_fully_matched(0);
+            }
+            let metrics =
+                ParquetFileMetrics::new(0, "test", &ExecutionPlanMetricsSet::new());
+            PAGE_PREDICATE_CALLS.set(0);
+            let result = filter.prune_plan_with_page_index_and_metrics(
+                plan,
+                &schema,
+                reader.parquet_schema(),
+                reader.metadata(),
+                &metrics,
+                limit,
+            );
+            assert_eq!(
+                PAGE_PREDICATE_CALLS.get(),
+                expected_calls,
+                "middle={middle:?}, limit={limit:?}, selected={selected}, fully_matched={fully_matched}"
+            );
+            assert_eq!(
+                selected_row_count(&result.access_plan, reader.metadata().row_groups()),
+                expected_rows
+            );
+        }
+    }
 
     #[test]
     fn limit_plan_preserves_existing_selections() {
