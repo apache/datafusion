@@ -27,7 +27,7 @@ use super::skip_partial::SkipAggregationProbe;
 use super::{AggregateExec, format_human_display};
 use crate::aggregates::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
-    GroupByMetrics, GroupValues, new_group_values,
+    GroupByMetrics, GroupValues, aggregate_sub_metrics, new_group_values,
 };
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
@@ -51,7 +51,7 @@ use datafusion_common::{
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use datafusion_expr::{EmitTo, GroupsAccumulator};
+use datafusion_expr::{AggregateMetrics, EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
@@ -412,6 +412,11 @@ impl GroupedHashAggregateStream {
             partition,
             aggregate_labels.iter().cloned(),
         );
+        let aggregate_submetrics = aggregate_sub_metrics(
+            &agg.metrics,
+            partition,
+            aggregate_labels.iter().cloned(),
+        );
         let aggregate_accumulator_metrics = AggregateAccumulatorMetrics::new(
             &agg.metrics,
             partition,
@@ -445,7 +450,8 @@ impl GroupedHashAggregateStream {
         // Instantiate the accumulators
         let accumulators: Vec<_> = aggregate_exprs
             .iter()
-            .map(create_group_accumulator)
+            .zip(aggregate_submetrics)
+            .map(|(agg_expr, metrics)| create_group_accumulator(agg_expr, metrics))
             .collect::<Result<_>>()?;
 
         let group_schema = agg_group_by.group_schema(&agg.input().schema())?;
@@ -645,9 +651,10 @@ impl GroupedHashAggregateStream {
 /// [`GroupsAccumulatorAdapter`] if not.
 pub(crate) fn create_group_accumulator(
     agg_expr: &Arc<AggregateFunctionExpr>,
+    metrics: Arc<dyn AggregateMetrics>,
 ) -> Result<Box<dyn GroupsAccumulator>> {
     if agg_expr.groups_accumulator_supported() {
-        agg_expr.create_groups_accumulator()
+        agg_expr.create_groups_accumulator_with_metrics(metrics)
     } else {
         // Note in the log when the slow path is used
         debug!(
@@ -655,7 +662,9 @@ pub(crate) fn create_group_accumulator(
             agg_expr.name()
         );
         let agg_expr_captured = Arc::clone(agg_expr);
-        let factory = move || agg_expr_captured.create_accumulator();
+        let factory = move || {
+            agg_expr_captured.create_accumulator_with_metrics(Arc::clone(&metrics))
+        };
         Ok(Box::new(GroupsAccumulatorAdapter::new(factory)))
     }
 }

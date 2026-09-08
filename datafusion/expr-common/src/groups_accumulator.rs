@@ -19,6 +19,9 @@
 
 use arrow::array::{ArrayRef, BooleanArray};
 use datafusion_common::{Result, exec_err, not_impl_err, utils::split_vec_min_alloc};
+use std::sync::Arc;
+
+use crate::accumulator::AggregateMetrics;
 
 /// Describes how many rows should be emitted during grouping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -188,6 +191,12 @@ impl<'a> GroupSelection<'a> {
 /// [`Accumulator`]: crate::accumulator::Accumulator
 /// [Aggregating Millions of Groups Fast blog]: https://arrow.apache.org/blog/2023/08/05/datafusion_fast_grouping/
 pub trait GroupsAccumulator: Send + std::any::Any {
+    /// Supplies optional metrics owned by this aggregate expression.
+    ///
+    /// The default preserves compatibility for accumulators without internal
+    /// submetrics.
+    fn set_metrics(&mut self, _metrics: Arc<dyn AggregateMetrics>) {}
+
     /// Updates the accumulator's state from its arguments, encoded as
     /// a vector of [`ArrayRef`]s.
     ///

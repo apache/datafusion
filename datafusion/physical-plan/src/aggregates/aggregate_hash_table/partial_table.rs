@@ -91,6 +91,7 @@ impl AggregateHashTable<PartialMarker> {
             aggregate_accumulator_metrics: Arc::clone(
                 &self.aggregate_accumulator_metrics,
             ),
+            aggregate_submetrics: self.aggregate_submetrics.clone(),
             input_schema: Arc::clone(&self.input_schema),
             output_schema: Arc::clone(&self.output_schema),
             state_schema: Arc::clone(&self.state_schema),
