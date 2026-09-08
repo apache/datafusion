@@ -652,33 +652,23 @@ async fn string_not_in_list_with_truncated_bounds() {
     check_string_not_in_list_with_truncated_bounds(true).await;
 }
 
-#[tokio::test]
-async fn string_in_list_with_null_preserves_filter_semantics() {
+async fn check_in_list_with_null_preserves_filter_semantics(
+    name: &str,
+    values: ArrayRef,
+    list: Vec<ScalarValue>,
+    expected: ScalarValue,
+) {
     let mut file = tempfile::Builder::new()
-        .prefix("string_in_list_null_pruning")
+        .prefix("in_list_null_pruning")
         .suffix(".parquet")
         .tempfile()
         .unwrap();
-    let schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)]));
-    // The first row group has a known zero null count, and every value lies
-    // in a gap in the IN list. The matching value in the second row group is
-    // deliberately not first, so incorrectly bypassing the row filter changes
-    // the result when the scan has a limit.
-    let values = vec![
-        Some("v000001"),
-        Some("v000001"),
-        Some("v000001"),
-        Some("v000001"),
-        Some("v000001"),
-        Some("v000000"),
-        None,
-        Some("v999999"),
-    ];
-    let batch = RecordBatch::try_new(
-        Arc::clone(&schema),
-        vec![Arc::new(StringArray::from(values))],
-    )
-    .unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        values.data_type().clone(),
+        true,
+    )]));
+    let batch = RecordBatch::try_new(Arc::clone(&schema), vec![values]).unwrap();
     let properties = WriterProperties::builder()
         .set_max_row_group_row_count(Some(4))
         .set_bloom_filter_enabled(false)
@@ -690,10 +680,7 @@ async fn string_in_list_with_null_preserves_filter_semantics() {
 
     // Build the physical source directly so a logical optimizer cannot fold
     // NOT IN (..., NULL) to an empty relation before the scan.
-    let mut list = (0..21)
-        .map(|index| lit(format!("v{:06}", index * 10)))
-        .collect::<Vec<_>>();
-    list.push(lit(ScalarValue::Utf8(None)));
+    let list = list.into_iter().map(lit).collect::<Vec<_>>();
     let location = Path::from_filesystem_path(file.path()).unwrap();
     let partitioned_file = PartitionedFile::new(
         location.to_string(),
@@ -729,7 +716,12 @@ async fn string_in_list_with_null_preserves_filter_semantics() {
             let plan: Arc<dyn ExecutionPlan> =
                 Arc::new(DataSourceExec::new(Arc::new(config)));
             let plan_text = displayable(plan.as_ref()).indent(true).to_string();
-            assert!(plan_text.contains("IN"), "{plan_text}");
+            assert!(plan_text.contains("IN"), "type={name}, plan={plan_text}");
+            assert_eq!(
+                plan_text.contains("IN_SET_INTERSECTS"),
+                !negated && max_in_list_size == 32,
+                "type={name}, negated={negated}, cap={max_in_list_size}, plan={plan_text}"
+            );
             let batches = collect(Arc::clone(&plan), ctx.task_ctx()).await.unwrap();
             let output = ScanOutput {
                 batches,
@@ -738,17 +730,29 @@ async fn string_in_list_with_null_preserves_filter_semantics() {
             };
 
             if negated {
-                assert!(output.batches.iter().all(|batch| batch.num_rows() == 0));
+                assert!(
+                    output.batches.iter().all(|batch| batch.num_rows() == 0),
+                    "type={name}, cap={max_in_list_size}"
+                );
             } else {
-                assert_batches_eq!(
-                    [
-                        "+---------+",
-                        "| value   |",
-                        "+---------+",
-                        "| v000000 |",
-                        "+---------+",
-                    ],
-                    &output.batches
+                assert_eq!(
+                    output
+                        .batches
+                        .iter()
+                        .map(RecordBatch::num_rows)
+                        .sum::<usize>(),
+                    1,
+                    "type={name}, cap={max_in_list_size}"
+                );
+                let batch = output
+                    .batches
+                    .iter()
+                    .find(|batch| batch.num_rows() > 0)
+                    .unwrap();
+                assert_eq!(
+                    ScalarValue::try_from_array(batch.column(0), 0).unwrap(),
+                    expected,
+                    "type={name}, cap={max_in_list_size}"
                 );
             }
             assert_eq!(
@@ -758,7 +762,8 @@ async fn string_in_list_with_null_preserves_filter_semantics() {
                     (false, _) => 3,
                     (true, 0) => 8,
                     (true, _) => 0,
-                }
+                },
+                "type={name}, negated={negated}, cap={max_in_list_size}"
             );
             assert_eq!(output.fully_matched("row_groups_pruned_statistics"), 0);
             assert_eq!(
@@ -770,11 +775,60 @@ async fn string_in_list_with_null_preserves_filter_semantics() {
                 } else {
                     1
                 },
-                "negated={negated}, cap={max_in_list_size}, metrics={}",
+                "type={name}, negated={negated}, cap={max_in_list_size}, metrics={}",
                 output.metrics
             );
             assert_eq!(output.pruned("limit_pruned_row_groups"), 0);
             assert_eq!(output.counter("predicate_evaluation_errors"), 0);
         }
     }
+}
+
+#[tokio::test]
+async fn in_list_with_null_preserves_filter_semantics() {
+    // The first row group has a known zero null count, and every value lies
+    // in a gap in the IN list. The matching value in the second row group is
+    // deliberately not first, so incorrectly bypassing the row filter changes
+    // the result when the scan has a limit.
+    let mut string_list = (0..21)
+        .map(|index| ScalarValue::Utf8(Some(format!("v{:06}", index * 10))))
+        .collect::<Vec<_>>();
+    string_list.push(ScalarValue::Utf8(None));
+    check_in_list_with_null_preserves_filter_semantics(
+        "string",
+        Arc::new(StringArray::from(vec![
+            Some("v000001"),
+            Some("v000001"),
+            Some("v000001"),
+            Some("v000001"),
+            Some("v000001"),
+            Some("v000000"),
+            None,
+            Some("v999999"),
+        ])) as ArrayRef,
+        string_list,
+        ScalarValue::Utf8(Some("v000000".into())),
+    )
+    .await;
+
+    let mut int64_list = (0..21)
+        .map(|index| ScalarValue::Int64(Some(index * 10)))
+        .collect::<Vec<_>>();
+    int64_list.push(ScalarValue::Int64(None));
+    check_in_list_with_null_preserves_filter_semantics(
+        "int64",
+        Arc::new(Int64Array::from(vec![
+            Some(1),
+            Some(1),
+            Some(1),
+            Some(1),
+            Some(1),
+            Some(0),
+            None,
+            Some(999_999),
+        ])) as ArrayRef,
+        int64_list,
+        ScalarValue::Int64(Some(0)),
+    )
+    .await;
 }
