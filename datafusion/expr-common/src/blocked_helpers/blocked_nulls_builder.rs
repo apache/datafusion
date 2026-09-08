@@ -337,7 +337,7 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedNullsBuilder<FIXED_BLOCK_SIZING> {
                 blocked_index.index_in_block(self.block_size),
             );
         }
-        // ponytail: linear walk, manual sizing keeps few blocks; keep block starts if this shows up
+        // TODO - optimize this loop
         let mut remaining = blocked_index.into_index_in_fixed_block_size(self.block_size);
         for (block, nulls) in self.blocks.iter().enumerate() {
             if remaining < nulls.len() {

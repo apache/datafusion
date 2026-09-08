@@ -125,7 +125,7 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteArrayType>
 
     /// Append every item of `array`
     pub fn extends_from_array(&mut self, array: &GenericByteArray<B>) {
-        // ponytail: per item pushes, bulk copy the offsets/bytes/nulls per block if this shows up in profiles
+        // TODO - optimize this in case of no nulls we can just copy a large chunk
         for item in array.iter() {
             self.push(item.map(|value| value.as_ref()));
         }

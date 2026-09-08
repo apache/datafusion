@@ -24,7 +24,7 @@ use arrow::array::{
     Array, ArrayRef, BinaryViewArray, BooleanBufferBuilder, ByteView, NullBufferBuilder,
     make_view,
 };
-use arrow::buffer::{Buffer, NullBuffer};
+use arrow::buffer::{Buffer, NullBuffer, ScalarBuffer};
 use arrow::compute::concat;
 use arrow::datatypes::{BinaryViewType, ByteViewType, DataType, StringViewType};
 use datafusion_common::hash_utils::RandomState;
@@ -468,17 +468,7 @@ where
             });
         }
 
-        let array =
-            unsafe { BinaryViewArray::new_unchecked(views, buffers, null_buffer) };
-
-        Some(match self.output_type {
-            OutputType::BinaryView => Arc::new(array),
-            OutputType::Utf8View => {
-                let array = unsafe { array.to_string_view_unchecked() };
-                Arc::new(array)
-            }
-            _ => unreachable!("Utf8/Binary should use `ArrowBytesMap`"),
-        })
+        Some(self.build_output(views, buffers, null_buffer))
     }
 
     /// Take every block, the map is empty afterwards
@@ -514,21 +504,7 @@ where
             };
 
             let views = views.into_scalar_buffer();
-            let array = unsafe {
-                BinaryViewArray::new_unchecked(views, block_buffers, null_buffer)
-            };
-
-            let output = match self.output_type {
-                OutputType::BinaryView => Arc::new(array) as ArrayRef,
-                OutputType::Utf8View => {
-                    // SAFETY: all input was valid utf8
-                    let array = unsafe { array.to_string_view_unchecked() };
-                    Arc::new(array)
-                }
-                _ => unreachable!("Utf8/Binary should use `ArrowBytesMap`"),
-            };
-
-            output_blocks.push(output);
+            output_blocks.push(self.build_output(views, block_buffers, null_buffer));
         }
 
         self.current_start_block_index = 0;
@@ -547,15 +523,29 @@ where
             self.block_size
         );
 
-        // ponytail: drain and re-insert the rest like the non blocked `GroupValuesBytesView` does,
-        // an in place re-layout would have to rewrite the buffer index of every moved view
+        // TODO - AVOID THIS TAKE ALL, CONCAT AND SLICE, IT DEFEAT THE PURPOSE
         let blocks = self.take_all();
         let all = concat(&blocks.iter().map(|b| b.as_ref()).collect::<Vec<_>>())
-            .expect("blocks have the same type");
+          .expect("blocks have the same type");
         let rest = all.slice(n, all.len() - n);
         self.insert_if_new(&rest, |_| V::default(), |_, _| {});
 
         all.slice(0, n)
+
+    }
+
+    fn build_output(&self, views: ScalarBuffer<u128>, buffers: Vec<Buffer>, null_buffer: Option<NullBuffer>) -> ArrayRef {
+        let array =
+          unsafe { BinaryViewArray::new_unchecked(views, buffers, null_buffer) };
+
+        match self.output_type {
+            OutputType::BinaryView => Arc::new(array),
+            OutputType::Utf8View => {
+                let array = unsafe { array.to_string_view_unchecked() };
+                Arc::new(array)
+            }
+            _ => unreachable!("Utf8/Binary should use `ArrowBytesMap`"),
+        }
     }
 
     unsafe fn append_inline_view(&mut self, view: u128) -> u128 {
