@@ -597,6 +597,10 @@ impl PartialHashAggregateStream {
         mut remaining_groups: RecordBatch,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
+        // The slices below share this batch's buffers: record rows and bytes
+        // once here, and count each emitted slice in `output_batches`.
+        self.baseline_metrics.record_output_bytes(&remaining_groups);
+
         while remaining_groups.num_rows() > self.batch_size {
             // More batch to output, continue in the current state.
             let output = remaining_groups.slice(0, self.batch_size);
@@ -609,17 +613,15 @@ impl PartialHashAggregateStream {
             self.reduction_factor.add_part(output.num_rows());
             debug_assert!(output.num_rows() > 0);
 
-            emitter
-                .emit(output.record_output(&self.baseline_metrics))
-                .await;
+            self.baseline_metrics.output_batches().add(1);
+            emitter.emit(output).await;
         }
 
         self.reduction_factor.add_part(remaining_groups.num_rows());
         debug_assert!(remaining_groups.num_rows() > 0);
 
-        emitter
-            .emit(remaining_groups.record_output(&self.baseline_metrics))
-            .await;
+        self.baseline_metrics.output_batches().add(1);
+        emitter.emit(remaining_groups).await;
 
         Ok(())
     }
@@ -636,7 +638,10 @@ impl PartialHashAggregateStream {
         let mut timer = elapsed_compute.timer();
 
         loop {
-            let Some(batch) = hash_table.next_output_batch()? else {
+            // The table records output metrics itself: rows and bytes once
+            // per materialization, batch count once per slice.
+            let Some(batch) = hash_table.next_output_batch(&self.baseline_metrics)?
+            else {
                 // Only reachable when the table held no groups at all: a
                 // non-empty table always reports its last batch together with
                 // the `Done` state, which the `try_resize` below already zeroes.
@@ -653,9 +658,7 @@ impl PartialHashAggregateStream {
             self.reduction_factor.add_part(batch.num_rows());
 
             timer.done();
-            emitter
-                .emit(batch.record_output(&self.baseline_metrics))
-                .await;
+            emitter.emit(batch).await;
             timer = elapsed_compute.timer();
         }
     }
@@ -958,7 +961,10 @@ impl FinalHashAggregateStream {
         hash_table.start_output()?;
 
         loop {
-            let Some(batch) = hash_table.next_output_batch()? else {
+            // The table records output metrics itself: rows and bytes once
+            // per materialization, batch count once per slice.
+            let Some(batch) = hash_table.next_output_batch(&self.baseline_metrics)?
+            else {
                 // Only reachable when the table held no groups at all: a
                 // non-empty table always reports its last batch together with
                 // the `Done` state, which the `try_resize` below already zeroes.
@@ -972,9 +978,7 @@ impl FinalHashAggregateStream {
             self.reservation.try_resize(hash_table.memory_size())?;
 
             timer.done();
-            emitter
-                .emit(batch.record_output(&self.baseline_metrics))
-                .await;
+            emitter.emit(batch).await;
             timer = elapsed_compute.timer();
         }
     }

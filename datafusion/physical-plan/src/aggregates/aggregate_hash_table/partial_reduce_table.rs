@@ -25,6 +25,7 @@ use crate::aggregates::AggregateExec;
 use crate::aggregates::group_values::AccumulatorPhase;
 
 use super::common::{AggregateHashTable, HashAggregateAccumulator, PartialReduceMarker};
+use crate::metrics::BaselineMetrics;
 
 /// Methods specific to the aggregate hash table used in the partial-reduce stage.
 impl AggregateHashTable<PartialReduceMarker> {
@@ -52,10 +53,12 @@ impl AggregateHashTable<PartialReduceMarker> {
     /// exhausted, and an internal error if polled in the `Building` state.
     pub(in crate::aggregates) fn next_output_batch(
         &mut self,
+        baseline_metrics: &BaselineMetrics,
     ) -> Result<Option<RecordBatch>> {
         self.next_output_batch_inner(
             HashAggregateAccumulator::state,
             AccumulatorPhase::State,
+            baseline_metrics,
         )
     }
 

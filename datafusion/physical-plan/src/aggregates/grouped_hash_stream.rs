@@ -835,9 +835,10 @@ impl Stream for GroupedHashAggregateStream {
                     // Empty record batches should not be emitted.
                     // They need to be treated as  [`Option<RecordBatch>`]es and handled separately
                     debug_assert!(output_batch.num_rows() > 0);
-                    return Poll::Ready(Some(Ok(
-                        output_batch.record_output(&self.baseline_metrics)
-                    )));
+                    // Rows and bytes were recorded for the whole materialized
+                    // batch in `emit`; only count the emitted slice here.
+                    self.baseline_metrics.output_batches().add(1);
+                    return Poll::Ready(Some(Ok(output_batch)));
                 }
 
                 ExecutionState::Done => {
@@ -1108,6 +1109,13 @@ impl GroupedHashAggregateStream {
         let _ = self.update_memory_reservation();
         let batch = RecordBatch::try_new(schema, output)?;
         debug_assert!(batch.num_rows() > 0);
+
+        if !spilling {
+            // The batch is emitted downstream in `batch_size` slices that share
+            // its buffers. Record rows and bytes once here; `ProducingOutput`
+            // counts each emitted slice in `output_batches`.
+            self.baseline_metrics.record_output_bytes(&batch);
+        }
 
         Ok(Some(batch))
     }

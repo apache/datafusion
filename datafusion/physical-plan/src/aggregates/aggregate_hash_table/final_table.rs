@@ -25,6 +25,7 @@ use crate::aggregates::AggregateExec;
 use crate::aggregates::group_values::AccumulatorPhase;
 
 use super::common::{AggregateHashTable, FinalMarker, HashAggregateAccumulator};
+use crate::metrics::BaselineMetrics;
 
 /// Implementation specific to final aggregation, where the table stores partial
 /// aggregate states and the input rows are also partial states.
@@ -58,10 +59,12 @@ impl AggregateHashTable<FinalMarker> {
     /// exhausted, and an internal error if polled in the `Building` state.
     pub(in crate::aggregates) fn next_output_batch(
         &mut self,
+        baseline_metrics: &BaselineMetrics,
     ) -> Result<Option<RecordBatch>> {
         self.next_output_batch_inner(
             HashAggregateAccumulator::evaluate_to_columns,
             AccumulatorPhase::Evaluate,
+            baseline_metrics,
         )
     }
 

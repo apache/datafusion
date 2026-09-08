@@ -38,6 +38,7 @@ use crate::aggregates::{
     AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
     group_id_array, max_duplicate_ordinal,
 };
+use crate::metrics::BaselineMetrics;
 
 use super::AggregateTableMetrics;
 
@@ -246,10 +247,17 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
     ///
     /// This is a temporary solution until blocked state management is implemented:
     /// Issue: <https://github.com/apache/datafusion/issues/7065>
+    ///
+    /// Output is materialized once and then handed out in `batch_size` slices
+    /// that share the materialized buffers. `baseline_metrics` therefore has
+    /// rows and bytes recorded once, when the batch is materialized, and its
+    /// batch count bumped once per returned slice. Callers must not record
+    /// the returned batches again.
     pub(super) fn next_output_batch_inner(
         &mut self,
         materialize_accumulator_fn: MaterializeAccumulatorFn,
         accumulator_phase: AccumulatorPhase,
+        baseline_metrics: &BaselineMetrics,
     ) -> Result<Option<RecordBatch>> {
         let output_schema = Arc::clone(&self.output_schema);
         let batch_size = self.batch_size;
@@ -278,6 +286,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
 
                     let batch = RecordBatch::try_new(output_schema, columns)?;
                     debug_assert!(batch.num_rows() > 0);
+                    baseline_metrics.record_output_bytes(&batch);
                     MaterializedAggregateOutput::new(batch)
                 }
                 AggregateHashTableState::OutputtingMaterialized(output) => output,
@@ -290,6 +299,9 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             };
 
         let batch = output.next_batch(batch_size);
+        if batch.is_some() {
+            baseline_metrics.output_batches().add(1);
+        }
         if output.is_exhausted() {
             self.state = AggregateHashTableState::Done;
         } else {
