@@ -143,38 +143,87 @@ impl AggregateAccumulatorMetrics {
 
 #[derive(Clone)]
 pub(crate) struct GroupByMetrics {
-    /// Time spent calculating the group IDs from the evaluated grouping columns.
-    pub(crate) time_calculating_group_ids: Time,
-    /// Time spent evaluating the inputs to the aggregate functions.
-    pub(crate) aggregate_arguments_time: Time,
-    /// Time spent evaluating the aggregate expressions themselves
-    /// (e.g. summing all elements and counting number of elements for `avg` aggregate).
-    pub(crate) aggregation_time: Time,
-    /// Time spent emitting the final results and constructing the record batch
-    /// which includes finalizing the grouping expressions
-    /// (e.g. emit from the hash table in case of hash aggregation) and the accumulators
-    pub(crate) emitting_time: Time,
+    /// Group-key preparation: grouping-expression evaluation, interning, and ordering updates.
+    time_calculating_group_ids: Time,
+    /// Aggregate-input evaluation, including collectively evaluated filters.
+    aggregate_arguments_time: Time,
+    /// Input-processing accumulator operations (`update` and `merge`).
+    aggregation_time: Option<Time>,
+    /// Output emission: group values and accumulator states or final values.
+    emitting_time: Time,
+    /// Grouped TopK priority-map batch setup, insertion, comparison, and NULL handling.
+    topk_maintenance_time: Option<Time>,
 }
 
 impl GroupByMetrics {
     pub(crate) fn new(metrics: &ExecutionPlanMetricsSet, partition: usize) -> Self {
+        Self::new_with_options(metrics, partition, true, false)
+    }
+
+    /// Creates metrics for Grouped TopK, which does not invoke accumulators.
+    pub(crate) fn new_topk(metrics: &ExecutionPlanMetricsSet, partition: usize) -> Self {
+        Self::new_with_options(metrics, partition, false, true)
+    }
+
+    fn new_with_options(
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+        include_aggregation_time: bool,
+        include_topk_maintenance_time: bool,
+    ) -> Self {
         Self {
             time_calculating_group_ids: MetricBuilder::new(metrics)
                 .subset_time("time_calculating_group_ids", partition),
             aggregate_arguments_time: MetricBuilder::new(metrics)
                 .subset_time("aggregate_arguments_time", partition),
-            aggregation_time: MetricBuilder::new(metrics)
-                .subset_time("aggregation_time", partition),
+            aggregation_time: include_aggregation_time.then(|| {
+                MetricBuilder::new(metrics).subset_time("aggregation_time", partition)
+            }),
             emitting_time: MetricBuilder::new(metrics)
                 .subset_time("emitting_time", partition),
+            topk_maintenance_time: include_topk_maintenance_time.then(|| {
+                MetricBuilder::new(metrics)
+                    .subset_time("topk_maintenance_time", partition)
+            }),
         }
+    }
+
+    /// Times grouping-expression evaluation, group interning, and ordering updates.
+    pub(crate) fn time_group_key_preparation<R>(&self, f: impl FnOnce() -> R) -> R {
+        let _timer = self.time_calculating_group_ids.timer();
+        f()
+    }
+
+    /// Times aggregate argument and collectively evaluated filter expressions.
+    pub(crate) fn time_aggregate_arguments<R>(&self, f: impl FnOnce() -> R) -> R {
+        let _timer = self.aggregate_arguments_time.timer();
+        f()
+    }
+
+    /// Times one interval containing all input-processing accumulator operations.
+    pub(crate) fn time_aggregation<R>(&self, f: impl FnOnce() -> R) -> R {
+        let _timer = self.aggregation_time.as_ref().map(Time::timer);
+        f()
+    }
+
+    /// Times group-value and accumulator-state/final-value output emission.
+    pub(crate) fn time_emitting<R>(&self, f: impl FnOnce() -> R) -> R {
+        let _timer = self.emitting_time.timer();
+        f()
+    }
+
+    /// Times Grouped TopK priority-map maintenance after group keys are prepared.
+    pub(crate) fn time_topk_maintenance<R>(&self, f: impl FnOnce() -> R) -> R {
+        let _timer = self.topk_maintenance_time.as_ref().map(Time::timer);
+        f()
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::GroupByMetrics;
     use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
-    use crate::metrics::{MetricValue, MetricsSet};
+    use crate::metrics::{ExecutionPlanMetricsSet, MetricValue, MetricsSet};
     use crate::test::TestMemoryExec;
     use crate::{ExecutionPlan, collect};
     use arrow::array::{Float64Array, UInt32Array};
@@ -205,6 +254,23 @@ mod tests {
         let emitting_time = metrics.sum_by_name("emitting_time");
         assert!(emitting_time.is_some());
         assert!(emitting_time.unwrap().as_usize() > 0);
+    }
+
+    #[test]
+    fn groupby_metrics_without_accumulators_do_not_register_aggregation_time() {
+        let metrics = ExecutionPlanMetricsSet::new();
+        let groupby_metrics = GroupByMetrics::new_topk(&metrics, 0);
+        let mut called = false;
+
+        groupby_metrics.time_aggregation(|| called = true);
+
+        assert!(called);
+        assert!(
+            metrics
+                .clone_inner()
+                .sum_by_name("aggregation_time")
+                .is_none()
+        );
     }
 
     fn aggregate_metric_names_and_labels(

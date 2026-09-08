@@ -7173,6 +7173,9 @@ impl serde::Serialize for FileScanExecConf {
         if self.file_compression_type.is_some() {
             len += 1;
         }
+        if self.preserve_order.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.FileScanExecConf", len)?;
         if !self.file_groups.is_empty() {
             struct_ser.serialize_field("fileGroups", &self.file_groups)?;
@@ -7217,6 +7220,9 @@ impl serde::Serialize for FileScanExecConf {
                 .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", *v)))?;
             struct_ser.serialize_field("fileCompressionType", &v)?;
         }
+        if let Some(v) = self.preserve_order.as_ref() {
+            struct_ser.serialize_field("preserveOrder", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -7248,6 +7254,8 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
             "outputPartitioning",
             "file_compression_type",
             "fileCompressionType",
+            "preserve_order",
+            "preserveOrder",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -7265,6 +7273,7 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
             ProjectionExprs,
             OutputPartitioning,
             FileCompressionType,
+            PreserveOrder,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -7299,6 +7308,7 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
                             "projectionExprs" | "projection_exprs" => Ok(GeneratedField::ProjectionExprs),
                             "outputPartitioning" | "output_partitioning" => Ok(GeneratedField::OutputPartitioning),
                             "fileCompressionType" | "file_compression_type" => Ok(GeneratedField::FileCompressionType),
+                            "preserveOrder" | "preserve_order" => Ok(GeneratedField::PreserveOrder),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -7331,6 +7341,7 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
                 let mut projection_exprs__ = None;
                 let mut output_partitioning__ = None;
                 let mut file_compression_type__ = None;
+                let mut preserve_order__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::FileGroups => {
@@ -7416,6 +7427,12 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
                             }
                             file_compression_type__ = map_.next_value::<::std::option::Option<super::datafusion_common::CompressionTypeVariant>>()?.map(|x| x as i32);
                         }
+                        GeneratedField::PreserveOrder => {
+                            if preserve_order__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("preserveOrder"));
+                            }
+                            preserve_order__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(FileScanExecConf {
@@ -7432,6 +7449,7 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
                     projection_exprs: projection_exprs__,
                     output_partitioning: output_partitioning__,
                     file_compression_type: file_compression_type__,
+                    preserve_order: preserve_order__,
                 })
             }
         }
@@ -21471,6 +21489,9 @@ impl serde::Serialize for PhysicalScalarSubqueryExprNode {
         if self.index != 0 {
             len += 1;
         }
+        if !self.metadata.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalScalarSubqueryExprNode", len)?;
         if let Some(v) = self.data_type.as_ref() {
             struct_ser.serialize_field("dataType", v)?;
@@ -21480,6 +21501,9 @@ impl serde::Serialize for PhysicalScalarSubqueryExprNode {
         }
         if self.index != 0 {
             struct_ser.serialize_field("index", &self.index)?;
+        }
+        if !self.metadata.is_empty() {
+            struct_ser.serialize_field("metadata", &self.metadata)?;
         }
         struct_ser.end()
     }
@@ -21495,6 +21519,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalScalarSubqueryExprNode {
             "dataType",
             "nullable",
             "index",
+            "metadata",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -21502,6 +21527,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalScalarSubqueryExprNode {
             DataType,
             Nullable,
             Index,
+            Metadata,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -21526,6 +21552,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalScalarSubqueryExprNode {
                             "dataType" | "data_type" => Ok(GeneratedField::DataType),
                             "nullable" => Ok(GeneratedField::Nullable),
                             "index" => Ok(GeneratedField::Index),
+                            "metadata" => Ok(GeneratedField::Metadata),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -21548,6 +21575,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalScalarSubqueryExprNode {
                 let mut data_type__ = None;
                 let mut nullable__ = None;
                 let mut index__ = None;
+                let mut metadata__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::DataType => {
@@ -21570,12 +21598,21 @@ impl<'de> serde::Deserialize<'de> for PhysicalScalarSubqueryExprNode {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::Metadata => {
+                            if metadata__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("metadata"));
+                            }
+                            metadata__ = Some(
+                                map_.next_value::<std::collections::HashMap<_, _>>()?
+                            );
+                        }
                     }
                 }
                 Ok(PhysicalScalarSubqueryExprNode {
                     data_type: data_type__,
                     nullable: nullable__.unwrap_or_default(),
                     index: index__.unwrap_or_default(),
+                    metadata: metadata__.unwrap_or_default(),
                 })
             }
         }
