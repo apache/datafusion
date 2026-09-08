@@ -104,6 +104,10 @@ pub(crate) struct SingleHashAggregateStream {
     /// Tracks the high-level stream lifecycle. The hash table owns the lower-level
     /// state for emitting output batches.
     state: Option<SingleHashAggregateState>,
+
+    /// When set, there are no aggregate expressions: AggregateExec routes
+    /// limited non-DISTINCT aggregates to a different stream.
+    group_values_soft_limit: Option<usize>,
 }
 
 /// Spill configuration and accumulated runs for single hash aggregation.
@@ -374,6 +378,7 @@ impl SingleHashAggregateStream {
                 hash_table,
                 spill_context,
             }),
+            group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
         })
     }
 
@@ -449,6 +454,27 @@ impl SingleHashAggregateStream {
                     return Self::break_with_err(e);
                 }
 
+                // Soft limit optimization:
+                //
+                // Stop reading input once the in-memory table contains enough distinct
+                // groups to satisfy the soft limit.
+                //
+                // When a limit is present, AggregateExec routes only unordered,
+                // unfiltered DISTINCT aggregates to this stream.
+                //
+                // With no aggregate expressions, additional input can only match existing
+                // groups or add new ones; it cannot change any existing group's output.
+                // Since there is no ordering requirement and we already have enough
+                // distinct groups, we can finish reading as if the input were exhausted.
+                //
+                // Reuse the input-exhausted transition to merge any existing spills
+                // before producing output. The downstream limit operator enforces
+                // the exact output row count.
+                if self.hit_soft_group_limit(&hash_table) {
+                    return self
+                        .close_input_and_prepare_output(hash_table, spill_context);
+                }
+
                 // Check memory reservation, and potentially spill.
                 let timer = elapsed_compute.timer();
                 let resize_result =
@@ -490,30 +516,53 @@ impl SingleHashAggregateStream {
             }
             Poll::Ready(Some(Err(e))) => Self::break_with_err(e),
             Poll::Ready(None) => {
-                self.close_input();
-                match spill_context {
-                    Some(spill_context) if spill_context.has_spills() => {
-                        ControlFlow::Continue(
-                            SingleHashAggregateState::PreparingMergeInput {
-                                hash_table,
-                                spill_context,
-                            },
-                        )
-                    }
-                    _ => {
-                        let elapsed_compute =
-                            self.baseline_metrics.elapsed_compute().clone();
-                        let timer = elapsed_compute.timer();
-                        let result = hash_table.start_output();
-                        timer.done();
+                self.close_input_and_prepare_output(hash_table, spill_context)
+            }
+        }
+    }
 
-                        match result {
-                            Ok(()) => ControlFlow::Continue(
-                                SingleHashAggregateState::ProducingOutput { hash_table },
-                            ),
-                            Err(e) => Self::break_with_err(e),
-                        }
+    /// See comments in [`Self::group_values_soft_limit`] for details.
+    fn hit_soft_group_limit(
+        &self,
+        hash_table: &AggregateHashTable<SingleMarker>,
+    ) -> bool {
+        self.group_values_soft_limit
+            .is_some_and(|limit| limit <= hash_table.building_group_count())
+    }
+
+    /// Stops consuming input and prepares the next execution phase.
+    /// Called when the input is exhausted or the distinct soft limit is reached.
+    ///
+    /// If data has been spilled, transitions to `PreparingMergeInput` so the
+    /// spilled and in-memory groups can be merged before output. Otherwise,
+    /// starts output from the in-memory hash table and transitions to
+    /// `ProducingOutput`.
+    fn close_input_and_prepare_output(
+        &mut self,
+        mut hash_table: AggregateHashTable<SingleMarker>,
+        spill_context: Option<Box<SingleSpillContext>>,
+    ) -> SingleHashAggregateStateTransition {
+        self.close_input();
+        match spill_context {
+            Some(spill_context) if spill_context.has_spills() => {
+                ControlFlow::Continue(SingleHashAggregateState::PreparingMergeInput {
+                    hash_table,
+                    spill_context,
+                })
+            }
+            _ => {
+                let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
+                let timer = elapsed_compute.timer();
+                let result = hash_table.start_output();
+                timer.done();
+
+                match result {
+                    Ok(()) => {
+                        ControlFlow::Continue(SingleHashAggregateState::ProducingOutput {
+                            hash_table,
+                        })
                     }
+                    Err(e) => Self::break_with_err(e),
                 }
             }
         }
