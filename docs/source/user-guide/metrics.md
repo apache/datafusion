@@ -159,11 +159,15 @@ use the `agg_expr_{index}_internal_{subphase}_time` naming and `aggregate`
 label. The `internal` segment keeps them separate from call-boundary timers;
 `subphase` is a stable identifier owned and documented by the aggregate
 implementation. They are registered lazily only when an aggregate requests
-them, so aggregates without internal submetrics add no metrics. For example,
-`array_agg(DISTINCT ...)` records the time spent deduplicating input values as
-`agg_expr_{index}_internal_distinct_time`. These submetrics complement the
-`update`, `merge`, `state`, and `evaluate` timers rather than subdividing or
-replacing them.
+them, so aggregates without internal submetrics add no metrics. Registration
+is per `(aggregate expression index, subphase, partition)`: replacement
+accumulators in that partition share the same time, and normal metric display
+combines that time across partitions. An aggregate may request its submetric
+during accumulator construction, so it can appear even when its input is empty.
+For example, `array_agg(DISTINCT ...)` records the time spent deduplicating
+input values as `agg_expr_{index}_internal_distinct_time`. These submetrics
+complement the `update`, `merge`, `state`, and `evaluate` timers rather than
+subdividing or replacing them.
 
 Except for the `Summary` metric `reduction_factor`, these operator-level and
 per-aggregate metrics are `Dev` metrics. They appear in `EXPLAIN ANALYZE` when
