@@ -120,6 +120,7 @@ pub async fn from_read_rel(
                 }));
             }
 
+            // Check for produce_one_row pattern
             // A VirtualTable with exactly one row containing only empty/default fields represents
             // an EmptyRelation with produce_one_row=true. This pattern is used for queries without
             // a FROM clause (e.g., "SELECT 1 AS one") where a single phantom row is needed to
@@ -138,61 +139,58 @@ pub async fn from_read_rel(
                 }));
             }
 
-            let values = {
-                let mut exprs = vec![];
-                for row in &vt.expressions {
-                    if row.fields.len() != substrait_schema.fields().len() {
-                        return substrait_err!(
-                            "Field count mismatch: expected {} fields but found {} in virtual table row",
-                            substrait_schema.fields().len(),
-                            row.fields.len()
-                        );
-                    }
-
-                    let mut row_exprs = vec![];
-                    let mut name_idx = 0;
-                    for expression in &row.fields {
-                        // Top-level names are provided through schema
-                        // Each expression consumes at least one name, and Literals may consume additional names.
-                        name_idx += 1;
-                        let expr = match expression.rex_type.as_ref() {
-                            Some(substrait::proto::expression::RexType::Literal(lit)) => {
-                                // Values literals need 'named_struct.names' so nested struct fields keep their names from the ReadRel base schema.
-                                // This is important for nested struct fields to retain their names.
-                                Expr::Literal(
-                                    from_substrait_literal(
-                                        consumer,
-                                        lit,
-                                        &named_struct.names,
-                                        &mut name_idx,
-                                    )?,
-                                    None,
-                                )
-                            }
-                            _ => {
-                                consumer
-                                    .consume_expression(expression, &substrait_schema)
-                                    .await?
-                            }
-                        };
-                        row_exprs.push(expr);
-                    }
-
-                    if name_idx != named_struct.names.len() {
-                        return substrait_err!(
-                            "Names list must match exactly to nested schema, but found {} uses for {} names",
-                            name_idx,
-                            named_struct.names.len()
-                        );
-                    }
-                    exprs.push(row_exprs);
+            let mut rows = vec![];
+            for row in &vt.expressions {
+                if row.fields.len() != substrait_schema.fields().len() {
+                    return substrait_err!(
+                        "Field count mismatch: expected {} fields but found {} in virtual table row",
+                        substrait_schema.fields().len(),
+                        row.fields.len()
+                    );
                 }
-                exprs
-            };
+
+                let mut row_exprs = vec![];
+                let mut name_idx = 0;
+                for expression in &row.fields {
+                    // Top-level names are provided through schema
+                    // Each expression consumes at least one name, and Literals may consume additional names.
+                    name_idx += 1;
+                    let expr = match expression.rex_type.as_ref() {
+                        Some(substrait::proto::expression::RexType::Literal(lit)) => {
+                            // Literal expressions need 'named_struct.names' so nested struct fields
+                            // keep their names from the ReadRel base schema.
+                            Expr::Literal(
+                                from_substrait_literal(
+                                    consumer,
+                                    lit,
+                                    &named_struct.names,
+                                    &mut name_idx,
+                                )?,
+                                None,
+                            )
+                        }
+                        _ => {
+                            consumer
+                                .consume_expression(expression, &substrait_schema)
+                                .await?
+                        }
+                    };
+                    row_exprs.push(expr);
+                }
+
+                if name_idx != named_struct.names.len() {
+                    return substrait_err!(
+                        "Names list must match exactly to nested schema, but found {} uses for {} names",
+                        name_idx,
+                        named_struct.names.len()
+                    );
+                }
+                rows.push(row_exprs);
+            }
 
             Ok(LogicalPlan::Values(Values {
                 schema: DFSchemaRef::new(substrait_schema),
-                values,
+                values: rows,
             }))
         }
         Some(ReadType::LocalFiles(lf)) => {

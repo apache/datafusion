@@ -22,10 +22,12 @@ mod bytes;
 pub mod bytes_view;
 mod dictionary;
 mod fixed_size_binary;
+mod list;
 pub mod primitive;
 pub mod row_backed;
 
 use std::mem::{self, size_of};
+use std::sync::Arc;
 
 use crate::aggregates::group_values::GroupValues;
 use crate::aggregates::group_values::multi_group_by::{
@@ -914,15 +916,18 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
 /// `$nullable`: whether the input can contains nulls
 /// `$t`: the primitive type of the builder
 macro_rules! instantiate_primitive {
-    ($v:expr, $nullable:expr, $t:ty, $data_type:ident) => {
-        if $nullable {
-            let b = PrimitiveGroupValueBuilder::<$t, true>::new($data_type.to_owned());
-            $v.push(Box::new(b) as _)
+    ($nullable:expr, $t:ty, $data_type:ident) => {{
+        let builder: Box<dyn GroupColumn> = if $nullable {
+            Box::new(PrimitiveGroupValueBuilder::<$t, true>::new(
+                $data_type.to_owned(),
+            ))
         } else {
-            let b = PrimitiveGroupValueBuilder::<$t, false>::new($data_type.to_owned());
-            $v.push(Box::new(b) as _)
-        }
-    };
+            Box::new(PrimitiveGroupValueBuilder::<$t, false>::new(
+                $data_type.to_owned(),
+            ))
+        };
+        Some(builder)
+    }};
 }
 
 /// Returns true if the specified data type has a specialized
@@ -934,17 +939,7 @@ macro_rules! instantiate_primitive {
 /// builder for. The `group_column_supported_type_matches_make_group_column`
 /// test below pins this biconditional.
 fn group_column_supported_type(data_type: &DataType) -> bool {
-    // Nested types (Struct / List / LargeList / FixedSizeList, recursively) have
-    // no type-specialized `GroupColumn`; they are handled by the generic
-    // row-backed fallback in `make_group_column` whenever arrow's row format can
-    // encode them. Gate the fallback to nested types so intentionally-excluded
-    // scalar types (e.g. Float16, Decimal256) stay on `GroupValuesRows` and the
-    // `group_column_supported_type` ⇔ `make_group_column` invariant holds.
-    if data_type.is_nested() {
-        return RowsGroupColumn::supports_type(data_type);
-    }
-    matches!(
-        *data_type,
+    match data_type {
         DataType::Int8
             | DataType::Int16
             | DataType::Int32
@@ -983,8 +978,19 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
             | DataType::Interval(_)
             | DataType::Utf8View
             | DataType::BinaryView
-            | DataType::Boolean
-    ) || matches!(data_type, DataType::Dictionary(_,v ) if group_column_supported_type(v))
+            | DataType::Boolean => true,
+        DataType::List(child_field) | DataType::LargeList(child_field)
+            if group_column_supported_type(child_field.data_type()) => true,
+        DataType::Dictionary(_, v) if group_column_supported_type(v) => true,
+        // Nested types (Struct / List / LargeList / FixedSizeList, recursively)
+        // that have no type-specialized `GroupColumn` as per the above are handled by the generic
+        // row-backed fallback in `make_group_column` whenever arrow's row format can
+        // encode them. Gate the fallback to nested types so intentionally-excluded
+        // scalar types (e.g. Float16, Decimal256) stay on `GroupValuesRows` and the
+        // `group_column_supported_type` ⇔ `make_group_column` invariant holds.
+        dt if dt.is_nested() => RowsGroupColumn::supports_type(dt),
+        _ => false,
+    }
 }
 
 /// Build a [`GroupColumn`] for a single schema field.
@@ -1005,136 +1011,136 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
 fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
     let nullable = field.is_nullable();
     let data_type = field.data_type();
-    let mut v: Vec<Box<dyn GroupColumn>> = Vec::with_capacity(1);
-    match *data_type {
-        DataType::Int8 => instantiate_primitive!(v, nullable, Int8Type, data_type),
-        DataType::Int16 => instantiate_primitive!(v, nullable, Int16Type, data_type),
-        DataType::Int32 => instantiate_primitive!(v, nullable, Int32Type, data_type),
-        DataType::Int64 => instantiate_primitive!(v, nullable, Int64Type, data_type),
-        DataType::UInt8 => instantiate_primitive!(v, nullable, UInt8Type, data_type),
-        DataType::UInt16 => instantiate_primitive!(v, nullable, UInt16Type, data_type),
-        DataType::UInt32 => instantiate_primitive!(v, nullable, UInt32Type, data_type),
-        DataType::UInt64 => instantiate_primitive!(v, nullable, UInt64Type, data_type),
-        DataType::Float16 => {
-            instantiate_primitive!(v, nullable, Float16Type, data_type)
-        }
-        DataType::Float32 => {
-            instantiate_primitive!(v, nullable, Float32Type, data_type)
-        }
-        DataType::Float64 => {
-            instantiate_primitive!(v, nullable, Float64Type, data_type)
-        }
-        DataType::Date32 => instantiate_primitive!(v, nullable, Date32Type, data_type),
-        DataType::Date64 => instantiate_primitive!(v, nullable, Date64Type, data_type),
+    let builder: Option<Box<dyn GroupColumn>> = match data_type {
+        DataType::Int8 => instantiate_primitive!(nullable, Int8Type, data_type),
+        DataType::Int16 => instantiate_primitive!(nullable, Int16Type, data_type),
+        DataType::Int32 => instantiate_primitive!(nullable, Int32Type, data_type),
+        DataType::Int64 => instantiate_primitive!(nullable, Int64Type, data_type),
+        DataType::UInt8 => instantiate_primitive!(nullable, UInt8Type, data_type),
+        DataType::UInt16 => instantiate_primitive!(nullable, UInt16Type, data_type),
+        DataType::UInt32 => instantiate_primitive!(nullable, UInt32Type, data_type),
+        DataType::UInt64 => instantiate_primitive!(nullable, UInt64Type, data_type),
+        DataType::Float16 => instantiate_primitive!(nullable, Float16Type, data_type),
+        DataType::Float32 => instantiate_primitive!(nullable, Float32Type, data_type),
+        DataType::Float64 => instantiate_primitive!(nullable, Float64Type, data_type),
+        DataType::Date32 => instantiate_primitive!(nullable, Date32Type, data_type),
+        DataType::Date64 => instantiate_primitive!(nullable, Date64Type, data_type),
         DataType::Time32(t) => match t {
             TimeUnit::Second => {
-                instantiate_primitive!(v, nullable, Time32SecondType, data_type)
+                instantiate_primitive!(nullable, Time32SecondType, data_type)
             }
             TimeUnit::Millisecond => {
-                instantiate_primitive!(v, nullable, Time32MillisecondType, data_type)
+                instantiate_primitive!(nullable, Time32MillisecondType, data_type)
             }
             // Time32 with Microsecond / Nanosecond is not a valid Arrow type
             // combination; reject explicitly so group_column_supported_type
             // and this dispatcher stay in lockstep (see consistency fuzz below).
-            _ => return not_impl_err!("{data_type} not supported in GroupValuesColumn"),
+            _ => None,
         },
         DataType::Time64(t) => match t {
             TimeUnit::Microsecond => {
-                instantiate_primitive!(v, nullable, Time64MicrosecondType, data_type)
+                instantiate_primitive!(nullable, Time64MicrosecondType, data_type)
             }
             TimeUnit::Nanosecond => {
-                instantiate_primitive!(v, nullable, Time64NanosecondType, data_type)
+                instantiate_primitive!(nullable, Time64NanosecondType, data_type)
             }
             // Time64 with Second / Millisecond is not a valid Arrow type
             // combination; reject explicitly.
-            _ => return not_impl_err!("{data_type} not supported in GroupValuesColumn"),
+            _ => None,
         },
         DataType::Timestamp(t, _) => match t {
             TimeUnit::Second => {
-                instantiate_primitive!(v, nullable, TimestampSecondType, data_type)
+                instantiate_primitive!(nullable, TimestampSecondType, data_type)
             }
             TimeUnit::Millisecond => {
-                instantiate_primitive!(v, nullable, TimestampMillisecondType, data_type)
+                instantiate_primitive!(nullable, TimestampMillisecondType, data_type)
             }
             TimeUnit::Microsecond => {
-                instantiate_primitive!(v, nullable, TimestampMicrosecondType, data_type)
+                instantiate_primitive!(nullable, TimestampMicrosecondType, data_type)
             }
             TimeUnit::Nanosecond => {
-                instantiate_primitive!(v, nullable, TimestampNanosecondType, data_type)
+                instantiate_primitive!(nullable, TimestampNanosecondType, data_type)
             }
         },
         DataType::Duration(t) => match t {
             TimeUnit::Second => {
-                instantiate_primitive!(v, nullable, DurationSecondType, data_type)
+                instantiate_primitive!(nullable, DurationSecondType, data_type)
             }
             TimeUnit::Millisecond => {
-                instantiate_primitive!(v, nullable, DurationMillisecondType, data_type)
+                instantiate_primitive!(nullable, DurationMillisecondType, data_type)
             }
             TimeUnit::Microsecond => {
-                instantiate_primitive!(v, nullable, DurationMicrosecondType, data_type)
+                instantiate_primitive!(nullable, DurationMicrosecondType, data_type)
             }
             TimeUnit::Nanosecond => {
-                instantiate_primitive!(v, nullable, DurationNanosecondType, data_type)
+                instantiate_primitive!(nullable, DurationNanosecondType, data_type)
             }
         },
         // `IntervalUnit` has exactly three variants, so this match is exhaustive
         // with no fallback arm (unlike Time32 / Time64).
         DataType::Interval(u) => match u {
             IntervalUnit::YearMonth => {
-                instantiate_primitive!(v, nullable, IntervalYearMonthType, data_type)
+                instantiate_primitive!(nullable, IntervalYearMonthType, data_type)
             }
             IntervalUnit::DayTime => {
-                instantiate_primitive!(v, nullable, IntervalDayTimeType, data_type)
+                instantiate_primitive!(nullable, IntervalDayTimeType, data_type)
             }
             IntervalUnit::MonthDayNano => {
-                instantiate_primitive!(v, nullable, IntervalMonthDayNanoType, data_type)
+                instantiate_primitive!(nullable, IntervalMonthDayNanoType, data_type)
             }
         },
         DataType::Decimal128(_, _) => {
-            instantiate_primitive!(v, nullable, Decimal128Type, data_type)
+            instantiate_primitive!(nullable, Decimal128Type, data_type)
         }
         DataType::Decimal256(_, _) => {
-            instantiate_primitive!(v, nullable, Decimal256Type, data_type)
+            instantiate_primitive!(nullable, Decimal256Type, data_type)
         }
-        DataType::Utf8 => {
-            v.push(Box::new(ByteGroupValueBuilder::<i32>::new(
-                OutputType::Utf8,
-            )));
-        }
-        DataType::LargeUtf8 => {
-            v.push(Box::new(ByteGroupValueBuilder::<i64>::new(
-                OutputType::Utf8,
-            )));
-        }
-        DataType::Binary => {
-            v.push(Box::new(ByteGroupValueBuilder::<i32>::new(
-                OutputType::Binary,
-            )));
-        }
-        DataType::LargeBinary => {
-            v.push(Box::new(ByteGroupValueBuilder::<i64>::new(
-                OutputType::Binary,
-            )));
-        }
+        DataType::Utf8 => Some(Box::new(ByteGroupValueBuilder::<i32>::new(
+            OutputType::Utf8,
+        ))),
+        DataType::LargeUtf8 => Some(Box::new(ByteGroupValueBuilder::<i64>::new(
+            OutputType::Utf8,
+        ))),
+        DataType::Binary => Some(Box::new(ByteGroupValueBuilder::<i32>::new(
+            OutputType::Binary,
+        ))),
+        DataType::LargeBinary => Some(Box::new(ByteGroupValueBuilder::<i64>::new(
+            OutputType::Binary,
+        ))),
         // A negative width is not a valid Arrow type; it falls to the `_`
         // arm below, matching `group_column_supported_type`.
         DataType::FixedSizeBinary(byte_width @ 0..) => {
-            v.push(Box::new(FixedSizeBinaryGroupValueBuilder::new(byte_width)));
+            Some(Box::new(FixedSizeBinaryGroupValueBuilder::new(*byte_width)))
         }
         DataType::Utf8View => {
-            v.push(Box::new(ByteViewGroupValueBuilder::<StringViewType>::new()));
+            Some(Box::new(ByteViewGroupValueBuilder::<StringViewType>::new()))
         }
         DataType::BinaryView => {
-            v.push(Box::new(ByteViewGroupValueBuilder::<BinaryViewType>::new()));
+            Some(Box::new(ByteViewGroupValueBuilder::<BinaryViewType>::new()))
         }
         DataType::Boolean => {
             if nullable {
-                v.push(Box::new(BooleanGroupValueBuilder::<true>::new()));
+                Some(Box::new(BooleanGroupValueBuilder::<true>::new()))
             } else {
-                v.push(Box::new(BooleanGroupValueBuilder::<false>::new()));
+                Some(Box::new(BooleanGroupValueBuilder::<false>::new()))
             }
         }
-        DataType::Dictionary(ref key_dt, ref value_dt) => {
+        DataType::List(child_field) => match make_group_column(child_field.as_ref()) {
+            Ok(child) => Some(Box::new(list::ListGroupValueBuilder::<i32>::new(
+                Arc::clone(child_field),
+                child,
+            ))),
+            Err(_) => None,
+        },
+        DataType::LargeList(child_field) => match make_group_column(child_field.as_ref())
+        {
+            Ok(child) => Some(Box::new(list::ListGroupValueBuilder::<i64>::new(
+                Arc::clone(child_field),
+                child,
+            ))),
+            Err(_) => None,
+        },
+        DataType::Dictionary(key_dt, value_dt) => {
             let new_field = Field::new("", *value_dt.clone(), true);
             let inner = make_group_column(&new_field)?;
             macro_rules! dict_col {
@@ -1159,24 +1165,22 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
                     );
                 }
             };
-            v.push(col)
+            Some(col)
         }
+        _ => None,
+    };
+    match builder {
+        Some(b) => Ok(b),
         // Generic fallback for nested types (Struct / List / LargeList /
         // FixedSizeList, recursively) that lack a type-specialized builder but
         // can be encoded by arrow's row format. This is what lets a mixed
         // schema keep the column-wise fast path for its native columns instead
         // of dropping the whole key onto `GroupValuesRows`.
-        ref dt if dt.is_nested() && RowsGroupColumn::supports_type(dt) => {
-            v.push(Box::new(RowsGroupColumn::try_new(dt.clone())?));
+        None if data_type.is_nested() && RowsGroupColumn::supports_type(data_type) => {
+            Ok(Box::new(RowsGroupColumn::try_new(data_type.clone())?))
         }
-        _ => return not_impl_err!("{data_type} not supported in GroupValuesColumn"),
+        None => not_impl_err!("{data_type} not supported in GroupValuesColumn"),
     }
-    debug_assert_eq!(
-        v.len(),
-        1,
-        "make_group_column must push exactly one builder"
-    );
-    Ok(v.into_iter().next().unwrap())
 }
 
 impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
@@ -1656,6 +1660,24 @@ mod tests {
     /// it should be added to unsupported_cases.
     #[test]
     fn group_column_supported_type_matches_make_group_column() {
+        let utf8 = || Field::new("v", DataType::Utf8, true);
+        let int32 = || Field::new("v", DataType::Int32, true);
+        let f16 = || Field::new("v", DataType::Float16, true);
+        // A leaf that neither has a specialized `GroupColumn` nor is accepted
+        // by the row-backed fallback (`RowsGroupColumn::supports_type` rejects
+        // `RunEndEncoded` anywhere in the subtree), so nesting it keeps the
+        // whole type unsupported.
+        let ree = || {
+            Field::new(
+                "v",
+                DataType::RunEndEncoded(
+                    Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                    Arc::new(Field::new("values", DataType::Int64, true)),
+                ),
+                true,
+            )
+        };
+
         let supported_cases: Vec<DataType> = vec![
             DataType::Int8,
             DataType::Int64,
@@ -1689,6 +1711,17 @@ mod tests {
             DataType::Interval(arrow::datatypes::IntervalUnit::YearMonth),
             DataType::Interval(arrow::datatypes::IntervalUnit::DayTime),
             DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano),
+            // Nested
+            DataType::List(Arc::new(int32())),
+            DataType::LargeList(Arc::new(int32())),
+            DataType::List(Arc::new(f16())),
+            DataType::LargeList(Arc::new(f16())),
+            DataType::List(Arc::new(utf8())),
+            DataType::List(Arc::new(Field::new(
+                "v",
+                DataType::List(Arc::new(int32())),
+                true,
+            ))),
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int64)),
             DataType::Dictionary(
@@ -1710,6 +1743,8 @@ mod tests {
                 group_column_supported_type(dt),
                 "expected group_column_supported_type=true for {dt:?}"
             );
+            // Building a top-level Field and feeding it through the factory
+            // must succeed for every supported case.
             let field = Field::new("col", dt.clone(), true);
             make_group_column(&field).unwrap_or_else(|e| {
                 panic!(
@@ -1729,6 +1764,15 @@ mod tests {
             DataType::Time64(arrow::datatypes::TimeUnit::Millisecond),
             DataType::Time32(arrow::datatypes::TimeUnit::Microsecond),
             DataType::Time32(arrow::datatypes::TimeUnit::Nanosecond),
+            // Nested with an unsupported leaf
+            DataType::List(Arc::new(ree())),
+            DataType::LargeList(Arc::new(ree())),
+            // Deeply nested unsupported
+            DataType::List(Arc::new(Field::new(
+                "v",
+                DataType::List(Arc::new(ree())),
+                true,
+            ))),
             // A negative width is representable in the DataType but is not
             // a valid Arrow type; no array can be constructed for it.
             DataType::FixedSizeBinary(-5),

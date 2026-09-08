@@ -34,7 +34,6 @@ use crate::variation_const::{FLOAT_16_TYPE_NAME, NULL_TYPE_NAME};
 use datafusion::arrow::datatypes::{
     DataType, Field, FieldRef, Fields, IntervalUnit, Schema,
 };
-use datafusion::common::datatype::DataTypeExt;
 use datafusion::common::{
     DFSchema, not_impl_err, substrait_datafusion_err, substrait_err,
 };
@@ -45,7 +44,8 @@ pub(crate) fn field_from_substrait_type_without_names(
     consumer: &impl SubstraitConsumer,
     dt: &Type,
 ) -> datafusion::common::Result<FieldRef> {
-    Ok(from_substrait_type_without_names(consumer, dt)?.into_nullable_field_ref())
+    let field = substrait_type_to_field(consumer, dt, &[], &mut 0)?;
+    Ok(Arc::new(field))
 }
 
 pub(crate) fn from_substrait_type_without_names(
@@ -62,7 +62,32 @@ pub fn field_from_substrait_type(
     name_idx: &mut usize,
 ) -> datafusion::common::Result<FieldRef> {
     // We could add nullability here now that we are returning a Field
-    Ok(from_substrait_type(consumer, dt, dfs_names, name_idx)?.into_nullable_field_ref())
+    let field = substrait_type_to_field(consumer, dt, dfs_names, name_idx)?;
+    Ok(Arc::new(field))
+}
+
+/// Converts a Substrait type to an Arrow [`Field`] and attaches the metadata
+/// that [`SubstraitConsumer::consume_type_metadata`] supplies for it.
+///
+/// This is the only place that attaches type metadata. Every Arrow field built
+/// from a Substrait type goes through here, including the fields of a nested
+/// list, map, or struct, so a nested type keeps its metadata without each call
+/// site having to ask for it.
+///
+/// The field is named `""` and is nullable. Callers set the name and the
+/// nullability that they need.
+pub(crate) fn substrait_type_to_field(
+    consumer: &impl SubstraitConsumer,
+    dt: &Type,
+    dfs_names: &[String],
+    name_idx: &mut usize,
+) -> datafusion::common::Result<Field> {
+    let data_type = from_substrait_type(consumer, dt, dfs_names, name_idx)?;
+    let field = Field::new("", data_type, true);
+    match consumer.consume_type_metadata(dt)? {
+        Some(metadata) => Ok(field.with_metadata(metadata)),
+        None => Ok(field),
+    }
 }
 
 pub fn from_substrait_type(
@@ -153,12 +178,13 @@ pub fn from_substrait_type(
                 let inner_type = list.r#type.as_ref().ok_or_else(|| {
                     substrait_datafusion_err!("List type must have inner type")
                 })?;
-                let field = Arc::new(Field::new_list_field(
-                    from_substrait_type(consumer, inner_type, dfs_names, name_idx)?,
-                    // We ignore Substrait's nullability here to match to_substrait_literal
-                    // which always creates nullable lists
-                    true,
-                ));
+                // `substrait_type_to_field` always returns a nullable field, so
+                // we ignore Substrait's nullability here to match
+                // to_substrait_literal, which always creates nullable lists
+                let field = Arc::new(
+                    substrait_type_to_field(consumer, inner_type, dfs_names, name_idx)?
+                        .with_name(Field::LIST_FIELD_DEFAULT_NAME),
+                );
                 match list.type_variation_reference {
                     DEFAULT_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::List(field)),
                     LARGE_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::LargeList(field)),
@@ -174,15 +200,16 @@ pub fn from_substrait_type(
                 let value_type = map.value.as_ref().ok_or_else(|| {
                     substrait_datafusion_err!("Map type must have value type")
                 })?;
-                let key_type =
-                    from_substrait_type(consumer, key_type, dfs_names, name_idx)?;
-                let value_type =
-                    from_substrait_type(consumer, value_type, dfs_names, name_idx)?;
+                let key_field =
+                    substrait_type_to_field(consumer, key_type, dfs_names, name_idx)?;
+                let value_field =
+                    substrait_type_to_field(consumer, value_type, dfs_names, name_idx)?;
 
                 match map.type_variation_reference {
                     DEFAULT_MAP_TYPE_VARIATION_REF => {
-                        let key_field = Arc::new(Field::new("key", key_type, false));
-                        let value_field = Arc::new(Field::new("value", value_type, true));
+                        let key_field =
+                            Arc::new(key_field.with_name("key").with_nullable(false));
+                        let value_field = Arc::new(value_field.with_name("value"));
                         Ok(DataType::Map(
                             Arc::new(Field::new_struct(
                                 "entries",
@@ -192,9 +219,11 @@ pub fn from_substrait_type(
                             false, // whether keys are sorted
                         ))
                     }
+                    // A Dictionary holds bare data types, so it cannot carry the
+                    // metadata of its key and value types.
                     DICTIONARY_MAP_TYPE_VARIATION_REF => Ok(DataType::Dictionary(
-                        Box::new(key_type),
-                        Box::new(value_type),
+                        Box::new(key_field.data_type().clone()),
+                        Box::new(value_field.data_type().clone()),
                     )),
                     v => not_impl_err!(
                         "Unsupported Substrait type variation {v} of type {s_kind:?}"
@@ -324,8 +353,9 @@ fn from_substrait_struct_type(
     let mut fields = vec![];
     for (i, f) in s.types.iter().enumerate() {
         let name = next_struct_field_name(i, dfs_names, name_idx)?;
-        let data_type = from_substrait_type(consumer, f, dfs_names, name_idx)?;
-        let field = Field::new(name, data_type, type_is_nullable(f)?);
+        let field = substrait_type_to_field(consumer, f, dfs_names, name_idx)?
+            .with_name(name)
+            .with_nullable(type_is_nullable(f)?);
         fields.push(field);
     }
     Ok(fields.into())
@@ -381,6 +411,215 @@ fn is_nullable(nullability: i32) -> datafusion::common::Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extensions::Extensions;
+    use crate::logical_plan::consumer::DefaultSubstraitConsumer;
+    use async_trait::async_trait;
+    use datafusion::catalog::TableProvider;
+    use datafusion::common::TableReference;
+    use datafusion::execution::{FunctionRegistry, SessionState, SessionStateBuilder};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use substrait::proto::r#type::Kind;
+
+    /// Wraps [DefaultSubstraitConsumer], overriding `consume_user_defined_type`
+    /// (so a `UserDefined` type resolves instead of erroring) and
+    /// `consume_type_metadata`, which returns the fixed metadata below for a
+    /// user-defined type and nothing for every other type.
+    struct MetadataConsumer<'a> {
+        inner: DefaultSubstraitConsumer<'a>,
+        metadata: Option<HashMap<String, String>>,
+    }
+
+    #[async_trait]
+    impl SubstraitConsumer for MetadataConsumer<'_> {
+        async fn resolve_table_ref(
+            &self,
+            table_ref: &TableReference,
+        ) -> datafusion::common::Result<Option<Arc<dyn TableProvider>>> {
+            self.inner.resolve_table_ref(table_ref).await
+        }
+
+        fn get_extensions(&self) -> &Extensions {
+            self.inner.get_extensions()
+        }
+
+        fn get_function_registry(&self) -> &impl FunctionRegistry {
+            self.inner.get_function_registry()
+        }
+
+        fn consume_user_defined_type(
+            &self,
+            _user_defined_type: &r#type::UserDefined,
+        ) -> datafusion::common::Result<DataType> {
+            Ok(DataType::Utf8)
+        }
+
+        fn consume_type_metadata(
+            &self,
+            typ: &Type,
+        ) -> datafusion::common::Result<Option<HashMap<String, String>>> {
+            match typ.kind {
+                Some(Kind::UserDefined(_)) => Ok(self.metadata.clone()),
+                _ => Ok(None),
+            }
+        }
+    }
+
+    fn user_defined_type() -> Type {
+        Type {
+            kind: Some(Kind::UserDefined(r#type::UserDefined {
+                type_reference: 0,
+                type_variation_reference: 0,
+                nullability: r#type::Nullability::Nullable as i32,
+                type_parameters: vec![],
+            })),
+        }
+    }
+
+    fn user_defined_struct_type() -> r#type::Struct {
+        r#type::Struct {
+            types: vec![user_defined_type()],
+            type_variation_reference: 0,
+            nullability: r#type::Nullability::Nullable as i32,
+        }
+    }
+
+    fn test_metadata() -> HashMap<String, String> {
+        HashMap::from([("user-defined-type".to_string(), "json".to_string())])
+    }
+
+    fn consumer_with_metadata(
+        metadata: Option<HashMap<String, String>>,
+    ) -> MetadataConsumer<'static> {
+        let extensions: &'static Extensions = Box::leak(Box::new(Extensions::default()));
+        let session_state: &'static SessionState =
+            Box::leak(Box::new(SessionStateBuilder::new().build()));
+        MetadataConsumer {
+            inner: DefaultSubstraitConsumer::new(extensions, session_state),
+            metadata,
+        }
+    }
+
+    #[test]
+    fn struct_field_gets_consumer_supplied_metadata_for_user_defined_type() {
+        let metadata = test_metadata();
+        let consumer = consumer_with_metadata(Some(metadata.clone()));
+
+        let fields = from_substrait_struct_type(
+            &consumer,
+            &user_defined_struct_type(),
+            &["col".to_string()],
+            &mut 0,
+        )
+        .unwrap();
+
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].name(), "col");
+        assert_eq!(fields[0].data_type(), &DataType::Utf8);
+        assert_eq!(fields[0].metadata(), &metadata);
+    }
+
+    #[test]
+    fn top_level_field_gets_consumer_supplied_metadata() {
+        let metadata = test_metadata();
+        let consumer = consumer_with_metadata(Some(metadata.clone()));
+
+        let field =
+            field_from_substrait_type_without_names(&consumer, &user_defined_type())
+                .unwrap();
+
+        assert_eq!(field.data_type(), &DataType::Utf8);
+        assert_eq!(field.metadata(), &metadata);
+    }
+
+    #[test]
+    fn named_top_level_field_gets_consumer_supplied_metadata() {
+        // Covers `field_from_substrait_type`, the public entry point that
+        // threads `dfs_names`/`name_idx` through, as opposed to the
+        // `_without_names` variant used by the tests above.
+        let metadata = test_metadata();
+        let consumer = consumer_with_metadata(Some(metadata.clone()));
+
+        let field = field_from_substrait_type(
+            &consumer,
+            &user_defined_type(),
+            &["col".to_string()],
+            &mut 0,
+        )
+        .unwrap();
+
+        assert_eq!(field.data_type(), &DataType::Utf8);
+        assert_eq!(field.metadata(), &metadata);
+    }
+
+    #[test]
+    fn list_element_field_gets_metadata_for_a_nested_user_defined_type() {
+        let metadata = test_metadata();
+        let consumer = consumer_with_metadata(Some(metadata.clone()));
+        let list = Type {
+            kind: Some(Kind::List(Box::new(r#type::List {
+                r#type: Some(Box::new(user_defined_type())),
+                type_variation_reference: DEFAULT_CONTAINER_TYPE_VARIATION_REF,
+                nullability: r#type::Nullability::Nullable as i32,
+            }))),
+        };
+
+        let field = field_from_substrait_type_without_names(&consumer, &list).unwrap();
+
+        let DataType::List(element) = field.data_type() else {
+            panic!("expected a List, got {:?}", field.data_type());
+        };
+        assert_eq!(element.name(), Field::LIST_FIELD_DEFAULT_NAME);
+        assert!(element.is_nullable());
+        assert_eq!(element.metadata(), &metadata);
+        // The list itself is not a user-defined type, so it carries no metadata.
+        assert!(field.metadata().is_empty());
+    }
+
+    #[test]
+    fn map_key_and_value_fields_get_metadata_for_a_nested_user_defined_type() {
+        let metadata = test_metadata();
+        let consumer = consumer_with_metadata(Some(metadata.clone()));
+        let map = Type {
+            kind: Some(Kind::Map(Box::new(r#type::Map {
+                key: Some(Box::new(user_defined_type())),
+                value: Some(Box::new(user_defined_type())),
+                type_variation_reference: DEFAULT_MAP_TYPE_VARIATION_REF,
+                nullability: r#type::Nullability::Nullable as i32,
+            }))),
+        };
+
+        let field = field_from_substrait_type_without_names(&consumer, &map).unwrap();
+
+        let DataType::Map(entries, _) = field.data_type() else {
+            panic!("expected a Map, got {:?}", field.data_type());
+        };
+        let DataType::Struct(entry_fields) = entries.data_type() else {
+            panic!("expected map entries to be a Struct");
+        };
+        assert_eq!(entry_fields[0].name(), "key");
+        assert!(!entry_fields[0].is_nullable());
+        assert_eq!(entry_fields[0].metadata(), &metadata);
+        assert_eq!(entry_fields[1].name(), "value");
+        assert!(entry_fields[1].is_nullable());
+        assert_eq!(entry_fields[1].metadata(), &metadata);
+    }
+
+    #[test]
+    fn struct_field_has_no_metadata_when_consumer_returns_none() {
+        let consumer = consumer_with_metadata(None);
+
+        let fields = from_substrait_struct_type(
+            &consumer,
+            &user_defined_struct_type(),
+            &["col".to_string()],
+            &mut 0,
+        )
+        .unwrap();
+
+        assert_eq!(fields.len(), 1);
+        assert!(fields[0].metadata().is_empty());
+    }
 
     #[test]
     fn type_is_nullable_missing_kind_defaults_to_nullable() {

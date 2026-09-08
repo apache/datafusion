@@ -59,6 +59,7 @@ insta = { workspace = true }
 default = ["physical"]
 physical = ["datafusion/parquet"]
 protoc = ["substrait/protoc"]
+protox = ["substrait/protox"]
 
 [package.metadata.docs.rs]
 # Use default features ("physical") for docs, plus "protoc". "protoc" is needed

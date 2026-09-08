@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -27,19 +28,48 @@ use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 use datafusion_physical_plan::ColumnarValue;
 
-/// Tests whether a sorted string domain intersects an inclusive statistics interval.
+/// Which `IN` form a sorted string domain is pruning for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum SetMembership {
+    /// `col IN (...)`. A row matches only where the domain intersects the
+    /// interval, so a disjoint interval excludes every row.
+    In,
+    /// `col NOT IN (...)`. Overlap proves nothing here: values outside the
+    /// domain still satisfy the predicate. An interval excludes every row only
+    /// when it holds a single value that the domain contains.
+    NotIn,
+}
+
+impl SetMembership {
+    fn compare_values(self, left: &[u8], right: &[u8]) -> Ordering {
+        match self {
+            // IN uses this order for interval searches.
+            Self::In => left.cmp(right),
+            // NOT IN only needs exact membership. Reject impossible lengths
+            // before comparing bytes that may have a long common prefix.
+            Self::NotIn => left.len().cmp(&right.len()).then_with(|| left.cmp(right)),
+        }
+    }
+}
+
+/// Tests an inclusive statistics interval against a sorted string domain.
 ///
 /// [`PhysicalExpr::evaluate`] returns one nullable Boolean per min/max interval:
-/// * `true`: the interval intersects the domain, so matching rows may exist.
-/// * `false`: the available bounds prove the interval disjoint from the domain.
+/// * `true`: matching rows may exist, so the container must be read.
+/// * `false`: the available bounds prove no row can match.
 /// * `NULL`: incomplete, invalid, or unusable bounds prevent a safe decision.
 ///
-/// A single known bound can still prove disjointness. Otherwise, unknown results
-/// keep the container eligible for reading.
+/// [`SetMembership`] selects the test. For [`SetMembership::In`] a single known
+/// bound can still prove disjointness. For [`SetMembership::NotIn`], one known
+/// bound outside the domain proves the container may match, while two equal
+/// bounds in the domain prove it cannot. This is the same reach as the per-value
+/// `min != v OR v != max` chain it replaces. Otherwise, unknown results keep the
+/// container eligible for reading.
 ///
 /// This expression is used only for pruning; the original IN remains the row filter.
 #[derive(Debug, Eq)]
 pub(crate) struct StringInListPruningExpr {
+    membership: SetMembership,
     min: PhysicalExprRef,
     max: PhysicalExprRef,
     values: Arc<[String]>,
@@ -47,28 +77,45 @@ pub(crate) struct StringInListPruningExpr {
 
 impl StringInListPruningExpr {
     pub(crate) fn new(
+        membership: SetMembership,
         min: PhysicalExprRef,
         max: PhysicalExprRef,
         mut values: Vec<String>,
     ) -> Self {
-        values.sort_unstable();
+        values.sort_unstable_by(|left, right| {
+            membership.compare_values(left.as_bytes(), right.as_bytes())
+        });
         values.dedup();
         Self {
+            membership,
             min,
             max,
             values: values.into(),
         }
     }
+
+    /// Does the sorted, deduplicated domain hold `value`?
+    fn contains(&self, value: &[u8]) -> bool {
+        self.values
+            .binary_search_by(|candidate| {
+                self.membership.compare_values(candidate.as_bytes(), value)
+            })
+            .is_ok()
+    }
 }
 
 impl PartialEq for StringInListPruningExpr {
     fn eq(&self, other: &Self) -> bool {
-        self.min.eq(&other.min) && self.max.eq(&other.max) && self.values == other.values
+        self.membership == other.membership
+            && self.min.eq(&other.min)
+            && self.max.eq(&other.max)
+            && self.values == other.values
     }
 }
 
 impl Hash for StringInListPruningExpr {
     fn hash<H: Hasher>(&self, state: &mut H) {
+        self.membership.hash(state);
         self.min.hash(state);
         self.max.hash(state);
         self.values.hash(state);
@@ -77,9 +124,13 @@ impl Hash for StringInListPruningExpr {
 
 impl Display for StringInListPruningExpr {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let name = match self.membership {
+            SetMembership::In => "IN_SET_INTERSECTS",
+            SetMembership::NotIn => "NOT_IN_SET_MAY_MATCH",
+        };
         write!(
             f,
-            "IN_SET_INTERSECTS({}, {}, {} values)",
+            "{name}({}, {}, {} values)",
             self.min,
             self.max,
             self.values.len()
@@ -139,6 +190,30 @@ impl PhysicalExpr for StringInListPruningExpr {
                 let max = (max.is_valid(i)
                     && max_nulls.as_ref().is_none_or(|nulls| nulls.is_valid(i)))
                 .then(|| max.value(i).as_bytes());
+                if self.membership == SetMembership::NotIn {
+                    return match (min, max) {
+                        // Check membership before comparing the bounds. NOT IN
+                        // ordering rejects different byte lengths first, avoiding
+                        // scans of long common prefixes.
+                        (Some(min), Some(max)) if self.contains(min) => {
+                            // A wider interval can hold a value outside the domain,
+                            // which satisfies NOT IN. Only an interval pinned to one
+                            // domain value rules out every row. Truncated Parquet
+                            // bounds cannot fake that: min truncates downward and max
+                            // upward, so equal bounds mean the true values were equal.
+                            Some(min != max)
+                        }
+                        (Some(_), Some(_)) => Some(true),
+                        // One known bound outside the domain is enough to preserve
+                        // the true result that lets an enclosing OR short-circuit.
+                        (Some(bound), None) | (None, Some(bound))
+                            if !self.contains(bound) =>
+                        {
+                            Some(true)
+                        }
+                        _ => None,
+                    };
+                }
                 match (min, max) {
                     (Some(min), Some(max)) => {
                         if min > max {
@@ -184,6 +259,7 @@ impl PhysicalExpr for StringInListPruningExpr {
     ) -> Result<PhysicalExprRef> {
         assert_eq_or_internal_err!(children.len(), 2);
         Ok(Arc::new(Self {
+            membership: self.membership,
             min: Arc::clone(&children[0]),
             max: Arc::clone(&children[1]),
             values: Arc::clone(&self.values),
