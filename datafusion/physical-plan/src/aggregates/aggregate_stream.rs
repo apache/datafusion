@@ -797,6 +797,103 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn aggregate_stream_merges_submetrics_across_partitions() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::UInt32, false),
+            Field::new("c", DataType::Float64, false),
+        ]));
+        let batches = [
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(UInt32Array::from(vec![1, 1, 2])),
+                    Arc::new(UInt32Array::from(vec![3, 3, 4])),
+                    Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0])),
+                ],
+            )?,
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(UInt32Array::from(vec![5, 5, 6])),
+                    Arc::new(UInt32Array::from(vec![7, 7, 8])),
+                    Arc::new(Float64Array::from(vec![4.0, 5.0, 6.0])),
+                ],
+            )?,
+        ];
+        let input = TestMemoryExec::try_new_exec(
+            &[vec![batches[0].clone()], vec![batches[1].clone()]],
+            Arc::clone(&schema),
+            None,
+        )?;
+        let aggregate = Arc::new(AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::default(),
+            vec![
+                distinct_array_aggregate(&schema, "a", "first")?,
+                distinct_array_aggregate(&schema, "b", "second")?,
+                sum_aggregate(&schema, "c", "plain")?,
+            ],
+            vec![None, None, None],
+            input,
+            schema,
+        )?);
+
+        let context = Arc::new(TaskContext::default());
+        for partition in 0..2 {
+            let _ = crate::common::collect(
+                aggregate.execute(partition, Arc::clone(&context))?,
+            )
+            .await?;
+        }
+
+        let metrics = aggregate.metrics().unwrap();
+        assert_eq!(
+            aggregate_metrics(&metrics, "internal_distinct"),
+            vec![
+                (
+                    "agg_expr_0_internal_distinct_time".to_string(),
+                    "first".to_string(),
+                ),
+                (
+                    "agg_expr_0_internal_distinct_time".to_string(),
+                    "first".to_string(),
+                ),
+                (
+                    "agg_expr_1_internal_distinct_time".to_string(),
+                    "second".to_string(),
+                ),
+                (
+                    "agg_expr_1_internal_distinct_time".to_string(),
+                    "second".to_string(),
+                ),
+            ]
+        );
+        let mut internal_partitions = metrics
+            .iter()
+            .filter(|metric| {
+                matches!(metric.value(), MetricValue::Time { name, .. } if name.ends_with("_internal_distinct_time"))
+            })
+            .map(|metric| metric.partition())
+            .collect::<Vec<_>>();
+        internal_partitions.sort_unstable();
+        assert_eq!(
+            internal_partitions,
+            vec![Some(0), Some(0), Some(1), Some(1)]
+        );
+        assert!(
+            metrics
+                .sum_by_name("agg_expr_0_internal_distinct_time")
+                .is_some_and(|metric| metric.as_usize() > 0)
+        );
+        assert!(!metrics.iter().any(|metric| {
+            matches!(metric.value(), MetricValue::Time { name, .. } if name.starts_with("agg_expr_2_internal_"))
+        }));
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn aggregate_stream_reports_partial_and_final_phases() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Float64, false),
