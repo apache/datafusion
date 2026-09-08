@@ -456,6 +456,22 @@
 <p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">56.0.0</span></code> has not been released yet. The information provided
 in this section pertains to features and changes that have already been merged
 to the main branch and are awaiting release in this version.</p>
+<section id="foreignsession-create-physical-plan-is-unsupported">
+<h3><code class="docutils literal notranslate"><span class="pre">ForeignSession::create_physical_plan</span></code> is unsupported<a class="headerlink" href="#foreignsession-create-physical-plan-is-unsupported" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">ForeignSession::create_physical_plan</span></code> no longer forwards to the library that
+owns the session. It now returns a <code class="docutils literal notranslate"><span class="pre">NotImplemented</span></code> error because forwarding can
+re-enter an installed foreign planner, and the execution-plan handle returned by
+the old callback cannot restore local Rust type identities for downcasting.
+The original <code class="docutils literal notranslate"><span class="pre">FFI_SessionRef</span></code> callback slot remains in place for ABI compatibility
+with DataFusion 55 consumers, but calling that callback returns the same error.</p>
+<p>The session-owning library should instead export its original planner as a
+<code class="docutils literal notranslate"><span class="pre">datafusion_ffi::query_planner::FFI_QueryPlanner</span></code> before installing a foreign
+planner. The foreign planner can retain and invoke that handle to receive a
+serialized physical plan reconstructed with local type identities. See the
+<code class="docutils literal notranslate"><span class="pre">datafusion_ffi::query_planner</span></code> module documentation for the complete delegation
+pattern. <code class="docutils literal notranslate"><span class="pre">ForeignSession::query_planner</span></code>, <code class="docutils literal notranslate"><span class="pre">optimize</span></code>, and <code class="docutils literal notranslate"><span class="pre">physical_optimizers</span></code>
+continue to forward to the owning session across the FFI boundary.</p>
+</section>
 <section id="groupcolumn-now-requires-values-preserving">
 <h3><code class="docutils literal notranslate"><span class="pre">GroupColumn</span></code> now requires <code class="docutils literal notranslate"><span class="pre">values_preserving</span></code><a class="headerlink" href="#groupcolumn-now-requires-values-preserving" title="Link to this heading">#</a></h3>
 <p>Custom implementations of the public <code class="docutils literal notranslate"><span class="pre">GroupColumn</span></code> trait must implement
@@ -693,6 +709,7 @@ to be updated to account for the new generic API.</p>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-56-0-0">DataFusion 56.0.0</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#foreignsession-create-physical-plan-is-unsupported"><code class="docutils literal notranslate"><span class="pre">ForeignSession::create_physical_plan</span></code> is unsupported</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#groupcolumn-now-requires-values-preserving"><code class="docutils literal notranslate"><span class="pre">GroupColumn</span></code> now requires <code class="docutils literal notranslate"><span class="pre">values_preserving</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-proto-common-option-and-constraint-conversions-are-fallible"><code class="docutils literal notranslate"><span class="pre">datafusion-proto</span></code>: common option and constraint conversions are fallible</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionoptions-has-a-new-enable-nlj-coordinated-fallback-field"><code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> has a new <code class="docutils literal notranslate"><span class="pre">enable_nlj_coordinated_fallback</span></code> field</a></li>
