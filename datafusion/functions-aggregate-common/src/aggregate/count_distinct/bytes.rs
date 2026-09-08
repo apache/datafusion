@@ -166,7 +166,16 @@ impl Accumulator for BytesViewDistinctCountAccumulator {
     }
 }
 
-#[cfg(test)]
+/// With `force_hash_collisions` every distinct value collides into the same
+/// hash bucket, so both `ArrowBytesSet`/`ArrowBytesViewSet` degrade to a
+/// linear scan per insert. These tests insert up to 500,000 distinct values
+/// per accumulator (twice, once lazily constructed and once pre-allocated),
+/// which is O(n) under a real hash and O(n^2) under a forced collision,
+/// turning a sub-second run into a multi-hour one and hanging CI (see
+/// apache/datafusion#25011). Skipped under that feature, matching the
+/// `count_distinct_spill` precedent in
+/// `datafusion/core/tests/memory_limit/mod.rs`.
+#[cfg(all(test, not(feature = "force_hash_collisions")))]
 mod tests {
     use super::*;
     use arrow::array::{StringArray, StringViewArray};

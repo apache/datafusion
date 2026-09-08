@@ -257,9 +257,24 @@ impl FileSource for JsonSource {
         use datafusion_proto_models::protobuf;
         use protobuf::physical_plan_node::PhysicalPlanType;
 
+        // Exhaustive destructure: adding a field to `JsonSource` without
+        // deciding how it is serialized is a compile error, not a silent
+        // round-trip gap.
+        let Self {
+            // Serialized in `base` and used to rebuild the source on decode.
+            table_schema: _,
+            // Set from `FileScanConfig` when the scan is opened.
+            batch_size: _,
+            // Runtime metrics, not part of the plan.
+            metrics: _,
+            // Serialized in `base` and reapplied on decode.
+            projection: _,
+            newline_delimited,
+        } = self;
+
         let node = protobuf::JsonScanExecNode {
             base_conf: Some(base.try_to_proto(ctx)?),
-            newline_delimited: if self.newline_delimited {
+            newline_delimited: if *newline_delimited {
                 None
             } else {
                 Some(false)
@@ -292,7 +307,14 @@ impl JsonSource {
             );
         };
 
-        let base_conf = scan.base_conf.as_ref().ok_or_else(|| {
+        // Exhaustive destructure: a new field on `JsonScanExecNode` is a
+        // compile error here rather than a silently ignored wire field.
+        let protobuf::JsonScanExecNode {
+            base_conf,
+            newline_delimited,
+        } = scan;
+
+        let base_conf = base_conf.as_ref().ok_or_else(|| {
             datafusion_common::internal_datafusion_err!(
                 "JsonScanExecNode is missing required field 'base_conf'"
             )
@@ -301,7 +323,7 @@ impl JsonSource {
         let table_schema = FileScanConfig::parse_table_schema_from_proto(base_conf)?;
         let source = Arc::new(
             JsonSource::new(table_schema)
-                .with_newline_delimited(scan.newline_delimited.unwrap_or(true)),
+                .with_newline_delimited(newline_delimited.unwrap_or(true)),
         );
 
         let conf = FileScanConfig::try_from_proto(base_conf, ctx, source)?;
