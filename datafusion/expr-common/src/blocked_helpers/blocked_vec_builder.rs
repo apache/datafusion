@@ -67,6 +67,14 @@ impl Region {
             assert!(cap > min, "mmap of {cap} bytes failed");
             cap = (cap / 2).max(min).next_multiple_of(page);
         };
+        // Ask for transparent huge pages. In the default `madvise` THP mode anonymous
+        // mappings stay on 4K pages, which costs a page fault per 4K on first touch and
+        // many more TLB misses on the random access the hash tables do, while the
+        // global allocator's memory is already huge page backed
+        #[cfg(target_os = "linux")]
+        unsafe {
+            libc::madvise(base, cap, libc::MADV_HUGEPAGE);
+        }
         Arc::new(Self {
             base: base.cast::<u8>(),
             cap,
