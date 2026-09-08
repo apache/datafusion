@@ -227,21 +227,42 @@ COPY (
 TO 'test_files/scratch/parquet_rle_to_dictionary/high_card/plain.parquet'
 STORED AS PARQUET OPTIONS ('format.dictionary_enabled' false);
 
+# Write rle.parquet with an explicit Dictionary(Int8, Utf8) Arrow schema so
+# that the file carries Int8 dictionary keys in its embedded Arrow schema
+# metadata. This exercises the real regression path: without the key-widening
+# fix, uniform_dict_schemas would select Int8 as the merged key type, which
+# cannot represent the 130 distinct values in the plain file.
 statement ok
-COPY (SELECT column1 AS category FROM (VALUES ('rle_a'), ('rle_b'), ('rle_a')))
+COPY (SELECT arrow_cast(column1, 'Dictionary(Int8, Utf8)') AS category FROM (VALUES ('rle_a'), ('rle_b'), ('rle_a')))
 TO 'test_files/scratch/parquet_rle_to_dictionary/high_card/rle.parquet'
 STORED AS PARQUET OPTIONS ('format.dictionary_enabled' true);
 
 statement ok
 set datafusion.execution.parquet.enable_rle_to_dictionary = true;
 
+# Verify that rle.parquet alone reads back as Dictionary(Int8, Utf8) —
+# confirming the Arrow schema metadata round-trips and was not widened on write.
+statement ok
+CREATE EXTERNAL TABLE rle_int8_only
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_rle_to_dictionary/high_card/rle.parquet';
+
+query T
+SELECT DISTINCT arrow_typeof(category) FROM rle_int8_only;
+----
+Dictionary(Int8, Utf8)
+
+statement ok
+DROP TABLE rle_int8_only;
+
 statement ok
 CREATE EXTERNAL TABLE high_card_mixed
 STORED AS PARQUET
 LOCATION 'test_files/scratch/parquet_rle_to_dictionary/high_card/';
 
-# Both files are scanned as Dictionary(Int32, Utf8) — Int32 key avoids
-# overflow for the 130 distinct values in the plain file.
+# Both files are scanned as Dictionary(Int32, Utf8) — uniform_dict_schemas
+# widens the Int8 key from rle.parquet to Int32 to avoid overflow for the
+# 130 distinct values in the plain file.
 query TI
 SELECT arrow_typeof(category), COUNT(*) FROM high_card_mixed GROUP BY arrow_typeof(category);
 ----
