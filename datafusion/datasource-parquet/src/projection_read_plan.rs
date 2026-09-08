@@ -63,7 +63,7 @@ pub(crate) struct ParquetReadPlan {
     pub projected_schema: SchemaRef,
 }
 
-/// Records a struct field access via `get_field(struct_col, 'field1', 'field2', ...)`.
+/// Records a nested input required by an expression, including UDF requirements.
 ///
 /// This allows the row filter to project only the specific Parquet leaf columns
 /// needed by the filter, rather than all leaves of the struct.
@@ -437,6 +437,47 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
                     return Ok(TreeNodeRecursion::Jump);
                 }
             }
+        }
+
+        if let Some(function) = node.downcast_ref::<ScalarFunctionExpr>()
+            && let Some(requirements) = function.required_input_fields(self.file_schema)
+            && !requirements.is_empty()
+        {
+            for (index, argument) in function.args().iter().enumerate() {
+                if let Some(requirement) =
+                    requirements.iter().find(|r| r.arg_index == index)
+                {
+                    if let Some(column) = argument.downcast_ref::<Column>() {
+                        for path in &requirement.field_paths {
+                            self.check_struct_field_column(column.name(), path.clone());
+                        }
+                        continue;
+                    }
+                    // A dependency declaration cannot remove conversions from
+                    // an argument. Runtime schema adaptation may have inserted a
+                    // cast; retain its entire target and evaluate it unchanged.
+                    if self.allow_struct_casts
+                        && let Some(cast) = argument.downcast_ref::<CastExpr>()
+                        && let Some(column) = cast.expr().downcast_ref::<Column>()
+                        && let Ok(root_index) = self.file_schema.index_of(column.name())
+                        && matches!(
+                            self.file_schema.field(root_index).data_type(),
+                            DataType::Struct(_)
+                        )
+                        && matches!(cast.cast_type(), DataType::Struct(_))
+                    {
+                        self.cast_accesses.push(CastColumnAccess {
+                            root_index,
+                            target_type: cast.cast_type().clone(),
+                        });
+                        continue;
+                    }
+                }
+                // Unspecified arguments and arbitrary argument expressions must
+                // still be evaluated, including columns and errors they depend on.
+                argument.visit(self)?;
+            }
+            return Ok(TreeNodeRecursion::Jump);
         }
 
         // Handle whole-column casts to a narrower nested type, e.g.
@@ -1099,6 +1140,241 @@ mod test {
 
     #[derive(Debug, PartialEq, Eq, Hash)]
     struct CustomStructLabel;
+
+    /// Computes a result from two fields and another argument, rather than
+    /// returning a field unchanged. Only the struct argument is restricted.
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct LabelScore {
+        requirements: Option<Vec<datafusion_expr::InputFieldRequirement>>,
+    }
+
+    impl datafusion_expr::ScalarUDFImpl for LabelScore {
+        fn name(&self) -> &str {
+            "label_score"
+        }
+
+        fn signature(&self) -> &datafusion_expr::Signature {
+            static SIGNATURE: std::sync::LazyLock<datafusion_expr::Signature> =
+                std::sync::LazyLock::new(|| {
+                    datafusion_expr::Signature::any(
+                        2,
+                        datafusion_expr::Volatility::Immutable,
+                    )
+                });
+            &SIGNATURE
+        }
+
+        fn return_type(&self, _: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int32)
+        }
+
+        fn required_input_fields(
+            &self,
+            args: datafusion_expr::ReturnFieldArgs,
+        ) -> Option<Vec<datafusion_expr::InputFieldRequirement>> {
+            // The source schema is available to the downstream implementation.
+            assert!(matches!(
+                args.arg_fields[1].data_type(),
+                DataType::Struct(_)
+            ));
+            self.requirements.clone()
+        }
+
+        fn invoke_with_args(
+            &self,
+            args: datafusion_expr::ScalarFunctionArgs,
+        ) -> Result<datafusion_expr::ColumnarValue> {
+            let id = args.args[0].to_array(args.number_rows)?;
+            let s = args.args[1].to_array(args.number_rows)?;
+            let id = id.as_any().downcast_ref::<Int32Array>().unwrap();
+            let s = s.as_any().downcast_ref::<StructArray>().unwrap();
+            let values = s
+                .column_by_name("value")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
+            let labels = s
+                .column_by_name("label")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            let scores = (0..s.len())
+                .map(|i| {
+                    (!s.is_null(i)
+                        && !id.is_null(i)
+                        && !values.is_null(i)
+                        && !labels.is_null(i))
+                    .then(|| id.value(i) + values.value(i) + labels.value(i).len() as i32)
+                })
+                .collect::<Int32Array>();
+            Ok(datafusion_expr::ColumnarValue::Array(Arc::new(scores)))
+        }
+    }
+
+    fn score_requirement() -> datafusion_expr::InputFieldRequirement {
+        datafusion_expr::InputFieldRequirement {
+            arg_index: 1,
+            field_paths: vec![vec!["value".into()], vec!["label".into()]],
+        }
+    }
+
+    #[test]
+    fn udf_input_requirements_prune_multiple_fields_and_preserve_other_arguments() {
+        let (file, schema, metadata) = write_id_struct_file_with_handle();
+        let descriptor = metadata.file_metadata().schema_descr();
+        for requirements in [
+            None,
+            Some(vec![score_requirement()]),
+            Some(vec![
+                datafusion_expr::InputFieldRequirement {
+                    arg_index: 0,
+                    field_paths: vec![vec![]],
+                },
+                score_requirement(),
+            ]),
+        ] {
+            let declare = requirements.is_some();
+            let udf = datafusion_expr::ScalarUDF::from(LabelScore { requirements })
+                .with_aliases(["score_alias"]);
+            let expr = logical2physical(&udf.call(vec![col("id"), col("s")]), &schema);
+            let plan =
+                build_projection_read_plan(vec![Arc::clone(&expr)], &schema, descriptor);
+            assert_eq!(
+                plan.projection_mask,
+                ProjectionMask::leaves(
+                    descriptor,
+                    if declare {
+                        vec![0, 1, 2]
+                    } else {
+                        vec![0, 1, 2, 3]
+                    }
+                )
+            );
+            let mut checker = PushdownChecker::new(&schema, false, false);
+            expr.visit(&mut checker).unwrap();
+            assert_eq!(checker.prevents_pushdown(), !declare);
+            let mut reader =
+                ParquetRecordBatchReaderBuilder::try_new(file.reopen().unwrap())
+                    .unwrap()
+                    .with_projection(plan.projection_mask)
+                    .build()
+                    .unwrap();
+            let batch = reader.next().unwrap().unwrap();
+            let result = expr
+                .evaluate(&batch)
+                .unwrap()
+                .into_array(batch.num_rows())
+                .unwrap();
+            assert_eq!(
+                result.as_ref(),
+                &Int32Array::from(vec![12, 23, 34]) as &dyn Array
+            );
+            let stale = Arc::clone(&expr)
+                .with_new_children(vec![
+                    Arc::new(datafusion_physical_expr::expressions::BinaryExpr::new(
+                        Arc::new(PhysicalColumn::new("id", 1)),
+                        datafusion_expr::Operator::Plus,
+                        Arc::new(datafusion_physical_expr::expressions::Literal::new(
+                            ScalarValue::Int32(Some(0)),
+                        )),
+                    )),
+                    Arc::new(PhysicalColumn::new("s", 0)),
+                ])
+                .unwrap();
+            let stale_plan = build_projection_read_plan(vec![stale], &schema, descriptor);
+            assert_eq!(stale_plan.projected_schema, plan.projected_schema);
+            // A second consumer of the whole struct overrides narrower requirements.
+            let plan = build_projection_read_plan(
+                vec![expr, Arc::new(PhysicalColumn::new("s", 1))],
+                &schema,
+                descriptor,
+            );
+            assert_eq!(
+                plan.projection_mask,
+                ProjectionMask::leaves(descriptor, [0, 1, 2, 3])
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_udf_input_requirements_keep_full_inputs() {
+        let (schema, metadata) = write_id_struct_file();
+        let descriptor = metadata.file_metadata().schema_descr();
+        let requirement = score_requirement();
+        for requirements in [
+            vec![datafusion_expr::InputFieldRequirement {
+                arg_index: 2,
+                ..requirement.clone()
+            }],
+            vec![requirement.clone(), requirement.clone()],
+            vec![datafusion_expr::InputFieldRequirement {
+                field_paths: vec![],
+                ..requirement.clone()
+            }],
+            vec![datafusion_expr::InputFieldRequirement {
+                field_paths: vec![vec!["missing".into()]],
+                ..requirement.clone()
+            }],
+            vec![datafusion_expr::InputFieldRequirement {
+                field_paths: vec![vec!["value".into(), "not_a_struct".into()]],
+                ..requirement
+            }],
+        ] {
+            let udf = datafusion_expr::ScalarUDF::from(LabelScore {
+                requirements: Some(requirements),
+            });
+            let expr = logical2physical(&udf.call(vec![col("id"), col("s")]), &schema);
+            let plan = build_projection_read_plan(vec![expr], &schema, descriptor);
+            assert_eq!(
+                plan.projection_mask,
+                ProjectionMask::leaves(descriptor, [0, 1, 2, 3])
+            );
+        }
+    }
+
+    #[test]
+    fn udf_input_requirements_preserve_argument_cast_errors() {
+        let (file, schema, metadata) = write_id_struct_file_with_handle();
+        let target = DataType::Struct(
+            vec![
+                Arc::new(Field::new("value", DataType::Int32, false)),
+                Arc::new(Field::new("label", DataType::Utf8, false)),
+                Arc::new(Field::new("pad", DataType::Int32, false)),
+            ]
+            .into(),
+        );
+        let expr = logical2physical(
+            &datafusion_expr::ScalarUDF::from(LabelScore {
+                requirements: Some(vec![score_requirement()]),
+            })
+            .call(vec![col("id"), datafusion_expr::cast(col("s"), target)]),
+            &schema,
+        );
+        // The UDF does not use pad, but its argument's explicit conversion does.
+        for allow_casts in [false, true] {
+            let mut checker = PushdownChecker::new(&schema, false, allow_casts);
+            expr.visit(&mut checker).unwrap();
+            assert_eq!(checker.prevents_pushdown(), !allow_casts);
+        }
+        let (plan, _) =
+            crate::row_filter::build_parquet_read_plan(&expr, &schema, &metadata)
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            plan.projection_mask,
+            ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [0, 1, 2, 3])
+        );
+        let mut reader = ParquetRecordBatchReaderBuilder::try_new(file.reopen().unwrap())
+            .unwrap()
+            .with_projection(plan.projection_mask)
+            .build()
+            .unwrap();
+        let batch = reader.next().unwrap().unwrap();
+        let error = expr.evaluate(&batch).unwrap_err();
+        assert!(error.to_string().contains("pad"), "{error}");
+    }
 
     impl datafusion_expr::ScalarUDFImpl for CustomStructLabel {
         fn name(&self) -> &str {

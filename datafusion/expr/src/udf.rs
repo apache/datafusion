@@ -69,6 +69,18 @@ pub struct StructFieldAccess {
     pub field_path: Vec<String>,
 }
 
+/// Nested fields sufficient to evaluate one argument of a scalar function.
+/// See [`ScalarUDFImpl::required_input_fields`] for the projection contract.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct InputFieldRequirement {
+    /// Index of the argument whose struct fields may be pruned.
+    pub arg_index: usize,
+    /// Non-empty list of paths through struct fields. An empty path selects
+    /// the entire argument; a path ending at a nested field selects its whole
+    /// subtree. Names are literal components, including any dots.
+    pub field_paths: Vec<Vec<String>>,
+}
+
 /// Logical representation of a Scalar User Defined Function.
 ///
 /// A scalar function produces a single row output for each row of input. This
@@ -338,6 +350,14 @@ impl ScalarUDF {
         literal_args: &[Option<ScalarValue>],
     ) -> Option<StructFieldAccess> {
         self.inner.struct_field_access(literal_args)
+    }
+
+    /// See [`ScalarUDFImpl::required_input_fields`].
+    pub fn required_input_fields(
+        &self,
+        args: ReturnFieldArgs,
+    ) -> Option<Vec<InputFieldRequirement>> {
+        self.inner.required_input_fields(args)
     }
 
     /// See [`ScalarUDFImpl::struct_field_mapping`] for more details.
@@ -1042,6 +1062,36 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
         None
     }
 
+    /// Describe which nested input fields suffice to evaluate this call.
+    ///
+    /// The supplied argument fields describe the schema at the point of use,
+    /// and `scalar_arguments` exposes known literals. Each returned entry may
+    /// restrict one argument to the union of its field paths. Arguments without
+    /// an entry are evaluated normally. Return `None` if no restriction is known.
+    /// Each argument index must occur at most once and each path must exist in
+    /// the supplied schema, traversing only Struct fields. A path can select an
+    /// entire List or Map, but cannot select individual elements or entries.
+    ///
+    /// The function must produce the same values, output field and errors when
+    /// unselected fields are removed, retaining selected fields and their
+    /// ancestors' metadata and validity. It must resolve fields by name and
+    /// accept any union of these requirements with other consumers' fields.
+    /// Required metadata, fallback values and fields needed for validation must
+    /// all be included. The declaration does not permit skipping evaluation of
+    /// argument expressions or their conversions.
+    ///
+    /// Readers may prune inputs and still evaluate the original function. This
+    /// does not assert that its output equals a field (see
+    /// [`Self::struct_field_access`]), provide output statistics, or authorize
+    /// moving the function across arbitrary operators (see [`Self::placement`]).
+    /// Existing implementations and unknown layouts retain their full inputs.
+    fn required_input_fields(
+        &self,
+        _args: ReturnFieldArgs,
+    ) -> Option<Vec<InputFieldRequirement>> {
+        None
+    }
+
     /// For struct-producing functions, return how output fields map to input
     /// arguments. This enables the optimizer to propagate orderings through
     /// struct projections.
@@ -1219,6 +1269,13 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         literal_args: &[Option<ScalarValue>],
     ) -> Option<StructFieldMapping> {
         self.inner.struct_field_mapping(literal_args)
+    }
+
+    fn required_input_fields(
+        &self,
+        args: ReturnFieldArgs,
+    ) -> Option<Vec<InputFieldRequirement>> {
+        self.inner.required_input_fields(args)
     }
 
     fn output_ordering(&self, inputs: &[ExprProperties]) -> Result<SortProperties> {

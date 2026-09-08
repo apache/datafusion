@@ -34,7 +34,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::PhysicalExpr;
-use crate::expressions::Literal;
+use crate::expressions::{Column, Literal};
 
 use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::{DataType, FieldRef, Schema};
@@ -181,6 +181,65 @@ impl ScalarFunctionExpr {
             return None;
         }
         Some(access)
+    }
+
+    /// Ask the UDF for input requirements against this schema, validating every
+    /// argument index and struct path. Invalid declarations retain full inputs.
+    /// Column names are resolved again because projection analysis can receive
+    /// expressions with indices from an earlier schema.
+    pub fn required_input_fields(
+        &self,
+        schema: &Schema,
+    ) -> Option<Vec<datafusion_expr::InputFieldRequirement>> {
+        let fields = self
+            .args
+            .iter()
+            .map(|arg| {
+                if let Some(column) = arg.downcast_ref::<Column>() {
+                    Some(Arc::clone(
+                        schema.fields().get(schema.index_of(column.name()).ok()?)?,
+                    ))
+                } else {
+                    crate::utils::reassign_expr_columns(Arc::clone(arg), schema)
+                        .ok()?
+                        .return_field(schema)
+                        .ok()
+                }
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let literals = self
+            .args
+            .iter()
+            .map(|arg| arg.downcast_ref::<Literal>().map(Literal::value))
+            .collect::<Vec<_>>();
+        let requirements = self.fun.required_input_fields(ReturnFieldArgs {
+            arg_fields: &fields,
+            scalar_arguments: &literals,
+        })?;
+        let mut seen = vec![false; self.args.len()];
+        for requirement in &requirements {
+            let field = fields.get(requirement.arg_index)?;
+            if std::mem::replace(&mut seen[requirement.arg_index], true)
+                || requirement.field_paths.is_empty()
+            {
+                return None;
+            }
+            for path in &requirement.field_paths {
+                let mut data_type = field.data_type();
+                for name in path {
+                    let DataType::Struct(children) = data_type else {
+                        return None;
+                    };
+                    let mut matches =
+                        children.iter().filter(|child| child.name() == name);
+                    data_type = matches.next()?.data_type();
+                    if matches.next().is_some() {
+                        return None;
+                    }
+                }
+            }
+        }
+        Some(requirements)
     }
 
     /// Given an arbitrary PhysicalExpr attempt to downcast it to a ScalarFunctionExpr
