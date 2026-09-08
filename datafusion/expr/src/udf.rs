@@ -543,7 +543,16 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     ///
     /// See [`Expr::schema_name`] for details
     fn schema_name(&self, args: &[Expr]) -> Result<String> {
-        udf_default_schema_name(self.name(), args)
+        /// Use an inner function to avoid code duplication over all
+        /// generic callsites as the body is the same.
+        fn inner(name: &str, args: &[Expr]) -> Result<String> {
+            Ok(format!(
+                "{}({})",
+                name,
+                schema_name_from_exprs_comma_separated_without_space(args)?
+            ))
+        }
+        inner(self.name(), args)
     }
 
     /// Returns a [`Signature`] describing the argument types for which this
@@ -656,6 +665,11 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// logical input even if the input is simplified (e.g. it must return the same
     /// value for `('foo' | 'bar')` as it does for ('foobar').
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        /// Use an inner function to avoid code duplication over all
+        /// generic callsites as the body is the same.
+        fn arg_fields_to_data_types(arg_fields: &[FieldRef]) -> Vec<DataType> {
+            arg_fields.iter().map(|f| f.data_type().clone()).collect()
+        }
         let data_types = arg_fields_to_data_types(args.arg_fields);
         let return_type = self.return_type(&data_types)?;
         Ok(Arc::new(Field::new(self.name(), return_type, true)))
@@ -932,7 +946,25 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
         if !self.preserves_lex_ordering(inputs)? {
             return Ok(SortProperties::Unordered);
         }
-        Ok(common_sort_properties(inputs))
+
+        /// Use an inner function to avoid code duplication over all
+        /// generic callsites as the body is the same.
+        fn inner(inputs: &[ExprProperties]) -> SortProperties {
+            let Some(first_order) = inputs.first().map(|p| &p.sort_properties) else {
+                return SortProperties::Singleton;
+            };
+
+            if inputs
+                .iter()
+                .skip(1)
+                .all(|input| &input.sort_properties == first_order)
+            {
+                *first_order
+            } else {
+                SortProperties::Unordered
+            }
+        }
+        Ok(inner(inputs))
     }
 
     /// Returns true if the function preserves lexicographical ordering based on
@@ -973,7 +1005,12 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// A Vec the same length as `arg_types`. DataFusion will `CAST` the function call
     /// arguments to these specific types.
     fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        coerce_types_not_implemented(self.name())
+        /// Use an inner function to avoid code duplication over all
+        /// generic callsites as the body is the same.
+        fn inner(name: &str) -> Result<Vec<DataType>> {
+            not_impl_err!("Function {name} does not implement coerce_types")
+        }
+        inner(self.name())
     }
 
     /// For struct-producing functions, return how output fields map to input
@@ -1015,49 +1052,6 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// closer to the data source.
     fn placement(&self, _args: &[ExpressionPlacement]) -> ExpressionPlacement {
         ExpressionPlacement::KeepInPlace
-    }
-}
-
-/// Default implementation of [`ScalarUDFImpl::coerce_types`].
-/// Extracted to a free-standing function to reduce binary size by avoiding instantiating code per ScalarUDFImpl impl.
-fn coerce_types_not_implemented(name: &str) -> Result<Vec<DataType>> {
-    not_impl_err!("Function {name} does not implement coerce_types")
-}
-
-/// Default implementation of [`ScalarUDFImpl::schema_name`]:
-/// `name(arg1,arg2,..)`
-/// Extracted to a free-standing function to reduce binary size by avoiding instantiating code per ScalarUDFImpl impl.
-fn udf_default_schema_name(name: &str, args: &[Expr]) -> Result<String> {
-    Ok(format!(
-        "{}({})",
-        name,
-        schema_name_from_exprs_comma_separated_without_space(args)?
-    ))
-}
-
-/// Collects the [`DataType`] of each field
-/// Extracted to a free-standing function to reduce binary size by avoiding instantiating code per ScalarUDFImpl impl.
-fn arg_fields_to_data_types(arg_fields: &[FieldRef]) -> Vec<DataType> {
-    arg_fields.iter().map(|f| f.data_type().clone()).collect()
-}
-
-/// Returns the [`SortProperties`] shared by all `inputs`, or
-/// [`SortProperties::Unordered`] if they differ. Used by the default
-/// implementation of [`ScalarUDFImpl::output_ordering`].
-/// Extracted to a free-standing function to reduce binary size by avoiding instantiating code per ScalarUDFImpl impl.
-fn common_sort_properties(inputs: &[ExprProperties]) -> SortProperties {
-    let Some(first_order) = inputs.first().map(|p| &p.sort_properties) else {
-        return SortProperties::Singleton;
-    };
-
-    if inputs
-        .iter()
-        .skip(1)
-        .all(|input| &input.sort_properties == first_order)
-    {
-        *first_order
-    } else {
-        SortProperties::Unordered
     }
 }
 
