@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{Result, internal_datafusion_err};
 use datafusion_expr::physical_planning_context::{ScalarSubqueryResults, SubqueryIndex};
 use datafusion_expr_common::columnar_value::ColumnarValue;
@@ -36,8 +37,8 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 /// simply reads from that container at the appropriate index.
 #[derive(Debug)]
 pub struct ScalarSubqueryExpr {
-    data_type: DataType,
-    nullable: bool,
+    /// Output field of the scalar subquery, including Arrow extension metadata.
+    field: FieldRef,
     /// Index of this subquery in the shared results container.
     index: SubqueryIndex,
     /// Shared results container populated by `ScalarSubqueryExec`.
@@ -51,9 +52,24 @@ impl ScalarSubqueryExpr {
         index: SubqueryIndex,
         results: ScalarSubqueryResults,
     ) -> Self {
+        Self::new_with_metadata(data_type, nullable, None, index, results)
+    }
+
+    /// Create a scalar subquery expression, preserving optional field metadata
+    /// from the logical subquery output (for example Arrow extension type names).
+    pub fn new_with_metadata(
+        data_type: DataType,
+        nullable: bool,
+        metadata: Option<FieldMetadata>,
+        index: SubqueryIndex,
+        results: ScalarSubqueryResults,
+    ) -> Self {
+        let mut field = Field::new("scalar_subquery", data_type, nullable);
+        if let Some(metadata) = metadata {
+            field = metadata.add_to_field(field);
+        }
         Self {
-            data_type,
-            nullable,
+            field: Arc::new(field),
             index,
             results,
         }
@@ -68,7 +84,7 @@ impl ScalarSubqueryExpr {
         note = "was only used for proto serialization, which no longer needs it; use `return_field` for type/nullability. It will be removed in 61.0.0 or 6 months after 55.0.0 is released, whichever is longer."
     )]
     pub fn data_type(&self) -> &DataType {
-        &self.data_type
+        self.field.data_type()
     }
 
     #[deprecated(
@@ -76,7 +92,7 @@ impl ScalarSubqueryExpr {
         note = "was only used for proto serialization, which no longer needs it; use `return_field` for type/nullability. It will be removed in 61.0.0 or 6 months after 55.0.0 is released, whichever is longer."
     )]
     pub fn nullable(&self) -> bool {
-        self.nullable
+        self.field.is_nullable()
     }
 
     /// Returns the index of this subquery in the shared results container.
@@ -117,11 +133,7 @@ impl Eq for ScalarSubqueryExpr {}
 
 impl PhysicalExpr for ScalarSubqueryExpr {
     fn return_field(&self, _input_schema: &Schema) -> Result<FieldRef> {
-        Ok(Arc::new(Field::new(
-            "scalar_subquery",
-            self.data_type.clone(),
-            self.nullable,
-        )))
+        Ok(Arc::clone(&self.field))
     }
 
     fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
@@ -163,13 +175,14 @@ impl PhysicalExpr for ScalarSubqueryExpr {
             expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::ScalarSubquery(
                 protobuf::PhysicalScalarSubqueryExprNode {
-                    data_type: Some((&self.data_type).try_into()?),
-                    nullable: self.nullable,
+                    data_type: Some(self.field.data_type().try_into()?),
+                    nullable: self.field.is_nullable(),
                     index: usize_to_wire(
                         self.index.as_usize(),
                         "ScalarSubqueryExpr",
                         "index",
                     )?,
+                    metadata: self.field.metadata().clone(),
                 },
             )),
         }))
@@ -207,9 +220,15 @@ impl ScalarSubqueryExpr {
             "data_type",
         )?
         .try_into()?;
-        Ok(Arc::new(ScalarSubqueryExpr::new(
+        let metadata = if sq.metadata.is_empty() {
+            None
+        } else {
+            Some(FieldMetadata::from(sq.metadata.clone()))
+        };
+        Ok(Arc::new(ScalarSubqueryExpr::new_with_metadata(
             data_type,
             sq.nullable,
+            metadata,
             SubqueryIndex::new(sq.index as usize),
             results.clone(),
         )))
@@ -312,6 +331,31 @@ mod tests {
         );
         assert_ne!(e1a, e3);
     }
+
+    #[test]
+    fn return_field_preserves_extension_metadata() -> Result<()> {
+        let metadata = FieldMetadata::from(std::collections::HashMap::from([(
+            "ARROW:extension:name".to_string(),
+            "example.extension".to_string(),
+        )]));
+        let expr = ScalarSubqueryExpr::new_with_metadata(
+            DataType::Utf8,
+            true,
+            Some(metadata),
+            SubqueryIndex::new(0),
+            ScalarSubqueryResults::new(1),
+        );
+
+        let field = expr.return_field(&Schema::empty())?;
+        assert_eq!(field.name(), "scalar_subquery");
+        assert_eq!(field.data_type(), &DataType::Utf8);
+        assert!(field.is_nullable());
+        assert_eq!(
+            field.metadata().get("ARROW:extension:name"),
+            Some(&"example.extension".to_string())
+        );
+        Ok(())
+    }
 }
 
 /// Tests for the `try_to_proto` / `try_from_proto` hooks.
@@ -340,6 +384,7 @@ mod proto_tests {
                     data_type,
                     nullable,
                     index,
+                    metadata: Default::default(),
                 },
             )),
         }
@@ -349,9 +394,13 @@ mod proto_tests {
     fn round_trips_through_proto() {
         // A three-slot results container so index 2 is meaningful.
         let results = ScalarSubqueryResults::new(3);
-        let expr = ScalarSubqueryExpr::new(
+        let expr = ScalarSubqueryExpr::new_with_metadata(
             DataType::Int32,
             true,
+            Some(FieldMetadata::from(std::collections::HashMap::from([(
+                "ARROW:extension:name".to_string(),
+                "example.extension".to_string(),
+            )]))),
             SubqueryIndex::new(2),
             results.clone(),
         );
@@ -378,6 +427,10 @@ mod proto_tests {
             .try_into()
             .unwrap();
         assert_eq!(encoded_type, DataType::Int32);
+        assert_eq!(
+            sq.metadata.get("ARROW:extension:name").map(String::as_str),
+            Some("example.extension")
+        );
 
         // Decode: reconstruct from the proto node, threading in the shared
         // results container the surrounding exec would provide.
@@ -394,6 +447,10 @@ mod proto_tests {
         let field = decoded.return_field(&Schema::empty()).unwrap();
         assert_eq!(field.data_type(), &DataType::Int32);
         assert!(field.is_nullable());
+        assert_eq!(
+            field.metadata().get("ARROW:extension:name"),
+            Some(&"example.extension".to_string())
+        );
 
         // Same shared container + same index → equal to the original.
         assert_eq!(decoded, &expr);
