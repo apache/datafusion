@@ -2420,6 +2420,7 @@ dependencies = [
  "petgraph",
  "rand 0.9.4",
  "recursive",
+ "regex",
  "rstest",
  "tokio",
 ]
@@ -2579,6 +2580,7 @@ dependencies = [
  "pbjson 0.9.0",
  "prost",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2689,6 +2691,7 @@ dependencies = [
  "indicatif",
  "itertools 0.15.0",
  "log",
+ "num-traits",
  "object_store",
  "postgres-types",
  "regex",

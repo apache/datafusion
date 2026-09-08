@@ -15,10 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, AsArray, new_null_array};
+use arrow::array::{ArrayRef, AsArray, BooleanArray, new_null_array};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, internal_err};
@@ -35,6 +36,7 @@ use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
     AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
+    group_id_array, max_duplicate_ordinal,
 };
 
 use super::AggregateTableMetrics;
@@ -171,24 +173,23 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         batch: &RecordBatch,
     ) -> Result<EvaluatedAggregateBatch> {
         let state = self.state.building();
-        let timer = self.group_by_metrics.time_calculating_group_ids.timer();
-        // outer vec: one per each grouping set
-        // inner vec: all group by exprs for the current grouping set
-        let grouping_set_args = evaluate_group_by(&state.group_by, batch)?;
-        drop(timer);
+        // Outer vec: one per grouping set; inner vec: group-by expressions.
+        let grouping_set_args = self
+            .group_by_metrics
+            .time_group_key_preparation(|| evaluate_group_by(&state.group_by, batch))?;
 
-        let timer = self.group_by_metrics.aggregate_arguments_time.timer();
-        // The evaluated args for each accumulator
-        let accumulator_args = state
-            .accumulators
-            .iter()
-            .enumerate()
-            .map(|(idx, acc)| {
-                self.aggregate_argument_metrics
-                    .time(idx, || acc.evaluate_acc_args(batch))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        drop(timer);
+        // The evaluated args for each accumulator.
+        let accumulator_args = self.group_by_metrics.time_aggregate_arguments(|| {
+            state
+                .accumulators
+                .iter()
+                .enumerate()
+                .map(|(idx, acc)| {
+                    self.aggregate_argument_metrics
+                        .time(idx, || acc.evaluate_acc_args(batch))
+                })
+                .collect::<Result<Vec<_>>>()
+        })?;
 
         Ok(EvaluatedAggregateBatch {
             grouping_set_args,
@@ -210,26 +211,31 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
     ) -> Result<()> {
         let evaluated_batch = self.evaluate_batch(batch)?;
         let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
+        let group_by_metrics = self.group_by_metrics.clone();
         let state = self.state.building_mut();
 
-        let _timer = self.group_by_metrics.aggregation_time.timer();
         for group_values in &evaluated_batch.grouping_set_args {
-            state
-                .group_values
-                .intern(group_values, &mut state.batch_group_indices)?;
+            group_by_metrics.time_group_key_preparation(|| {
+                state
+                    .group_values
+                    .intern(group_values, &mut state.batch_group_indices)
+            })?;
+
             let group_indices = &state.batch_group_indices;
             let total_num_groups = state.group_values.len();
-
-            for (idx, (acc, values)) in state
-                .accumulators
-                .iter_mut()
-                .zip(evaluated_batch.accumulator_args.iter())
-                .enumerate()
-            {
-                accumulator_metrics.time(idx, accumulator_phase, || {
-                    aggregate_fn(acc, values, group_indices, total_num_groups)
-                })?;
-            }
+            group_by_metrics.time_aggregation(|| {
+                for (idx, (acc, values)) in state
+                    .accumulators
+                    .iter_mut()
+                    .zip(evaluated_batch.accumulator_args.iter())
+                    .enumerate()
+                {
+                    accumulator_metrics.time(idx, accumulator_phase, || {
+                        aggregate_fn(acc, values, group_indices, total_num_groups)
+                    })?;
+                }
+                Ok::<(), datafusion_common::DataFusionError>(())
+            })?;
         }
 
         Ok(())
@@ -263,16 +269,17 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                     // Accumulator output consumes internal state. Materialize all
                     // groups once, then slice the materialized batch on later polls.
                     let emit_to = EmitTo::All;
-                    let timer = self.group_by_metrics.emitting_time.timer();
-                    let mut columns = state.group_values.emit(emit_to)?;
-                    for (idx, acc) in state.accumulators.iter_mut().enumerate() {
-                        columns.extend(accumulator_metrics.time(
-                            idx,
-                            accumulator_phase,
-                            || materialize_accumulator_fn(acc, emit_to),
-                        )?);
-                    }
-                    drop(timer);
+                    let columns = self.group_by_metrics.time_emitting(|| {
+                        let mut columns = state.group_values.emit(emit_to)?;
+                        for (idx, acc) in state.accumulators.iter_mut().enumerate() {
+                            columns.extend(accumulator_metrics.time(
+                                idx,
+                                accumulator_phase,
+                                || materialize_accumulator_fn(acc, emit_to),
+                            )?);
+                        }
+                        Ok::<_, datafusion_common::DataFusionError>(columns)
+                    })?;
 
                     let batch = RecordBatch::try_new(output_schema, columns)?;
                     debug_assert!(batch.num_rows() > 0);
@@ -332,19 +339,23 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
     ) -> Result<Option<RecordBatch>> {
         let state_schema = Arc::clone(&self.state_schema);
         let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
+        let group_by_metrics = self.group_by_metrics.clone();
         let state = self.state.building_mut();
         if state.group_values.is_empty() {
             return Ok(None);
         }
 
-        let mut output = state.group_values.emit(EmitTo::All)?;
-        for (idx, acc) in state.accumulators.iter_mut().enumerate() {
-            output.extend(accumulator_metrics.time(
-                idx,
-                AccumulatorPhase::State,
-                || acc.state(EmitTo::All),
-            )?);
-        }
+        let output = group_by_metrics.time_emitting(|| {
+            let mut output = state.group_values.emit(EmitTo::All)?;
+            for (idx, acc) in state.accumulators.iter_mut().enumerate() {
+                output.extend(accumulator_metrics.time(
+                    idx,
+                    AccumulatorPhase::State,
+                    || acc.state(EmitTo::All),
+                )?);
+            }
+            Ok::<_, datafusion_common::DataFusionError>(output)
+        })?;
 
         let batch = RecordBatch::try_new(state_schema, output)?;
         debug_assert!(batch.num_rows() > 0);
@@ -376,6 +387,97 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
 
         state.batch_group_indices = Vec::new();
         self.state = AggregateHashTableState::Outputting(state);
+    }
+
+    /// Creates the required empty grouping-set rows when the input is empty.
+    ///
+    /// For example, this query must still produce one grand-total group even if
+    /// `t` has no rows:
+    ///
+    /// ```sql
+    /// SELECT COUNT(v)
+    /// FROM t
+    /// GROUP BY GROUPING SETS (());
+    /// ```
+    ///
+    /// The synthetic row is filtered out before accumulator update so aggregates
+    /// see the same state they would see for an empty input, rather than a real
+    /// null-valued row.
+    ///
+    /// Only the raw-input tables (partial and single aggregation) call this
+    /// method: grouping sets are expanded while consuming raw rows, so the
+    /// state-input stages (final and partial-reduce aggregation) receive the
+    /// already expanded keys as plain group columns (see
+    /// [`PhysicalGroupBy::as_final`]) and never own a grouping set.
+    pub(super) fn init_empty_grouping_sets(&mut self) -> Result<()> {
+        let group_by_metrics = self.group_by_metrics.clone();
+        let state = self.state.building_mut();
+        if !state.group_by.has_grouping_set() || !state.group_values.is_empty() {
+            return Ok(());
+        }
+
+        let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
+        let any_interned = group_by_metrics.time_group_key_preparation(|| {
+            let max_ordinal = max_duplicate_ordinal(state.group_by.groups());
+            let mut ordinals: HashMap<&[bool], usize> = HashMap::new();
+            let group_schema = state.group_by.group_schema(&self.input_schema)?;
+            let n_expr = state.group_by.expr().len();
+            let mut any_interned = false;
+
+            for group in state.group_by.groups() {
+                let ordinal = {
+                    let entry = ordinals.entry(group.as_slice()).or_insert(0);
+                    let ordinal = *entry;
+                    *entry += 1;
+                    ordinal
+                };
+
+                if !group.iter().all(|&is_null| is_null) {
+                    continue;
+                }
+
+                let mut cols: Vec<ArrayRef> = group_schema
+                    .fields()
+                    .iter()
+                    .take(n_expr)
+                    .map(|field| new_null_array(field.data_type(), 1))
+                    .collect();
+                cols.push(group_id_array(group, ordinal, max_ordinal, 1)?);
+
+                state
+                    .group_values
+                    .intern(&cols, &mut state.batch_group_indices)?;
+                any_interned = true;
+            }
+            Ok::<_, datafusion_common::DataFusionError>(any_interned)
+        })?;
+
+        if any_interned {
+            let total_groups = state.group_values.len();
+            let false_filter = BooleanArray::from(vec![false]);
+            let values = state
+                .accumulators
+                .iter()
+                .map(|acc| {
+                    Ok(EvaluatedAccumulatorArgs {
+                        arguments: acc.null_arguments(&self.input_schema)?,
+                        filter: Some(Arc::new(false_filter.clone())),
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            group_by_metrics.time_aggregation(|| {
+                for (idx, (acc, values)) in
+                    state.accumulators.iter_mut().zip(values.iter()).enumerate()
+                {
+                    accumulator_metrics.time(idx, AccumulatorPhase::Update, || {
+                        acc.update_batch(values, &[0], total_groups)
+                    })?;
+                }
+                Ok::<(), datafusion_common::DataFusionError>(())
+            })?;
+        }
+
+        Ok(())
     }
 }
 
