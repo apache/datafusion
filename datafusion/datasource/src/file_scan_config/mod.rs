@@ -62,7 +62,7 @@ use datafusion_physical_plan::execution_plan::SchedulingType;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType,
     display::{ProjectSchemaDisplay, display_orderings},
-    filter_pushdown::FilterPushdownPropagation,
+    filter_pushdown::{FilterPushdownPropagation, PushedDown},
     metrics::ExecutionPlanMetricsSet,
 };
 use log::{debug, warn};
@@ -1028,6 +1028,13 @@ impl DataSource for FileScanConfig {
         filters: Vec<Arc<dyn PhysicalExpr>>,
         config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
+        // A new filter or pruning predicate can change which rows reach the enforced scan cap.
+        if self.limit.is_some() {
+            return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
+                vec![PushedDown::No; filters.len()],
+            ));
+        }
+
         // Remap filter Column indices to match the table schema (file + partition columns).
         // This is necessary because filters refer to the output schema of this `DataSource`
         // (e.g., after projection pushdown has been applied) and need to be remapped to the table schema
