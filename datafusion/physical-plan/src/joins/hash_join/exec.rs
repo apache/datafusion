@@ -308,11 +308,15 @@ pub(super) struct JoinLeftData {
     /// Membership testing strategy for filter pushdown
     /// Contains either InList values for small build sides or hash table reference for large build sides
     pub(super) membership: PushdownStrategy,
-    /// Shared atomic flag indicating if any probe partition saw data (for null-aware anti/mark joins)
-    /// This is shared across all probe partitions to provide global knowledge
-    pub(super) probe_side_non_empty: AtomicBool,
-    /// Shared atomic flag indicating if any probe partition saw NULL in join keys (for null-aware anti joins)
-    pub(super) probe_side_has_null: AtomicBool,
+    /// Shared flag set once any probe partition saw a row (null-aware anti/mark joins).
+    ///
+    /// Private on purpose: the final stage must read it through
+    /// [`Self::report_probe_completed`], which orders it after every
+    /// partition's stores.
+    probe_side_non_empty: AtomicBool,
+    /// Shared flag set once any probe partition saw a NULL join key (null-aware anti/mark joins).
+    /// Private for the same reason as `probe_side_non_empty`.
+    probe_side_has_null: AtomicBool,
 
     // For RightAnti joins, where the build side is a smaller subquery, truthy if has null for the single join key
     pub(super) build_side_has_null: bool,
@@ -373,11 +377,54 @@ impl JoinLeftData {
         &self.membership
     }
 
-    /// Decrements the counter of running threads, and returns `true`
-    /// if caller is the last running thread
-    pub(super) fn report_probe_completed(&self) -> bool {
-        self.probe_threads_counter.fetch_sub(1, Ordering::Relaxed) == 1
+    /// Records what a probe partition saw in one batch, for the null-aware
+    /// rules evaluated in the final stage.
+    pub(super) fn record_probe_batch(&self, non_empty: bool, has_null: bool) {
+        // Relaxed is enough: `report_probe_completed` orders these stores
+        // before the last partition's reads.
+        if non_empty {
+            self.probe_side_non_empty.store(true, Ordering::Relaxed);
+        }
+        if has_null {
+            self.probe_side_has_null.store(true, Ordering::Relaxed);
+        }
     }
+
+    /// Whether some probe partition has already recorded a NULL join key.
+    ///
+    /// Only an early-exit hint for the probe phase: it may lag behind sibling
+    /// partitions. Final-stage decisions must use the [`ProbeSideSummary`]
+    /// returned by [`Self::report_probe_completed`] instead.
+    pub(super) fn probe_side_has_null_hint(&self) -> bool {
+        self.probe_side_has_null.load(Ordering::Relaxed)
+    }
+
+    /// Decrements the counter of running probe partitions. Returns `Some` for
+    /// the last one, together with the shared probe-side flags.
+    ///
+    /// This is the synchronization point between probe partitions: the
+    /// `AcqRel` decrement publishes everything a finishing partition wrote to
+    /// the last partition, and the summary is read only after it. Handing the
+    /// flags out here, rather than exposing them, keeps the final stage from
+    /// reading them before its own decrement, which could miss a NULL that a
+    /// sibling partition records between the read and the decrement.
+    pub(super) fn report_probe_completed(&self) -> Option<ProbeSideSummary> {
+        let is_last = self.probe_threads_counter.fetch_sub(1, Ordering::AcqRel) == 1;
+        is_last.then(|| ProbeSideSummary {
+            has_null: self.probe_side_has_null.load(Ordering::Relaxed),
+            non_empty: self.probe_side_non_empty.load(Ordering::Relaxed),
+        })
+    }
+}
+
+/// What every probe partition together saw, as observed by the last partition
+/// to finish. Only obtainable from [`JoinLeftData::report_probe_completed`].
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ProbeSideSummary {
+    /// Some probe partition saw a row.
+    pub(super) non_empty: bool,
+    /// Some probe partition saw a NULL join key.
+    pub(super) has_null: bool,
 }
 
 /// Helps to build [`HashJoinExec`].
@@ -7356,6 +7403,153 @@ mod tests {
             ++
             ++
             ");
+        }
+        Ok(())
+    }
+
+    /// Builds a two-partition probe side for the cross-partition null-aware
+    /// tests: partition 0 holds the only NULL key, partition 1 holds none.
+    fn build_two_partition_probe_with_null_in_partition_0() -> Arc<dyn ExecutionPlan> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c2", DataType::Int32, true),
+            Field::new("dummy", DataType::Int32, true),
+        ]));
+        let partition_0 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(1), None])),
+                Arc::new(Int32Array::from(vec![Some(100), Some(400)])),
+            ],
+        )
+        .unwrap();
+        let partition_1 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(2)])),
+                Arc::new(Int32Array::from(vec![Some(200)])),
+            ],
+        )
+        .unwrap();
+        TestMemoryExec::try_new_exec(
+            &[vec![partition_0], vec![partition_1]],
+            schema,
+            None,
+        )
+        .unwrap()
+    }
+
+    /// Drains the probe partitions of `join` one after another in the given
+    /// order and returns everything they emitted.
+    async fn collect_partitions_in_order(
+        join: &HashJoinExec,
+        order: &[usize],
+        task_ctx: &Arc<TaskContext>,
+    ) -> Result<Vec<RecordBatch>> {
+        let mut batches = vec![];
+        for &partition in order {
+            let stream = join.execute(partition, Arc::clone(task_ctx))?;
+            batches.extend(common::collect(stream).await?);
+        }
+        Ok(batches)
+    }
+
+    /// A NULL probe key silences a null-aware anti join even when the
+    /// partition that saw it is not the one emitting the final build rows.
+    ///
+    /// `CollectLeft` with several probe partitions is what the planner
+    /// produces for `NOT IN`, and only the last partition to finish emits the
+    /// build rows, reading the shared NULL flag set by its siblings. Both
+    /// finishing orders must produce no rows.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_anti_join_probe_null_in_other_partition(
+        batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        for order in [[0, 1], [1, 0]] {
+            let left = build_table_two_cols(
+                ("c1", &vec![Some(1), Some(2), Some(3), Some(4)]),
+                ("dummy", &vec![Some(10), Some(20), Some(30), Some(40)]),
+            );
+            let right = build_two_partition_probe_with_null_in_partition_0();
+
+            let on = vec![(
+                Arc::new(Column::new_with_schema("c1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("c2", &right.schema())?) as _,
+            )];
+
+            let join = HashJoinExec::try_new(
+                left,
+                right,
+                on,
+                None,
+                &JoinType::LeftAnti,
+                None,
+                PartitionMode::CollectLeft,
+                NullEquality::NullEqualsNothing,
+                true, // null_aware = true
+            )?;
+
+            let batches = collect_partitions_in_order(&join, &order, &task_ctx).await?;
+            let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+            assert_eq!(
+                rows, 0,
+                "probe order {order:?} emitted rows although a probe partition saw NULL"
+            );
+        }
+        Ok(())
+    }
+
+    /// The null-aware mark join counterpart of
+    /// [`test_null_aware_anti_join_probe_null_in_other_partition`]: an
+    /// unmatched build row must get an UNKNOWN (NULL) mark when the NULL probe
+    /// key was seen by a sibling partition, whichever partition finishes last.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_left_mark_probe_null_in_other_partition(
+        batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        for order in [[0, 1], [1, 0]] {
+            let left = build_table_two_cols(
+                ("c1", &vec![Some(1), Some(4)]),
+                ("dummy", &vec![Some(10), Some(40)]),
+            );
+            let right = build_two_partition_probe_with_null_in_partition_0();
+
+            let on = vec![(
+                Arc::new(Column::new_with_schema("c1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("c2", &right.schema())?) as _,
+            )];
+
+            let join = HashJoinExec::try_new(
+                left,
+                right,
+                on,
+                None,
+                &JoinType::LeftMark,
+                None,
+                PartitionMode::CollectLeft,
+                NullEquality::NullEqualsNothing,
+                true, // null_aware = true
+            )?;
+
+            let batches = collect_partitions_in_order(&join, &order, &task_ctx).await?;
+
+            // c1=1 matches probe row 1 (mark true); c1=4 is unmatched and the
+            // probe side had a NULL, so its mark is UNKNOWN.
+            allow_duplicates! {
+                assert_snapshot!(batches_to_sort_string(&batches), @r"
+                +----+-------+------+
+                | c1 | dummy | mark |
+                +----+-------+------+
+                | 1  | 10    | true |
+                | 4  | 40    |      |
+                +----+-------+------+
+                ");
+            }
         }
         Ok(())
     }

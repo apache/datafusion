@@ -21,14 +21,13 @@
 //! [`super::HashJoinExec`]. See comments in [`HashJoinStream`] for more details.
 
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::task::Poll;
 
 use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
 use crate::joins::Map;
 use crate::joins::MapOffset;
 use crate::joins::PartitionMode;
-use crate::joins::hash_join::exec::{JoinLeftData, NullAwareMode};
+use crate::joins::hash_join::exec::{JoinLeftData, NullAwareMode, ProbeSideSummary};
 use crate::joins::hash_join::shared_bounds::{
     PartitionBounds, PartitionBuildData, SharedBuildAccumulator,
 };
@@ -987,24 +986,15 @@ impl HashJoinStream {
 
         let build_side = self.build_side.try_as_ready()?;
 
-        // For null-aware anti join, if probe side had NULL, no rows should be output
-        // Check shared atomic state to get global knowledge across all partitions
-        if self.null_aware == Some(NullAwareMode::LeftAnti)
-            && build_side
-                .left_data
-                .probe_side_has_null
-                .load(Ordering::Relaxed)
-        {
+        // Only the last probe partition to finish emits the build-side rows,
+        // and only it receives the shared probe-side summary (see
+        // `JoinLeftData::report_probe_completed` for why the flags are not
+        // readable any other way here).
+        let Some(probe_summary) = build_side.left_data.report_probe_completed() else {
             timer.done();
             self.state = HashJoinStreamState::Completed;
             return Ok(StatefulStreamResult::Continue);
-        }
-
-        if !build_side.left_data.report_probe_completed() {
-            timer.done();
-            self.state = HashJoinStreamState::Completed;
-            return Ok(StatefulStreamResult::Continue);
-        }
+        };
 
         // use the global left bitmap to produce the left indices and right indices
         let (left_side, right_side) = get_final_indices_from_shared_bitmap(
@@ -1019,6 +1009,7 @@ impl HashJoinStream {
             Some(NullAwareMode::LeftAnti) => {
                 let (left_side, right_side) = null_aware_left_anti_final_indices(
                     &build_side.left_data,
+                    probe_summary,
                     left_side,
                     right_side,
                 );
@@ -1027,6 +1018,7 @@ impl HashJoinStream {
             Some(NullAwareMode::LeftMark { .. }) => {
                 let mark_column = null_aware_left_mark_column(
                     &build_side.left_data,
+                    probe_summary,
                     &left_side,
                     &right_side,
                 );
@@ -1087,12 +1079,6 @@ fn null_aware_skip_probe_batch(
     match mode {
         NullAwareMode::RightAnti => left_data.build_side_has_null,
         NullAwareMode::LeftAnti | NullAwareMode::LeftMark { .. } => {
-            // Only batches with rows count: `NULL NOT IN (empty)` is TRUE.
-            if state.batch.num_rows() > 0 {
-                left_data
-                    .probe_side_non_empty
-                    .store(true, Ordering::Relaxed);
-            }
             // `on[0]` is the `NOT IN` value key for both modes.
             let probe_key_column = &state.values[0];
             let probe_has_null = match mode {
@@ -1101,11 +1087,11 @@ fn null_aware_skip_probe_batch(
                 }
                 _ => probe_key_column.null_count() > 0,
             };
-            if probe_has_null {
-                left_data.probe_side_has_null.store(true, Ordering::Relaxed);
-            }
-            mode == NullAwareMode::LeftAnti
-                && left_data.probe_side_has_null.load(Ordering::Relaxed)
+            // Only batches with rows count: `NULL NOT IN (empty)` is TRUE.
+            left_data.record_probe_batch(state.batch.num_rows() > 0, probe_has_null);
+            // Best-effort early exit; the final stage re-checks the flag
+            // through `report_probe_completed`.
+            mode == NullAwareMode::LeftAnti && left_data.probe_side_has_null_hint()
         }
     }
 }
@@ -1135,15 +1121,23 @@ fn drop_null_probe_keys(
     }
 }
 
-/// Final-stage rule of a null-aware `LeftAnti` join: a NULL build key means
-/// `NULL NOT IN (probe)`, which is UNKNOWN (row dropped) unless the probe side
-/// was empty, where it is TRUE (row kept).
+/// Final-stage rules of a null-aware `LeftAnti` join, evaluated by the last
+/// probe partition from what every partition together saw:
+/// - a NULL probe key seen by any partition makes `build.key NOT IN (probe)`
+///   UNKNOWN for every build row, so nothing is emitted;
+/// - otherwise a NULL build key means `NULL NOT IN (probe)`, which is UNKNOWN
+///   (row dropped) unless the probe side was empty, where it is TRUE (row
+///   kept).
 fn null_aware_left_anti_final_indices(
     left_data: &JoinLeftData,
+    probe_summary: ProbeSideSummary,
     left_side: UInt64Array,
     right_side: UInt32Array,
 ) -> (UInt64Array, UInt32Array) {
-    if !left_data.probe_side_non_empty.load(Ordering::Relaxed) {
+    if probe_summary.has_null {
+        return (UInt64Array::new_null(0), UInt32Array::new_null(0));
+    }
+    if !probe_summary.non_empty {
         return (left_side, right_side);
     }
     // null_aware validation ensures a single join key
@@ -1158,14 +1152,13 @@ fn null_aware_left_anti_final_indices(
 }
 
 /// Builds the nullable mark column of a null-aware `LeftMark` join from the
-/// final indices and the shared NULL-tracking state.
+/// final indices and what every probe partition together saw.
 fn null_aware_left_mark_column(
     left_data: &JoinLeftData,
+    probe_summary: ProbeSideSummary,
     left_side: &UInt64Array,
     right_side: &UInt32Array,
 ) -> ArrayRef {
-    let probe_side_has_null = left_data.probe_side_has_null.load(Ordering::Relaxed);
-    let probe_side_non_empty = left_data.probe_side_non_empty.load(Ordering::Relaxed);
     let build_key_column = &left_data.values()[0];
     // Correlated joins precomputed the UNKNOWN decision per build row.
     let null_indices_bitmap = left_data
@@ -1177,8 +1170,8 @@ fn null_aware_left_mark_column(
         right_side,
         build_key_column.as_ref(),
         null_indices_bitmap.as_deref(),
-        probe_side_has_null,
-        probe_side_non_empty,
+        probe_summary.has_null,
+        probe_summary.non_empty,
     )
 }
 
