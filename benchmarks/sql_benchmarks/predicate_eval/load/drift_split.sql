@@ -1,13 +1,13 @@
 -- Split drift dataset, shared by q82 and q83: 16 Parquet files of PRED_ROWS / 16
--- rows each. f00..f07 carry profile A (`a_sel = 0` selective at ~0.1%, `b_sel = 0`
--- unselective at ~50%), f08..f15 the mirror, at the rates q80/q81 use.
--- `FileGroup::split_files` sorts a group's files by path, so `target_partitions =
--- 1` reads f00..f15 in order and meets the flip halfway through the scan (q82),
--- while `= 16` hands every stream one whole file, i.e. one fixed profile (q83).
--- Each query sets that itself; `repartition_file_scans` stays off for both, or the
--- groups are re-derived as byte ranges and both profiles land in one stream again.
-
--- f00..f07: profile A -- `a_sel = 0` selective, `b_sel = 0` unselective.
+-- rows each, at the q80 rates -- f00..f07 carry profile A (`a_sel = 0` selective
+-- at ~0.1%, `b_sel = 0` unselective at ~50%) and f08..f15 the mirror.
+--
+-- One `COPY` per file, because a directory-target `COPY` names its output with a
+-- random write id and Parquet has no overwrite, so a second load would add files;
+-- the names are zero-padded so they sort numerically. `FileGroup::split_files`
+-- sorts a group's files by path, so `target_partitions = 1` (q82) reads f00..f15
+-- in order and `= 16` (q83) gives each stream one whole file; each query sets it.
+-- `repartition_file_scans` stays off, or both profiles land in one stream again.
 
 COPY (SELECT value AS seq, value % 1000 AS a_sel, value % 2    AS b_sel
       FROM generate_series(1, ${PRED_ROWS:-1000000} / 16) ORDER BY value)
@@ -48,8 +48,6 @@ COPY (SELECT value AS seq, value % 1000 AS a_sel, value % 2    AS b_sel
       FROM generate_series(1, ${PRED_ROWS:-1000000} / 16) ORDER BY value)
 TO 'sql_benchmarks/predicate_eval/scratch/drift_split/f07.parquet'
 STORED AS PARQUET;
-
--- f08..f15: profile B -- the mirror.
 
 COPY (SELECT value AS seq, value % 2    AS a_sel, value % 1000 AS b_sel
       FROM generate_series(1, ${PRED_ROWS:-1000000} / 16) ORDER BY value)

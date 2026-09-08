@@ -1,10 +1,7 @@
--- Sixty-four independent integer columns, each uniform on [0,100), so the
--- predicate `cN < k` again has selectivity ~k%. This is `ints.sql` widened from
--- 16 to 64 columns: c0..c15 use the same multipliers, so a predicate over them
--- has exactly the same selectivities as it does on `ints`, and only the width of
--- the batches flowing through the filter changes. The multipliers are all
--- coprime to 100, which keeps the residues uniform and the columns mutually
--- decorrelated. PRED_ROWS sizes the table.
+-- `ints.sql` widened to 64 integer columns, each uniform on [0,100), so `cN < k`
+-- again has selectivity ~k%. c0..c15 reuse the same multipliers, so a predicate
+-- over them has exactly the same selectivities as on `ints` and only the width of
+-- the batches flowing through the filter changes. PRED_ROWS sizes the table.
 CREATE TABLE t AS
 SELECT
   (value * 1)   % 100 AS c0,

@@ -1,8 +1,7 @@
 subgroup drift
 
 template sql_benchmarks/predicate_eval/predicate_eval.benchmark.template
-SUBGROUP=drift
-QPAD=82
+QUERY=drift/q82
 DATASET=drift_split
 NAME=drift_q82_late_flip
 

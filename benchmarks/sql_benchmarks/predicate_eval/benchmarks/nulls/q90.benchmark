@@ -1,7 +1,6 @@
 subgroup nulls
 
 template sql_benchmarks/predicate_eval/predicate_eval.benchmark.template
-SUBGROUP=nulls
-QPAD=90
-DATASET=nulls
+QUERY=nulls/q90
+DATASET=ints
 NAME=nulls_q90_nullable_selective_first

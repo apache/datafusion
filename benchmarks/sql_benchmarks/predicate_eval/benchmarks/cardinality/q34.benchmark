@@ -1,7 +1,6 @@
 subgroup cardinality
 
 template sql_benchmarks/predicate_eval/predicate_eval.benchmark.template
-SUBGROUP=cardinality
-QPAD=34
+QUERY=cardinality/q34
 DATASET=ints_wide
 NAME=cardinality_q34_k8_wide64

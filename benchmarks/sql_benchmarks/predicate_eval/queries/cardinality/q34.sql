@@ -1,8 +1,4 @@
--- k = 8 over the 64-column `ints_wide` table: the same predicates and the same
--- hidden selectivities as q32 (seven ~90% compares followed by one ~5%
--- compare), but every batch carries 64 columns instead of 16. Only the width of
--- the batches being filtered changes, so this isolates the per-conjunct cost of
--- materializing a filtered batch from the cost of evaluating the predicates.
+-- k = 8 as in q32, but over the 64-column `ints_wide` table.
 SELECT count(*) FROM t
 WHERE c0 < 90
   AND c1 < 90
