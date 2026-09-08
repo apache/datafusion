@@ -412,14 +412,14 @@ impl<T: ArrowNativeTypeOp + Ord + Copy + Send + Sync + 'static> PrimitiveValuesR
 
         if array.null_count() == 0 {
             let values = array.values().as_ref();
-            if !descending {
+            if descending {
                 for (idx, &val) in values.iter().enumerate() {
-                    let p = split_points.partition_point(|&sp| sp <= val);
+                    let p = split_points.partition_point(|&sp| sp >= val);
                     emit(idx, p);
                 }
             } else {
                 for (idx, &val) in values.iter().enumerate() {
-                    let p = split_points.partition_point(|&sp| sp >= val);
+                    let p = split_points.partition_point(|&sp| sp <= val);
                     emit(idx, p);
                 }
             }
@@ -430,10 +430,10 @@ impl<T: ArrowNativeTypeOp + Ord + Copy + Send + Sync + 'static> PrimitiveValuesR
                     emit(idx, null_partition);
                 } else {
                     let val = array.value(idx);
-                    let p = if !descending {
-                        split_points.partition_point(|&sp| sp <= val)
-                    } else {
+                    let p = if descending {
                         split_points.partition_point(|&sp| sp >= val)
+                    } else {
+                        split_points.partition_point(|&sp| sp <= val)
                     };
                     emit(idx, p);
                 }

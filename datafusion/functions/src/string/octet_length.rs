@@ -185,9 +185,9 @@ mod tests {
         );
         test_function!(
             OctetLengthFunc::new(),
-            vec![ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                String::from("")
-            )))],
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8(
+                Some(String::new())
+            ))],
             Ok(Some(0)),
             i32,
             Int32,
@@ -224,7 +224,7 @@ mod tests {
         test_function!(
             OctetLengthFunc::new(),
             vec![ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
-                String::from("")
+                String::new()
             )))],
             Ok(Some(0)),
             i32,

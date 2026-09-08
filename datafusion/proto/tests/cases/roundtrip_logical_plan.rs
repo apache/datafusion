@@ -1673,7 +1673,7 @@ async fn roundtrip_logical_plan_prepared_statement_with_metadata() -> Result<()>
         .unwrap();
     let prepared = LogicalPlanBuilder::new(plan)
         .prepare(
-            "".to_string(),
+            String::new(),
             vec![
                 Field::new("", DataType::Int32, true)
                     .with_metadata(

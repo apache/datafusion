@@ -1046,9 +1046,10 @@ impl<'a> UdafSchemaNameBuilder<'a> {
         }
 
         if !order_by.is_empty() {
-            let clause = match supports_within_group_clause {
-                true => "WITHIN GROUP",
-                false => "ORDER BY",
+            let clause = if supports_within_group_clause {
+                "WITHIN GROUP"
+            } else {
+                "ORDER BY"
             };
 
             schema_name.write_fmt(format_args!(

@@ -504,10 +504,10 @@ impl DisplayAs for NestedLoopJoinExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let display_filter = self.filter.as_ref().map_or_else(
-                    || "".to_string(),
-                    |f| format!(", filter={}", f.expression()),
-                );
+                let display_filter = self
+                    .filter
+                    .as_ref()
+                    .map_or_else(String::new, |f| format!(", filter={}", f.expression()));
                 let display_projections = if self.contains_projection() {
                     format!(
                         ", projection=[{}]",
@@ -524,7 +524,7 @@ impl DisplayAs for NestedLoopJoinExec {
                             .join(", ")
                     )
                 } else {
-                    "".to_string()
+                    String::new()
                 };
                 write!(
                     f,
@@ -533,10 +533,10 @@ impl DisplayAs for NestedLoopJoinExec {
                 )
             }
             DisplayFormatType::TreeRender => {
-                if *self.join_type() != JoinType::Inner {
-                    writeln!(f, "join_type={:?}", self.join_type)
-                } else {
+                if *self.join_type() == JoinType::Inner {
                     Ok(())
+                } else {
+                    writeln!(f, "join_type={:?}", self.join_type)
                 }
             }
         }
@@ -1749,7 +1749,7 @@ impl std::fmt::Debug for FallbackCoordinator {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FallbackCoordinator")
             .field("right_partition_count", &self.right_partition_count)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -3233,10 +3233,7 @@ impl NestedLoopJoinStream {
             return Ok(None);
         }
 
-        if !cur_right_bitmap.has_true() {
-            // If none of the pairs has passed the join predicate/filter
-            Ok(None)
-        } else {
+        if cur_right_bitmap.has_true() {
             // Use the optimized approach similar to build_intermediate_batch_for_single_left_row
             let join_batch = build_row_join_batch(
                 &self.output_schema,
@@ -3248,6 +3245,9 @@ impl NestedLoopJoinStream {
                 JoinSide::Left,
             )?;
             Ok(join_batch)
+        } else {
+            // If none of the pairs has passed the join predicate/filter
+            Ok(None)
         }
     }
 

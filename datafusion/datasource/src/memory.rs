@@ -571,9 +571,7 @@ impl MemorySourceConfig {
         target_partitions: usize,
         output_ordering: LexOrdering,
     ) -> Result<Option<Vec<Vec<RecordBatch>>>> {
-        if !self.eq_properties().ordering_satisfy(output_ordering)? {
-            Ok(None)
-        } else {
+        if self.eq_properties().ordering_satisfy(output_ordering)? {
             let total_num_batches =
                 self.partitions.iter().map(|b| b.len()).sum::<usize>();
             if total_num_batches < target_partitions {
@@ -623,9 +621,8 @@ impl MemorySourceConfig {
                         }
                         // Successful repartition. Break inner loop, and return to outer `cnt_to_repartition` loop.
                         break;
-                    } else {
-                        cannot_split_further.push(new_partitions.remove(0));
                     }
+                    cannot_split_further.push(new_partitions.remove(0));
                 }
             }
             let mut partitions = max_heap
@@ -640,6 +637,8 @@ impl MemorySourceConfig {
             let partitions = partitions.into_iter().map(|rep| rep.batches).collect_vec();
 
             Ok(Some(partitions))
+        } else {
+            Ok(None)
         }
     }
 
@@ -926,7 +925,7 @@ impl Debug for MemSink {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MemSink")
             .field("num_partitions", &self.batches.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

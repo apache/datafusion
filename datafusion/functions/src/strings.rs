@@ -1284,9 +1284,11 @@ impl ColumnarValueRef<'_> {
         convert_to_str: bool,
     ) -> Result<Option<ColumnarValueRef<'a>>> {
         match col {
-            ColumnarValue::Scalar(ScalarValue::Utf8(maybe_value))
-            | ColumnarValue::Scalar(ScalarValue::LargeUtf8(maybe_value))
-            | ColumnarValue::Scalar(ScalarValue::Utf8View(maybe_value)) => {
+            ColumnarValue::Scalar(
+                ScalarValue::Utf8(maybe_value)
+                | ScalarValue::LargeUtf8(maybe_value)
+                | ScalarValue::Utf8View(maybe_value),
+            ) => {
                 if let Some(s) = maybe_value {
                     *data_size += s.len() * len * size_factor;
                     Ok(Some(ColumnarValueRef::Scalar(s.as_bytes())))
@@ -1294,10 +1296,12 @@ impl ColumnarValueRef<'_> {
                     Ok(None)
                 }
             }
-            ColumnarValue::Scalar(ScalarValue::Binary(maybe_value))
-            | ColumnarValue::Scalar(ScalarValue::LargeBinary(maybe_value))
-            | ColumnarValue::Scalar(ScalarValue::BinaryView(maybe_value))
-            | ColumnarValue::Scalar(ScalarValue::FixedSizeBinary(_, maybe_value)) => {
+            ColumnarValue::Scalar(
+                ScalarValue::Binary(maybe_value)
+                | ScalarValue::LargeBinary(maybe_value)
+                | ScalarValue::BinaryView(maybe_value)
+                | ScalarValue::FixedSizeBinary(_, maybe_value),
+            ) => {
                 if let Some(b) = maybe_value {
                     *data_size += b.len() * len * size_factor;
                     Ok(Some(ColumnarValueRef::Scalar(b.as_slice())))

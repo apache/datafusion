@@ -133,7 +133,9 @@ impl TableProvider for SimpleCsvTable {
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let batches = if !self.exprs.is_empty() {
+        let batches = if self.exprs.is_empty() {
+            self.batches.clone()
+        } else {
             let max_return_lines = self.interpreter_expr(state).await?;
             // get max return rows from self.batches
             let mut batches = vec![];
@@ -144,14 +146,11 @@ impl TableProvider for SimpleCsvTable {
                     let batch_lines = max_return_lines as usize - lines;
                     batches.push(batch.slice(0, batch_lines));
                     break;
-                } else {
-                    batches.push(batch.clone());
-                    lines += batch_lines;
                 }
+                batches.push(batch.clone());
+                lines += batch_lines;
             }
             batches
-        } else {
-            self.batches.clone()
         };
         Ok(MemorySourceConfig::try_new_exec(
             &[batches],

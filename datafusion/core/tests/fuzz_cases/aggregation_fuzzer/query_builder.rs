@@ -306,7 +306,7 @@ impl QueryBuilder {
                     self.null_opt(),
                 )
             } else {
-                ("".to_string(), "".to_string())
+                (String::new(), String::new())
             };
 
             let function = format!(

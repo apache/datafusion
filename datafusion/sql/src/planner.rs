@@ -612,14 +612,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Expr::Column(col) => match &col.relation {
                     Some(r) => schema.field_with_qualified_name(r, &col.name).map(|_| ()),
                     None => {
-                        if !schema.fields_with_unqualified_name(&col.name).is_empty() {
-                            Ok(())
-                        } else {
+                        if schema.fields_with_unqualified_name(&col.name).is_empty() {
                             Err(field_not_found(
                                 col.relation.clone(),
                                 col.name.as_str(),
                                 schema,
                             ))
+                        } else {
+                            Ok(())
                         }
                     }
                 }

@@ -144,13 +144,14 @@ impl ListingTableFactory {
         // extension filter is left empty and the explicit paths/globs are used
         // as provided.
         let file_extension = if table_paths.len() == 1 {
-            match first_path.is_collection() {
+            if first_path.is_collection() {
                 // Setting the extension to be empty instead of allowing the default extension seems
                 // odd, but was done to ensure existing behavior isn't modified. It seems like this
                 // could be refactored to either use the default extension or set the fully expected
                 // extension when compression is included (e.g. ".csv.gz")
-                true => String::new(),
-                false => get_extension(&cmd.locations[0]),
+                String::new()
+            } else {
+                get_extension(&cmd.locations[0])
             }
         } else {
             String::new()
@@ -332,7 +333,7 @@ fn get_extension(path: &str) -> String {
     let res = Path::new(path).extension().and_then(|ext| ext.to_str());
     match res {
         Some(ext) => format!(".{ext}"),
-        None => "".to_string(),
+        None => String::new(),
     }
 }
 

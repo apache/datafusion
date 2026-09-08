@@ -115,7 +115,7 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
         match task.join().await {
             Ok(Ok((cnt, bytes))) => {
                 match writer.write_all(&bytes).await {
-                    Ok(_) => (),
+                    Ok(()) => (),
                     Err(e) => {
                         return SerializedRecordBatchResult::failure(
                             None,
@@ -142,7 +142,7 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
     }
 
     match serialize_task.join().await {
-        Ok(Ok(_)) => (),
+        Ok(Ok(())) => (),
         Ok(Err(e)) => return SerializedRecordBatchResult::failure(Some(writer), e),
         Err(_) => {
             return SerializedRecordBatchResult::failure(
@@ -216,20 +216,18 @@ pub(crate) async fn stateless_serialize_and_write_files(
     }
 
     if any_errors {
-        match any_abort_errors {
-            true => {
+        if any_abort_errors {
+            return internal_err!(
+                "Error encountered during writing to ObjectStore and failed to abort all writers. Partial result may have been written."
+            );
+        }
+        match triggering_error {
+            Some(e) => return Err(e),
+            None => {
                 return internal_err!(
-                    "Error encountered during writing to ObjectStore and failed to abort all writers. Partial result may have been written."
+                    "Unknown Error encountered during writing to ObjectStore. All writers successfully aborted."
                 );
             }
-            false => match triggering_error {
-                Some(e) => return Err(e),
-                None => {
-                    return internal_err!(
-                        "Unknown Error encountered during writing to ObjectStore. All writers successfully aborted."
-                    );
-                }
-            },
         }
     }
 

@@ -349,11 +349,11 @@ impl<'a> GuaranteeBuilder<'a> {
                     // e.g. `a IN (1,2,3) AND a IN (2,3,4)` is `a IN (2,3)`
                     // otherwise, we invalidate the guarantee
                     // e.g. `a IN (1,2,3) AND a IN (4,5,6)` is `a IN ()`, which is invalid
-                    if !intersection.is_empty() {
-                        existing.literals = intersection.into_iter().cloned().collect();
-                    } else {
+                    if intersection.is_empty() {
                         // at least one was not, so invalidate the guarantee
                         *entry = None;
+                    } else {
+                        existing.literals = intersection.into_iter().cloned().collect();
                     }
                 }
             }

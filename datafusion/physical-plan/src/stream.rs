@@ -451,7 +451,7 @@ impl<S> std::fmt::Debug for RecordBatchStreamAdapter<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RecordBatchStreamAdapter")
             .field("schema", &self.schema)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

@@ -396,7 +396,7 @@ impl AggregateStream {
                         match result
                             .and_then(|allocated| this.reservation.try_grow(allocated))
                         {
-                            Ok(_) => continue,
+                            Ok(()) => continue,
                             Err(e) => Err(e),
                         }
                     }

@@ -531,9 +531,8 @@ fn date_bin_impl(
                     return not_impl_err!(
                         "DATE_BIN stride does not support combination of month, day and nanosecond intervals"
                     );
-                } else {
-                    Interval::Months(months as i64)
                 }
+                Interval::Months(months as i64)
             } else {
                 let nanos = (TimeDelta::try_days(days as i64).unwrap()
                     + Duration::nanoseconds(nanos))

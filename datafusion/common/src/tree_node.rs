@@ -1290,7 +1290,9 @@ impl<T: DynTreeNode + ?Sized> TreeNode for Arc<T> {
         f: F,
     ) -> Result<Transformed<Self>> {
         let children = self.arc_children();
-        if !children.is_empty() {
+        if children.is_empty() {
+            Ok(Transformed::no(self))
+        } else {
             let new_children = children
                 .into_iter()
                 .cloned()
@@ -1305,8 +1307,6 @@ impl<T: DynTreeNode + ?Sized> TreeNode for Arc<T> {
             } else {
                 Ok(Transformed::new(self, false, new_children.tnr))
             }
-        } else {
-            Ok(Transformed::no(self))
         }
     }
 }
@@ -1338,13 +1338,13 @@ impl<T: ConcreteTreeNode> TreeNode for T {
         f: F,
     ) -> Result<Transformed<Self>> {
         let (new_self, children) = self.take_children();
-        if !children.is_empty() {
+        if children.is_empty() {
+            Ok(Transformed::no(new_self))
+        } else {
             let new_children = children.into_iter().map_until_stop_and_collect(f)?;
             // Propagate up `new_children.transformed` and `new_children.tnr` along with
             // the node containing transformed children.
             new_children.map_data(|new_children| new_self.with_new_children(new_children))
-        } else {
-            Ok(Transformed::no(new_self))
         }
     }
 }

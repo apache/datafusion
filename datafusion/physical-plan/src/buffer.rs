@@ -429,7 +429,7 @@ impl<T: Send + SizedMessage + 'static> MemoryBufferedStream<T> {
                 // in order to consider aborting the stream
                 let item_or_err = tokio::select! {
                     biased;
-                    _ = batch_tx.closed() => break,
+                    () = batch_tx.closed() => break,
                     // Catch a panic in the input poll so it surfaces as a stream error
                     // instead of dropping `batch_tx` and looking like a clean EOF.
                     polled = AssertUnwindSafe(input.next()).catch_unwind() => {
@@ -749,12 +749,13 @@ mod tests {
     async fn finished<T: SizedMessage>(
         buffered: &mut MemoryBufferedStream<T>,
     ) -> Result<(), Box<dyn Error>> {
-        match timeout(Duration::from_millis(1), buffered.next())
+        if timeout(Duration::from_millis(1), buffered.next())
             .await?
             .is_none()
         {
-            true => Ok(()),
-            false => internal_err!("Stream should have finished")?,
+            Ok(())
+        } else {
+            internal_err!("Stream should have finished")?
         }
     }
 

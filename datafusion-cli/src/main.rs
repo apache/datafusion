@@ -407,10 +407,10 @@ fn parse_batch_size(size: &str) -> Result<usize, String> {
 }
 
 fn parse_command(command: &str) -> Result<String, String> {
-    if !command.is_empty() {
-        Ok(command.to_string())
-    } else {
+    if command.is_empty() {
         Err("-c flag expects only non empty commands".to_string())
+    } else {
+        Ok(command.to_string())
     }
 }
 

@@ -101,16 +101,18 @@ impl ScalarUDFImpl for SparkLuhnCheck {
                     exec_err!("Unsupported data type {other:?} for function `luhn_check`")
                 }
             },
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(s)))
-            | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(s)))
-            | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(s))) => Ok(
-                ColumnarValue::Scalar(ScalarValue::Boolean(Some(luhn_check_impl(s)))),
-            ),
-            ColumnarValue::Scalar(ScalarValue::Utf8(None))
-            | ColumnarValue::Scalar(ScalarValue::LargeUtf8(None))
-            | ColumnarValue::Scalar(ScalarValue::Utf8View(None)) => {
-                Ok(ColumnarValue::Scalar(ScalarValue::Boolean(None)))
-            }
+            ColumnarValue::Scalar(
+                ScalarValue::Utf8(Some(s))
+                | ScalarValue::LargeUtf8(Some(s))
+                | ScalarValue::Utf8View(Some(s)),
+            ) => Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(
+                luhn_check_impl(s),
+            )))),
+            ColumnarValue::Scalar(
+                ScalarValue::Utf8(None)
+                | ScalarValue::LargeUtf8(None)
+                | ScalarValue::Utf8View(None),
+            ) => Ok(ColumnarValue::Scalar(ScalarValue::Boolean(None))),
             other => {
                 exec_err!("Unsupported data type {other:?} for function `luhn_check`")
             }

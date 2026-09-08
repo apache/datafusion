@@ -115,17 +115,17 @@ pub fn fields_with_udf<F: UDFCoercionExt>(
     let type_signature = &signature.type_signature;
 
     if current_fields.is_empty() && type_signature != &TypeSignature::UserDefined {
-        if type_signature.supports_zero_argument() {
-            return Ok(vec![]);
+        return if type_signature.supports_zero_argument() {
+            Ok(vec![])
         } else if type_signature.used_to_support_zero_arguments() {
             // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
-            return plan_err!(
+            plan_err!(
                 "'{}' does not support zero arguments. Use TypeSignature::Nullary for zero arguments",
                 func.name()
-            );
+            )
         } else {
-            return plan_err!("'{}' does not support zero arguments", func.name());
-        }
+            plan_err!("'{}' does not support zero arguments", func.name())
+        };
     }
     let current_types = current_fields
         .iter()
@@ -246,15 +246,15 @@ pub fn value_fields_with_higher_order_udf<L: Clone>(
                 current_fields.iter().zip(expected.iter()).enumerate()
             {
                 match (actual, expected) {
-                    (ValueOrLambda::Value(_), ValueOrLambda::Value(_)) => {}
-                    (ValueOrLambda::Lambda(_), ValueOrLambda::Lambda(_)) => {}
-                    (ValueOrLambda::Value(_), ValueOrLambda::Lambda(_)) => {
+                    (ValueOrLambda::Value(_), ValueOrLambda::Value(())) => {}
+                    (ValueOrLambda::Lambda(_), ValueOrLambda::Lambda(())) => {}
+                    (ValueOrLambda::Value(_), ValueOrLambda::Lambda(())) => {
                         let name = func.name();
                         return plan_err!(
                             "The function '{name}' expected a lambda at position {i} but received a value"
                         );
                     }
-                    (ValueOrLambda::Lambda(_), ValueOrLambda::Value(_)) => {
+                    (ValueOrLambda::Lambda(_), ValueOrLambda::Value(())) => {
                         let name = func.name();
                         return plan_err!(
                             "The function '{name}' expected a value at position {i} but received a lambda"
@@ -438,20 +438,20 @@ pub fn data_types(
     let type_signature = &signature.type_signature;
 
     if current_types.is_empty() && type_signature != &TypeSignature::UserDefined {
-        if type_signature.supports_zero_argument() {
-            return Ok(vec![]);
+        return if type_signature.supports_zero_argument() {
+            Ok(vec![])
         } else if type_signature.used_to_support_zero_arguments() {
             // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
-            return plan_err!(
+            plan_err!(
                 "function '{}' has signature {type_signature} which does not support zero arguments. Use TypeSignature::Nullary for zero arguments",
                 function_name.as_ref()
-            );
+            )
         } else {
-            return plan_err!(
+            plan_err!(
                 "Function '{}' has signature {type_signature} which does not support zero arguments",
                 function_name.as_ref()
-            );
-        }
+            )
+        };
     }
 
     let valid_types =
@@ -566,9 +566,8 @@ fn get_valid_types_with_udf<F: UDFCoercionExt>(
                     func.name(),
                     errors.join(",")
                 );
-            } else {
-                res
             }
+            res
         }
         _ => get_valid_types(func.name(), signature, current_types)?,
     };

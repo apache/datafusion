@@ -222,13 +222,13 @@ impl Future for Emit {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<()> {
-        if !self.done {
+        if self.done {
+            Poll::Ready(())
+        } else {
             self.done = true;
             // Poll::Pending causes the generator to yield, returning control back to the
             // calling Stream
             Poll::Pending
-        } else {
-            Poll::Ready(())
         }
     }
 }
@@ -402,7 +402,7 @@ mod test {
 
         let s = async_stream(|mut emitter| async move {
             select! {
-                _ = do_stuff_async() => emitter.emit(()).await,
+                () = do_stuff_async() => emitter.emit(()).await,
                 else => emitter.emit(()).await,
             }
         });
@@ -422,8 +422,8 @@ mod test {
 
         let s = async_stream(|mut emitter| async move {
             select! {
-                _ = do_stuff_async() => emitter.emit("hey").await,
-                _ = more_async_work() => emitter.emit("hey").await,
+                () = do_stuff_async() => emitter.emit("hey").await,
+                () = more_async_work() => emitter.emit("hey").await,
                 else => emitter.emit("hey").await,
             }
         });
@@ -464,7 +464,7 @@ mod test {
         pin_mut!(s);
 
         for i in 0..3 {
-            assert_matches!(tx.send(i).await, Ok(_));
+            assert_matches!(tx.send(i).await, Ok(()));
             assert_eq!(Some(i), s.next().await);
         }
 
@@ -573,7 +573,7 @@ mod test {
 
         let _ = async_stream(|mut emitter| async move {
             select! {
-                _ = do_stuff_async() => {
+                () = do_stuff_async() => {
                     let another_s = async_try_stream(|mut inner_emitter| async move {
                         inner_emitter.emit(()).await;
                         Ok(())

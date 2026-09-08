@@ -1311,7 +1311,7 @@ impl PhysicalExpr for CaseExpr {
             // There is at least one reachable nullable 'then' expression, so the case
             // expression itself is nullable.
             // Use `Result::map` to propagate the error from `nullable_then` if there is one.
-            nullable_then.map(|_| true)
+            nullable_then.map(|()| true)
         } else if let Some(e) = &self.body.else_expr {
             // There are no reachable nullable 'then' expressions, so all we still need to
             // check is the 'else' expression's nullability.
@@ -1368,9 +1368,7 @@ impl PhysicalExpr for CaseExpr {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        if children.len() != self.children().len() {
-            internal_err!("CaseExpr: Wrong number of children")
-        } else {
+        if children.len() == self.children().len() {
             let (expr, when_then_expr, else_expr) =
                 match (self.expr().is_some(), self.body.else_expr.is_some()) {
                     (true, true) => (
@@ -1393,6 +1391,8 @@ impl PhysicalExpr for CaseExpr {
                 when_then_expr.iter().cloned().tuples().collect(),
                 else_expr.cloned(),
             )?))
+        } else {
+            internal_err!("CaseExpr: Wrong number of children")
         }
     }
 

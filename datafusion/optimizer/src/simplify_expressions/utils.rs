@@ -91,19 +91,19 @@ pub fn delete_xor_in_complex_expr(expr: &Expr, needle: &Expr, is_left: bool) -> 
     if result_expr.normalize_eq(needle) {
         return needle.clone();
     } else if xor_counter % 2 == 0 {
-        if is_left {
-            return Expr::BinaryExpr(BinaryExpr::new(
+        return if is_left {
+            Expr::BinaryExpr(BinaryExpr::new(
                 Box::new(needle.clone()),
                 Operator::BitwiseXor,
                 Box::new(result_expr),
-            ));
+            ))
         } else {
-            return Expr::BinaryExpr(BinaryExpr::new(
+            Expr::BinaryExpr(BinaryExpr::new(
                 Box::new(result_expr),
                 Operator::BitwiseXor,
                 Box::new(needle.clone()),
-            ));
-        }
+            ))
+        };
     }
     result_expr
 }
@@ -240,12 +240,7 @@ pub fn is_eq_and_ne_with_different_literal(eq_expr: &Expr, ne_expr: &Expr) -> bo
         match expr {
             Expr::BinaryExpr(BinaryExpr {
                 left,
-                op: Operator::Eq,
-                right,
-            })
-            | Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: Operator::NotEq,
+                op: Operator::Eq | Operator::NotEq,
                 right,
             }) => match (left.as_ref(), right.as_ref()) {
                 (Expr::Literal(_, _), var) => Some((var, left)),

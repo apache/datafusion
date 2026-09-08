@@ -49,10 +49,10 @@ pub struct CliHelper {
 
 impl CliHelper {
     pub fn new(dialect: &Dialect, color: bool) -> Self {
-        let highlighter: Box<dyn Highlighter> = if !color {
-            Box::new(NoSyntaxHighlighter {})
-        } else {
+        let highlighter: Box<dyn Highlighter> = if color {
             Box::new(SyntaxHighlighter::new(dialect))
+        } else {
+            Box::new(NoSyntaxHighlighter {})
         };
         Self {
             completer: FilenameCompleter::new(),

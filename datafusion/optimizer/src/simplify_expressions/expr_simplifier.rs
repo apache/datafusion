@@ -722,9 +722,10 @@ impl ConstEvaluator {
             .ok()
             .and_then(|f| {
                 let m = f.metadata();
-                match m.is_empty() {
-                    true => None,
-                    false => Some(FieldMetadata::from(m)),
+                if m.is_empty() {
+                    None
+                } else {
+                    Some(FieldMetadata::from(m))
                 }
             });
         let col_val = match phys_expr.evaluate(&DUMMY_BATCH) {
@@ -905,13 +906,14 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 op: Eq,
                 right,
             }) if (left == right) & !left.is_volatile() => {
-                Transformed::yes(match !info.nullable(&left)? {
-                    true => lit(true),
-                    false => Expr::BinaryExpr(BinaryExpr {
+                Transformed::yes(if info.nullable(&left)? {
+                    Expr::BinaryExpr(BinaryExpr {
                         left: Box::new(Expr::IsNotNull(left)),
                         op: Or,
                         right: Box::new(lit_bool_null()),
-                    }),
+                    })
+                } else {
+                    lit(true)
                 })
             }
 
@@ -1550,12 +1552,10 @@ impl TreeNodeRewriter for Simplifier<'_> {
                     // CASE WHEN false THEN A ELSE B END --> B
                     if let Some(else_expr) = else_expr {
                         return Ok(Transformed::yes(*else_expr));
-                    // CASE WHEN false THEN A END --> NULL
-                    } else {
-                        let null =
-                            Expr::Literal(ScalarValue::try_new_null(&out_type)?, None);
-                        return Ok(Transformed::yes(null));
                     }
+                    // CASE WHEN false THEN A END --> NULL
+                    let null = Expr::Literal(ScalarValue::try_new_null(&out_type)?, None);
+                    return Ok(Transformed::yes(null));
                 }
 
                 Transformed::yes(Expr::Case(Case {
@@ -1741,9 +1741,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                                 //   - when exp is not NULL, it's false
                                 //   - when exp is NULL, it's NULL
                                 let result_for_non_null = lit(!like.negated);
-                                Transformed::yes(if !info.nullable(&like.expr)? {
-                                    result_for_non_null
-                                } else {
+                                Transformed::yes(if info.nullable(&like.expr)? {
                                     Expr::Case(Case {
                                         expr: Some(Box::new(Expr::IsNotNull(like.expr))),
                                         when_then_expr: vec![(
@@ -1752,6 +1750,8 @@ impl TreeNodeRewriter for Simplifier<'_> {
                                         )],
                                         else_expr: None,
                                     })
+                                } else {
+                                    result_for_non_null
                                 })
                             }
                             Some(pattern_str)
@@ -2434,14 +2434,14 @@ fn simplify_inlist_set_operation(
 
 /// Returns expression testing a boolean `expr` for being exactly `true` (not `false` or NULL).
 fn is_exactly_true(expr: Expr, info: &SimplifyContext) -> Result<Expr> {
-    if !info.nullable(&expr)? {
-        Ok(expr)
-    } else {
+    if info.nullable(&expr)? {
         Ok(Expr::BinaryExpr(BinaryExpr {
             left: Box::new(expr),
             op: Operator::IsNotDistinctFrom,
             right: Box::new(lit(true)),
         }))
+    } else {
+        Ok(expr)
     }
 }
 
@@ -2461,10 +2461,10 @@ fn simplify_right_is_one_case(
     match BinaryTypeCoercer::new(&left_type, op, &right_type).get_result_type() {
         Ok(result_type) => {
             // Only cast if the types differ
-            if left_type != result_type {
-                Ok(Transformed::yes(Expr::Cast(Cast::new(left, result_type))))
-            } else {
+            if left_type == result_type {
                 Ok(Transformed::yes(*left))
+            } else {
+                Ok(Transformed::yes(Expr::Cast(Cast::new(left, result_type))))
             }
         }
         Err(_) => Ok(Transformed::yes(*left)),

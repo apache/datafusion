@@ -139,7 +139,14 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
         }
 
         // Next, prepare the result array for each 'true' row in the selection vector.
-        let filtered_result = if !selection.has_true() {
+        let filtered_result = if selection.has_true() {
+            // If we reach this point, there's no other option than to filter the batch.
+            // This is a fairly costly operation since it requires creating partial copies
+            // (worst case of length `row_count - 1`) of all the arrays in the record batch.
+            // The resulting `filtered_batch` will contain one row per true in `selection`.
+            let filtered_batch = filter_record_batch(batch, selection)?;
+            self.evaluate(&filtered_batch)?
+        } else {
             // Do not call `evaluate` when the selection is empty.
             // `evaluate_selection` is used to conditionally evaluate expressions.
             // When the expression in question is fallible, evaluating it with an empty
@@ -148,13 +155,6 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
             // Instead, create an empty array matching the expected return type.
             let datatype = self.data_type(batch.schema_ref().as_ref())?;
             ColumnarValue::Array(new_empty_array(&datatype))
-        } else {
-            // If we reach this point, there's no other option than to filter the batch.
-            // This is a fairly costly operation since it requires creating partial copies
-            // (worst case of length `row_count - 1`) of all the arrays in the record batch.
-            // The resulting `filtered_batch` will contain one row per true in `selection`.
-            let filtered_batch = filter_record_batch(batch, selection)?;
-            self.evaluate(&filtered_batch)?
         };
 
         // Finally, scatter the filtered result array so that the indices match the input rows again.

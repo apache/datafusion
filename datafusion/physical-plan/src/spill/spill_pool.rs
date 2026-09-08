@@ -214,9 +214,7 @@ impl SpillPoolSink {
         let mut shared = self.shared.lock();
 
         // Create new file if there is none available to append to
-        let write_file = if !shared.open_write_files.is_empty() {
-            shared.open_write_files.pop_front().unwrap()
-        } else {
+        let write_file = if shared.open_write_files.is_empty() {
             let spill_manager = Arc::clone(&shared.spill_manager);
             // Release shared lock before disk I/O (fine-grained locking)
             drop(shared);
@@ -241,6 +239,8 @@ impl SpillPoolSink {
             shared.new_files.push_back(Arc::clone(&file_shared));
             shared.wake(); // Wake readers waiting for new files
             file_shared
+        } else {
+            shared.open_write_files.pop_front().unwrap()
         };
 
         // Release shared lock before file I/O (fine-grained locking)
@@ -1765,7 +1765,7 @@ mod tests {
             let mut inner = Some(self.inner.read_stream()?);
             Ok(Box::pin(
                 futures::stream::once(tokio::time::sleep(delay))
-                    .flat_map(move |_| inner.take().expect("polled once")),
+                    .flat_map(move |()| inner.take().expect("polled once")),
             ))
         }
 

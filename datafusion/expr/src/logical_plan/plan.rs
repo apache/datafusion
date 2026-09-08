@@ -1757,12 +1757,7 @@ impl LogicalPlan {
             let name_preserver = NamePreserver::new(&plan);
             plan.map_expressions(|e| {
                 let (e, has_placeholder) = e.infer_placeholder_types(&schema)?;
-                if !has_placeholder {
-                    // Performance optimization:
-                    // avoid NamePreserver copy and second pass over expression
-                    // if no placeholders.
-                    Ok(Transformed::no(e))
-                } else {
+                if has_placeholder {
                     let original_name = name_preserver.save(&e);
                     let transformed_expr = e.transform_up(|e| {
                         if let Expr::Placeholder(Placeholder { id, .. }) = e {
@@ -1776,6 +1771,11 @@ impl LogicalPlan {
                     })?;
                     // Preserve name to avoid breaking column references to this expression
                     Ok(transformed_expr.update_data(|expr| original_name.restore(expr)))
+                } else {
+                    // Performance optimization:
+                    // avoid NamePreserver copy and second pass over expression
+                    // if no placeholders.
+                    Ok(Transformed::no(e))
                 }
             })?
             .map_data(|plan| plan.update_schema_data_type())
@@ -2117,7 +2117,7 @@ impl LogicalPlan {
                                     .collect();
                                 format!(" projection=[{}]", names.join(", "))
                             }
-                            _ => "".to_string(),
+                            _ => String::new(),
                         };
 
                         write!(f, "TableScan: {table_name}{projected_fields}")?;
@@ -2257,7 +2257,7 @@ impl LogicalPlan {
                         let filter_expr = filter
                             .as_ref()
                             .map(|expr| format!(" Filter: {expr}"))
-                            .unwrap_or_else(|| "".to_string());
+                            .unwrap_or_else(String::new);
                         let null_aware_expr =
                             if *null_aware { " null_aware" } else { "" };
                         let join_type = if filter.is_none()
@@ -2386,7 +2386,7 @@ impl LogicalPlan {
                             if let Some(sort_expr) = sort_expr {
                                 expr_vec_fmt!(sort_expr)
                             } else {
-                                "".to_string()
+                                String::new()
                             },
                         ),
                     },
@@ -4318,7 +4318,9 @@ fn calc_func_dependencies_for_aggregate(
     // - If so, the functional dependencies will be empty because we cannot guarantee
     //   that GROUP BY expression results will be unique.
     // - Otherwise, it may be possible to propagate functional dependencies.
-    if !contains_grouping_set(group_expr) {
+    if contains_grouping_set(group_expr) {
+        Ok(FunctionalDependencies::empty())
+    } else {
         let group_by_expr_names = group_expr
             .iter()
             .map(|item| item.schema_name().to_string())
@@ -4331,8 +4333,6 @@ fn calc_func_dependencies_for_aggregate(
             aggr_schema,
         );
         Ok(aggregate_func_dependencies)
-    } else {
-        Ok(FunctionalDependencies::empty())
     }
 }
 
@@ -6265,7 +6265,7 @@ mod tests {
             .unwrap();
         let prepared_builder = LogicalPlanBuilder::new(plan)
             .prepare(
-                "".to_string(),
+                String::new(),
                 vec![Field::new("", DataType::Int32, true).into()],
             )
             .unwrap();
