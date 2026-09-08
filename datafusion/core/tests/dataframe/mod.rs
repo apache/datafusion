@@ -207,6 +207,23 @@ async fn with_column_window_functions() -> DataFusionResult<()> {
 }
 
 #[tokio::test]
+async fn duplicated_window_functions_can_be_executed() -> Result<()> {
+    let wexpr = datafusion::functions_window::row_number::row_number_udwf().call(vec![]);
+
+    let plan = LogicalPlanBuilder::empty(true)
+        .window(vec![wexpr.clone(), wexpr.alias("aliased")])?
+        .build()?;
+
+    let ctx = SessionContext::new();
+
+    let collected = DataFrame::new(ctx.state(), plan).collect().await?;
+
+    assert_eq!(collected.iter().map(|b| b.num_rows()).sum::<usize>(), 1);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_coalesce_schema() -> Result<()> {
     let ctx = SessionContext::new();
 

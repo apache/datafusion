@@ -130,3 +130,17 @@ Formatting instructions:
 or run them all at once:
 
 - [dev/rust_lint.sh](../../../dev/rust_lint.sh)
+
+Debugging:
+
+The standard dev profile, used by cargo build and cargo test, disables variable-level DWARF debug information that is required by interactive debuggers.
+
+If you need to step through the code with a debugger, build with:
+
+`CARGO_PROFILE_DEV_DEBUG=2 cargo build`
+
+Alternatively, you can set `CARGO_PROFILE_DEV_DEBUG=2` as an environment variable in your IDE.
+
+This enables the additional debug information required for source-level debugging.
+
+For more details, see the DataFusion [Cargo.toml](https://github.com/apache/datafusion/blob/main/Cargo.toml#L329) configuration.
