@@ -54,10 +54,10 @@ use datafusion_expr::{
 ///    GROUP BY a
 ///  ```
 ///
-/// A non-distinct `count` is also allowed alongside the distinct aggregate. It
-/// is the one supported function whose outer phase is a *different* function:
-/// the inner group-by counts rows per `(group, distinct value)` pair and the
-/// outer phase adds those partial counts up with `sum`.
+/// A non-distinct `count` may also appear alongside the distinct aggregate. It
+/// is the one supported function whose outer phase is a different function: the
+/// inner group-by counts rows per `(group, distinct value)` pair, and the outer
+/// phase sums those partial counts.
 ///
 ///  ```text
 ///    Before:
@@ -77,16 +77,10 @@ use datafusion_expr::{
 ///    GROUP BY a
 ///  ```
 ///
-/// The `CASE` covers the one input on which the two phases disagree: over an
-/// empty input the inner group by produces no rows at all, and a `sum` of no
-/// rows is NULL where `count` is 0.
+/// The `CASE` restores the 0 that `count` reports over an empty input, where a
+/// `sum` of no rows is NULL.
 ///
-/// That `count` is allowed only when the distinct aggregate reports that it has
-/// no specialized `GroupsAccumulator` for its argument types, so that the
-/// rewrite is taking the distinct aggregate off `GroupsAccumulatorAdapter`
-/// rather than only adding an inner group by. A function that does not report
-/// on this at all keeps the previous behaviour and is left alone. See
-/// `rewrite_pays_for_count` for the measurements behind that.
+/// See `rewrite_pays_for_count` for when the `count` is allowed.
 #[derive(Default, Debug)]
 pub struct SingleDistinctToGroupBy {}
 
@@ -184,30 +178,22 @@ fn is_single_distinct_agg(
 ///
 /// The rewrite is not free: every other aggregate moves down to the inner group
 /// by, which has a row per `(group, distinct value)` pair rather than per group,
-/// and each one keeps its state at that finer grain. What pays for it is taking
-/// the distinct aggregate off `GroupsAccumulatorAdapter`, whose one boxed
-/// accumulator per group is the expensive shape. A distinct aggregate that
-/// already has a specialized `GroupsAccumulator` never went near the adapter, so
-/// there is nothing to buy and only the inner group by to pay for: ClickBench
-/// Q22, whose `count(DISTINCT "UserID")` is over an `Int64`, measured a 132%
-/// increase in peak memory pool reservation when the rewrite applied to it.
+/// and keeps its state at that finer grain. What pays for that is taking the
+/// distinct aggregate off `GroupsAccumulatorAdapter` and its one boxed
+/// accumulator per group. An aggregate that already has a specialized
+/// `GroupsAccumulator` never went near the adapter, so there is nothing to buy
+/// and only the inner group by to pay for.
 ///
-/// `Some(false)` is the only answer that buys anything. `Some(true)` says the
-/// call never reaches the adapter. `None` says the function does not answer the
-/// question from the argument types, which is the default and so the answer for
-/// almost every function. Silence is not evidence, and reading it as `Some(false)`
-/// would open this path to every such function: `sum(DISTINCT int_col)` beside a
-/// `count(*)` measured 3.15x the peak memory once rewritten, over 4,000,000 rows
-/// in 2,000 groups.
+/// `Some(false)` is therefore the only answer that permits the rewrite. `None`,
+/// the default for almost every function, is not evidence that it pays.
 ///
-/// The predicate is a proxy, not the true discriminator. What decides the
-/// outcome is the cost per distinct value on each side, which this rule cannot
-/// see. The proxy is deliberately conservative in the direction that leaves a
-/// plan alone.
+/// This is a proxy: what actually decides the outcome is the cost per distinct
+/// value on each side, which this rule cannot see. It is deliberately
+/// conservative in the direction that leaves a plan alone. The pre-existing
+/// tolerance of a non-distinct `sum`, `min` or `max` is not gated, since
+/// narrowing it would change plans that have always been rewritten.
 ///
-/// The existing tolerance of a non-distinct `sum`, `min` or `max` predates this
-/// and is left alone: narrowing it would change plans that have always been
-/// rewritten, which no measurement here calls for.
+/// Measured in <https://github.com/apache/datafusion/pull/24859>.
 fn rewrite_pays_for_count(
     distinct_aggs: &[(&Arc<AggregateUDF>, &[Expr])],
     input_schema: &DFSchema,
@@ -354,11 +340,8 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                             } else {
                                 index += 1;
                                 let alias_str = format!("alias{index}");
-                                // `count` is the one function whose two phases
-                                // use different aggregates: the inner group-by
-                                // counts the rows of each `(group, distinct
-                                // value)` partition and the outer phase adds
-                                // those partial counts up.
+                                // `count`'s outer phase is `sum`, over the
+                                // partial counts the inner group-by produced.
                                 let rollup = count_rollup
                                     .as_ref()
                                     .filter(|rollup| rollup.is_count(&func));
@@ -389,11 +372,9 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                 if rollup.is_none() {
                                     return Ok((outer.clone(), outer));
                                 }
-                                // The inner group-by produces no rows at all
-                                // for an empty input, and `sum` reports that as
-                                // NULL where `count` reports 0. Restore the 0,
-                                // which also keeps the column non-nullable as
-                                // `count` had it.
+                                // `sum` of no rows is NULL where `count` is 0.
+                                // Restoring the 0 also keeps the column
+                                // non-nullable, as `count` had it.
                                 let proj =
                                     when(outer.clone().is_not_null(), outer.clone())
                                         .otherwise(lit(0_i64))?;
@@ -921,8 +902,7 @@ mod tests {
             .build()?;
 
         // Should not work: `sum` reports nothing about
-        // `GroupsAccumulatorAdapter` either, and measurement says this shape
-        // costs 3.15x the peak memory once rewritten
+        // `GroupsAccumulatorAdapter` either, so the rewrite is not known to pay
         assert_optimized_plan_equal!(
             plan,
             @r"

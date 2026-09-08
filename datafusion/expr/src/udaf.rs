@@ -631,26 +631,20 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// only the information a logical plan carries.
     ///
     /// Physical planning has an [`AccumulatorArgs`] to ask with; an optimizer
-    /// rule does not, and cannot fabricate one, so this is how a logical
-    /// caller learns whether a call would get a specialized
-    /// [`GroupsAccumulator`] or fall back to one boxed [`Accumulator`] per
-    /// group in `GroupsAccumulatorAdapter`. That distinction is worth a rule
-    /// changing its mind over: the adapter's per-group state can be orders of
-    /// magnitude larger.
+    /// rule does not. This is how a logical caller learns whether a call would
+    /// get a specialized [`GroupsAccumulator`] or fall back to one boxed
+    /// [`Accumulator`] per group in `GroupsAccumulatorAdapter`, whose per-group
+    /// state can be orders of magnitude larger.
     ///
-    /// The default is `None`, which means the implementation does not answer
-    /// this question. An implementation that overrides
-    /// [`Self::groups_accumulator_supported`], and whose answer is decided by
-    /// the argument types and `DISTINCT` alone, should override this one too,
-    /// and have the physical method call it so the two cannot disagree. An
-    /// implementation whose answer needs more than the argument types should
-    /// leave this at `None`.
+    /// An implementation whose answer is decided by the argument types and
+    /// `DISTINCT` alone should override this and have
+    /// [`Self::groups_accumulator_supported`] call it, so the two cannot
+    /// disagree. One whose answer needs more than that should leave the `None`
+    /// default.
     ///
-    /// `None` is not a third answer to the question. A caller must not read it
-    /// as either `Some(true)` or `Some(false)`, because both readings are
-    /// wrong for some implementation that returns it. A caller that has to act
-    /// on an unanswered question must take the action that is safe when either
-    /// answer turns out to be the true one.
+    /// `None` means unanswered, not "no": a caller must not read it as either
+    /// `Some(true)` or `Some(false)`, since both readings are wrong for some
+    /// implementation that returns it.
     fn groups_accumulator_supported_for_types(
         &self,
         _arg_types: &[DataType],
