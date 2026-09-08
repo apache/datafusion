@@ -234,8 +234,7 @@ const fn shape(
     }
 }
 
-/// Every shape from AGGREGATE_CHAINS.md. The ordering variants there come from
-/// crossing a shape with `Order`, so one entry here covers several rows.
+// Test cases
 const SHAPES: &[Shape] = &[
     shape("single", &[Aggregate(Single)], 1, Query::Grouped),
     shape(
@@ -1046,8 +1045,7 @@ fn order_matches(query: Query, expected: Order, actual: &InputOrderMode) -> bool
     }
 }
 
-/// Whether this stage's stream is allowed to spill. See the memory table in
-/// AGGREGATE_CHAINS.md.
+/// Whether this stage's stream is allowed to spill.
 fn can_spill(aggregate: &AggregateExec) -> bool {
     if aggregate.limit_options().is_some() {
         // GroupedTopKAggregateStream keeps a bounded heap and never spills
