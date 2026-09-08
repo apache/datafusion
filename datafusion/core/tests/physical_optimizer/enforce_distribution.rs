@@ -26,16 +26,18 @@ use crate::physical_optimizer::test_utils::{
     sort_merge_join_exec, sort_preserving_merge_exec, union_exec,
 };
 
-use arrow::array::{RecordBatch, UInt8Array, UInt64Array};
+use arrow::array::{ArrayRef, Int32Array, RecordBatch, UInt8Array, UInt64Array};
 use arrow::compute::SortOptions;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion::config::ConfigOptions;
 use datafusion::datasource::MemTable;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::listing::PartitionedFile;
+use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{CsvSource, ParquetSource};
-use datafusion::datasource::source::DataSourceExec;
+use datafusion::datasource::source::{DataSource, DataSourceExec};
+use datafusion::physical_planner::DefaultPhysicalPlanner;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::ScalarValue;
 use datafusion_common::Statistics;
@@ -80,7 +82,7 @@ use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeE
 use datafusion_physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion_physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlanProperties,
-    PlanProperties, ReplaceChildrenOptions, displayable,
+    PlanProperties, ReplaceChildrenOptions, collect_partitioned, displayable,
 };
 use insta::Settings;
 
@@ -4791,6 +4793,98 @@ async fn test_distribute_sort_memtable() -> Result<()> {
         DataSourceExec: partitions=3, partition_sizes=[34, 33, 33]
     ");
 
+    Ok(())
+}
+
+/// The full physical optimizer must not lose a source fetch while increasing source parallelism.
+#[tokio::test]
+async fn memory_source_repartition_preserves_fetch_through_optimizer() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+    let batches = vec![vec![
+        RecordBatch::try_from_iter(vec![(
+            "a",
+            Arc::new(Int32Array::from(vec![0, 1])) as ArrayRef,
+        )])?,
+        RecordBatch::try_from_iter(vec![(
+            "a",
+            Arc::new(Int32Array::from(vec![2, 3])) as ArrayRef,
+        )])?,
+    ]];
+    let source = MemorySourceConfig::try_new(&batches, Arc::clone(&schema), None)?
+        .with_limit(Some(1));
+    assert_eq!(source.fetch(), Some(1));
+    let source = DataSourceExec::from_data_source(source);
+    let predicate = Arc::new(BinaryExpr::new(
+        col("a", &schema)?,
+        Operator::GtEq,
+        Arc::new(Literal::new(ScalarValue::Int32(Some(0)))),
+    ));
+    let original: Arc<dyn ExecutionPlan> =
+        Arc::new(FilterExec::try_new(predicate, source)?);
+
+    let session_config = SessionConfig::new()
+        .with_target_partitions(2)
+        .with_batch_size(1)
+        .with_repartition_file_scans(true);
+    let ctx = SessionContext::new_with_config(session_config);
+    let state = ctx.state();
+    let config = state.config_options();
+
+    let values = |partitions: Vec<Vec<RecordBatch>>| {
+        partitions
+            .iter()
+            .flatten()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap()
+                    .values()
+                    .iter()
+                    .copied()
+            })
+            .collect::<Vec<_>>()
+    };
+    let original_values =
+        values(collect_partitioned(Arc::clone(&original), ctx.task_ctx()).await?);
+
+    // Exercise EnsureRequirements independently from the default full pipeline.
+    let ensure = EnsureRequirements::new().optimize(Arc::clone(&original), config)?;
+    let ensure_values =
+        values(collect_partitioned(Arc::clone(&ensure), ctx.task_ctx()).await?);
+    let ensure_plan = displayable(ensure.as_ref()).indent(true).to_string();
+
+    // Run the actual default physical-optimizer pipeline from the original plan,
+    // then run it once more to cover a subsequent physical-optimization pass.
+    let planner = DefaultPhysicalPlanner::default();
+    let full =
+        planner.optimize_physical_plan(Arc::clone(&original), &state, |_, _| {})?;
+    let full_values =
+        values(collect_partitioned(Arc::clone(&full), ctx.task_ctx()).await?);
+    let full_plan = displayable(full.as_ref()).indent(true).to_string();
+
+    let full_second = planner.optimize_physical_plan(full, &state, |_, _| {})?;
+    let full_second_values =
+        values(collect_partitioned(Arc::clone(&full_second), ctx.task_ctx()).await?);
+    let full_second_plan = displayable(full_second.as_ref()).indent(true).to_string();
+
+    assert_eq!(original_values, [0]);
+    for plan in [&ensure_plan, &full_plan, &full_second_plan] {
+        assert!(
+            plan.contains(
+                "RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1"
+            ),
+            "expected ordinary repartition fallback:\n{plan}"
+        );
+        assert!(
+            plan.contains("DataSourceExec: partitions=1") && plan.contains("fetch=1"),
+            "source partition count and fetch must be retained:\n{plan}"
+        );
+    }
+    assert_eq!(ensure_values, [0]);
+    assert_eq!(full_values, [0]);
+    assert_eq!(full_second_values, [0]);
     Ok(())
 }
 

@@ -159,6 +159,11 @@ impl DataSource for MemorySourceConfig {
         _repartition_file_min_size: usize,
         output_ordering: Option<LexOrdering>,
     ) -> Result<Option<Arc<dyn DataSource>>> {
+        // Fetch is an original per-partition cap, which repartitioning would change.
+        if self.fetch.is_some() {
+            return Ok(None);
+        }
+
         if self.partitions.is_empty() || self.partitions.len() >= target_partitions
         // if have no partitions, or already have more partitions than desired, do not repartition
         {
@@ -1055,6 +1060,7 @@ mod tests {
     use crate::tests::{aggr_test_schema, make_partition};
 
     use arrow::array::{ArrayRef, Int32Array, Int64Array, StringArray};
+    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::assert_batches_eq;
     use datafusion_common::stats::{ColumnStatistics, Precision};
@@ -1062,7 +1068,9 @@ mod tests {
     use datafusion_physical_plan::expressions::lit;
     use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 
-    use datafusion_physical_plan::ExecutionPlan;
+    use datafusion_physical_plan::{
+        ExecutionPlan, ExecutionPlanProperties, collect, collect_partitioned,
+    };
 
     #[tokio::test]
     async fn exec_with_limit() -> Result<()> {
@@ -1087,6 +1095,182 @@ mod tests {
             "+---+", "| i |", "+---+", "| 0 |", "| 1 |", "| 2 |", "| 3 |", "+---+",
         ];
         assert_batches_eq!(expected, &results);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn repartition_refuses_existing_fetch() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batches = vec![
+            RecordBatch::try_from_iter(vec![(
+                "a",
+                Arc::new(Int32Array::from(vec![0, 1])) as ArrayRef,
+            )])?,
+            RecordBatch::try_from_iter(vec![(
+                "a",
+                Arc::new(Int32Array::from(vec![2, 3])) as ArrayRef,
+            )])?,
+        ];
+        let task_ctx = Arc::new(TaskContext::default());
+
+        let uncapped =
+            MemorySourceConfig::try_new_from_batches(Arc::clone(&schema), batches)?;
+        let uncapped_repartitioned = uncapped
+            .repartitioned(2, &datafusion_common::config::ConfigOptions::default())?
+            .expect("uncapped source can be repartitioned");
+        assert_eq!(
+            uncapped_repartitioned
+                .output_partitioning()
+                .partition_count(),
+            2
+        );
+        let uncapped_rows: usize =
+            collect_partitioned(uncapped_repartitioned, Arc::clone(&task_ctx))
+                .await?
+                .iter()
+                .flatten()
+                .map(RecordBatch::num_rows)
+                .sum();
+        assert_eq!(uncapped_rows, 4);
+
+        let capped = MemorySourceConfig::try_new_from_batches(
+            Arc::clone(&schema),
+            vec![
+                RecordBatch::try_from_iter(vec![(
+                    "a",
+                    Arc::new(Int32Array::from(vec![0, 1])) as ArrayRef,
+                )])?,
+                RecordBatch::try_from_iter(vec![(
+                    "a",
+                    Arc::new(Int32Array::from(vec![2, 3])) as ArrayRef,
+                )])?,
+            ],
+        )?
+        .with_fetch(Some(0))
+        .unwrap();
+        assert!(
+            capped
+                .repartitioned(2, &datafusion_common::config::ConfigOptions::default())?
+                .is_none()
+        );
+        assert!(collect(capped, Arc::clone(&task_ctx)).await?.is_empty());
+
+        let partitions = vec![
+            vec![
+                RecordBatch::try_from_iter(vec![(
+                    "a",
+                    Arc::new(Int32Array::from(vec![0, 1])) as ArrayRef,
+                )])?,
+                RecordBatch::try_from_iter(vec![(
+                    "a",
+                    Arc::new(Int32Array::from(vec![2, 3])) as ArrayRef,
+                )])?,
+            ],
+            vec![
+                RecordBatch::try_from_iter(vec![(
+                    "a",
+                    Arc::new(Int32Array::from(vec![10, 11])) as ArrayRef,
+                )])?,
+                RecordBatch::try_from_iter(vec![(
+                    "a",
+                    Arc::new(Int32Array::from(vec![12, 13])) as ArrayRef,
+                )])?,
+            ],
+        ];
+        let capped = DataSourceExec::from_data_source(
+            MemorySourceConfig::try_new(&partitions, schema, None)?.with_limit(Some(1)),
+        );
+        assert!(
+            capped
+                .repartitioned(3, &datafusion_common::config::ConfigOptions::default())?
+                .is_none()
+        );
+        let values: Vec<i32> = collect_partitioned(capped, task_ctx)
+            .await?
+            .iter()
+            .flatten()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap()
+                    .values()
+                    .iter()
+                    .copied()
+            })
+            .collect();
+        assert_eq!(values, [0, 10]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn repartition_refuses_fetch_with_projection_and_sort_metadata() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let partitions = vec![vec![
+            RecordBatch::try_from_iter(vec![
+                ("a", Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef),
+                ("b", Arc::new(Int32Array::from(vec![10, 20])) as ArrayRef),
+            ])?,
+            RecordBatch::try_from_iter(vec![
+                ("a", Arc::new(Int32Array::from(vec![3, 4])) as ArrayRef),
+                ("b", Arc::new(Int32Array::from(vec![30, 40])) as ArrayRef),
+            ])?,
+        ]];
+        let ordering: LexOrdering = [PhysicalSortExpr {
+            expr: col("b", &schema)?,
+            options: SortOptions::default(),
+        }]
+        .into();
+        let projected_schema =
+            Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, false)]));
+        let projected_ordering: LexOrdering = [PhysicalSortExpr {
+            expr: col("b", &projected_schema)?,
+            options: SortOptions::default(),
+        }]
+        .into();
+        let source =
+            MemorySourceConfig::try_new(&partitions, Arc::clone(&schema), Some(vec![1]))?
+                .try_with_sort_information(vec![ordering])?
+                .with_limit(Some(1));
+
+        assert_eq!(source.sort_information(), from_ref(&projected_ordering));
+        assert!(source.repartitioned(2, usize::MAX, None)?.is_none());
+        assert!(
+            source
+                .repartitioned(2, usize::MAX, source.sort_information().first().cloned())?
+                .is_none()
+        );
+
+        let projected = DataSourceExec::from_data_source(source);
+        assert_eq!(
+            projected.schema(),
+            Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, false)]))
+        );
+        assert_eq!(
+            projected.properties().output_ordering(),
+            Some(&projected_ordering)
+        );
+        let batches =
+            collect_partitioned(projected, Arc::new(TaskContext::default())).await?;
+        let values: Vec<i32> = batches
+            .iter()
+            .flatten()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap()
+                    .values()
+                    .iter()
+                    .copied()
+            })
+            .collect();
+        assert_eq!(values, [10]);
         Ok(())
     }
 
