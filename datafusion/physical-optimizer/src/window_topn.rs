@@ -147,8 +147,21 @@ impl WindowTopN {
             return None;
         }
 
-        // Step 2: Extract limit from predicate (rn <= K, rn < K, etc.)
-        let (col_idx, limit_n) = extract_window_limit(filter.predicate())?;
+        // Step 2: Walk through optional ProjectionExec and RepartitionExec to find BoundedWindowAggExec
+        let child = filter.input();
+        let (window_exec, intermediates) = find_window_below(child)?;
+
+        // Step 3: Remap the predicate through projections before identifying its column.
+        let mut predicate = Arc::clone(filter.predicate());
+        for node in &intermediates {
+            if let Some(projection) = node.downcast_ref::<ProjectionExec>() {
+                predicate = projection
+                    .projection_expr()
+                    .unproject_expr(&predicate)
+                    .ok()?;
+            }
+        }
+        let (col_idx, limit_n) = extract_window_limit(&predicate)?;
 
         // A predicate such as `rn < 1` (or the flipped `1 > rn`) yields a fetch of
         // 0. `ROW_NUMBER`/`RANK`/`DENSE_RANK` are always >= 1, so no row can satisfy
@@ -158,10 +171,6 @@ impl WindowTopN {
         if limit_n == 0 {
             return None;
         }
-
-        // Step 3: Walk through optional ProjectionExec and RepartitionExec to find BoundedWindowAggExec
-        let child = filter.input();
-        let (window_exec, intermediates) = find_window_below(child)?;
 
         // Step 4: Verify col_idx references a supported window function output column
         let window_exec_typed = window_exec.downcast_ref::<BoundedWindowAggExec>()?;
@@ -388,8 +397,8 @@ type PlanAndIntermediates = (Arc<dyn ExecutionPlan>, Vec<Arc<dyn ExecutionPlan>>
 ///
 /// Handles sequences of `ProjectionExec` and `RepartitionExec`.
 /// This is safe because `PartitionedTopKExec` can be pushed below them:
-/// projections only provide aliases, and pushing the limit below repartitions
-/// is safe because the limit is computed per-partition.
+/// projection predicates are remapped to their inputs, and pushing the limit
+/// below repartitions is safe because the limit is computed per-partition.
 ///
 /// Returns the window exec and a list of intermediate nodes to rebuild,
 /// or `None` if no `BoundedWindowAggExec` is found.

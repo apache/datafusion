@@ -19,11 +19,15 @@
 
 use std::sync::Arc;
 
+use arrow::array::{Array, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema};
+use arrow::record_batch::RecordBatch;
+use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
+use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 use datafusion_functions_window::rank::{dense_rank_udwf, rank_udwf};
@@ -660,6 +664,200 @@ fn predicate_lt_1_no_change() -> Result<()> {
             "`{name} < 1` (limit 0) must not be rewritten"
         );
     }
+    Ok(())
+}
+
+// ----------------------------------------------------------------------
+// Execution: projections
+// ----------------------------------------------------------------------
+
+fn build_data_window_plan(
+    values: Vec<u64>,
+    udwf_factory: fn() -> Arc<datafusion_expr::WindowUDF>,
+    udwf_name: &str,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let s = Arc::new(Schema::new(vec![
+        Field::new("pk", DataType::UInt64, false),
+        Field::new("val", DataType::UInt64, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&s),
+        vec![
+            Arc::new(UInt64Array::from(vec![1; values.len()])),
+            Arc::new(UInt64Array::from(values)),
+        ],
+    )?;
+    let input: Arc<dyn ExecutionPlan> =
+        MemorySourceConfig::try_new_exec(&[vec![batch]], Arc::clone(&s), None)?;
+    let ordering = LexOrdering::new(vec![
+        PhysicalSortExpr::new_default(col("pk", &s)?).asc(),
+        PhysicalSortExpr::new_default(col("val", &s)?).asc(),
+    ])
+    .unwrap();
+    let sort: Arc<dyn ExecutionPlan> =
+        Arc::new(SortExec::new(ordering, input).with_preserve_partitioning(true));
+    let window_expr = Arc::new(StandardWindowExpr::new(
+        create_udwf_window_expr(&udwf_factory(), &[], &s, udwf_name.to_string(), false)?,
+        &[col("pk", &s)?],
+        &[PhysicalSortExpr::new_default(col("val", &s)?).asc()],
+        Arc::new(WindowFrame::new_bounds(
+            WindowFrameUnits::Rows,
+            WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+            WindowFrameBound::CurrentRow,
+        )),
+    ));
+    Ok(Arc::new(BoundedWindowAggExec::try_new(
+        vec![window_expr],
+        sort,
+        InputOrderMode::Sorted,
+        true,
+    )?))
+}
+
+fn project_columns(
+    input: Arc<dyn ExecutionPlan>,
+    columns: &[(usize, &str)],
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let exprs: Vec<_> = columns
+        .iter()
+        .map(|(index, alias)| {
+            (
+                Arc::new(Column::new(input.schema().field(*index).name(), *index))
+                    as Arc<dyn datafusion_physical_expr::PhysicalExpr>,
+                (*alias).to_string(),
+            )
+        })
+        .collect();
+    Ok(Arc::new(ProjectionExec::try_new(exprs, input)?))
+}
+
+fn uint_values(batches: &[RecordBatch], column: usize) -> Vec<u64> {
+    batches
+        .iter()
+        .flat_map(|batch| {
+            batch
+                .column(column)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap()
+                .values()
+                .iter()
+                .copied()
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn projection_predicates_remap_before_window_topn() -> Result<()> {
+    let task_ctx = Arc::new(TaskContext::default());
+
+    // A reordered projection puts `val` at index 2. It must not be mistaken
+    // for the window result, and its filter keeps no rows.
+    let projection = project_columns(
+        build_data_window_plan(vec![10], row_number_udwf, "row_number")?,
+        &[(0, "pk"), (2, "rn"), (1, "val")],
+    )?;
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("val", 2)),
+            Operator::LtEq,
+            lit(ScalarValue::UInt64(Some(1))),
+        )),
+        projection,
+    )?);
+    let optimized = optimize(Arc::clone(&plan))?;
+    assert_eq!(
+        collect(plan, Arc::clone(&task_ctx))
+            .await?
+            .iter()
+            .map(RecordBatch::num_rows)
+            .sum::<usize>(),
+        0
+    );
+    assert_eq!(
+        collect(Arc::clone(&optimized), Arc::clone(&task_ctx))
+            .await?
+            .iter()
+            .map(RecordBatch::num_rows)
+            .sum::<usize>(),
+        0
+    );
+
+    assert!(find_partitioned_topk(&optimized).is_none());
+
+    // A data predicate on a reordered projection must be retained rather
+    // than turned into a TopK predicate. Both same-key rows survive.
+    let projection = project_columns(
+        build_data_window_plan(vec![1, 1], row_number_udwf, "row_number")?,
+        &[(0, "pk"), (2, "rn"), (1, "val")],
+    )?;
+    let optimized = optimize(Arc::new(FilterExec::try_new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("val", 2)),
+            Operator::LtEq,
+            lit(ScalarValue::UInt64(Some(1))),
+        )),
+        projection,
+    )?))?;
+    assert!(find_partitioned_topk(&optimized).is_none());
+    let result = collect(optimized, Arc::clone(&task_ctx)).await?;
+    assert_eq!(uint_values(&result, 2), vec![1, 1]);
+    assert_eq!(uint_values(&result, 1), vec![1, 2]);
+
+    // Aliases and two projections still map the ranking predicate to the
+    // window column and retain exactly K rows.
+    let projection = project_columns(
+        project_columns(
+            build_data_window_plan(vec![5, 1, 3, 2], row_number_udwf, "row_number")?,
+            &[(2, "rank_alias"), (0, "pk_alias"), (1, "val_alias")],
+        )?,
+        &[(1, "pk"), (0, "ranking"), (2, "val")],
+    )?;
+    let optimized = optimize(Arc::new(FilterExec::try_new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("ranking", 1)),
+            Operator::LtEq,
+            lit(ScalarValue::UInt64(Some(2))),
+        )),
+        projection,
+    )?))?;
+    assert!(find_partitioned_topk(&optimized).is_some());
+    let result = collect(optimized, Arc::clone(&task_ctx)).await?;
+    assert_eq!(uint_values(&result, 2), vec![1, 2]);
+    assert_eq!(uint_values(&result, 1), vec![1, 2]);
+
+    // A computed ranking expression cannot be remapped to a direct column.
+    let window = build_data_window_plan(vec![3, 1, 2], row_number_udwf, "row_number")?;
+    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+        vec![
+            (Arc::new(Column::new("pk", 0)) as Arc<_>, "pk".to_string()),
+            (Arc::new(Column::new("val", 1)) as Arc<_>, "val".to_string()),
+            (
+                Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("row_number", 2)),
+                    Operator::Plus,
+                    lit(ScalarValue::UInt64(Some(1))),
+                )) as Arc<_>,
+                "ranking".to_string(),
+            ),
+        ],
+        window,
+    )?);
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("ranking", 2)),
+            Operator::LtEq,
+            lit(ScalarValue::UInt64(Some(2))),
+        )),
+        projection,
+    )?);
+    let optimized = optimize(Arc::clone(&plan))?;
+    assert!(find_partitioned_topk(&optimized).is_none());
+    let original = collect(plan, Arc::clone(&task_ctx)).await?;
+    let result = collect(optimized, task_ctx).await?;
+    assert_eq!(uint_values(&original, 1), vec![1]);
+    assert_eq!(uint_values(&result, 1), vec![1]);
+    assert_eq!(uint_values(&result, 2), vec![2]);
     Ok(())
 }
 
