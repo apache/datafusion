@@ -157,7 +157,7 @@ fn is_single_distinct_agg(
                 for e in args {
                     fields_set.insert(e);
                 }
-                distinct_aggs.push((func, args));
+                distinct_aggs.push((func, args.as_slice()));
             } else if count_rollup.is_some_and(|rollup| rollup.is_count(func)) {
                 has_count_rollup = true;
             } else if func.name() != "sum"
@@ -209,7 +209,7 @@ fn is_single_distinct_agg(
 /// and is left alone: narrowing it would change plans that have always been
 /// rewritten, which no measurement here calls for.
 fn rewrite_pays_for_count(
-    distinct_aggs: &[(&Arc<AggregateUDF>, &Vec<Expr>)],
+    distinct_aggs: &[(&Arc<AggregateUDF>, &[Expr])],
     input_schema: &DFSchema,
 ) -> Result<bool> {
     for (func, args) in distinct_aggs {
