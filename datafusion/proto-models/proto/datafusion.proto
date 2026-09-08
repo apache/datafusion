@@ -965,9 +965,20 @@ message CsvSinkExecNode {
   PhysicalSortExprNodeCollection sort_order = 4;
 }
 
+message ParquetSortingColumn {
+  int32 column_idx = 1;
+  bool descending = 2;
+  bool nulls_first = 3;
+}
+
+message ParquetSortingColumns {
+  repeated ParquetSortingColumn columns = 1;
+}
+
 message ParquetSink {
   FileSinkConfig config = 1;
   datafusion_common.TableParquetOptions parquet_options = 2;
+  ParquetSortingColumns sorting_columns = 3;
 }
 
 message ParquetSinkExecNode {
@@ -1287,6 +1298,8 @@ message ParquetScanExecNode {
   PhysicalSortExprNodeCollection sort_order_for_reorder = 5;
 
   bool reverse_row_groups = 6;
+
+  optional uint64 metadata_size_hint = 7;
 }
 
 message CsvScanExecNode {

@@ -91,6 +91,7 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
     let file_source = Arc::new(
         ParquetSource::new(Arc::clone(&file_schema))
             .with_table_parquet_options(options)
+            .with_metadata_size_hint(8192)
             .with_predicate(predicate),
     );
 
@@ -109,7 +110,23 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
             })
             .build();
 
-    roundtrip_test(DataSourceExec::from_data_source(scan_config))
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let roundtripped = roundtrip_test_and_return(
+        DataSourceExec::from_data_source(scan_config),
+        &ctx,
+        &codec,
+        &proto_converter,
+    )?;
+    let node = PhysicalPlanNode::try_from_physical_plan(roundtripped, &codec)?;
+    let Some(protobuf::physical_plan_node::PhysicalPlanType::ParquetScan(scan)) =
+        node.physical_plan_type
+    else {
+        return internal_err!("Expected ParquetScan node");
+    };
+    assert_eq!(scan.metadata_size_hint, Some(8192));
+    Ok(())
 }
 
 #[tokio::test]
