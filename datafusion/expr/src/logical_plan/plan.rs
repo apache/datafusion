@@ -1787,7 +1787,7 @@ impl LogicalPlan {
     /// updated according to the new parameters.
     ///
     /// Unlike `recompute_schema()`, this method rebuilds VALUES plans entirely to properly infer
-    /// types types from literal values after placeholder substitution.
+    /// types from literal values after placeholder substitution.
     fn update_schema_data_type(self) -> Result<LogicalPlan> {
         match self {
             // Build `LogicalPlan::Values` from the values for type inference.
