@@ -28,12 +28,11 @@ use arrow::buffer::{Buffer, NullBuffer, ScalarBuffer};
 use arrow::datatypes::{BinaryViewType, ByteViewType, DataType, StringViewType};
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt, VecDequeAllocExt};
+use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
 use datafusion_expr_common::blocked_helpers::{
     BlockedBytesBufferBuilder, BlockedNullsBuilder, CopyItemBlockedVecBuilder,
 };
 use datafusion_expr_common::groups_accumulator::BlocksIndex;
-use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::mem::size_of;
 use std::sync::Arc;
@@ -147,11 +146,11 @@ where
     /// Views for all stored values (in insertion order)
     views: CopyItemBlockedVecBuilder<true, u128>,
     buffer: BlockedBytesBufferBuilder,
-    num_buffer_blocks_per_block: VecDeque<usize>,
+    num_buffer_blocks_per_block: Vec<usize>,
     /// First buffer block index of every views block, parallel to
     /// `num_buffer_blocks_per_block`. Looked up by `Entry::index` instead of
     /// storing it per entry, which keeps `Entry` at 32 bytes (2 per cache line).
-    block_starts: VecDeque<usize>,
+    block_starts: Vec<usize>,
 
     /// random state used to generate hashes
     random_state: RandomState,
@@ -184,8 +183,8 @@ where
             views: CopyItemBlockedVecBuilder::new(block_size),
             buffer: BlockedBytesBufferBuilder::new(),
             // 1 empty block
-            num_buffer_blocks_per_block: VecDeque::from(vec![1]),
-            block_starts: VecDeque::from(vec![0]),
+            num_buffer_blocks_per_block: vec![1],
+            block_starts: vec![0],
             random_state: RandomState::default(),
             hashes_buffer: vec![],
             null: None,
@@ -441,27 +440,26 @@ where
         // The buffer blocks of a views block may be empty when all its values are inline
         let num_blocks = self
             .num_buffer_blocks_per_block
-            .pop_front()
-            .expect("must have block");
+            .remove(0);
         let buffers = (0..num_blocks)
             .map(|_| Buffer::from(self.buffer.take_first_block()))
             .collect::<Vec<_>>();
         if self.num_buffer_blocks_per_block.is_empty() {
-            self.num_buffer_blocks_per_block.push_back(1);
+            self.num_buffer_blocks_per_block.push(1);
         }
         // The views block being written to may already span several buffer blocks
         self.current_start_block_index = self.buffer.num_blocks()
             - self
                 .num_buffer_blocks_per_block
-                .back()
+                .last()
                 .expect("always has the current block");
         // The taken buffer blocks shift every remaining block index down
-        self.block_starts.pop_front();
+        self.block_starts.remove(0);
         for start in &mut self.block_starts {
             *start -= num_blocks;
         }
         if self.block_starts.is_empty() {
-            self.block_starts.push_back(self.current_start_block_index);
+            self.block_starts.push(self.current_start_block_index);
         }
 
         if self.views.is_empty() {
@@ -486,9 +484,9 @@ where
         let views_blocks = self.views.take_all();
         let number_of_buffers_per_block = std::mem::replace(
             &mut self.num_buffer_blocks_per_block,
-            VecDeque::from(vec![1]),
+            vec![1],
         );
-        self.block_starts = VecDeque::from(vec![0]);
+        self.block_starts = vec![0];
 
         self.map.clear();
 
@@ -570,14 +568,14 @@ where
         // New layout: a buffer block starts at every new views block and at every old
         // boundary that is kept, views are rewritten to point into it
         let mut starts: Vec<usize> = vec![];
-        let mut per_views_block: VecDeque<usize> = VecDeque::new();
+        let mut per_views_block: Vec<usize> = Vec::new();
         let mut pos = 0usize;
         let mut first_block_of_current = 0usize;
         for (k, view) in self.views.as_mut_slice().iter_mut().enumerate() {
             if k % block_size == 0 {
                 first_block_of_current = starts.len();
                 starts.push(pos);
-                per_views_block.push_back(1);
+                per_views_block.push(1);
             }
             let len = *view as u32;
             if len <= 12 {
@@ -587,7 +585,7 @@ where
                 let boundary = old_boundaries.next().unwrap();
                 if boundary == pos && starts.last() != Some(&pos) {
                     starts.push(pos);
-                    *per_views_block.back_mut().unwrap() += 1;
+                    *per_views_block.last_mut().unwrap() += 1;
                 }
             }
             let mut byte_view = ByteView::from(*view);
@@ -600,7 +598,7 @@ where
         // The views block being written to always owns a buffer block, even when empty
         if self.views.len().is_multiple_of(block_size) {
             starts.push(pos);
-            per_views_block.push_back(1);
+            per_views_block.push(1);
         }
         let sizes: Vec<usize> = starts
             .iter()
@@ -624,7 +622,7 @@ where
         self.block_starts = block_firsts[..per_views_block.len()].iter().copied().collect();
         self.num_buffer_blocks_per_block = per_views_block;
         self.current_start_block_index = self.buffer.num_blocks()
-            - self.num_buffer_blocks_per_block.back().expect("always has the current block");
+            - self.num_buffer_blocks_per_block.last().expect("always has the current block");
 
         let views = &self.views;
         self.map.retain(|entry| {
@@ -686,14 +684,14 @@ where
             // Ensure buffer is big enough
             if self.buffer.current_block_len() + len > BYTE_VIEW_MAX_BLOCK_SIZE {
                 self.buffer.start_new_block();
-                let count = self.num_buffer_blocks_per_block.back_mut().unwrap();
+                let count = self.num_buffer_blocks_per_block.last_mut().unwrap();
                 *count += 1;
                 self.buffer
                     .reserve_bytes_in_current_block(BYTE_VIEW_MAX_BLOCK_SIZE);
             }
 
             let buffer_index =
-                (self.num_buffer_blocks_per_block.back().unwrap() - 1) as u32;
+                (self.num_buffer_blocks_per_block.last().unwrap() - 1) as u32;
             let offset = self.buffer.current_block_len() as u32;
             self.buffer.extend_from_slice(value);
 
@@ -709,10 +707,10 @@ where
     }
 
     fn start_new_block(&mut self) {
-        self.num_buffer_blocks_per_block.push_back(1);
+        self.num_buffer_blocks_per_block.push(1);
         self.buffer.start_new_block();
         self.current_start_block_index = self.buffer.num_blocks() - 1;
-        self.block_starts.push_back(self.current_start_block_index);
+        self.block_starts.push(self.current_start_block_index);
     }
 
     /// Total number of entries (including null, if present)
@@ -737,6 +735,7 @@ where
         // than used length because this value drives memory accounting.
         self.map_size
             + self.num_buffer_blocks_per_block.allocated_size()
+            + self.block_starts.allocated_size()
             + self.views.allocated_size()
             + self.buffer.allocated_size()
             + self.hashes_buffer.allocated_size()

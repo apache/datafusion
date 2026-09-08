@@ -2,7 +2,7 @@ use crate::blocked_helpers::take_n_helpers::BlockBuilder;
 use crate::groups_accumulator::BlocksIndex;
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::ArrowNativeType;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut, Index, IndexMut, Range};
@@ -269,7 +269,7 @@ pub struct CopyItemBlockedVecBuilder<const FIXED_BLOCK_SIZING: bool, T: Copy> {
     /// Fixed sizing only: absolute item index at which the current block is full
     next_block_end: usize,
     /// Manual sizing only: absolute start of every block, `block_starts[0] == head`
-    block_starts: VecDeque<usize>,
+    block_starts: Vec<usize>,
     _t: PhantomData<T>,
 }
 
@@ -302,7 +302,7 @@ impl<const FIXED_BLOCK_SIZING: bool, T: Copy>
             tail: 0,
             block_size,
             next_block_end: 0,
-            block_starts: VecDeque::from([0]),
+            block_starts: vec![0],
             _t: PhantomData,
         };
         this.relayout_fixed();
@@ -363,7 +363,7 @@ impl<const FIXED_BLOCK_SIZING: bool, T: Copy>
             !FIXED_BLOCK_SIZING,
             "fixed sizing finishes blocks on its own"
         );
-        self.block_starts.push_back(self.tail);
+        self.block_starts.push(self.tail);
     }
 
     /// Push an item and return whether the current block is now full
@@ -447,9 +447,9 @@ impl<const FIXED_BLOCK_SIZING: bool, T: Copy>
         let block = self.hand_out(range.clone());
         self.head = range.end;
         if !FIXED_BLOCK_SIZING {
-            self.block_starts.pop_front();
+            self.block_starts.remove(0);
             if self.block_starts.is_empty() {
-                self.block_starts.push_back(self.tail);
+                self.block_starts.push(self.tail);
             }
         }
         self.after_head_moved();
@@ -491,7 +491,7 @@ impl<const FIXED_BLOCK_SIZING: bool, T: Copy>
             self.block_starts.clear();
             let mut start = self.head;
             for size in sizes {
-                self.block_starts.push_back(start);
+                self.block_starts.push(start);
                 start += size;
             }
             assert_eq!(
@@ -499,7 +499,7 @@ impl<const FIXED_BLOCK_SIZING: bool, T: Copy>
                 "adjusted block sizes must equal the length of the remaining items"
             );
             if self.block_starts.is_empty() {
-                self.block_starts.push_back(self.head);
+                self.block_starts.push(self.head);
             }
         }
         self.after_head_moved();
@@ -509,7 +509,7 @@ impl<const FIXED_BLOCK_SIZING: bool, T: Copy>
     pub fn reset(&mut self) {
         self.head = self.tail;
         self.block_starts.clear();
-        self.block_starts.push_back(self.tail);
+        self.block_starts.push(self.tail);
         self.after_head_moved();
     }
 
@@ -525,7 +525,7 @@ impl<const FIXED_BLOCK_SIZING: bool, T: Copy>
         if FIXED_BLOCK_SIZING {
             self.next_block_end - self.block_size
         } else {
-            *self.block_starts.back().expect("always at least one block")
+            *self.block_starts.last().expect("always at least one block")
         }
     }
 

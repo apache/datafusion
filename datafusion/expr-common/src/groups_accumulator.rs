@@ -537,7 +537,7 @@ impl BlocksIndex {
     #[inline(always)]
     pub fn into_flat_index_in_dyn_block_size(
         self,
-        block_starts: &std::collections::VecDeque<usize>,
+        block_starts: &[usize],
         head: usize,
     ) -> usize {
         // block_starts[self.block_index()] - head + self.index_in_block()

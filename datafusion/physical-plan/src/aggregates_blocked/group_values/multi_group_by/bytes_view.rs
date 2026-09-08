@@ -25,12 +25,11 @@ use arrow::array::{
 use arrow::buffer::{Buffer, NullBuffer, ScalarBuffer};
 use arrow::datatypes::ByteViewType;
 use datafusion_common::Result;
-use datafusion_common::utils::proxy::VecDequeAllocExt;
+use datafusion_common::utils::proxy::VecAllocExt;
 use datafusion_expr_common::blocked_helpers::{
     BlockedBytesBufferBuilder, BlockedNullsBuilder, CopyItemBlockedVecBuilder,
 };
 use datafusion_expr_common::groups_accumulator::{BlockedGroupSelection, BlocksIndex};
-use std::collections::VecDeque;
 use std::iter::once;
 use std::marker::PhantomData;
 use std::mem::size_of;
@@ -64,11 +63,11 @@ pub struct ByteViewGroupValueBuilder<const FIXED_BLOCK_SIZING: bool, B: ByteView
     bytes: BlockedBytesBufferBuilder,
 
     /// Number of bytes blocks of every views block, the open one included
-    num_bytes_blocks_per_block: VecDeque<usize>,
+    num_bytes_blocks_per_block: Vec<usize>,
 
     /// Index of the first bytes block of every views block, parallel to
     /// `num_bytes_blocks_per_block`
-    block_starts: VecDeque<usize>,
+    block_starts: Vec<usize>,
 
     /// The max size of a bytes block
     ///
@@ -96,8 +95,8 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType>
         Self {
             views: CopyItemBlockedVecBuilder::new(block_size),
             bytes: BlockedBytesBufferBuilder::new(),
-            num_bytes_blocks_per_block: VecDeque::from(vec![1]),
-            block_starts: VecDeque::from(vec![0]),
+            num_bytes_blocks_per_block: vec![1],
+            block_starts: vec![0],
             max_block_size: BYTE_VIEW_MAX_BLOCK_SIZE,
             nulls: BlockedNullsBuilder::new(block_size),
             _phantom: PhantomData {},
@@ -120,8 +119,8 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType>
     /// A views block was completed, the next one starts with a fresh bytes block
     fn open_views_block(&mut self) {
         self.bytes.start_new_block();
-        self.block_starts.push_back(self.bytes.num_blocks() - 1);
-        self.num_bytes_blocks_per_block.push_back(1);
+        self.block_starts.push(self.bytes.num_blocks() - 1);
+        self.num_bytes_blocks_per_block.push(1);
     }
 
     #[inline]
@@ -155,11 +154,11 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType>
             self.bytes.start_new_block();
             *self
                 .num_bytes_blocks_per_block
-                .back_mut()
+                .last_mut()
                 .expect("always has the open views block") += 1;
         }
 
-        let buffer_index = (self.num_bytes_blocks_per_block.back().unwrap() - 1) as u32;
+        let buffer_index = (self.num_bytes_blocks_per_block.last().unwrap() - 1) as u32;
         let offset = u32::try_from(self.bytes.current_block_len())
             .expect("a single value exceeds u32::MAX bytes");
         self.bytes.extend_from_slice(value);
@@ -549,14 +548,14 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType> BlockedGroupColumn<FIXED_B
         // New layout: a bytes block starts at every views block and at every old
         // boundary that is kept, views are rewritten to point into it
         let mut starts: Vec<usize> = vec![];
-        let mut per_views_block: VecDeque<usize> = VecDeque::new();
+        let mut per_views_block: Vec<usize> = Vec::new();
         let mut pos = 0usize;
         let mut first_block_of_current = 0usize;
         for (k, view) in self.views.as_mut_slice().iter_mut().enumerate() {
             if k % block_size == 0 {
                 first_block_of_current = starts.len();
                 starts.push(pos);
-                per_views_block.push_back(1);
+                per_views_block.push(1);
             }
             let len = *view as u32;
             if len <= 12 {
@@ -566,7 +565,7 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType> BlockedGroupColumn<FIXED_B
                 let boundary = old_boundaries.next().unwrap();
                 if boundary == pos && starts.last() != Some(&pos) {
                     starts.push(pos);
-                    *per_views_block.back_mut().unwrap() += 1;
+                    *per_views_block.last_mut().unwrap() += 1;
                 }
             }
             let mut byte_view = ByteView::from(*view);
@@ -579,7 +578,7 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType> BlockedGroupColumn<FIXED_B
         // The views block being written to always owns a bytes block, even when empty
         if self.views.len().is_multiple_of(block_size) {
             starts.push(pos);
-            per_views_block.push_back(1);
+            per_views_block.push(1);
         }
         let sizes: Vec<usize> = starts
             .iter()
@@ -617,19 +616,18 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType> BlockedGroupColumn<FIXED_B
         // The bytes blocks may be empty when every value of the block is inlined or null
         let count = self
             .num_bytes_blocks_per_block
-            .pop_front()
-            .expect("a views block owns bytes blocks");
+            .remove(0);
         let buffers = (0..count).map(|_| self.bytes.take_first_block()).collect();
 
         // The taken bytes blocks shift every remaining block index down
-        self.block_starts.pop_front();
+        self.block_starts.remove(0);
         for start in &mut self.block_starts {
             *start -= count;
         }
         if self.num_bytes_blocks_per_block.is_empty() {
             // the bytes builder keeps one open block after everything was taken
-            self.num_bytes_blocks_per_block.push_back(1);
-            self.block_starts.push_back(0);
+            self.num_bytes_blocks_per_block.push(1);
+            self.block_starts.push(0);
         }
 
         Some(Self::build(views.into(), buffers, nulls))
@@ -812,8 +810,8 @@ mod tests {
         }
         // 3 full views blocks with 2 bytes blocks each plus the open one
         assert_eq!(builder.bytes.num_blocks(), 7);
-        assert_eq!(builder.num_bytes_blocks_per_block, VecDeque::from(vec![2, 2, 2, 1]));
-        assert_eq!(builder.block_starts, VecDeque::from(vec![0, 2, 4, 6]));
+        assert_eq!(builder.num_bytes_blocks_per_block, Vec::from(vec![2, 2, 2, 1]));
+        assert_eq!(builder.block_starts, Vec::from(vec![0, 2, 4, 6]));
         assert_eq!(builder.bytes.len(), 12 * value_len);
         let size_before = builder.size();
 
@@ -824,7 +822,7 @@ mod tests {
         assert_eq!(buffers.len(), 2);
         assert_eq!(buffers[0].len() + buffers[1].len(), 4 * value_len);
         assert_eq!(builder.bytes.num_blocks(), 5);
-        assert_eq!(builder.block_starts, VecDeque::from(vec![0, 2, 4]));
+        assert_eq!(builder.block_starts, Vec::from(vec![0, 2, 4]));
         assert_eq!(builder.bytes.len(), 8 * value_len);
         // mapped pages are released at page granularity, never grow
         assert!(builder.size() <= size_before);
@@ -836,7 +834,7 @@ mod tests {
         assert_eq!(taken.as_string_view().data_buffers()[0].len(), value_len);
         assert_eq!(builder.bytes.len(), 7 * value_len);
         // the old bytes block boundary after value 5 is kept, value 8 moved into block 0
-        assert_eq!(builder.num_bytes_blocks_per_block, VecDeque::from(vec![3, 2]));
+        assert_eq!(builder.num_bytes_blocks_per_block, Vec::from(vec![3, 2]));
         assert_eq!(stored(&builder, 4), owned(&values[5..]));
         let taken = builder.take_n(1);
         assert_eq!(strings(&taken), owned(&values[5..6]));
