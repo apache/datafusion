@@ -154,6 +154,17 @@ when it is evaluated per aggregate. The legacy grouped hash path evaluates
 filters collectively, so its per-aggregate `arguments` timers cover argument
 expressions only; their sum need not equal `aggregate_arguments_time`.
 
+Aggregate implementations can also expose optional internal submetrics. These
+use the `agg_expr_{index}_internal_{subphase}_time` naming and `aggregate`
+label. The `internal` segment keeps them separate from call-boundary timers;
+`subphase` is a stable identifier owned and documented by the aggregate
+implementation. They are registered lazily only when an aggregate requests
+them, so aggregates without internal submetrics add no metrics. For example,
+`array_agg(DISTINCT ...)` records the time spent deduplicating input values as
+`agg_expr_{index}_internal_distinct_time`. These submetrics complement the
+`update`, `merge`, `state`, and `evaluate` timers rather than subdividing or
+replacing them.
+
 Except for the `Summary` metric `reduction_factor`, these operator-level and
 per-aggregate metrics are `Dev` metrics. They appear in `EXPLAIN ANALYZE` when
 `datafusion.explain.analyze_level` includes `Dev` (the default), but are omitted

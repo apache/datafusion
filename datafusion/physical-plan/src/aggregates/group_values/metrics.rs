@@ -18,6 +18,89 @@
 //! Metrics for the various group-by implementations.
 
 use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder, Time};
+use datafusion_expr::{AggregateMetric, AggregateMetrics};
+use parking_lot::Mutex;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+
+/// Lazily registers optional internal metrics for one aggregate expression.
+///
+/// The physical aggregate operator owns the expression index and label. Aggregate
+/// implementations can only supply stable subphase identifiers through
+/// [`AggregateMetrics`].
+#[derive(Debug)]
+pub(crate) struct AggregateSubMetrics {
+    metrics: ExecutionPlanMetricsSet,
+    partition: usize,
+    index: usize,
+    aggregate_label: String,
+    subphase_times: Mutex<HashMap<&'static str, Time>>,
+}
+
+impl AggregateSubMetrics {
+    pub(crate) fn new(
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+        index: usize,
+        aggregate_label: impl Into<String>,
+    ) -> Self {
+        Self {
+            metrics: metrics.clone(),
+            partition,
+            index,
+            aggregate_label: aggregate_label.into(),
+            subphase_times: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct AggregateSubMetric {
+    time: Time,
+}
+
+impl AggregateMetric for AggregateSubMetric {
+    fn add_duration(&self, duration: Duration) {
+        self.time.add_duration(duration);
+    }
+}
+
+impl AggregateMetrics for AggregateSubMetrics {
+    fn metric(&self, subphase: &'static str) -> Arc<dyn AggregateMetric> {
+        let mut subphase_times = self.subphase_times.lock();
+        let time = subphase_times
+            .entry(subphase)
+            .or_insert_with(|| {
+                MetricBuilder::new(&self.metrics)
+                    .with_new_label("aggregate", self.aggregate_label.clone())
+                    .subset_time(
+                        format!("agg_expr_{}_internal_{}_time", self.index, subphase),
+                        self.partition,
+                    )
+            })
+            .clone();
+        Arc::new(AggregateSubMetric { time })
+    }
+}
+
+pub(crate) fn aggregate_sub_metrics<T>(
+    metrics: &ExecutionPlanMetricsSet,
+    partition: usize,
+    aggregate_labels: impl IntoIterator<Item = T>,
+) -> Vec<Arc<dyn AggregateMetrics>>
+where
+    T: Into<String>,
+{
+    aggregate_labels
+        .into_iter()
+        .enumerate()
+        .map(|(index, label)| {
+            Arc::new(AggregateSubMetrics::new(metrics, partition, index, label))
+                as Arc<dyn AggregateMetrics>
+        })
+        .collect()
+}
 
 #[derive(Clone)]
 pub(crate) struct AggregateArgumentMetrics {
@@ -221,7 +304,7 @@ impl GroupByMetrics {
 
 #[cfg(test)]
 mod tests {
-    use super::GroupByMetrics;
+    use super::{GroupByMetrics, aggregate_sub_metrics};
     use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
     use crate::metrics::{ExecutionPlanMetricsSet, MetricValue, MetricsSet};
     use crate::test::TestMemoryExec;
@@ -240,6 +323,32 @@ mod tests {
     };
     use datafusion_physical_expr::expressions::col;
     use std::sync::Arc;
+    use std::time::Duration;
+
+    #[test]
+    fn aggregate_submetrics_merge_across_partitions() {
+        let metrics = ExecutionPlanMetricsSet::new();
+        let partition_0 = aggregate_sub_metrics(&metrics, 0, ["array_agg(DISTINCT a)"]);
+        let partition_1 = aggregate_sub_metrics(&metrics, 1, ["array_agg(DISTINCT a)"]);
+
+        partition_0[0]
+            .metric("distinct")
+            .add_duration(Duration::from_nanos(1));
+        partition_1[0]
+            .metric("distinct")
+            .add_duration(Duration::from_nanos(2));
+
+        let metrics = metrics.clone_inner();
+        let metric_name = "agg_expr_0_internal_distinct_time";
+        assert_eq!(metrics.sum_by_name(metric_name).unwrap().as_usize(), 3);
+        assert!(metrics.iter().all(|metric| {
+            metric.value().name() == metric_name
+                && metric.labels().iter().any(|label| {
+                    label.name() == "aggregate"
+                        && label.value() == "array_agg(DISTINCT a)"
+                })
+        }));
+    }
 
     /// Helper function to verify all three GroupBy metrics exist and have non-zero values
     fn assert_groupby_metrics(metrics: &MetricsSet) {
