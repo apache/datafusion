@@ -937,6 +937,77 @@ mod record_batch_tests {
         assert_eq!(counter.memory_usage(), get_record_batch_memory_size(&batch));
     }
 
+    /// Counts 1000 same-shaped batches with one `RecordBatchMemoryCounter`,
+    /// returning `(undercounted_batches, charged_total, expected_total)`.
+    ///
+    /// With `retain == true` every batch is kept alive until the end, so no
+    /// buffer can be freed and no address recycled while the counter is used.
+    /// With `retain == false` each batch is dropped after being counted, as a
+    /// streaming consumer would, letting the allocator hand the same address
+    /// to the next batch.
+    fn count_fresh_batches(retain: bool) -> (usize, usize, usize) {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "ints",
+            DataType::Int32,
+            false,
+        )]));
+        let make_batch = |seed: i32| {
+            let values: Vec<i32> = (seed..seed + 1024).collect();
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int32Array::from(values))],
+            )
+            .unwrap()
+        };
+
+        let mut counter = RecordBatchMemoryCounter::new();
+        let mut retained = Vec::new();
+        let mut undercounted_batches = 0usize;
+        let mut expected_total = 0usize;
+
+        for seed in 0..1000 {
+            let batch = make_batch(seed);
+            let expected = get_record_batch_memory_size(&batch);
+            let charged = counter.count_batch(&batch);
+            expected_total += expected;
+            if charged < expected {
+                undercounted_batches += 1;
+            }
+            if retain {
+                retained.push(batch);
+            }
+            // Otherwise `batch` is dropped here, freeing its buffer.
+        }
+
+        (undercounted_batches, counter.memory_usage(), expected_total)
+    }
+
+    /// While every counted batch stays alive, an address seen twice is a
+    /// genuinely shared buffer, so the counter is exact.
+    #[test]
+    fn test_record_batch_memory_counter_exact_while_batches_retained() {
+        let (undercounted, charged, expected) = count_fresh_batches(true);
+        assert_eq!(undercounted, 0);
+        assert_eq!(charged, expected);
+    }
+
+    /// Every batch here is new memory, so an exact counter charges all of
+    /// them. `RecordBatchMemoryCounter` identifies buffers by address, and
+    /// once a counted batch is dropped the allocator recycles its allocation
+    /// for the next same-sized batch, which the counter then skips as already
+    /// seen. Allocators bin by size class and prefer recently freed blocks, so
+    /// counting same-shaped batches in a loop hits this readily.
+    #[test]
+    fn test_record_batch_memory_counter_undercounts_after_address_reuse() {
+        let (undercounted, charged, expected) = count_fresh_batches(false);
+        println!("undercounted={undercounted} charged={charged} expected={expected}");
+        assert_eq!(
+            undercounted, 0,
+            "counter skipped {undercounted} fresh batches whose addresses were recycled"
+        );
+        assert_eq!(charged, expected);
+    }
+
     #[test]
     fn test_record_batch_memory_counter_promotes_buffer_set() {
         let fields = (0..=INLINE_BUFFER_IDS)

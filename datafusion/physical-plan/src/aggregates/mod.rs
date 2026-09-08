@@ -8467,4 +8467,154 @@ mod tests {
         assert!(agg.set_dynamic_filter(df).is_err());
         Ok(())
     }
+
+    /// Reproduces `output_bytes` undercounting caused by buffer address reuse.
+    ///
+    /// The deduplicating `output_bytes` counter identifies buffers by address
+    /// for the lifetime of the stream. A streaming aggregate hands each output
+    /// batch downstream and forgets it; once the consumer drops it, the
+    /// allocator may hand the same address to the next emitted batch, which the
+    /// counter then treats as already counted.
+    ///
+    /// Sorted partial aggregation emits a fresh materialization per completed
+    /// group range, so it produces many independently allocated output batches
+    /// with no shared buffers between them. Each is smaller than `batch_size`,
+    /// so none is sliced and measuring each batch on its own is exact.
+    #[tokio::test]
+    async fn output_bytes_metric_undercounts_when_buffer_addresses_are_reused()
+    -> Result<()> {
+        use datafusion_common::utils::memory::{
+            RecordBatchMemoryCounter, get_record_batch_memory_size,
+        };
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("value", DataType::Int64, false),
+        ]));
+
+        // 200 input batches, each with 512 distinct, strictly increasing keys.
+        let keys_per_batch = 512;
+        let input_batches = (0..200i32)
+            .map(|i| {
+                let start = i * keys_per_batch;
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(Int32Array::from(
+                            (start..start + keys_per_batch).collect::<Vec<_>>(),
+                        )),
+                        Arc::new(Int64Array::from(vec![1i64; keys_per_batch as usize])),
+                    ],
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let ordering = LexOrdering::new([PhysicalSortExpr::new_default(Arc::new(
+            Column::new("key", 0),
+        ))])
+        .unwrap();
+        let input = TestMemoryExec::try_new(&[input_batches], Arc::clone(&schema), None)?
+            .try_with_sort_information(vec![ordering])?;
+        let input = Arc::new(TestMemoryExec::update_cache(&Arc::new(input)));
+
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
+        let aggr_expr = vec![Arc::new(
+            AggregateExprBuilder::new(count_udaf(), vec![col("value", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("COUNT(value)")
+                .build()?,
+        )];
+        let aggregate = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by,
+            aggr_expr,
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?);
+        assert_eq!(aggregate.input_order_mode(), &InputOrderMode::Sorted);
+
+        // batch_size larger than any emitted batch so nothing is sliced.
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(8192)),
+        );
+
+        // Pass 1: ground truth. Retain every output batch so no buffer can be
+        // freed and no address recycled. Any address match between batches is
+        // then a genuine shared buffer. If the deduplicated total over all
+        // retained batches equals the per-batch sum, the emits share nothing
+        // and the per-batch sum is the exact expected value.
+        let retained = collect(aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
+        let output_batches = retained.len();
+        assert!(output_batches > 1, "test needs many separate emits");
+        let per_batch_sum: usize = retained
+            .iter()
+            .map(|batch| {
+                assert!(batch.num_rows() <= 8192, "batch was sliced");
+                get_record_batch_memory_size(batch)
+            })
+            .sum();
+        let mut ground_truth = RecordBatchMemoryCounter::new();
+        for batch in &retained {
+            ground_truth.count_batch(batch);
+        }
+        let expected_bytes = ground_truth.memory_usage();
+        assert_eq!(
+            expected_bytes, per_batch_sum,
+            "emitted batches share buffers; per-batch sum is not a valid expectation"
+        );
+        // Pass 1 also fed the metric while every batch was alive, so it must
+        // agree with the ground truth. This confirms the counter is exact when
+        // its retention requirement holds.
+        let metrics_while_retained = aggregate.metrics().unwrap();
+        let reported_while_retained = metrics_while_retained
+            .sum(|m| matches!(m.value(), MetricValue::OutputBytes(_)))
+            .unwrap()
+            .as_usize();
+        assert_eq!(reported_while_retained, expected_bytes);
+        drop(retained);
+
+        // Pass 2: consume like a real downstream operator, measure then drop.
+        // Use a fresh AggregateExec so its metrics are not mixed with pass 1.
+        let aggregate = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            aggregate.group_expr().clone(),
+            aggregate.aggr_expr().to_vec(),
+            aggregate.filter_expr().to_vec(),
+            Arc::clone(aggregate.input()),
+            Arc::clone(&schema),
+        )?);
+        let mut stream = aggregate.execute(0, task_ctx)?;
+        let mut dropped_batches = 0usize;
+        while let Some(batch) = stream.next().await {
+            let batch = batch?;
+            assert!(batch.num_rows() <= 8192, "batch was sliced");
+            dropped_batches += 1;
+        }
+        assert_eq!(dropped_batches, output_batches);
+
+        let metrics = aggregate.metrics().unwrap();
+        let reported_bytes = metrics
+            .sum(|m| matches!(m.value(), MetricValue::OutputBytes(_)))
+            .unwrap()
+            .as_usize();
+        let reported_batches = metrics
+            .sum(|m| matches!(m.value(), MetricValue::OutputBatches(_)))
+            .unwrap()
+            .as_usize();
+        assert_eq!(reported_batches, output_batches);
+
+        println!(
+            "output_batches={output_batches} reported_bytes={reported_bytes} \
+             expected_bytes={expected_bytes}"
+        );
+        assert_eq!(
+            reported_bytes, expected_bytes,
+            "output_bytes undercounts: {reported_bytes} reported vs {expected_bytes} \
+             actually emitted across {output_batches} batches"
+        );
+        Ok(())
+    }
 }
