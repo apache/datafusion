@@ -28,8 +28,10 @@ mod union_nullable_spill;
 mod view_spill_compaction;
 use arrow::array::{
     ArrayRef, DictionaryArray, Int32Array, Int64Array, RecordBatch, StringArray,
-    StringViewArray,
+    StringViewArray, StructArray
 };
+use arrow::buffer::NullBuffer;
+use arrow::array::{ListBuilder, Int64Builder};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Fields, Int32Type, SchemaRef};
 use arrow_schema::{DataType, Field, Schema};
@@ -316,14 +318,14 @@ async fn legacy_stream_nested_key_spill_keeps_groups_unique() {
         batches_to_sort_string(&batches)
     }
 
-    let expected_unbounded = run_nested_key_query(None, true).await;
+    let expected = run_nested_key_query(None, true).await;
     let actual_bounded = run_nested_key_query(Some(NESTED_KEY_MEMORY_LIMIT), false).await;
     let actual_unbounded_legacy = run_nested_key_query(None, true).await;
     let actual_bounded_legacy =
         run_nested_key_query(Some(NESTED_KEY_MEMORY_LIMIT), true).await;
 
     assert_eq!(actual_bounded_legacy, expected);
-    assert_eq!(actual_unbounded, expected);
+    assert_eq!(actual_unbounded_legacy, expected);
     assert_eq!(actual_bounded, expected);
 }
 
