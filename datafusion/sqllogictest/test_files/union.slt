@@ -302,6 +302,40 @@ physical_plan
 statement ok
 set datafusion.optimizer.enable_unions_to_filter = false;
 
+statement ok
+CREATE TABLE prices AS SELECT 1000 AS amount;
+
+# Establish the results with the rewrite disabled before repeating these
+# queries with it enabled. The derived tables deliberately reuse the table
+# and column names, but compute different values below their filters.
+query I rowsort
+SELECT prices.amount
+FROM (SELECT amount + 100 AS amount FROM prices) AS prices
+WHERE amount > 0
+UNION
+SELECT prices.amount
+FROM (SELECT amount + 200 AS amount FROM prices) AS prices
+WHERE amount > 1
+----
+1100
+1200
+
+query I rowsort
+SELECT x.id FROM t1 AS x WHERE x.id = 1
+UNION
+SELECT x.id FROM t1 AS x WHERE x.id = 2
+----
+1
+2
+
+query I rowsort
+SELECT p.amount FROM (SELECT id + 100 AS amount FROM t1) AS p WHERE p.amount = 101
+UNION
+SELECT p.amount FROM (SELECT id + 100 AS amount FROM t1) AS p WHERE p.amount = 102
+----
+101
+102
+
 query TT
 EXPLAIN SELECT id, name FROM t1 WHERE id = 1 UNION SELECT id, name FROM t1 WHERE id = 2
 ----
@@ -348,6 +382,43 @@ SELECT id, name FROM t1 WHERE id = 1 UNION SELECT id, name FROM t1 WHERE id = 2
 ----
 1 Alex
 2 Bob
+
+# Regression: different computed projections below the branch filters must
+# preserve both values when unions_to_filter is enabled.
+query I rowsort
+SELECT prices.amount
+FROM (SELECT amount + 100 AS amount FROM prices) AS prices
+WHERE amount > 0
+UNION
+SELECT prices.amount
+FROM (SELECT amount + 200 AS amount FROM prices) AS prices
+WHERE amount > 1
+----
+1100
+1200
+
+# Regression: predicates qualified with a table alias must still resolve
+# against the source below the merged filter.
+query I rowsort
+SELECT x.id FROM t1 AS x WHERE x.id = 1
+UNION
+SELECT x.id FROM t1 AS x WHERE x.id = 2
+----
+1
+2
+
+# Matching computed projections remain eligible for the rewrite and must
+# return the same rows as they do with the rewrite disabled.
+query I rowsort
+SELECT p.amount FROM (SELECT id + 100 AS amount FROM t1) AS p WHERE p.amount = 101
+UNION
+SELECT p.amount FROM (SELECT id + 100 AS amount FROM t1) AS p WHERE p.amount = 102
+----
+101
+102
+
+statement ok
+DROP TABLE prices;
 
 statement ok
 set datafusion.optimizer.enable_unions_to_filter = false;

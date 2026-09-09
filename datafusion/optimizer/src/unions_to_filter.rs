@@ -20,7 +20,9 @@
 
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
+use datafusion_common::tree_node::{
+    Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
+};
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion_expr::utils::disjunction;
@@ -172,7 +174,7 @@ fn extract_branch(plan: LogicalPlan) -> Result<Option<UnionBranch>> {
         return Ok(None);
     }
 
-    match plan {
+    let (source, predicate) = match plan {
         LogicalPlan::Filter(Filter {
             predicate, input, ..
         }) => {
@@ -182,17 +184,10 @@ fn extract_branch(plan: LogicalPlan) -> Result<Option<UnionBranch>> {
                 );
                 return Ok(None);
             }
-            let Some(source) = strip_passthrough_nodes(Arc::unwrap_or_clone(input)) else {
-                debug!(
-                    "unions_to_filter skipped: filter input contains a projection"
-                );
-                return Ok(None);
-            };
-            Ok(Some(UnionBranch {
-                source,
-                predicate,
-                wrappers,
-            }))
+            // Keep the input intact: projections compute values and aliases
+            // define the qualifiers used by the predicate. GroupKey compares
+            // the retained plans before merging their predicates.
+            (Arc::unwrap_or_clone(input), predicate)
         }
         // A Limit or Sort node changes the row-set semantics of the branch.
         // Merging two such branches into one would silently drop the per-branch
@@ -200,29 +195,30 @@ fn extract_branch(plan: LogicalPlan) -> Result<Option<UnionBranch>> {
         // not preserve (ORDER BY).  Bail out to leave the UNION unchanged.
         LogicalPlan::Limit(_) => {
             debug!("unions_to_filter skipped: branch contains LIMIT");
-            Ok(None)
+            return Ok(None);
         }
         LogicalPlan::Sort(_) => {
             debug!("unions_to_filter skipped: branch contains ORDER BY / SORT");
-            Ok(None)
+            return Ok(None);
         }
-        other => {
-            let Some(source) = strip_passthrough_nodes(other) else {
-                debug!(
-                    "unions_to_filter skipped: branch source contains a projection"
-                );
-                return Ok(None);
-            };
-            Ok(Some(UnionBranch {
-                source,
-                predicate: Expr::Literal(
-                    datafusion_common::ScalarValue::Boolean(Some(true)),
-                    None,
-                ),
-                wrappers,
-            }))
-        }
+        other => (
+            other,
+            Expr::Literal(datafusion_common::ScalarValue::Boolean(Some(true)), None),
+        ),
+    };
+
+    if !source_is_safe(&source)? {
+        debug!(
+            "unions_to_filter skipped: source contains volatile expression or subquery"
+        );
+        return Ok(None);
     }
+
+    Ok(Some(UnionBranch {
+        source,
+        predicate,
+        wrappers,
+    }))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -292,22 +288,6 @@ fn wrap_branch(mut plan: LogicalPlan, wrappers: &[Wrapper]) -> Result<LogicalPla
     Ok(plan)
 }
 
-/// Removes aliases below a branch filter, but refuses to remove projections.
-///
-/// A projection may compute new values, so dropping it can make branches with
-/// different results appear equivalent to `unions_to_filter`.
-fn strip_passthrough_nodes(mut plan: LogicalPlan) -> Option<LogicalPlan> {
-    loop {
-        plan = match plan {
-            LogicalPlan::Projection(_) => return None,
-            LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => {
-                Arc::unwrap_or_clone(input)
-            }
-            other => return Some(other),
-        };
-    }
-}
-
 fn align_plan_to_schema(
     plan: LogicalPlan,
     schema: datafusion_common::DFSchemaRef,
@@ -338,6 +318,24 @@ fn is_mergeable_predicate(expr: &Expr) -> bool {
     !expr.is_volatile() && !expr_contains_subquery(expr)
 }
 
+/// Check every expression in the retained source, including its descendants.
+/// Merging branches also merges their source evaluations, so the same
+/// restrictions as for projection wrappers apply throughout the source.
+fn source_is_safe(source: &LogicalPlan) -> Result<bool> {
+    let mut safe = true;
+    source.apply(|node| {
+        node.apply_expressions(|expr| {
+            if is_mergeable_predicate(expr) {
+                Ok(TreeNodeRecursion::Continue)
+            } else {
+                safe = false;
+                Ok(TreeNodeRecursion::Stop)
+            }
+        })
+    })?;
+    Ok(safe)
+}
+
 /// Returns `true` when every projection expression in `wrappers` is both
 /// non-volatile and subquery-free.
 ///
@@ -356,7 +354,10 @@ fn wrapper_projections_are_safe(wrappers: &[Wrapper]) -> bool {
 
 fn expr_contains_subquery(expr: &Expr) -> bool {
     expr.exists(|e| match e {
-        Expr::ScalarSubquery(_) | Expr::Exists(_) | Expr::InSubquery(_) => Ok(true),
+        Expr::ScalarSubquery(_)
+        | Expr::Exists(_)
+        | Expr::InSubquery(_)
+        | Expr::SetComparison(_) => Ok(true),
         _ => Ok(false),
     })
     .expect("boolean expression walk is infallible")
@@ -371,10 +372,11 @@ mod tests {
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::test::test_table_scan_with_name;
     use arrow::datatypes::DataType;
-    use datafusion_common::Result;
+    use datafusion_common::{Result, Spans};
+    use datafusion_expr::expr::{SetComparison, SetQuantifier};
     use datafusion_expr::{
-        ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-        Volatility, col, lit,
+        ColumnarValue, Expr, Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+        Signature, Subquery, Volatility, col, lit,
     };
 
     macro_rules! assert_optimized_plan_equal {
@@ -422,6 +424,231 @@ mod tests {
 
     fn volatile_expr() -> Expr {
         ScalarUDF::new_from_impl(VolatileTestUdf).call(vec![])
+    }
+
+    #[test]
+    fn set_comparison_is_detected_as_subquery() {
+        let subquery = LogicalPlanBuilder::from(test_table_scan_with_name("t2").unwrap())
+            .project(vec![col("b")])
+            .unwrap()
+            .build()
+            .unwrap();
+        let expr = Expr::SetComparison(SetComparison::new(
+            Box::new(col("a")),
+            Subquery {
+                subquery: Arc::new(subquery),
+                outer_ref_columns: vec![],
+                spans: Spans::new(),
+            },
+            Operator::Gt,
+            SetQuantifier::Any,
+        ));
+
+        assert!(expr_contains_subquery(&expr));
+    }
+
+    fn assert_not_rewritten(plan: LogicalPlan) {
+        let mut options = datafusion_common::config::ConfigOptions::default();
+        options.optimizer.enable_unions_to_filter = true;
+        let optimizer_ctx = OptimizerContext::new_with_config_options(Arc::new(options));
+        let result = UnionsToFilter::new()
+            .rewrite(plan.clone(), &optimizer_ctx)
+            .unwrap();
+        assert!(!result.transformed);
+        assert_eq!(result.data, plan);
+    }
+
+    #[test]
+    fn rewrite_union_distinct_preserves_alias_below_filter() -> Result<()> {
+        let scan = test_table_scan_with_name("t").unwrap();
+        let left_source = LogicalPlanBuilder::from(scan.clone())
+            .alias("x")
+            .unwrap()
+            .build()
+            .unwrap();
+        let right_source = LogicalPlanBuilder::from(scan)
+            .alias("x")
+            .unwrap()
+            .build()
+            .unwrap();
+        let left = LogicalPlanBuilder::from(left_source)
+            .filter(col("x.a").eq(lit(1)))
+            .unwrap()
+            .project(vec![col("x.a")])
+            .unwrap()
+            .build()
+            .unwrap();
+        let right = LogicalPlanBuilder::from(right_source)
+            .filter(col("x.a").eq(lit(2)))
+            .unwrap()
+            .project(vec![col("x.a")])
+            .unwrap()
+            .build()
+            .unwrap();
+        let plan = LogicalPlanBuilder::from(left)
+            .union_distinct(right)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        assert_optimized_plan_equal!(plan, @r"
+        Distinct:
+          Projection: x.a
+            Projection: x.a
+              Filter: x.a = Int32(1) OR x.a = Int32(2)
+                SubqueryAlias: x
+                  TableScan: t
+        ")
+        .unwrap();
+        Ok(())
+    }
+
+    #[test]
+    fn rewrite_union_distinct_matching_computed_projection_below_filter() -> Result<()> {
+        let scan = test_table_scan_with_name("prices").unwrap();
+        let left_source = LogicalPlanBuilder::from(scan.clone())
+            .project(vec![col("a").add(lit(100)).alias("amount")])
+            .unwrap()
+            .alias("prices")
+            .unwrap()
+            .build()
+            .unwrap();
+        let right_source = LogicalPlanBuilder::from(scan)
+            .project(vec![col("a").add(lit(100)).alias("amount")])
+            .unwrap()
+            .alias("prices")
+            .unwrap()
+            .build()
+            .unwrap();
+        let left = LogicalPlanBuilder::from(left_source)
+            .filter(col("amount").gt(lit(0)))
+            .unwrap()
+            .project(vec![col("amount")])
+            .unwrap()
+            .build()
+            .unwrap();
+        let right = LogicalPlanBuilder::from(right_source)
+            .filter(col("amount").gt(lit(1)))
+            .unwrap()
+            .project(vec![col("amount")])
+            .unwrap()
+            .build()
+            .unwrap();
+        let plan = LogicalPlanBuilder::from(left)
+            .union_distinct(right)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        assert_optimized_plan_equal!(plan, @r"
+        Distinct:
+          Projection: prices.amount
+            Projection: prices.amount
+              Filter: prices.amount > Int32(0) OR prices.amount > Int32(1)
+                SubqueryAlias: prices
+                  Projection: prices.a + Int32(100) AS amount
+                    TableScan: prices
+        ")
+        .unwrap();
+        Ok(())
+    }
+
+    #[test]
+    fn keep_union_distinct_with_volatile_source_projection() {
+        for nested in [false, true] {
+            let mut source =
+                LogicalPlanBuilder::from(test_table_scan_with_name("t").unwrap())
+                    .project(vec![volatile_expr().add(lit(1.0_f64)).alias("v"), col("a")])
+                    .unwrap()
+                    .alias("x")
+                    .unwrap();
+            if nested {
+                // The volatile projection is below another Filter, so checking
+                // just the source node's expressions would miss it.
+                source = source.filter(col("x.v").gt(lit(0.5_f64))).unwrap();
+            }
+            let source = source.build().unwrap();
+            let left = LogicalPlanBuilder::from(source.clone())
+                .filter(col("x.a").eq(lit(1)))
+                .unwrap()
+                .build()
+                .unwrap();
+            let right = LogicalPlanBuilder::from(source)
+                .filter(col("x.a").eq(lit(2)))
+                .unwrap()
+                .build()
+                .unwrap();
+            let plan = LogicalPlanBuilder::from(left)
+                .union_distinct(right)
+                .unwrap()
+                .build()
+                .unwrap();
+            assert_not_rewritten(plan);
+        }
+    }
+
+    #[test]
+    fn keep_union_distinct_with_volatile_source_without_filter() {
+        let source = LogicalPlanBuilder::from(test_table_scan_with_name("t").unwrap())
+            .project(vec![volatile_expr().alias("v"), col("a")])
+            .unwrap()
+            // Keep the volatile projection inside the retained source rather
+            // than letting peel_wrappers classify it as an outer wrapper.
+            .distinct()
+            .unwrap()
+            .build()
+            .unwrap();
+        let left = LogicalPlanBuilder::from(source.clone())
+            .project(vec![col("a")])
+            .unwrap()
+            .build()
+            .unwrap();
+        let right = LogicalPlanBuilder::from(source)
+            .filter(col("a").eq(lit(2)))
+            .unwrap()
+            .project(vec![col("a")])
+            .unwrap()
+            .build()
+            .unwrap();
+        let plan = LogicalPlanBuilder::from(left)
+            .union_distinct(right)
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_not_rewritten(plan);
+    }
+
+    #[test]
+    fn keep_union_distinct_with_subquery_in_source() {
+        let subquery = LogicalPlanBuilder::from(test_table_scan_with_name("t2").unwrap())
+            .project(vec![col("b")])
+            .unwrap()
+            .build()
+            .unwrap();
+        let source = LogicalPlanBuilder::from(test_table_scan_with_name("t").unwrap())
+            .project(vec![
+                datafusion_expr::scalar_subquery(Arc::new(subquery)).alias("v"),
+                col("a"),
+            ])
+            .unwrap()
+            .build()
+            .unwrap();
+        let left = LogicalPlanBuilder::from(source.clone())
+            .filter(col("a").eq(lit(1)))
+            .unwrap()
+            .build()
+            .unwrap();
+        let right = LogicalPlanBuilder::from(source)
+            .filter(col("a").eq(lit(2)))
+            .unwrap()
+            .build()
+            .unwrap();
+        let plan = LogicalPlanBuilder::from(left)
+            .union_distinct(right)
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_not_rewritten(plan);
     }
 
     #[test]
