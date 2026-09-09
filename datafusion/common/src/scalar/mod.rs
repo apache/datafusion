@@ -4440,6 +4440,18 @@ impl ScalarValue {
             target_type,
         ) {
             crate::nested_struct::cast_column(&scalar_array, target_type, cast_options)?
+        } else if crate::timezone_cast::is_naive_to_timezone_cast(
+            &source_type,
+            target_type,
+        ) {
+            // Casting a timezone-naive timestamp into a timezone follows
+            // PostgreSQL/DuckDB semantics around daylight saving transitions,
+            // which differ from arrow's kernel.
+            crate::timezone_cast::cast_naive_timestamp_to_timezone(
+                &scalar_array,
+                target_type,
+                cast_options,
+            )?
         } else {
             cast_with_options(&scalar_array, target_type, cast_options)?
         };

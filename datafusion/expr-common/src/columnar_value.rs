@@ -35,6 +35,7 @@ use datafusion_common::{
         date_to_timestamp_multiplier, ensure_timestamp_in_bounds,
         timestamp_to_timestamp_multiplier,
     },
+    timezone_cast::{cast_naive_timestamp_to_timezone, is_naive_to_timezone_cast},
 };
 use std::fmt;
 use std::sync::Arc;
@@ -327,6 +328,12 @@ fn cast_array_by_name(
     } else {
         if !cast_options.safe {
             ensure_temporal_array_timestamp_bounds(array, cast_type)?;
+        }
+        // Casting a timezone-naive timestamp into a timezone follows
+        // PostgreSQL/DuckDB semantics around daylight saving transitions, which
+        // differ from arrow's kernel.
+        if is_naive_to_timezone_cast(array.data_type(), cast_type) {
+            return cast_naive_timestamp_to_timezone(array, cast_type, cast_options);
         }
         Ok(kernels::cast::cast_with_options(
             array,

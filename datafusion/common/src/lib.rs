@@ -61,6 +61,7 @@ pub mod scalar;
 pub mod spans;
 pub mod stats;
 pub mod test_util;
+pub mod timezone_cast;
 pub mod tree_node;
 pub mod types;
 pub mod utils;

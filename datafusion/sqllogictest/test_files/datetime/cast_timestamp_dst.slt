@@ -1,0 +1,242 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## Casting a timezone-naive timestamp into a named timezone across a daylight
+## saving transition.
+##
+## A local (wall clock) time is not always a single instant:
+##   * the hour repeated by a "fall back" transition is ambiguous, and
+##   * the hour skipped by a "spring forward" transition does not exist.
+##
+## Like PostgreSQL and DuckDB, DataFusion resolves the ambiguous case to the
+## later instant (the post-transition, standard-time offset) and shifts a
+## nonexistent local time forward by the size of the gap.
+##########
+
+statement ok
+SET datafusion.execution.time_zone = 'America/New_York';
+
+# Unambiguous local time: 2024-11-01 is still EDT (-04:00)
+query P
+SELECT '2024-11-01T00:00:00'::timestamp::timestamptz;
+----
+2024-11-01T00:00:00-04:00
+
+# Ambiguous local time: 2024-11-03T01:30 occurs twice, at -04:00 and at -05:00.
+# The later instant (-05:00) wins.
+query P
+SELECT '2024-11-03T01:30:00'::timestamp::timestamptz;
+----
+2024-11-03T01:30:00-05:00
+
+# Nonexistent local time: 2024-03-10T02:30 is skipped by the spring forward
+# transition, so it is shifted forward by the one hour gap.
+query P
+SELECT '2024-03-10T02:30:00'::timestamp::timestamptz;
+----
+2024-03-10T03:30:00-04:00
+
+# The same three casts, as instants
+query I
+SELECT to_unixtime('2024-11-01T00:00:00'::timestamp::timestamptz);
+----
+1730433600
+
+# The earlier of the two candidate instants would be 1730611800
+query I
+SELECT to_unixtime('2024-11-03T01:30:00'::timestamp::timestamptz);
+----
+1730615400
+
+# 2024-03-10T07:30:00Z
+query I
+SELECT to_unixtime('2024-03-10T02:30:00'::timestamp::timestamptz);
+----
+1710055800
+
+# The literal casts above are constant folded; a real column exercises the
+# array cast kernel instead.
+statement ok
+CREATE TABLE t AS
+SELECT arrow_cast('2024-11-03T01:30:00', 'Timestamp(Nanosecond, None)') AS ts;
+
+query TT
+EXPLAIN SELECT ts::timestamptz FROM t;
+----
+logical_plan
+01)Projection: CAST(t.ts AS Timestamp(ns, "America/New_York"))
+02)--TableScan: t projection=[ts]
+physical_plan
+01)ProjectionExec: expr=[CAST(ts@0 AS Timestamp(ns, "America/New_York")) as t.ts]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query P
+SELECT ts::timestamptz FROM t;
+----
+2024-11-03T01:30:00-05:00
+
+query I
+SELECT to_unixtime(ts::timestamptz) FROM t;
+----
+1730615400
+
+statement ok
+DROP TABLE t;
+
+# All four time units, ambiguous local time
+query P
+SELECT arrow_cast(arrow_cast('2024-11-03T01:30:00', 'Timestamp(Second, None)'), 'Timestamp(Second, Some("America/New_York"))');
+----
+2024-11-03T01:30:00-05:00
+
+query P
+SELECT arrow_cast(arrow_cast('2024-11-03T01:30:00', 'Timestamp(Millisecond, None)'), 'Timestamp(Millisecond, Some("America/New_York"))');
+----
+2024-11-03T01:30:00-05:00
+
+query P
+SELECT arrow_cast(arrow_cast('2024-11-03T01:30:00', 'Timestamp(Microsecond, None)'), 'Timestamp(Microsecond, Some("America/New_York"))');
+----
+2024-11-03T01:30:00-05:00
+
+query P
+SELECT arrow_cast(arrow_cast('2024-11-03T01:30:00', 'Timestamp(Nanosecond, None)'), 'Timestamp(Nanosecond, Some("America/New_York"))');
+----
+2024-11-03T01:30:00-05:00
+
+# All four time units, nonexistent local time
+query P
+SELECT arrow_cast(arrow_cast('2024-03-10T02:30:00', 'Timestamp(Second, None)'), 'Timestamp(Second, Some("America/New_York"))');
+----
+2024-03-10T03:30:00-04:00
+
+query P
+SELECT arrow_cast(arrow_cast('2024-03-10T02:30:00', 'Timestamp(Millisecond, None)'), 'Timestamp(Millisecond, Some("America/New_York"))');
+----
+2024-03-10T03:30:00-04:00
+
+query P
+SELECT arrow_cast(arrow_cast('2024-03-10T02:30:00', 'Timestamp(Microsecond, None)'), 'Timestamp(Microsecond, Some("America/New_York"))');
+----
+2024-03-10T03:30:00-04:00
+
+query P
+SELECT arrow_cast(arrow_cast('2024-03-10T02:30:00', 'Timestamp(Nanosecond, None)'), 'Timestamp(Nanosecond, Some("America/New_York"))');
+----
+2024-03-10T03:30:00-04:00
+
+# A cast that also changes the time unit
+query P
+SELECT arrow_cast(arrow_cast('2024-11-03T01:30:00', 'Timestamp(Nanosecond, None)'), 'Timestamp(Millisecond, Some("America/New_York"))');
+----
+2024-11-03T01:30:00-05:00
+
+# TRY_CAST no longer yields NULL for these local times
+query P
+SELECT TRY_CAST('2024-11-03T01:30:00'::timestamp AS timestamptz);
+----
+2024-11-03T01:30:00-05:00
+
+query P
+SELECT TRY_CAST('2024-03-10T02:30:00'::timestamp AS timestamptz);
+----
+2024-03-10T03:30:00-04:00
+
+# NULL in, NULL out
+query P
+SELECT arrow_cast(NULL, 'Timestamp(Nanosecond, None)')::timestamptz;
+----
+NULL
+
+query P
+SELECT TRY_CAST(arrow_cast(NULL, 'Timestamp(Nanosecond, None)') AS timestamptz);
+----
+NULL
+
+##########
+## Australia/Sydney, where daylight saving runs the other way round
+##########
+
+statement ok
+SET datafusion.execution.time_zone = 'Australia/Sydney';
+
+# Ambiguous: 2024-04-07T02:30 occurs at +11:00 and then at +10:00
+query P
+SELECT '2024-04-07T02:30:00'::timestamp::timestamptz;
+----
+2024-04-07T02:30:00+10:00
+
+query I
+SELECT to_unixtime('2024-04-07T02:30:00'::timestamp::timestamptz);
+----
+1712421000
+
+# Nonexistent: 2024-10-06T02:30 is skipped, shifted forward by one hour
+query P
+SELECT '2024-10-06T02:30:00'::timestamp::timestamptz;
+----
+2024-10-06T03:30:00+11:00
+
+query I
+SELECT to_unixtime('2024-10-06T02:30:00'::timestamp::timestamptz);
+----
+1728145800
+
+statement ok
+CREATE TABLE t AS
+SELECT arrow_cast('2024-10-06T02:30:00', 'Timestamp(Nanosecond, None)') AS ts;
+
+query P
+SELECT ts::timestamptz FROM t;
+----
+2024-10-06T03:30:00+11:00
+
+statement ok
+DROP TABLE t;
+
+##########
+## A fixed offset never has a transition, so nothing changes there
+##########
+
+statement ok
+SET datafusion.execution.time_zone = '+08:00';
+
+query P
+SELECT '2024-11-03T01:30:00'::timestamp::timestamptz;
+----
+2024-11-03T01:30:00+08:00
+
+query P
+SELECT '2024-03-10T02:30:00'::timestamp::timestamptz;
+----
+2024-03-10T02:30:00+08:00
+
+statement ok
+CREATE TABLE t AS
+SELECT arrow_cast('2024-03-10T02:30:00', 'Timestamp(Nanosecond, None)') AS ts;
+
+query P
+SELECT ts::timestamptz FROM t;
+----
+2024-03-10T02:30:00+08:00
+
+statement ok
+DROP TABLE t;
+
+statement ok
+RESET datafusion.execution.time_zone;
