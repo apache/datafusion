@@ -73,7 +73,6 @@ mod tests {
             write!(f, "VariableStream")
         }
     }
-
     #[async_trait]
     impl ObjectStore for VariableStream {
         async fn put_opts(

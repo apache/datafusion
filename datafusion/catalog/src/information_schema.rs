@@ -7,6 +7,7 @@
 //! [Information Schema]: https://en.wikipedia.org/wiki/Information_schema
 
 use crate::streaming::StreamingTable;
+use futures::future::BoxFuture;
 use crate::table::TableFunction;
 use crate::{CatalogProviderList, SchemaProvider, TableProvider};
 use arrow::array::StringArray;
@@ -15,7 +16,6 @@ use arrow::compute::kernels::filter::filter_record_batch;
 use arrow::compute::like;
 use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use async_trait::async_trait;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_common::types::{LogicalType, NativeType};
@@ -908,7 +908,6 @@ fn remove_native_type_prefix(native_type: &NativeType) -> String {
     format!("{native_type}")
 }
 
-#[async_trait]
 impl SchemaProvider for InformationSchemaProvider {
     fn table_names(&self) -> Vec<String> {
         INFORMATION_SCHEMA_TABLES
@@ -917,11 +916,14 @@ impl SchemaProvider for InformationSchemaProvider {
             .collect()
     }
 
-    async fn table(
-        &self,
-        name: &str,
-    ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError> {
-        self.config.get_table(name)
+    fn table<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<Arc<dyn TableProvider>>, DataFusionError>> {
+        Box::pin(async move {
+            self.config.get_table(name)
+    
+        })
     }
 
     fn table_exist(&self, name: &str) -> bool {
@@ -1305,20 +1307,25 @@ mod tests {
     #[derive(Debug)]
     struct Fixture;
 
-    #[async_trait]
     impl SchemaProvider for Fixture {
         // InformationSchemaConfig::make_tables should use this.
-        async fn table_type(&self, _: &str) -> Result<Option<TableType>> {
-            Ok(Some(TableType::Base))
-        }
+        fn table_type<'a>(&'a self, _: &'a str) -> BoxFuture<'a, Result<Option<TableType>>> {
+        Box::pin(async move {
+                Ok(Some(TableType::Base))
+        
+        })
+    }
 
         // InformationSchemaConfig::make_tables used this before `table_type`
         // existed but should not, as it may be expensive.
-        async fn table(&self, _: &str) -> Result<Option<Arc<dyn TableProvider>>> {
-            panic!(
-                "InformationSchemaConfig::make_tables called SchemaProvider::table instead of table_type"
-            )
-        }
+        fn table<'a>(&'a self, _: &'a str) -> BoxFuture<'a, Result<Option<Arc<dyn TableProvider>>>> {
+        Box::pin(async move {
+                panic!(
+                    "InformationSchemaConfig::make_tables called SchemaProvider::table instead of table_type"
+                )
+        
+        })
+    }
 
         fn table_names(&self) -> Vec<String> {
             vec!["atable".to_string()]

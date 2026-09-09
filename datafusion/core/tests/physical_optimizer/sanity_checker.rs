@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use futures::future::BoxFuture;
 use insta::assert_snapshot;
 use std::sync::Arc;
 
@@ -26,8 +27,6 @@ use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion_physical_plan::joins::{StreamJoinPartitionMode, SymmetricHashJoinExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::{ExecutionPlan, displayable};
-
-use async_trait::async_trait;
 
 async fn register_current_csv(
     ctx: &SessionContext,
@@ -58,10 +57,9 @@ pub enum SourceType {
     Unbounded,
     Bounded,
 }
-
-#[async_trait]
 pub trait SqlTestCase {
-    async fn register_table(&self, ctx: &SessionContext) -> Result<()>;
+    fn register_table<'a>(&'a self, ctx: &'a SessionContext)
+    -> BoxFuture<'a, Result<()>>;
     fn expect_fail(&self) -> bool;
 }
 
@@ -70,13 +68,16 @@ pub struct UnaryTestCase {
     pub source_type: SourceType,
     pub expect_fail: bool,
 }
-
-#[async_trait]
 impl SqlTestCase for UnaryTestCase {
-    async fn register_table(&self, ctx: &SessionContext) -> Result<()> {
-        let table_is_infinite = self.source_type == SourceType::Unbounded;
-        register_current_csv(ctx, "test", table_is_infinite).await?;
-        Ok(())
+    fn register_table<'a>(
+        &'a self,
+        ctx: &'a SessionContext,
+    ) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            let table_is_infinite = self.source_type == SourceType::Unbounded;
+            register_current_csv(ctx, "test", table_is_infinite).await?;
+            Ok(())
+        })
     }
 
     fn expect_fail(&self) -> bool {
@@ -89,15 +90,18 @@ pub struct BinaryTestCase {
     pub source_types: (SourceType, SourceType),
     pub expect_fail: bool,
 }
-
-#[async_trait]
 impl SqlTestCase for BinaryTestCase {
-    async fn register_table(&self, ctx: &SessionContext) -> Result<()> {
-        let left_table_is_infinite = self.source_types.0 == SourceType::Unbounded;
-        let right_table_is_infinite = self.source_types.1 == SourceType::Unbounded;
-        register_current_csv(ctx, "left", left_table_is_infinite).await?;
-        register_current_csv(ctx, "right", right_table_is_infinite).await?;
-        Ok(())
+    fn register_table<'a>(
+        &'a self,
+        ctx: &'a SessionContext,
+    ) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            let left_table_is_infinite = self.source_types.0 == SourceType::Unbounded;
+            let right_table_is_infinite = self.source_types.1 == SourceType::Unbounded;
+            register_current_csv(ctx, "left", left_table_is_infinite).await?;
+            register_current_csv(ctx, "right", right_table_is_infinite).await?;
+            Ok(())
+        })
     }
 
     fn expect_fail(&self) -> bool {

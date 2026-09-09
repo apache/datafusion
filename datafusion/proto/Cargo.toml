@@ -81,6 +81,7 @@ serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }
+futures = { workspace = true }
 datafusion = { workspace = true, default-features = false, features = [
     "sql",
     "compression",

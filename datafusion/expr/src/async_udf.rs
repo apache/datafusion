@@ -4,11 +4,11 @@
 
 use crate::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl};
 use arrow::datatypes::{DataType, FieldRef};
-use async_trait::async_trait;
 use datafusion_common::error::Result;
 use datafusion_common::internal_err;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::Signature;
+use futures::future::BoxFuture;
 use std::any::Any;
 use std::fmt::{Debug, Display};
 use std::hash::{Hash, Hasher};
@@ -20,7 +20,6 @@ use std::sync::Arc;
 /// to register remote functions in the context.
 ///
 /// The name is chosen to mirror ScalarUDFImpl
-#[async_trait]
 pub trait AsyncScalarUDFImpl: ScalarUDFImpl {
     /// The ideal batch size for this function.
     ///
@@ -31,10 +30,10 @@ pub trait AsyncScalarUDFImpl: ScalarUDFImpl {
     }
 
     /// Invoke the function asynchronously with the async arguments
-    async fn invoke_async_with_args(
-        &self,
+    fn invoke_async_with_args<'a>(
+        &'a self,
         args: ScalarFunctionArgs,
-    ) -> Result<ColumnarValue>;
+    ) -> BoxFuture<'a, Result<ColumnarValue>>;
 }
 
 /// A scalar UDF that must be invoked using async methods
@@ -124,9 +123,9 @@ mod tests {
     };
 
     use arrow::datatypes::DataType;
-    use async_trait::async_trait;
     use datafusion_common::error::Result;
     use datafusion_expr_common::{columnar_value::ColumnarValue, signature::Signature};
+    use futures::future::BoxFuture;
 
     use crate::{
         ScalarFunctionArgs, ScalarUDFImpl,
@@ -155,14 +154,12 @@ mod tests {
             todo!()
         }
     }
-
-    #[async_trait]
     impl AsyncScalarUDFImpl for TestAsyncUDFImpl1 {
-        async fn invoke_async_with_args(
-            &self,
+        fn invoke_async_with_args<'a>(
+            &'a self,
             _args: ScalarFunctionArgs,
-        ) -> Result<ColumnarValue> {
-            todo!()
+        ) -> BoxFuture<'a, Result<ColumnarValue>> {
+            Box::pin(async move { todo!() })
         }
     }
 
@@ -188,14 +185,12 @@ mod tests {
             todo!()
         }
     }
-
-    #[async_trait]
     impl AsyncScalarUDFImpl for TestAsyncUDFImpl2 {
-        async fn invoke_async_with_args(
-            &self,
+        fn invoke_async_with_args<'a>(
+            &'a self,
             _args: ScalarFunctionArgs,
-        ) -> Result<ColumnarValue> {
-            todo!()
+        ) -> BoxFuture<'a, Result<ColumnarValue>> {
+            Box::pin(async move { todo!() })
         }
     }
 

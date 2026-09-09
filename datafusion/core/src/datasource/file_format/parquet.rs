@@ -288,7 +288,6 @@ mod tests {
             self.clone()
         }
     }
-
     #[async_trait]
     impl ObjectStore for RequestCountingObjectStore {
         async fn put_opts(
