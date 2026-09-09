@@ -708,6 +708,7 @@ processing.</p>
 <section id="join-clause">
 <h2>JOIN clause<a class="headerlink" href="#join-clause" title="Link to this heading">#</a></h2>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>from_item [join_type] JOIN from_item [join_condition]
+from_item ASOF JOIN from_item MATCH_CONDITION (condition) [join_condition]
 from_item CROSS JOIN from_item
 from_item NATURAL JOIN from_item
 from_item [join_type] JOIN LATERAL (query) AS alias [join_condition]
@@ -778,6 +779,58 @@ is not a match in the right table. When there is no match, null values are produ
 <span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
 </pre></div>
 </div>
+</section>
+<section id="asof-join">
+<h3>ASOF JOIN<a class="headerlink" href="#asof-join" title="Link to this heading">#</a></h3>
+<p>DataFusion follows the
+<a class="reference external" href="https://docs.snowflake.com/en/sql-reference/constructs/asof-join">Snowflake <code class="docutils literal notranslate"><span class="pre">ASOF</span> <span class="pre">JOIN</span></code> syntax</a>.
+An <code class="docutils literal notranslate"><span class="pre">ASOF</span> <span class="pre">JOIN</span></code> matches each left row with at most one right row according to an
+ordered comparison. It preserves every left row and fills the right columns
+with <code class="docutils literal notranslate"><span class="pre">NULL</span></code> when no right row matches.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="o">*</span><span class="p">,</span><span class="w"> </span><span class="n">p</span><span class="p">.</span><span class="n">price</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">trades</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">t</span>
+<span class="n">ASOF</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">prices</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">p</span>
+<span class="n">MATCH_CONDITION</span><span class="w"> </span><span class="p">(</span><span class="n">t</span><span class="p">.</span><span class="n">ts</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="n">p</span><span class="p">.</span><span class="n">ts</span><span class="p">)</span>
+<span class="k">ON</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="n">symbol</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">p</span><span class="p">.</span><span class="n">symbol</span><span class="p">;</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">MATCH_CONDITION</span></code> must compare an expression from the left input with an
+expression from the right input using one of the following operators. Operand
+order is significant: the left input expression must appear on the left.</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Condition</p></th>
+<th class="head"><p>Selected right row</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">l</span> <span class="pre">&gt;=</span> <span class="pre">r</span></code></p></td>
+<td><p>Greatest <code class="docutils literal notranslate"><span class="pre">r</span></code> less than or equal to <code class="docutils literal notranslate"><span class="pre">l</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">l</span> <span class="pre">&gt;</span> <span class="pre">r</span></code></p></td>
+<td><p>Greatest <code class="docutils literal notranslate"><span class="pre">r</span></code> strictly less than <code class="docutils literal notranslate"><span class="pre">l</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">l</span> <span class="pre">&lt;=</span> <span class="pre">r</span></code></p></td>
+<td><p>Smallest <code class="docutils literal notranslate"><span class="pre">r</span></code> greater than or equal to <code class="docutils literal notranslate"><span class="pre">l</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">l</span> <span class="pre">&lt;</span> <span class="pre">r</span></code></p></td>
+<td><p>Smallest <code class="docutils literal notranslate"><span class="pre">r</span></code> strictly greater than <code class="docutils literal notranslate"><span class="pre">l</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>An optional <code class="docutils literal notranslate"><span class="pre">ON</span></code> clause containing equality conditions combined with <code class="docutils literal notranslate"><span class="pre">AND</span></code>, or
+a <code class="docutils literal notranslate"><span class="pre">USING</span></code> clause, divides rows into equality groups before the ordered match.
+An unqualified <code class="docutils literal notranslate"><span class="pre">USING</span></code> key appears once in wildcard output, while both qualified
+input keys remain addressable.</p>
+<p>Without equality keys, all rows belong to one group. The initial execution
+strategy collects one ordered right partition and shares it across every left
+partition, so output partitioning follows the left input. The complete right
+input must fit in memory and may be scanned once per left partition; spilling
+and repartitioned ASOF execution are not yet supported.</p>
+<p>A <code class="docutils literal notranslate"><span class="pre">NULL</span></code> in either ordered expression or in any equality key does not match.
+Both inputs must be bounded. If multiple right rows have the same equality keys
+and ordered value, which tied row is selected is nondeterministic.</p>
 </section>
 <section id="right-outer-join">
 <h3>RIGHT OUTER JOIN<a class="headerlink" href="#right-outer-join" title="Link to this heading">#</a></h3>
@@ -1453,6 +1506,7 @@ order, so the returned rows are not guaranteed to be deterministic.</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#join-clause">JOIN clause</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#inner-join">INNER JOIN</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#left-outer-join">LEFT OUTER JOIN</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#asof-join">ASOF JOIN</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#right-outer-join">RIGHT OUTER JOIN</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#full-outer-join">FULL OUTER JOIN</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#natural-join">NATURAL JOIN</a></li>
