@@ -3100,8 +3100,6 @@ mod tests {
     struct PushDownProvider {
         pub filter_support: TableProviderFilterPushDown,
     }
-
-    #[async_trait]
     impl TableSource for PushDownProvider {
         fn schema(&self) -> SchemaRef {
             Arc::new(Schema::new(vec![

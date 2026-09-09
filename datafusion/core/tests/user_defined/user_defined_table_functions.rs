@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use futures::future::BoxFuture;
 use std::fs::File;
 use std::io::Seek;
 use std::path::Path;
@@ -37,8 +38,6 @@ use datafusion_catalog::TableFunctionImpl;
 use datafusion_catalog::{Session, TableFunctionArgs};
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, Projection, TableType};
-
-use async_trait::async_trait;
 
 /// test simple udtf with define read_csv with parameters
 #[tokio::test]
@@ -115,8 +114,6 @@ struct SimpleCsvTable {
     exprs: Vec<Expr>,
     batches: Vec<RecordBatch>,
 }
-
-#[async_trait]
 impl TableProvider for SimpleCsvTable {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
@@ -126,38 +123,40 @@ impl TableProvider for SimpleCsvTable {
         TableType::Base
     }
 
-    async fn scan(
-        &self,
-        state: &dyn Session,
-        projection: Option<&[usize]>,
-        _filters: &[Expr],
+    fn scan<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        _filters: &'a [Expr],
         _limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let batches = if !self.exprs.is_empty() {
-            let max_return_lines = self.interpreter_expr(state).await?;
-            // get max return rows from self.batches
-            let mut batches = vec![];
-            let mut lines = 0;
-            for batch in &self.batches {
-                let batch_lines = batch.num_rows();
-                if lines + batch_lines > max_return_lines as usize {
-                    let batch_lines = max_return_lines as usize - lines;
-                    batches.push(batch.slice(0, batch_lines));
-                    break;
-                } else {
-                    batches.push(batch.clone());
-                    lines += batch_lines;
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            let batches = if !self.exprs.is_empty() {
+                let max_return_lines = self.interpreter_expr(state).await?;
+                // get max return rows from self.batches
+                let mut batches = vec![];
+                let mut lines = 0;
+                for batch in &self.batches {
+                    let batch_lines = batch.num_rows();
+                    if lines + batch_lines > max_return_lines as usize {
+                        let batch_lines = max_return_lines as usize - lines;
+                        batches.push(batch.slice(0, batch_lines));
+                        break;
+                    } else {
+                        batches.push(batch.clone());
+                        lines += batch_lines;
+                    }
                 }
-            }
-            batches
-        } else {
-            self.batches.clone()
-        };
-        Ok(MemorySourceConfig::try_new_exec(
-            &[batches],
-            TableProvider::schema(self),
-            projection.map(|p| p.to_vec()),
-        )?)
+                batches
+            } else {
+                self.batches.clone()
+            };
+            Ok(MemorySourceConfig::try_new_exec(
+                &[batches],
+                TableProvider::schema(self),
+                projection.map(|p| p.to_vec()),
+            )? as Arc<dyn ExecutionPlan>)
+        })
     }
 }
 

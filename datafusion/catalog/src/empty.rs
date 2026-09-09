@@ -17,10 +17,10 @@
 
 //! [`EmptyTable`] useful for testing.
 
+use futures::future::BoxFuture;
 use std::sync::Arc;
 
 use arrow::datatypes::*;
-use async_trait::async_trait;
 use datafusion_common::{Result, project_schema};
 use datafusion_expr::{Expr, TableType};
 use datafusion_physical_plan::ExecutionPlan;
@@ -52,8 +52,6 @@ impl EmptyTable {
         self
     }
 }
-
-#[async_trait]
 impl TableProvider for EmptyTable {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
@@ -63,17 +61,21 @@ impl TableProvider for EmptyTable {
         TableType::Base
     }
 
-    async fn scan(
-        &self,
-        _state: &dyn Session,
-        projection: Option<&[usize]>,
-        _filters: &[Expr],
+    fn scan<'a>(
+        &'a self,
+        _state: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        _filters: &'a [Expr],
         _limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        // even though there is no data, projections apply
-        let projected_schema = project_schema(&self.schema, projection)?;
-        Ok(Arc::new(
-            EmptyExec::new(projected_schema).with_partitions(self.partitions),
-        ))
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            // even though there is no data, projections apply
+            let projected_schema = project_schema(&self.schema, projection)?;
+            Ok(
+                Arc::new(
+                    EmptyExec::new(projected_schema).with_partitions(self.partitions),
+                ) as Arc<dyn ExecutionPlan>,
+            )
+        })
     }
 }

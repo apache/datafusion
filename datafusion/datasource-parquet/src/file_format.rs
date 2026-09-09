@@ -64,7 +64,6 @@ use crate::reader::CachedParquetFileReaderFactory;
 use crate::source::{
     ParquetSource, parse_coerce_int96_string, parse_coerce_int96_tz_string,
 };
-use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::cache::cache_manager::FileMetadataCache;
@@ -307,8 +306,6 @@ async fn get_file_decryption_properties(
 ) -> Result<Option<Arc<FileDecryptionProperties>>> {
     Ok(None)
 }
-
-#[async_trait]
 impl FileFormat for ParquetFormat {
     fn get_ext(&self) -> String {
         ParquetFormatFactory::new().get_ext()
@@ -329,246 +326,262 @@ impl FileFormat for ParquetFormat {
         None
     }
 
-    async fn infer_schema(
-        &self,
-        state: &dyn Session,
-        store: &Arc<dyn ObjectStore>,
-        objects: &[ObjectMeta],
-    ) -> Result<SchemaRef> {
-        let coerce_int96 = match self.coerce_int96() {
-            Some(time_unit) => Some(parse_coerce_int96_string(time_unit.as_str())?),
-            None => None,
-        };
-        let coerce_int96_tz = self
-            .options
-            .global
-            .coerce_int96_tz
-            .as_ref()
-            .map(|tz| parse_coerce_int96_tz_string(tz))
-            .transpose()?;
+    fn infer_schema<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        store: &'a Arc<dyn ObjectStore>,
+        objects: &'a [ObjectMeta],
+    ) -> BoxFuture<'a, Result<SchemaRef>> {
+        Box::pin(async move {
+            let coerce_int96 = match self.coerce_int96() {
+                Some(time_unit) => Some(parse_coerce_int96_string(time_unit.as_str())?),
+                None => None,
+            };
+            let coerce_int96_tz = self
+                .options
+                .global
+                .coerce_int96_tz
+                .as_ref()
+                .map(|tz| parse_coerce_int96_tz_string(tz))
+                .transpose()?;
 
-        let file_metadata_cache =
-            state.runtime_env().cache_manager.get_file_metadata_cache();
+            let file_metadata_cache =
+                state.runtime_env().cache_manager.get_file_metadata_cache();
 
-        let mut schemas: Vec<_> = futures::stream::iter(objects)
-            .map(|object| async {
-                let file_decryption_properties = get_file_decryption_properties(
-                    state,
-                    &self.options,
-                    &object.location,
-                )
-                .await?;
-                let result = DFParquetMetadata::new(store.as_ref(), object)
-                    .with_metadata_size_hint(self.metadata_size_hint())
-                    .with_decryption_properties(file_decryption_properties)
-                    .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
-                    .with_coerce_int96(coerce_int96)
-                    .with_coerce_int96_tz(coerce_int96_tz.clone())
-                    .fetch_schema_with_location()
+            let mut schemas: Vec<_> = futures::stream::iter(objects)
+                .map(|object| async {
+                    let file_decryption_properties = get_file_decryption_properties(
+                        state,
+                        &self.options,
+                        &object.location,
+                    )
                     .await?;
-                Ok::<_, DataFusionError>(result)
-            })
-            .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
-            // fetch schemas concurrently, if requested
-            .buffer_unordered(
-                state
-                    .config_options()
-                    .execution
-                    .meta_fetch_concurrency
-                    .get(),
-            )
-            .try_collect()
-            .await?;
-
-        // Schema inference adds fields based the order they are seen
-        // which depends on the order the files are processed. For some
-        // object stores (like local file systems) the order returned from list
-        // is not deterministic. Thus, to ensure deterministic schema inference
-        // sort the files first.
-        // https://github.com/apache/datafusion/pull/6629
-        schemas
-            .sort_unstable_by(|(location1, _), (location2, _)| location1.cmp(location2));
-
-        let mut seen = HashSet::new();
-        for (location, schema) in &schemas {
-            ensure_unique_field_names(schema, &mut seen).map_err(|err| {
-                DataFusionError::Context(
-                    format!("Error when processing Parquet file {location}"),
-                    Box::new(err),
+                    let result = DFParquetMetadata::new(store.as_ref(), object)
+                        .with_metadata_size_hint(self.metadata_size_hint())
+                        .with_decryption_properties(file_decryption_properties)
+                        .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
+                        .with_coerce_int96(coerce_int96)
+                        .with_coerce_int96_tz(coerce_int96_tz.clone())
+                        .fetch_schema_with_location()
+                        .await?;
+                    Ok::<_, DataFusionError>(result)
+                })
+                .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
+                // fetch schemas concurrently, if requested
+                .buffer_unordered(
+                    state
+                        .config_options()
+                        .execution
+                        .meta_fetch_concurrency
+                        .get(),
                 )
-            })?;
-        }
-        drop(seen);
-
-        let schemas = schemas.into_iter().map(|(_, schema)| schema);
-
-        let schema = if self.skip_metadata() {
-            Schema::try_merge(clear_metadata(schemas))
-        } else {
-            Schema::try_merge(schemas)
-        }?;
-
-        let schema = if self.binary_as_string() {
-            transform_binary_to_string(&schema)
-        } else {
-            schema
-        };
-
-        let schema = if self.force_view_types() {
-            transform_schema_to_view(&schema)
-        } else {
-            schema
-        };
-
-        Ok(Arc::new(schema))
-    }
-
-    async fn infer_stats(
-        &self,
-        state: &dyn Session,
-        store: &Arc<dyn ObjectStore>,
-        table_schema: SchemaRef,
-        object: &ObjectMeta,
-    ) -> Result<Statistics> {
-        let file_decryption_properties =
-            get_file_decryption_properties(state, &self.options, &object.location)
+                .try_collect()
                 .await?;
-        let file_metadata_cache =
-            state.runtime_env().cache_manager.get_file_metadata_cache();
-        DFParquetMetadata::new(store, object)
-            .with_metadata_size_hint(self.metadata_size_hint())
-            .with_decryption_properties(file_decryption_properties)
-            .with_file_metadata_cache(Some(file_metadata_cache))
-            .fetch_statistics(&table_schema)
-            .await
+
+            // Schema inference adds fields based the order they are seen
+            // which depends on the order the files are processed. For some
+            // object stores (like local file systems) the order returned from list
+            // is not deterministic. Thus, to ensure deterministic schema inference
+            // sort the files first.
+            // https://github.com/apache/datafusion/pull/6629
+            schemas.sort_unstable_by(|(location1, _), (location2, _)| {
+                location1.cmp(location2)
+            });
+
+            let mut seen = HashSet::new();
+            for (location, schema) in &schemas {
+                ensure_unique_field_names(schema, &mut seen).map_err(|err| {
+                    DataFusionError::Context(
+                        format!("Error when processing Parquet file {location}"),
+                        Box::new(err),
+                    )
+                })?;
+            }
+            drop(seen);
+
+            let schemas = schemas.into_iter().map(|(_, schema)| schema);
+
+            let schema = if self.skip_metadata() {
+                Schema::try_merge(clear_metadata(schemas))
+            } else {
+                Schema::try_merge(schemas)
+            }?;
+
+            let schema = if self.binary_as_string() {
+                transform_binary_to_string(&schema)
+            } else {
+                schema
+            };
+
+            let schema = if self.force_view_types() {
+                transform_schema_to_view(&schema)
+            } else {
+                schema
+            };
+
+            Ok(Arc::new(schema))
+        })
     }
 
-    async fn infer_ordering(
-        &self,
-        state: &dyn Session,
-        store: &Arc<dyn ObjectStore>,
+    fn infer_stats<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        store: &'a Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
-        object: &ObjectMeta,
-    ) -> Result<Option<LexOrdering>> {
-        let file_decryption_properties =
-            get_file_decryption_properties(state, &self.options, &object.location)
-                .await?;
-        let file_metadata_cache =
-            state.runtime_env().cache_manager.get_file_metadata_cache();
-        let metadata = DFParquetMetadata::new(store, object)
-            .with_metadata_size_hint(self.metadata_size_hint())
-            .with_decryption_properties(file_decryption_properties)
-            .with_file_metadata_cache(Some(file_metadata_cache))
-            .fetch_metadata()
-            .await?;
-        crate::metadata::ordering_from_parquet_metadata(&metadata, &table_schema)
+        object: &'a ObjectMeta,
+    ) -> BoxFuture<'a, Result<Statistics>> {
+        Box::pin(async move {
+            let file_decryption_properties =
+                get_file_decryption_properties(state, &self.options, &object.location)
+                    .await?;
+            let file_metadata_cache =
+                state.runtime_env().cache_manager.get_file_metadata_cache();
+            DFParquetMetadata::new(store, object)
+                .with_metadata_size_hint(self.metadata_size_hint())
+                .with_decryption_properties(file_decryption_properties)
+                .with_file_metadata_cache(Some(file_metadata_cache))
+                .fetch_statistics(&table_schema)
+                .await
+        })
     }
 
-    async fn infer_stats_and_ordering(
-        &self,
-        state: &dyn Session,
-        store: &Arc<dyn ObjectStore>,
+    fn infer_ordering<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        store: &'a Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
-        object: &ObjectMeta,
-    ) -> Result<datafusion_datasource::file_format::FileMeta> {
-        let file_decryption_properties =
-            get_file_decryption_properties(state, &self.options, &object.location)
+        object: &'a ObjectMeta,
+    ) -> BoxFuture<'a, Result<Option<LexOrdering>>> {
+        Box::pin(async move {
+            let file_decryption_properties =
+                get_file_decryption_properties(state, &self.options, &object.location)
+                    .await?;
+            let file_metadata_cache =
+                state.runtime_env().cache_manager.get_file_metadata_cache();
+            let metadata = DFParquetMetadata::new(store, object)
+                .with_metadata_size_hint(self.metadata_size_hint())
+                .with_decryption_properties(file_decryption_properties)
+                .with_file_metadata_cache(Some(file_metadata_cache))
+                .fetch_metadata()
                 .await?;
-        let file_metadata_cache =
-            state.runtime_env().cache_manager.get_file_metadata_cache();
-        let metadata = DFParquetMetadata::new(store, object)
-            .with_metadata_size_hint(self.metadata_size_hint())
-            .with_decryption_properties(file_decryption_properties)
-            .with_file_metadata_cache(Some(file_metadata_cache))
-            .fetch_metadata()
-            .await?;
-        let statistics = DFParquetMetadata::statistics_from_parquet_metadata(
-            &metadata,
-            &table_schema,
-        )?;
-        let ordering =
-            crate::metadata::ordering_from_parquet_metadata(&metadata, &table_schema)?;
-        Ok(
-            datafusion_datasource::file_format::FileMeta::new(statistics)
-                .with_ordering(ordering),
-        )
+            crate::metadata::ordering_from_parquet_metadata(&metadata, &table_schema)
+        })
     }
 
-    async fn create_physical_plan(
-        &self,
-        state: &dyn Session,
+    fn infer_stats_and_ordering<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        store: &'a Arc<dyn ObjectStore>,
+        table_schema: SchemaRef,
+        object: &'a ObjectMeta,
+    ) -> BoxFuture<'a, Result<datafusion_datasource::file_format::FileMeta>> {
+        Box::pin(async move {
+            let file_decryption_properties =
+                get_file_decryption_properties(state, &self.options, &object.location)
+                    .await?;
+            let file_metadata_cache =
+                state.runtime_env().cache_manager.get_file_metadata_cache();
+            let metadata = DFParquetMetadata::new(store, object)
+                .with_metadata_size_hint(self.metadata_size_hint())
+                .with_decryption_properties(file_decryption_properties)
+                .with_file_metadata_cache(Some(file_metadata_cache))
+                .fetch_metadata()
+                .await?;
+            let statistics = DFParquetMetadata::statistics_from_parquet_metadata(
+                &metadata,
+                &table_schema,
+            )?;
+            let ordering = crate::metadata::ordering_from_parquet_metadata(
+                &metadata,
+                &table_schema,
+            )?;
+            Ok(
+                datafusion_datasource::file_format::FileMeta::new(statistics)
+                    .with_ordering(ordering),
+            )
+        })
+    }
+
+    fn create_physical_plan<'a>(
+        &'a self,
+        state: &'a dyn Session,
         conf: FileScanConfig,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut metadata_size_hint = None;
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            let mut metadata_size_hint = None;
 
-        if let Some(metadata) = self.metadata_size_hint() {
-            metadata_size_hint = Some(metadata);
-        }
+            if let Some(metadata) = self.metadata_size_hint() {
+                metadata_size_hint = Some(metadata);
+            }
 
-        let mut source = conf
-            .file_source()
-            .downcast_ref::<ParquetSource>()
-            .cloned()
-            .ok_or_else(|| internal_datafusion_err!("Expected ParquetSource"))?;
-        source = source.with_table_parquet_options(self.options.clone());
+            let mut source = conf
+                .file_source()
+                .downcast_ref::<ParquetSource>()
+                .cloned()
+                .ok_or_else(|| internal_datafusion_err!("Expected ParquetSource"))?;
+            source = source.with_table_parquet_options(self.options.clone());
 
-        // Use the CachedParquetFileReaderFactory
-        let metadata_cache = state.runtime_env().cache_manager.get_file_metadata_cache();
-        let store = state
-            .runtime_env()
-            .object_store(conf.object_store_url.clone())?;
-        let cached_parquet_read_factory =
-            Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
-        source = source.with_parquet_file_reader_factory(cached_parquet_read_factory);
+            // Use the CachedParquetFileReaderFactory
+            let metadata_cache =
+                state.runtime_env().cache_manager.get_file_metadata_cache();
+            let store = state
+                .runtime_env()
+                .object_store(conf.object_store_url.clone())?;
+            let cached_parquet_read_factory =
+                Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
+            source = source.with_parquet_file_reader_factory(cached_parquet_read_factory);
 
-        if let Some(metadata_size_hint) = metadata_size_hint {
-            source = source.with_metadata_size_hint(metadata_size_hint)
-        }
+            if let Some(metadata_size_hint) = metadata_size_hint {
+                source = source.with_metadata_size_hint(metadata_size_hint)
+            }
 
-        source = self.set_source_encryption_factory(source, state)?;
+            source = self.set_source_encryption_factory(source, state)?;
 
-        let conf = FileScanConfigBuilder::from(conf)
-            .with_source(Arc::new(source))
-            .build();
-        Ok(DataSourceExec::from_data_source(conf))
+            let conf = FileScanConfigBuilder::from(conf)
+                .with_source(Arc::new(source))
+                .build();
+            Ok(DataSourceExec::from_data_source(conf) as Arc<dyn ExecutionPlan>)
+        })
     }
 
-    async fn create_writer_physical_plan(
-        &self,
+    fn create_writer_physical_plan<'a>(
+        &'a self,
         input: Arc<dyn ExecutionPlan>,
-        _state: &dyn Session,
+        _state: &'a dyn Session,
         conf: FileSinkConfig,
         order_requirements: Option<LexRequirement>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        if conf.insert_op != InsertOp::Append {
-            return not_impl_err!("Overwrites are not implemented yet for Parquet");
-        }
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            if conf.insert_op != InsertOp::Append {
+                return not_impl_err!("Overwrites are not implemented yet for Parquet");
+            }
 
-        // Convert ordering requirements to Parquet SortingColumns for file metadata
-        let sorting_columns = if let Some(ref requirements) = order_requirements {
-            let ordering: LexOrdering = requirements.clone().into();
-            let writer_schema = get_writer_schema(&conf);
-            // In cases like `COPY (... ORDER BY ...) TO ...` the ORDER BY clause
-            // may not be compatible with Parquet sorting columns (e.g. ordering on `random()`).
-            // So if we cannot create a Parquet sorting column from the ordering requirement,
-            // we skip setting sorting columns on the Parquet sink.
-            lex_ordering_to_sorting_columns(
-                &ordering,
-                conf.output_schema(),
-                &writer_schema,
-            )
-            .ok()
-            .filter(|columns| !columns.is_empty())
-        } else {
-            None
-        };
+            // Convert ordering requirements to Parquet SortingColumns for file metadata
+            let sorting_columns = if let Some(ref requirements) = order_requirements {
+                let ordering: LexOrdering = requirements.clone().into();
+                let writer_schema = get_writer_schema(&conf);
+                // In cases like `COPY (... ORDER BY ...) TO ...` the ORDER BY clause
+                // may not be compatible with Parquet sorting columns (e.g. ordering on `random()`).
+                // So if we cannot create a Parquet sorting column from the ordering requirement,
+                // we skip setting sorting columns on the Parquet sink.
+                lex_ordering_to_sorting_columns(
+                    &ordering,
+                    conf.output_schema(),
+                    &writer_schema,
+                )
+                .ok()
+                .filter(|columns| !columns.is_empty())
+            } else {
+                None
+            };
 
-        let sink = Arc::new(
-            ParquetSink::new(conf, self.options.clone())
-                .with_sorting_columns(sorting_columns),
-        );
+            let sink = Arc::new(
+                ParquetSink::new(conf, self.options.clone())
+                    .with_sorting_columns(sorting_columns),
+            );
 
-        Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
+            Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
+        })
     }
 
     fn file_source(&self, table_schema: TableSchema) -> Arc<dyn FileSource> {

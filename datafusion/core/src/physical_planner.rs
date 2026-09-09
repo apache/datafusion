@@ -111,7 +111,6 @@ use datafusion_physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubque
 use datafusion_physical_plan::unnest::ListUnnest;
 use datafusion_session::{PhysicalOptimizerContext, PhysicalOptimizerRule, Session};
 
-use async_trait::async_trait;
 use datafusion_physical_plan::async_func::{AsyncFuncExec, AsyncMapper};
 use futures::future::BoxFuture;
 use futures::{StreamExt, TryStreamExt};
@@ -151,23 +150,13 @@ impl PhysicalOptimizerContext for SessionOptimizerContext<'_> {
 pub struct DefaultPhysicalPlanner {
     extension_planners: Vec<Arc<dyn ExtensionPlanner + Send + Sync>>,
 }
-
-#[async_trait]
 impl PhysicalPlanner for DefaultPhysicalPlanner {
     /// Create a physical plan from a logical plan
-    // Hand-written `#[async_trait]` expansion to reduce compile time. See
-    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
-    fn create_physical_plan<'life0, 'life1, 'life2, 'async_trait>(
-        &'life0 self,
-        logical_plan: &'life1 LogicalPlan,
-        session_state: &'life2 dyn Session,
-    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
-    where
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        'life2: 'async_trait,
-        Self: 'async_trait,
-    {
+    fn create_physical_plan<'a>(
+        &'a self,
+        logical_plan: &'a LogicalPlan,
+        session_state: &'a dyn Session,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
         self.create_physical_plan_boxed(logical_plan, session_state)
     }
 
@@ -3444,18 +3433,18 @@ mod tests {
     struct TestQueryPlanner {
         invoked: Arc<AtomicBool>,
     }
-
-    #[async_trait]
     impl QueryPlanner for TestQueryPlanner {
-        async fn create_physical_plan(
-            &self,
-            logical_plan: &LogicalPlan,
-            session: &dyn Session,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            self.invoked.store(true, AtomicOrdering::Relaxed);
-            DefaultPhysicalPlanner::default()
-                .create_physical_plan(logical_plan, session)
-                .await
+        fn create_physical_plan<'a>(
+            &'a self,
+            logical_plan: &'a LogicalPlan,
+            session: &'a dyn Session,
+        ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+            Box::pin(async move {
+                self.invoked.store(true, AtomicOrdering::Relaxed);
+                DefaultPhysicalPlanner::default()
+                    .create_physical_plan(logical_plan, session)
+                    .await
+            })
         }
     }
 
@@ -3463,8 +3452,6 @@ mod tests {
         inner: SessionState,
         query_planner: Arc<dyn QueryPlanner + Send + Sync>,
     }
-
-    #[async_trait]
     impl Session for TestSession {
         fn session_id(&self) -> &str {
             self.inner.session_id()
@@ -3497,14 +3484,16 @@ mod tests {
             self.inner.statistics_registry()
         }
 
-        async fn create_physical_plan(
-            &self,
-            logical_plan: &LogicalPlan,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            let logical_plan = self.optimize(logical_plan)?;
-            self.query_planner()
-                .create_physical_plan(&logical_plan, self)
-                .await
+        fn create_physical_plan<'a>(
+            &'a self,
+            logical_plan: &'a LogicalPlan,
+        ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+            Box::pin(async move {
+                let logical_plan = self.optimize(logical_plan)?;
+                self.query_planner()
+                    .create_physical_plan(&logical_plan, self)
+                    .await
+            })
         }
 
         fn create_physical_expr(
@@ -3576,8 +3565,6 @@ mod tests {
         schema: SchemaRef,
         captured: Mutex<Option<(DFSchemaRef, String, usize)>>,
     }
-
-    #[async_trait]
     impl TableProvider for CaptureMergeProvider {
         fn schema(&self) -> SchemaRef {
             Arc::clone(&self.schema)
@@ -3587,28 +3574,33 @@ mod tests {
             TableType::Base
         }
 
-        async fn scan(
-            &self,
-            _state: &dyn Session,
-            _projection: Option<&[usize]>,
-            _filters: &[Expr],
+        fn scan<'a>(
+            &'a self,
+            _state: &'a dyn Session,
+            _projection: Option<&'a [usize]>,
+            _filters: &'a [Expr],
             _limit: Option<usize>,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            Ok(Arc::new(EmptyExec::new(Arc::clone(&self.schema))))
+        ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+            Box::pin(async move {
+                Ok(Arc::new(EmptyExec::new(Arc::clone(&self.schema)))
+                    as Arc<dyn ExecutionPlan>)
+            })
         }
 
-        async fn merge_into(
-            &self,
-            state: &dyn Session,
+        fn merge_into<'a>(
+            &'a self,
+            state: &'a dyn Session,
             source: Arc<dyn ExecutionPlan>,
             merge_schema: DFSchemaRef,
             on: Expr,
             clauses: Vec<MergeIntoClause>,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            let physical_on = state.create_physical_expr(on, &merge_schema)?;
-            *self.captured.lock().await =
-                Some((merge_schema, format!("{physical_on:?}"), clauses.len()));
-            Ok(source)
+        ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+            Box::pin(async move {
+                let physical_on = state.create_physical_expr(on, &merge_schema)?;
+                *self.captured.lock().await =
+                    Some((merge_schema, format!("{physical_on:?}"), clauses.len()));
+                Ok(source)
+            })
         }
     }
 
@@ -4927,20 +4919,18 @@ mod tests {
     }
 
     struct ErrorExtensionPlanner {}
-
-    #[async_trait]
     impl ExtensionPlanner for ErrorExtensionPlanner {
         /// Create a physical plan for an extension node
-        async fn plan_extension(
-            &self,
-            _planner: &dyn PhysicalPlanner,
-            _node: &dyn UserDefinedLogicalNode,
-            _logical_inputs: &[&LogicalPlan],
-            _physical_inputs: &[Arc<dyn ExecutionPlan>],
-            _session_state: &dyn Session,
-            _planning_ctx: &PhysicalPlanningContext,
-        ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-            internal_err!("BOOM")
+        fn plan_extension<'a>(
+            &'a self,
+            _planner: &'a dyn PhysicalPlanner,
+            _node: &'a dyn UserDefinedLogicalNode,
+            _logical_inputs: &'a [&'a LogicalPlan],
+            _physical_inputs: &'a [Arc<dyn ExecutionPlan>],
+            _session_state: &'a dyn Session,
+            _planning_ctx: &'a PhysicalPlanningContext,
+        ) -> BoxFuture<'a, Result<Option<Arc<dyn ExecutionPlan>>>> {
+            Box::pin(async move { internal_err!("BOOM") })
         }
     }
     /// An example extension node that doesn't do anything
@@ -5107,51 +5097,53 @@ mod tests {
     }
 
     struct ExpressionExtensionPlanner;
-
-    #[async_trait]
     impl ExtensionPlanner for ExpressionExtensionPlanner {
-        async fn plan_extension(
-            &self,
-            planner: &dyn PhysicalPlanner,
-            node: &dyn UserDefinedLogicalNode,
-            _logical_inputs: &[&LogicalPlan],
-            _physical_inputs: &[Arc<dyn ExecutionPlan>],
-            session_state: &dyn Session,
-            planning_ctx: &PhysicalPlanningContext,
-        ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-            for expr in node.expressions() {
-                planner.create_physical_expr(
-                    &expr,
-                    node.schema(),
-                    session_state,
-                    planning_ctx,
-                )?;
-            }
-            Ok(Some(Arc::new(NoOpExecutionPlan::new(Arc::clone(
-                node.schema().inner(),
-            )))))
+        fn plan_extension<'a>(
+            &'a self,
+            planner: &'a dyn PhysicalPlanner,
+            node: &'a dyn UserDefinedLogicalNode,
+            _logical_inputs: &'a [&'a LogicalPlan],
+            _physical_inputs: &'a [Arc<dyn ExecutionPlan>],
+            session_state: &'a dyn Session,
+            planning_ctx: &'a PhysicalPlanningContext,
+        ) -> BoxFuture<'a, Result<Option<Arc<dyn ExecutionPlan>>>> {
+            Box::pin(async move {
+                for expr in node.expressions() {
+                    planner.create_physical_expr(
+                        &expr,
+                        node.schema(),
+                        session_state,
+                        planning_ctx,
+                    )?;
+                }
+                Ok(Some(Arc::new(NoOpExecutionPlan::new(Arc::clone(
+                    node.schema().inner(),
+                ))) as Arc<dyn ExecutionPlan>))
+            })
         }
     }
 
     //  Produces an execution plan where the schema is mismatched from
     //  the logical plan node.
     struct BadExtensionPlanner {}
-
-    #[async_trait]
     impl ExtensionPlanner for BadExtensionPlanner {
         /// Create a physical plan for an extension node
-        async fn plan_extension(
-            &self,
-            _planner: &dyn PhysicalPlanner,
-            _node: &dyn UserDefinedLogicalNode,
-            _logical_inputs: &[&LogicalPlan],
-            _physical_inputs: &[Arc<dyn ExecutionPlan>],
-            _session_state: &dyn Session,
-            _planning_ctx: &PhysicalPlanningContext,
-        ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-            Ok(Some(Arc::new(NoOpExecutionPlan::new(SchemaRef::new(
-                Schema::new(vec![Field::new("b", DataType::Int32, false)]),
-            )))))
+        fn plan_extension<'a>(
+            &'a self,
+            _planner: &'a dyn PhysicalPlanner,
+            _node: &'a dyn UserDefinedLogicalNode,
+            _logical_inputs: &'a [&'a LogicalPlan],
+            _physical_inputs: &'a [Arc<dyn ExecutionPlan>],
+            _session_state: &'a dyn Session,
+            _planning_ctx: &'a PhysicalPlanningContext,
+        ) -> BoxFuture<'a, Result<Option<Arc<dyn ExecutionPlan>>>> {
+            Box::pin(async move {
+                Ok(Some(
+                    Arc::new(NoOpExecutionPlan::new(SchemaRef::new(Schema::new(vec![
+                        Field::new("b", DataType::Int32, false),
+                    ])))) as Arc<dyn ExecutionPlan>,
+                ))
+            })
         }
     }
 
@@ -5618,8 +5610,6 @@ digraph {
         logical_schema: SchemaRef,
         physical_schema: SchemaRef,
     }
-
-    #[async_trait]
     impl TableProvider for MockSchemaTableProvider {
         fn schema(&self) -> SchemaRef {
             Arc::clone(&self.logical_schema)
@@ -5629,16 +5619,19 @@ digraph {
             TableType::Base
         }
 
-        async fn scan(
-            &self,
-            _state: &dyn Session,
-            _projection: Option<&[usize]>,
-            _filters: &[Expr],
+        fn scan<'a>(
+            &'a self,
+            _state: &'a dyn Session,
+            _projection: Option<&'a [usize]>,
+            _filters: &'a [Expr],
             _limit: Option<usize>,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            Ok(Arc::new(NoOpExecutionPlan::new(Arc::clone(
-                &self.physical_schema,
-            ))))
+        ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+            Box::pin(async move {
+                Ok(
+                    Arc::new(NoOpExecutionPlan::new(Arc::clone(&self.physical_schema)))
+                        as Arc<dyn ExecutionPlan>,
+                )
+            })
         }
     }
 
@@ -5837,35 +5830,35 @@ digraph {
     }
 
     struct MockTableScanExtensionPlanner;
-
-    #[async_trait]
     impl ExtensionPlanner for MockTableScanExtensionPlanner {
-        async fn plan_extension(
-            &self,
-            _planner: &dyn PhysicalPlanner,
-            _node: &dyn UserDefinedLogicalNode,
-            _logical_inputs: &[&LogicalPlan],
-            _physical_inputs: &[Arc<dyn ExecutionPlan>],
-            _session_state: &dyn Session,
-            _planning_ctx: &PhysicalPlanningContext,
-        ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-            Ok(None)
+        fn plan_extension<'a>(
+            &'a self,
+            _planner: &'a dyn PhysicalPlanner,
+            _node: &'a dyn UserDefinedLogicalNode,
+            _logical_inputs: &'a [&'a LogicalPlan],
+            _physical_inputs: &'a [Arc<dyn ExecutionPlan>],
+            _session_state: &'a dyn Session,
+            _planning_ctx: &'a PhysicalPlanningContext,
+        ) -> BoxFuture<'a, Result<Option<Arc<dyn ExecutionPlan>>>> {
+            Box::pin(async move { Ok(None) })
         }
 
-        async fn plan_table_scan(
-            &self,
-            _planner: &dyn PhysicalPlanner,
-            scan: &TableScan,
-            _session_state: &dyn Session,
-            _planning_ctx: &PhysicalPlanningContext,
-        ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-            if scan.source.is::<MockTableSource>() {
-                Ok(Some(Arc::new(EmptyExec::new(Arc::clone(
-                    scan.projected_schema.inner(),
-                )))))
-            } else {
-                Ok(None)
-            }
+        fn plan_table_scan<'a>(
+            &'a self,
+            _planner: &'a dyn PhysicalPlanner,
+            scan: &'a TableScan,
+            _session_state: &'a dyn Session,
+            _planning_ctx: &'a PhysicalPlanningContext,
+        ) -> BoxFuture<'a, Result<Option<Arc<dyn ExecutionPlan>>>> {
+            Box::pin(async move {
+                if scan.source.is::<MockTableSource>() {
+                    Ok(Some(Arc::new(EmptyExec::new(Arc::clone(
+                        scan.projected_schema.inner(),
+                    ))) as Arc<dyn ExecutionPlan>))
+                } else {
+                    Ok(None)
+                }
+            })
         }
     }
 

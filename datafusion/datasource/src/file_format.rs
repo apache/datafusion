@@ -38,7 +38,7 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_session::Session;
 
-use async_trait::async_trait;
+use futures::future::BoxFuture;
 use object_store::{ObjectMeta, ObjectStore};
 
 /// Default max records to scan to infer the schema
@@ -99,7 +99,6 @@ impl FileMeta {
 /// providers that support the same file formats.
 ///
 /// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html
-#[async_trait]
 pub trait FileFormat: Any + Send + Sync + fmt::Debug {
     /// Returns the extension for this FileFormat, e.g. "file.csv" -> csv
     fn get_ext(&self) -> String;
@@ -117,12 +116,12 @@ pub trait FileFormat: Any + Send + Sync + fmt::Debug {
     /// be analysed up to a given number of records or files (as specified in the
     /// format config) then give the estimated common schema. This might fail if
     /// the files have schemas that cannot be merged.
-    async fn infer_schema(
-        &self,
-        state: &dyn Session,
-        store: &Arc<dyn ObjectStore>,
-        objects: &[ObjectMeta],
-    ) -> Result<SchemaRef>;
+    fn infer_schema<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        store: &'a Arc<dyn ObjectStore>,
+        objects: &'a [ObjectMeta],
+    ) -> BoxFuture<'a, Result<SchemaRef>>;
 
     /// Infer the statistics for the provided object. The cost and accuracy of the
     /// estimated statistics might vary greatly between file formats.
@@ -131,13 +130,13 @@ pub trait FileFormat: Any + Send + Sync + fmt::Debug {
     /// and may be a superset of the schema contained in this file.
     ///
     /// TODO: should the file source return statistics for only columns referred to in the table schema?
-    async fn infer_stats(
-        &self,
-        state: &dyn Session,
-        store: &Arc<dyn ObjectStore>,
+    fn infer_stats<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        store: &'a Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
-        object: &ObjectMeta,
-    ) -> Result<Statistics>;
+        object: &'a ObjectMeta,
+    ) -> BoxFuture<'a, Result<Statistics>>;
 
     /// Infer the ordering (sort order) for the provided object from file metadata.
     ///
@@ -148,14 +147,14 @@ pub trait FileFormat: Any + Send + Sync + fmt::Debug {
     /// and may be a superset of the schema contained in this file.
     ///
     /// The default implementation returns `Ok(None)`.
-    async fn infer_ordering(
-        &self,
-        _state: &dyn Session,
-        _store: &Arc<dyn ObjectStore>,
+    fn infer_ordering<'a>(
+        &'a self,
+        _state: &'a dyn Session,
+        _store: &'a Arc<dyn ObjectStore>,
         _table_schema: SchemaRef,
-        _object: &ObjectMeta,
-    ) -> Result<Option<LexOrdering>> {
-        Ok(None)
+        _object: &'a ObjectMeta,
+    ) -> BoxFuture<'a, Result<Option<LexOrdering>>> {
+        Box::pin(async { Ok(None) })
     }
 
     /// Infer both statistics and ordering from a single metadata read.
@@ -166,43 +165,45 @@ pub trait FileFormat: Any + Send + Sync + fmt::Debug {
     ///
     /// The default implementation calls both methods separately. File formats
     /// that can extract both from a single read should override this method.
-    async fn infer_stats_and_ordering(
-        &self,
-        state: &dyn Session,
-        store: &Arc<dyn ObjectStore>,
+    fn infer_stats_and_ordering<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        store: &'a Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
-        object: &ObjectMeta,
-    ) -> Result<FileMeta> {
-        let statistics = self
-            .infer_stats(state, store, Arc::clone(&table_schema), object)
-            .await?;
-        let ordering = self
-            .infer_ordering(state, store, table_schema, object)
-            .await?;
-        Ok(FileMeta {
-            statistics,
-            ordering,
+        object: &'a ObjectMeta,
+    ) -> BoxFuture<'a, Result<FileMeta>> {
+        Box::pin(async move {
+            let statistics = self
+                .infer_stats(state, store, Arc::clone(&table_schema), object)
+                .await?;
+            let ordering = self
+                .infer_ordering(state, store, table_schema, object)
+                .await?;
+            Ok(FileMeta {
+                statistics,
+                ordering,
+            })
         })
     }
 
     /// Take a list of files and convert it to the appropriate executor
     /// according to this file format.
-    async fn create_physical_plan(
-        &self,
-        state: &dyn Session,
+    fn create_physical_plan<'a>(
+        &'a self,
+        state: &'a dyn Session,
         conf: FileScanConfig,
-    ) -> Result<Arc<dyn ExecutionPlan>>;
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>>;
 
     /// Take a list of files and the configuration to convert it to the
     /// appropriate writer executor according to this file format.
-    async fn create_writer_physical_plan(
-        &self,
+    fn create_writer_physical_plan<'a>(
+        &'a self,
         _input: Arc<dyn ExecutionPlan>,
-        _state: &dyn Session,
+        _state: &'a dyn Session,
         _conf: FileSinkConfig,
         _order_requirements: Option<LexRequirement>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        not_impl_err!("Writer not implemented for this format")
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async { not_impl_err!("Writer not implemented for this format") })
     }
 
     /// Return the related FileSource such as `CsvSource`, `JsonSource`, etc.

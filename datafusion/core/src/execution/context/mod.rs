@@ -17,6 +17,7 @@
 
 //! [`SessionContext`] API for registering data sources and executing queries
 
+use futures::future::BoxFuture;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::{Arc, Weak};
@@ -101,7 +102,6 @@ use datafusion_optimizer::{Analyzer, OptimizerContext};
 use datafusion_optimizer::{AnalyzerRule, OptimizerRule};
 use datafusion_session::SessionStore;
 
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use object_store::ObjectStore;
 use parking_lot::RwLock;
@@ -2216,15 +2216,13 @@ pub use datafusion_session::{QueryPlanner, UnsupportedQueryPlanner};
 ///     return pc.multiply(km_data, conversation_rate_multiplier)
 /// '
 /// ```
-
-#[async_trait]
 pub trait FunctionFactory: Debug + Sync + Send {
     /// Creates a new dynamic function from the SQL in the [CreateFunction] statement
-    async fn create(
-        &self,
-        state: &SessionState,
+    fn create<'a>(
+        &'a self,
+        state: &'a SessionState,
         statement: CreateFunction,
-    ) -> Result<RegisterFunction>;
+    ) -> BoxFuture<'a, Result<RegisterFunction>>;
 }
 
 /// The result of processing a [`CreateFunction`] statement with [`FunctionFactory`].
@@ -2376,7 +2374,6 @@ mod tests {
     use crate::catalog::SchemaProvider;
     use crate::execution::session_state::SessionStateBuilder;
     use crate::physical_planner::PhysicalPlanner;
-    use async_trait::async_trait;
     use datafusion_expr::planner::TypePlanner;
     use datafusion_session::Session;
     use sqlparser::ast;
@@ -2819,15 +2816,13 @@ mod tests {
     }
 
     struct MyPhysicalPlanner {}
-
-    #[async_trait]
     impl PhysicalPlanner for MyPhysicalPlanner {
-        async fn create_physical_plan(
-            &self,
-            _logical_plan: &LogicalPlan,
-            _session_state: &dyn Session,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            not_impl_err!("query not supported")
+        fn create_physical_plan<'a>(
+            &'a self,
+            _logical_plan: &'a LogicalPlan,
+            _session_state: &'a dyn Session,
+        ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+            Box::pin(async move { not_impl_err!("query not supported") })
         }
 
         fn create_physical_expr(
@@ -2843,18 +2838,18 @@ mod tests {
 
     #[derive(Debug)]
     struct MyQueryPlanner {}
-
-    #[async_trait]
     impl QueryPlanner for MyQueryPlanner {
-        async fn create_physical_plan(
-            &self,
-            logical_plan: &LogicalPlan,
-            session_state: &dyn Session,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            let physical_planner = MyPhysicalPlanner {};
-            physical_planner
-                .create_physical_plan(logical_plan, session_state)
-                .await
+        fn create_physical_plan<'a>(
+            &'a self,
+            logical_plan: &'a LogicalPlan,
+            session_state: &'a dyn Session,
+        ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+            Box::pin(async move {
+                let physical_planner = MyPhysicalPlanner {};
+                physical_planner
+                    .create_physical_plan(logical_plan, session_state)
+                    .await
+            })
         }
     }
 

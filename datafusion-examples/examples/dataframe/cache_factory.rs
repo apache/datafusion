@@ -17,12 +17,12 @@
 
 //! See `main.rs` for how to run it.
 
+use futures::future::BoxFuture;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::{Arc, RwLock};
 
 use arrow::array::RecordBatch;
-use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::catalog::memory::MemorySourceConfig;
 use datafusion::common::DFSchemaRef;
@@ -138,56 +138,57 @@ impl UserDefinedLogicalNodeCore for CacheNode {
 struct CacheNodePlanner {
     cache_manager: Arc<RwLock<CacheManager>>,
 }
-
-#[async_trait]
 impl ExtensionPlanner for CacheNodePlanner {
-    async fn plan_extension(
-        &self,
-        _planner: &dyn PhysicalPlanner,
-        node: &dyn UserDefinedLogicalNode,
-        logical_inputs: &[&LogicalPlan],
-        physical_inputs: &[Arc<dyn ExecutionPlan>],
-        session_state: &dyn Session,
-        _planning_ctx: &PhysicalPlanningContext,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        if let Some(cache_node) = node.as_any().downcast_ref::<CacheNode>() {
-            assert_eq!(logical_inputs.len(), 1, "Inconsistent number of inputs");
-            assert_eq!(physical_inputs.len(), 1, "Inconsistent number of inputs");
-            if self
-                .cache_manager
-                .read()
-                .unwrap()
-                .get(&cache_node.input)
-                .is_none()
-            {
-                let ctx = session_state.task_ctx();
-                println!("caching in memory");
-                let batches =
-                    collect_partitioned(physical_inputs[0].clone(), ctx).await?;
-                self.cache_manager
-                    .write()
+    fn plan_extension<'a>(
+        &'a self,
+        _planner: &'a dyn PhysicalPlanner,
+        node: &'a dyn UserDefinedLogicalNode,
+        logical_inputs: &'a [&'a LogicalPlan],
+        physical_inputs: &'a [Arc<dyn ExecutionPlan>],
+        session_state: &'a dyn Session,
+        _planning_ctx: &'a PhysicalPlanningContext,
+    ) -> BoxFuture<'a, Result<Option<Arc<dyn ExecutionPlan>>>> {
+        Box::pin(async move {
+            if let Some(cache_node) = node.as_any().downcast_ref::<CacheNode>() {
+                assert_eq!(logical_inputs.len(), 1, "Inconsistent number of inputs");
+                assert_eq!(physical_inputs.len(), 1, "Inconsistent number of inputs");
+                if self
+                    .cache_manager
+                    .read()
                     .unwrap()
-                    .put(cache_node.input.clone(), batches);
+                    .get(&cache_node.input)
+                    .is_none()
+                {
+                    let ctx = session_state.task_ctx();
+                    println!("caching in memory");
+                    let batches =
+                        collect_partitioned(physical_inputs[0].clone(), ctx).await?;
+                    self.cache_manager
+                        .write()
+                        .unwrap()
+                        .put(cache_node.input.clone(), batches);
+                } else {
+                    println!("fetching directly from cache manager");
+                }
+                Ok(self
+                    .cache_manager
+                    .read()
+                    .unwrap()
+                    .get(&cache_node.input)
+                    .map(|batches| {
+                        let exec: Arc<dyn ExecutionPlan> =
+                            MemorySourceConfig::try_new_exec(
+                                batches,
+                                physical_inputs[0].schema(),
+                                None,
+                            )
+                            .unwrap();
+                        exec
+                    }))
             } else {
-                println!("fetching directly from cache manager");
+                Ok(None)
             }
-            Ok(self
-                .cache_manager
-                .read()
-                .unwrap()
-                .get(&cache_node.input)
-                .map(|batches| {
-                    let exec: Arc<dyn ExecutionPlan> = MemorySourceConfig::try_new_exec(
-                        batches,
-                        physical_inputs[0].schema(),
-                        None,
-                    )
-                    .unwrap();
-                    exec
-                }))
-        } else {
-            Ok(None)
-        }
+        })
     }
 }
 
@@ -195,23 +196,23 @@ impl ExtensionPlanner for CacheNodePlanner {
 struct CacheNodeQueryPlanner {
     cache_manager: Arc<RwLock<CacheManager>>,
 }
-
-#[async_trait]
 impl QueryPlanner for CacheNodeQueryPlanner {
-    async fn create_physical_plan(
-        &self,
-        logical_plan: &LogicalPlan,
-        session_state: &dyn Session,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let physical_planner =
-            DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
-                CacheNodePlanner {
-                    cache_manager: Arc::clone(&self.cache_manager),
-                },
-            )]);
-        physical_planner
-            .create_physical_plan(logical_plan, session_state)
-            .await
+    fn create_physical_plan<'a>(
+        &'a self,
+        logical_plan: &'a LogicalPlan,
+        session_state: &'a dyn Session,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            let physical_planner =
+                DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
+                    CacheNodePlanner {
+                        cache_manager: Arc::clone(&self.cache_manager),
+                    },
+                )]);
+            physical_planner
+                .create_physical_plan(logical_plan, session_state)
+                .await
+        })
     }
 }
 

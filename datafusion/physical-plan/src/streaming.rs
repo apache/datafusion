@@ -43,7 +43,6 @@ use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::projection::ProjectionMapping;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
-use async_trait::async_trait;
 use futures::stream::StreamExt;
 use log::debug;
 
@@ -257,8 +256,6 @@ impl DisplayAs for StreamingTableExec {
         }
     }
 }
-
-#[async_trait]
 impl ExecutionPlan for StreamingTableExec {
     fn name(&self) -> &'static str {
         "StreamingTableExec"

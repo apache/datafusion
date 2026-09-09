@@ -17,6 +17,7 @@
 
 //! Default TableSource implementation used in DataFusion physical plans
 
+use futures::future::BoxFuture;
 use std::borrow::Cow;
 use std::sync::Arc;
 
@@ -99,13 +100,10 @@ pub fn source_as_provider(
 
 #[test]
 fn preserves_table_type() {
-    use async_trait::async_trait;
     use datafusion_common::DataFusionError;
 
     #[derive(Debug)]
     struct TestTempTable;
-
-    #[async_trait]
     impl TableProvider for TestTempTable {
         fn table_type(&self) -> TableType {
             TableType::Temporary
@@ -115,15 +113,17 @@ fn preserves_table_type() {
             unimplemented!()
         }
 
-        async fn scan(
-            &self,
-            _: &dyn crate::Session,
-            _: Option<&[usize]>,
-            _: &[Expr],
+        fn scan<'a>(
+            &'a self,
+            _: &'a dyn crate::Session,
+            _: Option<&'a [usize]>,
+            _: &'a [Expr],
             _: Option<usize>,
-        ) -> Result<Arc<dyn datafusion_physical_plan::ExecutionPlan>, DataFusionError>
-        {
-            unimplemented!()
+        ) -> BoxFuture<
+            'a,
+            Result<Arc<dyn datafusion_physical_plan::ExecutionPlan>, DataFusionError>,
+        > {
+            Box::pin(async move { unimplemented!() })
         }
     }
 

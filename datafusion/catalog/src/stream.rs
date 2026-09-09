@@ -39,29 +39,18 @@ use datafusion_physical_plan::stream::RecordBatchReceiverStreamBuilder;
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
-use async_trait::async_trait;
 use futures::StreamExt;
 use futures::future::BoxFuture;
 
 /// A [`TableProviderFactory`] for [`StreamTable`]
 #[derive(Debug, Default)]
 pub struct StreamTableFactory {}
-
-#[async_trait]
 impl TableProviderFactory for StreamTableFactory {
-    // Hand-written `#[async_trait]` expansion to reduce compile time. See
-    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
-    fn create<'life0, 'life1, 'life2, 'async_trait>(
-        &'life0 self,
-        state: &'life1 dyn Session,
-        cmd: &'life2 CreateExternalTable,
-    ) -> BoxFuture<'async_trait, Result<Arc<dyn TableProvider>>>
-    where
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        'life2: 'async_trait,
-        Self: 'async_trait,
-    {
+    fn create<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        cmd: &'a CreateExternalTable,
+    ) -> BoxFuture<'a, Result<Arc<dyn TableProvider>>> {
         self.create_boxed(state, cmd)
     }
 }
@@ -335,8 +324,6 @@ impl StreamTable {
         Self(config)
     }
 }
-
-#[async_trait]
 impl TableProvider for StreamTable {
     fn schema(&self) -> SchemaRef {
         Arc::clone(self.0.source.schema())
@@ -350,38 +337,22 @@ impl TableProvider for StreamTable {
         TableType::Base
     }
 
-    // Hand-written `#[async_trait]` expansion to reduce compile time. See
-    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
-    fn scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(
-        &'life0 self,
-        state: &'life1 dyn Session,
-        projection: Option<&'life2 [usize]>,
-        filters: &'life3 [Expr],
+    fn scan<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        filters: &'a [Expr],
         limit: Option<usize>,
-    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
-    where
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        'life2: 'async_trait,
-        'life3: 'async_trait,
-        Self: 'async_trait,
-    {
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
         self.scan_boxed(state, projection, filters, limit)
     }
 
-    // Hand-written `#[async_trait]` expansion to reduce compile time. See
-    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
-    fn insert_into<'life0, 'life1, 'async_trait>(
-        &'life0 self,
-        state: &'life1 dyn Session,
+    fn insert_into<'a>(
+        &'a self,
+        state: &'a dyn Session,
         input: Arc<dyn ExecutionPlan>,
         insert_op: InsertOp,
-    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
-    where
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        Self: 'async_trait,
-    {
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
         self.insert_into_boxed(state, input, insert_op)
     }
 }
@@ -488,25 +459,16 @@ impl DisplayAs for StreamWrite {
         self.0.source.stream_write_display(t, f)
     }
 }
-
-#[async_trait]
 impl DataSink for StreamWrite {
     fn schema(&self) -> &SchemaRef {
         self.0.source.schema()
     }
 
-    // Hand-written `#[async_trait]` expansion to reduce compile time. See
-    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
-    fn write_all<'life0, 'life1, 'async_trait>(
-        &'life0 self,
+    fn write_all<'a>(
+        &'a self,
         data: SendableRecordBatchStream,
-        context: &'life1 Arc<TaskContext>,
-    ) -> BoxFuture<'async_trait, Result<u64>>
-    where
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        Self: 'async_trait,
-    {
+        context: &'a Arc<TaskContext>,
+    ) -> BoxFuture<'a, Result<u64>> {
         self.write_all_boxed(data, context)
     }
 }

@@ -54,11 +54,11 @@
 //! reference-counted planner, so it outlives A's original session, whereas
 //! `FFI_SessionRef` borrows its session with the lifetime erased.
 
+use futures::future::BoxFuture;
 use std::ffi::c_void;
 use std::sync::Arc;
 
 use async_ffi::{FfiFuture, FutureExt};
-use async_trait::async_trait;
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_expr::LogicalPlan;
 use datafusion_physical_plan::ExecutionPlan;
@@ -340,17 +340,17 @@ impl From<&FFI_QueryPlanner> for Arc<dyn QueryPlanner + Send + Sync> {
         }
     }
 }
-
-#[async_trait]
 impl QueryPlanner for ForeignQueryPlanner {
-    async fn create_physical_plan(
-        &self,
-        logical_plan: &LogicalPlan,
-        session: &dyn Session,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.0
-            .create_physical_plan_with_session_runtime(logical_plan, session, None)
-            .await
+    fn create_physical_plan<'a>(
+        &'a self,
+        logical_plan: &'a LogicalPlan,
+        session: &'a dyn Session,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            self.0
+                .create_physical_plan_with_session_runtime(logical_plan, session, None)
+                .await
+        })
     }
 }
 
@@ -371,17 +371,17 @@ mod tests {
 
     #[derive(Debug)]
     struct EmptyQueryPlanner;
-
-    #[async_trait]
     impl QueryPlanner for EmptyQueryPlanner {
-        async fn create_physical_plan(
-            &self,
-            _logical_plan: &LogicalPlan,
-            _session: &dyn Session,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            let schema =
-                Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
-            Ok(Arc::new(EmptyExec::new(schema)))
+        fn create_physical_plan<'a>(
+            &'a self,
+            _logical_plan: &'a LogicalPlan,
+            _session: &'a dyn Session,
+        ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+            Box::pin(async move {
+                let schema =
+                    Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+                Ok(Arc::new(EmptyExec::new(schema)) as Arc<dyn ExecutionPlan>)
+            })
         }
     }
 

@@ -17,6 +17,7 @@
 
 //! See `main.rs` for how to run it.
 
+use futures::future::BoxFuture;
 use std::fs::File;
 use std::io::Seek;
 use std::path::Path;
@@ -24,7 +25,6 @@ use std::sync::Arc;
 
 use arrow::csv::ReaderBuilder;
 use arrow::csv::reader::Format;
-use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::catalog::{Session, TableFunctionArgs, TableFunctionImpl};
@@ -82,8 +82,6 @@ struct LocalCsvTable {
     limit: Option<usize>,
     batches: Vec<RecordBatch>,
 }
-
-#[async_trait]
 impl TableProvider for LocalCsvTable {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
@@ -93,37 +91,39 @@ impl TableProvider for LocalCsvTable {
         TableType::Base
     }
 
-    async fn scan(
-        &self,
-        _state: &dyn Session,
-        projection: Option<&[usize]>,
-        _filters: &[Expr],
+    fn scan<'a>(
+        &'a self,
+        _state: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        _filters: &'a [Expr],
         _limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let batches = if let Some(max_return_lines) = self.limit {
-            // get max return rows from self.batches
-            let mut batches = vec![];
-            let mut lines = 0;
-            for batch in &self.batches {
-                let batch_lines = batch.num_rows();
-                if lines + batch_lines > max_return_lines {
-                    let batch_lines = max_return_lines - lines;
-                    batches.push(batch.slice(0, batch_lines));
-                    break;
-                } else {
-                    batches.push(batch.clone());
-                    lines += batch_lines;
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            let batches = if let Some(max_return_lines) = self.limit {
+                // get max return rows from self.batches
+                let mut batches = vec![];
+                let mut lines = 0;
+                for batch in &self.batches {
+                    let batch_lines = batch.num_rows();
+                    if lines + batch_lines > max_return_lines {
+                        let batch_lines = max_return_lines - lines;
+                        batches.push(batch.slice(0, batch_lines));
+                        break;
+                    } else {
+                        batches.push(batch.clone());
+                        lines += batch_lines;
+                    }
                 }
-            }
-            batches
-        } else {
-            self.batches.clone()
-        };
-        Ok(MemorySourceConfig::try_new_exec(
-            &[batches],
-            TableProvider::schema(self),
-            projection.map(|p| p.to_vec()),
-        )?)
+                batches
+            } else {
+                self.batches.clone()
+            };
+            Ok(MemorySourceConfig::try_new_exec(
+                &[batches],
+                TableProvider::schema(self),
+                projection.map(|p| p.to_vec()),
+            )? as Arc<dyn ExecutionPlan>)
+        })
     }
 }
 

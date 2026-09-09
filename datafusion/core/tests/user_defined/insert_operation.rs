@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use futures::future::BoxFuture;
 use std::{str::FromStr, sync::Arc};
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use async_trait::async_trait;
 use datafusion::{
     error::Result,
     prelude::{SessionConfig, SessionContext},
@@ -87,8 +87,6 @@ impl TestInsertTableProvider {
         }
     }
 }
-
-#[async_trait]
 impl TableProvider for TestInsertTableProvider {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
@@ -98,23 +96,27 @@ impl TableProvider for TestInsertTableProvider {
         TableType::Base
     }
 
-    async fn scan(
-        &self,
-        _state: &dyn Session,
-        _projection: Option<&[usize]>,
-        _filters: &[Expr],
+    fn scan<'a>(
+        &'a self,
+        _state: &'a dyn Session,
+        _projection: Option<&'a [usize]>,
+        _filters: &'a [Expr],
         _limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        unimplemented!("TestInsertTableProvider is a stub for testing.")
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            unimplemented!("TestInsertTableProvider is a stub for testing.")
+        })
     }
 
-    async fn insert_into(
-        &self,
-        _state: &dyn Session,
+    fn insert_into<'a>(
+        &'a self,
+        _state: &'a dyn Session,
         _input: Arc<dyn ExecutionPlan>,
         insert_op: InsertOp,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(TestInsertExec::new(insert_op)))
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            Ok(Arc::new(TestInsertExec::new(insert_op)) as Arc<dyn ExecutionPlan>)
+        })
     }
 }
 

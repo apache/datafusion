@@ -25,11 +25,11 @@
 //! access the runtime, then you will get a panic when trying to do operations
 //! such as spawning a tokio task.
 
+use futures::future::BoxFuture;
 use std::fmt::Debug;
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
-use async_trait::async_trait;
 use datafusion_catalog::{
     CatalogProvider, CatalogProviderList, MemTable, MemoryCatalogProvider,
     MemoryCatalogProviderList, MemorySchemaProvider, SchemaProvider, TableProvider,
@@ -85,15 +85,16 @@ impl Default for FixedSchemaProvider {
         Self { inner }
     }
 }
-
-#[async_trait]
 impl SchemaProvider for FixedSchemaProvider {
     fn table_names(&self) -> Vec<String> {
         self.inner.table_names()
     }
 
-    async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
-        self.inner.table(name).await
+    fn table<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<Arc<dyn TableProvider>>>> {
+        Box::pin(async move { self.inner.table(name).await })
     }
 
     fn table_exist(&self, name: &str) -> bool {

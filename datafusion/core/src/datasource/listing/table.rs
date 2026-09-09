@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::execution::SessionState;
-use async_trait::async_trait;
 use datafusion_catalog_listing::{ListingOptions, ListingTableConfig};
 use datafusion_common::{config_datafusion_err, internal_datafusion_err};
 use datafusion_session::Session;
@@ -29,48 +28,33 @@ use std::collections::HashMap;
 /// This trait exists because the following inference methods only
 /// work for [`SessionState`] implementations of [`Session`].
 /// See [`ListingTableConfig`] for the remaining inference methods.
-#[async_trait]
 pub trait ListingTableConfigExt {
     /// Infer `ListingOptions` based on `table_path` and file suffix.
     ///
     /// The format is inferred based on the first `table_path`.
-    async fn infer_options(
+    fn infer_options<'a>(
         self,
-        state: &dyn Session,
-    ) -> datafusion_common::Result<ListingTableConfig>;
+        state: &'a dyn Session,
+    ) -> BoxFuture<'a, datafusion_common::Result<ListingTableConfig>>;
 
     /// Convenience method to call both [`Self::infer_options`] and [`ListingTableConfig::infer_schema`]
-    async fn infer(
+    fn infer<'a>(
         self,
-        state: &dyn Session,
-    ) -> datafusion_common::Result<ListingTableConfig>;
+        state: &'a dyn Session,
+    ) -> BoxFuture<'a, datafusion_common::Result<ListingTableConfig>>;
 }
-
-#[async_trait]
 impl ListingTableConfigExt for ListingTableConfig {
-    // Hand-written `#[async_trait]` expansion to reduce compile time. See
-    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
-    fn infer_options<'life0, 'async_trait>(
+    fn infer_options<'a>(
         self,
-        state: &'life0 dyn Session,
-    ) -> BoxFuture<'async_trait, datafusion_common::Result<ListingTableConfig>>
-    where
-        'life0: 'async_trait,
-        Self: 'async_trait,
-    {
+        state: &'a dyn Session,
+    ) -> BoxFuture<'a, datafusion_common::Result<ListingTableConfig>> {
         infer_options_boxed(self, state)
     }
 
-    // Hand-written `#[async_trait]` expansion to reduce compile time. See
-    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
-    fn infer<'life0, 'async_trait>(
+    fn infer<'a>(
         self,
-        state: &'life0 dyn Session,
-    ) -> BoxFuture<'async_trait, datafusion_common::Result<Self>>
-    where
-        'life0: 'async_trait,
-        Self: 'async_trait,
-    {
+        state: &'a dyn Session,
+    ) -> BoxFuture<'a, datafusion_common::Result<Self>> {
         infer_boxed(self, state)
     }
 }

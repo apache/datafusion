@@ -116,7 +116,6 @@
 use arrow::array::{ArrayRef, StringArray};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{HashMap, HashSet, Result, exec_err};
 use datafusion::datasource::TableType;
@@ -132,6 +131,7 @@ use datafusion::parquet::file::reader::{FileReader, SerializedFileReader};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
+use futures::future::BoxFuture;
 use std::fs::{File, read_dir};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -391,7 +391,6 @@ fn get_key_value<'a>(file_meta_data: &'a FileMetaData, key: &'_ str) -> Option<&
 }
 
 /// Implement TableProvider for DistinctIndexTable, using the distinct index to prune files
-#[async_trait]
 impl TableProvider for DistinctIndexTable {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
@@ -402,63 +401,66 @@ impl TableProvider for DistinctIndexTable {
 
     /// Prune files before reading: only keep files whose distinct set
     /// contains the filter value
-    async fn scan(
-        &self,
-        _ctx: &dyn Session,
-        _proj: Option<&[usize]>,
-        filters: &[Expr],
+    fn scan<'a>(
+        &'a self,
+        _ctx: &'a dyn Session,
+        _proj: Option<&'a [usize]>,
+        filters: &'a [Expr],
         _limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        // This example only handles filters of the form
-        // `category = 'X'` where X is a string literal
-        //
-        // You can use `PruningPredicate` for much more general range and
-        // equality analysis or write your own custom logic.
-        let mut target: Option<&str> = None;
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            // This example only handles filters of the form
+            // `category = 'X'` where X is a string literal
+            //
+            // You can use `PruningPredicate` for much more general range and
+            // equality analysis or write your own custom logic.
+            let mut target: Option<&str> = None;
 
-        if filters.len() == 1
-            && let Expr::BinaryExpr(expr) = &filters[0]
-            && expr.op == Operator::Eq
-            && let (Expr::Column(c), Expr::Literal(ScalarValue::Utf8(Some(v)), _)) =
-                (&*expr.left, &*expr.right)
-            && c.name == "category"
-        {
-            println!("Filtering for category: {v}");
-            target = Some(v);
-        }
-        // Determine which files to scan
-        let files_to_scan: Vec<_> = self
-            .files_and_index
-            .iter()
-            .filter_map(|(f, distinct_index)| {
-                // keep file if no target or target is in the distinct set
-                if target.is_none() || distinct_index.contains(target?) {
-                    Some(f)
-                } else {
-                    None
-                }
-            })
-            .collect();
+            if filters.len() == 1
+                && let Expr::BinaryExpr(expr) = &filters[0]
+                && expr.op == Operator::Eq
+                && let (Expr::Column(c), Expr::Literal(ScalarValue::Utf8(Some(v)), _)) =
+                    (&*expr.left, &*expr.right)
+                && c.name == "category"
+            {
+                println!("Filtering for category: {v}");
+                target = Some(v);
+            }
+            // Determine which files to scan
+            let files_to_scan: Vec<_> = self
+                .files_and_index
+                .iter()
+                .filter_map(|(f, distinct_index)| {
+                    // keep file if no target or target is in the distinct set
+                    if target.is_none() || distinct_index.contains(target?) {
+                        Some(f)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
 
-        println!("Scanning only files: {files_to_scan:?}");
+            println!("Scanning only files: {files_to_scan:?}");
 
-        // Build ParquetSource to actually read the files
-        let url = ObjectStoreUrl::parse("file://")?;
-        let source = Arc::new(
-            ParquetSource::new(self.schema.clone()).with_enable_page_index(true),
-        );
-        let mut builder = FileScanConfigBuilder::new(url, source);
-        for file in files_to_scan {
-            let path = self.dir.join(file);
-            let len = std::fs::metadata(&path)?.len();
-            // If the index contained information about row groups or pages,
-            // you could also pass that information here to further prune
-            // the data read from the file.
-            let partitioned_file =
-                PartitionedFile::new(path.to_str().unwrap().to_string(), len);
-            builder = builder.with_file(partitioned_file);
-        }
-        Ok(DataSourceExec::from_data_source(builder.build()))
+            // Build ParquetSource to actually read the files
+            let url = ObjectStoreUrl::parse("file://")?;
+            let source = Arc::new(
+                ParquetSource::new(self.schema.clone()).with_enable_page_index(true),
+            );
+            let mut builder = FileScanConfigBuilder::new(url, source);
+            for file in files_to_scan {
+                let path = self.dir.join(file);
+                let len = std::fs::metadata(&path)?.len();
+                // If the index contained information about row groups or pages,
+                // you could also pass that information here to further prune
+                // the data read from the file.
+                let partitioned_file =
+                    PartitionedFile::new(path.to_str().unwrap().to_string(), len);
+                builder = builder.with_file(partitioned_file);
+            }
+            Ok(DataSourceExec::from_data_source(builder.build())
+                as Arc<dyn ExecutionPlan>)
+        })
     }
 
     /// Tell DataFusion that we can handle filters on the "category" column

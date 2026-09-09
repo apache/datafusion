@@ -55,7 +55,6 @@ use datafusion::prelude::*;
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
 use arrow::datatypes::SchemaRef;
-use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion::datasource::memory::DataSourceExec;
 use futures::FutureExt;
@@ -452,7 +451,6 @@ impl IndexedFile {
 
 /// Implement the TableProvider trait for IndexTableProvider
 /// so that we can query it as a table.
-#[async_trait]
 impl TableProvider for IndexTableProvider {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.indexed_file.schema)
@@ -462,51 +460,55 @@ impl TableProvider for IndexTableProvider {
         TableType::Base
     }
 
-    async fn scan(
-        &self,
-        state: &dyn Session,
-        projection: Option<&[usize]>,
-        filters: &[Expr],
+    fn scan<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        filters: &'a [Expr],
         limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let indexed_file = &self.indexed_file;
-        let predicate = self.filters_to_predicate(state, filters)?;
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            let indexed_file = &self.indexed_file;
+            let predicate = self.filters_to_predicate(state, filters)?;
 
-        // Figure out which row groups to scan based on the predicate
-        let access_plan = self.create_plan(&predicate)?;
-        println!("{access_plan:?}");
+            // Figure out which row groups to scan based on the predicate
+            let access_plan = self.create_plan(&predicate)?;
+            println!("{access_plan:?}");
 
-        let partitioned_file = indexed_file
-            .partitioned_file()
-            // provide the starting access plan to the DataSourceExec by
-            // storing it as  "extensions" on PartitionedFile
-            .with_extension(access_plan);
+            let partitioned_file = indexed_file
+                .partitioned_file()
+                // provide the starting access plan to the DataSourceExec by
+                // storing it as  "extensions" on PartitionedFile
+                .with_extension(access_plan);
 
-        // Prepare for scanning
-        let schema = self.schema();
-        let object_store_url = ObjectStoreUrl::parse("file://")?;
+            // Prepare for scanning
+            let schema = self.schema();
+            let object_store_url = ObjectStoreUrl::parse("file://")?;
 
-        // Configure a factory interface to avoid re-reading the metadata for each file
-        let reader_factory =
-            CachedParquetFileReaderFactory::new(Arc::clone(&self.object_store))
-                .with_file(indexed_file);
+            // Configure a factory interface to avoid re-reading the metadata for each file
+            let reader_factory =
+                CachedParquetFileReaderFactory::new(Arc::clone(&self.object_store))
+                    .with_file(indexed_file);
 
-        let file_source = Arc::new(
-            ParquetSource::new(schema.clone())
-                // provide the predicate so the DataSourceExec can try and prune
-                // row groups internally
-                .with_predicate(predicate)
-                // provide the factory to create parquet reader without re-reading metadata
-                .with_parquet_file_reader_factory(Arc::new(reader_factory)),
-        );
-        let file_scan_config = FileScanConfigBuilder::new(object_store_url, file_source)
-            .with_limit(limit)
-            .with_projection_indices(projection.map(|p| p.to_vec()))?
-            .with_file(partitioned_file)
-            .build();
+            let file_source = Arc::new(
+                ParquetSource::new(schema.clone())
+                    // provide the predicate so the DataSourceExec can try and prune
+                    // row groups internally
+                    .with_predicate(predicate)
+                    // provide the factory to create parquet reader without re-reading metadata
+                    .with_parquet_file_reader_factory(Arc::new(reader_factory)),
+            );
+            let file_scan_config =
+                FileScanConfigBuilder::new(object_store_url, file_source)
+                    .with_limit(limit)
+                    .with_projection_indices(projection.map(|p| p.to_vec()))?
+                    .with_file(partitioned_file)
+                    .build();
 
-        // Finally, put it all together into a DataSourceExec
-        Ok(DataSourceExec::from_data_source(file_scan_config))
+            // Finally, put it all together into a DataSourceExec
+            Ok(DataSourceExec::from_data_source(file_scan_config)
+                as Arc<dyn ExecutionPlan>)
+        })
     }
 
     /// Tell DataFusion to push filters down to the scan method

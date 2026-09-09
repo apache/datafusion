@@ -17,6 +17,7 @@
 
 //! This module contains tests for limiting memory at runtime in DataFusion
 
+use futures::future::BoxFuture;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, LazyLock};
 
@@ -65,7 +66,6 @@ use datafusion_physical_plan::spill::get_record_batch_memory_size;
 use rand::Rng;
 use test_utils::AccessLogGenerator;
 
-use async_trait::async_trait;
 use futures::StreamExt;
 use tokio::fs::File;
 
@@ -1659,8 +1659,6 @@ impl SortedTableProvider {
         }
     }
 }
-
-#[async_trait]
 impl TableProvider for SortedTableProvider {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
@@ -1670,20 +1668,22 @@ impl TableProvider for SortedTableProvider {
         TableType::Base
     }
 
-    async fn scan(
-        &self,
-        _state: &dyn Session,
-        projection: Option<&[usize]>,
-        _filters: &[Expr],
+    fn scan<'a>(
+        &'a self,
+        _state: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        _filters: &'a [Expr],
         _limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mem_conf = MemorySourceConfig::try_new(
-            &self.batches,
-            self.schema(),
-            projection.map(|p| p.to_vec()),
-        )?
-        .try_with_sort_information(self.sort_information.clone())?;
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            let mem_conf = MemorySourceConfig::try_new(
+                &self.batches,
+                self.schema(),
+                projection.map(|p| p.to_vec()),
+            )?
+            .try_with_sort_information(self.sort_information.clone())?;
 
-        Ok(DataSourceExec::from_data_source(mem_conf))
+            Ok(DataSourceExec::from_data_source(mem_conf) as Arc<dyn ExecutionPlan>)
+        })
     }
 }

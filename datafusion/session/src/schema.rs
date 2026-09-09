@@ -18,8 +18,8 @@
 //! Describes the interface and built-in implementations of schemas,
 //! representing collections of named tables.
 
-use async_trait::async_trait;
 use datafusion_common::{DataFusionError, exec_err};
+use futures::future::BoxFuture;
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -33,10 +33,9 @@ use datafusion_expr::TableType;
 /// Please see [`CatalogProvider`] for details of implementing a custom catalog.
 ///
 /// [`CatalogProvider`]: super::CatalogProvider
-#[async_trait]
 pub trait SchemaProvider: Any + Debug + Sync + Send {
     /// Returns the owner of the Schema, default is None. This value is reported
-    /// as part of `information_schema.schemata`.
+    /// as part of `information_schema.schemata`.\
     fn owner_name(&self) -> Option<&str> {
         None
     }
@@ -46,17 +45,20 @@ pub trait SchemaProvider: Any + Debug + Sync + Send {
 
     /// Retrieves a specific table from the schema by name, if it exists,
     /// otherwise returns `None`.
-    async fn table(
-        &self,
-        name: &str,
-    ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError>;
+    fn table<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<Arc<dyn TableProvider>>, DataFusionError>>;
 
     /// Retrieves the type of a specific table from the schema by name, if it exists, otherwise
     /// returns `None`.  Implementations for which this operation is cheap but [Self::table] is
     /// expensive can override this to improve operations that only need the type, e.g.
     /// `SELECT * FROM information_schema.tables`.
-    async fn table_type(&self, name: &str) -> Result<Option<TableType>> {
-        self.table(name).await.map(|o| o.map(|t| t.table_type()))
+    fn table_type<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<TableType>>> {
+        Box::pin(async move { self.table(name).await.map(|o| o.map(|t| t.table_type())) })
     }
 
     /// If supported by the implementation, adds a new table named `name` to

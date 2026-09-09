@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use futures::future::BoxFuture;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use datafusion_common::{HashMap, TableReference, error::Result, not_impl_err};
 use datafusion_execution::config::SessionConfig;
 
@@ -31,7 +31,6 @@ struct ResolvedSchemaProvider {
     owner_name: Option<String>,
     cached_tables: HashMap<String, Arc<dyn TableProvider>>,
 }
-#[async_trait]
 impl SchemaProvider for ResolvedSchemaProvider {
     fn owner_name(&self) -> Option<&str> {
         self.owner_name.as_deref()
@@ -41,8 +40,11 @@ impl SchemaProvider for ResolvedSchemaProvider {
         self.cached_tables.keys().cloned().collect()
     }
 
-    async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
-        Ok(self.cached_tables.get(name).cloned())
+    fn table<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<Arc<dyn TableProvider>>>> {
+        Box::pin(async move { Ok(self.cached_tables.get(name).cloned()) })
     }
 
     fn register_table(
@@ -184,10 +186,12 @@ impl CatalogProviderList for ResolvedCatalogProviderList {
 /// See the [remote_catalog.rs] for an end to end example
 ///
 /// [remote_catalog.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/data_io/remote_catalog.rs
-#[async_trait]
 pub trait AsyncSchemaProvider: Send + Sync {
     /// Lookup a table in the schema provider
-    async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>>;
+    fn table<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<Arc<dyn TableProvider>>>>;
     /// Creates a cached provider that can be used to execute a query containing given references
     ///
     /// This method will walk through the references and look them up once, creating a cache of table
@@ -198,48 +202,51 @@ pub trait AsyncSchemaProvider: Send + Sync {
     /// for refresh or eviction of stale entries.
     ///
     /// See the [`AsyncSchemaProvider`] documentation for additional details
-    async fn resolve(
-        &self,
-        references: &[TableReference],
-        config: &SessionConfig,
-        catalog_name: &str,
-        schema_name: &str,
-    ) -> Result<Arc<dyn SchemaProvider>> {
-        let mut cached_tables = HashMap::<String, Option<Arc<dyn TableProvider>>>::new();
+    fn resolve<'a>(
+        &'a self,
+        references: &'a [TableReference],
+        config: &'a SessionConfig,
+        catalog_name: &'a str,
+        schema_name: &'a str,
+    ) -> BoxFuture<'a, Result<Arc<dyn SchemaProvider>>> {
+        Box::pin(async move {
+            let mut cached_tables =
+                HashMap::<String, Option<Arc<dyn TableProvider>>>::new();
 
-        for reference in references {
-            let ref_catalog_name = reference
-                .catalog()
-                .unwrap_or(&config.options().catalog.default_catalog);
+            for reference in references {
+                let ref_catalog_name = reference
+                    .catalog()
+                    .unwrap_or(&config.options().catalog.default_catalog);
 
-            // Maybe this is a reference to some other catalog provided in another way
-            if ref_catalog_name != catalog_name {
-                continue;
+                // Maybe this is a reference to some other catalog provided in another way
+                if ref_catalog_name != catalog_name {
+                    continue;
+                }
+
+                let ref_schema_name = reference
+                    .schema()
+                    .unwrap_or(&config.options().catalog.default_schema);
+
+                if ref_schema_name != schema_name {
+                    continue;
+                }
+
+                if !cached_tables.contains_key(reference.table()) {
+                    let resolved_table = self.table(reference.table()).await?;
+                    cached_tables.insert(reference.table().to_string(), resolved_table);
+                }
             }
 
-            let ref_schema_name = reference
-                .schema()
-                .unwrap_or(&config.options().catalog.default_schema);
+            let cached_tables = cached_tables
+                .into_iter()
+                .filter_map(|(key, maybe_value)| maybe_value.map(|value| (key, value)))
+                .collect();
 
-            if ref_schema_name != schema_name {
-                continue;
-            }
-
-            if !cached_tables.contains_key(reference.table()) {
-                let resolved_table = self.table(reference.table()).await?;
-                cached_tables.insert(reference.table().to_string(), resolved_table);
-            }
-        }
-
-        let cached_tables = cached_tables
-            .into_iter()
-            .filter_map(|(key, maybe_value)| maybe_value.map(|value| (key, value)))
-            .collect();
-
-        Ok(Arc::new(ResolvedSchemaProvider {
-            cached_tables,
-            owner_name: Some(catalog_name.to_string()),
-        }))
+            Ok(Arc::new(ResolvedSchemaProvider {
+                cached_tables,
+                owner_name: Some(catalog_name.to_string()),
+            }) as Arc<dyn SchemaProvider>)
+        })
     }
 }
 
@@ -248,11 +255,12 @@ pub trait AsyncSchemaProvider: Send + Sync {
 /// The [`CatalogProvider::schema`] method is synchronous because asynchronous operations should
 /// not be used during planning.  This trait makes it easy to lookup schema references once and cache
 /// them for future planning use.  See [`AsyncSchemaProvider`] for more details on motivation.
-
-#[async_trait]
 pub trait AsyncCatalogProvider: Send + Sync {
     /// Lookup a schema in the provider
-    async fn schema(&self, name: &str) -> Result<Option<Arc<dyn AsyncSchemaProvider>>>;
+    fn schema<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<Arc<dyn AsyncSchemaProvider>>>>;
 
     /// Creates a cached provider that can be used to execute a query containing given references
     ///
@@ -263,57 +271,60 @@ pub trait AsyncCatalogProvider: Send + Sync {
     ///
     /// This cache is intended to be short-lived for the execution of a single query.  There is no mechanism
     /// for refresh or eviction of stale entries.
-    async fn resolve(
-        &self,
-        references: &[TableReference],
-        config: &SessionConfig,
-        catalog_name: &str,
-    ) -> Result<Arc<dyn CatalogProvider>> {
-        let mut cached_schemas =
-            HashMap::<String, Option<ResolvedSchemaProviderBuilder>>::new();
+    fn resolve<'a>(
+        &'a self,
+        references: &'a [TableReference],
+        config: &'a SessionConfig,
+        catalog_name: &'a str,
+    ) -> BoxFuture<'a, Result<Arc<dyn CatalogProvider>>> {
+        Box::pin(async move {
+            let mut cached_schemas =
+                HashMap::<String, Option<ResolvedSchemaProviderBuilder>>::new();
 
-        for reference in references {
-            let ref_catalog_name = reference
-                .catalog()
-                .unwrap_or(&config.options().catalog.default_catalog);
+            for reference in references {
+                let ref_catalog_name = reference
+                    .catalog()
+                    .unwrap_or(&config.options().catalog.default_catalog);
 
-            // Maybe this is a reference to some other catalog provided in another way
-            if ref_catalog_name != catalog_name {
-                continue;
+                // Maybe this is a reference to some other catalog provided in another way
+                if ref_catalog_name != catalog_name {
+                    continue;
+                }
+
+                let schema_name = reference
+                    .schema()
+                    .unwrap_or(&config.options().catalog.default_schema);
+
+                let schema = if let Some(schema) = cached_schemas.get_mut(schema_name) {
+                    schema
+                } else {
+                    let resolved_schema = self.schema(schema_name).await?;
+                    let resolved_schema = resolved_schema.map(|resolved_schema| {
+                        ResolvedSchemaProviderBuilder::new(
+                            catalog_name.to_string(),
+                            resolved_schema,
+                        )
+                    });
+                    cached_schemas.insert(schema_name.to_string(), resolved_schema);
+                    cached_schemas.get_mut(schema_name).unwrap()
+                };
+
+                // If we can't find the catalog don't bother checking the table
+                let Some(schema) = schema else { continue };
+
+                schema.resolve_table(reference.table()).await?;
             }
 
-            let schema_name = reference
-                .schema()
-                .unwrap_or(&config.options().catalog.default_schema);
+            let cached_schemas = cached_schemas
+                .into_iter()
+                .filter_map(|(key, maybe_builder)| {
+                    maybe_builder.map(|schema_builder| (key, schema_builder.finish()))
+                })
+                .collect::<HashMap<_, _>>();
 
-            let schema = if let Some(schema) = cached_schemas.get_mut(schema_name) {
-                schema
-            } else {
-                let resolved_schema = self.schema(schema_name).await?;
-                let resolved_schema = resolved_schema.map(|resolved_schema| {
-                    ResolvedSchemaProviderBuilder::new(
-                        catalog_name.to_string(),
-                        resolved_schema,
-                    )
-                });
-                cached_schemas.insert(schema_name.to_string(), resolved_schema);
-                cached_schemas.get_mut(schema_name).unwrap()
-            };
-
-            // If we can't find the catalog don't bother checking the table
-            let Some(schema) = schema else { continue };
-
-            schema.resolve_table(reference.table()).await?;
-        }
-
-        let cached_schemas = cached_schemas
-            .into_iter()
-            .filter_map(|(key, maybe_builder)| {
-                maybe_builder.map(|schema_builder| (key, schema_builder.finish()))
-            })
-            .collect::<HashMap<_, _>>();
-
-        Ok(Arc::new(ResolvedCatalogProvider { cached_schemas }))
+            Ok(Arc::new(ResolvedCatalogProvider { cached_schemas })
+                as Arc<dyn CatalogProvider>)
+        })
     }
 }
 
@@ -322,10 +333,12 @@ pub trait AsyncCatalogProvider: Send + Sync {
 /// The [`CatalogProviderList::catalog`] method is synchronous because asynchronous operations should
 /// not be used during planning.  This trait makes it easy to lookup catalog references once and cache
 /// them for future planning use.  See [`AsyncSchemaProvider`] for more details on motivation.
-#[async_trait]
 pub trait AsyncCatalogProviderList: Send + Sync {
     /// Lookup a catalog in the provider
-    async fn catalog(&self, name: &str) -> Result<Option<Arc<dyn AsyncCatalogProvider>>>;
+    fn catalog<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<Arc<dyn AsyncCatalogProvider>>>>;
 
     /// Creates a cached provider that can be used to execute a query containing given references
     ///
@@ -336,77 +349,82 @@ pub trait AsyncCatalogProviderList: Send + Sync {
     ///
     /// This cache is intended to be short-lived for the execution of a single query.  There is no mechanism
     /// for refresh or eviction of stale entries.
-    async fn resolve(
-        &self,
-        references: &[TableReference],
-        config: &SessionConfig,
-    ) -> Result<Arc<dyn CatalogProviderList>> {
-        let mut cached_catalogs =
-            HashMap::<String, Option<ResolvedCatalogProviderBuilder>>::new();
+    fn resolve<'a>(
+        &'a self,
+        references: &'a [TableReference],
+        config: &'a SessionConfig,
+    ) -> BoxFuture<'a, Result<Arc<dyn CatalogProviderList>>> {
+        Box::pin(async move {
+            let mut cached_catalogs =
+                HashMap::<String, Option<ResolvedCatalogProviderBuilder>>::new();
 
-        for reference in references {
-            let catalog_name = reference
-                .catalog()
-                .unwrap_or(&config.options().catalog.default_catalog);
+            for reference in references {
+                let catalog_name = reference
+                    .catalog()
+                    .unwrap_or(&config.options().catalog.default_catalog);
 
-            // We will do three lookups here, one for the catalog, one for the schema, and one for the table
-            // We cache the result (both found results and not-found results) to speed up future lookups
-            //
-            // Note that a cache-miss is not an error at this point.  We allow for the possibility that
-            // other providers may supply the reference.
-            //
-            // If this is the only provider then a not-found error will be raised during planning when it can't
-            // find the reference in the cache.
+                // We will do three lookups here, one for the catalog, one for the schema, and one for the table
+                // We cache the result (both found results and not-found results) to speed up future lookups
+                //
+                // Note that a cache-miss is not an error at this point.  We allow for the possibility that
+                // other providers may supply the reference.
+                //
+                // If this is the only provider then a not-found error will be raised during planning when it can't
+                // find the reference in the cache.
 
-            let catalog = if let Some(catalog) = cached_catalogs.get_mut(catalog_name) {
-                catalog
-            } else {
-                let resolved_catalog = self.catalog(catalog_name).await?;
-                let resolved_catalog =
-                    resolved_catalog.map(ResolvedCatalogProviderBuilder::new);
-                cached_catalogs.insert(catalog_name.to_string(), resolved_catalog);
-                cached_catalogs.get_mut(catalog_name).unwrap()
-            };
+                let catalog = if let Some(catalog) = cached_catalogs.get_mut(catalog_name)
+                {
+                    catalog
+                } else {
+                    let resolved_catalog = self.catalog(catalog_name).await?;
+                    let resolved_catalog =
+                        resolved_catalog.map(ResolvedCatalogProviderBuilder::new);
+                    cached_catalogs.insert(catalog_name.to_string(), resolved_catalog);
+                    cached_catalogs.get_mut(catalog_name).unwrap()
+                };
 
-            // If we can't find the catalog don't bother checking the schema / table
-            let Some(catalog) = catalog else { continue };
+                // If we can't find the catalog don't bother checking the schema / table
+                let Some(catalog) = catalog else { continue };
 
-            let schema_name = reference
-                .schema()
-                .unwrap_or(&config.options().catalog.default_schema);
+                let schema_name = reference
+                    .schema()
+                    .unwrap_or(&config.options().catalog.default_schema);
 
-            let schema = if let Some(schema) = catalog.cached_schemas.get_mut(schema_name)
-            {
-                schema
-            } else {
-                let resolved_schema = catalog.async_provider.schema(schema_name).await?;
-                let resolved_schema = resolved_schema.map(|async_schema| {
-                    ResolvedSchemaProviderBuilder::new(
-                        catalog_name.to_string(),
-                        async_schema,
-                    )
-                });
-                catalog
-                    .cached_schemas
-                    .insert(schema_name.to_string(), resolved_schema);
-                catalog.cached_schemas.get_mut(schema_name).unwrap()
-            };
+                let schema =
+                    if let Some(schema) = catalog.cached_schemas.get_mut(schema_name) {
+                        schema
+                    } else {
+                        let resolved_schema =
+                            catalog.async_provider.schema(schema_name).await?;
+                        let resolved_schema = resolved_schema.map(|async_schema| {
+                            ResolvedSchemaProviderBuilder::new(
+                                catalog_name.to_string(),
+                                async_schema,
+                            )
+                        });
+                        catalog
+                            .cached_schemas
+                            .insert(schema_name.to_string(), resolved_schema);
+                        catalog.cached_schemas.get_mut(schema_name).unwrap()
+                    };
 
-            // If we can't find the catalog don't bother checking the table
-            let Some(schema) = schema else { continue };
+                // If we can't find the catalog don't bother checking the table
+                let Some(schema) = schema else { continue };
 
-            schema.resolve_table(reference.table()).await?;
-        }
+                schema.resolve_table(reference.table()).await?;
+            }
 
-        // Build the cached catalog provider list
-        let cached_catalogs = cached_catalogs
-            .into_iter()
-            .filter_map(|(key, maybe_builder)| {
-                maybe_builder.map(|catalog_builder| (key, catalog_builder.finish()))
-            })
-            .collect::<HashMap<_, _>>();
+            // Build the cached catalog provider list
+            let cached_catalogs = cached_catalogs
+                .into_iter()
+                .filter_map(|(key, maybe_builder)| {
+                    maybe_builder.map(|catalog_builder| (key, catalog_builder.finish()))
+                })
+                .collect::<HashMap<_, _>>();
 
-        Ok(Arc::new(ResolvedCatalogProviderList { cached_catalogs }))
+            Ok(Arc::new(ResolvedCatalogProviderList { cached_catalogs })
+                as Arc<dyn CatalogProviderList>)
+        })
     }
 }
 
@@ -418,11 +436,11 @@ mod tests {
     };
 
     use arrow::datatypes::SchemaRef;
-    use async_trait::async_trait;
     use datafusion_common::{Statistics, TableReference, error::Result};
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::{Expr, TableType};
     use datafusion_physical_plan::ExecutionPlan;
+    use futures::future::BoxFuture;
 
     use crate::{Session, TableProvider};
 
@@ -430,7 +448,6 @@ mod tests {
 
     #[derive(Debug)]
     struct MockTableProvider {}
-    #[async_trait]
     impl TableProvider for MockTableProvider {
         /// Get a reference to the schema for this table
         fn schema(&self) -> SchemaRef {
@@ -441,14 +458,14 @@ mod tests {
             unimplemented!()
         }
 
-        async fn scan(
-            &self,
-            _state: &dyn Session,
-            _projection: Option<&[usize]>,
-            _filters: &[Expr],
+        fn scan<'a>(
+            &'a self,
+            _state: &'a dyn Session,
+            _projection: Option<&'a [usize]>,
+            _filters: &'a [Expr],
             _limit: Option<usize>,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            unimplemented!()
+        ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+            Box::pin(async move { unimplemented!() })
         }
 
         fn statistics(&self) -> Option<Statistics> {
@@ -464,16 +481,21 @@ mod tests {
     const MOCK_CATALOG: &str = "mock_catalog";
     const MOCK_SCHEMA: &str = "mock_schema";
     const MOCK_TABLE: &str = "mock_table";
-
-    #[async_trait]
     impl AsyncSchemaProvider for MockAsyncSchemaProvider {
-        async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
-            self.lookup_count.fetch_add(1, Ordering::Release);
-            if name == MOCK_TABLE {
-                Ok(Some(Arc::new(MockTableProvider {})))
-            } else {
-                Ok(None)
-            }
+        fn table<'a>(
+            &'a self,
+            name: &'a str,
+        ) -> BoxFuture<'a, Result<Option<Arc<dyn TableProvider>>>> {
+            Box::pin(async move {
+                self.lookup_count.fetch_add(1, Ordering::Release);
+                if name == MOCK_TABLE {
+                    Ok(Some(
+                        Arc::new(MockTableProvider {}) as Arc<dyn TableProvider>
+                    ))
+                } else {
+                    Ok(None)
+                }
+            })
         }
     }
 
@@ -556,19 +578,20 @@ mod tests {
     struct MockAsyncCatalogProvider {
         lookup_count: AtomicU32,
     }
-
-    #[async_trait]
     impl AsyncCatalogProvider for MockAsyncCatalogProvider {
-        async fn schema(
-            &self,
-            name: &str,
-        ) -> Result<Option<Arc<dyn AsyncSchemaProvider>>> {
-            self.lookup_count.fetch_add(1, Ordering::Release);
-            if name == MOCK_SCHEMA {
-                Ok(Some(Arc::new(MockAsyncSchemaProvider::default())))
-            } else {
-                Ok(None)
-            }
+        fn schema<'a>(
+            &'a self,
+            name: &'a str,
+        ) -> BoxFuture<'a, Result<Option<Arc<dyn AsyncSchemaProvider>>>> {
+            Box::pin(async move {
+                self.lookup_count.fetch_add(1, Ordering::Release);
+                if name == MOCK_SCHEMA {
+                    Ok(Some(Arc::new(MockAsyncSchemaProvider::default())
+                        as Arc<dyn AsyncSchemaProvider>))
+                } else {
+                    Ok(None)
+                }
+            })
         }
     }
 
@@ -641,19 +664,20 @@ mod tests {
     struct MockAsyncCatalogProviderList {
         lookup_count: AtomicU32,
     }
-
-    #[async_trait]
     impl AsyncCatalogProviderList for MockAsyncCatalogProviderList {
-        async fn catalog(
-            &self,
-            name: &str,
-        ) -> Result<Option<Arc<dyn AsyncCatalogProvider>>> {
-            self.lookup_count.fetch_add(1, Ordering::Release);
-            if name == MOCK_CATALOG {
-                Ok(Some(Arc::new(MockAsyncCatalogProvider::default())))
-            } else {
-                Ok(None)
-            }
+        fn catalog<'a>(
+            &'a self,
+            name: &'a str,
+        ) -> BoxFuture<'a, Result<Option<Arc<dyn AsyncCatalogProvider>>>> {
+            Box::pin(async move {
+                self.lookup_count.fetch_add(1, Ordering::Release);
+                if name == MOCK_CATALOG {
+                    Ok(Some(Arc::new(MockAsyncCatalogProvider::default())
+                        as Arc<dyn AsyncCatalogProvider>))
+                } else {
+                    Ok(None)
+                }
+            })
         }
     }
 

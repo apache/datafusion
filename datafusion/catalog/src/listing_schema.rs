@@ -17,6 +17,7 @@
 
 //! [`ListingSchemaProvider`]: [`SchemaProvider`] that scans ObjectStores for tables automatically
 
+use futures::future::BoxFuture;
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -29,7 +30,6 @@ use datafusion_common::{
 };
 use datafusion_expr::CreateExternalTable;
 
-use async_trait::async_trait;
 use futures::TryStreamExt;
 use itertools::Itertools;
 use object_store::ObjectStore;
@@ -142,8 +142,6 @@ impl ListingSchemaProvider {
         Ok(())
     }
 }
-
-#[async_trait]
 impl SchemaProvider for ListingSchemaProvider {
     fn table_names(&self) -> Vec<String> {
         self.tables
@@ -154,16 +152,18 @@ impl SchemaProvider for ListingSchemaProvider {
             .collect()
     }
 
-    async fn table(
-        &self,
-        name: &str,
-    ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError> {
-        Ok(self
-            .tables
-            .lock()
-            .expect("Can't lock tables")
-            .get(name)
-            .cloned())
+    fn table<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<Arc<dyn TableProvider>>, DataFusionError>> {
+        Box::pin(async move {
+            Ok(self
+                .tables
+                .lock()
+                .expect("Can't lock tables")
+                .get(name)
+                .cloned())
+        })
     }
 
     fn register_table(

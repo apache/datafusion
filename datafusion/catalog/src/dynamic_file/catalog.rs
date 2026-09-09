@@ -18,7 +18,7 @@
 //! [`DynamicFileCatalog`] that creates tables from file paths
 
 use crate::{CatalogProvider, CatalogProviderList, SchemaProvider, TableProvider};
-use async_trait::async_trait;
+use futures::future::BoxFuture;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -125,22 +125,22 @@ impl DynamicFileSchemaProvider {
         Self { inner, factory }
     }
 }
-
-#[async_trait]
 impl SchemaProvider for DynamicFileSchemaProvider {
     fn table_names(&self) -> Vec<String> {
         self.inner.table_names()
     }
 
-    async fn table(
-        &self,
-        name: &str,
-    ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>> {
-        if let Some(table) = self.inner.table(name).await? {
-            return Ok(Some(table));
-        }
+    fn table<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, datafusion_common::Result<Option<Arc<dyn TableProvider>>>> {
+        Box::pin(async move {
+            if let Some(table) = self.inner.table(name).await? {
+                return Ok(Some(table));
+            }
 
-        self.factory.try_new(name).await
+            self.factory.try_new(name).await
+        })
     }
 
     fn register_table(
@@ -164,11 +164,10 @@ impl SchemaProvider for DynamicFileSchemaProvider {
 }
 
 /// [UrlTableFactory] is a factory that can create a table provider from the given url.
-#[async_trait]
 pub trait UrlTableFactory: Debug + Sync + Send {
     /// create a new table provider from the provided url
-    async fn try_new(
-        &self,
-        url: &str,
-    ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>>;
+    fn try_new<'a>(
+        &'a self,
+        url: &'a str,
+    ) -> BoxFuture<'a, datafusion_common::Result<Option<Arc<dyn TableProvider>>>>;
 }

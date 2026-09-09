@@ -18,9 +18,9 @@
 //! [`MemorySchemaProvider`]: In-memory implementations of [`SchemaProvider`].
 
 use crate::{SchemaProvider, TableProvider};
-use async_trait::async_trait;
 use dashmap::DashMap;
 use datafusion_common::{DataFusionError, exec_err};
+use futures::future::BoxFuture;
 use std::sync::Arc;
 
 /// Simple in-memory implementation of a schema.
@@ -43,8 +43,6 @@ impl Default for MemorySchemaProvider {
         Self::new()
     }
 }
-
-#[async_trait]
 impl SchemaProvider for MemorySchemaProvider {
     fn table_names(&self) -> Vec<String> {
         self.tables
@@ -53,11 +51,16 @@ impl SchemaProvider for MemorySchemaProvider {
             .collect()
     }
 
-    async fn table(
-        &self,
-        name: &str,
-    ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>, DataFusionError> {
-        Ok(self.tables.get(name).map(|table| Arc::clone(table.value())))
+    fn table<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<
+        'a,
+        datafusion_common::Result<Option<Arc<dyn TableProvider>>, DataFusionError>,
+    > {
+        Box::pin(async move {
+            Ok(self.tables.get(name).map(|table| Arc::clone(table.value())))
+        })
     }
 
     fn register_table(

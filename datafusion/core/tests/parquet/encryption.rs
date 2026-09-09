@@ -20,7 +20,6 @@
 use arrow::array::{ArrayRef, Int32Array, StringArray};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::{DataType, SchemaRef};
-use async_trait::async_trait;
 use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
@@ -28,6 +27,7 @@ use datafusion_common::config::{EncryptionFactoryOptions, TableParquetOptions};
 use datafusion_common::{DataFusionError, assert_batches_sorted_eq, exec_datafusion_err};
 use datafusion_datasource_parquet::ParquetFormat;
 use datafusion_execution::parquet_encryption::EncryptionFactory;
+use futures::future::BoxFuture;
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::encryption::decrypt::FileDecryptionProperties;
@@ -329,42 +329,46 @@ struct MockEncryptionFactory {
     pub encryption_keys: Mutex<HashMap<object_store::path::Path, Vec<u8>>>,
     pub counter: AtomicU8,
 }
-
-#[async_trait]
 impl EncryptionFactory for MockEncryptionFactory {
-    async fn get_file_encryption_properties(
-        &self,
-        config: &EncryptionFactoryOptions,
-        _schema: &SchemaRef,
-        file_path: &object_store::path::Path,
-    ) -> datafusion_common::Result<Option<Arc<FileEncryptionProperties>>> {
-        assert_eq!(
-            config.options.get("test_key"),
-            Some(&"test value".to_string())
-        );
-        let file_idx = self.counter.fetch_add(1, Ordering::Relaxed);
-        let key = vec![file_idx, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-        let mut keys = self.encryption_keys.lock().unwrap();
-        keys.insert(file_path.clone(), key.clone());
-        let encryption_properties = FileEncryptionProperties::builder(key).build()?;
-        Ok(Some(encryption_properties))
+    fn get_file_encryption_properties<'a>(
+        &'a self,
+        config: &'a EncryptionFactoryOptions,
+        _schema: &'a SchemaRef,
+        file_path: &'a object_store::path::Path,
+    ) -> BoxFuture<'a, datafusion_common::Result<Option<Arc<FileEncryptionProperties>>>>
+    {
+        Box::pin(async move {
+            assert_eq!(
+                config.options.get("test_key"),
+                Some(&"test value".to_string())
+            );
+            let file_idx = self.counter.fetch_add(1, Ordering::Relaxed);
+            let key = vec![file_idx, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+            let mut keys = self.encryption_keys.lock().unwrap();
+            keys.insert(file_path.clone(), key.clone());
+            let encryption_properties = FileEncryptionProperties::builder(key).build()?;
+            Ok(Some(encryption_properties))
+        })
     }
 
-    async fn get_file_decryption_properties(
-        &self,
-        config: &EncryptionFactoryOptions,
-        file_path: &object_store::path::Path,
-    ) -> datafusion_common::Result<Option<Arc<FileDecryptionProperties>>> {
-        assert_eq!(
-            config.options.get("test_key"),
-            Some(&"test value".to_string())
-        );
-        let keys = self.encryption_keys.lock().unwrap();
-        let key = keys
-            .get(file_path)
-            .ok_or_else(|| exec_datafusion_err!("No key for file {file_path:?}"))?;
-        let decryption_properties =
-            FileDecryptionProperties::builder(key.clone()).build()?;
-        Ok(Some(decryption_properties))
+    fn get_file_decryption_properties<'a>(
+        &'a self,
+        config: &'a EncryptionFactoryOptions,
+        file_path: &'a object_store::path::Path,
+    ) -> BoxFuture<'a, datafusion_common::Result<Option<Arc<FileDecryptionProperties>>>>
+    {
+        Box::pin(async move {
+            assert_eq!(
+                config.options.get("test_key"),
+                Some(&"test value".to_string())
+            );
+            let keys = self.encryption_keys.lock().unwrap();
+            let key = keys
+                .get(file_path)
+                .ok_or_else(|| exec_datafusion_err!("No key for file {file_path:?}"))?;
+            let decryption_properties =
+                FileDecryptionProperties::builder(key.clone()).build()?;
+            Ok(Some(decryption_properties))
+        })
     }
 }

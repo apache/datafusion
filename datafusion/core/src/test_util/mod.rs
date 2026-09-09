@@ -53,7 +53,6 @@ use datafusion_expr::{
 };
 use std::pin::Pin;
 
-use async_trait::async_trait;
 use futures::future::BoxFuture;
 
 use tempfile::TempDir;
@@ -181,22 +180,12 @@ pub fn populate_csv_partitions(
 /// TableFactory for tests
 #[derive(Default, Debug)]
 pub struct TestTableFactory {}
-
-#[async_trait]
 impl TableProviderFactory for TestTableFactory {
-    // Hand-written `#[async_trait]` expansion to reduce compile time. See
-    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
-    fn create<'life0, 'life1, 'life2, 'async_trait>(
-        &'life0 self,
-        session: &'life1 dyn Session,
-        cmd: &'life2 CreateExternalTable,
-    ) -> BoxFuture<'async_trait, Result<Arc<dyn TableProvider>>>
-    where
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        'life2: 'async_trait,
-        Self: 'async_trait,
-    {
+    fn create<'a>(
+        &'a self,
+        session: &'a dyn Session,
+        cmd: &'a CreateExternalTable,
+    ) -> BoxFuture<'a, Result<Arc<dyn TableProvider>>> {
         self.create_boxed(session, cmd)
     }
 }
@@ -236,8 +225,6 @@ pub struct TestTableProvider {
 }
 
 impl TestTableProvider {}
-
-#[async_trait]
 impl TableProvider for TestTableProvider {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
@@ -247,14 +234,16 @@ impl TableProvider for TestTableProvider {
         unimplemented!("TestTableProvider is a stub for testing.")
     }
 
-    async fn scan(
-        &self,
-        _state: &dyn Session,
-        _projection: Option<&[usize]>,
-        _filters: &[Expr],
+    fn scan<'a>(
+        &'a self,
+        _state: &'a dyn Session,
+        _projection: Option<&'a [usize]>,
+        _filters: &'a [Expr],
         _limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        unimplemented!("TestTableProvider is a stub for testing.")
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(
+            async move { unimplemented!("TestTableProvider is a stub for testing.") },
+        )
     }
 }
 

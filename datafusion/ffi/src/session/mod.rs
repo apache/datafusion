@@ -30,6 +30,7 @@
 //! planner, and C must retain and invoke that planner directly. See the
 //! [`crate::query_planner`] module for details.
 
+use futures::future::BoxFuture;
 use std::any::Any;
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -38,7 +39,6 @@ use std::sync::{Arc, OnceLock};
 use arrow_schema::SchemaRef;
 use arrow_schema::ffi::FFI_ArrowSchema;
 use async_ffi::{FfiFuture, FutureExt};
-use async_trait::async_trait;
 use datafusion_common::config::{ConfigFileType, ConfigOptions, TableOptions};
 use datafusion_common::{DFSchema, DataFusionError, not_impl_err};
 use datafusion_execution::TaskContext;
@@ -688,8 +688,6 @@ fn table_options_from_rhashmap(options: SVec<(SString, SString)>) -> TableOption
         });
     table_options
 }
-
-#[async_trait]
 impl Session for ForeignSession {
     fn session_id(&self) -> &str {
         unsafe { (self.session.session_id)(&self.session).as_str() }
@@ -732,13 +730,15 @@ impl Session for ForeignSession {
         }
     }
 
-    async fn create_physical_plan(
-        &self,
-        _logical_plan: &LogicalPlan,
-    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
-        not_impl_err!(
-            "ForeignSession::create_physical_plan is unsupported; export and invoke an FFI_QueryPlanner captured before installing a foreign planner"
-        )
+    fn create_physical_plan<'a>(
+        &'a self,
+        _logical_plan: &'a LogicalPlan,
+    ) -> BoxFuture<'a, datafusion_common::Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            not_impl_err!(
+                "ForeignSession::create_physical_plan is unsupported; export and invoke an FFI_QueryPlanner captured before installing a foreign planner"
+            )
+        })
     }
 
     fn create_physical_expr(
@@ -848,19 +848,19 @@ mod tests {
 
     #[derive(Debug)]
     struct ReenteringQueryPlanner;
-
-    #[async_trait]
     impl QueryPlanner for ReenteringQueryPlanner {
-        async fn create_physical_plan(
-            &self,
-            logical_plan: &LogicalPlan,
-            session: &dyn Session,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            if REENTERING_PLANNER_CALLS.fetch_add(1, Ordering::Relaxed) == 0 {
-                session.create_physical_plan(logical_plan).await
-            } else {
-                exec_err!("query planner was re-entered through the session")
-            }
+        fn create_physical_plan<'a>(
+            &'a self,
+            logical_plan: &'a LogicalPlan,
+            session: &'a dyn Session,
+        ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+            Box::pin(async move {
+                if REENTERING_PLANNER_CALLS.fetch_add(1, Ordering::Relaxed) == 0 {
+                    session.create_physical_plan(logical_plan).await
+                } else {
+                    exec_err!("query planner was re-entered through the session")
+                }
+            })
         }
     }
 

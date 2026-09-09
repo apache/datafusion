@@ -17,6 +17,7 @@
 
 //! [`JsonFormat`]: Line delimited and array JSON [`FileFormat`] abstractions
 
+use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
@@ -59,7 +60,6 @@ use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
 
 use crate::utils::JsonArrayToNdjsonReader;
-use async_trait::async_trait;
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore, ObjectStoreExt};
 
 #[derive(Default)]
@@ -233,8 +233,6 @@ fn infer_schema_from_json_array<R: Read>(
 
     Ok((schema, count))
 }
-
-#[async_trait]
 impl FileFormat for JsonFormat {
     fn get_ext(&self) -> String {
         JsonFormatFactory::new().get_ext()
@@ -252,124 +250,132 @@ impl FileFormat for JsonFormat {
         Some(self.options.compression.into())
     }
 
-    async fn infer_schema(
-        &self,
-        _state: &dyn Session,
-        store: &Arc<dyn ObjectStore>,
-        objects: &[ObjectMeta],
-    ) -> Result<SchemaRef> {
-        let mut schemas = Vec::new();
-        let mut records_to_read = self
-            .options
-            .schema_infer_max_rec
-            .unwrap_or(DEFAULT_SCHEMA_INFER_MAX_RECORD);
-        let file_compression_type = FileCompressionType::from(self.options.compression);
-        let newline_delimited = self.options.newline_delimited;
+    fn infer_schema<'a>(
+        &'a self,
+        _state: &'a dyn Session,
+        store: &'a Arc<dyn ObjectStore>,
+        objects: &'a [ObjectMeta],
+    ) -> BoxFuture<'a, Result<SchemaRef>> {
+        Box::pin(async move {
+            let mut schemas = Vec::new();
+            let mut records_to_read = self
+                .options
+                .schema_infer_max_rec
+                .unwrap_or(DEFAULT_SCHEMA_INFER_MAX_RECORD);
+            let file_compression_type =
+                FileCompressionType::from(self.options.compression);
+            let newline_delimited = self.options.newline_delimited;
 
-        for object in objects {
-            // Early exit if we've read enough records
-            if records_to_read == 0 {
-                break;
+            for object in objects {
+                // Early exit if we've read enough records
+                if records_to_read == 0 {
+                    break;
+                }
+
+                let r = store.as_ref().get(&object.location).await?;
+
+                let (schema, records_consumed) = match r.payload {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    GetResultPayload::File(file, _) => {
+                        let decoder = file_compression_type.convert_read(file)?;
+                        let reader = BufReader::new(decoder);
+
+                        if newline_delimited {
+                            // NDJSON: use ValueIter directly
+                            let iter = ValueIter::new(reader, None);
+                            let mut count = 0;
+                            let schema =
+                                infer_json_schema_from_iterator(iter.take_while(|_| {
+                                    let should_take = count < records_to_read;
+                                    if should_take {
+                                        count += 1;
+                                    }
+                                    should_take
+                                }))?;
+                            (schema, count)
+                        } else {
+                            // JSON array format: use streaming converter
+                            infer_schema_from_json_array(reader, records_to_read)?
+                        }
+                    }
+                    GetResultPayload::Stream(_) => {
+                        let data = r.bytes().await?;
+                        let decoder =
+                            file_compression_type.convert_read(data.reader())?;
+                        let reader = BufReader::new(decoder);
+
+                        if newline_delimited {
+                            let iter = ValueIter::new(reader, None);
+                            let mut count = 0;
+                            let schema =
+                                infer_json_schema_from_iterator(iter.take_while(|_| {
+                                    let should_take = count < records_to_read;
+                                    if should_take {
+                                        count += 1;
+                                    }
+                                    should_take
+                                }))?;
+                            (schema, count)
+                        } else {
+                            // JSON array format: use streaming converter
+                            infer_schema_from_json_array(reader, records_to_read)?
+                        }
+                    }
+                };
+
+                schemas.push(schema);
+                // Correctly decrement records_to_read
+                records_to_read = records_to_read.saturating_sub(records_consumed);
             }
 
-            let r = store.as_ref().get(&object.location).await?;
-
-            let (schema, records_consumed) = match r.payload {
-                #[cfg(not(target_arch = "wasm32"))]
-                GetResultPayload::File(file, _) => {
-                    let decoder = file_compression_type.convert_read(file)?;
-                    let reader = BufReader::new(decoder);
-
-                    if newline_delimited {
-                        // NDJSON: use ValueIter directly
-                        let iter = ValueIter::new(reader, None);
-                        let mut count = 0;
-                        let schema =
-                            infer_json_schema_from_iterator(iter.take_while(|_| {
-                                let should_take = count < records_to_read;
-                                if should_take {
-                                    count += 1;
-                                }
-                                should_take
-                            }))?;
-                        (schema, count)
-                    } else {
-                        // JSON array format: use streaming converter
-                        infer_schema_from_json_array(reader, records_to_read)?
-                    }
-                }
-                GetResultPayload::Stream(_) => {
-                    let data = r.bytes().await?;
-                    let decoder = file_compression_type.convert_read(data.reader())?;
-                    let reader = BufReader::new(decoder);
-
-                    if newline_delimited {
-                        let iter = ValueIter::new(reader, None);
-                        let mut count = 0;
-                        let schema =
-                            infer_json_schema_from_iterator(iter.take_while(|_| {
-                                let should_take = count < records_to_read;
-                                if should_take {
-                                    count += 1;
-                                }
-                                should_take
-                            }))?;
-                        (schema, count)
-                    } else {
-                        // JSON array format: use streaming converter
-                        infer_schema_from_json_array(reader, records_to_read)?
-                    }
-                }
-            };
-
-            schemas.push(schema);
-            // Correctly decrement records_to_read
-            records_to_read = records_to_read.saturating_sub(records_consumed);
-        }
-
-        let schema = Schema::try_merge(schemas)?;
-        Ok(Arc::new(schema))
+            let schema = Schema::try_merge(schemas)?;
+            Ok(Arc::new(schema))
+        })
     }
 
-    async fn infer_stats(
-        &self,
-        _state: &dyn Session,
-        _store: &Arc<dyn ObjectStore>,
+    fn infer_stats<'a>(
+        &'a self,
+        _state: &'a dyn Session,
+        _store: &'a Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
-        _object: &ObjectMeta,
-    ) -> Result<Statistics> {
-        Ok(Statistics::new_unknown(&table_schema))
+        _object: &'a ObjectMeta,
+    ) -> BoxFuture<'a, Result<Statistics>> {
+        Box::pin(async move { Ok(Statistics::new_unknown(&table_schema)) })
     }
 
-    async fn create_physical_plan(
-        &self,
-        _state: &dyn Session,
+    fn create_physical_plan<'a>(
+        &'a self,
+        _state: &'a dyn Session,
         conf: FileScanConfig,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let conf = FileScanConfigBuilder::from(conf)
-            .with_file_compression_type(FileCompressionType::from(
-                self.options.compression,
-            ))
-            .build();
-        Ok(DataSourceExec::from_data_source(conf))
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            let conf = FileScanConfigBuilder::from(conf)
+                .with_file_compression_type(FileCompressionType::from(
+                    self.options.compression,
+                ))
+                .build();
+            Ok(DataSourceExec::from_data_source(conf) as Arc<dyn ExecutionPlan>)
+        })
     }
 
-    async fn create_writer_physical_plan(
-        &self,
+    fn create_writer_physical_plan<'a>(
+        &'a self,
         input: Arc<dyn ExecutionPlan>,
-        _state: &dyn Session,
+        _state: &'a dyn Session,
         conf: FileSinkConfig,
         order_requirements: Option<LexRequirement>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        if conf.insert_op != InsertOp::Append {
-            return not_impl_err!("Overwrites are not implemented yet for Json");
-        }
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            if conf.insert_op != InsertOp::Append {
+                return not_impl_err!("Overwrites are not implemented yet for Json");
+            }
 
-        let writer_options = JsonWriterOptions::try_from(&self.options)?;
+            let writer_options = JsonWriterOptions::try_from(&self.options)?;
 
-        let sink = Arc::new(JsonSink::new(conf, writer_options));
+            let sink = Arc::new(JsonSink::new(conf, writer_options));
 
-        Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
+            Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
+        })
     }
 
     fn file_source(&self, table_schema: TableSchema) -> Arc<dyn FileSource> {
@@ -449,46 +455,44 @@ impl JsonSink {
         &self.writer_options
     }
 }
-
-#[async_trait]
 impl FileSink for JsonSink {
     fn config(&self) -> &FileSinkConfig {
         &self.config
     }
 
-    async fn spawn_writer_tasks_and_join(
-        &self,
-        context: &Arc<TaskContext>,
+    fn spawn_writer_tasks_and_join<'a>(
+        &'a self,
+        context: &'a Arc<TaskContext>,
         demux_task: SpawnedTask<Result<()>>,
         file_stream_rx: DemuxedStreamReceiver,
         object_store: Arc<dyn ObjectStore>,
-    ) -> Result<u64> {
-        let serializer = Arc::new(JsonSerializer::new()) as _;
-        spawn_writer_tasks_and_join(
-            context,
-            serializer,
-            self.writer_options.compression.into(),
-            self.writer_options.compression_level,
-            object_store,
-            demux_task,
-            file_stream_rx,
-        )
-        .await
+    ) -> BoxFuture<'a, Result<u64>> {
+        Box::pin(async move {
+            let serializer = Arc::new(JsonSerializer::new()) as _;
+            spawn_writer_tasks_and_join(
+                context,
+                serializer,
+                self.writer_options.compression.into(),
+                self.writer_options.compression_level,
+                object_store,
+                demux_task,
+                file_stream_rx,
+            )
+            .await
+        })
     }
 }
-
-#[async_trait]
 impl DataSink for JsonSink {
     fn schema(&self) -> &SchemaRef {
         self.config.output_schema()
     }
 
-    async fn write_all(
-        &self,
+    fn write_all<'a>(
+        &'a self,
         data: SendableRecordBatchStream,
-        context: &Arc<TaskContext>,
-    ) -> Result<u64> {
-        FileSink::write_all(self, data, context).await
+        context: &'a Arc<TaskContext>,
+    ) -> BoxFuture<'a, Result<u64>> {
+        Box::pin(async move { FileSink::write_all(self, data, context).await })
     }
 
     #[cfg(feature = "proto")]

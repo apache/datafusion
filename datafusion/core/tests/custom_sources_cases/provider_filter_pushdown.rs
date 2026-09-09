@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use futures::future::BoxFuture;
 use std::sync::Arc;
 
 use arrow::array::{Int32Builder, Int64Array};
@@ -41,8 +42,6 @@ use datafusion_functions_aggregate::expr_fn::count;
 use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
-
-use async_trait::async_trait;
 
 fn create_batch(value: i32, num_rows: usize) -> Result<RecordBatch> {
     let mut builder = Int32Builder::with_capacity(num_rows);
@@ -176,8 +175,6 @@ struct CustomProvider {
     zero_batch: RecordBatch,
     one_batch: RecordBatch,
 }
-
-#[async_trait]
 impl TableProvider for CustomProvider {
     fn schema(&self) -> SchemaRef {
         self.zero_batch.schema()
@@ -187,63 +184,67 @@ impl TableProvider for CustomProvider {
         TableType::Base
     }
 
-    async fn scan(
-        &self,
-        _state: &dyn Session,
-        projection: Option<&[usize]>,
-        filters: &[Expr],
+    fn scan<'a>(
+        &'a self,
+        _state: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        filters: &'a [Expr],
         _: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let empty = Vec::new();
-        let projection = projection.unwrap_or(&empty);
-        match &filters[0] {
-            Expr::BinaryExpr(BinaryExpr { right, .. }) => {
-                let int_value = match &**right {
-                    Expr::Literal(ScalarValue::Int8(Some(i)), _) => *i as i64,
-                    Expr::Literal(ScalarValue::Int16(Some(i)), _) => *i as i64,
-                    Expr::Literal(ScalarValue::Int32(Some(i)), _) => *i as i64,
-                    Expr::Literal(ScalarValue::Int64(Some(i)), _) => *i,
-                    Expr::Cast(Cast { expr, field: _ }) => match &**expr {
-                        Expr::Literal(lit_value, _) => match lit_value {
-                            ScalarValue::Int8(Some(v)) => *v as i64,
-                            ScalarValue::Int16(Some(v)) => *v as i64,
-                            ScalarValue::Int32(Some(v)) => *v as i64,
-                            ScalarValue::Int64(Some(v)) => *v,
-                            other_value => {
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            let empty = Vec::new();
+            let projection = projection.unwrap_or(&empty);
+            match &filters[0] {
+                Expr::BinaryExpr(BinaryExpr { right, .. }) => {
+                    let int_value = match &**right {
+                        Expr::Literal(ScalarValue::Int8(Some(i)), _) => *i as i64,
+                        Expr::Literal(ScalarValue::Int16(Some(i)), _) => *i as i64,
+                        Expr::Literal(ScalarValue::Int32(Some(i)), _) => *i as i64,
+                        Expr::Literal(ScalarValue::Int64(Some(i)), _) => *i,
+                        Expr::Cast(Cast { expr, field: _ }) => match &**expr {
+                            Expr::Literal(lit_value, _) => match lit_value {
+                                ScalarValue::Int8(Some(v)) => *v as i64,
+                                ScalarValue::Int16(Some(v)) => *v as i64,
+                                ScalarValue::Int32(Some(v)) => *v as i64,
+                                ScalarValue::Int64(Some(v)) => *v,
+                                other_value => {
+                                    return not_impl_err!(
+                                        "Do not support value {other_value:?}"
+                                    );
+                                }
+                            },
+                            other_expr => {
                                 return not_impl_err!(
-                                    "Do not support value {other_value:?}"
+                                    "Do not support expr {other_expr:?}"
                                 );
                             }
                         },
                         other_expr => {
                             return not_impl_err!("Do not support expr {other_expr:?}");
                         }
-                    },
-                    other_expr => {
-                        return not_impl_err!("Do not support expr {other_expr:?}");
-                    }
-                };
+                    };
 
-                Ok(Arc::new(CustomPlan::new(
+                    Ok(Arc::new(CustomPlan::new(
+                        match projection.is_empty() {
+                            true => Arc::new(Schema::empty()),
+                            false => self.zero_batch.schema(),
+                        },
+                        match int_value {
+                            0 => vec![self.zero_batch.clone()],
+                            1 => vec![self.one_batch.clone()],
+                            _ => vec![],
+                        },
+                    )) as Arc<dyn ExecutionPlan>)
+                }
+                _ => Ok(Arc::new(CustomPlan::new(
                     match projection.is_empty() {
                         true => Arc::new(Schema::empty()),
                         false => self.zero_batch.schema(),
                     },
-                    match int_value {
-                        0 => vec![self.zero_batch.clone()],
-                        1 => vec![self.one_batch.clone()],
-                        _ => vec![],
-                    },
-                )))
+                    vec![],
+                )) as Arc<dyn ExecutionPlan>),
             }
-            _ => Ok(Arc::new(CustomPlan::new(
-                match projection.is_empty() {
-                    true => Arc::new(Schema::empty()),
-                    false => self.zero_batch.schema(),
-                },
-                vec![],
-            ))),
-        }
+        })
     }
 
     fn supports_filters_pushdown(

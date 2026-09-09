@@ -37,16 +37,15 @@ use datafusion_physical_plan::{
     ReplaceChildrenOptions, SendableRecordBatchStream, execute_input_stream,
 };
 
-use async_trait::async_trait;
 use datafusion_physical_plan::execution_plan::{EvaluationType, SchedulingType};
 use futures::StreamExt;
+use futures::future::BoxFuture;
 
 /// `DataSink` implements writing streams of [`RecordBatch`]es to
 /// user defined destinations.
 ///
 /// The `Display` impl is used to format the sink for explain plan
 /// output.
-#[async_trait]
 pub trait DataSink: Any + DisplayAs + Debug + Send + Sync {
     /// Return a snapshot of the [MetricsSet] for this
     /// [DataSink].
@@ -67,11 +66,11 @@ pub trait DataSink: Any + DisplayAs + Debug + Send + Sync {
     /// This method will be called exactly once during each DML
     /// statement. Thus prior to return, the sink should do any commit
     /// or rollback required.
-    async fn write_all(
-        &self,
+    fn write_all<'a>(
+        &'a self,
         data: SendableRecordBatchStream,
-        context: &Arc<TaskContext>,
-    ) -> Result<u64>;
+        context: &'a Arc<TaskContext>,
+    ) -> BoxFuture<'a, Result<u64>>;
 
     /// Serialize this sink into a full protobuf plan node, if it knows how.
     ///

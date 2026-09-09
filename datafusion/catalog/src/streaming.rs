@@ -21,7 +21,6 @@ use std::future::ready;
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
-use async_trait::async_trait;
 use datafusion_common::{DFSchema, Result, plan_err};
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{Expr, SortExpr, TableType};
@@ -109,8 +108,6 @@ impl StreamingTable {
         Ok(output_partitioning.project(&projection_mapping, &eq_properties))
     }
 }
-
-#[async_trait]
 impl TableProvider for StreamingTable {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
@@ -120,22 +117,13 @@ impl TableProvider for StreamingTable {
         TableType::View
     }
 
-    // Hand-written `#[async_trait]` expansion to reduce compile time. See
-    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
-    fn scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(
-        &'life0 self,
-        state: &'life1 dyn Session,
-        projection: Option<&'life2 [usize]>,
-        filters: &'life3 [Expr],
+    fn scan<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        filters: &'a [Expr],
         limit: Option<usize>,
-    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
-    where
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        'life2: 'async_trait,
-        'life3: 'async_trait,
-        Self: 'async_trait,
-    {
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
         self.scan_boxed(state, projection, filters, limit)
     }
 }

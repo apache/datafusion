@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use futures::future::BoxFuture;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use datafusion_catalog::{MemTable, Session, TableProvider, TableProviderFactory};
 use datafusion_common::Result;
 use datafusion_expr::CreateExternalTable;
@@ -28,27 +28,27 @@ use crate::table_provider_factory::FFI_TableProviderFactory;
 
 #[derive(Debug)]
 pub struct TestTableProviderFactory {}
-
-#[async_trait]
 impl TableProviderFactory for TestTableProviderFactory {
-    async fn create(
-        &self,
-        _session: &dyn Session,
-        _cmd: &CreateExternalTable,
-    ) -> Result<Arc<dyn TableProvider>> {
-        let schema = create_test_schema();
+    fn create<'a>(
+        &'a self,
+        _session: &'a dyn Session,
+        _cmd: &'a CreateExternalTable,
+    ) -> BoxFuture<'a, Result<Arc<dyn TableProvider>>> {
+        Box::pin(async move {
+            let schema = create_test_schema();
 
-        // It is useful to create these as multiple record batches
-        // so that we can demonstrate the FFI stream.
-        let batches = vec![
-            create_record_batch(1, 5),
-            create_record_batch(6, 1),
-            create_record_batch(7, 5),
-        ];
+            // It is useful to create these as multiple record batches
+            // so that we can demonstrate the FFI stream.
+            let batches = vec![
+                create_record_batch(1, 5),
+                create_record_batch(6, 1),
+                create_record_batch(7, 5),
+            ];
 
-        let table_provider = MemTable::try_new(schema, vec![batches]).unwrap();
+            let table_provider = MemTable::try_new(schema, vec![batches]).unwrap();
 
-        Ok(Arc::new(table_provider))
+            Ok(Arc::new(table_provider))
+        })
     }
 }
 

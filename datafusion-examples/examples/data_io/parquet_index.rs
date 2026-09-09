@@ -23,7 +23,6 @@ use arrow::array::{
 };
 use arrow::datatypes::{Int32Type, SchemaRef};
 use arrow::util::pretty::pretty_format_batches;
-use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::common::pruning::PruningStatistics;
 use datafusion::common::{
@@ -45,6 +44,7 @@ use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_optimizer::pruning::PruningPredicateBuilder;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
+use futures::future::BoxFuture;
 use std::collections::HashSet;
 use std::fmt::Display;
 use std::fs;
@@ -204,8 +204,6 @@ impl IndexTableProvider {
         &self.index
     }
 }
-
-#[async_trait]
 impl TableProvider for IndexTableProvider {
     fn schema(&self) -> SchemaRef {
         self.index.schema().clone()
@@ -215,48 +213,51 @@ impl TableProvider for IndexTableProvider {
         TableType::Base
     }
 
-    async fn scan(
-        &self,
-        state: &dyn Session,
-        projection: Option<&[usize]>,
-        filters: &[Expr],
+    fn scan<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        filters: &'a [Expr],
         limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let df_schema = DFSchema::try_from(self.schema())?;
-        // convert filters like [`a = 1`, `b = 2`] to a single filter like `a = 1 AND b = 2`
-        let predicate = conjunction(filters.to_vec());
-        let predicate = predicate
-            .map(|predicate| state.create_physical_expr(predicate, &df_schema))
-            .transpose()?
-            // if there are no filters, use a literal true to have a predicate
-            // that always evaluates to true we can pass to the index
-            .unwrap_or_else(|| datafusion::physical_expr::expressions::lit(true));
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            let df_schema = DFSchema::try_from(self.schema())?;
+            // convert filters like [`a = 1`, `b = 2`] to a single filter like `a = 1 AND b = 2`
+            let predicate = conjunction(filters.to_vec());
+            let predicate = predicate
+                .map(|predicate| state.create_physical_expr(predicate, &df_schema))
+                .transpose()?
+                // if there are no filters, use a literal true to have a predicate
+                // that always evaluates to true we can pass to the index
+                .unwrap_or_else(|| datafusion::physical_expr::expressions::lit(true));
 
-        // Use the index to find the files that might have data that matches the
-        // predicate. Any file that can not have data that matches the predicate
-        // will not be returned.
-        let files = self.index.get_files(predicate.clone())?;
+            // Use the index to find the files that might have data that matches the
+            // predicate. Any file that can not have data that matches the predicate
+            // will not be returned.
+            let files = self.index.get_files(predicate.clone())?;
 
-        let object_store_url = ObjectStoreUrl::parse("file://")?;
-        let source =
-            Arc::new(ParquetSource::new(self.schema()).with_predicate(predicate));
-        let mut file_scan_config_builder =
-            FileScanConfigBuilder::new(object_store_url, source)
-                .with_projection_indices(projection.map(|p| p.to_vec()))?
-                .with_limit(limit);
+            let object_store_url = ObjectStoreUrl::parse("file://")?;
+            let source =
+                Arc::new(ParquetSource::new(self.schema()).with_predicate(predicate));
+            let mut file_scan_config_builder =
+                FileScanConfigBuilder::new(object_store_url, source)
+                    .with_projection_indices(projection.map(|p| p.to_vec()))?
+                    .with_limit(limit);
 
-        // Transform to the format needed to pass to DataSourceExec
-        // Create one file group per file (default to scanning them all in parallel)
-        for (file_name, file_size) in files {
-            let path = self.dir.join(file_name);
-            let canonical_path = fs::canonicalize(path)?;
-            file_scan_config_builder = file_scan_config_builder.with_file(
-                PartitionedFile::new(canonical_path.display().to_string(), file_size),
-            );
-        }
-        Ok(DataSourceExec::from_data_source(
-            file_scan_config_builder.build(),
-        ))
+            // Transform to the format needed to pass to DataSourceExec
+            // Create one file group per file (default to scanning them all in parallel)
+            for (file_name, file_size) in files {
+                let path = self.dir.join(file_name);
+                let canonical_path = fs::canonicalize(path)?;
+                file_scan_config_builder = file_scan_config_builder.with_file(
+                    PartitionedFile::new(canonical_path.display().to_string(), file_size),
+                );
+            }
+            Ok(
+                DataSourceExec::from_data_source(file_scan_config_builder.build())
+                    as Arc<dyn ExecutionPlan>,
+            )
+        })
     }
 
     /// Tell DataFusion to push filters down to the scan method

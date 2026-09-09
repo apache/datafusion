@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use futures::future::BoxFuture;
 use std::process::Command;
 
 use rstest::rstest;
 
-use async_trait::async_trait;
 use insta::internals::SettingsBindDropGuard;
 use insta::{Settings, glob};
 use insta_cmd::{assert_cmd_snapshot, get_cargo_bin};
@@ -785,24 +785,25 @@ SELECT * from CARS LIMIT 1;
 }
 
 /// Extension trait to Add the minio connection information to a Command
-#[async_trait]
 trait MinioCommandExt {
-    async fn with_minio(&mut self, container: &ContainerAsync<minio::MinIO>)
-    -> &mut Self;
+    fn with_minio<'a>(
+        &'a mut self,
+        container: &'a ContainerAsync<minio::MinIO>,
+    ) -> BoxFuture<'a, &'a mut Self>;
 }
-
-#[async_trait]
 impl MinioCommandExt for Command {
-    async fn with_minio(
-        &mut self,
-        container: &ContainerAsync<minio::MinIO>,
-    ) -> &mut Self {
-        let port = container.get_host_port_ipv4(9000).await.unwrap();
+    fn with_minio<'a>(
+        &'a mut self,
+        container: &'a ContainerAsync<minio::MinIO>,
+    ) -> BoxFuture<'a, &'a mut Self> {
+        Box::pin(async move {
+            let port = container.get_host_port_ipv4(9000).await.unwrap();
 
-        self.env_clear()
-            .env("AWS_ACCESS_KEY_ID", "TEST-DataFusionLogin")
-            .env("AWS_SECRET_ACCESS_KEY", "TEST-DataFusionPassword")
-            .env("AWS_ENDPOINT", format!("http://localhost:{port}"))
-            .env("AWS_ALLOW_HTTP", "true")
+            self.env_clear()
+                .env("AWS_ACCESS_KEY_ID", "TEST-DataFusionLogin")
+                .env("AWS_SECRET_ACCESS_KEY", "TEST-DataFusionPassword")
+                .env("AWS_ENDPOINT", format!("http://localhost:{port}"))
+                .env("AWS_ALLOW_HTTP", "true")
+        })
     }
 }

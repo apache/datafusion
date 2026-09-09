@@ -23,11 +23,11 @@
 //! making network requests. This can be used for tasks like fetching
 //! data from an external API such as a LLM service or an external database.
 
+use futures::future::BoxFuture;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, BooleanArray, Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
-use async_trait::async_trait;
 use datafusion::assert_batches_eq;
 use datafusion::common::cast::as_string_view_array;
 use datafusion::common::error::Result;
@@ -181,7 +181,6 @@ impl ScalarUDFImpl for AskLLM {
 
 /// In addition to [`ScalarUDFImpl`], we also need to implement the
 /// [`AsyncScalarUDFImpl`] trait.
-#[async_trait]
 impl AsyncScalarUDFImpl for AskLLM {
     /// The `invoke_async_with_args` method is similar to `invoke_with_args`,
     /// but it returns a `Future` that resolves to the result.
@@ -191,44 +190,47 @@ impl AsyncScalarUDFImpl for AskLLM {
     /// is processing the query, so you may wish to make actual network requests
     /// on a different `Runtime`, as explained in the `thread_pools.rs` example
     /// in this directory.
-    async fn invoke_async_with_args(
-        &self,
+    fn invoke_async_with_args<'a>(
+        &'a self,
         args: ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
-        // in a real UDF you would likely want to special case constant
-        // arguments to improve performance, but this example converts the
-        // arguments to arrays for simplicity.
-        let args = ColumnarValue::values_to_arrays(&args.args)?;
-        let [content_column, question_column] = take_function_args(self.name(), args)?;
+    ) -> BoxFuture<'a, Result<ColumnarValue>> {
+        Box::pin(async move {
+            // in a real UDF you would likely want to special case constant
+            // arguments to improve performance, but this example converts the
+            // arguments to arrays for simplicity.
+            let args = ColumnarValue::values_to_arrays(&args.args)?;
+            let [content_column, question_column] =
+                take_function_args(self.name(), args)?;
 
-        // In a real function, you would use a library such as `reqwest` here to
-        // make an async HTTP request. Credentials and other configurations can
-        // be supplied via the `ConfigOptions` parameter.
+            // In a real function, you would use a library such as `reqwest` here to
+            // make an async HTTP request. Credentials and other configurations can
+            // be supplied via the `ConfigOptions` parameter.
 
-        // In this example, we will simulate the LLM response by comparing the two
-        // input arguments using some static strings
-        let content_column = as_string_view_array(&content_column)?;
-        let question_column = as_string_view_array(&question_column)?;
+            // In this example, we will simulate the LLM response by comparing the two
+            // input arguments using some static strings
+            let content_column = as_string_view_array(&content_column)?;
+            let question_column = as_string_view_array(&question_column)?;
 
-        let result_array: BooleanArray = content_column
-            .iter()
-            .zip(question_column.iter())
-            .map(|(a, b)| {
-                // If either value is null, return None
-                let a = a?;
-                let b = b?;
-                // Simulate an LLM response by checking the arguments to some
-                // hardcoded conditions.
-                if a.contains("cat") && b.contains("furry")
-                    || a.contains("dog") && b.contains("furry")
-                {
-                    Some(true)
-                } else {
-                    Some(false)
-                }
-            })
-            .collect();
+            let result_array: BooleanArray = content_column
+                .iter()
+                .zip(question_column.iter())
+                .map(|(a, b)| {
+                    // If either value is null, return None
+                    let a = a?;
+                    let b = b?;
+                    // Simulate an LLM response by checking the arguments to some
+                    // hardcoded conditions.
+                    if a.contains("cat") && b.contains("furry")
+                        || a.contains("dog") && b.contains("furry")
+                    {
+                        Some(true)
+                    } else {
+                        Some(false)
+                    }
+                })
+                .collect();
 
-        Ok(ColumnarValue::from(Arc::new(result_array) as ArrayRef))
+            Ok(ColumnarValue::from(Arc::new(result_array) as ArrayRef))
+        })
     }
 }
