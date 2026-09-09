@@ -96,6 +96,10 @@ criterion = { workspace = true, features = ["async_futures"] }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-window = { workspace = true }
 insta = { workspace = true }
+# Model checker for the hash join probe-completion protocol; see
+# joins/hash_join/probe_completion.rs. Test-only, so it stays out of the
+# dependency tree of anything that links DataFusion.
+loom = { workspace = true }
 rand = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = "0.7.0"

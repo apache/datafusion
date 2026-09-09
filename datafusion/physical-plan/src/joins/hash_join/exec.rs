@@ -18,7 +18,6 @@
 use std::collections::HashSet;
 use std::fmt;
 use std::mem::size_of;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::vec;
 
@@ -33,6 +32,7 @@ use crate::filter_pushdown::{
 use crate::joins::Map;
 use crate::joins::array_map::ArrayMap;
 use crate::joins::hash_join::inlist_builder::build_struct_inlist_values;
+use crate::joins::hash_join::probe_completion::{ProbeCompletion, ProbeSideSummary};
 use crate::joins::hash_join::shared_bounds::{
     ColumnBounds, PartitionBounds, PushdownStrategy, SharedBuildAccumulator,
 };
@@ -293,9 +293,9 @@ pub(super) struct JoinLeftData {
     visited_indices_bitmap: SharedBitmapBuilder,
     /// Shared bitmap builder for null marks
     null_indices_bitmap: SharedBitmapBuilder,
-    /// Counter of running probe-threads, potentially
-    /// able to update `visited_indices_bitmap`
-    probe_threads_counter: AtomicUsize,
+    /// Tracks which probe partition finishes last and what the partitions
+    /// collectively saw. See [`ProbeCompletion`] for the invariant it upholds.
+    probe_completion: ProbeCompletion,
     /// We need to keep this field to maintain accurate memory accounting, even though we don't directly use it.
     /// Without holding onto this reservation, the recorded memory usage would become inconsistent with actual usage.
     /// This could hide potential out-of-memory issues, especially when upstream operators increase their memory consumption.
@@ -308,16 +308,6 @@ pub(super) struct JoinLeftData {
     /// Membership testing strategy for filter pushdown
     /// Contains either InList values for small build sides or hash table reference for large build sides
     pub(super) membership: PushdownStrategy,
-    /// Shared flag set once any probe partition saw a row (null-aware anti/mark joins).
-    ///
-    /// Private on purpose: the final stage must read it through
-    /// [`Self::report_probe_completed`], which orders it after every
-    /// partition's stores.
-    probe_side_non_empty: AtomicBool,
-    /// Shared flag set once any probe partition saw a NULL join key (null-aware anti/mark joins).
-    /// Private for the same reason as `probe_side_non_empty`.
-    probe_side_has_null: AtomicBool,
-
     // For RightAnti joins, where the build side is a smaller subquery, truthy if has null for the single join key
     pub(super) build_side_has_null: bool,
 }
@@ -380,14 +370,7 @@ impl JoinLeftData {
     /// Records what a probe partition saw in one batch, for the null-aware
     /// rules evaluated in the final stage.
     pub(super) fn record_probe_batch(&self, non_empty: bool, has_null: bool) {
-        // Relaxed is enough: `report_probe_completed` orders these stores
-        // before the last partition's reads.
-        if non_empty {
-            self.probe_side_non_empty.store(true, Ordering::Relaxed);
-        }
-        if has_null {
-            self.probe_side_has_null.store(true, Ordering::Relaxed);
-        }
+        self.probe_completion.record_batch(non_empty, has_null);
     }
 
     /// Whether some probe partition has already recorded a NULL join key.
@@ -396,35 +379,18 @@ impl JoinLeftData {
     /// partitions. Final-stage decisions must use the [`ProbeSideSummary`]
     /// returned by [`Self::report_probe_completed`] instead.
     pub(super) fn probe_side_has_null_hint(&self) -> bool {
-        self.probe_side_has_null.load(Ordering::Relaxed)
+        self.probe_completion.saw_null_key_hint()
     }
 
-    /// Decrements the counter of running probe partitions. Returns `Some` for
-    /// the last one, together with the shared probe-side flags.
+    /// Marks this probe partition as finished, returning `Some` for the last
+    /// one together with what every partition saw.
     ///
-    /// This is the synchronization point between probe partitions: the
-    /// `AcqRel` decrement publishes everything a finishing partition wrote to
-    /// the last partition, and the summary is read only after it. Handing the
-    /// flags out here, rather than exposing them, keeps the final stage from
-    /// reading them before its own decrement, which could miss a NULL that a
-    /// sibling partition records between the read and the decrement.
+    /// The summary is reachable only through this call, which is what stops
+    /// the final stage from reading the shared flags before its own
+    /// decrement. See [`ProbeCompletion`] for why that ordering matters.
     pub(super) fn report_probe_completed(&self) -> Option<ProbeSideSummary> {
-        let is_last = self.probe_threads_counter.fetch_sub(1, Ordering::AcqRel) == 1;
-        is_last.then(|| ProbeSideSummary {
-            has_null: self.probe_side_has_null.load(Ordering::Relaxed),
-            non_empty: self.probe_side_non_empty.load(Ordering::Relaxed),
-        })
+        self.probe_completion.report_completed()
     }
-}
-
-/// What every probe partition together saw, as observed by the last partition
-/// to finish. Only obtainable from [`JoinLeftData::report_probe_completed`].
-#[derive(Debug, Clone, Copy)]
-pub(super) struct ProbeSideSummary {
-    /// Some probe partition saw a row.
-    pub(super) non_empty: bool,
-    /// Some probe partition saw a NULL join key.
-    pub(super) has_null: bool,
 }
 
 /// Helps to build [`HashJoinExec`].
@@ -3024,12 +2990,10 @@ async fn collect_left_input(
         values: left_values,
         visited_indices_bitmap: Mutex::new(visited_indices_bitmap),
         null_indices_bitmap: Mutex::new(null_indices_bitmap),
-        probe_threads_counter: AtomicUsize::new(probe_threads_count),
+        probe_completion: ProbeCompletion::new(probe_threads_count),
         _reservation: reservation,
         bounds,
         membership,
-        probe_side_non_empty: AtomicBool::new(false),
-        probe_side_has_null: AtomicBool::new(false),
         build_side_has_null: build_has_null,
     };
 
@@ -7458,8 +7422,13 @@ mod tests {
     ///
     /// `CollectLeft` with several probe partitions is what the planner
     /// produces for `NOT IN`, and only the last partition to finish emits the
-    /// build rows, reading the shared NULL flag set by its siblings. Both
-    /// finishing orders must produce no rows.
+    /// build rows, reading what its siblings recorded. Both finishing orders
+    /// must produce no rows.
+    ///
+    /// These partitions are drained sequentially, so this covers the
+    /// cross-partition plumbing, not the concurrent race that motivated
+    /// [`ProbeCompletion`]. The interleavings are model-checked in
+    /// `probe_completion::loom_tests` instead.
     #[apply(hash_join_exec_configs)]
     #[tokio::test]
     async fn test_null_aware_anti_join_probe_null_in_other_partition(
@@ -7505,6 +7474,8 @@ mod tests {
     /// [`test_null_aware_anti_join_probe_null_in_other_partition`]: an
     /// unmatched build row must get an UNKNOWN (NULL) mark when the NULL probe
     /// key was seen by a sibling partition, whichever partition finishes last.
+    ///
+    /// Sequentially drained, with the same caveat as that test.
     #[apply(hash_join_exec_configs)]
     #[tokio::test]
     async fn test_null_aware_left_mark_probe_null_in_other_partition(
