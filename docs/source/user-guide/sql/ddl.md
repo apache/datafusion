@@ -35,6 +35,58 @@ CREATE DATABASE [ IF NOT EXISTS ] <i><b>catalog</i></b>
 CREATE DATABASE cat;
 ```
 
+## CREATE EXTERNAL CATALOG
+
+`CREATE EXTERNAL CATALOG` registers a catalog built by a registered
+[`CatalogProviderFactory`], such as a catalog backed by a remote catalog
+service (for example, an Iceberg REST catalog), so that it can be queried
+alongside DataFusion's built-in catalogs. A `CatalogProviderFactory` must
+first be registered on the `SessionState` with a key matching the
+`STORED AS` clause below — see the [Catalog Provider Factories] section of
+the Library User Guide for how to implement and register one.
+
+The supported syntax is:
+
+```sql
+CREATE [OR REPLACE] EXTERNAL CATALOG
+[ IF NOT EXISTS ]
+<catalog_name>
+STORED AS <catalog_type>
+[ LOCATION <literal> ]
+[ OPTIONS (<key_value_list>) ]
+
+<key_value_list> := (<literal> <literal>, <literal> <literal>, ...)
+```
+
+`catalog_type` identifies which registered `CatalogProviderFactory` to
+invoke; it is looked up the same way `file_type` is for
+[`CREATE EXTERNAL TABLE`](#create-external-table).
+
+```sql
+CREATE EXTERNAL CATALOG my_catalog
+STORED AS ICEBERG
+LOCATION 's3://bucket/warehouse'
+OPTIONS ('catalog.uri' 'http://rest-catalog:8181', 'warehouse' 'my_catalog');
+```
+
+[`catalogproviderfactory`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.CatalogProviderFactory.html
+[catalog provider factories]: ../../library-user-guide/catalogs.md#catalog-provider-factories
+
+## DROP CATALOG
+
+Removes a catalog previously registered with `CREATE EXTERNAL CATALOG` from
+DataFusion's catalog list.
+
+<pre>
+DROP CATALOG [ IF EXISTS ] <b><i>catalog_name</i></b>;
+</pre>
+
+```sql
+DROP CATALOG my_catalog;
+-- or use 'if exists' to silently ignore if the catalog doesn't exist
+DROP CATALOG IF EXISTS nonexistent_catalog;
+```
+
 ## CREATE SCHEMA
 
 Create schema under specified catalog, or the default DataFusion catalog if not specified.

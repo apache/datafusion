@@ -15,10 +15,34 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use async_trait::async_trait;
+use datafusion::catalog::{
+    CatalogProvider, CatalogProviderFactory, MemoryCatalogProvider,
+};
 use datafusion::execution::session_state::SessionStateBuilder;
+use datafusion::logical_expr::CreateExternalCatalog;
 use datafusion::test_util::TestTableFactory;
+use datafusion_catalog::Session;
+use datafusion_common::exec_err;
 
 use super::*;
+
+#[derive(Debug)]
+struct TestCatalogFactory {}
+
+#[async_trait]
+impl CatalogProviderFactory for TestCatalogFactory {
+    async fn create(
+        &self,
+        _state: &dyn Session,
+        cmd: &CreateExternalCatalog,
+    ) -> Result<Arc<dyn CatalogProvider>> {
+        if cmd.options.contains_key("fail") {
+            return exec_err!("catalog factory configured to fail");
+        }
+        Ok(Arc::new(MemoryCatalogProvider::new()))
+    }
+}
 
 #[tokio::test]
 async fn create_custom_table() -> Result<()> {
@@ -86,6 +110,108 @@ async fn create_drop_table() -> Result<()> {
 
     let exists = schema.table_exist("dt");
     assert!(!exists, "Table should have been dropped!");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_external_catalog_with_factory() -> Result<()> {
+    let mut state = SessionStateBuilder::new().with_default_features().build();
+    state
+        .catalog_factories_mut()
+        .insert("TESTCATALOG".to_string(), Arc::new(TestCatalogFactory {}));
+    let ctx = SessionContext::new_with_state(state);
+
+    let sql = "CREATE EXTERNAL CATALOG cat STORED AS TESTCATALOG LOCATION 's3://bucket/warehouse' OPTIONS ('warehouse' 'cat')";
+    ctx.sql(sql).await?;
+
+    assert!(
+        ctx.catalog("cat").is_some(),
+        "Catalog should have been created!"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_external_catalog_unknown_factory() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "CREATE EXTERNAL CATALOG cat STORED AS TESTCATALOG LOCATION 's3://bucket/warehouse'";
+    let err = ctx.sql(sql).await.unwrap_err();
+    assert_contains!(
+        err.to_string(),
+        "Unable to find catalog factory for TESTCATALOG"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_external_catalog_factory_error_not_registered() -> Result<()> {
+    let mut state = SessionStateBuilder::new().with_default_features().build();
+    state
+        .catalog_factories_mut()
+        .insert("TESTCATALOG".to_string(), Arc::new(TestCatalogFactory {}));
+    let ctx = SessionContext::new_with_state(state);
+
+    let sql = "CREATE EXTERNAL CATALOG cat STORED AS TESTCATALOG LOCATION 's3://x' OPTIONS ('fail' 'true')";
+    let err = ctx.sql(sql).await.unwrap_err();
+    assert_contains!(err.to_string(), "catalog factory configured to fail");
+    assert!(
+        ctx.catalog("cat").is_none(),
+        "Catalog should not have been registered when the factory errors"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_external_catalog_if_not_exists() -> Result<()> {
+    let mut state = SessionStateBuilder::new().with_default_features().build();
+    state
+        .catalog_factories_mut()
+        .insert("TESTCATALOG".to_string(), Arc::new(TestCatalogFactory {}));
+    let ctx = SessionContext::new_with_state(state);
+
+    let sql = "CREATE EXTERNAL CATALOG cat STORED AS TESTCATALOG LOCATION 's3://x'";
+    ctx.sql(sql).await?;
+
+    // creating it again without IF NOT EXISTS should fail
+    let err = ctx.sql(sql).await.unwrap_err();
+    assert_contains!(err.to_string(), "already exists");
+
+    // ... but should succeed with IF NOT EXISTS
+    let sql = "CREATE EXTERNAL CATALOG IF NOT EXISTS cat STORED AS TESTCATALOG LOCATION 's3://x'";
+    ctx.sql(sql).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_drop_external_catalog() -> Result<()> {
+    let mut state = SessionStateBuilder::new().with_default_features().build();
+    state
+        .catalog_factories_mut()
+        .insert("TESTCATALOG".to_string(), Arc::new(TestCatalogFactory {}));
+    let ctx = SessionContext::new_with_state(state);
+
+    let sql = "CREATE EXTERNAL CATALOG cat STORED AS TESTCATALOG LOCATION 's3://x'";
+    ctx.sql(sql).await?;
+    assert!(ctx.catalog("cat").is_some());
+
+    ctx.sql("DROP EXTERNAL CATALOG cat").await?;
+    assert!(
+        ctx.catalog("cat").is_none(),
+        "Catalog should have been dropped!"
+    );
+
+    // dropping again should fail without IF EXISTS
+    let err = ctx.sql("DROP EXTERNAL CATALOG cat").await.unwrap_err();
+    assert_contains!(err.to_string(), "doesn't exist");
+
+    // ... but should succeed with IF EXISTS
+    ctx.sql("DROP EXTERNAL CATALOG IF EXISTS cat").await?;
 
     Ok(())
 }

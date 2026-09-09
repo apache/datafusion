@@ -32,9 +32,10 @@ pub use builder::{
     union, wrap_projection_for_join_if_necessary,
 };
 pub use ddl::{
-    CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateFunction,
-    CreateFunctionBody, CreateIndex, CreateMemoryTable, CreateView, DdlStatement,
-    DropCatalogSchema, DropFunction, DropTable, DropView, OperateFunctionArg,
+    CreateCatalog, CreateCatalogSchema, CreateExternalCatalog, CreateExternalTable,
+    CreateFunction, CreateFunctionBody, CreateIndex, CreateMemoryTable, CreateView,
+    DdlStatement, DropCatalog, DropCatalogSchema, DropFunction, DropTable, DropView,
+    OperateFunctionArg,
 };
 pub use dml::{
     DmlStatement, MergeIntoAction, MergeIntoClause, MergeIntoClauseKind, MergeIntoOp,

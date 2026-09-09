@@ -2137,6 +2137,12 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(_)) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DropCatalogSchema",
             )),
+            LogicalPlan::Ddl(DdlStatement::CreateExternalCatalog(_)) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for CreateExternalCatalog",
+            )),
+            LogicalPlan::Ddl(DdlStatement::DropCatalog(_)) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for DropCatalog",
+            )),
             LogicalPlan::Ddl(DdlStatement::CreateFunction(_)) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for CreateFunction",
             )),
