@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt::Write as _;
 use std::sync::{Arc, LazyLock};
 
 use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef};
@@ -117,9 +118,9 @@ fn query2() -> String {
             query.push_str(", ");
         }
         if (i / 2) % 2 == 0 {
-            query.push_str(&format!("t.{}", col_name(i)));
+            write!(query, "t.{}", col_name(i)).ok();
         } else {
-            query.push_str(&format!("v.{}", col_name(i)));
+            write!(query, "v.{}", col_name(i)).ok();
         }
     }
     query.push_str(" FROM t JOIN v ON t.x_0 = v.x_0 WHERE ");

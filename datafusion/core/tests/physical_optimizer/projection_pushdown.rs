@@ -49,8 +49,8 @@ use datafusion_physical_plan::coop::CooperativeExec;
 use datafusion_physical_plan::filter::{FilterExec, FilterExecBuilder};
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion_physical_plan::joins::{
-    HashJoinExec, NestedLoopJoinExec, PartitionMode, StreamJoinPartitionMode,
-    SymmetricHashJoinExec,
+    HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
+    StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr, update_expr};
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -812,7 +812,7 @@ fn test_output_req_after_projection() -> Result<()> {
         );
     } else {
         panic!("Expected KeyPartitioned distribution!");
-    };
+    }
 
     Ok(())
 }
@@ -1870,6 +1870,49 @@ fn test_filter_with_embedded_projection_after_renaming_projection() -> Result<()
         @r"
     FilterExec: y@1 > 10
       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a@0 as x, b@1 as y], file_type=csv, has_header=false
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_sort_merge_join_interleaved_projection_embeds() -> Result<()> {
+    // SELECT t1.c, t2.c, t1.a FROM t1 JOIN t2 ON t1.b = t2.c
+    // Taking a column from each side in turn leaves the sides interleaved, which
+    // cannot be pushed into the children, so the join applies it itself.
+    let join = Arc::new(SortMergeJoinExec::try_new(
+        create_simple_csv_exec(),
+        create_simple_csv_exec(),
+        vec![(Arc::new(Column::new("b", 1)), Arc::new(Column::new("c", 2)))],
+        None,
+        JoinType::Inner,
+        vec![SortOptions::default()],
+        NullEquality::NullEqualsNothing,
+    )?);
+    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+        vec![
+            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c_from_left"),
+            ProjectionExpr::new(Arc::new(Column::new("c", 7)), "c_from_right"),
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a_from_left"),
+        ],
+        join,
+    )?);
+
+    let after_optimize =
+        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+    let actual = displayable(after_optimize.as_ref())
+        .indent(true)
+        .to_string()
+        .trim()
+        .to_string();
+    assert_snapshot!(
+        actual,
+        @r"
+    ProjectionExec: expr=[c@0 as c_from_left, c@1 as c_from_right, a@2 as a_from_left]
+      SortMergeJoinExec: join_type=Inner, on=[(b@1, c@2)], projection=[c@2, c@7, a@0]
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
     "
     );
 

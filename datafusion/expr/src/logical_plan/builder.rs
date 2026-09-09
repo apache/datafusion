@@ -31,20 +31,22 @@ use crate::expr_rewriter::{
     rewrite_sort_cols_by_aggs,
 };
 use crate::logical_plan::{
-    Aggregate, Analyze, Distinct, DistinctOn, EmptyRelation, Explain, Filter, Join,
-    JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare,
-    Projection, Repartition, Sort, SubqueryAlias, TableScanBuilder, Union, Unnest,
-    Values, Window,
+    Aggregate, Analyze, AsOfJoin, AsOfMatch, Distinct, DistinctOn, EmptyRelation,
+    Explain, Filter, Join, JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning,
+    PlanType, Prepare, Projection, Repartition, Sort, SubqueryAlias, TableScanBuilder,
+    Union, Unnest, Values, Window,
 };
 use crate::select_expr::SelectExpr;
 use crate::utils::{
-    can_hash, columnize_expr, compare_sort_expr, expand_qualified_wildcard,
-    expand_wildcard, expr_to_columns, find_valid_equijoin_key_pair,
-    group_window_expr_by_sort_keys,
+    can_hash, check_all_columns_from_schema, columnize_expr, compare_sort_expr,
+    expand_qualified_wildcard, expand_wildcard, expr_to_columns,
+    find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
+    split_conjunction_owned,
 };
 use crate::{
-    DmlStatement, ExplainOption, Expr, ExprSchemable, Operator, RecursiveQuery,
-    Statement, TableProviderFilterPushDown, TableSource, WriteOp, and, binary_expr, lit,
+    BinaryExpr, DmlStatement, ExplainOption, Expr, ExprSchemable, Operator,
+    RecursiveQuery, Statement, TableProviderFilterPushDown, TableSource, WriteOp, and,
+    binary_expr, lit,
 };
 
 use super::dml::InsertOp;
@@ -1007,6 +1009,128 @@ impl LogicalPlanBuilder {
         )
     }
 
+    /// Apply a left-preserving ASOF join using an optional equality condition
+    /// and one ordered match condition.
+    ///
+    /// When present, `on_expr` must contain equality comparisons combined with
+    /// `AND`. Each comparison must have one operand that references only the
+    /// left input and one that references only `right`; their order does not
+    /// matter. `match_condition` must be a single `<`, `<=`, `>`, or `>=`
+    /// comparison whose left operand references only the left input and whose
+    /// right operand references only `right`.
+    pub fn asof_join_on(
+        self,
+        right: LogicalPlan,
+        on_expr: Option<Expr>,
+        match_condition: Expr,
+    ) -> Result<Self> {
+        let on = on_expr
+            .into_iter()
+            .flat_map(split_conjunction_owned)
+            .map(|predicate| {
+                let Expr::BinaryExpr(BinaryExpr {
+                    left,
+                    op: Operator::Eq,
+                    right: right_expr,
+                }) = predicate
+                else {
+                    return plan_err!(
+                        "ASOF ON accepts only equality conditions combined with AND"
+                    );
+                };
+                find_valid_equijoin_key_pair(
+                    &left,
+                    &right_expr,
+                    self.plan.schema(),
+                    right.schema(),
+                )?
+                .ok_or_else(|| {
+                    plan_datafusion_err!(
+                        "Each ASOF equality condition must compare one left expression with one right expression"
+                    )
+                })
+            })
+            .collect::<Result<_>>()?;
+        self.asof_join_with_constraint(
+            right,
+            on,
+            AsOfMatch::try_from(match_condition)?,
+            JoinConstraint::On,
+        )
+    }
+
+    /// Apply a left-preserving ASOF join using `USING` equality keys and one
+    /// ordered match condition.
+    ///
+    /// Every key in `using_keys` must resolve in both inputs.
+    /// `match_condition` follows the same operand and operator requirements as
+    /// [`asof_join_on`](Self::asof_join_on).
+    pub fn asof_join_using(
+        self,
+        right: LogicalPlan,
+        using_keys: Vec<Column>,
+        match_condition: Expr,
+    ) -> Result<Self> {
+        let on = using_keys
+            .into_iter()
+            .map(|key| {
+                let left = Self::normalize(&self.plan, key.clone())?;
+                let right = Self::normalize(&right, key)?;
+                Ok((Expr::Column(left), Expr::Column(right)))
+            })
+            .collect::<Result<_>>()?;
+        self.asof_join_with_constraint(
+            right,
+            on,
+            AsOfMatch::try_from(match_condition)?,
+            JoinConstraint::Using,
+        )
+    }
+
+    fn asof_join_with_constraint(
+        self,
+        right: LogicalPlan,
+        on: Vec<(Expr, Expr)>,
+        match_condition: AsOfMatch,
+        join_constraint: JoinConstraint,
+    ) -> Result<Self> {
+        let left_columns = match_condition.left.column_refs();
+        let right_columns = match_condition.right.column_refs();
+        if left_columns.is_empty()
+            || right_columns.is_empty()
+            || !check_all_columns_from_schema(&left_columns, self.plan.schema())?
+            || !check_all_columns_from_schema(&right_columns, right.schema())?
+        {
+            return plan_err!(
+                "ASOF MATCH_CONDITION left operand must reference only the left input and right operand only the right input"
+            );
+        }
+        let normalize = |expr, schema: &DFSchema| {
+            normalize_col_with_schemas_and_ambiguity_check(expr, &[&[schema]], &[])
+        };
+        let on = on
+            .into_iter()
+            .map(|(left, right_expr)| {
+                Ok((
+                    normalize(left, self.plan.schema())?,
+                    normalize(right_expr, right.schema())?,
+                ))
+            })
+            .collect::<Result<_>>()?;
+        let match_condition = AsOfMatch {
+            left: normalize(match_condition.left, self.plan.schema())?,
+            op: match_condition.op,
+            right: normalize(match_condition.right, right.schema())?,
+        };
+        Ok(Self::new(LogicalPlan::AsOfJoin(AsOfJoin::try_new(
+            self.plan,
+            Arc::new(right),
+            on,
+            match_condition,
+            join_constraint,
+        )?)))
+    }
+
     pub(crate) fn normalize(plan: &LogicalPlan, column: Column) -> Result<Column> {
         if column.relation.is_some() {
             // column is already normalized
@@ -1423,28 +1547,19 @@ impl LogicalPlanBuilder {
                 )
             })
             .unzip();
-        if is_all {
-            LogicalPlanBuilder::from(left_plan)
-                .join_detailed(
-                    right_plan,
-                    join_type,
-                    join_keys,
-                    None,
-                    NullEquality::NullEqualsNull,
-                )?
-                .build()
-        } else {
-            LogicalPlanBuilder::from(left_plan)
-                .distinct()?
-                .join_detailed(
-                    right_plan,
-                    join_type,
-                    join_keys,
-                    None,
-                    NullEquality::NullEqualsNull,
-                )?
-                .build()
+        let mut left_builder = LogicalPlanBuilder::from(left_plan);
+        if !is_all {
+            left_builder = left_builder.distinct()?;
         }
+        left_builder
+            .join_detailed(
+                right_plan,
+                join_type,
+                join_keys,
+                None,
+                NullEquality::NullEqualsNull,
+            )?
+            .build()
     }
 
     /// Build the plan
@@ -1666,7 +1781,9 @@ fn mark_field(schema: &DFSchema) -> (Option<TableReference>, Arc<Field>) {
 
     (
         table_reference,
-        Arc::new(Field::new("mark", DataType::Boolean, false)),
+        // Nullable: null-aware `LeftMark` joins use NULL to represent SQL
+        // UNKNOWN for `NOT IN`. Other mark joins simply never produce a NULL.
+        Arc::new(Field::new("mark", DataType::Boolean, true)),
     )
 }
 
@@ -1774,6 +1891,14 @@ pub fn build_join_schema(
 
     let dfschema = DFSchema::new_with_metadata(qualified_fields, metadata)?;
     dfschema.with_functional_dependencies(func_dependencies)
+}
+
+/// Creates the schema for a left-preserving ASOF join.
+///
+/// Both `ON` and `USING` preserve all qualified input fields. SQL wildcard
+/// expansion handles the unqualified `USING` key as a single column.
+pub fn build_asof_join_schema(left: &DFSchema, right: &DFSchema) -> Result<DFSchema> {
+    build_join_schema(left, right, &JoinType::Left)
 }
 
 /// (Re)qualify the sides of a join if needed, i.e. if the columns from one side would otherwise
@@ -2838,6 +2963,70 @@ mod tests {
             SubqueryAlias: right
               Values: (Int32(1))
         ");
+
+        Ok(())
+    }
+
+    #[test]
+    fn asof_join_on_extracts_and_validates_conditions() -> Result<()> {
+        let values = vec![vec![lit(1), lit(2)]];
+        let left = LogicalPlanBuilder::values(values.clone())?
+            .alias("l")?
+            .build()?;
+        let right = LogicalPlanBuilder::values(values)?.alias("r")?.build()?;
+
+        let plan = LogicalPlanBuilder::from(left.clone())
+            .asof_join_on(
+                right.clone(),
+                Some(
+                    col("r.column1")
+                        .eq(col("l.column1"))
+                        .and(col("l.column2").eq(col("r.column2"))),
+                ),
+                col("l.column2").gt_eq(col("r.column2")),
+            )?
+            .build()?;
+        let LogicalPlan::AsOfJoin(join) = plan else {
+            panic!("expected ASOF join")
+        };
+        assert_eq!(
+            join.on,
+            vec![
+                (col("l.column1"), col("r.column1")),
+                (col("l.column2"), col("r.column2")),
+            ]
+        );
+        assert_eq!(
+            join.match_condition.as_ref(),
+            &AsOfMatch::new(col("l.column2"), Operator::GtEq, col("r.column2"))
+        );
+
+        let invalid_on = LogicalPlanBuilder::from(left.clone())
+            .asof_join_on(
+                right.clone(),
+                Some(col("l.column1").gt(col("r.column1"))),
+                col("l.column2").gt_eq(col("r.column2")),
+            )
+            .expect_err("non-equality ASOF ON should fail");
+        assert_snapshot!(invalid_on.strip_backtrace(), @r#"Error during planning: ASOF ON accepts only equality conditions combined with AND"#);
+
+        let invalid_match = LogicalPlanBuilder::from(left.clone())
+            .asof_join_on(
+                right.clone(),
+                Some(col("l.column1").eq(col("r.column1"))),
+                col("l.column2").eq(col("r.column2")),
+            )
+            .expect_err("equality ASOF MATCH_CONDITION should fail");
+        assert_snapshot!(invalid_match.strip_backtrace(), @r#"Error during planning: ASOF MATCH_CONDITION requires <, <=, >, or >=, found ="#);
+
+        let reversed_match = LogicalPlanBuilder::from(left)
+            .asof_join_on(
+                right,
+                Some(col("l.column1").eq(col("r.column1"))),
+                col("r.column2").gt_eq(col("l.column2")),
+            )
+            .expect_err("reversed ASOF MATCH_CONDITION should fail");
+        assert_snapshot!(reversed_match.strip_backtrace(), @r#"Error during planning: ASOF MATCH_CONDITION left operand must reference only the left input and right operand only the right input"#);
 
         Ok(())
     }

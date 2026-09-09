@@ -135,7 +135,7 @@ impl TryFrom<ast::WindowFrame> for WindowFrame {
             && val.is_null()
         {
             plan_err!("Invalid window frame: end bound cannot be UNBOUNDED PRECEDING")?
-        };
+        }
 
         let units = value.units.into();
         Ok(Self::new_bounds(units, start_bound, end_bound))
@@ -475,7 +475,7 @@ pub enum WindowFrameUnits {
     Range,
     /// The GROUPS frame type means that the starting and ending boundaries are determine
     /// by counting "groups" relative to the current group. A "group" is a set of rows that all have
-    /// equivalent values for all all terms of the window ORDER BY clause.
+    /// equivalent values for all terms of the window ORDER BY clause.
     Groups,
 }
 

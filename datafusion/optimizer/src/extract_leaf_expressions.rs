@@ -57,6 +57,58 @@ fn has_extractable_expr(exprs: &[Expr]) -> bool {
     })
 }
 
+/// Returns the flat names of `plan`'s output columns whose defining expression
+/// is volatile (e.g. `random()`).
+///
+/// Only a [`LogicalPlan::Projection`] can define such a column: anywhere else
+/// the value has already been materialized by the projection that produced it,
+/// so referencing the column again does not re-evaluate anything.
+fn volatile_output_columns(plan: &LogicalPlan) -> BTreeSet<String> {
+    let LogicalPlan::Projection(projection) = plan else {
+        return BTreeSet::new();
+    };
+    projection
+        .schema
+        .iter()
+        .zip(projection.expr.iter())
+        .filter(|(_, expr)| expr.is_volatile())
+        .map(|((qualifier, field), _)| Column::from((qualifier, field)).flat_name())
+        .collect()
+}
+
+/// Returns `true` if building an extraction projection for `exprs` on top of
+/// `input` would duplicate a volatile computation.
+///
+/// When `input` is already a projection, [`build_extraction_projection_impl`]
+/// *merges* into it: every column reference in an extracted expression is
+/// replaced by that column's defining expression (see
+/// [`build_projection_replace_map`]). Inlining a volatile definition makes the
+/// merged projection evaluate it a second, independent time, so the extracted
+/// value no longer matches the column it was derived from:
+///
+/// ```text
+/// Projection: s, get_field(s, 'a') AS field
+///   Projection: named_struct('a', random()) AS s
+/// ```
+///
+/// would merge into a single projection computing `random()` twice, and
+/// `field` would then differ from `s['a']` on every row. Callers skip the
+/// extraction instead.
+fn would_duplicate_volatile<'a>(
+    exprs: impl IntoIterator<Item = &'a Expr>,
+    input: &LogicalPlan,
+) -> bool {
+    let volatile = volatile_output_columns(input);
+    if volatile.is_empty() {
+        return false;
+    }
+    exprs.into_iter().any(|expr| {
+        expr.column_refs()
+            .iter()
+            .any(|col| volatile.contains(&col.flat_name()))
+    })
+}
+
 /// Extracts `MoveTowardsLeafNodes` sub-expressions from non-projection nodes
 /// into **extraction projections** (pass 1 of 2).
 ///
@@ -134,15 +186,19 @@ impl OptimizerRule for ExtractLeafExpressions {
     }
 }
 
-/// Scans the current plan node's expressions for pre-existing
-/// `__datafusion_extracted_N` aliases and advances the generator
-/// counter past them to avoid collisions with user-provided aliases.
+/// Scans the plan for pre-existing `__datafusion_extracted_N` aliases and
+/// advances the generator counter past them to avoid collisions with
+/// user-provided aliases.
+///
+/// Subquery plans nested inside expressions are scanned as well: extraction
+/// rewrites with `transform_down_with_subqueries`, so it can generate aliases
+/// *inside* a subquery and would otherwise collide with a user alias there.
 fn advance_generator_past_existing(
     plan: &LogicalPlan,
     alias_generator: &AliasGenerator,
 ) -> Result<()> {
-    plan.apply(|plan| {
-        plan.expressions().iter().try_for_each(|expr| {
+    plan.apply_with_subqueries(|plan| {
+        plan.apply_expressions(|expr| {
             expr.apply(|e| {
                 if let Expr::Alias(alias) = e
                     && let Some(id) = alias
@@ -154,10 +210,8 @@ fn advance_generator_past_existing(
                     alias_generator.update_min_id(id);
                 }
                 Ok(TreeNodeRecursion::Continue)
-            })?;
-            Ok::<(), datafusion_common::error::DataFusionError>(())
-        })?;
-        Ok(TreeNodeRecursion::Continue)
+            })
+        })
     })
     .map(|_| ())
 }
@@ -193,7 +247,18 @@ fn extract_from_plan(
     }
 
     // Fast pre-check: skip all allocations if no extractable expressions exist
-    if !has_extractable_expr(&plan.expressions()) {
+    let node_exprs = plan.expressions();
+    if !has_extractable_expr(&node_exprs) {
+        return Ok(Transformed::no(plan));
+    }
+
+    // The extraction projection is merged into an input that is already a
+    // projection, which inlines the referenced columns' definitions. Skip the
+    // extraction when that would duplicate a volatile computation.
+    if inputs
+        .iter()
+        .any(|input| would_duplicate_volatile(node_exprs.iter(), input))
+    {
         return Ok(Transformed::no(plan));
     }
 
@@ -915,6 +980,16 @@ fn split_and_push_projection(
         return Ok(None);
     }
 
+    // Pushing into an input that is already a projection merges into it and
+    // inlines the referenced columns' definitions. Leave the projection alone
+    // when that would duplicate a volatile computation.
+    if would_duplicate_volatile(
+        extraction_pairs.iter().map(|(expr, _)| expr),
+        input.as_ref(),
+    ) {
+        return Ok(None);
+    }
+
     // ── Phase 2: Push down ──────────────────────────────────────────────
     let proj_input = Arc::clone(&proj.input);
     let pushed = push_extraction_pairs(
@@ -1213,6 +1288,15 @@ fn try_push_into_inputs(
         if per_input[idx].pairs.is_empty() {
             new_inputs.push(input.clone());
         } else {
+            // Merging into an input projection inlines the referenced columns'
+            // definitions; bail out when that would duplicate a volatile
+            // computation.
+            if would_duplicate_volatile(
+                per_input[idx].pairs.iter().map(|(expr, _)| expr),
+                input,
+            ) {
+                return Ok(None);
+            }
             let input_arc = Arc::new(input.clone());
             let target_schema = Arc::clone(input.schema());
             let proj = build_extraction_projection_impl(
@@ -1268,7 +1352,7 @@ mod tests {
     use crate::{Optimizer, OptimizerContext};
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::{
-        ScalarUDF, col, lit, logical_plan::builder::LogicalPlanBuilder,
+        ScalarUDF, Volatility, col, lit, logical_plan::builder::LogicalPlanBuilder,
     };
 
     fn leaf_udf(expr: Expr, name: &str) -> Expr {
@@ -1278,6 +1362,19 @@ mod tests {
                     .with_placement(ExpressionPlacement::MoveTowardsLeafNodes),
             )),
             vec![expr, lit(name)],
+        ))
+    }
+
+    /// A stand-in for `random()`: a volatile expression that must be evaluated
+    /// exactly once per row.
+    fn volatile_udf(expr: Expr) -> Expr {
+        Expr::ScalarFunction(ScalarFunction::new_udf(
+            Arc::new(ScalarUDF::new_from_impl(
+                PlacementTestUDF::new()
+                    .with_placement(ExpressionPlacement::KeepInPlace)
+                    .with_volatility(Volatility::Volatile),
+            )),
+            vec![expr],
         ))
     }
 
@@ -1679,8 +1776,8 @@ mod tests {
     }
 
     /// Test: Projection with different field than Filter
-    /// SELECT id, s['label'] FROM t WHERE s['value'] > 150
-    /// Both s['label'] and s['value'] should be in a single extraction projection.
+    /// `SELECT id, s['label'] FROM t WHERE s['value'] > 150`
+    /// Both `s['label']` and `s['value']` should be in a single extraction projection.
     #[test]
     fn test_projection_different_field_from_filter() -> Result<()> {
         let table_scan = test_table_scan_with_struct()?;
@@ -1955,6 +2052,63 @@ mod tests {
         ## Optimized
         Projection: leaf_udf(test.user, Utf8("name"))
           TableScan: test projection=[user]
+        "#)
+    }
+
+    /// Merging an extraction into an input projection inlines the definition of
+    /// every column the extraction references. When that definition is volatile
+    /// the inlined copy is an independent evaluation, so the extraction must be
+    /// skipped and the plan left alone.
+    #[test]
+    fn test_no_merge_into_volatile_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![volatile_udf(col("a")).alias("v")])?
+            .project(vec![col("v"), leaf_udf(col("v"), "x")])?
+            .build()?;
+
+        assert_stages!(plan, @r#"
+        ## Original Plan
+        Projection: v, leaf_udf(v, Utf8("x"))
+          Projection: keep_in_place_udf(test.a) AS v
+            TableScan: test projection=[a]
+
+        ## After Extraction
+        (same as original)
+
+        ## After Pushdown
+        (same as after extraction)
+
+        ## Optimized
+        (same as after pushdown)
+        "#)
+    }
+
+    /// Same guard for pass 1: extracting out of a `Filter` whose input
+    /// projection defines the referenced column volatilely would make the
+    /// predicate test a second, independent evaluation.
+    #[test]
+    fn test_no_extraction_from_filter_over_volatile_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![volatile_udf(col("a")).alias("v")])?
+            .filter(leaf_udf(col("v"), "x").eq(lit(1u32)))?
+            .build()?;
+
+        assert_stages!(plan, @r#"
+        ## Original Plan
+        Filter: leaf_udf(v, Utf8("x")) = UInt32(1)
+          Projection: keep_in_place_udf(test.a) AS v
+            TableScan: test projection=[a]
+
+        ## After Extraction
+        (same as original)
+
+        ## After Pushdown
+        (same as after extraction)
+
+        ## Optimized
+        (same as after pushdown)
         "#)
     }
 
@@ -3251,6 +3405,32 @@ mod tests {
                       Projection: right.id, leaf_udf(right.user, Utf8("t")) AS __datafusion_extracted_2
                         TableScan: right projection=[id, user]
         "#);
+        Ok(())
+    }
+
+    /// Pre-existing `__datafusion_extracted_N` aliases must advance the alias
+    /// generator even when they live inside a subquery plan, since extraction
+    /// descends into subqueries and would otherwise reuse the same alias.
+    #[test]
+    fn test_advance_generator_past_alias_in_subquery() -> Result<()> {
+        use datafusion_expr::in_subquery;
+
+        let subquery = LogicalPlanBuilder::from(test_table_scan_with_struct()?)
+            .project(vec![
+                leaf_udf(col("user"), "name").alias("__datafusion_extracted_7"),
+            ])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(test_table_scan_with_struct_named("outer")?)
+            .filter(in_subquery(col("id"), Arc::new(subquery)))?
+            .build()?;
+
+        let alias_generator = AliasGenerator::new();
+        advance_generator_past_existing(&plan, &alias_generator)?;
+
+        assert_eq!(
+            alias_generator.next(EXTRACTED_EXPR_PREFIX),
+            "__datafusion_extracted_8"
+        );
         Ok(())
     }
 }

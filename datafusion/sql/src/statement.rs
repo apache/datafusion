@@ -1091,12 +1091,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     plan_err!(
                         "Inserts with a table alias not supported: {table_alias:?}"
                     )?
-                };
+                }
                 if let Some(priority) = priority {
                     plan_err!(
                         "Inserts with a `PRIORITY` clause not supported: {priority:?}"
                     )?
-                };
+                }
                 if insert_alias.is_some() {
                     plan_err!("Inserts with an alias not supported")?;
                 }
@@ -1305,10 +1305,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             } => {
                 if end {
                     return not_impl_err!("COMMIT AND END not supported");
-                };
+                }
                 if let Some(modifier) = modifier {
                     return not_impl_err!("COMMIT {modifier} not supported");
-                };
+                }
                 let statement = PlanStatement::TransactionEnd(TransactionEnd {
                     conclusion: TransactionConclusion::Commit,
                     chain,

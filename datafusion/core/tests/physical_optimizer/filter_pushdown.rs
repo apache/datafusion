@@ -66,6 +66,9 @@ use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
     coalesce_partitions::CoalescePartitionsExec,
     collect,
+    execution_plan::{
+        ChildrenPropertiesMode, ReplaceChildrenOptions, plan_contains_expression_id,
+    },
     filter::{FilterExec, FilterExecBuilder},
     joins::{HashJoinExec, PartitionMode},
     projection::ProjectionExec,
@@ -2964,29 +2967,12 @@ async fn test_hashjoin_hash_table_pushdown_collect_left() {
     );
 }
 
-// Not portable to sqllogictest: verifies whether the optimized probe-side plan
-// retains the HashJoinExec's dynamic filter expression. The with_support(false)
-// branch has no SQL analog because parquet supports filter pushdown.
+// Not portable to sqllogictest: verifies that the HashJoinExec only keeps its
+// dynamic filter when the optimized probe-side plan retains the expression, i.e.
+// when there is something to consume it. The with_support(false) branch has no
+// SQL analog because parquet supports filter pushdown.
 #[test]
-fn test_hashjoin_dynamic_filter_pushdown_is_used() {
-    fn contains_expression_id(plan: &Arc<dyn ExecutionPlan>, expression_id: u64) -> bool {
-        let mut found = false;
-        plan.apply(|node| {
-            node.apply_expressions(&mut |root| {
-                root.apply(|expr| {
-                    if expr.expression_id() == Some(expression_id) {
-                        found = true;
-                        Ok(TreeNodeRecursion::Stop)
-                    } else {
-                        Ok(TreeNodeRecursion::Continue)
-                    }
-                })
-            })
-        })
-        .unwrap();
-        found
-    }
-
+fn test_hashjoin_dynamic_filter_requires_probe_consumer() {
     for (probe_supports_pushdown, expected_consumer) in [(false, false), (true, true)] {
         let build_side_schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Utf8, false),
@@ -3050,18 +3036,197 @@ fn test_hashjoin_dynamic_filter_pushdown_is_used() {
             .downcast_ref::<HashJoinExec>()
             .expect("Plan should be HashJoinExec");
         let dynamic_filters = hash_join.dynamic_expressions_produced();
-        let expression_id = dynamic_filters
-            .first()
-            .expect("Dynamic filter should be created")
-            .expression_id()
-            .expect("Dynamic filters always have an expression ID");
 
+        // The join keeps a dynamic filter only if the pushdown left a consumer for it
+        // in the probe subtree. Otherwise it is dropped at planning time so that
+        // `execute` skips build side bounds accumulation entirely.
         assert_eq!(
-            contains_expression_id(hash_join.right(), expression_id),
-            expected_consumer,
-            "probe consumer should be {expected_consumer} when pushdown support is {probe_supports_pushdown}"
+            dynamic_filters.len(),
+            usize::from(expected_consumer),
+            "dynamic filter should {}be produced when pushdown support is {probe_supports_pushdown}",
+            if expected_consumer { "" } else { "not " }
         );
+
+        if let Some(dynamic_filter) = dynamic_filters.first() {
+            let expression_id = dynamic_filter
+                .expression_id()
+                .expect("Dynamic filters always have an expression ID");
+            assert!(
+                plan_contains_expression_id(hash_join.right(), expression_id).unwrap(),
+                "probe subtree should contain the dynamic filter it accepted"
+            );
+        }
     }
+}
+
+// Not portable to sqllogictest: stands in for a distributed planner that splits
+// an already-optimized plan into stages, leaving the HashJoinExec and the scan
+// consuming its dynamic filter on different workers. Whether to produce the
+// filter is decided during pushdown, so it has to survive the probe subtree
+// being swapped out afterwards.
+#[tokio::test]
+async fn test_hashjoin_dynamic_filter_survives_probe_subtree_replacement() {
+    let (build_side_schema, build_scan, probe_side_schema, probe_scan) =
+        hashjoin_pushdown_scans();
+
+    let on = vec![
+        (
+            col("a", &build_side_schema).unwrap(),
+            col("a", &probe_side_schema).unwrap(),
+        ),
+        (
+            col("b", &build_side_schema).unwrap(),
+            col("b", &probe_side_schema).unwrap(),
+        ),
+    ];
+    let plan = Arc::new(
+        HashJoinExec::try_new(
+            Arc::clone(&build_scan),
+            probe_scan,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    ) as Arc<dyn ExecutionPlan>;
+
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+
+    // The probe scan accepted the filter, so the join kept it.
+    assert_eq!(plan.dynamic_expressions_produced().len(), 1);
+
+    // Swap the probe subtree for one that does not hold the filter: in a real
+    // deployment the consumer ends up in another stage, on another worker, and is
+    // not reachable from this node at all.
+    let detached_probe = TestScanBuilder::new(Arc::clone(&probe_side_schema))
+        .with_support(true)
+        .with_batches(vec![
+            record_batch!(
+                ("a", Utf8, ["aa", "ab", "ac", "ad"]),
+                ("b", Utf8, ["ba", "bb", "bc", "bd"]),
+                ("e", Float64, [1.0, 2.0, 3.0, 4.0])
+            )
+            .unwrap(),
+        ])
+        .build();
+    let plan = plan
+        .replace_children(
+            vec![build_scan, detached_probe],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
+        .unwrap();
+    assert_eq!(plan.dynamic_expressions_produced().len(), 1);
+
+    let session_ctx =
+        SessionContext::new_with_config(SessionConfig::from(config).with_batch_size(10));
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    collect(Arc::clone(&plan), session_ctx.state().task_ctx())
+        .await
+        .unwrap();
+
+    // The build side bounds were still computed and published, so whatever holds
+    // the other end of this filter sees them.
+    let dynamic_filter = plan
+        .dynamic_expressions_produced()
+        .into_iter()
+        .next()
+        .expect("dynamic filter should be retained");
+    insta::assert_snapshot!(
+        format!("{dynamic_filter}"),
+        @"DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}, {c0:ab,c1:bb}]) ]",
+    );
+}
+
+// Not portable to sqllogictest: custom `PhysicalOptimizerRule`s are appended
+// after the built in ones, so a user rule runs after the Post phase
+// `FilterPushdown` that decides whether to keep the join's dynamic filter. Such a
+// rule can bring a consumer back by re-running the pushdown; there is nothing to
+// undo first, because a join with no consumer holds no dynamic filter.
+//
+// Re-running the Post phase is an already supported mode rather than something
+// this test invents: see `post_phase_is_idempotent_on_hash_join` below, added by
+// apache/datafusion#22523 because AQE (datafusion-ballista#1359) re-runs the
+// optimizer chain after every completed stage.
+#[test]
+fn test_hashjoin_dynamic_filter_recreated_when_pushdown_reruns() {
+    let (build_side_schema, build_scan, probe_side_schema, _) = hashjoin_pushdown_scans();
+
+    let probe_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab", "ac", "ad"]),
+            ("b", Utf8, ["ba", "bb", "bc", "bd"]),
+            ("e", Float64, [1.0, 2.0, 3.0, 4.0])
+        )
+        .unwrap(),
+    ];
+    let unsupported_probe = TestScanBuilder::new(Arc::clone(&probe_side_schema))
+        .with_support(false)
+        .with_batches(probe_batches.clone())
+        .build();
+
+    let on = vec![
+        (
+            col("a", &build_side_schema).unwrap(),
+            col("a", &probe_side_schema).unwrap(),
+        ),
+        (
+            col("b", &build_side_schema).unwrap(),
+            col("b", &probe_side_schema).unwrap(),
+        ),
+    ];
+    let plan = Arc::new(
+        HashJoinExec::try_new(
+            Arc::clone(&build_scan),
+            unsupported_probe,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    ) as Arc<dyn ExecutionPlan>;
+
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+
+    // Nothing in the probe side accepts the filter, so the join drops it.
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+    assert_eq!(plan.dynamic_expressions_produced().len(), 0);
+
+    // A later rule swaps in a probe side that does accept filters and re-runs the
+    // pushdown. The join creates a fresh filter and finds its consumer.
+    let supported_probe = TestScanBuilder::new(Arc::clone(&probe_side_schema))
+        .with_support(true)
+        .with_batches(probe_batches)
+        .build();
+    let plan = plan
+        .replace_children(
+            vec![build_scan, supported_probe],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
+        .unwrap();
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+    assert_eq!(plan.dynamic_expressions_produced().len(), 1);
 }
 
 /// Regression test for https://github.com/apache/datafusion/issues/20109.

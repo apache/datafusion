@@ -1,0 +1,13 @@
+# DENSE_RANK top-2, ~1K partitions, heavy ties. With 10 distinct ORDER BY values
+# the top-2 distinct values cover roughly a fifth of each partition, so this is
+# the heaviest surviving-row count on the sweep. See q09 on why the cast matters.
+
+subgroup window_sorted
+
+template sql_benchmarks/h2o/window_sorted.benchmark.template
+QPAD=15
+FN=DENSE_RANK
+PK_MOD=1000
+OB_EXPR=CAST(v2 AS BIGINT) % 10
+OB_BOUND=count(DISTINCT ob) = 10
+NAME=window_sorted_q15_dense_rank_1k_partitions_heavy_ties

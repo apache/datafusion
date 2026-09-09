@@ -58,6 +58,11 @@ SELECT date_part('QTR'::string, '2000-01-01'::date);
 ----
 1
 
+query I
+SELECT date_part('QUARTERS'::string, '2000-01-01'::date);
+----
+1
+
 # MONTH
 query I
 SELECT date_part('MONTH'::string, '2000-01-01'::date);
@@ -136,6 +141,11 @@ SELECT date_part('DOW_ISO'::string, '2000-01-01'::date);
 # DOY
 query I
 SELECT date_part('DOY'::string, '2000-01-01'::date);
+----
+1
+
+query I
+SELECT date_part('DAYOFYEAR'::string, '2000-01-01'::date);
 ----
 1
 

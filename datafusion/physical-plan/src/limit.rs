@@ -36,6 +36,8 @@ use crate::{
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::TreeNodeRecursion;
+#[cfg(feature = "proto")]
+use datafusion_common::utils::{usize_from_wire, usize_to_wire};
 use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_execution::TaskContext;
 
@@ -299,10 +301,10 @@ impl ExecutionPlan for GlobalLimitExec {
                 protobuf::physical_plan_node::PhysicalPlanType::GlobalLimit(Box::new(
                     protobuf::GlobalLimitExecNode {
                         input: Some(Box::new(input)),
-                        skip: *skip as u32,
+                        skip: usize_to_wire(*skip, "GlobalLimitExec", "skip")?,
                         fetch: match fetch {
-                            Some(n) => *n as i64,
-                            _ => -1, // no limit
+                            Some(n) => usize_to_wire(*n, "GlobalLimitExec", "fetch")?,
+                            None => -1, // no limit
                         },
                         required_ordering,
                     },
@@ -336,16 +338,15 @@ impl GlobalLimitExec {
         } = &**limit;
         let input =
             ctx.decode_required_child(input.as_deref(), "GlobalLimitExec", "input")?;
-        let fetch = if *fetch >= 0 {
-            Some(*fetch as usize)
-        } else {
-            None
-        };
+        let fetch = (*fetch >= 0)
+            .then(|| usize_from_wire(*fetch, "GlobalLimitExec", "fetch"))
+            .transpose()?;
         let required_ordering = optional_ordering_try_from_proto(
             required_ordering,
             &ctx.expr_ctx(input.schema().as_ref()),
         )?;
-        let mut exec = GlobalLimitExec::new(input, *skip as usize, fetch);
+        let skip = usize_from_wire(*skip, "GlobalLimitExec", "skip")?;
+        let mut exec = GlobalLimitExec::new(input, skip, fetch);
         exec.set_required_ordering(required_ordering);
         Ok(Arc::new(exec))
     }
@@ -575,7 +576,7 @@ impl ExecutionPlan for LocalLimitExec {
                 protobuf::physical_plan_node::PhysicalPlanType::LocalLimit(Box::new(
                     protobuf::LocalLimitExecNode {
                         input: Some(Box::new(input)),
-                        fetch: *fetch as u32,
+                        fetch: usize_to_wire(*fetch, "LocalLimitExec", "fetch")?,
                         required_ordering,
                     },
                 )),
@@ -610,7 +611,8 @@ impl LocalLimitExec {
             required_ordering,
             &ctx.expr_ctx(input.schema().as_ref()),
         )?;
-        let mut exec = LocalLimitExec::new(input, *fetch as usize);
+        let fetch = usize_from_wire(*fetch, "LocalLimitExec", "fetch")?;
+        let mut exec = LocalLimitExec::new(input, fetch);
         exec.set_required_ordering(required_ordering);
         Ok(Arc::new(exec))
     }

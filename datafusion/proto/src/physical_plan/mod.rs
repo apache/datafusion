@@ -23,8 +23,10 @@ use std::sync::Arc;
 
 use arrow::datatypes::{IntervalMonthDayNanoType, Schema, SchemaRef};
 use datafusion_catalog::memory::MemorySourceConfig;
+use datafusion_common::utils::{usize_from_wire, usize_to_wire};
 use datafusion_common::{
     DataFusionError, Result, internal_datafusion_err, internal_err, not_impl_err,
+    plan_err,
 };
 use datafusion_datasource_arrow::source::ArrowSource;
 #[cfg(feature = "avro")]
@@ -60,8 +62,8 @@ use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::explain::ExplainExec;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::{
-    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, SortMergeJoinExec,
-    SymmetricHashJoinExec,
+    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PiecewiseMergeJoinExec,
+    SortMergeJoinExec, SymmetricHashJoinExec,
 };
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::memory::LazyMemoryExec;
@@ -103,9 +105,14 @@ fn encode_human_display_alias(human_display: &str, alias: &str) -> String {
 #[cfg(test)]
 mod file_scan_config_serde {
     use super::*;
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::{DataType, Field, SchemaRef};
+    use datafusion::physical_expr_adapter::{
+        DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter,
+        PhysicalExprAdapterFactory,
+    };
     use datafusion_common::{Constraint, Constraints, ScalarValue, Statistics};
     use datafusion_datasource::file::FileSource;
+    use datafusion_datasource::file_compression_type::FileCompressionType;
     use datafusion_datasource::file_groups::FileGroup;
     use datafusion_datasource::file_scan_config::{
         FileScanConfig, FileScanConfigBuilder,
@@ -140,6 +147,28 @@ mod file_scan_config_serde {
                 table_schema,
                 projection,
             }
+        }
+    }
+
+    #[derive(Debug)]
+    struct SerdeTestExprAdapter;
+
+    impl PhysicalExprAdapter for SerdeTestExprAdapter {
+        fn rewrite(&self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
+            Ok(expr)
+        }
+    }
+
+    #[derive(Debug)]
+    struct SerdeTestExprAdapterFactory;
+
+    impl PhysicalExprAdapterFactory for SerdeTestExprAdapterFactory {
+        fn create(
+            &self,
+            _logical_file_schema: SchemaRef,
+            _physical_file_schema: SchemaRef,
+        ) -> Result<Arc<dyn PhysicalExprAdapter>> {
+            Ok(Arc::new(SerdeTestExprAdapter))
         }
     }
 
@@ -257,6 +286,7 @@ mod file_scan_config_serde {
             .with_statistics(table_statistics)
             .with_limit(Some(17))
             .with_batch_size(Some(256))
+            .with_file_compression_type(FileCompressionType::GZIP)
             .with_output_ordering(vec![ordering])
             .with_output_partitioning(output_partitioning)
             .build()
@@ -365,7 +395,73 @@ mod file_scan_config_serde {
         assert_eq!(decoded.file_groups[1].len(), 1);
         assert!(decoded.file_groups[0].files()[0].arrow_schema.is_some());
         assert!(decoded.file_groups[0].files()[1].arrow_schema.is_none());
+        assert_eq!(decoded.file_compression_type, FileCompressionType::GZIP);
 
+        Ok(())
+    }
+
+    #[test]
+    fn new_file_scan_config_serde_preserves_explicit_order_flag() -> Result<()> {
+        let serde = FileScanSerdeHarness::new();
+
+        let preserve_without_ordering = FileScanConfigBuilder::from(test_config(None))
+            .with_output_ordering(vec![])
+            .with_preserve_order(true)
+            .build();
+        let encoded = serde.encode(&preserve_without_ordering)?;
+        assert_eq!(encoded.preserve_order, Some(true));
+        let decoded = serde.decode(&encoded)?;
+        assert!(decoded.preserve_order);
+        assert!(decoded.output_ordering.is_empty());
+
+        let mut do_not_preserve_with_ordering = test_config(None);
+        do_not_preserve_with_ordering.preserve_order = false;
+        assert!(!do_not_preserve_with_ordering.output_ordering.is_empty());
+        let mut encoded = serde.encode(&do_not_preserve_with_ordering)?;
+        assert_eq!(encoded.preserve_order, Some(false));
+        assert!(!serde.decode(&encoded)?.preserve_order);
+
+        // Older payloads had no flag and derived it from the ordering.
+        encoded.preserve_order = None;
+        assert!(serde.decode(&encoded)?.preserve_order);
+        Ok(())
+    }
+
+    #[test]
+    fn new_file_scan_config_encode_handles_expr_adapter_factories() -> Result<()> {
+        let serde = FileScanSerdeHarness::new();
+        let default_config = FileScanConfigBuilder::from(test_config(None))
+            .with_expr_adapter(Some(Arc::new(DefaultPhysicalExprAdapterFactory)))
+            .build();
+        let encoded = serde.encode(&default_config)?;
+        assert!(serde.decode(&encoded)?.expr_adapter_factory.is_none());
+
+        let custom_config = FileScanConfigBuilder::from(test_config(None))
+            .with_expr_adapter(Some(Arc::new(SerdeTestExprAdapterFactory)))
+            .build();
+        let err = serde
+            .encode(&custom_config)
+            .expect_err("custom expression adapter must not be dropped");
+        assert!(
+            err.to_string().contains("expr_adapter_factory"),
+            "unexpected error: {err}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn new_file_scan_config_decode_without_compression_uses_legacy_default() -> Result<()>
+    {
+        let serde = FileScanSerdeHarness::new();
+        let mut encoded = serde.encode(&test_config(None))?;
+        assert!(encoded.file_compression_type.is_some());
+
+        encoded.file_compression_type = None;
+        let decoded = serde.decode(&encoded)?;
+        assert_eq!(
+            decoded.file_compression_type,
+            FileCompressionType::UNCOMPRESSED
+        );
         Ok(())
     }
 
@@ -446,6 +542,16 @@ mod file_scan_config_serde {
         assert!(
             err.to_string()
                 .contains("ProjectionExpr missing expr field"),
+            "unexpected error: {err}"
+        );
+
+        let mut unknown_compression = valid;
+        unknown_compression.file_compression_type = Some(i32::MAX);
+        let err = serde
+            .decode(&unknown_compression)
+            .expect_err("unknown compression type must fail");
+        assert!(
+            err.to_string().contains("Unknown file compression type"),
             "unexpected error: {err}"
         );
 
@@ -1209,6 +1315,9 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::ScalarSubquery(_) => {
                 ScalarSubqueryExec::try_from_proto(self.node(), &decode_ctx)
             }
+            PhysicalPlanType::PiecewiseMergeJoin(_) => {
+                PiecewiseMergeJoinExec::try_from_proto(self.node(), &decode_ctx)
+            }
         }
     }
 
@@ -1372,7 +1481,17 @@ pub trait PhysicalPlanNodeExt: Sized {
         };
 
         let table = GenerateSeriesTable::new(Arc::clone(&schema), args);
-        let generator = table.as_generator(generate_series.target_batch_size as usize)?;
+        let target_batch_size = usize_from_wire(
+            generate_series.target_batch_size,
+            "GenerateSeriesNode",
+            "target_batch_size",
+        )?;
+        if target_batch_size == 0 {
+            return plan_err!(
+                "GenerateSeriesNode: target_batch_size must be greater than 0"
+            );
+        }
+        let generator = table.as_generator(target_batch_size)?;
 
         Ok(Arc::new(LazyMemoryExec::try_new(schema, vec![generator])?))
     }
@@ -1417,6 +1536,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             }));
         }
 
+        let encode_target_batch_size =
+            |size| usize_to_wire::<u32>(size, "GenerateSeriesNode", "target_batch_size");
         if let Some(int_64) = generator_guard
             .as_any()
             .downcast_ref::<GenericSeriesState<i64>>()
@@ -1424,7 +1545,7 @@ pub trait PhysicalPlanNodeExt: Sized {
             let schema = exec.schema();
             let node = protobuf::GenerateSeriesNode {
                 schema: Some(schema.as_ref().try_into()?),
-                target_batch_size: int_64.batch_size() as u32,
+                target_batch_size: encode_target_batch_size(int_64.batch_size())?,
                 args: Some(protobuf::generate_series_node::Args::Int64Args(
                     protobuf::GenerateSeriesArgsInt64 {
                         start: *int_64.start(),
@@ -1488,7 +1609,7 @@ pub trait PhysicalPlanNodeExt: Sized {
 
             let node = protobuf::GenerateSeriesNode {
                 schema: Some(schema.as_ref().try_into()?),
-                target_batch_size: timestamp_args.batch_size() as u32,
+                target_batch_size: encode_target_batch_size(timestamp_args.batch_size())?,
                 args: Some(args),
             };
 

@@ -748,6 +748,92 @@ impl Display for ConfigMinTwoUsize {
     }
 }
 
+/// Used for [`OptimizerOptions::default_filter_selectivity`] to represent
+/// an integer percentage value, when valid values are 0 to 100 inclusive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ConfigFilterSelectivity(u8);
+
+/// Private helper for hard-coded defaults in `config_namespace!`, which cannot
+/// use `?`. All external construction should use
+/// [`ConfigFilterSelectivity::try_new`].
+const fn filter_selectivity_default(value: u8) -> ConfigFilterSelectivity {
+    if value <= 100 {
+        ConfigFilterSelectivity(value)
+    } else {
+        panic!("value must be between 0 and 100")
+    }
+}
+
+impl ConfigFilterSelectivity {
+    fn try_from_i64(value: i64) -> Result<Self> {
+        if (0..=100).contains(&value) {
+            Ok(Self(value as u8))
+        } else {
+            _config_err!("value must be between 0 and 100, got {value}")
+        }
+    }
+
+    /// Creates a [`ConfigFilterSelectivity`], returning a configuration error
+    /// if `value` is greater than 100.
+    pub fn try_new(value: u8) -> Result<Self> {
+        Self::try_from_i64(i64::from(value))
+    }
+
+    /// Returns the wrapped `u8`.
+    pub const fn get(self) -> u8 {
+        self.0
+    }
+}
+
+impl From<ConfigFilterSelectivity> for u8 {
+    fn from(value: ConfigFilterSelectivity) -> Self {
+        value.get()
+    }
+}
+
+impl FromStr for ConfigFilterSelectivity {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_from_i64(default_config_transform::<i64>(s)?)
+    }
+}
+
+impl ConfigField for ConfigFilterSelectivity {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        if !key.is_empty() {
+            return _config_err!(
+                "Config field default_filter_selectivity is a scalar ConfigFilterSelectivity and does not have nested field \"{}\"",
+                key
+            );
+        }
+
+        *self = ConfigFilterSelectivity::from_str(value)?;
+        Ok(())
+    }
+
+    fn reset(&mut self, key: &str) -> Result<()> {
+        if key.is_empty() {
+            Ok(())
+        } else {
+            _config_err!(
+                "Config field default_filter_selectivity is a scalar ConfigFilterSelectivity and does not have nested field \"{}\"",
+                key
+            )
+        }
+    }
+}
+
+impl Display for ConfigFilterSelectivity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.get())
+    }
+}
+
 /// Policy for handling duplicate keys in Spark-compatible map-construction
 /// functions (`map_from_arrays`, `map_from_entries`, `str_to_map`). Mirrors
 /// Spark's [`spark.sql.mapKeyDedupPolicy`](https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961).
@@ -878,13 +964,13 @@ config_namespace! {
         /// the new schema verification step.
         pub skip_physical_aggregate_schema_check: bool, default = false
 
-        /// Temporary switch for aggregate stream implementations that are being
-        /// migrated from `GroupedHashAggregateStream`.
+        /// Whether aggregation uses the implementation from the major refactor
+        /// completed in the 56.0.0 release. When set to `false`, aggregation
+        /// falls back to the implementation used before 55.0.0.
         ///
-        /// When set to true, DataFusion tries the migrated implementations when
-        /// their preconditions are satisfied. When set to false, grouped
-        /// aggregation falls back to `GroupedHashAggregateStream`. This option
-        /// will be removed after the migration is finished.
+        /// The fallback exists only as a workaround for bugs in the new
+        /// implementation and will be removed, together with this option, after
+        /// the 56.0.0 release.
         ///
         /// See <https://github.com/apache/datafusion/issues/22710> for details.
         pub enable_migration_aggregate: bool, default = true
@@ -944,6 +1030,25 @@ config_namespace! {
         ///
         /// Default: 128 MB
         pub max_spill_file_size_bytes: ConfigNonZeroUsize, default = non_zero_usize_default(128 * 1024 * 1024)
+
+        /// Enables the memory-limited fallback for `NestedLoopJoinExec` join
+        /// types that emit unmatched left rows in the final output (LEFT, LEFT
+        /// SEMI, LEFT ANTI, LEFT MARK, FULL) when the right side has multiple
+        /// partitions.
+        ///
+        /// This fallback coordinates per-chunk left state (visited bitmap and
+        /// probe-thread counter) across all right-side partitions, which
+        /// assumes every partition runs in the same process. Distributed
+        /// engines that execute each output partition as an independent task
+        /// (e.g. Ballista, datafusion-distributed) build a separate coordinator
+        /// per task and poll only one partition, so the cross-partition
+        /// counter never reaches zero and the fallback would stall. Such
+        /// engines should set this to `false`: the coordinated fallback is then
+        /// disabled for left-emitting multi-partition joins, which instead fail
+        /// with a resource-exhaustion error under memory pressure rather than
+        /// deadlocking. Single-partition and non-left-emitting joins are
+        /// unaffected and always keep the fallback.
+        pub enable_nlj_coordinated_fallback: bool, default = true
 
         /// Number of files to read in parallel when inferring schema and statistics
         pub meta_fetch_concurrency: ConfigNonZeroUsize, default = non_zero_usize_default(32)
@@ -1282,13 +1387,19 @@ config_namespace! {
         /// parquet reader setting. 0 means no caching.
         pub max_predicate_cache_size: Option<usize>, default = None
 
-        /// Maximum number of values in an `IN (...)` list for which pruning will
-        /// occur. Longer lists will not be used to prune files, row groups, or
-        /// data pages.
+        /// Maximum number of input values in an `IN (...)` list eligible for
+        /// min/max pruning. Lists above this cap, or a cap of 0, skip this
+        /// rewrite; other predicates and Bloom-filter pruning remain available.
         ///
-        /// Higher values help in cases such as filtering on a list of
-        /// ~25-100 identifiers, but also make the predicate more expensive to
-        /// evaluate. Set to 0 to disable `IN (...)` list pruning entirely.
+        /// Within the cap, nonempty lists of at most 20 values use the existing
+        /// per-value rewrite. Larger literal lists use a compact representation
+        /// when the column type is string, variable-length binary, integer,
+        /// decimal, date, time, timestamp, or duration. This applies to both `IN`
+        /// and `NOT IN`, including lists with NULL members. `NOT IN` with NULL and
+        /// all-NULL `IN` lists cannot match any rows. Compact lists containing NULL
+        /// do not use the fully-matched-row-group optimization. Floating-point and
+        /// other lists retain the existing per-value rewrite, so raising the cap
+        /// can make those predicates expensive to build and evaluate.
         ///
         /// Defaults to 20.
         pub max_in_list_size: usize, default = 20
@@ -1672,11 +1783,10 @@ config_namespace! {
         /// query is used.
         pub join_reordering: bool, default = true
 
-        /// When set to true, the physical plan optimizer uses the pluggable
-        /// `StatisticsRegistry` for statistics propagation across operators.
-        /// This enables more accurate cardinality estimates compared to each
-        /// operator's built-in `partition_statistics`.
-        pub use_statistics_registry: bool, default = false
+        /// (Deprecated) Ignored: the physical plan optimizer always consults the
+        /// session's pluggable `StatisticsRegistry` (register providers on the
+        /// `SessionState`; with none it is a no-op).
+        pub use_statistics_registry: bool, warn = "`use_statistics_registry` is deprecated and ignored; the StatisticsRegistry is always consulted, register providers on the SessionState", default = false
 
         /// When set to true, the physical plan optimizer will prefer HashJoin over SortMergeJoin.
         /// HashJoin can work more efficiently than SortMergeJoin but consumes more memory
@@ -1689,7 +1799,7 @@ config_namespace! {
 
         /// The maximum estimated size in bytes for one input side of a HashJoin
         /// will be collected into a single partition
-        pub hash_join_single_partition_threshold: usize, default = 1024 * 1024
+        pub hash_join_single_partition_threshold: usize, default = 4 * 1024 * 1024
 
         /// The maximum estimated size in rows for one input side of a HashJoin
         /// will be collected into a single partition
@@ -1728,7 +1838,7 @@ config_namespace! {
         /// The default filter selectivity used by Filter Statistics
         /// when an exact selectivity cannot be determined. Valid values are
         /// between 0 (no selectivity) and 100 (all rows are selected).
-        pub default_filter_selectivity: u8, default = 20
+        pub default_filter_selectivity: ConfigFilterSelectivity, default = filter_selectivity_default(20)
 
         /// When set to true, the optimizer will not attempt to convert Union to Interleave
         pub prefer_existing_union: bool, default = false
@@ -3331,7 +3441,7 @@ impl ConfigField for ConfigFileEncryptionProperties {
         if key.contains("::") {
             // Handle any column specific properties
             return self.column_encryption_properties.set(key, value);
-        };
+        }
 
         let (key, rem) = key.split_once('.').unwrap_or((key, ""));
         match key {
@@ -3511,7 +3621,7 @@ impl ConfigField for ConfigFileDecryptionProperties {
         if key.contains("::") {
             // Handle any column specific properties
             return self.column_decryption_properties.set(key, value);
-        };
+        }
 
         let (key, rem) = key.split_once('.').unwrap_or((key, ""));
         match key {

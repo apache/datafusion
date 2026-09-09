@@ -24,7 +24,8 @@ use arrow::buffer::NullBuffer;
 use arrow::datatypes::ArrowPrimitiveType;
 
 use crate::aggregate::groups_accumulator::nulls::filter_to_validity;
-use datafusion_expr_common::groups_accumulator::EmitTo;
+use datafusion_common::Result;
+use datafusion_expr_common::groups_accumulator::{EmitTo, GroupSelection};
 
 /// If the input has nulls, then the accumulator must potentially
 /// handle each input null value specially (e.g. for `SUM` to mark the
@@ -285,6 +286,28 @@ impl NullState {
                             value_fn(group_index, new_value)
                         }
                     })
+            }
+        }
+    }
+
+    /// Creates a [`NullBuffer`] for `selection` without changing this state.
+    pub fn build_preserving(
+        &self,
+        selection: GroupSelection<'_>,
+    ) -> Result<Option<NullBuffer>> {
+        let selected_len = selection.len();
+        match &self.seen_values {
+            SeenValues::All { num_values } => {
+                selection.validate_num_groups(*num_values)?;
+                Ok(None)
+            }
+            SeenValues::Some { values } => {
+                selection.validate_num_groups(values.len())?;
+                let mut selected = BooleanBufferBuilder::new(selected_len);
+                for index in selection.iter() {
+                    selected.append(values.get_bit(index));
+                }
+                Ok(Some(NullBuffer::new(selected.finish())))
             }
         }
     }
