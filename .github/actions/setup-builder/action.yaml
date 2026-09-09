@@ -29,6 +29,7 @@ runs:
       shell: bash
       run: |
         RETRY=("ci/scripts/retry" timeout 120)
+        rm -f /etc/apt/sources.list.d/google-chrome.list
         "${RETRY[@]}" apt-get update
         "${RETRY[@]}" apt-get install -y protobuf-compiler
     - name: Setup Rust toolchain

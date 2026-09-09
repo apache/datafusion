@@ -50,7 +50,8 @@ jobs:
       - name: Install Graphviz
         run: |
           set -x
-          sudo apt-get update
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list
+          sudo apt-get update -o Acquire::Retries=5
           sudo apt-get install -y graphviz
       - name: Install cargo-depgraph
         uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026  # v2.85.11
