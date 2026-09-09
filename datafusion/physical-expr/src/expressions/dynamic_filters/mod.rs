@@ -109,7 +109,7 @@ impl std::fmt::Debug for DynamicFilterPhysicalExpr {
             .field("state_watch", &self.state_watch)
             .field("data_type", &self.data_type)
             .field("nullable", &self.nullable)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

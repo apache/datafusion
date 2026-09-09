@@ -220,7 +220,7 @@ impl std::fmt::Debug for Count {
         f.debug_struct("Count")
             .field("name", &self.name())
             .field("signature", &self.signature)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

@@ -119,9 +119,11 @@ impl ScalarUDFImpl for FormatStringFunc {
             ColumnarValue::Scalar(ScalarValue::Utf8View(None)) => {
                 Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(None)))
             }
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(fmt)))
-            | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(fmt)))
-            | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(fmt))) => {
+            ColumnarValue::Scalar(
+                ScalarValue::Utf8(Some(fmt))
+                | ScalarValue::LargeUtf8(Some(fmt))
+                | ScalarValue::Utf8View(Some(fmt)),
+            ) => {
                 let formatter = Formatter::parse(fmt, &data_types)?;
                 let mut result = Vec::with_capacity(len.unwrap_or(1));
                 for i in 0..len.unwrap_or(1) {
@@ -1817,13 +1819,13 @@ impl ConversionSpecifier {
         let (prefix, suffix) = if negative && self.negative_in_parentheses {
             ("(".to_owned(), ")".to_owned())
         } else if negative {
-            ("-".to_owned(), "".to_owned())
+            ("-".to_owned(), String::new())
         } else if self.force_sign {
-            ("+".to_owned(), "".to_owned())
+            ("+".to_owned(), String::new())
         } else if self.space_sign {
-            (" ".to_owned(), "".to_owned())
+            (" ".to_owned(), String::new())
         } else {
-            ("".to_owned(), "".to_owned())
+            (String::new(), String::new())
         };
 
         self.format_decimal_integer(writer, abs_val, prefix, &suffix);

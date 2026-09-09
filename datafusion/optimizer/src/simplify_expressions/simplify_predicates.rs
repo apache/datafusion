@@ -285,20 +285,20 @@ mod tests {
 
         // Check that the cast predicate is preserved
         let has_cast_predicate = result.iter().any(|p| {
-            matches!(p, Expr::BinaryExpr(BinaryExpr { 
-                left, 
-                op: Operator::Lt, 
-                right 
+            matches!(p, Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::Lt,
+                right
             }) if matches!(left.as_ref(), Expr::Cast(_)) && right == &Box::new(lit("abc")))
         });
         assert!(has_cast_predicate, "Cast predicate should be preserved");
 
         // Check that we have the more restrictive column predicate (a < 5)
         let has_column_predicate = result.iter().any(|p| {
-            matches!(p, Expr::BinaryExpr(BinaryExpr { 
-                left, 
-                op: Operator::Lt, 
-                right 
+            matches!(p, Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::Lt,
+                right
             }) if left == &Box::new(col("a")) && right == &Box::new(lit(5i32)))
         });
         assert!(has_column_predicate, "Should have a < 5 predicate");
@@ -352,20 +352,20 @@ mod tests {
 
         // Check for a < 3
         let has_a_predicate = result.iter().any(|p| {
-            matches!(p, Expr::BinaryExpr(BinaryExpr { 
-                left, 
-                op: Operator::Lt, 
-                right 
+            matches!(p, Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::Lt,
+                right
             }) if left == &Box::new(col("a")) && right == &Box::new(lit(3i32)))
         });
         assert!(has_a_predicate, "Should have a < 3 predicate");
 
         // Check for b > 20
         let has_b_predicate = result.iter().any(|p| {
-            matches!(p, Expr::BinaryExpr(BinaryExpr { 
-                left, 
-                op: Operator::Gt, 
-                right 
+            matches!(p, Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::Gt,
+                right
             }) if left == &Box::new(col("b")) && right == &Box::new(lit(20i32)))
         });
         assert!(has_b_predicate, "Should have b > 20 predicate");

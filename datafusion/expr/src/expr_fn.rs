@@ -542,7 +542,7 @@ impl Debug for SimpleAggregateUDF {
             .field("signature", &self.signature)
             .field("return_type", &self.return_type)
             .field("fun", &"<FUNC>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

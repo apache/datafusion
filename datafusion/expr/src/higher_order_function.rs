@@ -1580,7 +1580,7 @@ mod tests {
                         None,
                     ])
                 }
-                (1, Some(accumulator)) | (0, Some(accumulator)) => {
+                (0 | 1, Some(accumulator)) => {
                     // now we can use the merge output as it's accumulator and
                     // as the finish parameter
                     LambdaParametersProgress::Complete(vec![

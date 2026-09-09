@@ -585,7 +585,7 @@ async fn collect_right_input(
     let batches = input
         .try_fold(Vec::new(), |mut batches, batch| {
             let batch_size = memory_counter.count_batch(&batch);
-            futures::future::ready(reservation.try_grow(batch_size).map(|_| {
+            futures::future::ready(reservation.try_grow(batch_size).map(|()| {
                 metrics.build_mem_used.add(batch_size);
                 batches.push(batch);
                 batches

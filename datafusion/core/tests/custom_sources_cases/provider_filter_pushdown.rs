@@ -225,9 +225,10 @@ impl TableProvider for CustomProvider {
                 };
 
                 Ok(Arc::new(CustomPlan::new(
-                    match projection.is_empty() {
-                        true => Arc::new(Schema::empty()),
-                        false => self.zero_batch.schema(),
+                    if projection.is_empty() {
+                        Arc::new(Schema::empty())
+                    } else {
+                        self.zero_batch.schema()
                     },
                     match int_value {
                         0 => vec![self.zero_batch.clone()],
@@ -237,9 +238,10 @@ impl TableProvider for CustomProvider {
                 )))
             }
             _ => Ok(Arc::new(CustomPlan::new(
-                match projection.is_empty() {
-                    true => Arc::new(Schema::empty()),
-                    false => self.zero_batch.schema(),
+                if projection.is_empty() {
+                    Arc::new(Schema::empty())
+                } else {
+                    self.zero_batch.schema()
                 },
                 vec![],
             ))),

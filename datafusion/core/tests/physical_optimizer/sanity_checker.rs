@@ -51,16 +51,13 @@ async fn register_current_csv(
     let schema = datafusion::test_util::aggr_test_schema();
     let path = format!("{testdata}/csv/aggregate_test_100.csv");
 
-    match infinite {
-        true => {
-            let source = FileStreamProvider::new_file(schema, path.into());
-            let config = StreamConfig::new(Arc::new(source));
-            ctx.register_table(table_name, Arc::new(StreamTable::new(Arc::new(config))))?;
-        }
-        false => {
-            ctx.register_csv(table_name, &path, CsvReadOptions::new().schema(&schema))
-                .await?;
-        }
+    if infinite {
+        let source = FileStreamProvider::new_file(schema, path.into());
+        let config = StreamConfig::new(Arc::new(source));
+        ctx.register_table(table_name, Arc::new(StreamTable::new(Arc::new(config))))?;
+    } else {
+        ctx.register_csv(table_name, &path, CsvReadOptions::new().schema(&schema))
+            .await?;
     }
 
     Ok(())

@@ -219,58 +219,57 @@ impl MemoryPool for FairSpillPool {
 
     fn grow(&self, reservation: &MemoryReservation, additional: usize) {
         let mut state = self.state.lock();
-        match reservation.registration.consumer.can_spill {
-            true => state.spillable += additional,
-            false => state.unspillable += additional,
+        if reservation.registration.consumer.can_spill {
+            state.spillable += additional
+        } else {
+            state.unspillable += additional
         }
     }
 
     fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
         let mut state = self.state.lock();
-        match reservation.registration.consumer.can_spill {
-            true => state.spillable -= shrink,
-            false => state.unspillable -= shrink,
+        if reservation.registration.consumer.can_spill {
+            state.spillable -= shrink
+        } else {
+            state.unspillable -= shrink
         }
     }
 
     fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> Result<()> {
         let mut state = self.state.lock();
 
-        match reservation.registration.consumer.can_spill {
-            true => {
-                // The total amount of memory available to spilling consumers
-                let spill_available = self.pool_size.saturating_sub(state.unspillable);
+        if reservation.registration.consumer.can_spill {
+            // The total amount of memory available to spilling consumers
+            let spill_available = self.pool_size.saturating_sub(state.unspillable);
 
-                // No spiller may use more than their fraction of the memory available
-                let available = spill_available
-                    .checked_div(state.num_spill)
-                    .unwrap_or(spill_available);
+            // No spiller may use more than their fraction of the memory available
+            let available = spill_available
+                .checked_div(state.num_spill)
+                .unwrap_or(spill_available);
 
-                if reservation.size() + additional > available {
-                    return Err(insufficient_capacity_err(
-                        reservation,
-                        additional,
-                        available,
-                        self,
-                    ));
-                }
-                state.spillable += additional;
+            if reservation.size() + additional > available {
+                return Err(insufficient_capacity_err(
+                    reservation,
+                    additional,
+                    available,
+                    self,
+                ));
             }
-            false => {
-                let available = self
-                    .pool_size
-                    .saturating_sub(state.unspillable + state.spillable);
+            state.spillable += additional;
+        } else {
+            let available = self
+                .pool_size
+                .saturating_sub(state.unspillable + state.spillable);
 
-                if available < additional {
-                    return Err(insufficient_capacity_err(
-                        reservation,
-                        additional,
-                        available,
-                        self,
-                    ));
-                }
-                state.unspillable += additional;
+            if available < additional {
+                return Err(insufficient_capacity_err(
+                    reservation,
+                    additional,
+                    available,
+                    self,
+                ));
             }
+            state.unspillable += additional;
         }
         Ok(())
     }

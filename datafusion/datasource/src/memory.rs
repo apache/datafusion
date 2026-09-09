@@ -623,9 +623,8 @@ impl MemorySourceConfig {
                         }
                         // Successful repartition. Break inner loop, and return to outer `cnt_to_repartition` loop.
                         break;
-                    } else {
-                        cannot_split_further.push(new_partitions.remove(0));
                     }
+                    cannot_split_further.push(new_partitions.remove(0));
                 }
             }
             let mut partitions = max_heap
@@ -926,7 +925,7 @@ impl Debug for MemSink {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MemSink")
             .field("num_partitions", &self.batches.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

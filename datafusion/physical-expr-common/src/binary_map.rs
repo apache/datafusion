@@ -705,7 +705,7 @@ where
             .field("buffer", &self.buffer)
             .field("random_state", &self.random_state)
             .field("hashes_buffer", &self.hashes_buffer)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -818,7 +818,7 @@ mod tests {
         let values: ArrayRef = Arc::new(StringArray::from_iter_values(
             (0..1_000).map(|i| format!("distinct value number {i}")),
         ));
-        map.insert_if_new(&values, |_| (), |_| ());
+        map.insert_if_new(&values, |_| (), |()| {});
 
         let populated_size = map.size();
         assert!(populated_size > INITIAL_BUFFER_CAPACITY);
@@ -950,8 +950,8 @@ mod tests {
                         let value = format!("{}:{i}", batch * 1_000 + i);
                         format!("{value:value_len$}")
                     })));
-                lazy.insert_if_new(&values, |_| (), |_| ());
-                pre_allocated.insert_if_new(&values, |_| (), |_| ());
+                lazy.insert_if_new(&values, |_| (), |()| {});
+                pre_allocated.insert_if_new(&values, |_| (), |()| {});
 
                 assert_eq!(lazy.buffer.len(), pre_allocated.buffer.len());
                 assert_eq!(
@@ -973,7 +973,7 @@ mod tests {
         let values: ArrayRef = Arc::new(StringArray::from_iter_values(
             (0..10).map(|i| format!("distinct value number {i}")),
         ));
-        lazy.insert_if_new(&values, |_| (), |_| ());
+        lazy.insert_if_new(&values, |_| (), |()| {});
 
         assert!(
             lazy.buffer.capacity() < INITIAL_BUFFER_CAPACITY,

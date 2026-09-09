@@ -592,9 +592,10 @@ impl FFI_TableProvider {
             schema: schema_fn_wrapper,
             scan: scan_fn_wrapper,
             table_type: table_type_fn_wrapper,
-            supports_filters_pushdown: match can_support_pushdown_filters {
-                true => Some(supports_filters_pushdown_fn_wrapper),
-                false => None,
+            supports_filters_pushdown: if can_support_pushdown_filters {
+                Some(supports_filters_pushdown_fn_wrapper)
+            } else {
+                None
             },
             insert_into: insert_into_fn_wrapper,
             statistics: statistics_fn_wrapper,

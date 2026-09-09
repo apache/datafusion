@@ -166,7 +166,7 @@ impl Debug for PeakRecordingPool {
             .field("inner", &self.inner)
             .field("peak", &self.peak_reserved())
             .field("max", &self.max_reserved())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

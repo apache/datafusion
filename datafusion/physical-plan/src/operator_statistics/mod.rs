@@ -1031,9 +1031,11 @@ impl StatisticsProvider for UnionStatisticsProvider {
                     (Precision::Exact(a), Precision::Exact(b)) => {
                         Precision::Exact(a.saturating_add(b))
                     }
-                    (Precision::Inexact(a), Precision::Exact(b))
-                    | (Precision::Exact(a), Precision::Inexact(b))
-                    | (Precision::Inexact(a), Precision::Inexact(b)) => {
+                    (
+                        Precision::Inexact(a),
+                        Precision::Exact(b) | Precision::Inexact(b),
+                    )
+                    | (Precision::Exact(a), Precision::Inexact(b)) => {
                         Precision::Inexact(a.saturating_add(b))
                     }
                 })

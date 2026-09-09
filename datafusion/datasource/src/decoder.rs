@@ -91,7 +91,7 @@ impl<T: Decoder> fmt::Debug for DecoderDeserializer<T> {
         f.debug_struct("Deserializer")
             .field("buffered_queue", &self.buffered_queue)
             .field("finalized", &self.finalized)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

@@ -270,7 +270,7 @@ mod tests {
         test_spark_length_string!(Some(String::from("josé")), Ok(Some(4)));
         // test long strings (more than 12 bytes for StringView)
         test_spark_length_string!(Some(String::from("joséjoséjoséjosé")), Ok(Some(16)));
-        test_spark_length_string!(Some(String::from("")), Ok(Some(0)));
+        test_spark_length_string!(Some(String::new()), Ok(Some(0)));
         test_spark_length_string!(None, Ok(None));
 
         test_spark_length_binary!(Some(String::from("chars").into_bytes()), Ok(Some(5)));
@@ -280,7 +280,7 @@ mod tests {
             Some(String::from("joséjoséjoséjosé").into_bytes()),
             Ok(Some(20))
         );
-        test_spark_length_binary!(Some(String::from("").into_bytes()), Ok(Some(0)));
+        test_spark_length_binary!(Some(String::new().into_bytes()), Ok(Some(0)));
         test_spark_length_binary!(None, Ok(None));
 
         Ok(())

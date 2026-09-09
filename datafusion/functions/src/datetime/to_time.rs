@@ -144,9 +144,9 @@ fn string_to_time(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let formats = compile_formats(&formats);
 
     match &args[0] {
-        ColumnarValue::Scalar(ScalarValue::Utf8(s))
-        | ColumnarValue::Scalar(ScalarValue::LargeUtf8(s))
-        | ColumnarValue::Scalar(ScalarValue::Utf8View(s)) => {
+        ColumnarValue::Scalar(
+            ScalarValue::Utf8(s) | ScalarValue::LargeUtf8(s) | ScalarValue::Utf8View(s),
+        ) => {
             let result = s
                 .as_ref()
                 .map(|s| parse_time_with_formats(s, &formats))
@@ -175,14 +175,18 @@ fn collect_formats(args: &[ColumnarValue]) -> Result<Vec<&str>> {
     let mut formats = Vec::with_capacity(args.len() - 1);
     for (i, arg) in args[1..].iter().enumerate() {
         match arg {
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(s)))
-            | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(s)))
-            | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(s))) => {
+            ColumnarValue::Scalar(
+                ScalarValue::Utf8(Some(s))
+                | ScalarValue::LargeUtf8(Some(s))
+                | ScalarValue::Utf8View(Some(s)),
+            ) => {
                 formats.push(s.as_str());
             }
-            ColumnarValue::Scalar(ScalarValue::Utf8(None))
-            | ColumnarValue::Scalar(ScalarValue::LargeUtf8(None))
-            | ColumnarValue::Scalar(ScalarValue::Utf8View(None)) => {
+            ColumnarValue::Scalar(
+                ScalarValue::Utf8(None)
+                | ScalarValue::LargeUtf8(None)
+                | ScalarValue::Utf8View(None),
+            ) => {
                 // Skip null format strings
             }
             ColumnarValue::Array(_) => {

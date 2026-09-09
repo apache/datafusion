@@ -1004,9 +1004,10 @@ fn build_batch(
             // Original batch has the same columns
             // All unnesting results are written to temp_batch
             for depth in (1..=max_recursion).rev() {
-                let input = match depth == max_recursion {
-                    true => batch.columns(),
-                    false => &flatten_arrs,
+                let input = if depth == max_recursion {
+                    batch.columns()
+                } else {
+                    &flatten_arrs
                 };
                 // Only sound for a single non-recursive level: with recursion the deeper
                 // levels' lengths depend on arrays that do not exist yet, which is also why

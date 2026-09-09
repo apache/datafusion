@@ -768,7 +768,7 @@ pub(crate) fn make_staggered_batches<const STREAM: bool>(
     let mut rng = StdRng::seed_from_u64(random_seed);
     let mut input123: Vec<(i32, i32, i32)> = vec![(0, 0, 0); len];
     let mut input4: Vec<i32> = vec![0; len];
-    let mut input5: Vec<String> = vec!["".to_string(); len];
+    let mut input5: Vec<String> = vec![String::new(); len];
     for v in &mut input123 {
         *v = (
             rng.random_range(0..n_distinct) as i32,
