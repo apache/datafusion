@@ -60,10 +60,12 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int32Array, Int64Array, RecordBatch, StringViewArray};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{
+    BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main,
+};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::expressions::col;
 use datafusion_physical_plan::metrics::Time;
 use datafusion_physical_plan::repartition::{BatchPartitioner, RepartitionExec};
 use datafusion_physical_plan::test::TestMemoryExec;
@@ -130,7 +132,11 @@ fn make_utf8view_batch(schema: &SchemaRef, num_rows: usize) -> RecordBatch {
     .unwrap()
 }
 
-fn make_multi_key_batch(schema: &SchemaRef, num_keys: usize, num_rows: usize) -> RecordBatch {
+fn make_multi_key_batch(
+    schema: &SchemaRef,
+    num_keys: usize,
+    num_rows: usize,
+) -> RecordBatch {
     let mut rng = StdRng::seed_from_u64(SEED);
     let mut columns: Vec<ArrayRef> = (0..num_keys)
         .map(|_| {
@@ -396,7 +402,8 @@ fn bench_repartition_exec_hash_1_to_n(c: &mut Criterion) {
             b.iter_batched(
                 || {
                     let input =
-                        TestMemoryExec::try_new_exec(&partitions, schema.clone(), None).unwrap();
+                        TestMemoryExec::try_new_exec(&partitions, schema.clone(), None)
+                            .unwrap();
                     Arc::new(
                         RepartitionExec::try_new(
                             input,
@@ -434,7 +441,8 @@ fn bench_repartition_exec_round_robin_1_to_n(c: &mut Criterion) {
             b.iter_batched(
                 || {
                     let input =
-                        TestMemoryExec::try_new_exec(&partitions, schema.clone(), None).unwrap();
+                        TestMemoryExec::try_new_exec(&partitions, schema.clone(), None)
+                            .unwrap();
                     Arc::new(
                         RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(n))
                             .unwrap(),
@@ -473,7 +481,8 @@ fn bench_repartition_exec_hash_n_to_n(c: &mut Criterion) {
             b.iter_batched(
                 || {
                     let input =
-                        TestMemoryExec::try_new_exec(&partitions, schema.clone(), None).unwrap();
+                        TestMemoryExec::try_new_exec(&partitions, schema.clone(), None)
+                            .unwrap();
                     Arc::new(
                         RepartitionExec::try_new(
                             input,
@@ -530,9 +539,12 @@ fn bench_repartition_exec_hash_m_to_n(c: &mut Criterion) {
             |b, &(_, n)| {
                 b.iter_batched(
                     || {
-                        let input =
-                            TestMemoryExec::try_new_exec(&partitions, schema.clone(), None)
-                                .unwrap();
+                        let input = TestMemoryExec::try_new_exec(
+                            &partitions,
+                            schema.clone(),
+                            None,
+                        )
+                        .unwrap();
                         Arc::new(
                             RepartitionExec::try_new(
                                 input,
