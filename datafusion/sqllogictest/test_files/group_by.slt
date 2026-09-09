@@ -5592,7 +5592,7 @@ select a, b, count(*) from t group by a, b order by a, b;
 ----
 1 123.45 2
 1 NULL 1
-2 678.9 3
+2 678.90 3
 2 1011.12 2
 3 1314.15 2
 NULL 123.45 2
@@ -5774,9 +5774,9 @@ create table decimal256_multi_group (k int, d decimal(50, 2)) as values
 query IRI
 select k, d, count(*) from decimal256_multi_group group by k, d order by k, d;
 ----
-1 100 2
-1 250 1
-2 100 1
+1 100.00 2
+1 250.00 1
+2 100.00 1
 2 NULL 1
 
 statement ok

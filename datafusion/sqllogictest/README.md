@@ -449,7 +449,7 @@ query <type_string> <sort_mode>
   - 'T' - **T**ext,
   - "?" - any other types
 - `expected_result`: In the results section, some values are converted according to some rules:
-  - floating point values are rounded to the scale of "12",
+  - floating point values are rounded to the scale of "12" and "15" for Spark,
   - NULL values are rendered as `NULL`,
   - empty strings are rendered as `(empty)`,
   - boolean values are rendered as `true`/`false`,

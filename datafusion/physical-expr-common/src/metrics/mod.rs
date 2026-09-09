@@ -26,6 +26,7 @@ mod value;
 
 use datafusion_common::HashMap;
 pub use datafusion_common::format::{MetricCategory, MetricType};
+use datafusion_common::human_readable_size;
 use parking_lot::Mutex;
 use std::{
     borrow::Cow,
@@ -125,7 +126,21 @@ impl Display for Metric {
         }
 
         // and now the value
-        write!(f, "={}", self.value)
+        write!(f, "=")?;
+
+        if self.metric_category == Some(MetricCategory::Bytes) {
+            match &self.value {
+                MetricValue::Count { count, .. } => {
+                    return write!(f, "{}", human_readable_size(count.value()));
+                }
+                MetricValue::Gauge { gauge, .. } => {
+                    return write!(f, "{}", human_readable_size(gauge.value()));
+                }
+                _ => {}
+            }
+        }
+
+        write!(f, "{}", self.value)
     }
 }
 
@@ -773,6 +788,84 @@ mod tests {
         };
 
         assert_eq!(metrics.sum(|_| true), Some(expected_sum));
+    }
+
+    #[test]
+    fn test_bytes_counter_and_gauge_use_byte_units() {
+        let metrics = ExecutionPlanMetricsSet::new();
+
+        // A dedicated byte counter/gauge (like `bytes_scanned` or
+        // `stream_memory_usage`) must render with human_readable_size's
+        // 1024-based units (KB/MB/GB), not human_readable_count's 1000-based
+        // units (K/M/B) - see #24203. 3 GiB, chosen to clear
+        // human_readable_size's >= 2x-tier threshold for GB (below that it
+        // falls back to a large MB value).
+        let three_gib = 3 * 1024 * 1024 * 1024;
+        let bytes_scanned =
+            MetricBuilder::new(&metrics).bytes_counter("bytes_scanned", 0);
+        bytes_scanned.add(three_gib);
+
+        let stream_memory_usage =
+            MetricBuilder::new(&metrics).bytes_gauge("stream_memory_usage", 0);
+        stream_memory_usage.add(three_gib);
+
+        // ParquetSink uses the global (non-partitioned) builder for
+        // `bytes_written`, distinct from `bytes_scanned`'s partitioned
+        // `bytes_counter` above - cover that path too.
+        let bytes_written =
+            MetricBuilder::new(&metrics).global_bytes_counter("bytes_written");
+        bytes_written.add(three_gib);
+
+        // A generic Count/Gauge explicitly tagged Bytes must ALSO be
+        // byte-formatted at Display time - see #24203. `MetricValue` is a
+        // public, already-released exhaustive enum, so dedicated
+        // BytesCount/BytesGauge variants would be a SemVer break; instead
+        // `Display for Metric` reinterprets any Bytes-category Count/Gauge.
+        let generic_bytes_gauge = MetricBuilder::new(&metrics)
+            .with_category(MetricCategory::Bytes)
+            .gauge("right_input_bytes", 0);
+        generic_bytes_gauge.add(three_gib);
+
+        // A generic Count/Gauge with NO Bytes category must keep
+        // count-formatting (human_readable_count), not byte-formatting.
+        let generic_rows_gauge =
+            MetricBuilder::new(&metrics).gauge("right_input_rows", 0);
+        generic_rows_gauge.add(three_gib);
+
+        let rendered: Vec<String> = metrics
+            .clone_inner()
+            .iter()
+            .map(|m| m.to_string())
+            .collect();
+
+        assert!(
+            rendered
+                .iter()
+                .any(|s| s == "bytes_scanned{partition=0}=3.0 GB"),
+            "bytes_scanned should be byte-formatted, got: {rendered:?}"
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|s| s == "stream_memory_usage{partition=0}=3.0 GB"),
+            "stream_memory_usage should be byte-formatted, got: {rendered:?}"
+        );
+        assert!(
+            rendered.iter().any(|s| s == "bytes_written=3.0 GB"),
+            "bytes_written (global_bytes_counter, no partition) should be byte-formatted, got: {rendered:?}"
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|s| s == "right_input_bytes{partition=0}=3.0 GB"),
+            "a generic Gauge tagged Bytes should be byte-formatted, got: {rendered:?}"
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|s| s == "right_input_rows{partition=0}=3.22 B"),
+            "a generic Gauge with no Bytes category must keep count-formatting, got: {rendered:?}"
+        );
     }
 
     #[test]

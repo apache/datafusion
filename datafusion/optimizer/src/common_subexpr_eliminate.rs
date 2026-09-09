@@ -566,6 +566,7 @@ impl OptimizerRule for CommonSubexprEliminate {
             LogicalPlan::Window(window) => self.try_optimize_window(window, config)?,
             LogicalPlan::Aggregate(agg) => self.try_optimize_aggregate(agg, config)?,
             LogicalPlan::Join(_)
+            | LogicalPlan::AsOfJoin(_)
             | LogicalPlan::Repartition(_)
             | LogicalPlan::Union(_)
             | LogicalPlan::TableScan(_)
@@ -732,6 +733,7 @@ impl CSEController for ExprCSEController<'_> {
                 | Expr::Wildcard { .. }
                 | Expr::Lambda(_)
                 | Expr::LambdaVariable(_)
+                | Expr::WindowFunction(..)
         );
 
         let is_aggr = matches!(node, Expr::AggregateFunction(..));
@@ -856,6 +858,7 @@ mod test {
     use crate::test::udfs::leaf_udf_expr;
     use crate::test::*;
     use datafusion_expr::test::function_stub::{avg, sum};
+    use datafusion_functions_window::row_number::row_number_udwf;
 
     macro_rules! assert_optimized_plan_equal {
         (
@@ -1929,6 +1932,23 @@ mod test {
         Projection: __common_expr_1 AS c1, __common_expr_1 AS c2
           Projection: leaf_udf(test.a) + test.b AS __common_expr_1, test.a, test.b, test.c
             TableScan: test
+        "
+        )
+    }
+
+    #[test]
+    fn test_window_function_is_not_extracted() -> Result<()> {
+        let wexpr = row_number_udwf().call(vec![]);
+
+        let plan = LogicalPlanBuilder::empty(true)
+            .window(vec![wexpr.clone(), wexpr.alias("aliased")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        WindowAggr: windowExpr=[[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS aliased]]
+          EmptyRelation: rows=1
         "
         )
     }
