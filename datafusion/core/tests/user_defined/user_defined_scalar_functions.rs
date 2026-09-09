@@ -1196,6 +1196,10 @@ async fn create_scalar_function_from_sql_statement_invalid_placeholders() -> Res
     "#;
     assert!(ctx.sql(sql).await.is_ok());
 
+    // A function without a body has no placeholders to validate
+    let sql = "CREATE FUNCTION no_body() RETURNS DOUBLE";
+    ctx.state().create_logical_plan(sql).await?;
+
     Ok(())
 }
 
