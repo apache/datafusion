@@ -46,7 +46,6 @@ tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] 
 
 [dev-dependencies]
 arrow-flight = { workspace = true }
-async-trait = { workspace = true }
 base64 = "0.23.0"
 bytes = { workspace = true }
 dashmap = { workspace = true }

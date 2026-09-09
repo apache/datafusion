@@ -87,7 +87,6 @@ use futures::{
     stream::{Stream, StreamExt},
 };
 use rand::{Rng, SeedableRng, rngs::StdRng};
-use tonic::async_trait;
 
 use datafusion::common::{
     DFSchemaRef, DataFusionError, Result, Statistics, internal_err, not_impl_err,

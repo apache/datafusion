@@ -49,7 +49,6 @@ proto = [
 
 [dependencies]
 arrow = { workspace = true }
-async-trait = { workspace = true }
 datafusion-catalog = { workspace = true }
 datafusion-common = { workspace = true }
 futures = { workspace = true }

@@ -30,10 +30,10 @@ pub trait AsyncScalarUDFImpl: ScalarUDFImpl {
     }
 
     /// Invoke the function asynchronously with the async arguments
-    fn invoke_async_with_args<'a>(
-        &'a self,
+    fn invoke_async_with_args(
+        &self,
         args: ScalarFunctionArgs,
-    ) -> BoxFuture<'a, Result<ColumnarValue>>;
+    ) -> BoxFuture<'_, Result<ColumnarValue>>;
 }
 
 /// A scalar UDF that must be invoked using async methods
@@ -155,10 +155,10 @@ mod tests {
         }
     }
     impl AsyncScalarUDFImpl for TestAsyncUDFImpl1 {
-        fn invoke_async_with_args<'a>(
-            &'a self,
+        fn invoke_async_with_args(
+            &self,
             _args: ScalarFunctionArgs,
-        ) -> BoxFuture<'a, Result<ColumnarValue>> {
+        ) -> BoxFuture<'_, Result<ColumnarValue>> {
             Box::pin(async move { todo!() })
         }
     }
@@ -186,10 +186,10 @@ mod tests {
         }
     }
     impl AsyncScalarUDFImpl for TestAsyncUDFImpl2 {
-        fn invoke_async_with_args<'a>(
-            &'a self,
+        fn invoke_async_with_args(
+            &self,
             _args: ScalarFunctionArgs,
-        ) -> BoxFuture<'a, Result<ColumnarValue>> {
+        ) -> BoxFuture<'_, Result<ColumnarValue>> {
             Box::pin(async move { todo!() })
         }
     }

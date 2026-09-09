@@ -1751,7 +1751,6 @@ mod tests {
     use std::fmt::{Debug, Formatter};
 
     use arrow::datatypes::{Field, Metadata, Schema, SchemaRef};
-    use async_trait::async_trait;
 
     use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue, Spans};
     use datafusion_expr::expr::{ScalarFunction, SetComparison, SetQuantifier};
