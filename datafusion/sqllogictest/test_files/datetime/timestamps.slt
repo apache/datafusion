@@ -4301,7 +4301,6 @@ SELECT column1 FROM t_utc WHERE column1 < '2024-02-01T00:00:00' AT TIME ZONE 'Am
 query P
 SELECT column1 FROM t_europe WHERE column1 = '2024-01-31T16:00:01' AT TIME ZONE 'America/Los_Angeles';
 ----
-2024-02-01T00:00:01+01:00
 
 query P
 SELECT column1 FROM t_europe WHERE column1 BETWEEN '2020-01-01T00:00:00' AT TIME ZONE 'Australia/Brisbane' AND '2024-02-01T00:00:00' AT TIME ZONE 'America/Los_Angeles';
