@@ -125,7 +125,13 @@ fn is_lossy_temporal_cast(from_type: &DataType, to_type: &DataType) -> bool {
         && from_tz.is_some() != to_tz.is_some()
     {
         let tz = from_tz.as_ref().or(to_tz.as_ref()).unwrap().as_ref();
-        if tz != "UTC" && tz != "+00:00" && tz != "-00:00" && tz != "Z" {
+        if tz != "UTC"
+            && tz != "+00:00"
+            && tz != "-00:00"
+            && tz != "+0:00"
+            && tz != "-0:00"
+            && tz != "Z"
+        {
             return true;
         }
     }
