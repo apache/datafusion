@@ -628,6 +628,18 @@ impl ExecutionPlan for FilterExec {
             context.session_id(),
             context.task_id()
         );
+        // A predicate that is provably `true` (e.g. after statistics-driven
+        // simplification dropped all conjuncts) makes this operator a
+        // pass-through: hand back the input stream directly instead of
+        // paying mask evaluation, `filter_record_batch`, coalescing and
+        // metrics per batch. Only valid when no projection / fetch needs to
+        // be applied on top of the input batches.
+        if self.predicate.eq(&lit(true))
+            && self.fetch.is_none()
+            && self.projection.is_none()
+        {
+            return self.input.execute(partition, context);
+        }
         let metrics = FilterExecMetrics::new(&self.metrics, partition);
         Ok(Box::pin(FilterExecStream {
             schema: self.schema(),
@@ -1170,14 +1182,15 @@ fn simplify_not_null_conjuncts(
     let Ok(stats) = StatisticsContext::new().compute(input.as_ref(), &StatisticsArgs::new()) else {
         return predicate;
     };
-    let schema = input.schema();
+    // Use the column's schema index directly: `Column::name()` is for display
+    // only and is ambiguous when the input has duplicate field names (e.g.
+    // after a join); the predicate's `Column::index()` is what physical
+    // evaluation uses and what `column_statistics` is keyed by.
     let provably_non_null = |col: &Column| {
-        schema.index_of(col.name()).is_ok_and(|idx| {
-            stats
-                .column_statistics
-                .get(idx)
-                .is_some_and(|cs| matches!(cs.null_count, Precision::Exact(0)))
-        })
+        stats
+            .column_statistics
+            .get(col.index())
+            .is_some_and(|cs| matches!(cs.null_count, Precision::Exact(0)))
     };
 
     let mut kept: Vec<Arc<dyn PhysicalExpr>> = Vec::with_capacity(conjuncts.len());
@@ -1679,6 +1692,90 @@ mod tests {
             Arc::new(IsNotNullExpr::new(col("a", &schema)?));
         let simplified = simplify_not_null_conjuncts(Arc::clone(&predicate), &input);
         assert!(simplified.eq(&predicate), "must keep predicate unchanged");
+        Ok(())
+    }
+
+    #[test]
+    fn not_null_conjunct_uses_column_index_with_duplicate_names() -> Result<()> {
+        // Regression for review feedback: after a join the input schema can
+        // contain duplicate field names. Statistics must be looked up by the
+        // column's schema index, not by name: here field 0 ("a") is provably
+        // non-null while the same-named field 1 ("a") contains NULLs. A
+        // conjunct on field 0 must be dropped and one on field 1 kept.
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("a", DataType::Int64, true),
+        ]);
+        // null_count: field 0 = 0 (proof), field 1 = 5 (NULLs present)
+        let input = stats_exec_with_null_count(&schema, vec![0, 5]);
+
+        let col0 = Column::new("a", 0);
+        let col1 = Column::new("a", 1);
+        assert_eq!(col0.name(), col1.name(), "same name, different index");
+
+        // IS NOT NULL on the provably non-null field 0: dropped.
+        let p0: Arc<dyn PhysicalExpr> = Arc::new(IsNotNullExpr::new(Arc::new(col0)));
+        let simplified = simplify_not_null_conjuncts(Arc::clone(&p0), &input);
+        assert!(
+            simplified.downcast_ref::<Literal>().is_some(),
+            "conjunct on provably non-null field 0 should drop to a literal, got {simplified}"
+        );
+
+        // IS NOT NULL on the same-named field 1 which holds NULLs: kept.
+        let p1: Arc<dyn PhysicalExpr> = Arc::new(IsNotNullExpr::new(Arc::new(col1)));
+        let simplified = simplify_not_null_conjuncts(Arc::clone(&p1), &input);
+        assert!(
+            simplified.eq(&p1),
+            "conjunct on same-named field 1 with NULLs must be kept, got {simplified}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn lit_true_predicate_bypasses_filter_stream() -> Result<()> {
+        // Regression for review feedback: a predicate that simplified to
+        // `lit(true)` (all conjuncts dropped) makes FilterExec a
+        // pass-through — execute() must return the input stream without
+        // building a FilterExecStream (no mask evaluation / coalescing).
+        use crate::test::exec::MockExec;
+        use arrow::array::ArrayRef;
+        use futures::TryStreamExt;
+
+        let batch = RecordBatch::try_from_iter(vec![(
+            "a",
+            Arc::new(arrow::array::Int64Array::from(vec![1, 2, 3])) as ArrayRef,
+        )])?;
+        let schema = batch.schema();
+        // Build input that reports zero nulls so IS NOT NULL simplifies to lit(true)
+        let input = stats_exec_with_null_count(&schema, vec![0]);
+
+        let predicate: Arc<dyn PhysicalExpr> =
+            Arc::new(IsNotNullExpr::new(col("a", &schema)?));
+        let filter = FilterExecBuilder::new(predicate, input).build()?;
+        assert!(
+            filter.predicate().eq(&lit(true)),
+            "predicate should have simplified to lit(true)"
+        );
+
+        // execute() must bypass: create a MockExec that produces one batch,
+        // then verify the filter returns the *same* batch (unfiltered).
+        let mock_input = Arc::new(
+            MockExec::new(vec![Ok(batch.clone())], Arc::clone(&schema))
+                .with_use_task(false),
+        );
+        let filter = FilterExecBuilder::new(lit(true), mock_input).build()?;
+
+        let ctx = Arc::new(TaskContext::default());
+        let mut stream = filter.execute(0, ctx)?;
+        let mut collected = Vec::new();
+        while let Some(b) = stream.try_next().await? {
+            collected.push(b);
+        }
+        assert_eq!(collected.len(), 1, "should return single batch");
+        assert_eq!(
+            collected[0], batch,
+            "batch must pass through unchanged (no mask applied)"
+        );
         Ok(())
     }
 
