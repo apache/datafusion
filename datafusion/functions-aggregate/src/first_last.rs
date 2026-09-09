@@ -404,6 +404,20 @@ struct FirstLastGroupsAccumulator<S: ValueState> {
     // extreme_of_each_group_buf.0[group_idx] -> idx_in_val
     // only valid if extreme_of_each_group_buf.1[group_idx] == true
     extreme_of_each_group_buf: (Vec<usize>, BooleanBufferBuilder),
+    // Set by `get_filtered_extreme_of_each_group` (merge_batch /
+    // convert_to_state), which clears the scoreboard at its start but leaves
+    // its winners' bits set on return. `update_batch_pre_ordered` keeps the
+    // scoreboard all-false between its own batches, but the two can
+    // interleave on one instance (the aggregation stream calls merge_batch on
+    // the same accumulators when replaying spilled state), so the fast path
+    // does one full reset when this is set.
+    extreme_buf_dirty: bool,
+    // Batch-local list of groups touched by `update_batch_pre_ordered`,
+    // reused across batches. It lets winner collection and the scoreboard
+    // reset run in O(groups touched by the batch) instead of
+    // O(total_num_groups): with 1M allocated groups and 64 touched per
+    // batch, a full-scoreboard sweep per batch dominates the runtime.
+    touched_groups_buf: Vec<usize>,
 
     // =========== option ============
 
@@ -450,6 +464,8 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
             is_sets: BooleanBufferBuilder::new(0),
             size_of_orderings: 0,
             extreme_of_each_group_buf: (Vec::new(), BooleanBufferBuilder::new(0)),
+            extreme_buf_dirty: false,
+            touched_groups_buf: Vec::new(),
             pick_first_in_group,
             is_input_pre_ordered,
         })
@@ -628,6 +644,11 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
             }
         }
 
+        // Winners' bits stay set on return; tell the pre-ordered fast path
+        // that the scoreboard needs a reset before it can trust its all-false
+        // invariant again.
+        self.extreme_buf_dirty = true;
+
         Ok(self
             .extreme_of_each_group_buf
             .0
@@ -672,12 +693,22 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
     ) -> Result<()> {
         let vals = &values_and_order_cols[0];
 
-        // Reuse the per-batch scoreboard: `buf.0[g]` is this batch's winning
-        // row for group `g`, valid only while `buf.1[g]` is set.
-        self.extreme_of_each_group_buf.1.truncate(0);
-        self.extreme_of_each_group_buf
-            .1
-            .append_n(self.is_sets.len(), false);
+        // `extreme_of_each_group_buf.1` is sized by `resize_states` and kept
+        // all-false between batches: each batch records the groups it touched
+        // in `touched_groups_buf` and clears exactly those bits before
+        // returning. Neither the reset nor the winner collection may scan
+        // `total_num_groups` -- with 1M allocated groups and 64 touched, a
+        // full sweep turns a ~13us batch into ~400us and erases the win.
+        debug_assert!(self.touched_groups_buf.is_empty());
+        if self.extreme_buf_dirty {
+            // A merge (spill replay) ran on this instance and left its
+            // winners' bits set; restore the all-false invariant once.
+            self.extreme_of_each_group_buf.1.truncate(0);
+            self.extreme_of_each_group_buf
+                .1
+                .append_n(self.is_sets.len(), false);
+            self.extreme_buf_dirty = false;
+        }
 
         for (idx_in_val, &group_idx) in group_indices.iter().enumerate() {
             // A row passes the FILTER clause only when the predicate is
@@ -691,30 +722,28 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
                 continue;
             }
 
+            let touched_this_batch = self.extreme_of_each_group_buf.1.get_bit(group_idx);
             if self.pick_first_in_group
-                && (self.is_sets.get_bit(group_idx)
-                    || self.extreme_of_each_group_buf.1.get_bit(group_idx))
+                && (self.is_sets.get_bit(group_idx) || touched_this_batch)
             {
                 // The first qualifying row wins; groups decided by an earlier
                 // batch (or earlier in this batch) never change again.
                 continue;
             }
+            if !touched_this_batch {
+                self.extreme_of_each_group_buf.1.set_bit(group_idx, true);
+                self.touched_groups_buf.push(group_idx);
+            }
             // For LAST_VALUE, later qualifying rows unconditionally overwrite.
-            self.extreme_of_each_group_buf.1.set_bit(group_idx, true);
             self.extreme_of_each_group_buf.0[group_idx] = idx_in_val;
         }
 
-        let winners = self
-            .extreme_of_each_group_buf
-            .0
-            .iter()
-            .enumerate()
-            .filter(|(group_idx, _)| self.extreme_of_each_group_buf.1.get_bit(*group_idx))
-            .map(|(group_idx, idx_in_val)| (group_idx, *idx_in_val))
-            .collect::<Vec<_>>();
-
         let mut ordering_buf = Vec::with_capacity(self.ordering_req.len());
-        for (group_idx, idx) in winners {
+        // Take the buffer to appease the borrow checker; `update_state`
+        // needs `&mut self`.
+        let touched = std::mem::take(&mut self.touched_groups_buf);
+        for &group_idx in &touched {
+            let idx = self.extreme_of_each_group_buf.0[group_idx];
             extract_row_at_idx_to_buf(
                 &values_and_order_cols[1..],
                 idx,
@@ -722,6 +751,12 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
             )?;
             self.update_state(group_idx, &ordering_buf, vals, idx)?;
         }
+        // Restore the all-false invariant by clearing only the touched bits.
+        for &group_idx in &touched {
+            self.extreme_of_each_group_buf.1.set_bit(group_idx, false);
+        }
+        self.touched_groups_buf = touched;
+        self.touched_groups_buf.clear();
 
         Ok(())
     }
@@ -2872,6 +2907,58 @@ mod tests {
             let out = final_acc.evaluate(EmitTo::All)?;
             assert_eq!(int64_values(&out), vec![Some(900)]);
         }
+        Ok(())
+    }
+
+    /// Winner collection and scoreboard reset must scale with the groups a
+    /// batch touches, not with `total_num_groups`. Correctness side of that:
+    /// sparse high group indices against a large total still resolve.
+    #[test]
+    fn pre_ordered_sparse_groups_large_total() -> Result<()> {
+        let total = 100_000;
+        let mut fast = grouped_acc(false, false, true, false)?;
+        fast.update_batch(
+            &vo_batch(&[Some(10), Some(20)], &[1, 1], &[1, 1]),
+            &[7, 42_000],
+            None,
+            total,
+        )?;
+        fast.update_batch(
+            &vo_batch(&[Some(11), Some(30)], &[2, 1], &[1, 1]),
+            &[7, 99_999],
+            None,
+            total,
+        )?;
+        let out = fast.evaluate(EmitTo::All)?;
+        let vals = int64_values(&out);
+        assert_eq!(vals.len(), total);
+        assert_eq!(vals[7], Some(11));
+        assert_eq!(vals[42_000], Some(20));
+        assert_eq!(vals[99_999], Some(30));
+        assert_eq!(vals[0], None);
+        Ok(())
+    }
+
+    /// The aggregation stream calls `merge_batch` on the same accumulators
+    /// when replaying spilled state, and the tournament helper leaves its
+    /// winners' scoreboard bits set. A later pre-ordered `update_batch` must
+    /// not mistake those for "touched in this batch", or a merged group's
+    /// newer row is dropped from the winner list.
+    #[test]
+    fn pre_ordered_update_after_merge_interleave() -> Result<()> {
+        let merged_state = {
+            let mut partial = grouped_acc(false, false, true, false)?;
+            partial.update_batch(&vo_batch(&[Some(100)], &[1], &[1]), &[0], None, 1)?;
+            partial.state(EmitTo::All)?
+        };
+
+        let mut acc = grouped_acc(false, false, true, false)?;
+        acc.merge_batch(&merged_state, &[0], 1)?;
+        // A newer row (higher ordering key) for the merged group arrives
+        // through the fast path afterwards.
+        acc.update_batch(&vo_batch(&[Some(500)], &[5], &[1]), &[0], None, 1)?;
+        let out = acc.evaluate(EmitTo::All)?;
+        assert_eq!(int64_values(&out), vec![Some(500)]);
         Ok(())
     }
 }

@@ -104,12 +104,14 @@ DROP TABLE multiple_ordered_table;
 # arrives ordered by (b, c), so FIRST/LAST over `ORDER BY c` need comparisons.
 
 statement ok
-COPY (VALUES (1, 1, 5, 100), (1, 1, 6, 101), (1, 2, 1, 200), (1, 2, 2, 201))
+COPY (VALUES
+    (1, 1, 5, 100, false), (1, 1, 6, 101, true),
+    (1, 2, 1, 200, true), (1, 2, 2, 201, false))
 TO 'test_files/scratch/first_last_ordered/rollup.csv'
 OPTIONS ('format.has_header' 'false');
 
 statement ok
-CREATE EXTERNAL TABLE rollup_source (a INT, b INT, c INT, d INT)
+CREATE EXTERNAL TABLE rollup_source (a INT, b INT, c INT, d INT, e BOOLEAN)
 STORED AS CSV
 LOCATION 'test_files/scratch/first_last_ordered/rollup.csv'
 WITH ORDER (a ASC, b ASC, c ASC)
@@ -136,5 +138,46 @@ NULL NULL 201
 1 1 101
 1 2 201
 
+# Boolean is outside groups_accumulator_supported, so these run through
+# GroupsAccumulatorAdapter and the single-group accumulators, which consumed
+# the pre-ordered flag on main already: this covers the latent wrong-results
+# path that existed before this PR, not just the new grouped fast path.
+query IIBB
+SELECT a, b, FIRST_VALUE(e ORDER BY c), LAST_VALUE(e ORDER BY c)
+FROM rollup_source GROUP BY ROLLUP(a, b) ORDER BY a NULLS FIRST, b NULLS FIRST;
+----
+NULL NULL true true
+1 NULL true true
+1 1 false true
+1 2 true false
+
 statement ok
 DROP TABLE rollup_source;
+
+# Tie handling is a user-visible behavior change: among rows whose ordering
+# keys compare equal, the pre-ordered fast path picks the physically last
+# qualifying row for LAST_VALUE (first for FIRST_VALUE), while the tournament
+# path keeps the first-seen row of a tie. Both are valid answers -- which row
+# of a tie wins is unspecified -- but declaring WITH ORDER on a table can
+# change which one a query returns. This pins the fast path's choice.
+statement ok
+COPY (VALUES (1, 1, 10), (1, 1, 11), (2, 1, 20), (2, 1, 21))
+TO 'test_files/scratch/first_last_ordered/ties.csv'
+OPTIONS ('format.has_header' 'false');
+
+statement ok
+CREATE EXTERNAL TABLE tie_source (g INT, ts INT, px INT)
+STORED AS CSV
+LOCATION 'test_files/scratch/first_last_ordered/ties.csv'
+WITH ORDER (g ASC, ts ASC)
+OPTIONS ('format.has_header' 'false');
+
+query III
+SELECT g, FIRST_VALUE(px ORDER BY ts), LAST_VALUE(px ORDER BY ts)
+FROM tie_source GROUP BY g ORDER BY g;
+----
+1 10 11
+2 20 21
+
+statement ok
+DROP TABLE tie_source;
