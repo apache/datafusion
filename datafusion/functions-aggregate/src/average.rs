@@ -1663,6 +1663,31 @@ mod tests {
     }
 
     #[test]
+    fn avg_groups_size_uses_sum_native_type() -> Result<()> {
+        let input_type = DataType::Decimal128(10, 0);
+        let sum_type = DataType::Decimal256(20, 0);
+        let mut accumulator = AvgGroupsAccumulator::<
+            Decimal128Type,
+            _,
+            Decimal256Type,
+            Decimal128Type,
+        >::new(&sum_type, &input_type, |_, _| Ok(0_i128));
+
+        let values = Arc::new(
+            Decimal128Array::from(vec![Some(2), None, Some(4)])
+                .with_precision_and_scale(10, 0)?,
+        );
+        accumulator.update_batch(&[values], &[0, 1, 2], None, 3)?;
+
+        let expected_size = accumulator.counts.capacity() * size_of::<u64>()
+            + accumulator.sums.capacity() * size_of::<i256>()
+            + accumulator.null_state.size();
+        assert_eq!(accumulator.size(), expected_size);
+
+        Ok(())
+    }
+
+    #[test]
     fn average_groups_preserving_reads() -> Result<()> {
         let mut accumulator = AvgGroupsAccumulator::<Float64Type, _>::new(
             &DataType::Float64,
