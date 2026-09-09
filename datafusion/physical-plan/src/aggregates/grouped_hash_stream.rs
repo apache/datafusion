@@ -1558,13 +1558,12 @@ mod tests {
             batch?;
         }
 
-        assert!(
-            aggregate_exec
-                .metrics()
-                .unwrap()
-                .sum_by_name("agg_expr_0_internal_distinct_time")
-                .is_some_and(|metric| metric.as_usize() > 0)
-        );
+        let metrics = aggregate_exec.metrics().unwrap();
+        let distinct_time = metrics
+            .iter()
+            .find(|metric| metric.value().name() == "agg_expr_0_internal_distinct_time")
+            .expect("internal distinct time metric");
+        assert!(distinct_time.value().as_usize() > 0);
 
         Ok(())
     }

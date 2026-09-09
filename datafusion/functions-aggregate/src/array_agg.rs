@@ -857,12 +857,6 @@ pub struct DistinctArrayAggAccumulator {
     distinct_metric: Option<Arc<dyn AggregateMetric>>,
 }
 
-/// Avoid per-group timer overhead when the adapter calls us with a tiny batch.
-///
-/// Batches below this threshold are not large enough for a useful timing
-/// sample, while timing each one adds two clock reads and an atomic update.
-const DISTINCT_METRIC_MIN_BATCH_SIZE: usize = 16;
-
 /// Returns `true` if `dt` is, or recursively contains, a `Dictionary` type.
 ///
 /// `RowConverter` always decodes to the physical (non-dictionary) type, so a
@@ -922,16 +916,12 @@ impl DistinctArrayAggAccumulator {
     }
 }
 
-impl Accumulator for DistinctArrayAggAccumulator {
-    fn set_metrics(&mut self, metrics: Arc<dyn AggregateMetrics>) {
-        self.distinct_metric = Some(metrics.metric("distinct"));
-    }
-
-    fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![self.evaluate()?])
-    }
-
-    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+impl DistinctArrayAggAccumulator {
+    fn update_batch_impl(
+        &mut self,
+        values: &[ArrayRef],
+        record_metric: bool,
+    ) -> Result<()> {
         if values.is_empty() {
             return Ok(());
         }
@@ -961,7 +951,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
             return Ok(());
         }
 
-        let distinct_metric = (col.len() >= DISTINCT_METRIC_MIN_BATCH_SIZE)
+        let distinct_metric = record_metric
             .then(|| self.distinct_metric.as_ref().cloned())
             .flatten();
         let distinct_start = distinct_metric.as_ref().map(|_| Instant::now());
@@ -1015,6 +1005,28 @@ impl Accumulator for DistinctArrayAggAccumulator {
             metric.add_duration(start.elapsed());
         }
         Ok(())
+    }
+}
+
+impl Accumulator for DistinctArrayAggAccumulator {
+    fn set_metrics(&mut self, metrics: Arc<dyn AggregateMetrics>) {
+        self.distinct_metric = Some(metrics.metric("distinct"));
+    }
+
+    fn grouped_update_batch_metric(&self) -> Option<Arc<dyn AggregateMetric>> {
+        self.distinct_metric.as_ref().cloned()
+    }
+
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.update_batch_impl(values, true)
+    }
+
+    fn update_batch_grouped(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.update_batch_impl(values, false)
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![self.evaluate()?])
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
@@ -1514,19 +1526,15 @@ mod tests {
     }
 
     #[test]
-    fn distinct_accumulator_skips_metric_for_small_batches() -> Result<()> {
+    fn distinct_accumulator_records_metric_for_small_batches() -> Result<()> {
         let metric_updates = Arc::new(AtomicUsize::new(0));
         let mut accumulator =
             DistinctArrayAggAccumulator::try_new(&DataType::Int32, None, false)?;
         accumulator.set_metrics(Arc::new(CountingMetrics(Arc::clone(&metric_updates))));
 
-        accumulator.update_batch(&[Arc::new(Int32Array::from(vec![
-            1;
-            DISTINCT_METRIC_MIN_BATCH_SIZE
-                - 1
-        ]))])?;
+        accumulator.update_batch(&[Arc::new(Int32Array::from(vec![1]))])?;
 
-        assert_eq!(metric_updates.load(Ordering::Relaxed), 0);
+        assert_eq!(metric_updates.load(Ordering::Relaxed), 1);
         Ok(())
     }
 
@@ -1537,10 +1545,7 @@ mod tests {
             DistinctArrayAggAccumulator::try_new(&DataType::Int32, None, false)?;
         accumulator.set_metrics(Arc::new(CountingMetrics(Arc::clone(&metric_updates))));
 
-        accumulator.update_batch(&[Arc::new(Int32Array::from(vec![
-            1;
-            DISTINCT_METRIC_MIN_BATCH_SIZE
-        ]))])?;
+        accumulator.update_batch(&[Arc::new(Int32Array::from(vec![1; 16]))])?;
 
         assert_eq!(metric_updates.load(Ordering::Relaxed), 1);
         Ok(())

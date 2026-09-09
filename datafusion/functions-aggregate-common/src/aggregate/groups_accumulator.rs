@@ -24,6 +24,8 @@ pub mod nulls;
 pub mod prim_op;
 
 use std::mem::{size_of, size_of_val};
+use std::sync::Arc;
+use std::time::Instant;
 
 use arrow::array::new_empty_array;
 use arrow::{
@@ -33,7 +35,7 @@ use arrow::{
     datatypes::UInt32Type,
 };
 use datafusion_common::{Result, ScalarValue, arrow_datafusion_err};
-use datafusion_expr_common::accumulator::Accumulator;
+use datafusion_expr_common::accumulator::{Accumulator, AggregateMetric};
 use datafusion_expr_common::groups_accumulator::{
     EmitTo, GroupSelection, GroupsAccumulator,
 };
@@ -102,6 +104,9 @@ pub struct GroupsAccumulatorAdapter {
     /// bottleneck in earlier implementations when there were many
     /// distinct groups.
     allocation_bytes: usize,
+
+    /// Optional aggregate-owned metric timed once for a grouped update batch.
+    grouped_update_metric: Option<Arc<dyn AggregateMetric>>,
 }
 
 struct AccumulatorState {
@@ -139,6 +144,7 @@ impl GroupsAccumulatorAdapter {
             factory: Box::new(factory),
             states: vec![],
             allocation_bytes: 0,
+            grouped_update_metric: None,
         }
     }
 
@@ -152,6 +158,9 @@ impl GroupsAccumulatorAdapter {
         let new_accumulators = total_num_groups - self.states.len();
         for _ in 0..new_accumulators {
             let accumulator = (self.factory)()?;
+            if self.grouped_update_metric.is_none() {
+                self.grouped_update_metric = accumulator.grouped_update_batch_metric();
+            }
             let state = AccumulatorState::new(accumulator);
             self.add_allocation(state.size());
             self.states.push(state);
@@ -191,6 +200,7 @@ impl GroupsAccumulatorAdapter {
         group_indices: &[usize],
         opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
+        time_grouped_update: bool,
         f: F,
     ) -> Result<()>
     where
@@ -245,25 +255,37 @@ impl GroupsAccumulatorAdapter {
         // RecordBatch(es)
         let iter = groups_with_rows.iter().zip(offsets.windows(2));
 
+        let grouped_update_metric = time_grouped_update
+            .then(|| self.grouped_update_metric.as_ref().cloned())
+            .flatten();
+        let start = grouped_update_metric.as_ref().map(|_| Instant::now());
+
         let mut sizes_pre = 0;
         let mut sizes_post = 0;
-        for (&group_idx, offsets) in iter {
-            let state = &mut self.states[group_idx];
-            sizes_pre += state.size();
+        let result: Result<()> = (|| {
+            for (&group_idx, offsets) in iter {
+                let state = &mut self.states[group_idx];
+                sizes_pre += state.size();
 
-            let values_to_accumulate = slice_and_maybe_filter(
-                &values,
-                opt_filter.as_ref().map(|f| f.as_boolean()),
-                offsets,
-            )?;
-            f(state.accumulator.as_mut(), &values_to_accumulate)?;
+                let values_to_accumulate = slice_and_maybe_filter(
+                    &values,
+                    opt_filter.as_ref().map(|f| f.as_boolean()),
+                    offsets,
+                )?;
+                f(state.accumulator.as_mut(), &values_to_accumulate)?;
 
-            // clear out the state so they are empty for next
-            // iteration
-            state.indices.clear();
-            sizes_post += state.size();
+                // clear out the state so they are empty for next
+                // iteration
+                state.indices.clear();
+                sizes_post += state.size();
+            }
+            Ok(())
+        })();
+
+        if let (Some(metric), Some(start)) = (grouped_update_metric, start) {
+            metric.add_duration(start.elapsed());
         }
-
+        result?;
         self.adjust_allocation(sizes_pre, sizes_post);
         Ok(())
     }
@@ -310,8 +332,9 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
             group_indices,
             opt_filter,
             total_num_groups,
+            true,
             |accumulator, values_to_accumulate| {
-                accumulator.update_batch(values_to_accumulate)
+                accumulator.update_batch_grouped(values_to_accumulate)
             },
         )?;
         Ok(())
@@ -412,6 +435,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
             group_indices,
             None,
             total_num_groups,
+            false,
             |accumulator, values_to_accumulate| {
                 accumulator.merge_batch(values_to_accumulate)?;
                 Ok(())
