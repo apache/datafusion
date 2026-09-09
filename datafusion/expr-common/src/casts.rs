@@ -1017,7 +1017,7 @@ mod tests {
         // Naive <-> UTC is NOT lossy (UTC offset is 0, so literal cast is exact)
         assert!(!is_lossy_temporal_cast(&ts_naive, &ts_utc));
         assert!(!is_lossy_temporal_cast(&ts_utc, &ts_naive));
-        
+
         // Naive <-> Non-UTC is lossy because it ignores session timezone
         assert!(is_lossy_temporal_cast(&ts_naive, &ts_sgt));
         assert!(is_lossy_temporal_cast(&ts_sgt, &ts_naive));
