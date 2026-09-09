@@ -43,24 +43,10 @@
 //!    it. Were the counter `Relaxed`, nothing would order a sibling's store
 //!    before the final load even when the decrement happened first.
 //!
-//! # Testing
-//!
-//! Neither property can be pinned down by an ordinary concurrent test. The
+//! Neither property can be pinned down by an ordinary concurrent test: the
 //! window is a few instructions wide, and on x86 a `Relaxed` decrement lowers
-//! to the same instruction as an `AcqRel` one, so a stress test would pass on
-//! the broken version. The invariant is instead model-checked with [loom],
-//! which enumerates the thread interleavings *and* the store visibility the
-//! memory model permits, in `loom_tests` below.
-//!
-//! Because loom can only explore its own atomic types, the protocol is written
-//! once in [`define_probe_completion`] and instantiated twice: over
-//! [`std::sync::atomic`] for the real join, and over `loom::sync::atomic` for
-//! the model. Both instantiations share this single copy of the orderings and
-//! the call sequence, so weakening the decrement to `Relaxed`, or reading the
-//! facts before it, fails the model. That is what makes these tests regression
-//! coverage rather than a restatement of the fix.
-//!
-//! [loom]: https://docs.rs/loom
+//! to the same instruction as an `AcqRel` one. Both are model-checked in
+//! `loom_tests` instead.
 
 use std::sync::atomic::Ordering;
 
@@ -78,13 +64,23 @@ pub(super) struct ProbeSideSummary {
     pub(super) has_null: bool,
 }
 
-/// Defines [`ProbeCompletion`] over a given pair of atomic types.
+/// Defines [`ProbeCompletion`] over the given atomic types.
 ///
-/// The indirection exists so the loom model below can instantiate the very
-/// same logic over loom's atomics. See the [module docs](self); do not add a
-/// second copy of these orderings anywhere.
+/// [loom] can only explore its own atomics, so the protocol is written once
+/// here and instantiated twice: over [`std::sync::atomic`] for the join, and
+/// over `loom::sync::atomic` for the model in `loom_tests`. Both share this
+/// single copy of the orderings and the call sequence, which is what lets the
+/// model speak for the real thing. Keep it that way: a second copy of these
+/// orderings would not be covered.
+///
+/// [loom]: https://docs.rs/loom
 macro_rules! define_probe_completion {
-    ($atomic_usize:ty, $atomic_bool:ty) => {
+    (counter: $counter:ty, flag: $flag:ty) => {
+        /// Counts the probe partitions that are still running.
+        type Counter = $counter;
+        /// One fact, set by any partition and read by the last one.
+        type Flag = $flag;
+
         /// Tracks how many probe partitions are still running, together with
         /// the null-aware facts they contribute.
         ///
@@ -92,20 +88,20 @@ macro_rules! define_probe_completion {
         #[derive(Debug)]
         pub(super) struct ProbeCompletion {
             /// Probe partitions that have not finished yet.
-            running: $atomic_usize,
+            running: Counter,
             /// Set once any probe partition has seen a row.
-            saw_row: $atomic_bool,
+            saw_row: Flag,
             /// Set once any probe partition has seen a NULL join key.
-            saw_null_key: $atomic_bool,
+            saw_null_key: Flag,
         }
 
         impl ProbeCompletion {
             /// Creates the protocol state for `probe_threads` partitions.
             pub(super) fn new(probe_threads: usize) -> Self {
                 Self {
-                    running: <$atomic_usize>::new(probe_threads),
-                    saw_row: <$atomic_bool>::new(false),
-                    saw_null_key: <$atomic_bool>::new(false),
+                    running: Counter::new(probe_threads),
+                    saw_row: Flag::new(false),
+                    saw_null_key: Flag::new(false),
                 }
             }
 
@@ -140,6 +136,8 @@ macro_rules! define_probe_completion {
             /// and acquires those of the partitions that finished earlier, so
             /// the summary handed to the last caller is complete.
             pub(super) fn report_completed(&self) -> Option<ProbeSideSummary> {
+                // `fetch_sub` returns the value from *before* the decrement,
+                // so `1` means this call is the one that took it to zero.
                 let was_last = self.running.fetch_sub(1, Ordering::AcqRel) == 1;
                 was_last.then(|| ProbeSideSummary {
                     non_empty: self.saw_row.load(Ordering::Relaxed),
@@ -151,8 +149,8 @@ macro_rules! define_probe_completion {
 }
 
 define_probe_completion!(
-    std::sync::atomic::AtomicUsize,
-    std::sync::atomic::AtomicBool
+    counter: std::sync::atomic::AtomicUsize,
+    flag: std::sync::atomic::AtomicBool
 );
 
 #[cfg(test)]
@@ -225,8 +223,8 @@ mod loom_tests {
     use std::sync::atomic::Ordering;
 
     define_probe_completion!(
-        loom::sync::atomic::AtomicUsize,
-        loom::sync::atomic::AtomicBool
+        counter: loom::sync::atomic::AtomicUsize,
+        flag: loom::sync::atomic::AtomicBool
     );
 
     /// The invariant behind the fix: whichever partition observes itself to be
