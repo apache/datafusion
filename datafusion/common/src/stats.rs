@@ -382,6 +382,13 @@ pub struct Statistics {
     pub column_statistics: Vec<ColumnStatistics>,
 }
 
+/// Returns `true` when the statistics prove that the input contains no rows.
+///
+/// Inexact or absent row counts are not sufficient to treat an input as empty.
+pub fn is_known_empty(statistics: &Statistics) -> bool {
+    statistics.num_rows == Precision::Exact(0)
+}
+
 /// Fallback to use when NDV overlap can not be estimated from column bounds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum NdvFallback {
@@ -3375,5 +3382,18 @@ mod tests {
         stats.total_byte_size = Precision::Exact(999);
         stats.calculate_total_byte_size(&non_primitive_schema);
         assert_eq!(stats.total_byte_size, Precision::Inexact(999));
+    }
+
+    #[test]
+    fn test_is_known_empty() {
+        let statistics = |num_rows| Statistics {
+            num_rows,
+            ..Default::default()
+        };
+
+        assert!(is_known_empty(&statistics(Precision::Exact(0))));
+        assert!(!is_known_empty(&statistics(Precision::Inexact(0))));
+        assert!(!is_known_empty(&statistics(Precision::Exact(1))));
+        assert!(!is_known_empty(&statistics(Precision::Absent)));
     }
 }

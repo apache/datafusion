@@ -104,25 +104,25 @@ impl PhysicalSortExpr {
         result
     }
 
-    /// Set the sort sort options to ASC
+    /// Set the sort options to ASC
     pub fn asc(mut self) -> Self {
         self.options.descending = false;
         self
     }
 
-    /// Set the sort sort options to DESC
+    /// Set the sort options to DESC
     pub fn desc(mut self) -> Self {
         self.options.descending = true;
         self
     }
 
-    /// Set the sort sort options to NULLS FIRST
+    /// Set the sort options to NULLS FIRST
     pub fn nulls_first(mut self) -> Self {
         self.options.nulls_first = true;
         self
     }
 
-    /// Set the sort sort options to NULLS LAST
+    /// Set the sort options to NULLS LAST
     pub fn nulls_last(mut self) -> Self {
         self.options.nulls_first = false;
         self

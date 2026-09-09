@@ -1593,6 +1593,12 @@ impl DefaultPhysicalPlanner {
 
                 let prefer_hash_join =
                     session_state.config_options().optimizer.prefer_hash_join;
+                // Null-aware joins are pinned to CollectLeft hash joins (see
+                // `HashJoinExec::null_aware`): never repartition them, and
+                // never route them to the sort-merge path below.
+                let can_repartition_join = session_state.config().target_partitions() > 1
+                    && session_state.config().repartition_joins()
+                    && !*null_aware;
 
                 // TODO: Allow PWMJ to deal with residual equijoin conditions
                 let join: Arc<dyn ExecutionPlan> = if join_on.is_empty() {
@@ -1745,24 +1751,15 @@ impl DefaultPhysicalPlanner {
                         vec![SortOptions::default(); join_on_len],
                         *null_equality,
                     )?)
-                } else if session_state.config().target_partitions() > 1
-                    && session_state.config().repartition_joins()
-                    && prefer_hash_join
-                    && !*null_aware
-                // Null-aware joins must use CollectLeft
-                {
-                    Arc::new(HashJoinExec::try_new(
-                        physical_left,
-                        physical_right,
-                        join_on,
-                        join_filter,
-                        join_type,
-                        None,
-                        PartitionMode::Auto,
-                        *null_equality,
-                        *null_aware,
-                    )?)
                 } else {
+                    // Null-aware joins need global probe-side state, so keep
+                    // them in CollectLeft mode.
+                    let partition_mode = if can_repartition_join {
+                        PartitionMode::Auto
+                    } else {
+                        PartitionMode::CollectLeft
+                    };
+
                     Arc::new(HashJoinExec::try_new(
                         physical_left,
                         physical_right,
@@ -1770,7 +1767,7 @@ impl DefaultPhysicalPlanner {
                         join_filter,
                         join_type,
                         None,
-                        PartitionMode::CollectLeft,
+                        partition_mode,
                         *null_equality,
                         *null_aware,
                     )?)
@@ -2759,7 +2756,7 @@ impl DefaultPhysicalPlanner {
                     e.plan.display_graphviz().to_string(),
                 ));
             }
-        };
+        }
 
         if !stringified_plans.is_empty() {
             return Ok(Arc::new(ExplainExec::new(
@@ -4039,6 +4036,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn correlated_not_in_is_null_uses_null_aware_hash_mark_join() -> Result<()> {
+        let query = "
+            SELECT value
+            FROM (
+              VALUES
+                (1, 1, 'a'),
+                (3, 1, 'b'),
+                (1, 2, 'c'),
+                (NULL, 1, 'd'),
+                (5, 3, 'e'),
+                (2, 1, 'f'),
+                (NULL, 2, 'g')
+            ) AS outer_corr_table(id, grp, value)
+            WHERE (id NOT IN (
+              SELECT id
+              FROM (
+                VALUES
+                  (2, 1),
+                  (NULL, 1),
+                  (1, 2)
+              ) AS inner_corr_table(id, grp)
+              WHERE inner_corr_table.grp = outer_corr_table.grp
+            )) IS NULL
+            ORDER BY value";
+
+        let config = SessionConfig::new()
+            .with_target_partitions(4)
+            .set_bool("datafusion.optimizer.prefer_hash_join", false);
+        let ctx = SessionContext::new_with_config(config);
+
+        let plan = ctx.sql(query).await?.create_physical_plan().await?;
+        let formatted = displayable(plan.as_ref()).indent(true).to_string();
+        assert_contains!(
+            &formatted,
+            "HashJoinExec: mode=CollectLeft, join_type=LeftMark"
+        );
+        assert!(!formatted.contains("SortMergeJoinExec"), "{formatted}");
+
+        let batches = ctx.sql(query).await?.collect().await?;
+        assert_batches_eq!(
+            &[
+                "+-------+",
+                "| value |",
+                "+-------+",
+                "| a     |",
+                "| b     |",
+                "| d     |",
+                "| g     |",
+                "+-------+",
+            ],
+            &batches
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn scalar_subquery_in_projection_and_filter_plans() -> Result<()> {
         let plan = plan_sql(
             "SELECT x + (SELECT max(y) FROM (VALUES (10), (20)) AS u(y)) \
@@ -4327,9 +4381,6 @@ mod tests {
 
         let plan = plan(&logical_plan).await?;
 
-        // c12 is f64, c7 is u8 -> cast c7 to f64
-        // the cast here is implicit so has CastOptions with safe=true
-        let _expected = "predicate: BinaryExpr { left: TryCastExpr { expr: Column { name: \"c7\", index: 6 }, cast_type: Float64 }, op: Lt, right: Column { name: \"c12\", index: 11 } }";
         let plan_debug_str = format!("{plan:?}");
         assert!(plan_debug_str.contains("GlobalLimitExec"));
         assert!(plan_debug_str.contains("skip: 3"));

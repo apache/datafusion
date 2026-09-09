@@ -58,8 +58,8 @@ use datafusion_common::{
 };
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
-    AsOfMatch, ExplainOption, ScalarUDF, SortExpr, TableProviderFilterPushDown,
-    UNNAMED_TABLE, case, dml::InsertOp, is_null, lit, utils::COUNT_STAR_EXPANSION,
+    ExplainOption, ScalarUDF, SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE, case,
+    dml::InsertOp, is_null, lit, utils::COUNT_STAR_EXPANSION,
 };
 use datafusion_functions::core::coalesce;
 use datafusion_functions::math::nanvl;
@@ -1382,17 +1382,18 @@ impl DataFrame {
 
     /// Join this `DataFrame` to the closest eligible row in `right`.
     ///
-    /// Every left row is emitted exactly once. `on` contains optional equality
-    /// expressions and `match_condition` selects the ordered predecessor or
-    /// successor from the matching right group.
+    /// Every left row is emitted exactly once. When present, `on` must contain
+    /// equality comparisons combined with `AND`. `match_condition` must be a
+    /// single `<`, `<=`, `>`, or `>=` comparison whose left and right operands
+    /// reference this `DataFrame` and `right`, respectively.
     pub fn join_asof(
         self,
         right: DataFrame,
-        on: Vec<(Expr, Expr)>,
-        match_condition: AsOfMatch,
+        on: Option<Expr>,
+        match_condition: Expr,
     ) -> Result<DataFrame> {
         let plan = LogicalPlanBuilder::from(self.plan)
-            .asof_join(right.plan, on, match_condition)?
+            .asof_join_on(right.plan, on, match_condition)?
             .build()?;
         Ok(DataFrame {
             session_state: self.session_state,
@@ -1407,7 +1408,7 @@ impl DataFrame {
         self,
         right: DataFrame,
         using_keys: Vec<Column>,
-        match_condition: AsOfMatch,
+        match_condition: Expr,
     ) -> Result<DataFrame> {
         let plan = LogicalPlanBuilder::from(self.plan)
             .asof_join_using(right.plan, using_keys, match_condition)?
@@ -2653,7 +2654,7 @@ impl DataFrame {
     /// # async fn main() -> Result<()> {
     /// let id: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
     /// let name: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar", "baz"]));
-    /// let df = DataFrame::from_columns(vec![("id", id), ("name", name)])?;
+    /// let df = DataFrame::from_columns([("id", id), ("name", name)])?;
     /// let expected = vec![
     ///     "+----+------+",
     ///     "| id | name |",
@@ -2667,17 +2668,16 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn from_columns(columns: Vec<(&str, ArrayRef)>) -> Result<Self> {
-        let fields = columns
-            .iter()
-            .map(|(name, array)| Field::new(*name, array.data_type().clone(), true))
-            .collect::<Vec<_>>();
-
-        let arrays = columns
+    pub fn from_columns<'a, I>(columns: I) -> Result<Self>
+    where
+        I: IntoIterator<Item = (&'a str, ArrayRef)>,
+    {
+        let (fields, arrays): (Vec<_>, Vec<_>) = columns
             .into_iter()
-            .map(|(_, array)| array)
-            .collect::<Vec<_>>();
-
+            .map(|(name, array)| {
+                (Field::new(name, array.data_type().clone(), true), array)
+            })
+            .unzip();
         let schema = Arc::new(Schema::new(fields));
         let batch = RecordBatch::try_new(schema, arrays)?;
         let ctx = SessionContext::new();
@@ -2734,7 +2734,7 @@ macro_rules! dataframe {
         use datafusion::prelude::DataFrame;
         use datafusion::common::test_util::IntoArrayRef;
 
-        let columns = vec![
+        let columns = [
             $(
                 ($name, $data.into_array_ref()),
             )+

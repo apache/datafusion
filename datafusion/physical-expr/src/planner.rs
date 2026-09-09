@@ -27,7 +27,7 @@ use crate::{
 use arrow::datatypes::Schema;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::datatype::FieldExt;
-use datafusion_common::metadata::{FieldMetadata, format_type_and_metadata};
+use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
     DFSchema, Result, ScalarValue, TableReference, ToDFSchema, exec_err,
     internal_datafusion_err, not_impl_err, plan_datafusion_err, plan_err,
@@ -387,23 +387,11 @@ pub fn create_physical_expr(
         Expr::Cast(Cast { expr, field }) => expressions::cast_with_target_field(
             create_physical_expr(expr, input_dfschema, execution_props, planning_ctx)?,
             input_schema,
-            Arc::clone(field),
+            field,
             None,
         ),
         Expr::TryCast(TryCast { expr, field }) => {
-            if !field.metadata().is_empty() {
-                let (_, src_field) = expr.to_field(input_dfschema)?;
-                return plan_err!(
-                    "TryCast from {} to {} is not supported",
-                    format_type_and_metadata(
-                        src_field.data_type(),
-                        Some(src_field.metadata()),
-                    ),
-                    format_type_and_metadata(field.data_type(), Some(field.metadata()))
-                );
-            }
-
-            expressions::try_cast(
+            expressions::try_cast_with_target_field(
                 create_physical_expr(
                     expr,
                     input_dfschema,
@@ -411,7 +399,7 @@ pub fn create_physical_expr(
                     planning_ctx,
                 )?,
                 input_schema,
-                field.data_type().clone(),
+                field,
             )
         }
         Expr::Not(expr) => expressions::not(create_physical_expr(
@@ -535,10 +523,12 @@ pub fn create_physical_expr(
                             schema.fields().len()
                         );
                     }
-                    let dt = schema.field(0).data_type().clone();
-                    Ok(Arc::new(ScalarSubqueryExpr::new(
-                        dt,
+                    let output_field = schema.field(0);
+                    let metadata = FieldMetadata::from(output_field.as_ref());
+                    Ok(Arc::new(ScalarSubqueryExpr::new_with_metadata(
+                        output_field.data_type().clone(),
                         e.nullable(input_dfschema)?,
+                        (!metadata.is_empty()).then_some(metadata),
                         index,
                         planning_ctx.results().clone(),
                     )))
@@ -743,6 +733,7 @@ pub fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
 mod tests {
     use arrow::array::{ArrayRef, BooleanArray, RecordBatch, StringArray};
     use arrow::datatypes::{DataType, Field};
+    use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
     use datafusion_common::HashMap;
     use datafusion_expr::physical_planning_context::{
         ScalarSubqueryResults, SubqueryIndex,
@@ -769,6 +760,14 @@ mod tests {
         physical
             .downcast_ref::<expressions::CastExpr>()
             .expect("planner should lower logical CAST to CastExpr")
+    }
+
+    fn as_planner_try_cast(
+        physical: &Arc<dyn PhysicalExpr>,
+    ) -> &expressions::TryCastExpr {
+        physical
+            .downcast_ref::<expressions::TryCastExpr>()
+            .expect("planner should lower logical TRY_CAST to TryCastExpr")
     }
 
     #[test]
@@ -831,11 +830,60 @@ mod tests {
     }
 
     #[test]
+    fn scalar_subquery_preserves_output_field_metadata() -> Result<()> {
+        let metadata = FieldMetadata::from(HashMap::from([(
+            EXTENSION_TYPE_NAME_KEY.to_string(),
+            "example.extension".to_string(),
+        )]));
+        let plan = LogicalPlanBuilder::empty(true)
+            .project(vec![
+                lit("a").alias_with_metadata("geometry", Some(metadata)),
+            ])?
+            .build()?;
+        let expr = scalar_subquery(Arc::new(plan));
+        let Expr::ScalarSubquery(subquery) = &expr else {
+            unreachable!()
+        };
+
+        let index = SubqueryIndex::new(0);
+        let planning_ctx = PhysicalPlanningContext::new(
+            HashMap::from([(subquery.clone(), index)]),
+            ScalarSubqueryResults::new(1),
+        );
+        let physical_expr = create_physical_expr(
+            &expr,
+            &DFSchema::empty(),
+            &ExecutionProps::new(),
+            &planning_ctx,
+        )?;
+
+        let field = physical_expr.return_field(&Schema::empty())?;
+        assert_eq!(
+            field.metadata().get(EXTENSION_TYPE_NAME_KEY),
+            Some(&"example.extension".to_string()),
+            "scalar subquery physical expr must keep ARROW extension metadata: {field:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_cast_lowering_preserves_target_field_metadata() -> Result<()> {
         let schema = test_cast_schema();
+
+        // Target field with both extension metadata and custom metadata.
+        // With exact target metadata semantics, all target metadata should propagate.
         let target_field = Arc::new(
-            Field::new("cast_target", DataType::Int64, true)
-                .with_metadata([("target_meta".to_string(), "1".to_string())].into()),
+            Field::new("cast_target", DataType::Int64, true).with_metadata(
+                [
+                    (
+                        EXTENSION_TYPE_NAME_KEY.to_string(),
+                        "arrow.json".to_string(),
+                    ),
+                    (EXTENSION_TYPE_METADATA_KEY.to_string(), "{}".to_string()),
+                    ("custom_target_meta".to_string(), "custom_value".to_string()),
+                ]
+                .into(),
+            ),
         );
         let cast_expr = Expr::Cast(Cast::new_from_field(
             Box::new(col("a")),
@@ -845,8 +893,35 @@ mod tests {
         let physical = lower_cast_expr(&cast_expr, &schema)?;
         let cast = as_planner_cast(&physical);
 
-        assert_eq!(cast.target_field(), &target_field);
-        assert_eq!(physical.return_field(&schema)?, target_field);
+        // The CastExpr stores the target type and all target metadata
+        assert_eq!(cast.cast_type(), &DataType::Int64);
+        let target_metadata = cast.target_metadata().expect("should have metadata");
+        assert_eq!(
+            target_metadata.get(EXTENSION_TYPE_NAME_KEY),
+            Some(&"arrow.json".to_string())
+        );
+        assert_eq!(
+            target_metadata.get(EXTENSION_TYPE_METADATA_KEY),
+            Some(&"{}".to_string())
+        );
+        assert_eq!(cast.target_nullable(), Some(true));
+
+        // return_field should have all target metadata (exact semantics)
+        let returned = physical.return_field(&schema)?;
+        assert_eq!(
+            returned.metadata().get(EXTENSION_TYPE_NAME_KEY),
+            Some(&"arrow.json".to_string())
+        );
+        assert_eq!(
+            returned.metadata().get(EXTENSION_TYPE_METADATA_KEY),
+            Some(&"{}".to_string())
+        );
+        // All target metadata should propagate with exact semantics
+        assert_eq!(
+            returned.metadata().get("custom_target_meta"),
+            Some(&"custom_value".to_string()),
+            "All target metadata should propagate with exact semantics"
+        );
         assert!(physical.nullable(&schema)?);
 
         Ok(())
@@ -872,22 +947,85 @@ mod tests {
     #[test]
     fn test_cast_lowering_preserves_same_type_field_semantics() -> Result<()> {
         let schema = test_cast_schema();
+
+        // Same-type cast with extension metadata on target.
+        // With exact target metadata semantics, all target metadata should propagate.
         let target_field = Arc::new(
             Field::new("same_type_cast", DataType::Int32, true).with_metadata(
-                [("target_meta".to_string(), "same-type".to_string())].into(),
+                [
+                    (
+                        EXTENSION_TYPE_NAME_KEY.to_string(),
+                        "arrow.opaque".to_string(),
+                    ),
+                    ("custom_meta".to_string(), "custom_value".to_string()),
+                ]
+                .into(),
             ),
         );
-        let cast_expr = Expr::Cast(Cast::new_from_field(
-            Box::new(col("a")),
-            Arc::clone(&target_field),
-        ));
 
-        let physical = lower_cast_expr(&cast_expr, &schema)?;
-        let cast = as_planner_cast(&physical);
+        for use_try_cast in [false, true] {
+            // For error labelling
+            let cast_name = if use_try_cast { "TRY_CAST" } else { "CAST" };
 
-        assert_eq!(cast.target_field(), &target_field);
-        assert_eq!(physical.return_field(&schema)?, target_field);
-        assert!(physical.nullable(&schema)?);
+            let cast_expr = if use_try_cast {
+                Expr::TryCast(TryCast::new_from_field(
+                    Box::new(col("a")),
+                    Arc::clone(&target_field),
+                ))
+            } else {
+                Expr::Cast(Cast::new_from_field(
+                    Box::new(col("a")),
+                    Arc::clone(&target_field),
+                ))
+            };
+
+            let physical = lower_cast_expr(&cast_expr, &schema)?;
+
+            // Extract common fields - both CastExpr and TryCastExpr have these
+            let (cast_type, target_metadata, target_nullable) = if use_try_cast {
+                let cast = as_planner_try_cast(&physical);
+                (cast.cast_type(), cast.target_metadata(), None)
+            } else {
+                let cast = as_planner_cast(&physical);
+                (
+                    cast.cast_type(),
+                    cast.target_metadata(),
+                    cast.target_nullable(),
+                )
+            };
+
+            // Verify the physical expression stores correct metadata (same for both)
+            assert_eq!(cast_type, &DataType::Int32, "{cast_name}: cast_type");
+            let target_metadata = target_metadata.expect("should have metadata");
+            assert_eq!(
+                target_metadata.get(EXTENSION_TYPE_NAME_KEY),
+                Some(&"arrow.opaque".to_string()),
+                "{cast_name}: extension type name"
+            );
+
+            // Only CastExpr tracks target_nullable (TryCast is always nullable)
+            if !use_try_cast {
+                assert_eq!(target_nullable, Some(true), "{cast_name}: target_nullable");
+            }
+
+            // return_field should have all target metadata (exact semantics)
+            let returned = physical.return_field(&schema)?;
+            assert_eq!(
+                returned.metadata().get(EXTENSION_TYPE_NAME_KEY),
+                Some(&"arrow.opaque".to_string()),
+                "{cast_name}: return_field extension type name"
+            );
+            // All target metadata should propagate with exact semantics
+            assert_eq!(
+                returned.metadata().get("custom_meta"),
+                Some(&"custom_value".to_string()),
+                "{cast_name}: All target metadata should propagate with exact semantics"
+            );
+            assert!(
+                physical.nullable(&schema)?,
+                "{cast_name}: should be nullable"
+            );
+        }
 
         Ok(())
     }

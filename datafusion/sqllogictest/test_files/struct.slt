@@ -1732,3 +1732,23 @@ drop view leaf_view;
 
 statement ok
 drop table leaf_base;
+
+# LIMIT can slice a List batch while retaining unreachable backing children
+statement ok
+create table list_cast_limit as
+select * from (values
+  (1, [struct('1')]),
+  (2, [struct('2')]),
+  (3, [struct('bad')])
+) as t(i, l);
+
+query ?
+select arrow_cast(l, 'List(Struct("c0": Int32))')
+from list_cast_limit
+limit 2;
+----
+[{c0: 1}]
+[{c0: 2}]
+
+statement ok
+drop table list_cast_limit;

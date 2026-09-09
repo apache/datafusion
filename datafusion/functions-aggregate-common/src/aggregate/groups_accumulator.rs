@@ -34,7 +34,9 @@ use arrow::{
 };
 use datafusion_common::{Result, ScalarValue, arrow_datafusion_err};
 use datafusion_expr_common::accumulator::Accumulator;
-use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
+use datafusion_expr_common::groups_accumulator::{
+    EmitTo, GroupSelection, GroupsAccumulator,
+};
 
 /// An adapter that implements [`GroupsAccumulator`] for any [`Accumulator`]
 ///
@@ -335,6 +337,34 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         result
     }
 
+    fn evaluate_preserving(&mut self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
+        selection.validate_num_groups(self.states.len())?;
+        let selected_len = selection.len();
+        if selected_len == 0 {
+            // ScalarValue::iter_to_array needs at least one value to infer the
+            // output type, so evaluate a temporary empty accumulator.
+            let mut accumulator = (self.factory)()?;
+            return Ok(ScalarValue::iter_to_array([accumulator.evaluate()?])?.slice(0, 0));
+        }
+
+        let mut results = Vec::with_capacity(selected_len);
+        for group_index in selection.iter() {
+            let (result, size_pre, size_post) = {
+                let state = &mut self.states[group_index];
+                let size_pre = state.size();
+                let result = state.accumulator.evaluate()?;
+                (result, size_pre, state.size())
+            };
+            self.adjust_allocation(size_pre, size_post);
+            results.push(result);
+        }
+        ScalarValue::iter_to_array(results)
+    }
+
+    fn supports_evaluate_preserving(&self) -> bool {
+        true
+    }
+
     // filtered_null_mask(opt_filter, &values);
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let vec_size_pre = self.states.allocated_size();
@@ -497,5 +527,53 @@ pub(crate) fn slice_and_maybe_filter(
             .collect()
     } else {
         Ok(sliced_arrays)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::min_max::MaxAccumulator;
+    use arrow::array::{AsArray, Int64Array};
+    use arrow::datatypes::{DataType, Int64Type};
+
+    #[test]
+    fn adapter_preserving_evaluation_uses_accumulator_contract() -> Result<()> {
+        let mut accumulator = GroupsAccumulatorAdapter::new(|| {
+            Ok(Box::new(MaxAccumulator::try_new(&DataType::Int64)?)
+                as Box<dyn Accumulator>)
+        });
+        let values = Arc::new(Int64Array::from(vec![Some(1), Some(5), Some(2), None]));
+        accumulator.update_batch(&[values], &[0, 0, 1, 2], None, 4)?;
+
+        let selection = GroupSelection::try_from_indices(&[1, 0, 3, 1], 4)?;
+        let expected = Int64Array::from(vec![Some(2), Some(5), None, Some(2)]);
+        for _ in 0..2 {
+            assert_eq!(
+                accumulator
+                    .evaluate_preserving(selection)?
+                    .as_primitive::<Int64Type>(),
+                &expected
+            );
+        }
+
+        let empty =
+            accumulator.evaluate_preserving(GroupSelection::try_from_indices(&[], 4)?)?;
+        assert_eq!(empty.data_type(), &DataType::Int64);
+        assert!(empty.is_empty());
+
+        let values = Arc::new(Int64Array::from(vec![7, 4, 9]));
+        accumulator.update_batch(&[values], &[0, 2, 3], None, 4)?;
+        assert_eq!(
+            accumulator
+                .evaluate_preserving(GroupSelection::all(4))?
+                .as_primitive::<Int64Type>(),
+            &Int64Array::from(vec![Some(7), Some(2), Some(4), Some(9)])
+        );
+        assert!(accumulator.supports_evaluate_preserving());
+        assert!(!accumulator.supports_state_preserving());
+        Ok(())
     }
 }

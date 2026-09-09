@@ -91,7 +91,7 @@ async fn dynamic_rg_pruning_metric_fires_for_topk_descending_limit() {
 
     let output = ctx.query("SELECT v FROM t ORDER BY v DESC LIMIT 5").await;
 
-    assert_eq!(output.result_rows, 5, "query must return LIMIT rows",);
+    assert_eq!(output.result_rows, 5, "query must return LIMIT rows");
 
     let pruned = output
         .row_groups_pruned_dynamic_filter()

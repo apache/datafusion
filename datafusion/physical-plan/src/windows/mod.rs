@@ -568,7 +568,7 @@ pub(crate) fn window_equivalence_properties(
                                 Arc::new(window_col),
                                 SortOptions::new(true, false),
                             )]);
-                        };
+                        }
                     }
                 }
             }
@@ -615,7 +615,7 @@ pub fn get_best_fitting_window(
         // Executor has bounded input and `input_order_mode` is not `InputOrderMode::Sorted`
         // in this case removing the sort is not helpful, return:
         return Ok(None);
-    };
+    }
 
     let window_expr = if should_reverse {
         if let Some(reversed_window_expr) = window_exprs

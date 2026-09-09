@@ -377,7 +377,7 @@ fn from_table_reference(
 /// method to be used to deserialize nodes
 /// serialized by [from_table_source]
 fn to_table_source(
-    node: &Option<Box<LogicalPlanNode>>,
+    node: Option<&LogicalPlanNode>,
     ctx: &TaskContext,
     extension_codec: &dyn LogicalExtensionCodec,
 ) -> Result<Arc<dyn TableSource>> {
@@ -862,7 +862,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .with_definition(definition)
                         .with_unbounded(create_extern_table.unbounded)
                         .with_options(create_extern_table.options.clone())
-                        .with_constraints(constraints.into())
+                        .with_constraints(constraints.try_into()?)
                         .with_column_defaults(column_defaults)
                         .build(),
                     ),
@@ -1300,7 +1300,8 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::Dml(dml_node) => {
                 let table_name =
                     from_table_reference(dml_node.table_name.as_ref(), "DML ")?;
-                let target = to_table_source(&dml_node.target, ctx, extension_codec)?;
+                let target =
+                    to_table_source(dml_node.target.as_deref(), ctx, extension_codec)?;
                 let write_op =
                     from_proto::parse_write_op(dml_node, ctx, extension_codec)?;
                 Ok(LogicalPlan::Dml(DmlStatement::new(

@@ -1256,7 +1256,7 @@ impl SessionContext {
                     builder.with_max_spill_merge_fan_in(DEFAULT_MAX_SPILL_MERGE_FAN_IN);
             }
             _ => return plan_err!("Unknown runtime configuration: {variable}"),
-        };
+        }
         *state = SessionStateBuilder::from(state.clone())
             .with_runtime_env(Arc::new(builder.build()?))
             .build();
@@ -1517,7 +1517,7 @@ impl SessionContext {
                 self.state.write().register_higher_order_function(f)?;
             }
             RegisterFunction::Table(name, f) => self.register_udtf(&name, f),
-        };
+        }
 
         self.return_empty_dataframe()
     }

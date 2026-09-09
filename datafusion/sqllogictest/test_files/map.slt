@@ -618,21 +618,21 @@ query ????
 select map_extract(MAP {'a': 1, 'b': NULL, 'c': 3}, 'a'), map_extract(MAP {'a': 1, 'b': NULL, 'c': 3}, 'b'),
        map_extract(MAP {'a': 1, 'b': NULL, 'c': 3}, 'c'), map_extract(MAP {'a': 1, 'b': NULL, 'c': 3}, 'd');
 ----
-[1] [NULL] [3] [NULL]
+[1] [NULL] [3] []
 
 # key is integer
 query ????
 select map_extract(MAP {1: 1, 2: NULL, 3:3}, 1), map_extract(MAP {1: 1, 2: NULL, 3:3}, 2),
        map_extract(MAP {1: 1, 2: NULL, 3:3}, 3), map_extract(MAP {1: 1, 2: NULL, 3:3}, 4);
 ----
-[1] [NULL] [3] [NULL]
+[1] [NULL] [3] []
 
 # value is list
 query ????
 select map_extract(MAP {1: [1, 2], 2: NULL, 3:[3]}, 1), map_extract(MAP {1: [1, 2], 2: NULL, 3:[3]}, 2),
        map_extract(MAP {1: [1, 2], 2: NULL, 3:[3]}, 3), map_extract(MAP {1: [1, 2], 2: NULL, 3:[3]}, 4);
 ----
-[[1, 2]] [NULL] [[3]] [NULL]
+[[1, 2]] [NULL] [[3]] []
 
 # key in map and query key are different types
 query ?????
@@ -640,7 +640,7 @@ select map_extract(MAP {1: 1, 2: 2, 3:3}, '1'), map_extract(MAP {1: 1, 2: 2, 3:3
        map_extract(MAP {1.0: 1, 2: 2, 3:3}, '1'), map_extract(MAP {'1': 1, '2': 2, '3':3}, 1.0),
        map_extract(MAP {arrow_cast('1', 'Utf8View'): 1, arrow_cast('2', 'Utf8View'): 2, arrow_cast('3', 'Utf8View'):3}, '1');
 ----
-[1] [1] [1] [NULL] [1]
+[1] [1] [1] [] [1]
 
 # null arg
 query ?
@@ -648,14 +648,47 @@ select map_extract(NULL, 'a');
 ----
 NULL
 
+# Empty maps, null lookup keys, and the element_at alias
+query ????
+select map_extract(map(CAST([] AS VARCHAR[]), CAST([] AS INT[])), 'a'), map_extract(MAP {'a': 1}, NULL),
+       element_at(MAP {'a': 1, 'b': NULL}, 'missing'), element_at(MAP {'a': 1, 'b': NULL}, 'b');
+----
+[] [] [] [NULL]
+
+# Materialize a dictionary of structs so extracting d preserves a valid dictionary
+# index pointing to a null value. A typed null instead has a null dictionary index.
+statement ok
+CREATE TABLE map_extract_dictionary_structs AS
+SELECT arrow_cast(
+    named_struct('d', CAST(NULL AS VARCHAR)),
+    'Dictionary(Int8, Struct("d": Utf8))'
+) AS s;
+
+# These non-null struct keys compare equal despite their different null encodings.
+query B??
+WITH keys AS (
+    SELECT named_struct('d', s['d']) AS stored_key,
+           named_struct('d', arrow_cast(NULL, 'Dictionary(Int8, Utf8)')) AS query_key
+    FROM map_extract_dictionary_structs
+)
+SELECT stored_key = query_key,
+       map_extract(MAP {stored_key: 42}, query_key),
+       map_extract(MAP {query_key: 42}, stored_key)
+FROM keys;
+----
+true [42] [42]
+
+statement ok
+DROP TABLE map_extract_dictionary_structs;
+
 # map_extract with columns
 query ???
 select map_extract(column1, 1), map_extract(column1, 5), map_extract(column1, 7) from map_array_table_1;
 ----
-[[1, NULL, 3]] [NULL] [NULL]
-[NULL] [[4, NULL, 6]] [NULL]
-[NULL] [NULL] [[1, NULL, 3]]
-[NULL] [NULL] [NULL]
+[[1, NULL, 3]] [] []
+[] [[4, NULL, 6]] []
+[] [] [[1, NULL, 3]]
+NULL NULL NULL
 
 query ?
 select column1[1] from map_array_table_1;
@@ -699,22 +732,22 @@ select map_extract(column1, column2), map_extract(column1, column3), map_extract
 ----
 [[1, NULL, 3]] [[1, NULL, 3]] [[1, NULL, 3]]
 [[4, NULL, 6]] [[4, NULL, 6]] [[4, NULL, 6]]
-[NULL] [NULL] [NULL]
-[NULL] [NULL] [NULL]
+[] [] []
+NULL NULL NULL
 
 query ???
 select map_extract(column1, column2), map_extract(column1, column3), map_extract(column1, column4) from map_array_table_2;
 ----
-[[1, NULL, 3]] [NULL] [[1, NULL, 3]]
-[[4, NULL, 6]] [NULL] [[4, NULL, 6]]
-[NULL] [NULL] [NULL]
+[[1, NULL, 3]] [] [[1, NULL, 3]]
+[[4, NULL, 6]] [] [[4, NULL, 6]]
+[] [] []
 
 query ???
 select map_extract(column1, 1), map_extract(column1, 5), map_extract(column1, 7) from map_array_table_2;
 ----
-[[1, NULL, 3]] [NULL] [NULL]
-[NULL] [[4, NULL, 6]] [NULL]
-[NULL] [NULL] [[1, NULL, 3]]
+[[1, NULL, 3]] [] []
+[] [[4, NULL, 6]] []
+[] [] [[1, NULL, 3]]
 
 # Tests for map_entries
 

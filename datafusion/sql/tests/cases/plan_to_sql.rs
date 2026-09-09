@@ -393,12 +393,93 @@ fn roundtrip_statement_with_dialect_4() -> Result<(), DataFusionError> {
 }
 
 #[test]
+fn roundtrip_rebases_derived_projection_references() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select j1_id from (select ta.j1_id as j1_id from j1 ta);",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT j1_id FROM (SELECT ta.j1_id FROM j1 AS ta)",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select j1_id from (select ta.j1_id as j1_id from j1 ta);",
+        parser_dialect: MySqlDialect {},
+        unparser_dialect: UnparserMySqlDialect {},
+        expected: @"SELECT `derived_projection`.`j1_id` FROM (SELECT `ta`.`j1_id` FROM `j1` AS `ta`) AS `derived_projection`",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select j1_id from (select ta.j1_id as j1_id from j1 ta) order by j1_id;",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT j1_id FROM (SELECT ta.j1_id FROM j1 AS ta) ORDER BY j1_id ASC NULLS LAST",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select j1_id from (select ta.j1_id as j1_id from j1 ta) order by j1_id;",
+        parser_dialect: MySqlDialect {},
+        unparser_dialect: UnparserMySqlDialect {},
+        expected: @"SELECT `derived_projection`.`j1_id` FROM (SELECT `ta`.`j1_id` FROM `j1` AS `ta`) AS `derived_projection` ORDER BY `derived_projection`.`j1_id` ASC",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select j1_id from (select ta.j1_id as j1_id from j1 ta) where j1_id > 1;",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT j1_id FROM (SELECT ta.j1_id FROM j1 AS ta WHERE (ta.j1_id > 1))",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select j1_id from (select ta.j1_id as j1_id from j1 ta) where j1_id > 1;",
+        parser_dialect: MySqlDialect {},
+        unparser_dialect: UnparserMySqlDialect {},
+        expected: @"SELECT `derived_projection`.`j1_id` FROM (SELECT `ta`.`j1_id` FROM `j1` AS `ta` WHERE (`ta`.`j1_id` > 1)) AS `derived_projection`",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select j1_id from (select distinct ta.j1_id as j1_id from j1 ta);",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT j1_id FROM (SELECT DISTINCT ta.j1_id FROM j1 AS ta)",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select j1_id from (select distinct ta.j1_id as j1_id from j1 ta);",
+        parser_dialect: MySqlDialect {},
+        unparser_dialect: UnparserMySqlDialect {},
+        expected: @"SELECT `derived_distinct`.`j1_id` FROM (SELECT DISTINCT `ta`.`j1_id` FROM `j1` AS `ta`) AS `derived_distinct`",
+    );
+
+    let statement = Parser::new(&GenericDialect {})
+        .try_with_sql("select j1_id from (select ta.j1_id as j1_id from j1 ta)")?
+        .parse_statement()?;
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let plan = SqlToRel::new(&context).sql_statement_to_plan(statement)?;
+    let plan = LogicalPlanBuilder::from(plan)
+        .filter(col("ta.j1_id").gt(lit(1)))?
+        .build()?;
+    let unparser = Unparser::new(&UnparserMySqlDialect {});
+    assert_snapshot!(
+        unparser.plan_to_sql(&plan)?,
+        @"SELECT `derived_projection`.`j1_id` FROM (SELECT `ta`.`j1_id` FROM `j1` AS `ta`) AS `derived_projection` WHERE (`derived_projection`.`j1_id` > 1)"
+    );
+
+    let schema = Schema::new(vec![Field::new("j1_id", DataType::Int32, false)]);
+    let plan = table_scan(Some("j1"), &schema, None)?
+        .alias("ta")?
+        .project(vec![col("ta.j1_id")])?
+        .filter(col("ta.j1_id").gt(lit(0)))?
+        .project(vec![lit(1)])?
+        .build()?;
+    assert_snapshot!(
+        unparser.plan_to_sql(&plan)?,
+        @"SELECT 1 FROM (SELECT `ta`.`j1_id` FROM `j1` AS `ta`) AS `derived_projection` WHERE (`derived_projection`.`j1_id` > 0)"
+    );
+    Ok(())
+}
+
+#[test]
 fn roundtrip_statement_with_dialect_5() -> Result<(), DataFusionError> {
     roundtrip_statement_with_dialect_helper!(
         sql: "select j1_id from (select j1_id from j1 limit 10);",
         parser_dialect: MySqlDialect {},
         unparser_dialect: UnparserMySqlDialect {},
-        expected: @"SELECT `j1`.`j1_id` FROM (SELECT `j1`.`j1_id` FROM `j1` LIMIT 10) AS `derived_limit`",
+        expected: @"SELECT `derived_limit`.`j1_id` FROM (SELECT `j1`.`j1_id` FROM `j1` LIMIT 10) AS `derived_limit`",
     );
     Ok(())
 }
@@ -1614,7 +1695,7 @@ fn test_table_scan_pushdown() -> Result<()> {
         plan_to_sql(&query_from_table_scan_with_two_projections)?;
     assert_snapshot!(
         query_from_table_scan_with_two_projections,
-        @"SELECT t1.id, t1.age FROM (SELECT t1.id, t1.age FROM t1)"
+        @"SELECT id, age FROM (SELECT t1.id, t1.age FROM t1)"
     );
 
     let table_scan_with_filter = table_scan_with_filters(
@@ -1791,7 +1872,7 @@ fn test_sort_with_scalar_fn_and_push_down_fetch() -> Result<()> {
     let sql = plan_to_sql(&plan)?;
     assert_snapshot!(
         sql,
-        @"SELECT t1.search_phrase FROM (SELECT t1.search_phrase, t1.event_time FROM t1 WHERE (t1.search_phrase <> '') ORDER BY substr(t1.event_time, 1, 5) ASC NULLS FIRST LIMIT 10)"
+        @"SELECT search_phrase FROM (SELECT t1.search_phrase, t1.event_time FROM t1 WHERE (t1.search_phrase <> '') ORDER BY substr(t1.event_time, 1, 5) ASC NULLS FIRST LIMIT 10)"
     );
     Ok(())
 }
@@ -2742,6 +2823,37 @@ fn test_unparse_inner_join_with_table_scan_projection() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_unparse_asof_join() -> Result<()> {
+    let trades_schema = Schema::new(vec![
+        Field::new("symbol", DataType::Utf8, false),
+        Field::new("ts", DataType::Int64, false),
+        Field::new("trade_id", DataType::Int32, false),
+    ]);
+    let prices_schema = Schema::new(vec![
+        Field::new("symbol", DataType::Utf8, false),
+        Field::new("ts", DataType::Int64, false),
+        Field::new("price", DataType::Int32, false),
+    ]);
+    let trades = table_scan(Some("trades"), &trades_schema, None)?
+        .alias("t")?
+        .build()?;
+    let prices = table_scan(Some("prices"), &prices_schema, None)?
+        .alias("p")?
+        .build()?;
+    let plan = LogicalPlanBuilder::from(trades)
+        .asof_join_on(
+            prices,
+            Some(col("t.symbol").eq(col("p.symbol"))),
+            col("t.ts").gt_eq(col("p.ts")),
+        )?
+        .project(vec![col("t.trade_id"), col("p.price")])?
+        .build()?;
+
+    assert_snapshot!(plan_to_sql(&plan)?, @r#"SELECT t.trade_id, p.price FROM trades AS t ASOF JOIN prices AS p MATCH_CONDITION ((t.ts >= p.ts)) ON t.symbol = p.symbol"#);
+    Ok(())
+}
+
 /// Build the three base table scans (`left_table`, `mid_table`, `right_table`)
 /// shared by the nested passthrough-projection join unparsing tests.
 fn nested_passthrough_join_tables() -> Result<(LogicalPlan, LogicalPlan, LogicalPlan)> {
@@ -2848,6 +2960,65 @@ fn test_unparse_projected_join_unwraps_left_nested_passthrough_projection() -> R
         sql,
         @r#"SELECT left_table.left_id, mid_table.mid_id, right_table."value" FROM left_table INNER JOIN mid_table ON left_table.mid_id = mid_table.mid_id INNER JOIN right_table ON mid_table.right_id = right_table.right_id"#
     );
+
+    Ok(())
+}
+
+#[test]
+fn test_unparse_nested_asof_join_inputs() -> Result<()> {
+    let (left, mid, right) = nested_passthrough_join_tables()?;
+    let nested_left = LogicalPlanBuilder::from(left)
+        .asof_join_on(
+            mid,
+            Some(col("left_table.mid_id").eq(col("mid_table.mid_id"))),
+            col("left_table.left_id").gt_eq(col("mid_table.mid_id")),
+        )?
+        .project(vec![
+            col("left_table.left_id"),
+            col("mid_table.mid_id"),
+            col("mid_table.right_id"),
+        ])?
+        .build()?;
+    let plan = LogicalPlanBuilder::from(nested_left)
+        .asof_join_on(
+            right,
+            Some(col("mid_table.right_id").eq(col("right_table.right_id"))),
+            col("mid_table.right_id").gt_eq(col("right_table.right_id")),
+        )?
+        .project(vec![
+            col("left_table.left_id"),
+            col("mid_table.mid_id"),
+            col("right_table.value"),
+        ])?
+        .build()?;
+    assert_snapshot!(plan_to_sql(&plan)?, @r#"SELECT left_table.left_id, mid_table.mid_id, right_table."value" FROM left_table ASOF JOIN mid_table MATCH_CONDITION ((left_table.left_id >= mid_table.mid_id)) ON left_table.mid_id = mid_table.mid_id ASOF JOIN right_table MATCH_CONDITION ((mid_table.right_id >= right_table.right_id)) ON mid_table.right_id = right_table.right_id"#);
+
+    let (left, mid, right) = nested_passthrough_join_tables()?;
+    let nested_right = LogicalPlanBuilder::from(mid)
+        .asof_join_on(
+            right,
+            Some(col("mid_table.right_id").eq(col("right_table.right_id"))),
+            col("mid_table.right_id").gt_eq(col("right_table.right_id")),
+        )?
+        .project(vec![
+            col("mid_table.mid_id"),
+            col("mid_table.right_id"),
+            col("right_table.value"),
+        ])?
+        .build()?;
+    let plan = LogicalPlanBuilder::from(left)
+        .asof_join_on(
+            nested_right,
+            Some(col("left_table.mid_id").eq(col("mid_table.mid_id"))),
+            col("left_table.left_id").gt_eq(col("mid_table.mid_id")),
+        )?
+        .project(vec![
+            col("left_table.left_id"),
+            col("mid_table.mid_id"),
+            col("right_table.value"),
+        ])?
+        .build()?;
+    assert_snapshot!(plan_to_sql(&plan)?, @r#"SELECT left_table.left_id, mid_table.mid_id, right_table."value" FROM left_table ASOF JOIN (mid_table ASOF JOIN right_table MATCH_CONDITION ((mid_table.right_id >= right_table.right_id)) ON mid_table.right_id = right_table.right_id) MATCH_CONDITION ((left_table.left_id >= mid_table.mid_id)) ON left_table.mid_id = mid_table.mid_id"#);
 
     Ok(())
 }
