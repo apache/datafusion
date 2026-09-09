@@ -668,10 +668,15 @@ select log(2, 2.0/3) a, log(10, 2.0/3) b;
 
 # log scalar ops with zero edgecases
 # please see https://github.com/apache/datafusion/pull/5245#issuecomment-1426828382
-query RR rowsort
-select log(0) a, log(1, 64) b;
+# log(0) is a domain error (PostgreSQL compatibility, #22261)
+query error cannot take logarithm of zero
+select log(0);
+
+# log(1, 64) remains IEEE infinity (base-1 is a separate issue)
+query R
+select log(1, 64);
 ----
--Infinity Infinity
+Infinity
 
 # log with columns #1
 query RRR rowsort

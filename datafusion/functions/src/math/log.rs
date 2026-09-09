@@ -100,6 +100,27 @@ impl LogFunc {
     }
 }
 
+/// Matches PostgreSQL: `log(0::float8)` is undefined (IEEE 754 would yield -inf).
+const LOG_OF_ZERO_ERROR: &str = "cannot take logarithm of zero";
+
+#[inline]
+fn log_of_zero_error() -> ArrowError {
+    ArrowError::ComputeError(LOG_OF_ZERO_ERROR.to_string())
+}
+
+/// Compute `value.log(base)` after rejecting a zero value.
+///
+/// Only the value (the number being logged) is checked. A zero *base*
+/// (`log(0, x)`) is left as IEEE 754 infinity / NaN; that is a separate
+/// compatibility case from issue #22261.
+#[inline]
+fn compute_float_log<F: Float>(value: F, base: F) -> Result<F, ArrowError> {
+    if value == F::zero() {
+        return Err(log_of_zero_error());
+    }
+    Ok(value.log(base))
+}
+
 /// Checks if the base is valid for the efficient integer logarithm algorithm.
 #[inline]
 fn is_valid_integer_base(base: f64) -> bool {
@@ -110,6 +131,9 @@ fn is_valid_integer_base(base: f64) -> bool {
 /// For integer bases >= 2 with zero scale, return an exact integer log when the
 /// value is a perfect power of the base. Otherwise falls back to f64 computation.
 fn log_decimal32(value: i32, scale: i8, base: f64) -> Result<f64, ArrowError> {
+    if value == 0 {
+        return Err(log_of_zero_error());
+    }
     if scale == 0
         && is_valid_integer_base(base)
         && let Ok(unscaled) = u32::try_from(value)
@@ -128,6 +152,9 @@ fn log_decimal32(value: i32, scale: i8, base: f64) -> Result<f64, ArrowError> {
 /// For integer bases >= 2 with zero scale, return an exact integer log when the
 /// value is a perfect power of the base. Otherwise falls back to f64 computation.
 fn log_decimal64(value: i64, scale: i8, base: f64) -> Result<f64, ArrowError> {
+    if value == 0 {
+        return Err(log_of_zero_error());
+    }
     if scale == 0
         && is_valid_integer_base(base)
         && let Ok(unscaled) = u64::try_from(value)
@@ -146,6 +173,9 @@ fn log_decimal64(value: i64, scale: i8, base: f64) -> Result<f64, ArrowError> {
 /// For integer bases >= 2 with zero scale, return an exact integer log when the
 /// value is a perfect power of the base. Otherwise falls back to f64 computation.
 fn log_decimal128(value: i128, scale: i8, base: f64) -> Result<f64, ArrowError> {
+    if value == 0 {
+        return Err(log_of_zero_error());
+    }
     if scale == 0
         && is_valid_integer_base(base)
         && let Ok(unscaled) = u128::try_from(value)
@@ -171,6 +201,9 @@ fn decimal_to_f64<T: ToPrimitive + Copy>(value: T, scale: i8) -> Result<f64, Arr
 }
 
 fn log_decimal256(value: i256, scale: i8, base: f64) -> Result<f64, ArrowError> {
+    if value == i256::ZERO {
+        return Err(log_of_zero_error());
+    }
     // Try to convert to i128 for the optimized path
     match value.to_i128() {
         Some(v) => log_decimal128(v, scale, base),
@@ -251,27 +284,24 @@ impl ScalarUDFImpl for LogFunc {
         let value = value.to_array(args.number_rows)?;
 
         let output: ArrayRef = match value.data_type() {
-            DataType::Float16 => {
-                calculate_binary_math::<Float16Type, Float16Type, Float16Type, _>(
-                    &value,
-                    &base,
-                    |value, base| Ok(value.log(base)),
-                )?
-            }
-            DataType::Float32 => {
-                calculate_binary_math::<Float32Type, Float32Type, Float32Type, _>(
-                    &value,
-                    &base,
-                    |value, base| Ok(value.log(base)),
-                )?
-            }
-            DataType::Float64 => {
-                calculate_binary_math::<Float64Type, Float64Type, Float64Type, _>(
-                    &value,
-                    &base,
-                    |value, base| Ok(value.log(base)),
-                )?
-            }
+            DataType::Float16 => calculate_binary_math::<
+                Float16Type,
+                Float16Type,
+                Float16Type,
+                _,
+            >(&value, &base, compute_float_log)?,
+            DataType::Float32 => calculate_binary_math::<
+                Float32Type,
+                Float32Type,
+                Float32Type,
+                _,
+            >(&value, &base, compute_float_log)?,
+            DataType::Float64 => calculate_binary_math::<
+                Float64Type,
+                Float64Type,
+                Float64Type,
+                _,
+            >(&value, &base, compute_float_log)?,
             DataType::Decimal32(_, scale) => {
                 calculate_binary_math::<Decimal32Type, Float64Type, Float64Type, _>(
                     &value,
@@ -315,7 +345,9 @@ impl ScalarUDFImpl for LogFunc {
     /// Simplify the `log` function by the relevant rules:
     /// 1. Log(a, 1) ===> 0
     /// 2. Log(a, Power(a, b)) ===> b
+    ///    (only when `Power(a, b)` is known to be a valid log argument)
     /// 3. Log(a, a) ===> 1
+    ///    (only when `a` is known to be a valid log argument)
     fn simplify(
         &self,
         mut args: Vec<Expr>,
@@ -376,13 +408,18 @@ impl ScalarUDFImpl for LogFunc {
                 if is_pow(&func)
                     && args.len() == 2
                     && base == args[0]
-                    && !base_nullable =>
+                    && !base_nullable
+                    && is_known_positive_power_result(&args[0], &args[1]) =>
             {
                 let b = args.pop().unwrap(); // length checked above
                 Ok(ExprSimplifyResult::Simplified(b))
             }
             number => {
-                if number == base && !base_nullable {
+                // `log(a, a) => 1` is only valid when `a` is known to be a
+                // strictly positive finite value. Zero/negative literals and
+                // non-constant expressions must not be rewritten so the
+                // domain-error check still runs (e.g. `log(0, 0)`).
+                if number == base && !base_nullable && is_known_valid_log_value(&number) {
                     Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::new_one(
                         &number_datatype,
                     )?)))
@@ -406,6 +443,37 @@ impl ScalarUDFImpl for LogFunc {
 /// Returns true if the function is `PowerFunc`
 fn is_pow(func: &ScalarUDF) -> bool {
     func.inner().is::<PowerFunc>()
+}
+
+/// Cast a literal expression to `f64`, if possible.
+fn literal_as_f64(expr: &Expr) -> Option<f64> {
+    let Expr::Literal(value, _) = expr else {
+        return None;
+    };
+    match value.cast_to(&DataType::Float64) {
+        Ok(ScalarValue::Float64(Some(v))) => Some(v),
+        _ => None,
+    }
+}
+
+/// True when `expr` is a literal known to be a valid log argument: finite
+/// and strictly greater than zero. Non-literals, zero, negatives, NaN, and
+/// infinities are not statically safe and must not be rewritten away.
+fn is_known_valid_log_value(expr: &Expr) -> bool {
+    matches!(literal_as_f64(expr), Some(v) if v.is_finite() && v > 0.0)
+}
+
+/// True when `power(base, exponent)` is known to evaluate to a strictly
+/// positive finite value, so `log(base, power(base, exponent))` will not
+/// hit the log-of-zero domain error (or produce 0 via underflow).
+fn is_known_positive_power_result(base: &Expr, exponent: &Expr) -> bool {
+    match (literal_as_f64(base), literal_as_f64(exponent)) {
+        (Some(b), Some(e)) if b.is_finite() && b > 0.0 && e.is_finite() => {
+            let p = b.powf(e);
+            p.is_finite() && p > 0.0
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -1211,6 +1279,161 @@ mod tests {
             ColumnarValue::Scalar(_) => {
                 panic!("Expected an array value")
             }
+        }
+    }
+
+    fn invoke_log(
+        args: Vec<ColumnarValue>,
+        data_types: Vec<DataType>,
+    ) -> Result<ColumnarValue> {
+        let number_rows = args
+            .iter()
+            .map(|a| match a {
+                ColumnarValue::Array(arr) => arr.len(),
+                ColumnarValue::Scalar(_) => 1,
+            })
+            .max()
+            .unwrap_or(1);
+        let arg_fields = data_types
+            .into_iter()
+            .map(|dt| Field::new("a", dt, false).into())
+            .collect();
+        let args = ScalarFunctionArgs {
+            args,
+            arg_fields,
+            number_rows,
+            return_field: Field::new("f", DataType::Float64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        LogFunc::new().invoke_with_args(args)
+    }
+
+    fn assert_log_of_zero(err: datafusion_common::DataFusionError) {
+        let message = err.to_string();
+        assert!(
+            message.contains(LOG_OF_ZERO_ERROR),
+            "expected '{LOG_OF_ZERO_ERROR}' in error, got {message}"
+        );
+    }
+
+    #[test]
+    fn test_log_zero_float64_unary_errors() {
+        let err = invoke_log(
+            vec![ColumnarValue::Scalar(ScalarValue::Float64(Some(0.0)))],
+            vec![DataType::Float64],
+        )
+        .expect_err("log(0.0) should be a domain error");
+        assert_log_of_zero(err);
+    }
+
+    #[test]
+    fn test_log_negative_zero_float64_errors() {
+        let err = invoke_log(
+            vec![ColumnarValue::Scalar(ScalarValue::Float64(Some(-0.0)))],
+            vec![DataType::Float64],
+        )
+        .expect_err("log(-0.0) should be a domain error");
+        assert_log_of_zero(err);
+    }
+
+    #[test]
+    fn test_log_zero_float32_unary_errors() {
+        let err = invoke_log(
+            vec![ColumnarValue::Scalar(ScalarValue::Float32(Some(0.0)))],
+            vec![DataType::Float32],
+        )
+        .expect_err("log(0.0f32) should be a domain error");
+        assert_log_of_zero(err);
+    }
+
+    #[test]
+    fn test_log_zero_float64_binary_errors() {
+        let err = invoke_log(
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(10.0))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(0.0))),
+            ],
+            vec![DataType::Float64, DataType::Float64],
+        )
+        .expect_err("log(10, 0.0) should be a domain error");
+        assert_log_of_zero(err);
+    }
+
+    #[test]
+    fn test_log_zero_array_errors() {
+        let err = invoke_log(
+            vec![ColumnarValue::Array(Arc::new(Float64Array::from(vec![
+                10.0, 0.0, 100.0,
+            ])))],
+            vec![DataType::Float64],
+        )
+        .expect_err("log() of an array containing 0 should be a domain error");
+        assert_log_of_zero(err);
+    }
+
+    #[test]
+    fn test_log_zero_decimal128_errors() {
+        let err = invoke_log(
+            vec![ColumnarValue::Scalar(ScalarValue::Decimal128(
+                Some(0),
+                38,
+                0,
+            ))],
+            vec![DataType::Decimal128(38, 0)],
+        )
+        .expect_err("log(0::decimal) should be a domain error");
+        assert_log_of_zero(err);
+    }
+
+    #[test]
+    fn test_log_zero_decimal256_errors() {
+        let err = invoke_log(
+            vec![ColumnarValue::Scalar(ScalarValue::Decimal256(
+                Some(i256::ZERO),
+                DECIMAL256_MAX_PRECISION,
+                0,
+            ))],
+            vec![DataType::Decimal256(DECIMAL256_MAX_PRECISION, 0)],
+        )
+        .expect_err("log(0::decimal256) should be a domain error");
+        assert_log_of_zero(err);
+    }
+
+    #[test]
+    fn test_log_zero_base_is_not_this_issue() {
+        // log(0, 64) takes log of 64 (nonzero). A zero *base* is out of
+        // scope for #22261 and keeps the previous IEEE result.
+        invoke_log(
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(0.0))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(64.0))),
+            ],
+            vec![DataType::Float64, DataType::Float64],
+        )
+        .expect("zero base should not error in this change");
+    }
+
+    #[test]
+    fn test_log_zero_every_physical_type() {
+        let data_types = [
+            DataType::Float16,
+            DataType::Float32,
+            DataType::Float64,
+            DataType::Decimal32(9, 2),
+            DataType::Decimal64(18, 2),
+            DataType::Decimal128(38, 0),
+            DataType::Decimal256(DECIMAL256_MAX_PRECISION, 0),
+        ];
+
+        for data_type in data_types {
+            let zero = ScalarValue::new_zero(&data_type)
+                .unwrap_or_else(|e| panic!("zero for {data_type}: {e}"));
+            let err =
+                invoke_log(vec![ColumnarValue::Scalar(zero)], vec![data_type.clone()])
+                    .expect_err(&format!(
+                        "log(0) as {data_type} should be a domain error"
+                    ));
+            assert_log_of_zero(err);
         }
     }
 }

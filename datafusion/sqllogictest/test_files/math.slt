@@ -1162,6 +1162,38 @@ select
 ----
 39.0625 Float64
 
+# log(0::float8) - issue #22261
+query error DataFusion error: Arrow error: Compute error: cannot take logarithm of zero
+SELECT log(0.0::float8)
+
+# two-arg form: logarithm of zero value
+query error DataFusion error: Arrow error: Compute error: cannot take logarithm of zero
+SELECT log(10.0::float8, 0.0::float8)
+
+# negative zero is still zero
+query error DataFusion error: Arrow error: Compute error: cannot take logarithm of zero
+SELECT log((-0.0)::float8)
+
+# column / non-literal path
+query error DataFusion error: Arrow error: Compute error: cannot take logarithm of zero
+SELECT log(x) FROM (VALUES (0.0::float8)) AS t(x)
+
+# decimal zero
+query error DataFusion error: Arrow error: Compute error: cannot take logarithm of zero
+SELECT log(0::decimal(10, 2))
+
+# log(0, 0) must not simplify to 1
+query error DataFusion error: Arrow error: Compute error: cannot take logarithm of zero
+SELECT log(0.0::float8, 0.0::float8)
+
+# log(a, power(a, b)) must not rewrite to b when the power result is zero
+query error DataFusion error: Arrow error: Compute error: cannot take logarithm of zero
+SELECT log(0.0::float8, power(0.0::float8, 1.0::float8))
+
+# underflow of a positive base still yields a zero power result
+query error DataFusion error: Arrow error: Compute error: cannot take logarithm of zero
+SELECT log(2.0::float8, power(2.0::float8, -2000.0::float8))
+
 # factorial negative (PostgreSQL-compatible domain error)
 query error DataFusion error: Execution error: factorial of a negative number is undefined
 select factorial(-1);
@@ -1213,7 +1245,9 @@ physical_plan
 01)ProjectionExec: expr=[log(column1@0, 1) as l1, log(column1@0, column1@0) as la, power(column1@0, 0) as p0, power(column1@0, log(column1@0, column2@1)) as pl]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
-# Non-nullable bases still use the existing simplifications
+# Non-nullable bases still use simplifications that cannot skip domain checks.
+# log(a, 1) and power(...) are unchanged. log(a, a) is not rewritten because
+# a column is not a known-positive literal.
 query TT
 EXPLAIN SELECT
   log(a, 1) AS l1,
@@ -1223,13 +1257,35 @@ EXPLAIN SELECT
 FROM (VALUES (2.0::double, 3.0::double)) AS t(a, b);
 ----
 logical_plan
-01)Projection: Float64(0) AS l1, Float64(1) AS la, Float64(1) AS p0, t.b AS pl
+01)Projection: Float64(0) AS l1, log(t.a, t.a) AS la, Float64(1) AS p0, t.b AS pl
 02)--SubqueryAlias: t
-03)----Projection: column2 AS b
+03)----Projection: column1 AS a, column2 AS b
 04)------Values: (Float64(2), Float64(3))
 physical_plan
-01)ProjectionExec: expr=[0 as l1, 1 as la, 1 as p0, column2@1 as pl]
+01)ProjectionExec: expr=[0 as l1, log(column1@0, column1@0) as la, 1 as p0, column2@1 as pl]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Known-positive literals still use log(a, a) => 1
+query TT
+EXPLAIN SELECT log(2.0::float8, 2.0::float8);
+----
+logical_plan
+01)Projection: Float64(1) AS log(Float64(2),Float64(2))
+02)--EmptyRelation: rows=1
+physical_plan
+01)ProjectionExec: expr=[1 as log(Float64(2),Float64(2))]
+02)--PlaceholderRowExec
+
+# Known-positive power result still uses log(a, power(a, b)) => b
+query TT
+EXPLAIN SELECT log(2.0::float8, power(2.0::float8, 3.0::float8));
+----
+logical_plan
+01)Projection: Float64(3) AS log(Float64(2),power(Float64(2),Float64(3)))
+02)--EmptyRelation: rows=1
+physical_plan
+01)ProjectionExec: expr=[3 as log(Float64(2),power(Float64(2),Float64(3)))]
+02)--PlaceholderRowExec
 
 # Float 16/32/64 for log
 query RT
