@@ -236,9 +236,15 @@ fn extract_single_field(base: ColumnarValue, name: ScalarValue) -> Result<Column
         }
         (DataType::Struct(_), _, Some(k)) => {
             let as_struct_array = as_struct_array(&array)?;
-            match as_struct_array.column_by_name(&k) {
-                None => exec_err!("Field {k} not found in struct"),
-                Some(col) => Ok(ColumnarValue::Array(Arc::clone(col))),
+            let nulls = as_struct_array.nulls();
+            match (as_struct_array.column_by_name(&k), nulls) {
+                (None, _) => exec_err!("Field {k} not found in struct"),
+                (Some(col), None) => Ok(ColumnarValue::Array(Arc::clone(col))),
+                (Some(col), Some(parent_nulls)) => {
+                    let nulls = NullBuffer::union(col.nulls(), Some(parent_nulls));
+                    let data = col.to_data().into_builder().nulls(nulls).build()?;
+                    Ok(ColumnarValue::Array(make_array(data)))
+                }
             }
         }
         (DataType::Struct(_), name, _) => exec_err!(
@@ -707,6 +713,35 @@ mod tests {
         let expected = Int32Array::from(vec![Some(1), Some(2), Some(3)]);
 
         assert_eq!(result_array.as_ref(), &expected as &dyn Array);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_field_nested_struct_outer_nulls() -> Result<()> {
+        let inner_array = StructArray::new(
+            vec![Field::new("value", DataType::Int32, false)].into(),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+            None,
+        );
+
+        // Only the outer struct marks row 1 as null; its children are all valid.
+        let outer_array = StructArray::new(
+            vec![Field::new("inner", inner_array.data_type().clone(), false)].into(),
+            vec![Arc::new(inner_array)],
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
+
+        let inner = extract_single_field(
+            ColumnarValue::Array(Arc::new(outer_array)),
+            ScalarValue::Utf8(Some("inner".to_string())),
+        )?;
+        let result =
+            extract_single_field(inner, ScalarValue::Utf8(Some("value".to_string())))?
+                .into_array(3)?;
+
+        let expected = Int32Array::from(vec![Some(1), None, Some(3)]);
+        assert_eq!(result.as_ref(), &expected as &dyn Array);
 
         Ok(())
     }
