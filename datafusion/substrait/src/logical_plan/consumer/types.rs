@@ -26,7 +26,6 @@ use datafusion::arrow::datatypes::{
 use datafusion::common::{
     DFSchema, not_impl_err, substrait_datafusion_err, substrait_err,
 };
-use futures::future::BoxFuture;
 use std::sync::Arc;
 use substrait::proto::{NamedStruct, Type, r#type};
 
@@ -447,6 +446,8 @@ mod tests {
         inner: DefaultSubstraitConsumer<'a>,
         metadata: Option<HashMap<String, String>>,
     }
+    use futures::future::BoxFuture;
+
     impl SubstraitConsumer for MetadataConsumer<'_> {
         fn resolve_table_ref<'a>(
             &'a self,
