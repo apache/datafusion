@@ -113,6 +113,16 @@ fn is_date_type(data_type: &DataType) -> bool {
 /// `Date64` carrying sub-day milliseconds would lose them. This is not a licence to
 /// drop them - [`try_cast_numeric_literal`] returns `None` for a `Date64` value not
 /// divisible by 86_400_000, so an inexact `Date64` -> `Date32` fold never happens.
+///
+/// **Timezone Shifts:**
+/// Conversions between timezone-naive and timezone-aware timestamps are
+/// mathematically bijective (shifting the physical value by the timezone offset),
+/// rather than many-to-one lossy. However, we return `true` here to block unwrapping
+/// as an intentionally conservative guard. If we returned `false`, `unwrap_cast_in_comparison`
+/// would strip the cast but fail to shift the underlying literal, returning incorrect
+/// query results. (A robust alternative would be to allow the unwrap and shift the literal,
+/// preserving pushdown and pruning.) Only UTC-equivalent timezones (where the shift is
+/// exactly zero) are allowed to bypass this guard.
 fn is_lossy_temporal_cast(from_type: &DataType, to_type: &DataType) -> bool {
     if from_type == to_type {
         return false;
@@ -122,11 +132,14 @@ fn is_lossy_temporal_cast(from_type: &DataType, to_type: &DataType) -> bool {
     }
     if let (DataType::Timestamp(_, from_tz), DataType::Timestamp(_, to_tz)) =
         (from_type, to_type)
-        && from_tz.is_some() != to_tz.is_some()
     {
-        let tz = from_tz.as_ref().or(to_tz.as_ref()).unwrap().as_ref();
-        if !is_zero_offset_timezone(tz) {
-            return true;
+        match (from_tz, to_tz) {
+            (Some(tz), None) | (None, Some(tz)) => {
+                if !is_zero_offset_timezone(tz.as_ref()) {
+                    return true;
+                }
+            }
+            _ => {}
         }
     }
     (is_date_type(from_type) && to_type.is_temporal())
