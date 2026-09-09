@@ -310,8 +310,12 @@ impl BlockedGroupsAccumulator for MinMaxBytesBlockedAccumulator {
     }
 
     fn state(&mut self, emit_to: BlockedEmitTo) -> Result<Vec<Vec<ArrayRef>>> {
-        // min/max are their own states (no transition needed)
-        self.evaluate(emit_to).map(|block| vec![block])
+        // min/max are their own states (no transition needed), one state column per block
+        Ok(self
+            .evaluate(emit_to)?
+            .into_iter()
+            .map(|block| vec![block])
+            .collect())
     }
 
     fn merge_batch(
