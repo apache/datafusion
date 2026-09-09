@@ -102,14 +102,6 @@ use crate::{InputOrderMode, SendableRecordBatchStream, metrics};
 ///   group key and spills them as one run. After the input ends, it spills any
 ///   remaining states, performs a sort-preserving merge of all runs, and feeds the
 ///   merged input into a fully ordered final aggregate stream.
-///
-/// ## Implementation Note
-///
-/// This is intentionally kept simple and closely maps to
-/// `GroupedHashAggregateStream` to finish the refactor sooner.
-///
-/// See issue for details: <https://github.com/apache/datafusion/issues/22710>
-///
 pub(crate) struct OrderedPartialAggregateStream {
     schema: SchemaRef,
     input: SendableRecordBatchStream,

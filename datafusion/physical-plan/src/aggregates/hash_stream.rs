@@ -19,11 +19,6 @@
 //!
 //! See comments in [`PartialHashAggregateStream`] and [`FinalHashAggregateStream`]
 //! for details.
-//!
-//! Note these streams are an incremental migration of the existing
-//! [`crate::aggregates::grouped_hash_stream::GroupedHashAggregateStream`].
-//!
-//! See issue for details: <https://github.com/apache/datafusion/issues/22710>
 
 use std::mem::size_of;
 use std::sync::Arc;
