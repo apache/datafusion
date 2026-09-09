@@ -778,14 +778,15 @@ fn general_date_trunc_array_fine_granularity<T: ArrowTimestampType>(
 
     if let Some(unit) = unit {
         let unit = unit.get();
-        let array = PrimitiveArray::<T>::from_iter_values_with_nulls(
-            array
-                .values()
-                .iter()
-                .map(|v| *v - i64::rem_euclid(*v, unit)),
-            array.nulls().cloned(),
-        )
-        .with_timezone_opt(tz_opt);
+        let array: PrimitiveArray<T> = array
+            .try_unary(|value| {
+                value.checked_sub(value.rem_euclid(unit)).ok_or_else(|| {
+                    exec_datafusion_err!(
+                        "Timestamp {value} out of range after truncating to {granularity}"
+                    )
+                })
+            })?
+            .with_timezone_opt(tz_opt);
         Ok(Arc::new(array))
     } else {
         // truncate to the same or smaller unit
@@ -1337,6 +1338,40 @@ mod tests {
                 panic!("unexpected column type");
             }
         }
+    }
+
+    #[test]
+    fn test_date_trunc_fine_granularity_underflow() {
+        let input = TimestampNanosecondArray::from(vec![i64::MIN]);
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(ScalarValue::from("microsecond")),
+                ColumnarValue::Array(Arc::new(input)),
+            ],
+            arg_fields: vec![
+                Field::new("granularity", DataType::Utf8, false).into(),
+                Field::new(
+                    "timestamp",
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                    false,
+                )
+                .into(),
+            ],
+            number_rows: 1,
+            return_field: Field::new(
+                "f",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                true,
+            )
+            .into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+
+        let error = DateTruncFunc::new().invoke_with_args(args).unwrap_err();
+        assert_eq!(
+            error.strip_backtrace(),
+            "Execution error: Timestamp -9223372036854775808 out of range after truncating to Microsecond"
+        );
     }
 
     #[test]
