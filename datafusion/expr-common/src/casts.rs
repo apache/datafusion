@@ -160,11 +160,12 @@ pub fn exact_preimage_cast(
         return None;
     }
 
-    // Apply a family-level safety gate: the source→target cast must be
+    // Apply a family-level safety gate: the source→target cast must normally be
     // value-preserving over the full source domain. Timestamp precision
-    // narrowing is handled as a Range preimage, not an Exact preimage;
-    // timestamp widening / equal-unit casts still require the literal
-    // round-trip check below.
+    // narrowing is handled as a Range preimage, not an Exact preimage.
+    // Timestamp widening / equal-unit casts still require the literal
+    // round-trip check below; widening retains its pre-existing overflow
+    // limitation at extreme source values.
     if !is_exact_cast_safe(source_type, target_type) {
         return None;
     }
@@ -203,14 +204,17 @@ fn is_timestamp_cast(source_type: &DataType, target_type: &DataType) -> bool {
 }
 
 /// Returns `true` when the cast from `source_type` to `target_type` is
-/// value-preserving (injective) and order-preserving at the family level —
-/// i.e. every value in the source domain can be round-tripped through the cast
-/// without information loss, and comparisons keep the same ordering.
+/// value-preserving (injective) and order-preserving at the family level.
+/// Timestamp widening is classified family-safe but retains its pre-existing
+/// overflow limitation at extreme source values; it is not a full-domain
+/// guarantee. Other accepted casts can be round-tripped without information
+/// loss and preserve comparison ordering.
 ///
 /// This is a conservative gate used by [`exact_preimage_cast`]. Timestamp
 /// precision narrowing is not exact-safe (it is handled by
 /// [`CastPredicatePreimage::Range`]); timestamp widening / equal-unit casts are
-/// family-safe but still require the caller's literal round-trip check.
+/// family-safe subject to the widening overflow limitation and still require the
+/// caller's literal round-trip check.
 fn is_exact_cast_safe(source_type: &DataType, target_type: &DataType) -> bool {
     // Unwrap at most one level of dictionary for family-level checking.
     let (src, tgt) = match (source_type, target_type) {
@@ -434,11 +438,16 @@ fn timestamp_narrowing_range_preimage(
 ) -> Result<Option<Interval>> {
     let (
         DataType::Timestamp(source_unit, source_tz),
-        DataType::Timestamp(target_unit, _),
+        DataType::Timestamp(target_unit, target_tz),
     ) = (source_type, target_type)
     else {
         return Ok(None);
     };
+
+    // A naive source cannot be inverted into a timezone-aware target bucket.
+    if source_tz.is_none() && target_tz.is_some() {
+        return Ok(None);
+    }
 
     let source_scale = i128::from(timestamp_unit_scale(source_unit));
     let target_scale = i128::from(timestamp_unit_scale(target_unit));
@@ -1770,6 +1779,14 @@ mod tests {
         ] {
             assert_timestamp_narrowing_range(lit_ms, lower_ns, upper_ns);
         }
+    }
+
+    #[test]
+    fn test_timestamp_narrowing_range_rejects_naive_to_timezone() {
+        let source = DataType::Timestamp(TimeUnit::Nanosecond, None);
+        let target = DataType::Timestamp(TimeUnit::Millisecond, Some("+01:00".into()));
+        let literal = ScalarValue::TimestampMillisecond(Some(0), Some("+01:00".into()));
+        assert_preimage_none(&source, &target, Operator::Eq, &literal);
     }
 
     #[test]

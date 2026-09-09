@@ -44,6 +44,7 @@ use crate::PhysicalExpr;
 use crate::expressions::{
     BinaryExpr, CastExpr, Literal, TryCastExpr, is_not_null, is_null, lit,
 };
+use datafusion_physical_expr_common::physical_expr::is_volatile;
 
 /// Attempts to unwrap casts in comparison expressions.
 pub(crate) fn unwrap_cast_in_comparison(
@@ -142,6 +143,18 @@ fn try_unwrap_cast_comparison(
             Ok(Some(Arc::new(binary_expr)))
         }
         Some(CastPredicatePreimage::Range(interval)) => {
+            // Equality-like range predicates duplicate their input; do not duplicate
+            // volatile expressions.
+            if matches!(
+                op,
+                Operator::Eq
+                    | Operator::NotEq
+                    | Operator::IsDistinctFrom
+                    | Operator::IsNotDistinctFrom
+            ) && is_volatile(&inner_expr)
+            {
+                return Ok(None);
+            }
             rewrite_with_preimage(interval, op, inner_expr).map(Some)
         }
         None => Ok(None),

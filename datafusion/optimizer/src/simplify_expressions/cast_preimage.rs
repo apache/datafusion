@@ -98,10 +98,24 @@ pub(super) fn supports_cast_predicate_for_binary(
         return false;
     };
 
-    cast_predicate_preimage(&source_type, target_type, op, lit_value)
-        .ok()
-        .flatten()
-        .is_some()
+    let Ok(preimage) = cast_predicate_preimage(&source_type, target_type, op, lit_value)
+    else {
+        return false;
+    };
+    if preimage.is_none() {
+        return false;
+    }
+    // Equality-like range predicates duplicate their input; volatile expressions
+    // cannot be duplicated.
+    !(matches!(preimage, Some(CastPredicatePreimage::Range(_)))
+        && matches!(
+            op,
+            Operator::Eq
+                | Operator::NotEq
+                | Operator::IsDistinctFrom
+                | Operator::IsNotDistinctFrom
+        )
+        && inner_expr.is_volatile())
 }
 
 pub(super) fn supports_cast_predicate_for_inlist(
