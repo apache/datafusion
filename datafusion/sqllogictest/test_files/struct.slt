@@ -766,22 +766,23 @@ select get_field(CAST(NULL AS STRUCT(a STRUCT(b INT))), 'a', 'b');
 ----
 NULL
 
-# Null handling: null in middle of chain
+# Null parents at either level make a non-nullable child nullable.
 statement ok
-create table null_mid_test (s STRUCT(a STRUCT(b INT)));
-
-statement ok
-insert into null_mid_test values ({'a': NULL});
+create table null_mid_test as
+select arrow_cast(NULL, 'Struct("a": non-null Struct("b": non-null Int32))') as null_base,
+       arrow_cast({'a': NULL}, 'Struct("a": Struct("b": non-null Int32))') as s;
 
 query I
 select s['a']['b'] from null_mid_test;
 ----
 NULL
 
-query I
-select get_field(s, 'a', 'b') from null_mid_test;
+query IBIB
+select get_field(null_base, 'a', 'b'), arrow_field(null_base['a']['b'])['nullable'],
+       get_field(s, 'a', 'b'), arrow_field(s['a']['b'])['nullable']
+from null_mid_test;
 ----
-NULL
+NULL true NULL true
 
 statement ok
 drop table null_mid_test;
