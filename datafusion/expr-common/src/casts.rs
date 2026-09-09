@@ -122,10 +122,9 @@ fn is_lossy_temporal_cast(from_type: &DataType, to_type: &DataType) -> bool {
     }
     if let (DataType::Timestamp(_, from_tz), DataType::Timestamp(_, to_tz)) =
         (from_type, to_type)
+        && from_tz.is_some() != to_tz.is_some()
     {
-        if from_tz.is_some() != to_tz.is_some() {
-            return true;
-        }
+        return true;
     }
     (is_date_type(from_type) && to_type.is_temporal())
         || (is_date_type(to_type) && from_type.is_temporal())
