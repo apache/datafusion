@@ -164,7 +164,7 @@ nlj:                    Benchmark for simple nested loop joins, testing various 
 hj:                     Benchmark for simple hash joins, testing various join scenarios
 smj:                    Benchmark for simple sort merge joins, testing various join scenarios
 dict:                   Benchmark for dictionary-encoded group-by scenarios
-array_agg_distinct:     1M-group, two-row-per-group array_agg(DISTINCT) benchmark
+array_agg_distinct:     10K-group, two-row-per-group array_agg(DISTINCT) benchmark
 compile_profile:        Compile and execute TPC-H across selected Cargo profiles, reporting timing and binary size
 
 
