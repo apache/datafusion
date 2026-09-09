@@ -124,7 +124,10 @@ fn is_lossy_temporal_cast(from_type: &DataType, to_type: &DataType) -> bool {
         (from_type, to_type)
         && from_tz.is_some() != to_tz.is_some()
     {
-        return true;
+        let tz = from_tz.as_ref().or(to_tz.as_ref()).unwrap().as_ref();
+        if tz != "UTC" && tz != "+00:00" && tz != "-00:00" && tz != "Z" {
+            return true;
+        }
     }
     (is_date_type(from_type) && to_type.is_temporal())
         || (is_date_type(to_type) && from_type.is_temporal())
@@ -1011,9 +1014,11 @@ mod tests {
         let ts_sgt =
             DataType::Timestamp(TimeUnit::Millisecond, Some("Asia/Singapore".into()));
 
-        // Naive <-> Tz-aware is lossy because it ignores session timezone
-        assert!(is_lossy_temporal_cast(&ts_naive, &ts_utc));
-        assert!(is_lossy_temporal_cast(&ts_utc, &ts_naive));
+        // Naive <-> UTC is NOT lossy (UTC offset is 0, so literal cast is exact)
+        assert!(!is_lossy_temporal_cast(&ts_naive, &ts_utc));
+        assert!(!is_lossy_temporal_cast(&ts_utc, &ts_naive));
+        
+        // Naive <-> Non-UTC is lossy because it ignores session timezone
         assert!(is_lossy_temporal_cast(&ts_naive, &ts_sgt));
         assert!(is_lossy_temporal_cast(&ts_sgt, &ts_naive));
 
