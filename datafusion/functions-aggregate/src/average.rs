@@ -1664,18 +1664,21 @@ mod tests {
 
     #[test]
     fn avg_groups_size_uses_sum_native_type() -> Result<()> {
-        let input_type = DataType::Decimal128(10, 0);
-        let sum_type = DataType::Decimal256(20, 0);
+        let input_type = DataType::Decimal128(26, 0);
+        let sum_type = avg_sum_data_type(&input_type);
+        let return_type = Avg::new().return_type(&[input_type.clone()])?;
+        assert_eq!(sum_type, DataType::Decimal256(76, 0));
+        assert_eq!(return_type, DataType::Decimal128(30, 4));
         let mut accumulator = AvgGroupsAccumulator::<
             Decimal128Type,
             _,
             Decimal256Type,
             Decimal128Type,
-        >::new(&sum_type, &input_type, |_, _| Ok(0_i128));
+        >::new(&sum_type, &return_type, |_, _| Ok(0_i128));
 
         let values = Arc::new(
             Decimal128Array::from(vec![Some(2), None, Some(4)])
-                .with_precision_and_scale(10, 0)?,
+                .with_precision_and_scale(26, 0)?,
         );
         accumulator.update_batch(&[values], &[0, 1, 2], None, 3)?;
 
