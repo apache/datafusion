@@ -3482,6 +3482,7 @@ pub(crate) mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::assert_contains;
+    use datafusion_common::cast::as_int32_array;
     use datafusion_common::test_util::batches_to_sort_string;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
@@ -3628,6 +3629,176 @@ pub(crate) mod tests {
         assert_eq!(left_data.locate(5), Some((1, 0)));
         assert_eq!(left_data.locate(11), Some((1, 6)));
         assert_eq!(left_data.locate(12), None);
+    }
+
+    const CHUNKED_LEFT_ROWS: i32 = 36;
+    /// Left rows that [`chunked_right_table`] matches: the first and last row, and the rows on
+    /// both sides of a chunk boundary in every layout the test builds (11|12 for 4- and 12-row
+    /// chunks, 27|28 for 4- and 7-row chunks). Every other boundary has unmatched rows on both
+    /// sides.
+    const CHUNKED_LEFT_MATCHED: [i32; 6] = [0, 11, 12, 27, 28, 35];
+
+    fn chunked_left_table(batch_rows: Option<usize>) -> Arc<dyn ExecutionPlan> {
+        let ids: Vec<i32> = (0..CHUNKED_LEFT_ROWS).collect();
+        build_table(
+            ("a1", &ids),
+            ("b1", &ids),
+            ("c1", &ids),
+            batch_rows,
+            Vec::new(),
+        )
+    }
+
+    /// One row per batch, so a batch size of 12 takes the multi-row probe path (12 / 1 > 10)
+    /// and a batch size of 4 the single-row one.
+    fn chunked_right_table() -> Arc<dyn ExecutionPlan> {
+        let mut ids = CHUNKED_LEFT_MATCHED.to_vec();
+        ids.push(99);
+        build_table(
+            ("a2", &ids),
+            ("b2", &ids),
+            ("c2", &ids),
+            Some(1),
+            Vec::new(),
+        )
+    }
+
+    /// left.a1 = right.a2
+    fn equality_join_filter() -> JoinFilter {
+        let column_indices = vec![
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Right,
+            },
+        ];
+        let intermediate_schema = Schema::new(vec![
+            Field::new("a1", DataType::Int32, true),
+            Field::new("a2", DataType::Int32, true),
+        ]);
+        let expression = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a1", 0)),
+            Operator::Eq,
+            Arc::new(Column::new("a2", 1)),
+        )) as Arc<dyn PhysicalExpr>;
+        JoinFilter::new(expression, column_indices, Arc::new(intermediate_schema))
+    }
+
+    /// Number of chunks the build-side load produces for `left` at this target batch size.
+    async fn build_side_chunk_count(
+        left: &Arc<dyn ExecutionPlan>,
+        target_batch_size: usize,
+    ) -> Result<usize> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let reservation = MemoryConsumer::new("test").register(task_ctx.memory_pool());
+        let metrics = ExecutionPlanMetricsSet::new();
+        let load = collect_left_input(
+            left.execute(0, task_ctx)?,
+            BuildProbeJoinMetrics::new(0, &metrics),
+            reservation,
+            false,
+            1,
+            None,
+            target_batch_size,
+        )
+        .await?;
+        let LeftLoad::InMemory(data) = load else {
+            panic!("the build side fit in memory");
+        };
+        Ok(data.chunks.len())
+    }
+
+    /// The build side arrives either as single-row batches, which the load coalesces into chunks
+    /// of exactly `batch_size` rows, or as 7-row batches, which bypass the coalescer and leave
+    /// chunk edges off the output batch size, so probe and unmatched-left ranges must be clamped
+    /// at them. The same rows delivered as one batch form a single chunk, so the two runs differ
+    /// only in chunk layout and must agree.
+    #[rstest]
+    #[tokio::test]
+    async fn join_across_build_chunk_boundaries(
+        #[values(4, 12)] batch_size: usize,
+        #[values(1, 7)] left_batch_rows: usize,
+        #[values(
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::Full,
+            JoinType::LeftSemi,
+            JoinType::LeftAnti,
+            JoinType::LeftMark,
+            JoinType::RightSemi,
+            JoinType::RightAnti,
+            JoinType::RightMark
+        )]
+        join_type: JoinType,
+    ) -> Result<()> {
+        let rows = CHUNKED_LEFT_ROWS as usize;
+        // Batches above half the target bypass the coalescer and stay whole.
+        let expected_chunks = if left_batch_rows > batch_size / 2 {
+            rows.div_ceil(left_batch_rows)
+        } else {
+            rows.div_ceil(batch_size)
+        };
+        assert!(expected_chunks > 1);
+        let chunked_left = chunked_left_table(Some(left_batch_rows));
+        assert_eq!(
+            build_side_chunk_count(&chunked_left, batch_size).await?,
+            expected_chunks
+        );
+        let single_chunk_left = chunked_left_table(None);
+        assert_eq!(
+            build_side_chunk_count(&single_chunk_left, batch_size).await?,
+            1
+        );
+
+        let (columns, chunked, _) = multi_partitioned_join_collect(
+            chunked_left,
+            chunked_right_table(),
+            &join_type,
+            Some(equality_join_filter()),
+            new_task_ctx(batch_size),
+        )
+        .await?;
+        let (_, single_chunk, _) = multi_partitioned_join_collect(
+            single_chunk_left,
+            chunked_right_table(),
+            &join_type,
+            Some(equality_join_filter()),
+            new_task_ctx(batch_size),
+        )
+        .await?;
+        assert_eq!(
+            batches_to_sort_string(&chunked),
+            batches_to_sort_string(&single_chunk)
+        );
+
+        if join_type == JoinType::Left {
+            let a2 = columns.iter().position(|c| c == "a2").unwrap();
+            let (mut matched, mut unmatched) = (Vec::new(), Vec::new());
+            for batch in &chunked {
+                let a1 = as_int32_array(batch.column(0))?;
+                for row in 0..batch.num_rows() {
+                    if batch.column(a2).is_null(row) {
+                        unmatched.push(a1.value(row));
+                    } else {
+                        matched.push(a1.value(row));
+                    }
+                }
+            }
+            matched.sort_unstable();
+            unmatched.sort_unstable();
+            assert_eq!(matched, CHUNKED_LEFT_MATCHED);
+            assert_eq!(
+                unmatched,
+                (0..CHUNKED_LEFT_ROWS)
+                    .filter(|i| !CHUNKED_LEFT_MATCHED.contains(i))
+                    .collect::<Vec<_>>()
+            );
+        }
+        Ok(())
     }
 
     /// An input that can be executed only once: later executions yield no batches, the way a
