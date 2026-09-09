@@ -1179,7 +1179,9 @@ fn simplify_not_null_conjuncts(
 
     // Global (all-partitions) statistics; per-partition refinement is not
     // needed for a proof that holds across every partition.
-    let Ok(stats) = StatisticsContext::new().compute(input.as_ref(), &StatisticsArgs::new()) else {
+    let Ok(stats) =
+        StatisticsContext::new().compute(input.as_ref(), &StatisticsArgs::new())
+    else {
         return predicate;
     };
     // Use the column's schema index directly: `Column::name()` is for display
@@ -1624,7 +1626,10 @@ mod tests {
     use crate::test::exec::StatisticsExec;
     use arrow::datatypes::{Field, Schema, UnionFields, UnionMode};
 
-    fn stats_exec_with_null_count(schema: &Schema, null_counts: Vec<usize>) -> Arc<dyn ExecutionPlan> {
+    fn stats_exec_with_null_count(
+        schema: &Schema,
+        null_counts: Vec<usize>,
+    ) -> Arc<dyn ExecutionPlan> {
         let stats = Statistics {
             column_statistics: null_counts
                 .into_iter()
