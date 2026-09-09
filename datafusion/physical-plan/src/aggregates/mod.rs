@@ -888,6 +888,10 @@ pub struct AggregateExec {
     metrics: ExecutionPlanMetricsSet,
     required_input_ordering: Option<OrderingRequirements>,
     /// Describes how the input is ordered relative to the group by columns
+    ///
+    /// This field is also overloaded to mean "the output MUST preserve this
+    /// input order". When that is not possible, the constructor overwrites it
+    /// with the unordered variant [`InputOrderMode::Linear`].
     input_order_mode: InputOrderMode,
     cache: Arc<PlanProperties>,
     /// During initialization, if the plan supports dynamic filtering (see [`AggrDynFilter`]),
@@ -1223,143 +1227,76 @@ impl AggregateExec {
             ));
         }
 
-        // Select the stream type based on the query shape and configuration.
-        // For an overview, see the `Aggregate planning` section in this file's
-        // documentation.
-        //
-        // # Implementation Note
-        //
-        // `GroupedHashAggregateStream` is the legacy implementation of all the
-        // branches below. It has been split into dedicated streams, and the
-        // `enable_migration_aggregate` config option selects between the new
-        // streams and the legacy implementation.
-        //
-        // See the `grouped_hash_stream` module documentation for the
-        // deprecation schedule.
-        if context
+        // `GroupedHashAggregateStream` is the legacy implementation of every
+        // grouped path below. It is only planned as an opt-in fallback, see the
+        // `grouped_hash_stream` module documentation for the deprecation
+        // schedule.
+        if !context
             .session_config()
             .options()
             .execution
             .enable_migration_aggregate
         {
-            if self.should_use_ordered_partial_aggregate_stream(context) {
-                return Ok(StreamType::OrderedPartialAggregate(
-                    OrderedPartialAggregateStream::new(self, context, partition)?,
-                ));
-            }
+            return Ok(StreamType::GroupedHash(GroupedHashAggregateStream::new(
+                self, context, partition,
+            )?));
+        }
 
-            if self.should_use_partial_hash_stream(context) {
-                return Ok(StreamType::PartialHash(PartialHashAggregateStream::new(
-                    self, context, partition,
-                )?));
-            }
-
-            if self.should_use_partial_reduce_hash_stream(context) {
-                return Ok(StreamType::PartialReduceHash(
-                    PartialReduceHashAggregateStream::new(self, context, partition)?,
-                ));
-            }
-
-            if self.should_use_ordered_final_aggregate_stream(context) {
-                return Ok(StreamType::OrderedFinalAggregate(
-                    OrderedFinalAggregateStream::new(self, context, partition)?,
-                ));
-            }
-
-            if self.should_use_final_hash_stream(context) {
-                return Ok(StreamType::FinalHash(FinalHashAggregateStream::new(
-                    self, context, partition,
-                )?));
-            }
-
-            if self.should_use_ordered_single_aggregate_stream(context) {
-                return Ok(StreamType::OrderedSingleAggregate(
-                    OrderedSingleAggregateStream::new(self, context, partition)?,
-                ));
-            }
-
-            if self.should_use_single_hash_stream(context) {
-                return Ok(StreamType::SingleHash(SingleHashAggregateStream::new(
-                    self, context, partition,
-                )?));
-            }
-
+        // Grouping sets are expanded by the raw-input stages, so the stages
+        // consuming partial state must receive the expanded keys as a plain
+        // group by (see `PhysicalGroupBy::as_final`).
+        if self.mode.input_mode() == AggregateInputMode::Partial
+            && !self.group_by.is_single()
+        {
             return internal_err!(
-                "All aggregate cases should be able to handle by the new path"
+                "Grouping sets must be expanded before {:?} aggregation, which consumes partial state",
+                self.mode
             );
         }
 
-        // `enable_migration_aggregate` is disabled: fall back to the legacy
-        // implementation, which handles every grouped execution path itself.
-        Ok(StreamType::GroupedHash(GroupedHashAggregateStream::new(
-            self, context, partition,
-        )?))
-    }
-
-    // # Grouping sets
-    //
-    // `GROUPING SETS`, `CUBE` and `ROLLUP` are expanded by the raw-input stages
-    // (partial and single aggregation), which evaluate every grouping set of
-    // each input batch into the same hash table. They are always planned with
-    // `InputOrderMode::Linear` (see `try_new_with_schema`), so they only reach
-    // the unordered hash streams. State-input stages (final and partial-reduce
-    // aggregation) must receive the expanded keys as a plain group by (see
-    // `PhysicalGroupBy::as_final`), which their predicates check explicitly.
-
-    fn should_use_partial_hash_stream(&self, _context: &TaskContext) -> bool {
-        self.mode == AggregateMode::Partial
-            && self.input_order_mode == InputOrderMode::Linear
-            && !self.group_by.is_true_no_grouping()
-    }
-
-    fn should_use_ordered_partial_aggregate_stream(
-        &self,
-        _context: &TaskContext,
-    ) -> bool {
-        self.mode == AggregateMode::Partial
-            && self.input_order_mode != InputOrderMode::Linear
-            && !self.group_by.is_true_no_grouping()
-    }
-
-    fn should_use_final_hash_stream(&self, _context: &TaskContext) -> bool {
-        matches!(
-            self.mode,
-            AggregateMode::Final | AggregateMode::FinalPartitioned
-        ) && self.input_order_mode == InputOrderMode::Linear
-            && !self.group_by.is_true_no_grouping()
-            && self.group_by.is_single()
-    }
-
-    fn should_use_partial_reduce_hash_stream(&self, _context: &TaskContext) -> bool {
-        self.mode == AggregateMode::PartialReduce
-            && self.input_order_mode == InputOrderMode::Linear
-            && !self.group_by.is_true_no_grouping()
-            && self.group_by.is_single()
-    }
-
-    fn should_use_single_hash_stream(&self, _context: &TaskContext) -> bool {
-        matches!(
-            self.mode,
-            AggregateMode::Single | AggregateMode::SinglePartitioned
-        ) && self.input_order_mode == InputOrderMode::Linear
-            && !self.group_by.is_true_no_grouping()
-    }
-
-    fn should_use_ordered_single_aggregate_stream(&self, _context: &TaskContext) -> bool {
-        matches!(
-            self.mode,
-            AggregateMode::Single | AggregateMode::SinglePartitioned
-        ) && self.input_order_mode != InputOrderMode::Linear
-            && !self.group_by.is_true_no_grouping()
-    }
-
-    fn should_use_ordered_final_aggregate_stream(&self, _context: &TaskContext) -> bool {
-        matches!(
-            self.mode,
-            AggregateMode::Final | AggregateMode::FinalPartitioned
-        ) && self.input_order_mode != InputOrderMode::Linear
-            && !self.group_by.is_true_no_grouping()
-            && self.group_by.is_single()
+        // Choose the execution path based on (aggregation mode, ordering).
+        //
+        // Note that `self.input_order_mode` represents both input ordering and output
+        // order promise. See its comment for details.
+        use AggregateMode::*;
+        use InputOrderMode::*;
+        let stream = match (self.mode, &self.input_order_mode) {
+            (Partial, Linear) => StreamType::PartialHash(
+                PartialHashAggregateStream::new(self, context, partition)?,
+            ),
+            (Partial, Sorted | PartiallySorted(_)) => {
+                StreamType::OrderedPartialAggregate(OrderedPartialAggregateStream::new(
+                    self, context, partition,
+                )?)
+            }
+            (PartialReduce, Linear) => StreamType::PartialReduceHash(
+                PartialReduceHashAggregateStream::new(self, context, partition)?,
+            ),
+            (PartialReduce, Sorted | PartiallySorted(_)) => {
+                // See the comment above: the builder enforces `Linear` order for
+                // `PartialReduce` mode.
+                return internal_err!(
+                    "PartialReduce aggregation must use InputOrderMode::Linear"
+                );
+            }
+            (Final | FinalPartitioned, Linear) => StreamType::FinalHash(
+                FinalHashAggregateStream::new(self, context, partition)?,
+            ),
+            (Final | FinalPartitioned, Sorted | PartiallySorted(_)) => {
+                StreamType::OrderedFinalAggregate(OrderedFinalAggregateStream::new(
+                    self, context, partition,
+                )?)
+            }
+            (Single | SinglePartitioned, Linear) => StreamType::SingleHash(
+                SingleHashAggregateStream::new(self, context, partition)?,
+            ),
+            (Single | SinglePartitioned, Sorted | PartiallySorted(_)) => {
+                StreamType::OrderedSingleAggregate(OrderedSingleAggregateStream::new(
+                    self, context, partition,
+                )?)
+            }
+        };
+        Ok(stream)
     }
 
     /// Finds the DataType and SortDirection for this Aggregate, if there is one
