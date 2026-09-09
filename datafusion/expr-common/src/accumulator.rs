@@ -84,6 +84,24 @@ pub trait Accumulator: Send + Sync + Debug + std::any::Any {
     /// running sum.
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()>;
 
+    /// Returns an optional metric timed once per grouped adapter input batch.
+    ///
+    /// A grouped accumulator adapter uses this for aggregate-owned work it
+    /// dispatches to one accumulator per group. The default preserves the
+    /// usual per-accumulator update path.
+    fn grouped_update_batch_metric(&self) -> Option<Arc<dyn AggregateMetric>> {
+        None
+    }
+
+    /// Updates state when called by a grouped accumulator adapter.
+    ///
+    /// The default delegates to [`Self::update_batch`]. Implementations that
+    /// return a [`Self::grouped_update_batch_metric`] can avoid timing every
+    /// per-group call; the adapter records one interval for the full batch.
+    fn update_batch_grouped(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.update_batch(values)
+    }
+
     /// Returns the final aggregate value.
     ///
     /// For example, the `SUM` accumulator maintains a running sum,
