@@ -188,7 +188,7 @@ pub fn lexsort(
 }
 
 /// The arrays typed as `A`, they were checked to share one data type
-fn downcast_all<'a, A: Array + 'static>(arrays: &'a [ArrayRef]) -> Vec<&'a A> {
+fn downcast_all<A: Array + 'static>(arrays: &[ArrayRef]) -> Vec<&A> {
     arrays
         .iter()
         .map(|array| {

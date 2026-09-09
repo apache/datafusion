@@ -57,8 +57,8 @@ use crate::{
     PlanProperties, ReplaceChildrenOptions, SendableRecordBatchStream, Statistics,
 };
 
-use arrow::array::{Array, RecordBatch, RecordBatchOptions};
-use arrow::compute::{concat_batches, interleave, lexsort_to_indices, take_arrays};
+use arrow::array::{RecordBatch, RecordBatchOptions};
+use arrow::compute::{lexsort_to_indices, take_arrays};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::SpillCompression;
 use datafusion_common::tree_node::TreeNodeRecursion;
@@ -77,7 +77,6 @@ use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
 
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
-use crate::sorts::arrow::sort::SortColumn;
 use crate::sorts::stream::IncrementalMultiBatchSortIterator;
 
 #[cfg(test)]
@@ -640,10 +639,10 @@ impl ExternalSorter {
             // Concatenate memory batches together and sort
             let cap = self.in_mem_batches.capacity();
             let batches = std::mem::replace(&mut self.in_mem_batches, Vec::with_capacity(cap));
-            let mut size_to_resize = 0;
-            for batch in &batches {
-                size_to_resize += get_reserved_bytes_for_record_batch(&batch)?;
-            }
+            let size_to_resize: usize = batches
+              .iter()
+              .map(get_reserved_bytes_for_record_batch)
+              .sum::<Result<usize>>()?;
             self.reservation
                 .try_resize(size_to_resize)
                 .map_err(Self::err_with_oom_context)?;
@@ -664,10 +663,10 @@ impl ExternalSorter {
             runs
               .into_iter()
               .map(|batches| {
-                  let mut size_to_split = 0;
-                  for batch in &batches {
-                      size_to_split += get_reserved_bytes_for_record_batch(&batch)?;
-                  }
+                  let size_to_split: usize = batches
+                    .iter()
+                    .map(get_reserved_bytes_for_record_batch)
+                    .sum::<Result<usize>>()?;
                   let reservation = self
                     .reservation
                     .split(size_to_split);
@@ -719,8 +718,7 @@ impl ExternalSorter {
 
         // Flush a group into a run, skipping the copy for a single-batch group.
         let flush = |group: &mut Vec<RecordBatch>,
-                     runs: &mut Vec<Vec<RecordBatch>>,
-                     schema: &SchemaRef|
+                     runs: &mut Vec<Vec<RecordBatch>>|
          -> Result<()> {
             match group.len() {
                 0 => {}
@@ -737,17 +735,18 @@ impl ExternalSorter {
         for batch in batches {
             let bytes = get_reserved_bytes_for_record_batch(&batch)?;
             if !group.is_empty() && group_bytes.saturating_add(bytes) > target {
-                flush(&mut group, &mut runs, &self.schema)?;
+                flush(&mut group, &mut runs)?;
                 group_bytes = 0;
             }
             group_bytes += bytes;
             group.push(batch);
         }
-        flush(&mut group, &mut runs, &self.schema)?;
+        flush(&mut group, &mut runs)?;
 
         // Realign the reservation: concatenation may shift the footprint slightly.
         let total: usize = runs
             .iter()
+            .flatten()
             .map(get_reserved_bytes_for_record_batch)
             .sum::<Result<usize>>()?;
         self.reservation
@@ -854,7 +853,7 @@ impl ExternalSorter {
 
         let mut expected_size = 0;
         for batch in &batches {
-            expected_size += get_reserved_bytes_for_record_batch(&batch)?;
+            expected_size += get_reserved_bytes_for_record_batch(batch)?;
         }
 
         assert_eq!(
@@ -914,48 +913,6 @@ impl ExternalSorter {
           .try_flatten();
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
-    }
-
-    fn sort_batches(
-        sort_expr: &LexOrdering,
-        batches: &[RecordBatch],
-        batch_size: usize,
-    ) -> Result<Vec<RecordBatch>> {
-        let Some(first) = batches.first() else {
-            return Ok(vec![]);
-        };
-        let schema = first.schema();
-
-        let columns = sort_expr
-          .iter()
-          .map(|sort_expr| {
-              let values = batches
-                .iter()
-                .map(|block| sort_expr.expr.evaluate(block)?.into_array(block.num_rows()))
-                .collect::<Result<Vec<_>>>()?;
-              Ok(SortColumn {
-                  values,
-                  options: Some(sort_expr.options),
-              })
-          })
-          .collect::<Result<Vec<_>>>()?;
-        let order = super::arrow::sort::lexsort_to_indices(&columns, None)?;
-        drop(columns);
-
-        let arrays: Vec<Vec<&dyn Array>> = (0..schema.fields().len())
-          .map(|column| batches.iter().map(|block| block.column(column).as_ref()).collect())
-          .collect();
-
-        order
-          .chunks(batch_size)
-          .map(|positions| -> Result<RecordBatch> {
-            let columns = arrays
-              .iter()
-              .map(|column| interleave(column, positions))
-              .collect::<std::result::Result<Vec<_>, _>>()?;
-            Ok(RecordBatch::try_new(Arc::clone(&schema), columns)?)
-        })
-          .collect::<Result<Vec<_>>>()
     }
 
     /// If this sort may spill, pre-allocates
@@ -2290,7 +2247,7 @@ mod tests {
     use crate::test::{assert_is_pending, make_partition};
 
     use arrow::array::*;
-    use arrow::compute::SortOptions;
+    use arrow::compute::{concat_batches, SortOptions};
     use arrow::datatypes::*;
     use datafusion_common::ScalarValue;
     use datafusion_common::cast::as_primitive_array;

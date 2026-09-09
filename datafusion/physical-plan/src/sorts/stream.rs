@@ -442,7 +442,7 @@ impl IncrementalMultiBatchSortIterator {
                     .iter()
                     .map(|batch| batch.column(i).as_ref())
                     .collect();
-                interleave(&column_values, indices)
+                Ok(interleave(&column_values, indices)?)
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -472,7 +472,7 @@ impl IncrementalMultiBatchSortIterator {
     }
 
     fn next_batch(&mut self) -> Result<RecordBatch> {
-        match std::mem::replace(
+        match mem::replace(
             &mut self.state,
             IncrementalMultiBranchIteratorState::Done,
         ) {
@@ -510,7 +510,7 @@ impl IncrementalMultiBatchSortIterator {
             }
             IncrementalMultiBranchIteratorState::CalculatedIndices {
                 input_batches,
-                mut indices,
+                indices,
             } => self.on_take_next(input_batches, indices),
             IncrementalMultiBranchIteratorState::Done => {
                 unreachable!("must not be done if reached here")
