@@ -62,7 +62,7 @@ use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream, metric
 /// Blocks per spill file. Every spill file costs the merge a read buffer reservation, so
 /// blocks are sorted together in groups. A group is small enough that sorting its rows is
 /// cheap, and its blocks are released as soon as its file is written.
-// ponytail: fixed count, make it byte based if block sizes vary a lot
+/// TODO fixed count, make it byte based if block sizes vary a lot
 pub(super) const SPILL_BLOCKS_PER_FILE: usize = 16;
 
 /// Sorts `blocks` by `spill_expr` into one spill file without concatenating or slicing

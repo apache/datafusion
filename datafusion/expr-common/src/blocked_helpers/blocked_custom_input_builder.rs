@@ -341,11 +341,13 @@ impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider: BlockProvider>
         if self.len == 0 {
             return None;
         }
+        Some(self.take_first_block())
+    }
 
-        let block = self
-            .blocks
-            .pop_front()
-            .expect("len > 0 so must have a block");
+    /// Take the first block even when it is empty, for callers that know from
+    /// elsewhere that the block holds items
+    pub fn take_first_block(&mut self) -> CustomBlockProvider::Block {
+        let block = self.blocks.pop_front().expect("always at least one block");
 
         if self.blocks.is_empty() {
             self.current_block_index = 0;
@@ -359,7 +361,42 @@ impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider: BlockProvider>
 
         self.len -= block.len();
 
-        Some(block)
+        block
+    }
+
+    /// Block `block_index` without bounds checking
+    ///
+    /// # Safety
+    /// `block_index < self.num_blocks()`
+    #[inline]
+    pub unsafe fn block_unchecked(&self, block_index: usize) -> &CustomBlockProvider::Block {
+        debug_assert!(block_index < self.blocks.len());
+        unsafe { self.blocks.get(block_index).unwrap_unchecked() }
+    }
+
+    /// Mutable block `block_index` without bounds checking
+    ///
+    /// # Safety
+    /// `block_index < self.num_blocks()`
+    #[inline]
+    pub unsafe fn block_unchecked_mut(
+        &mut self,
+        block_index: usize,
+    ) -> &mut CustomBlockProvider::Block {
+        debug_assert!(block_index < self.blocks.len());
+        unsafe { self.blocks.get_mut(block_index).unwrap_unchecked() }
+    }
+
+    pub fn blocks_mut(&mut self) -> impl Iterator<Item = &mut CustomBlockProvider::Block> {
+        self.blocks.iter_mut()
+    }
+
+    pub fn current_block_mut(&mut self) -> &mut CustomBlockProvider::Block {
+        &mut self.blocks[self.current_block_index]
+    }
+
+    pub fn current_or_block_mut(&mut self, block_index: usize) -> &mut CustomBlockProvider::Block {
+        &mut self.blocks[block_index]
     }
 
     pub fn take_block_finished(&mut self) -> Option<CustomBlockProvider::FinishedBlock>

@@ -1,259 +1,52 @@
+use super::blocked_custom_input_builder::{
+    Block, BlockProvider, BlockProviderFinish, BlockWithSlice, BlockedCustomInputBuilder,
+};
 use crate::blocked_helpers::take_n_helpers::BlockBuilder;
 use crate::groups_accumulator::BlocksIndex;
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::ArrowNativeType;
-use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut, Index, IndexMut, Range};
-use std::ptr::NonNull;
-use std::sync::{Arc, Mutex};
-
-/// Virtual bytes reserved per builder up front. Untouched pages cost nothing, so this
-/// is sized to practically never fill; the live window is relocated (and doubled if
-/// needed) if it ever does. Halved until the kernel accepts it on strict overcommit setups
-const RESERVED_BYTES: usize = 10 << 30;
-
-/// Smallest reservation worth falling back to
-const MIN_RESERVED_BYTES: usize = 64 << 20;
-
-/// Every builder starts in a small mapping on 4K pages and relocates into a
-/// `RESERVED_BYTES` huge page mapping only once it outgrows it. Tearing down a mapping
-/// costs the kernel time proportional to its size (page table walk, TLB shootdown), so
-/// the hundreds of tiny builders a small aggregation creates per query must not each
-/// map and unmap gigabytes, and must not each hold a 2MB huge page either
-const SMALL_REGION_BYTES: usize = 256 << 10;
-
-/// Retired small mappings kept for reuse, dirty, so reusing one costs no syscall at
-/// all. Bounded, the rest are unmapped as usual. Shared across threads because tokio
-/// moves a partition between workers, so per thread pools drain on some and overflow
-/// on others
-static POOL: Mutex<Vec<usize>> = Mutex::new(Vec::new());
-const POOL_MAX: usize = 256;
-
-fn pool() -> std::sync::MutexGuard<'static, Vec<usize>> {
-    POOL.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-/// Anonymous private mapping shared between a builder and the blocks it handed out.
-///
-/// Pages are returned to the OS from the front once neither the builder (everything
-/// below `head`) nor any handed out block still needs them
-#[derive(Debug)]
-struct Region {
-    base: *mut u8,
-    cap: usize,
-    page: usize,
-    /// A `SMALL_REGION_BYTES` mapping on 4K pages, pooled when dropped
-    small: bool,
-    state: Mutex<RegionState>,
-}
-
-#[derive(Debug)]
-struct RegionState {
-    /// Bytes below which the builder no longer needs anything
-    head: usize,
-    /// Bytes already returned to the OS, always a page multiple
-    unmapped: usize,
-    /// Start byte of every handed out block that is still alive, with a count
-    /// since a zero item take can hand out the same start twice
-    live_blocks: BTreeMap<usize, usize>,
-}
-
-// The mapping is only reached through `&self` methods that go through the mutex,
-// or through the builder that exclusively owns the live window
-unsafe impl Send for Region {}
-unsafe impl Sync for Region {}
-
-impl Region {
-    /// Reserve `cap` bytes, settling for less (down to `min`) when the kernel refuses
-    fn map(cap: usize, min: usize) -> Arc<Self> {
-        let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
-        let small = cap == SMALL_REGION_BYTES;
-        if small {
-            if let Some(base) = pool().pop() {
-                return Self::new(base as *mut u8, cap, page, small);
-            }
-        }
-        let mut cap = cap.next_multiple_of(page);
-        let base = loop {
-            let base = unsafe {
-                libc::mmap(
-                    std::ptr::null_mut(),
-                    cap,
-                    libc::PROT_READ | libc::PROT_WRITE,
-                    libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE,
-                    -1,
-                    0,
-                )
-            };
-            if base != libc::MAP_FAILED {
-                break base;
-            }
-            assert!(cap > min, "mmap of {cap} bytes failed");
-            cap = (cap / 2).max(min).next_multiple_of(page);
-        };
-        // Ask for transparent huge pages. In the default `madvise` THP mode anonymous
-        // mappings stay on 4K pages, which costs a page fault per 4K on first touch and
-        // many more TLB misses on the random access the hash tables do, while the
-        // global allocator's memory is already huge page backed
-        #[cfg(target_os = "linux")]
-        if !small {
-            unsafe {
-                libc::madvise(base, cap, libc::MADV_HUGEPAGE);
-            }
-        }
-        Self::new(base.cast::<u8>(), cap, page, small)
-    }
-
-    fn new(base: *mut u8, cap: usize, page: usize, small: bool) -> Arc<Self> {
-        Arc::new(Self {
-            base,
-            cap,
-            page,
-            small,
-            state: Mutex::new(RegionState {
-                head: 0,
-                unmapped: 0,
-                live_blocks: BTreeMap::new(),
-            }),
-        })
-    }
-
-    /// The builder no longer needs anything below `byte_offset`
-    fn set_head(&self, byte_offset: usize) {
-        let mut state = self.state.lock().unwrap();
-        state.head = byte_offset;
-        self.sweep(&mut state);
-    }
-
-    /// Claim `[start, ..)` so its pages stay mapped until the guard is dropped
-    fn claim(self: &Arc<Self>, start: usize) -> BlockGuard {
-        *self
-            .state
-            .lock()
-            .unwrap()
-            .live_blocks
-            .entry(start)
-            .or_default() += 1;
-        BlockGuard {
-            region: Arc::clone(self),
-            start,
-        }
-    }
-
-    fn release(&self, start: usize) {
-        let mut state = self.state.lock().unwrap();
-        let count = state
-            .live_blocks
-            .get_mut(&start)
-            .expect("released block must be live");
-        *count -= 1;
-        if *count == 0 {
-            state.live_blocks.remove(&start);
-        }
-        self.sweep(&mut state);
-    }
-
-    /// Return every whole page nobody needs anymore to the OS
-    fn sweep(&self, state: &mut RegionState) {
-        let first_live_block = state.live_blocks.keys().next().copied();
-        // A small region is pooled or unmapped whole once nothing uses it anymore
-        if self.small {
-            return;
-        }
-        let free_end =
-            state.head.min(first_live_block.unwrap_or(usize::MAX)) & !(self.page - 1);
-        if free_end > state.unmapped {
-            let rc = unsafe {
-                libc::munmap(
-                    self.base.add(state.unmapped).cast(),
-                    free_end - state.unmapped,
-                )
-            };
-            assert_eq!(rc, 0, "munmap failed");
-            state.unmapped = free_end;
-        }
-    }
-}
-
-impl Drop for Region {
-    fn drop(&mut self) {
-        let state = match self.state.get_mut() {
-            Ok(state) => state,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        if self.small {
-            let mut pool = pool();
-            if pool.len() < POOL_MAX {
-                pool.push(self.base as usize);
-                return;
-            }
-        }
-        if self.cap > state.unmapped {
-            unsafe {
-                libc::munmap(self.base.add(state.unmapped).cast(), self.cap - state.unmapped)
-            };
-        }
-    }
-}
-
-/// Owner of a handed out block, releases its pages when the last buffer is dropped
-#[derive(Debug)]
-struct BlockGuard {
-    region: Arc<Region>,
-    start: usize,
-}
-
-impl Drop for BlockGuard {
-    fn drop(&mut self) {
-        self.region.release(self.start);
-    }
-}
 
 /// A block taken out of a [`CopyItemBlockedVecBuilder`], exclusively owned like a `Vec`
 /// so it can be mutated in place, and convertible into an arrow buffer without copying.
-/// Its pages are returned to the OS once the block (or the buffer made from it) is dropped
 pub struct MmapVec<T: Copy> {
-    ptr: NonNull<T>,
-    len: usize,
-    /// `None` for an empty block that borrows no pages
-    guard: Option<BlockGuard>,
+    data: Vec<T>,
 }
-
-// The block owns its range of the mapping exclusively, items are plain data
-unsafe impl<T: Copy + Send> Send for MmapVec<T> {}
-unsafe impl<T: Copy + Sync> Sync for MmapVec<T> {}
 
 impl<T: Copy> MmapVec<T> {
     pub fn as_slice(&self) -> &[T] {
-        self
+        &self.data
     }
 
     pub fn as_mut_slice(&mut self) -> &mut [T] {
-        self
+        &mut self.data
     }
 
-    /// Wrap into an arrow buffer, the pages stay mapped for as long as the buffer lives
-    pub fn into_buffer(self) -> Buffer {
-        match self.guard {
-            None => Buffer::from(&[]),
-            Some(guard) => unsafe {
-                Buffer::from_custom_allocation(
-                    self.ptr.cast::<u8>(),
-                    self.len * size_of::<T>(),
-                    Arc::new(guard),
-                )
-            },
-        }
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
+    /// Wrap into an arrow buffer without copying
+    pub fn into_buffer(self) -> Buffer
+    where
+        T: ArrowNativeType,
+    {
+        Buffer::from_vec(self.data)
     }
 
     pub fn into_scalar_buffer(self) -> ScalarBuffer<T>
     where
         T: ArrowNativeType,
     {
-        let len = self.len;
-        ScalarBuffer::new(self.into_buffer(), 0, len)
+        ScalarBuffer::from(self.data)
     }
 }
 
@@ -262,14 +55,14 @@ impl<T: Copy> Deref for MmapVec<T> {
 
     #[inline]
     fn deref(&self) -> &[T] {
-        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
+        &self.data
     }
 }
 
 impl<T: Copy> DerefMut for MmapVec<T> {
     #[inline]
     fn deref_mut(&mut self) -> &mut [T] {
-        unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
+        &mut self.data
     }
 }
 
@@ -279,13 +72,29 @@ impl<T: Copy> AsRef<[T]> for MmapVec<T> {
     }
 }
 
+impl<T: Copy> Index<usize> for MmapVec<T> {
+    type Output = T;
+
+    #[inline]
+    fn index(&self, index: usize) -> &T {
+        &self.data[index]
+    }
+}
+
+impl<T: Copy> IndexMut<usize> for MmapVec<T> {
+    #[inline]
+    fn index_mut(&mut self, index: usize) -> &mut T {
+        &mut self.data[index]
+    }
+}
+
 impl<T: ArrowNativeType> From<MmapVec<T>> for ScalarBuffer<T> {
     fn from(block: MmapVec<T>) -> Self {
         block.into_scalar_buffer()
     }
 }
 
-impl<T: Copy> From<MmapVec<T>> for Buffer {
+impl<T: ArrowNativeType> From<MmapVec<T>> for Buffer {
     fn from(block: MmapVec<T>) -> Self {
         block.into_buffer()
     }
@@ -303,404 +112,224 @@ impl<T: Copy + PartialEq, U: AsRef<[T]>> PartialEq<U> for MmapVec<T> {
     }
 }
 
-/// Items live contiguously in an mmap'ed region at `[head, tail)`, so any item is
-/// reachable by plain offset. Blocks are only a view over that range: fixed sizing
-/// computes them from `head`, manual sizing records where each block starts.
-/// Taking from the front advances `head` and unmaps the pages it left behind.
-#[derive(Debug)]
-pub struct CopyItemBlockedVecBuilder<const FIXED_BLOCK_SIZING: bool, T: Copy> {
-    region: Arc<Region>,
-    /// Absolute item index of the first live item
-    head: usize,
-    /// Absolute item index one past the last live item
-    tail: usize,
-    block_size: usize,
-    /// Fixed sizing only: absolute item index at which the current block is full
-    next_block_end: usize,
-    /// Manual sizing only: absolute start of every block, `block_starts[0] == head`
-    block_starts: Vec<usize>,
-    _t: PhantomData<T>,
+impl<T: Copy> Block for MmapVec<T> {
+    type Item = T;
+
+    fn allocated_size(&self) -> usize {
+        size_of::<T>() * self.data.capacity()
+    }
+
+    #[inline]
+    fn push(&mut self, item: T) {
+        self.data.push(item)
+    }
+
+    fn extend(&mut self, iter: impl Iterator<Item = T>) {
+        self.data.extend(iter)
+    }
+
+    fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
 }
 
-impl<const FIXED_BLOCK_SIZING: bool, T: Copy> Drop
+impl<T: Copy> BlockWithSlice for MmapVec<T> {
+    fn copy_from_slice(&mut self, slice: &[T]) {
+        self.data.extend_from_slice(slice)
+    }
+
+    fn append_n(&mut self, item: T, n: usize) {
+        self.data.resize(self.data.len() + n, item)
+    }
+}
+
+impl<T: Copy> BlockBuilder for MmapVec<T> {
+    type Output = MmapVec<T>;
+
+    fn with_capacity(capacity: usize) -> Self {
+        MmapVec {
+            data: Vec::with_capacity(capacity),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    fn truncate(&mut self, len: usize) {
+        self.data.truncate(len)
+    }
+
+    fn append_range(&mut self, src: &Self, range: Range<usize>) {
+        self.data.extend_from_slice(&src.data[range])
+    }
+
+    fn shift_down(&mut self, offset: usize, len: usize) {
+        if offset > 0 {
+            self.data.copy_within(offset..offset + len, 0);
+        }
+        self.data.truncate(len)
+    }
+
+    fn allocated_size(&self) -> usize {
+        size_of::<T>() * self.data.capacity()
+    }
+
+    fn finish(self) -> MmapVec<T> {
+        self
+    }
+}
+
+#[derive(Debug)]
+pub struct VecBlockProvider<T>(PhantomData<T>);
+
+impl<T> Default for VecBlockProvider<T> {
+    fn default() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<T: Copy> BlockProvider for VecBlockProvider<T> {
+    type Block = MmapVec<T>;
+
+    fn new_block(&self) -> MmapVec<T> {
+        MmapVec { data: Vec::new() }
+    }
+
+    fn allocated_size(&self) -> usize {
+        0
+    }
+}
+
+impl<T: ArrowNativeType> BlockProviderFinish for VecBlockProvider<T> {
+    type FinishedBlock = ScalarBuffer<T>;
+
+    fn finish(&self, block: MmapVec<T>) -> ScalarBuffer<T> {
+        block.into_scalar_buffer()
+    }
+}
+
+/// Blocks are separate `Vec`s in a `VecDeque`, so a block is handed out by moving it and
+/// items are addressed by `(block, index in block)`
+#[derive(Debug)]
+pub struct CopyItemBlockedVecBuilder<const FIXED_BLOCK_SIZING: bool, T: Copy>(
+    BlockedCustomInputBuilder<FIXED_BLOCK_SIZING, VecBlockProvider<T>>,
+);
+
+impl<const FIXED_BLOCK_SIZING: bool, T: Copy> Deref
     for CopyItemBlockedVecBuilder<FIXED_BLOCK_SIZING, T>
 {
-    fn drop(&mut self) {
-        self.region.set_head(self.region.cap);
+    type Target = BlockedCustomInputBuilder<FIXED_BLOCK_SIZING, VecBlockProvider<T>>;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<const FIXED_BLOCK_SIZING: bool, T: Copy> DerefMut
+    for CopyItemBlockedVecBuilder<FIXED_BLOCK_SIZING, T>
+{
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
 impl<const FIXED_BLOCK_SIZING: bool, T: Copy>
     CopyItemBlockedVecBuilder<FIXED_BLOCK_SIZING, T>
 {
-    const ITEM: usize = size_of::<T>();
-
     pub fn new(block_size: usize) -> Self {
-        Self::with_reservation(block_size, SMALL_REGION_BYTES)
-    }
-
-    /// Reserve `reserved_bytes` of address space instead of the default
-    pub fn with_reservation(block_size: usize, reserved_bytes: usize) -> Self {
-        assert!(Self::ITEM > 0, "zero sized items are not supported");
-        if FIXED_BLOCK_SIZING {
-            assert_ne!(block_size, 0, "block size must be greater than 0");
-        }
-        let mut this = Self {
-            region: Region::map(reserved_bytes, MIN_RESERVED_BYTES.min(reserved_bytes)),
-            head: 0,
-            tail: 0,
+        assert!(size_of::<T>() > 0, "zero sized items are not supported");
+        Self(BlockedCustomInputBuilder::new(
             block_size,
-            next_block_end: 0,
-            block_starts: vec![0],
-            _t: PhantomData,
-        };
-        this.relayout_fixed();
-        this
+            VecBlockProvider::default(),
+        ))
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.head == self.tail
+    /// Kept for API compatibility with the mmap implementation, blocks grow on demand
+    pub fn with_reservation(block_size: usize, _reserved_bytes: usize) -> Self {
+        Self::new(block_size)
     }
 
-    #[inline(always)]
-    pub fn len(&self) -> usize {
-        self.tail - self.head
-    }
-
-    #[inline(always)]
-    pub fn block_size(&self) -> usize {
-        self.block_size
-    }
-
-    pub fn num_blocks(&self) -> usize {
-        if FIXED_BLOCK_SIZING {
-            self.len() / self.block_size + 1
-        } else {
-            self.block_starts.len()
-        }
-    }
-
-    /// Mapped bytes that may hold data, from the first live page to the page after `tail`
-    pub fn allocated_size(&self) -> usize {
-        let page = self.region.page;
-        let live_start = (self.head * Self::ITEM) & !(page - 1);
-        (self.tail * Self::ITEM).next_multiple_of(page) - live_start
-            + self.block_starts.capacity() * size_of::<usize>()
-    }
-
-    pub fn as_slice(&self) -> &[T] {
-        unsafe { std::slice::from_raw_parts(self.ptr_at(self.head), self.len()) }
-    }
-
-    pub fn as_mut_slice(&mut self) -> &mut [T] {
-        unsafe {
-            std::slice::from_raw_parts_mut(self.ptr_at(self.head).cast_mut(), self.len())
-        }
-    }
-
-    pub fn block(&self, block_index: usize) -> &[T] {
-        let Range { start, end } = self.block_range(block_index);
-        &self.as_slice()[start - self.head..end - self.head]
-    }
-
-    pub fn current_block_len(&self) -> usize {
-        self.tail - self.current_block_start()
-    }
-
-    pub fn start_new_block(&mut self) {
-        assert!(
-            !FIXED_BLOCK_SIZING,
-            "fixed sizing finishes blocks on its own"
-        );
-        self.block_starts.push(self.tail);
-    }
-
-    /// Push an item and return whether the current block is now full
-    #[inline]
-    pub fn push(&mut self, value: T) -> bool {
-        self.reserve(1);
-        unsafe { self.ptr_at(self.tail).cast_mut().write(value) };
-        self.tail += 1;
-        if FIXED_BLOCK_SIZING && self.tail == self.next_block_end {
-            self.next_block_end += self.block_size;
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Make `n` more items live without writing them, they read as all zero bytes
-    /// since the mapping is zero filled and their pages stay untouched
+    /// Make `n` more items live, they read as all zero bytes
     ///
     /// # Safety
     /// `T` must be valid when all of its bytes are zero
     pub unsafe fn advance_untouched(&mut self, n: usize) {
-        self.reserve(n);
-        self.tail += n;
-        self.relayout_fixed();
+        let zero: T = unsafe { std::mem::zeroed() };
+        self.0.push_value_n(zero, n);
     }
 
-    pub fn extend_from_slice(&mut self, slice: &[T]) {
-        self.reserve(slice.len());
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                slice.as_ptr(),
-                self.ptr_at(self.tail).cast_mut(),
-                slice.len(),
-            )
-        };
-        self.tail += slice.len();
-        self.relayout_fixed();
-    }
-
-    pub fn push_value_n(&mut self, value: T, n: usize) {
-        self.reserve(n);
-        let start = self.tail;
-        self.tail += n;
-        unsafe { std::slice::from_raw_parts_mut(self.ptr_at(start).cast_mut(), n) }
-            .fill(value);
-        self.relayout_fixed();
-    }
-
-    pub fn push_default_n(&mut self, n: usize)
-    where
-        T: Default,
-    {
-        self.push_value_n(T::default(), n);
-    }
-
-    /// Make room for `extra` more items past `tail`
+    /// Make room for `extra` more items in the current block
     #[inline]
     pub fn reserve(&mut self, extra: usize) {
-        if (self.tail + extra) * Self::ITEM > self.region.cap {
-            self.relocate(extra);
+        let block_size = self.0.block_size();
+        let block = self.0.current_block_mut();
+        let extra = if FIXED_BLOCK_SIZING {
+            extra.min(block_size - block.len())
+        } else {
+            extra
+        };
+        block.data.reserve(extra);
+    }
+
+    /// `(block, index in block)` of `index`. Fixed sizing addresses blocks directly.
+    /// Manual sizing callers address items flat, counting from the block they name (the
+    /// mmap implementation kept items contiguous so this was a plain offset), which
+    /// here walks the blocks
+    /// TODO: O(blocks) walk, manual sizing is the rare path and its blocks are few
+    #[inline]
+    fn locate(&self, index: BlocksIndex) -> (usize, usize) {
+        let block_size = self.0.block_size();
+        let mut block = index.block_index(block_size);
+        let mut offset = index.index_in_block(block_size);
+        if FIXED_BLOCK_SIZING {
+            return (block, offset);
         }
+        let last = self.0.num_blocks() - 1;
+        while block < last {
+            let len = self.0.block(block).len();
+            if offset < len {
+                break;
+            }
+            offset -= len;
+            block += 1;
+        }
+        (block, offset)
     }
 
     pub fn reserve_blocks(&mut self, n: usize) {
-        self.block_starts.reserve(n);
+        self.0.reserve_blocks(n);
     }
 
-    /// Take the first block, `None` once there are no more items
-    pub fn take_block(&mut self) -> Option<MmapVec<T>> {
-        if self.is_empty() {
-            return None;
-        }
-        Some(self.take_first_block())
-    }
-
-    /// Take the first block even when it is empty, for callers that know from
-    /// elsewhere that the block holds items
-    pub fn take_first_block(&mut self) -> MmapVec<T> {
-        let range = self.block_range(0);
-        let block = self.hand_out(range.clone());
-        self.head = range.end;
-        if !FIXED_BLOCK_SIZING {
-            self.block_starts.remove(0);
-            if self.block_starts.is_empty() {
-                self.block_starts.push(self.tail);
-            }
-        }
-        self.after_head_moved();
-        block
-    }
-
-    pub fn take_block_finished(&mut self) -> Option<ScalarBuffer<T>>
-    where
-        T: ArrowNativeType,
-    {
-        self.take_block().map(Into::into)
-    }
-
-    /// Take every non empty block
-    pub fn take_all(&mut self) -> Vec<MmapVec<T>> {
-        let blocks = (0..self.num_blocks())
-            .map(|i| self.block_range(i))
-            .filter(|r| !r.is_empty())
-            .map(|r| self.hand_out(r))
-            .collect();
-        self.reset();
-        blocks
-    }
-
-    /// Take the first `n` items. With manual sizing `adjusted_block_size_iter` gives
-    /// the block sizes of the remaining items and must sum to their count
-    pub fn take_n(
-        &mut self,
-        n: usize,
-        adjusted_block_size_iter: Option<impl Iterator<Item = usize> + Clone>,
-    ) -> MmapVec<T> {
-        assert_eq!(FIXED_BLOCK_SIZING, adjusted_block_size_iter.is_none());
-        assert!(n <= self.len(), "n ({n}) must be <= len ({})", self.len());
-
-        let taken = self.hand_out(self.head..self.head + n);
-        self.head += n;
-
-        if let Some(sizes) = adjusted_block_size_iter {
-            self.block_starts.clear();
-            let mut start = self.head;
-            for size in sizes {
-                self.block_starts.push(start);
-                start += size;
-            }
-            assert_eq!(
-                start, self.tail,
-                "adjusted block sizes must equal the length of the remaining items"
-            );
-            if self.block_starts.is_empty() {
-                self.block_starts.push(self.head);
-            }
-        }
-        self.after_head_moved();
-        taken
-    }
-
-    pub fn reset(&mut self) {
-        self.head = self.tail;
-        self.block_starts.clear();
-        self.block_starts.push(self.tail);
-        self.after_head_moved();
-    }
-
-    // ---- internals ----
-
-    #[inline]
-    fn ptr_at(&self, item_index: usize) -> *const T {
-        unsafe { self.region.base.add(item_index * Self::ITEM).cast::<T>() }
-    }
-
-    #[inline]
-    fn current_block_start(&self) -> usize {
-        if FIXED_BLOCK_SIZING {
-            self.next_block_end - self.block_size
-        } else {
-            *self.block_starts.last().expect("always at least one block")
-        }
-    }
-
-    /// Absolute item range of a block
-    fn block_range(&self, block_index: usize) -> Range<usize> {
-        if FIXED_BLOCK_SIZING {
-            let start = self.head + block_index * self.block_size;
-            start..(start + self.block_size).min(self.tail)
-        } else {
-            let start = self.block_starts[block_index];
-            start
-                ..self
-                    .block_starts
-                    .get(block_index + 1)
-                    .copied()
-                    .unwrap_or(self.tail)
-        }
-    }
-
-    /// Fixed sizing: recompute where the current block ends after `head`/`tail` changed
-    fn relayout_fixed(&mut self) {
-        if FIXED_BLOCK_SIZING {
-            self.next_block_end =
-                self.head + (self.len() / self.block_size + 1) * self.block_size;
-        }
-    }
-
-    fn after_head_moved(&mut self) {
-        self.relayout_fixed();
-        self.region.set_head(self.head * Self::ITEM);
-    }
-
-    /// Zero copy hand over of an absolute item range, its pages stay mapped while it lives
-    fn hand_out(&self, range: Range<usize>) -> MmapVec<T> {
-        let ptr = NonNull::new(self.ptr_at(range.start).cast_mut())
-            .expect("mmap is never null");
-        let guard =
-            (!range.is_empty()).then(|| self.region.claim(range.start * Self::ITEM));
-        MmapVec {
-            ptr,
-            len: range.len(),
-            guard,
-        }
-    }
-
-    /// Move the live window to the start of a fresh region, doubling it while the
-    /// window would fill more than half
-    fn relocate(&mut self, extra: usize) {
-        let live = self.len();
-        let need = (live + extra) * Self::ITEM;
-        // Leaving the small mapping goes straight to the full reservation
-        let mut cap = self.region.cap.max(RESERVED_BYTES);
-        while cap < need.saturating_mul(2) {
-            cap *= 2;
-        }
-        let new = Region::map(cap, need);
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                self.ptr_at(self.head).cast::<u8>(),
-                new.base,
-                live * Self::ITEM,
-            )
-        };
-        // Blocks handed out of the old region keep it alive for as long as they need it
-        self.region.set_head(self.region.cap);
-        self.region = new;
-        for start in &mut self.block_starts {
-            *start -= self.head;
-        }
-        self.next_block_end -= self.head;
-        self.head = 0;
-        self.tail = live;
-    }
-}
-
-impl<T: Copy> CopyItemBlockedVecBuilder<true, T> {
-    pub fn take_n_fixed(&mut self, n: usize) -> MmapVec<T> {
-        self.take_n(n, None::<std::iter::Empty<usize>>)
-    }
-}
-
-impl<const FIXED_BLOCK_SIZING: bool, T: Copy> Extend<T>
-    for CopyItemBlockedVecBuilder<FIXED_BLOCK_SIZING, T>
-{
-    fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
-        let iter = iter.into_iter();
-        self.reserve(iter.size_hint().0);
-        for value in iter {
-            self.push(value);
-        }
-    }
-}
-
-impl<const FIXED_BLOCK_SIZING: bool, T: Copy>
-    CopyItemBlockedVecBuilder<FIXED_BLOCK_SIZING, T>
-{
-    /// Offset of an index from `head`
-    #[inline]
-    fn offset(&self, index: BlocksIndex) -> usize {
-        if FIXED_BLOCK_SIZING {
-            index.into_index_in_fixed_block_size(self.block_size)
-        } else {
-            index.into_flat_index_in_dyn_block_size(&self.block_starts, self.head)
-        }
+    /// Every item, block by block
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        self.0.blocks_mut().flat_map(|block| block.data.iter_mut())
     }
 
     /// Item at `index` without bounds checking
     ///
     /// # Safety
-    /// `index` must point at an existing item, i.e. `self.offset(index) < self.len()`
+    /// `index` must point at an existing item
     #[inline]
     pub unsafe fn get_unchecked(&self, index: BlocksIndex) -> &T {
-        let offset = self.offset(index);
-        debug_assert!(offset < self.len());
-        unsafe { &*self.ptr_at(self.head + offset) }
+        let (block, offset) = self.locate(index);
+        unsafe { self.0.block_unchecked(block).data.get_unchecked(offset) }
     }
 
     /// Mutable item at `index` without bounds checking
     ///
     /// # Safety
-    /// `index` must point at an existing item, i.e. `self.offset(index) < self.len()`
+    /// `index` must point at an existing item
     #[inline]
     pub unsafe fn get_unchecked_mut(&mut self, index: BlocksIndex) -> &mut T {
-        let offset = self.offset(index);
-        debug_assert!(offset < self.len());
-        unsafe { &mut *self.ptr_at(self.head + offset).cast_mut() }
+        let (block, offset) = self.locate(index);
+        unsafe { self.0.block_unchecked_mut(block).data.get_unchecked_mut(offset) }
     }
 }
 
@@ -711,7 +340,8 @@ impl<const FIXED_BLOCK_SIZING: bool, T: Copy> Index<BlocksIndex>
 
     #[inline]
     fn index(&self, index: BlocksIndex) -> &T {
-        &self.as_slice()[self.offset(index)]
+        let (block, offset) = self.locate(index);
+        &self.0.block(block).data[offset]
     }
 }
 
@@ -720,8 +350,25 @@ impl<const FIXED_BLOCK_SIZING: bool, T: Copy> IndexMut<BlocksIndex>
 {
     #[inline]
     fn index_mut(&mut self, index: BlocksIndex) -> &mut T {
-        let offset = self.offset(index);
-        &mut self.as_mut_slice()[offset]
+        let (block, offset) = self.locate(index);
+        &mut self.0.current_or_block_mut(block).data[offset]
+    }
+}
+
+impl<T: Copy> Index<usize> for CopyItemBlockedVecBuilder<true, T> {
+    type Output = T;
+
+    #[inline]
+    fn index(&self, index: usize) -> &T {
+        &self[BlocksIndex::from_index_in_fixed_block_size(index, self.0.block_size())]
+    }
+}
+
+impl<T: Copy> IndexMut<usize> for CopyItemBlockedVecBuilder<true, T> {
+    #[inline]
+    fn index_mut(&mut self, index: usize) -> &mut T {
+        let index = BlocksIndex::from_index_in_fixed_block_size(index, self.0.block_size());
+        &mut self[index]
     }
 }
 
@@ -771,7 +418,7 @@ mod tests {
     type Manual = CopyItemBlockedVecBuilder<false, i32>;
 
     fn to_vec(builder: &Fixed) -> Vec<i32> {
-        (0..builder.len()).map(|i| builder[i]).collect()
+        (0..builder.num_blocks()).flat_map(|i| builder.block(i).to_vec()).collect()
     }
 
     /// A fixed builder always keeps a trailing block with room for the next push
@@ -1189,9 +836,7 @@ mod tests {
 
     #[test]
     fn allocated_size_follows_blocks() {
-        // memory is returned page by page, so make a block span whole pages
-        let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
-        let block_size = page / size_of::<i32>();
+        let block_size = 1024;
         let mut builder = Fixed::new(block_size);
         let empty = builder.allocated_size();
 
@@ -1199,11 +844,13 @@ mod tests {
         let full = builder.allocated_size();
         assert!(full >= empty + (2 * block_size + 1) * size_of::<i32>());
 
+        // a taken block leaves with its memory
         builder.take_block();
         let after_take = builder.allocated_size();
-        assert_eq!(after_take, full - page);
+        assert!(after_take <= full - block_size * size_of::<i32>());
 
         builder.take_all();
+        assert!(builder.is_empty());
         assert!(builder.allocated_size() < after_take);
     }
 

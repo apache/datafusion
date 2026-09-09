@@ -551,7 +551,7 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType> BlockedGroupColumn<FIXED_B
         let mut per_views_block: Vec<usize> = Vec::new();
         let mut pos = 0usize;
         let mut first_block_of_current = 0usize;
-        for (k, view) in self.views.as_mut_slice().iter_mut().enumerate() {
+        for (k, view) in self.views.iter_mut().enumerate() {
             if k % block_size == 0 {
                 first_block_of_current = starts.len();
                 starts.push(pos);

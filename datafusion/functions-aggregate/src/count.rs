@@ -932,16 +932,14 @@ impl BlockedGroupsAccumulator for BlockedCountGroupsAccumulator {
         // Add one to each group's counter for each non null, non
         // filtered value
         self.ensure_groups(total_num_groups);
-        let block_size = self.counts.block_size();
-        let counts = self.counts.as_mut_slice();
+        let counts = &mut self.counts;
         accumulate_indices(
             group_indices,
             values.logical_nulls().as_ref(),
             opt_filter,
             |group_index: BlocksIndex| {
-                let flat = group_index.into_index_in_fixed_block_size(block_size);
                 // SAFETY: `ensure_groups` made room for every group index
-                let count = unsafe { counts.get_unchecked_mut(flat) };
+                let count = unsafe { counts.get_unchecked_mut(group_index) };
                 *count += 1;
             },
         );

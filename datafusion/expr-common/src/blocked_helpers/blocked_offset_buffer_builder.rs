@@ -74,25 +74,13 @@ impl<const FIXED_BLOCK_SIZING: bool, O: OffsetSizeTrait>
         self.last_offset
     }
 
-    /// Slot of the start offset of item `index`, the item index counts `block_size`
-    /// items per block while the slots have one more (the leading zero) per block
-    #[inline]
-    fn slot(&self, index: BlocksIndex) -> usize {
-        assert!(
-            FIXED_BLOCK_SIZING,
-            "indexing by BlocksIndex is only supported for fixed block sizing"
-        );
-        let block_size = self.block_size();
-        index.block_index(block_size) * (block_size + 1)
-            + index.index_in_block(block_size)
-    }
-
     /// `(start, end)` offsets within the block of item `index`
     #[inline]
     pub fn value_offsets(&self, index: BlocksIndex) -> (O, O) {
-        let slot = self.slot(index);
-        let slots = self.slots.as_slice();
-        (slots[slot], slots[slot + 1])
+        let block_size = self.block_size();
+        let block = self.slots.block(index.block_index(block_size));
+        let slot = index.index_in_block(block_size);
+        (block[slot], block[slot + 1])
     }
 
     pub fn start_new_block(&mut self) {
@@ -158,17 +146,17 @@ impl<const FIXED_BLOCK_SIZING: bool, O: OffsetSizeTrait>
         }
 
         let added = offset_buffer_slice.len() - 1;
-        let start = self.slots.len();
-        self.slots.extend_from_slice(&offset_buffer_slice[1..]);
 
         // Rebase, easily SIMD-ed: `[0, 2, 3]` extended with `[6, 9, 10]` becomes `[0, 2, 3, 6, 7]`
         let base = offset_buffer_slice[0];
         let last_offset = self.last_offset;
-        for offset in &mut self.slots.as_mut_slice()[start..] {
-            *offset = *offset - base + last_offset;
-        }
+        let rebased: Vec<O> = offset_buffer_slice[1..]
+            .iter()
+            .map(|offset| *offset - base + last_offset)
+            .collect();
+        self.slots.extend_from_slice(&rebased);
 
-        self.last_offset = self.slots.as_slice()[self.slots.len() - 1];
+        self.last_offset = *rebased.last().expect("at least one offset was added");
         self.len += added;
         self.finish_block_if_full()
     }
@@ -365,13 +353,14 @@ impl<const FIXED_BLOCK_SIZING: bool, O: OffsetSizeTrait>
         if FIXED_BLOCK_SIZING {
             old.take_n(n + 1, None::<std::iter::Empty<usize>>)
         } else {
-            old.take_n(n + 1, Some(std::iter::once(old.len() - n - 1)))
+            let rest = old.len() - n - 1;
+            old.take_n(n + 1, Some(std::iter::once(rest)))
         }
         .into_scalar_buffer()
     }
 
     pub fn blocks_iter(&self) -> impl Iterator<Item = &[O]> + Clone {
-        (0..self.num_blocks()).map(|b| self.slots.block(b))
+        (0..self.num_blocks()).map(|b| self.slots.block(b).as_slice())
     }
 }
 
@@ -408,7 +397,8 @@ impl<const FIXED_BLOCK_SIZING: bool, O: OffsetSizeTrait> Index<BlocksIndex>
 
     #[inline]
     fn index(&self, index: BlocksIndex) -> &Self::Output {
-        &self.slots.as_slice()[self.slot(index)]
+        let block_size = self.block_size();
+        &self.slots.block(index.block_index(block_size))[index.index_in_block(block_size)]
     }
 }
 
