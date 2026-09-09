@@ -16,11 +16,12 @@
 // under the License.
 
 //! [`EliminateCrossJoin`] converts `CROSS JOIN` to `INNER JOIN` if join predicates are available.
+use crate::optimizer::map_children_recompute_schema_if_needed;
 use crate::{OptimizerConfig, OptimizerRule};
 use std::sync::Arc;
 
 use crate::join_key_set::JoinKeySet;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::{NullEquality, Result};
 use datafusion_expr::expr::{BinaryExpr, Expr};
 use datafusion_expr::logical_plan::{
@@ -255,15 +256,12 @@ fn rewrite_children(
     let transformed_plan = plan
         .map_uncorrelated_subqueries(|input| optimizer.rewrite(input, config))?
         .transform_sibling(|plan| {
-            plan.map_children(|input| optimizer.rewrite(input, config))
+            map_children_recompute_schema_if_needed(plan, |input| {
+                optimizer.rewrite(input, config)
+            })
         })?;
 
-    // recompute schema if the plan was transformed
-    if transformed_plan.transformed {
-        transformed_plan.map_data(|plan| plan.recompute_schema())
-    } else {
-        Ok(transformed_plan)
-    }
+    Ok(transformed_plan)
 }
 
 /// Recursively accumulate possible_join_keys and inputs from inner joins
