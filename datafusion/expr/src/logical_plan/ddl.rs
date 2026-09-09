@@ -50,6 +50,8 @@ pub enum DdlStatement {
     CreateCatalogSchema(CreateCatalogSchema),
     /// Creates a new catalog (aka "Database").
     CreateCatalog(CreateCatalog),
+    /// Creates a new catalog by invoking a registered `CatalogProviderFactory`.
+    CreateExternalCatalog(Box<CreateExternalCatalog>),
     /// Creates a new index.
     CreateIndex(CreateIndex),
     /// Drops a table.
@@ -58,6 +60,8 @@ pub enum DdlStatement {
     DropView(DropView),
     /// Drops a catalog schema
     DropCatalogSchema(DropCatalogSchema),
+    /// Drops a catalog previously created with `CREATE EXTERNAL CATALOG`.
+    DropCatalog(DropCatalog),
     /// Create function statement. Boxed for the same reason as
     /// [`Self::CreateExternalTable`] (~288 bytes).
     CreateFunction(Box<CreateFunction>),
@@ -76,10 +80,12 @@ impl DdlStatement {
                 schema
             }
             DdlStatement::CreateCatalog(CreateCatalog { schema, .. }) => schema,
+            DdlStatement::CreateExternalCatalog(ce) => &ce.schema,
             DdlStatement::CreateIndex(CreateIndex { schema, .. }) => schema,
             DdlStatement::DropTable(DropTable { schema, .. }) => schema,
             DdlStatement::DropView(DropView { schema, .. }) => schema,
             DdlStatement::DropCatalogSchema(DropCatalogSchema { schema, .. }) => schema,
+            DdlStatement::DropCatalog(DropCatalog { schema, .. }) => schema,
             DdlStatement::CreateFunction(cf) => &cf.schema,
             DdlStatement::DropFunction(DropFunction { schema, .. }) => schema,
         }
@@ -94,10 +100,12 @@ impl DdlStatement {
             DdlStatement::CreateView(_) => "CreateView",
             DdlStatement::CreateCatalogSchema(_) => "CreateCatalogSchema",
             DdlStatement::CreateCatalog(_) => "CreateCatalog",
+            DdlStatement::CreateExternalCatalog(_) => "CreateExternalCatalog",
             DdlStatement::CreateIndex(_) => "CreateIndex",
             DdlStatement::DropTable(_) => "DropTable",
             DdlStatement::DropView(_) => "DropView",
             DdlStatement::DropCatalogSchema(_) => "DropCatalogSchema",
+            DdlStatement::DropCatalog(_) => "DropCatalog",
             DdlStatement::CreateFunction(_) => "CreateFunction",
             DdlStatement::DropFunction(_) => "DropFunction",
         }
@@ -109,6 +117,7 @@ impl DdlStatement {
             DdlStatement::CreateExternalTable(_) => vec![],
             DdlStatement::CreateCatalogSchema(_) => vec![],
             DdlStatement::CreateCatalog(_) => vec![],
+            DdlStatement::CreateExternalCatalog(_) => vec![],
             DdlStatement::CreateMemoryTable(CreateMemoryTable { input, .. }) => {
                 vec![input]
             }
@@ -117,6 +126,7 @@ impl DdlStatement {
             DdlStatement::DropTable(_) => vec![],
             DdlStatement::DropView(_) => vec![],
             DdlStatement::DropCatalogSchema(_) => vec![],
+            DdlStatement::DropCatalog(_) => vec![],
             DdlStatement::CreateFunction(_) => vec![],
             DdlStatement::DropFunction(_) => vec![],
         }
@@ -166,6 +176,9 @@ impl DdlStatement {
                     }) => {
                         write!(f, "CreateCatalog: {catalog_name:?}")
                     }
+                    DdlStatement::CreateExternalCatalog(ce) => {
+                        write!(f, "CreateExternalCatalog: {:?}", ce.catalog_name)
+                    }
                     DdlStatement::CreateIndex(CreateIndex { name, .. }) => {
                         write!(f, "CreateIndex: {name:?}")
                     }
@@ -189,6 +202,11 @@ impl DdlStatement {
                             f,
                             "DropCatalogSchema: {name:?} if not exist:={if_exists} cascade:={cascade}"
                         )
+                    }
+                    DdlStatement::DropCatalog(DropCatalog {
+                        name, if_exists, ..
+                    }) => {
+                        write!(f, "DropCatalog: {name:?} if not exist:={if_exists}")
                     }
                     DdlStatement::CreateFunction(cf) => {
                         let name = &cf.name;
@@ -530,6 +548,73 @@ impl PartialOrd for CreateCatalog {
     }
 }
 
+/// Creates a catalog by invoking a registered `CatalogProviderFactory`.
+///
+/// This mirrors [`CreateExternalTable`], which creates a table by invoking a
+/// registered `TableProviderFactory`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateExternalCatalog {
+    /// The catalog name
+    pub catalog_name: String,
+    /// The key used to look up the `CatalogProviderFactory` (the `STORED AS` clause)
+    pub catalog_type: String,
+    /// The physical location of the catalog, if applicable
+    pub location: Option<String>,
+    /// Do nothing (except issuing a notice) if a catalog with the same name already exists
+    pub if_not_exists: bool,
+    /// Option to replace the catalog if it already exists
+    pub or_replace: bool,
+    /// Catalog(provider) specific options
+    pub options: HashMap<String, String>,
+    /// Dummy schema
+    pub schema: DFSchemaRef,
+}
+
+// Hashing refers to a subset of fields considered in PartialEq.
+impl Hash for CreateExternalCatalog {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.catalog_name.hash(state);
+        self.catalog_type.hash(state);
+        self.location.hash(state);
+        self.if_not_exists.hash(state);
+        self.or_replace.hash(state);
+        self.options.len().hash(state); // HashMap is not hashable
+    }
+}
+
+// Manual implementation needed because of `schema` and `options` fields.
+// Comparison excludes these fields.
+impl PartialOrd for CreateExternalCatalog {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        #[derive(PartialEq, PartialOrd)]
+        struct ComparableCreateExternalCatalog<'a> {
+            pub catalog_name: &'a String,
+            pub catalog_type: &'a String,
+            pub location: &'a Option<String>,
+            pub if_not_exists: &'a bool,
+            pub or_replace: &'a bool,
+        }
+        let comparable_self = ComparableCreateExternalCatalog {
+            catalog_name: &self.catalog_name,
+            catalog_type: &self.catalog_type,
+            location: &self.location,
+            if_not_exists: &self.if_not_exists,
+            or_replace: &self.or_replace,
+        };
+        let comparable_other = ComparableCreateExternalCatalog {
+            catalog_name: &other.catalog_name,
+            catalog_type: &other.catalog_type,
+            location: &other.location,
+            if_not_exists: &other.if_not_exists,
+            or_replace: &other.or_replace,
+        };
+        comparable_self
+            .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
+    }
+}
+
 /// Creates a schema.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateCatalogSchema {
@@ -620,6 +705,29 @@ impl PartialOrd for DropCatalogSchema {
                 Some(Ordering::Equal) => self.cascade.partial_cmp(&other.cascade),
                 cmp => cmp,
             },
+            cmp => cmp,
+        }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
+    }
+}
+
+/// Drops a catalog previously created with `CREATE EXTERNAL CATALOG`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DropCatalog {
+    /// The catalog name
+    pub name: String,
+    /// If the catalog exists
+    pub if_exists: bool,
+    /// Dummy schema
+    pub schema: DFSchemaRef,
+}
+
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for DropCatalog {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.name.partial_cmp(&other.name) {
+            Some(Ordering::Equal) => self.if_exists.partial_cmp(&other.if_exists),
             cmp => cmp,
         }
         // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields

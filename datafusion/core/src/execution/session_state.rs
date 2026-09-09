@@ -23,7 +23,9 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::catalog::{CatalogProviderList, SchemaProvider, TableProviderFactory};
+use crate::catalog::{
+    CatalogProviderFactory, CatalogProviderList, SchemaProvider, TableProviderFactory,
+};
 use crate::datasource::file_format::FileFormatFactory;
 #[cfg(feature = "sql")]
 use crate::datasource::provider_as_source;
@@ -202,6 +204,16 @@ struct SessionStateInner {
     ///
     /// [`TableProvider`]: crate::catalog::TableProvider
     table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
+    /// CatalogProviderFactories for different catalog implementations.
+    ///
+    /// Maps strings like "ICEBERG" to an instance of [`CatalogProviderFactory`]
+    ///
+    /// This is used to create [`CatalogProvider`] instances for the
+    /// `CREATE EXTERNAL CATALOG ... STORED AS <TYPE>` statement, for catalogs
+    /// backed by an external implementation.
+    ///
+    /// [`CatalogProvider`]: crate::catalog::CatalogProvider
+    catalog_factories: HashMap<String, Arc<dyn CatalogProviderFactory>>,
     /// Runtime environment
     runtime_env: Arc<RuntimeEnv>,
     /// [FunctionFactory] to support pluggable user defined function handler.
@@ -246,6 +258,7 @@ impl Debug for SessionState {
             .field("execution_props", &self.execution_props)
             .field("table_options", &self.inner.table_options)
             .field("table_factories", &self.inner.table_factories)
+            .field("catalog_factories", &self.inner.catalog_factories)
             .field("function_factory", &self.inner.function_factory)
             .field("cache_factory", &self.inner.cache_factory)
             .field("expr_planners", &self.inner.expr_planners);
@@ -492,6 +505,18 @@ impl SessionState {
         &mut self,
     ) -> &mut HashMap<String, Arc<dyn TableProviderFactory>> {
         &mut Arc::make_mut(&mut self.inner).table_factories
+    }
+
+    /// Get the catalog factories
+    pub fn catalog_factories(&self) -> &HashMap<String, Arc<dyn CatalogProviderFactory>> {
+        &self.inner.catalog_factories
+    }
+
+    /// Get the catalog factories
+    pub fn catalog_factories_mut(
+        &mut self,
+    ) -> &mut HashMap<String, Arc<dyn CatalogProviderFactory>> {
+        &mut Arc::make_mut(&mut self.inner).catalog_factories
     }
 
     /// Parse an SQL string into an DataFusion specific AST
@@ -1134,6 +1159,7 @@ pub struct SessionStateBuilder {
     table_options: Option<TableOptions>,
     execution_props: Option<ExecutionProps>,
     table_factories: Option<HashMap<String, Arc<dyn TableProviderFactory>>>,
+    catalog_factories: Option<HashMap<String, Arc<dyn CatalogProviderFactory>>>,
     runtime_env: Option<Arc<RuntimeEnv>>,
     function_factory: Option<Arc<dyn FunctionFactory>>,
     cache_factory: Option<Arc<dyn CacheFactory>>,
@@ -1177,6 +1203,7 @@ impl SessionStateBuilder {
             config: None,
             execution_props: None,
             table_factories: None,
+            catalog_factories: None,
             runtime_env: None,
             function_factory: None,
             cache_factory: None,
@@ -1242,6 +1269,7 @@ impl SessionStateBuilder {
             table_options: Some(existing.table_options),
             execution_props: Some(execution_props),
             table_factories: Some(existing.table_factories),
+            catalog_factories: Some(existing.catalog_factories),
             runtime_env: Some(existing.runtime_env),
             function_factory: existing.function_factory,
             cache_factory: existing.cache_factory,
@@ -1556,6 +1584,27 @@ impl SessionStateBuilder {
         self
     }
 
+    /// Add a [`CatalogProviderFactory`] to the map of factories
+    pub fn with_catalog_factory(
+        mut self,
+        key: String,
+        catalog_factory: Arc<dyn CatalogProviderFactory>,
+    ) -> Self {
+        let mut catalog_factories = self.catalog_factories.unwrap_or_default();
+        catalog_factories.insert(key, catalog_factory);
+        self.catalog_factories = Some(catalog_factories);
+        self
+    }
+
+    /// Set the map of [`CatalogProviderFactory`]s
+    pub fn with_catalog_factories(
+        mut self,
+        catalog_factories: HashMap<String, Arc<dyn CatalogProviderFactory>>,
+    ) -> Self {
+        self.catalog_factories = Some(catalog_factories);
+        self
+    }
+
     /// Set the [`RuntimeEnv`]
     pub fn with_runtime_env(mut self, runtime_env: Arc<RuntimeEnv>) -> Self {
         self.runtime_env = Some(runtime_env);
@@ -1655,6 +1704,7 @@ impl SessionStateBuilder {
             config,
             execution_props,
             table_factories,
+            catalog_factories,
             runtime_env,
             function_factory,
             cache_factory,
@@ -1696,6 +1746,7 @@ impl SessionStateBuilder {
             }),
             config,
             table_factories: table_factories.unwrap_or_default(),
+            catalog_factories: catalog_factories.unwrap_or_default(),
             runtime_env,
             function_factory,
             cache_factory,
@@ -1937,6 +1988,13 @@ impl SessionStateBuilder {
         &mut self.table_factories
     }
 
+    /// Returns the current catalog_factories value
+    pub fn catalog_factories(
+        &mut self,
+    ) -> &mut Option<HashMap<String, Arc<dyn CatalogProviderFactory>>> {
+        &mut self.catalog_factories
+    }
+
     /// Returns the current runtime_env value
     pub fn runtime_env(&mut self) -> &mut Option<Arc<RuntimeEnv>> {
         &mut self.runtime_env
@@ -1989,6 +2047,7 @@ impl Debug for SessionStateBuilder {
             .field("execution_props", &self.execution_props)
             .field("table_options", &self.table_options)
             .field("table_factories", &self.table_factories)
+            .field("catalog_factories", &self.catalog_factories)
             .field("function_factory", &self.function_factory)
             .field("cache_factory", &self.cache_factory)
             .field("expr_planners", &self.expr_planners);

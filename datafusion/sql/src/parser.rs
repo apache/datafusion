@@ -309,6 +309,70 @@ impl fmt::Display for CreateExternalTable {
     }
 }
 
+/// DataFusion extension `CREATE EXTERNAL CATALOG` statement.
+///
+/// ```sql
+/// CREATE [OR REPLACE] EXTERNAL CATALOG [IF NOT EXISTS] <catalog_name>
+/// STORED AS <catalog_type>
+/// [ LOCATION <literal> ]
+/// [ OPTIONS (<key_value_list>) ]
+///
+/// <key_value_list> := (<literal> <literal>, <literal> <literal>, ...)
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateExternalCatalog {
+    /// Catalog name
+    pub catalog_name: ObjectName,
+    /// The key used to look up the registered `CatalogProviderFactory`
+    pub catalog_type: String,
+    /// The physical location of the catalog, if applicable
+    pub location: Option<String>,
+    /// Option to not error if catalog already exists
+    pub if_not_exists: bool,
+    /// Option to replace the catalog if it already exists
+    pub or_replace: bool,
+    /// Catalog(provider) specific options
+    pub options: Vec<(String, Value)>,
+}
+
+impl fmt::Display for CreateExternalCatalog {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "CREATE EXTERNAL CATALOG ")?;
+        if self.if_not_exists {
+            write!(f, "IF NOT EXISTS ")?;
+        }
+        write!(f, "{} ", self.catalog_name)?;
+        write!(f, "STORED AS {}", self.catalog_type)?;
+        if let Some(location) = &self.location {
+            write!(
+                f,
+                " LOCATION {}",
+                Value::SingleQuotedString(location.clone())
+            )?;
+        }
+        Ok(())
+    }
+}
+
+/// DataFusion extension `DROP EXTERNAL CATALOG` statement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DropCatalog {
+    /// Catalog name
+    pub name: ObjectName,
+    /// Option to not error if the catalog does not exist
+    pub if_exists: bool,
+}
+
+impl fmt::Display for DropCatalog {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "DROP EXTERNAL CATALOG ")?;
+        if self.if_exists {
+            write!(f, "IF EXISTS ")?;
+        }
+        write!(f, "{}", self.name)
+    }
+}
+
 /// DataFusion extension for `RESET`
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResetStatement {
@@ -337,6 +401,10 @@ pub enum Statement {
     Statement(Box<SQLStatement>),
     /// Extension: `CREATE EXTERNAL TABLE`
     CreateExternalTable(CreateExternalTable),
+    /// Extension: `CREATE EXTERNAL CATALOG`
+    CreateExternalCatalog(CreateExternalCatalog),
+    /// Extension: `DROP CATALOG`
+    DropCatalog(DropCatalog),
     /// Extension: `COPY TO`
     CopyTo(CopyToStatement),
     /// EXPLAIN for extensions
@@ -350,6 +418,8 @@ impl fmt::Display for Statement {
         match self {
             Statement::Statement(stmt) => write!(f, "{stmt}"),
             Statement::CreateExternalTable(stmt) => write!(f, "{stmt}"),
+            Statement::CreateExternalCatalog(stmt) => write!(f, "{stmt}"),
+            Statement::DropCatalog(stmt) => write!(f, "{stmt}"),
             Statement::CopyTo(stmt) => write!(f, "{stmt}"),
             Statement::Explain(stmt) => write!(f, "{stmt}"),
             Statement::Reset(stmt) => write!(f, "{stmt}"),
@@ -634,6 +704,12 @@ impl<'a> DFParser<'a> {
                     Keyword::RESET => {
                         self.parser.next_token(); // RESET
                         self.parse_reset()
+                    }
+                    Keyword::DROP if self.peek_drop_external_catalog() => {
+                        self.parser.next_token(); // DROP
+                        self.parser.next_token(); // EXTERNAL
+                        self.parser.next_token(); // CATALOG
+                        self.parse_drop_external_catalog()
                     }
                     _ => {
                         // use sqlparser-rs parser
@@ -932,23 +1008,44 @@ impl<'a> DFParser<'a> {
             .parser
             .parse_keywords(&[Keyword::OR, Keyword::REPLACE, Keyword::EXTERNAL])
         {
-            self.parse_create_external_table(false, true)
+            self.parse_create_external(false, true)
         } else if self.parser.parse_keywords(&[
             Keyword::OR,
             Keyword::REPLACE,
             Keyword::UNBOUNDED,
             Keyword::EXTERNAL,
         ]) {
-            self.parse_create_external_table(true, true)
+            self.parse_create_external(true, true)
         } else if self.parser.parse_keyword(Keyword::EXTERNAL) {
-            self.parse_create_external_table(false, false)
+            self.parse_create_external(false, false)
         } else if self
             .parser
             .parse_keywords(&[Keyword::UNBOUNDED, Keyword::EXTERNAL])
         {
-            self.parse_create_external_table(true, false)
+            self.parse_create_external(true, false)
         } else {
             Ok(Statement::Statement(Box::from(self.parser.parse_create()?)))
+        }
+    }
+
+    /// Dispatches `CREATE [OR REPLACE] [UNBOUNDED] EXTERNAL ...` (with the
+    /// leading keywords already consumed) to either `CREATE EXTERNAL TABLE`
+    /// or `CREATE EXTERNAL CATALOG`, based on the keyword that follows
+    /// `EXTERNAL`.
+    fn parse_create_external(
+        &mut self,
+        unbounded: bool,
+        or_replace: bool,
+    ) -> Result<Statement, DataFusionError> {
+        if self.parser.parse_keyword(Keyword::CATALOG) {
+            if unbounded {
+                return parser_err!(
+                    "UNBOUNDED is not supported for CREATE EXTERNAL CATALOG"
+                );
+            }
+            self.parse_create_external_catalog(or_replace)
+        } else {
+            self.parse_create_external_table(unbounded, or_replace)
         }
     }
 
@@ -1246,6 +1343,106 @@ impl<'a> DFParser<'a> {
             constraints,
         };
         Ok(Statement::CreateExternalTable(create))
+    }
+
+    /// Parses a `CREATE EXTERNAL CATALOG` statement, with `CREATE [OR
+    /// REPLACE] EXTERNAL CATALOG` already consumed.
+    fn parse_create_external_catalog(
+        &mut self,
+        or_replace: bool,
+    ) -> Result<Statement, DataFusionError> {
+        let if_not_exists =
+            self.parser
+                .parse_keywords(&[Keyword::IF, Keyword::NOT, Keyword::EXISTS]);
+
+        if if_not_exists && or_replace {
+            return parser_err!("'IF NOT EXISTS' cannot coexist with 'REPLACE'");
+        }
+
+        let catalog_name = self.parser.parse_object_name(true)?;
+
+        #[derive(Default)]
+        struct Builder {
+            catalog_type: Option<String>,
+            location: Option<String>,
+            options: Option<Vec<(String, Value)>>,
+        }
+        let mut builder = Builder::default();
+
+        loop {
+            if let Some(keyword) = self.parser.parse_one_of_keywords(&[
+                Keyword::STORED,
+                Keyword::LOCATION,
+                Keyword::OPTIONS,
+            ]) {
+                match keyword {
+                    Keyword::STORED => {
+                        self.parser.expect_keyword(Keyword::AS)?;
+                        ensure_not_set(builder.catalog_type.as_ref(), "STORED AS")?;
+                        builder.catalog_type = Some(self.parse_file_format()?);
+                    }
+                    Keyword::LOCATION => {
+                        ensure_not_set(builder.location.as_ref(), "LOCATION")?;
+                        builder.location = Some(self.parser.parse_literal_string()?);
+                    }
+                    Keyword::OPTIONS => {
+                        ensure_not_set(builder.options.as_ref(), "OPTIONS")?;
+                        builder.options = Some(self.parse_value_options()?);
+                    }
+                    _ => {
+                        unreachable!()
+                    }
+                }
+            } else {
+                let token = self.parser.peek_token();
+                if token == Token::EOF || token == Token::SemiColon {
+                    break;
+                } else {
+                    return self.expected("end of statement or ;", &token)?;
+                }
+            }
+        }
+
+        let Some(catalog_type) = builder.catalog_type else {
+            return sql_err!(ParserError::ParserError(
+                "Missing STORED AS clause in CREATE EXTERNAL CATALOG statement".into(),
+            ));
+        };
+
+        Ok(Statement::CreateExternalCatalog(CreateExternalCatalog {
+            catalog_name,
+            catalog_type,
+            location: builder.location,
+            if_not_exists,
+            or_replace,
+            options: builder.options.unwrap_or_default(),
+        }))
+    }
+
+    /// Returns `true` if the upcoming tokens are `DROP EXTERNAL CATALOG`,
+    /// without consuming any tokens.
+    fn peek_drop_external_catalog(&mut self) -> bool {
+        matches!(
+            self.parser.peek_nth_token(1).token,
+            Token::Word(Word {
+                keyword: Keyword::EXTERNAL,
+                ..
+            })
+        ) && matches!(
+            self.parser.peek_nth_token(2).token,
+            Token::Word(Word {
+                keyword: Keyword::CATALOG,
+                ..
+            })
+        )
+    }
+
+    /// Parses a `DROP EXTERNAL CATALOG` statement, with `DROP EXTERNAL
+    /// CATALOG` already consumed.
+    fn parse_drop_external_catalog(&mut self) -> Result<Statement, DataFusionError> {
+        let if_exists = self.parser.parse_keywords(&[Keyword::IF, Keyword::EXISTS]);
+        let name = self.parser.parse_object_name(true)?;
+        Ok(Statement::DropCatalog(DropCatalog { name, if_exists }))
     }
 
     /// Parses one or more external table locations.
@@ -1826,6 +2023,113 @@ mod tests {
         expect_parse_ok(sql, expected)?;
 
         // For error cases, see: `create_external_table.slt`
+
+        Ok(())
+    }
+
+    fn make_create_external_catalog(catalog_type: &str) -> CreateExternalCatalog {
+        CreateExternalCatalog {
+            catalog_name: ObjectName::from(vec![Ident::from("c")]),
+            catalog_type: catalog_type.to_string(),
+            location: None,
+            if_not_exists: false,
+            or_replace: false,
+            options: vec![],
+        }
+    }
+
+    #[test]
+    fn create_external_catalog() -> Result<(), DataFusionError> {
+        // minimal: just STORED AS
+        let sql = "CREATE EXTERNAL CATALOG c STORED AS ICEBERG";
+        let expected = Statement::CreateExternalCatalog(CreateExternalCatalog {
+            catalog_type: "ICEBERG".to_string(),
+            ..make_create_external_catalog("ICEBERG")
+        });
+        expect_parse_ok(sql, expected)?;
+
+        // with LOCATION
+        let sql = "CREATE EXTERNAL CATALOG c STORED AS ICEBERG LOCATION 's3://bucket/warehouse'";
+        let expected = Statement::CreateExternalCatalog(CreateExternalCatalog {
+            location: Some("s3://bucket/warehouse".to_string()),
+            ..make_create_external_catalog("ICEBERG")
+        });
+        expect_parse_ok(sql, expected)?;
+
+        // with OPTIONS
+        let sql = "CREATE EXTERNAL CATALOG c STORED AS ICEBERG OPTIONS ('catalog.uri' 'http://rest:8181', 'warehouse' 'c')";
+        let expected = Statement::CreateExternalCatalog(CreateExternalCatalog {
+            options: vec![
+                (
+                    "catalog.uri".into(),
+                    Value::SingleQuotedString("http://rest:8181".into()),
+                ),
+                ("warehouse".into(), Value::SingleQuotedString("c".into())),
+            ],
+            ..make_create_external_catalog("ICEBERG")
+        });
+        expect_parse_ok(sql, expected)?;
+
+        // IF NOT EXISTS
+        let sql = "CREATE EXTERNAL CATALOG IF NOT EXISTS c STORED AS ICEBERG";
+        let expected = Statement::CreateExternalCatalog(CreateExternalCatalog {
+            if_not_exists: true,
+            ..make_create_external_catalog("ICEBERG")
+        });
+        expect_parse_ok(sql, expected)?;
+
+        // OR REPLACE
+        let sql = "CREATE OR REPLACE EXTERNAL CATALOG c STORED AS ICEBERG";
+        let expected = Statement::CreateExternalCatalog(CreateExternalCatalog {
+            or_replace: true,
+            ..make_create_external_catalog("ICEBERG")
+        });
+        expect_parse_ok(sql, expected)?;
+
+        // IF NOT EXISTS and OR REPLACE cannot coexist
+        expect_parse_error(
+            "CREATE OR REPLACE EXTERNAL CATALOG IF NOT EXISTS c STORED AS ICEBERG",
+            "'IF NOT EXISTS' cannot coexist with 'REPLACE'",
+        );
+
+        // missing STORED AS
+        expect_parse_error(
+            "CREATE EXTERNAL CATALOG c",
+            "Missing STORED AS clause in CREATE EXTERNAL CATALOG statement",
+        );
+
+        // UNBOUNDED is not applicable to catalogs
+        expect_parse_error(
+            "CREATE UNBOUNDED EXTERNAL CATALOG c STORED AS ICEBERG",
+            "UNBOUNDED is not supported for CREATE EXTERNAL CATALOG",
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn drop_external_catalog() -> Result<(), DataFusionError> {
+        let sql = "DROP CATALOG c";
+        let expected = Statement::DropCatalog(DropCatalog {
+            name: ObjectName::from(vec![Ident::from("c")]),
+            if_exists: false,
+        });
+        expect_parse_ok(sql, expected)?;
+
+        let sql = "DROP CATALOG IF EXISTS c";
+        let expected = Statement::DropCatalog(DropCatalog {
+            name: ObjectName::from(vec![Ident::from("c")]),
+            if_exists: true,
+        });
+        expect_parse_ok(sql, expected)?;
+
+        // DROP TABLE / VIEW / SCHEMA are unaffected by the DROP EXTERNAL
+        // CATALOG dispatch and continue to use the native parser.
+        let sql = "DROP TABLE t";
+        assert!(matches!(
+            DFParser::parse_sql(sql)?.pop_front(),
+            Some(Statement::Statement(_))
+        ));
 
         Ok(())
     }
