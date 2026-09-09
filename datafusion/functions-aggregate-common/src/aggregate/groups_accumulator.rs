@@ -105,13 +105,6 @@ pub struct GroupsAccumulatorAdapter {
 
     /// The portion of [`Self::allocation_bytes`] that is the scratch
     /// [`AccumulatorState::indices`] capacity held by [`Self::states`].
-    ///
-    /// The scratch vectors are cleared, but not deallocated, at the end of every
-    /// batch, so their capacity is retained for the lifetime of the group. The
-    /// pre/post deltas taken around [`Accumulator`] work therefore see the same
-    /// capacity on both sides and can never charge it. This field records what
-    /// has already been charged so each batch charges only the growth since the
-    /// previous one.
     indices_allocation_bytes: usize,
 }
 
