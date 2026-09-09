@@ -33,12 +33,14 @@
 #     {name: Bob,   id: 2}
 #
 # dict_struct_nullable:
-#   ds  Dictionary(UInt32, Struct(name: Utf8, id: Int32))  — 4 rows, keys [0, NULL, 1, NULL]
+#   ds  Dictionary(UInt32, Struct(name: Utf8, id: Int32))  — 5 rows, keys [0, NULL, 1, 2, 2]
+#   Value 2 is a null struct with valid child values ("hidden", 30).
 #
 #   Rows (logical values):
 #     {name: X,  id: 10}
 #     NULL
-#     {name: Y,  id: 20}
+#     {name: Y,  id: NULL}
+#     NULL
 #     NULL
 
 # Verify schema of dict_struct_table
@@ -67,11 +69,11 @@ SELECT dict_struct['id'] FROM dict_struct_table;
 1
 2
 
-# Verify the extracted field preserves dictionary encoding
-query T
-SELECT arrow_typeof(dict_struct['name']) FROM dict_struct_table LIMIT 1;
+# Verify the extracted field preserves dictionary encoding and nullability
+query TBB
+SELECT arrow_typeof(dict_struct['name']), arrow_field(dict_struct['name'])['nullable'], arrow_field(plain_struct['name'])['nullable'] FROM dict_struct_table LIMIT 1;
 ----
-Dictionary(UInt32, Utf8)
+Dictionary(UInt32, Utf8) false false
 
 query T
 SELECT arrow_typeof(dict_struct['id']) FROM dict_struct_table LIMIT 1;
@@ -107,21 +109,23 @@ Carol
 Alice
 Bob
 
-# Field extraction from dict-encoded struct with NULLs
-query T
-SELECT ds['name'] FROM dict_struct_nullable;
+# A nullable parent makes its non-nullable child nullable, preserving the dictionary type.
+query TTB
+SELECT ds['name'], arrow_typeof(ds['name']), arrow_field(ds['name'])['nullable'] FROM dict_struct_nullable;
 ----
-X
-NULL
-Y
-NULL
+X Dictionary(UInt32, Utf8) true
+NULL Dictionary(UInt32, Utf8) true
+Y Dictionary(UInt32, Utf8) true
+NULL Dictionary(UInt32, Utf8) true
+NULL Dictionary(UInt32, Utf8) true
 
 query ?
 SELECT ds['id'] FROM dict_struct_nullable;
 ----
 10
 NULL
-20
+NULL
+NULL
 NULL
 
 # Filtering on extracted dict-encoded struct field
