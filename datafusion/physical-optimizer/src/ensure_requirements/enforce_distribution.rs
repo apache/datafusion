@@ -38,8 +38,8 @@ use crate::utils::{
     is_sort_preserving_merge,
 };
 
+use crate::optimizer::PhysicalOptimizerContext;
 use arrow::compute::SortOptions;
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::Transformed;
@@ -1014,6 +1014,7 @@ fn get_repartition_requirement_status(
     plan: &Arc<dyn ExecutionPlan>,
     batch_size: usize,
     should_use_estimates: bool,
+    stats_ctx: &StatisticsContext,
 ) -> Result<Vec<RepartitionRequirementStatus>> {
     let mut needs_alignment = false;
     let children = plan.children();
@@ -1025,7 +1026,7 @@ fn get_repartition_requirement_status(
     {
         // Decide whether adding a round robin is beneficial depending on
         // the statistical information we have on the number of rows:
-        let roundrobin_beneficial_stats = match StatisticsContext::new()
+        let roundrobin_beneficial_stats = match stats_ctx
             .compute(child.as_ref(), &StatisticsArgs::new())?
             .num_rows
         {
@@ -1354,7 +1355,8 @@ fn enforce_distribution_relationships(
 )]
 pub fn ensure_distribution(
     dist_context: DistributionContext,
-    config: &ConfigOptions,
+    context: &dyn PhysicalOptimizerContext,
+    stats_ctx: &StatisticsContext,
 ) -> Result<Transformed<DistributionContext>> {
     let dist_context = update_children(dist_context)?;
 
@@ -1362,6 +1364,7 @@ pub fn ensure_distribution(
         return Ok(Transformed::no(dist_context));
     }
 
+    let config = context.config_options();
     let target_partitions = config.execution.target_partitions;
     // When `false`, round robin repartition will not be added to increase parallelism
     let enable_round_robin = config.optimizer.enable_round_robin_repartition;
@@ -1450,8 +1453,12 @@ pub fn ensure_distribution(
         || plan.is::<SortMergeJoinExec>();
 
     let input_distributions = plan.input_distribution_requirements();
-    let repartition_status_flags =
-        get_repartition_requirement_status(&plan, batch_size, should_use_estimates)?;
+    let repartition_status_flags = get_repartition_requirement_status(
+        &plan,
+        batch_size,
+        should_use_estimates,
+        stats_ctx,
+    )?;
     // This loop iterates over all the children to:
     // - Increase parallelism for every child if it is beneficial.
     // - Satisfy the distribution requirements of every child, if it is not

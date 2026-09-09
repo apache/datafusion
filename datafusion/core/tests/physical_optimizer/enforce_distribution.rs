@@ -18,6 +18,7 @@
 use std::fmt::Debug;
 use std::ops::Deref;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::physical_optimizer::test_utils::{
     RequirementsTestExec, bounded_window_exec_with_can_repartition, check_integrity,
@@ -55,14 +56,19 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, OrderingRequirements, PhysicalSortExpr,
 };
+use datafusion_physical_optimizer::PhysicalOptimizerContext;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::enforce_distribution::*;
 use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion_physical_optimizer::join_selection::JoinSelection;
+use datafusion_physical_optimizer::optimizer::ConfigOnlyContext;
 use datafusion_physical_optimizer::output_requirements::OutputRequirements;
 use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
+};
+use datafusion_physical_plan::operator_statistics::{
+    ClosureStatisticsProvider, StatisticsRegistry, StatisticsResult,
 };
 
 use datafusion_physical_expr::{
@@ -641,7 +647,12 @@ fn ensure_distribution_helper(
     config.optimizer.repartition_file_scans = false;
     config.optimizer.repartition_file_min_size = 1024;
     config.optimizer.prefer_existing_sort = prefer_existing_sort;
-    ensure_distribution(distribution_context, &config).map(|item| item.data.plan)
+    ensure_distribution(
+        distribution_context,
+        &ConfigOnlyContext::new(&config),
+        &datafusion_physical_plan::statistics::StatisticsContext::new(),
+    )
+    .map(|item| item.data.plan)
 }
 
 fn test_suite_default_config_options() -> ConfigOptions {
@@ -764,7 +775,11 @@ impl TestConfig {
             // Then run ensure_distribution rule
             DistributionContext::new_default(adjusted)
                 .transform_up(|distribution_context| {
-                    ensure_distribution(distribution_context, &self.config)
+                    ensure_distribution(
+                        distribution_context,
+                        &ConfigOnlyContext::new(&self.config),
+                        &datafusion_physical_plan::statistics::StatisticsContext::new(),
+                    )
                 })
                 .data()
                 .and_then(check_integrity)?;
@@ -4994,6 +5009,263 @@ fn ensure_distribution_reuses_plan_arc_when_no_redistribution_needed() -> Result
     assert!(
         Arc::ptr_eq(&result, &plan),
         "ensure_distribution must reuse the input Arc when no children require redistribution"
+    );
+    Ok(())
+}
+
+/// Single-child pass-through whose `statistics_from_inputs` increments a counter
+/// every time it is actually computed (i.e. on a statistics-cache miss). Used to
+/// observe how often `ensure_distribution` recomputes a node's statistics.
+#[derive(Debug)]
+struct CountingStatsExec {
+    input: Arc<dyn ExecutionPlan>,
+    cache: Arc<PlanProperties>,
+    calls: Arc<AtomicUsize>,
+}
+
+impl CountingStatsExec {
+    fn new(input: Arc<dyn ExecutionPlan>, calls: Arc<AtomicUsize>) -> Self {
+        let cache = PlanProperties::new(
+            input.equivalence_properties().clone(),
+            input.output_partitioning().clone(),
+            input.pipeline_behavior(),
+            input.boundedness(),
+        );
+        Self {
+            input,
+            cache: Arc::new(cache),
+            calls,
+        }
+    }
+}
+
+impl DisplayAs for CountingStatsExec {
+    fn fmt_as(
+        &self,
+        _t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        write!(f, "CountingStatsExec")
+    }
+}
+
+impl ExecutionPlan for CountingStatsExec {
+    fn name(&self) -> &'static str {
+        "CountingStatsExec"
+    }
+
+    fn properties(&self) -> &Arc<PlanProperties> {
+        &self.cache
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
+    }
+
+    fn replace_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        assert_eq!(children.len(), 1);
+        Ok(Arc::new(Self::new(
+            children.pop().unwrap(),
+            Arc::clone(&self.calls),
+        )))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<datafusion::execution::context::TaskContext>,
+    ) -> Result<datafusion_physical_plan::SendableRecordBatchStream> {
+        unreachable!();
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        _input_stats: &[Arc<Statistics>],
+        _args: &datafusion_physical_plan::statistics::StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        Ok(Arc::new(Statistics::new_unknown(
+            self.input.schema().as_ref(),
+        )))
+    }
+}
+
+/// Regression test for the shared statistics cache in `ensure_distribution`.
+///
+/// A deep stack of pass-through operators sits over a counting leaf. Each
+/// ancestor's distribution enforcement inspects its child's statistics, which
+/// recurse to the leaf. With one `StatisticsContext` shared across the pass the
+/// leaf is computed once; with a fresh context per node it is recomputed once
+/// per ancestor. This directly detects a regression where the cache is not
+/// actually shared (e.g. reset on every node), which no plan-output assertion
+/// can catch because the optimized plan is identical either way.
+#[test]
+fn ensure_distribution_shares_statistics_cache() -> Result<()> {
+    // Count how many times a leaf's statistics are computed while
+    // `ensure_distribution` runs over a stack of `depth` pass-through operators
+    // sitting on top of it. Each ancestor's distribution enforcement inspects
+    // its child's statistics, which recurse to the leaf.
+    //
+    // `shared` uses one `StatisticsContext` for the whole pass (what
+    // `EnsureRequirements` does); `fresh` allocates a new context per node (the
+    // behavior before this change). Returns (shared_computes, fresh_computes).
+    fn run(depth: usize) -> Result<(usize, usize)> {
+        fn deep_plan(depth: usize, calls: &Arc<AtomicUsize>) -> Arc<dyn ExecutionPlan> {
+            let mut plan: Arc<dyn ExecutionPlan> =
+                Arc::new(CountingStatsExec::new(parquet_exec(), Arc::clone(calls)));
+            for _ in 0..depth {
+                plan = filter_exec(plan);
+            }
+            plan
+        }
+
+        let mut config = ConfigOptions::new();
+        config.execution.target_partitions = 10;
+        // Keep the plan a fixpoint so no node is rebuilt and the shared cache is
+        // never reset; statistics are still computed for the round-robin decision.
+        config.optimizer.enable_round_robin_repartition = false;
+
+        let shared_calls = Arc::new(AtomicUsize::new(0));
+        let stats_ctx = datafusion_physical_plan::statistics::StatisticsContext::new();
+        DistributionContext::new_default(deep_plan(depth, &shared_calls)).transform_up(
+            |ctx| {
+                // Reset only when the node's plan pointer actually changed, exactly
+                // as `EnsureRequirements` does (a rewrite can free a cached node).
+                let before = Arc::clone(&ctx.plan);
+                let result = ensure_distribution(
+                    ctx,
+                    &ConfigOnlyContext::new(&config),
+                    &stats_ctx,
+                )?;
+                if !Arc::ptr_eq(&before, &result.data.plan) {
+                    stats_ctx.reset_cache();
+                }
+                Ok(result)
+            },
+        )?;
+        let shared = shared_calls.load(Ordering::Relaxed);
+
+        let fresh_calls = Arc::new(AtomicUsize::new(0));
+        DistributionContext::new_default(deep_plan(depth, &fresh_calls)).transform_up(
+            |ctx| {
+                ensure_distribution(
+                    ctx,
+                    &ConfigOnlyContext::new(&config),
+                    &datafusion_physical_plan::statistics::StatisticsContext::new(),
+                )
+            },
+        )?;
+        let fresh = fresh_calls.load(Ordering::Relaxed);
+
+        Ok((shared, fresh))
+    }
+
+    let (shared_shallow, fresh_shallow) = run(4)?;
+    let (shared_deep, fresh_deep) = run(12)?;
+
+    // Sharing strictly reduces statistics recomputation at any depth. A broken
+    // cache (e.g. reset on every node) would make these equal.
+    assert!(
+        shared_shallow < fresh_shallow && shared_deep < fresh_deep,
+        "shared cache must recompute less: shallow {shared_shallow} vs {fresh_shallow}, deep {shared_deep} vs {fresh_deep}"
+    );
+
+    // Without sharing, each extra ancestor recomputes the leaf's subtree, so the
+    // gap between `fresh` and `shared` widens as the plan gets deeper. That is the
+    // depth-scaling recomputation the shared cache removes; a cache that is not
+    // actually shared would save nothing and the gap would not grow.
+    let saved_shallow = fresh_shallow - shared_shallow;
+    let saved_deep = fresh_deep - shared_deep;
+    assert!(
+        saved_deep > saved_shallow,
+        "the shared cache should save more on deeper plans: saved {saved_shallow} at depth 4, {saved_deep} at depth 12"
+    );
+
+    Ok(())
+}
+
+/// `EnsureRequirements::optimize_with_context` must thread the session's
+/// statistics registry into the distribution pass, so registered providers can
+/// influence cost-based decisions (here, whether a round-robin repartition is
+/// worthwhile). A tiny single-partition scan does not warrant round-robin on its
+/// real statistics; a provider that reports it as large flips that decision, but
+/// only if the registry is actually threaded through.
+#[test]
+fn ensure_distribution_uses_context_statistics_registry() -> Result<()> {
+    let alias = vec![("a".to_string(), "a".to_string())];
+    let plan = aggregate_exec_with_alias(parquet_exec_with_size(1, 100), alias);
+
+    let mut config = ConfigOptions::new();
+    config.execution.target_partitions = 10;
+    // Make the round-robin decision actually depend on the estimated row count.
+    config
+        .execution
+        .use_row_number_estimates_to_optimize_partitioning = true;
+
+    // Default context: no registry, so the scan's real (tiny) statistics apply.
+    let plan_default = EnsureRequirements::new().optimize(plan.clone(), &config)?;
+
+    // A provider that reports the scan as large.
+    let mut registry = StatisticsRegistry::new();
+    registry.register(Arc::new(ClosureStatisticsProvider::with_matches(
+        |p| p.name() == "DataSourceExec",
+        |p, _child_stats| {
+            let mut stats = Statistics::new_unknown(&p.schema());
+            stats.num_rows = Precision::Inexact(10_000_000);
+            Ok(StatisticsResult::Computed(stats.into()))
+        },
+    )));
+
+    struct ContextWithRegistry {
+        config: ConfigOptions,
+        registry: StatisticsRegistry,
+    }
+    impl PhysicalOptimizerContext for ContextWithRegistry {
+        fn config_options(&self) -> &ConfigOptions {
+            &self.config
+        }
+        fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
+            Some(&self.registry)
+        }
+    }
+
+    let plan_registry = EnsureRequirements::new()
+        .optimize_with_context(plan, &ContextWithRegistry { config, registry })?;
+
+    let s_default = displayable(plan_default.as_ref()).indent(true).to_string();
+    let s_registry = displayable(plan_registry.as_ref()).indent(true).to_string();
+
+    // With the scan's tiny real stats, a round-robin repartition is not worth it.
+    assert!(
+        !s_default.contains("RoundRobinBatch"),
+        "default context (tiny stats) should not add a round-robin repartition:\n{s_default}"
+    );
+    // The registry reports the scan as large, so the same rule now parallelizes
+    // it — proving the registry was threaded through `optimize_with_context`.
+    assert!(
+        s_registry.contains("RoundRobinBatch"),
+        "registry-reported large stats should add a round-robin repartition:\n{s_registry}"
     );
     Ok(())
 }
