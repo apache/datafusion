@@ -49,28 +49,49 @@
 //!   helpers. They use [`RecordBatchReceiverStreamBuilder`] for bounded streams
 //!   and [`SpawnedTask`] to run each input partition once.
 //!
+//! The resulting plan, drawn parent above child to match the printed plan:
+//!
 //! ```text
-//! expensive join
-//!       |
-//! StreamingFanoutExec
-//!       |
-//! StreamingFanoutReaderExec (consumer 0) ---> east aggregate ---+
-//!       :                                                        +-> UNION ALL
-//!       +...> StreamingFanoutReaderExec (consumer 1) -> west ----+
+//! UnionExec
+//! +-- east aggregate
+//! |   +-- StreamingFanoutReaderExec (consumer 0)
+//! |       +-- StreamingFanoutExec
+//! |           +-- expensive join
+//! +-- west aggregate
+//!     +-- StreamingFanoutReaderExec (consumer 1)  ....> StreamingFanoutExec
 //! ```
 //!
-//! The dotted connection is not a physical child edge. Both readers select
-//! output lanes from the same fan-out. Its queues hold at most one batch per
+//! The dotted connection is deliberately not a physical child edge. Consumer
+//! 1's reader holds an [`Arc`] to the same fan-out but reports no children, so
+//! the physical plan remains a tree and later tree walks see the shared input
+//! exactly once. The queues hold at most [`CHANNEL_CAPACITY`] batches per
 //! consumer and input partition. The shared output is not collected into a
 //! `MemTable` or registered as a table.
 //!
 //! ## Where this example does not work
 //!
-//! - Separate `collect` calls create separate physical plans and do not share
-//!   this execution-scoped state.
+//! - The plan is single-use because each consumer takes its queue on first
+//!   execution. Plan the query again to run it again; separate `collect` calls
+//!   cannot share one execution.
 //! - All consumers must be polled concurrently. For example, sharing this
 //!   bounded stream across both sides of a hash join can deadlock while one
 //!   side is drained before the other is polled.
+//! - Every planned consumer must execute. Otherwise its queue remains open and
+//!   the producer blocks when that queue fills.
+//! - The example assumes every copy of a marked subplan is planned identically
+//!   and does not support nested shares.
+//! - Dropping only the consumer streams does not immediately abort the producer
+//!   while the plan remains alive.
+//! - Buffering is bounded by batch count, not bytes, and is not registered with
+//!   the [`MemoryPool`]. This is an illustrative extension, not a production
+//!   operator.
+//!
+//! The supported alternative today is [`DataFrame::cache`], which materializes
+//! the shared result before its consumers run. Streaming the result instead is
+//! discussed in <https://github.com/apache/datafusion/issues/8777>.
+//!
+//! [`DataFrame::cache`]: datafusion::dataframe::DataFrame::cache
+//! [`MemoryPool`]: datafusion::execution::memory_pool::MemoryPool
 //!
 
 use std::collections::HashMap;
@@ -78,6 +99,7 @@ use std::fmt::{self, Formatter};
 use std::hash::Hash;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::Duration;
 
 use arrow::array::{RecordBatch, record_batch};
 use arrow::util::pretty::print_batches;
@@ -85,12 +107,13 @@ use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::runtime::SpawnedTask;
+use datafusion::common::stats::Statistics;
 use datafusion::common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion::common::{
     DFSchemaRef, DataFusionError, Result, SharedResult, assert_batches_sorted_eq,
-    exec_err, plan_err,
+    exec_err, not_impl_err, plan_err,
 };
 use datafusion::execution::context::QueryPlanner;
 use datafusion::execution::{
@@ -102,28 +125,40 @@ use datafusion::logical_expr::{
     Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
     UserDefinedLogicalNodeCore,
 };
-use datafusion::physical_expr::{Partitioning, PhysicalExpr};
-use datafusion::physical_optimizer::PhysicalOptimizerRule;
+use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_optimizer::{
+    PhysicalOptimizerRule, ensure_coop::EnsureCooperative,
+    sanity_checker::SanityCheckPlan,
+};
+use datafusion::physical_plan::execution_plan::{
+    CardinalityEffect, EvaluationType, SchedulingType,
+};
 use datafusion::physical_plan::stream::{
     RecordBatchReceiverStreamBuilder, RecordBatchStreamAdapter,
 };
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    ChildStats, ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
+    ExecutionPlanProperties, PlanProperties, ReplaceChildrenOptions, StatisticsArgs,
     collect, displayable,
 };
 use datafusion::physical_planner::{
     DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner,
 };
 use datafusion::prelude::*;
-use futures::StreamExt;
+use futures::future::{BoxFuture, Shared};
+use futures::{FutureExt, StreamExt};
 use tokio::sync::mpsc::Sender;
+use tokio::time::timeout;
 
 const CHANNEL_CAPACITY: usize = 1;
+const COLLECT_TIMEOUT: Duration = Duration::from_secs(30);
 static NEXT_STREAMING_SHARE_ID: AtomicUsize = AtomicUsize::new(0);
 
 /// Streams one shared subplan to two consumers under `UNION ALL`.
 pub async fn streaming_shared_subplan() -> Result<()> {
     let metrics = Arc::new(FanoutMetrics::default());
+    // One target partition makes the expected source execution count explicit.
+    // A small batch size ensures more batches than one queue can hold.
     let config = SessionConfig::new()
         .with_target_partitions(1)
         .with_batch_size(2);
@@ -136,6 +171,10 @@ pub async fn streaming_shared_subplan() -> Result<()> {
         .with_physical_optimizer_rule(Arc::new(RewriteStreamingShares {
             metrics: Arc::clone(&metrics),
         }))
+        // The custom rewrite is appended after the default rules, so run the
+        // final scheduling and invariant checks again on its output.
+        .with_physical_optimizer_rule(Arc::new(EnsureCooperative::new()))
+        .with_physical_optimizer_rule(Arc::new(SanityCheckPlan::new()))
         .build();
     let ctx = SessionContext::new_with_state(state);
 
@@ -187,7 +226,15 @@ pub async fn streaming_shared_subplan() -> Result<()> {
     assert_eq!(shared_text.matches("StreamingFanoutExec").count(), 1);
     assert_eq!(shared_text.matches("StreamingFanoutReaderExec").count(), 2);
 
-    let results = collect(shared_plan, ctx.task_ctx()).await?;
+    let Ok(results) =
+        timeout(COLLECT_TIMEOUT, collect(shared_plan, ctx.task_ctx())).await
+    else {
+        return exec_err!(
+            "the shared plan did not finish within {COLLECT_TIMEOUT:?}: \
+             a consumer may not have been polled"
+        );
+    };
+    let results = results?;
     print_batches(&results)?;
     assert_batches_sorted_eq!(
         [
@@ -201,26 +248,19 @@ pub async fn streaming_shared_subplan() -> Result<()> {
         &results
     );
 
+    let source_executions = metrics.source_partition_executions.load(Ordering::SeqCst);
     assert_eq!(
-        metrics.source_partition_executions.load(Ordering::SeqCst),
-        1,
+        source_executions, 1,
         "the shared source partition must execute once"
     );
+    let broadcast = metrics.batches_broadcast.load(Ordering::SeqCst);
     assert!(
-        metrics.batches_broadcast.load(Ordering::SeqCst) > 1,
-        "the example must broadcast multiple batches"
-    );
-    assert!(
-        metrics.max_buffered_batches.load(Ordering::SeqCst) <= CHANNEL_CAPACITY,
-        "a consumer queue exceeded its configured bound"
+        broadcast > CHANNEL_CAPACITY,
+        "the whole shared stream ({broadcast} batches) fits in one consumer queue, \
+         so this run does not demonstrate streaming"
     );
 
-    println!(
-        "Source executions: {}; batches broadcast: {}; max queued per consumer: {}",
-        metrics.source_partition_executions.load(Ordering::SeqCst),
-        metrics.batches_broadcast.load(Ordering::SeqCst),
-        metrics.max_buffered_batches.load(Ordering::SeqCst),
-    );
+    println!("Source executions: {source_executions}; batches broadcast: {broadcast}");
     Ok(())
 }
 
@@ -394,14 +434,25 @@ impl ExecutionPlan for StreamingShareMarkerExec {
         Ok(TreeNodeRecursion::Continue)
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if children.len() != 1 {
             return plan_err!("StreamingShareMarkerExec requires one child");
         }
         Ok(Arc::new(Self::new(self.id, children.swap_remove(0))))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -410,6 +461,23 @@ impl ExecutionPlan for StreamingShareMarkerExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         self.input.execute(partition, context)
+    }
+
+    // The marker is transparent to optimizer statistics and cardinality.
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        Ok(Arc::clone(&input_stats[0]))
+    }
+
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        CardinalityEffect::Equal
     }
 }
 
@@ -464,18 +532,9 @@ impl PhysicalOptimizerRule for RewriteStreamingShares {
                 fanouts.insert(id, Arc::clone(&fanout));
                 (fanout, true)
             };
-            let properties = Arc::clone(fanout.input.properties());
-            let input_partition_count = fanout.input_partition_count;
-            let fanout: Arc<dyn ExecutionPlan> = fanout;
-            let replacement: Arc<dyn ExecutionPlan> =
-                Arc::new(StreamingFanoutReaderExec::new(
-                    id,
-                    consumer,
-                    input_partition_count,
-                    fanout,
-                    visible_child,
-                    properties,
-                ));
+            let replacement: Arc<dyn ExecutionPlan> = Arc::new(
+                StreamingFanoutReaderExec::try_new(id, consumer, fanout, visible_child)?,
+            );
             Ok(Transformed::yes(replacement))
         })
         .data()
@@ -490,7 +549,12 @@ impl PhysicalOptimizerRule for RewriteStreamingShares {
     }
 }
 
-/// Fan-out exchange with one output lane per consumer and input partition.
+/// Owns the shared producer and one bounded queue per consumer and input
+/// partition.
+///
+/// Readers select queues through [`StreamingFanoutExec::consumer_stream`].
+/// Executing this node directly would incorrectly model the duplicated lanes as
+/// disjoint output partitions, so [`ExecutionPlan::execute`] rejects that use.
 #[derive(Debug)]
 struct StreamingFanoutExec {
     id: usize,
@@ -523,17 +587,20 @@ impl StreamingFanoutExec {
         state: Arc<StreamingFanoutState>,
     ) -> Result<Self> {
         let input_partition_count = input.output_partitioning().partition_count();
-        let Some(output_partition_count) =
-            input_partition_count.checked_mul(consumer_count)
-        else {
-            return plan_err!("Streaming fan-out output partition count overflow");
-        };
-        if output_partition_count == 0 {
-            return plan_err!("Streaming fan-out requires input and consumer partitions");
+        if input_partition_count == 0 || consumer_count == 0 {
+            return plan_err!(
+                "Streaming fan-out requires at least one input partition and one \
+                 consumer, got {input_partition_count} and {consumer_count}"
+            );
         }
-        let properties = Arc::new(input.properties().as_ref().clone().with_partitioning(
-            Partitioning::UnknownPartitioning(output_partition_count),
-        ));
+        let properties = Arc::new(
+            input
+                .properties()
+                .as_ref()
+                .clone()
+                .with_evaluation_type(EvaluationType::Eager)
+                .with_scheduling_type(SchedulingType::Cooperative),
+        );
         Ok(Self {
             id,
             input,
@@ -579,9 +646,10 @@ impl ExecutionPlan for StreamingFanoutExec {
         Ok(TreeNodeRecursion::Continue)
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if children.len() != 1 {
             return plan_err!("StreamingFanoutExec requires one child");
@@ -601,27 +669,67 @@ impl ExecutionPlan for StreamingFanoutExec {
         )?))
     }
 
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
+    }
+
     fn execute(
         &self,
-        partition: usize,
-        context: Arc<TaskContext>,
+        _partition: usize,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let output_partition_count = self.input_partition_count * self.consumer_count;
-        if partition >= output_partition_count {
-            return exec_err!("Streaming fan-out output partition {partition} not found");
-        }
-        let consumer = partition / self.input_partition_count;
-        let input_partition = partition % self.input_partition_count;
-        self.state.stream(consumer, input_partition, context)
+        exec_err!(
+            "StreamingFanoutExec {} must be executed through a \
+             StreamingFanoutReaderExec",
+            self.id
+        )
+    }
+
+    fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
+        not_impl_err!(
+            "StreamingFanoutExec {} cannot be re-executed; plan the shared \
+             subplan again",
+            self.id
+        )
     }
 }
 
-/// Selects one consumer's partition lanes from the fan-out exchange.
+impl StreamingFanoutExec {
+    fn consumer_stream(
+        &self,
+        consumer: usize,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        if consumer >= self.consumer_count {
+            return exec_err!(
+                "Streaming fan-out {} has {} consumers, asked for {consumer}",
+                self.id,
+                self.consumer_count
+            );
+        }
+        if partition >= self.input_partition_count {
+            return exec_err!(
+                "Streaming fan-out {} has {} input partitions, asked for {partition}",
+                self.id,
+                self.input_partition_count
+            );
+        }
+        self.state.stream(consumer, partition, context)
+    }
+}
+
+/// Reads one consumer's view of the shared subplan.
 #[derive(Debug)]
 struct StreamingFanoutReaderExec {
     id: usize,
     consumer: usize,
-    input_partition_count: usize,
     fanout: Arc<dyn ExecutionPlan>,
     // Only one reader exposes the shared fan-out as a child, keeping the plan a tree.
     visible_child: bool,
@@ -629,22 +737,34 @@ struct StreamingFanoutReaderExec {
 }
 
 impl StreamingFanoutReaderExec {
-    fn new(
+    fn try_new(
         id: usize,
         consumer: usize,
-        input_partition_count: usize,
         fanout: Arc<dyn ExecutionPlan>,
         visible_child: bool,
-        properties: Arc<PlanProperties>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        let Some(exchange) = fanout.downcast_ref::<StreamingFanoutExec>() else {
+            return plan_err!(
+                "StreamingFanoutReaderExec requires a StreamingFanoutExec, got {}",
+                fanout.name()
+            );
+        };
+        let properties = Arc::new(
+            exchange
+                .input
+                .properties()
+                .as_ref()
+                .clone()
+                .with_evaluation_type(EvaluationType::Eager)
+                .with_scheduling_type(SchedulingType::Cooperative),
+        );
+        Ok(Self {
             id,
             consumer,
-            input_partition_count,
             fanout,
             visible_child,
             properties,
-        }
+        })
     }
 }
 
@@ -690,9 +810,10 @@ impl ExecutionPlan for StreamingFanoutReaderExec {
         Ok(TreeNodeRecursion::Continue)
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if self.visible_child {
             if children.len() != 1 {
@@ -700,14 +821,12 @@ impl ExecutionPlan for StreamingFanoutReaderExec {
                     "The first StreamingFanoutReaderExec requires one child"
                 );
             }
-            return Ok(Arc::new(Self::new(
+            return Ok(Arc::new(Self::try_new(
                 self.id,
                 self.consumer,
-                self.input_partition_count,
                 children.swap_remove(0),
                 true,
-                Arc::clone(&self.properties),
-            )));
+            )?));
         }
         if !children.is_empty() {
             return plan_err!(
@@ -717,22 +836,36 @@ impl ExecutionPlan for StreamingFanoutReaderExec {
         Ok(self)
     }
 
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
+    }
+
     fn execute(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if partition >= self.input_partition_count {
-            return exec_err!("Streaming fan-out reader partition {partition} not found");
-        }
-        let Some(fanout_partition) = self
-            .consumer
-            .checked_mul(self.input_partition_count)
-            .and_then(|base| base.checked_add(partition))
-        else {
-            return exec_err!("Streaming fan-out reader partition overflow");
+        let Some(fanout) = self.fanout.downcast_ref::<StreamingFanoutExec>() else {
+            return exec_err!(
+                "StreamingFanoutReaderExec {} lost its StreamingFanoutExec",
+                self.id
+            );
         };
-        self.fanout.execute(fanout_partition, context)
+        fanout.consumer_stream(self.consumer, partition, context)
+    }
+
+    fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
+        not_impl_err!(
+            "StreamingFanoutReaderExec {} cannot be re-executed; plan the shared \
+             subplan again",
+            self.id
+        )
     }
 }
 
@@ -744,7 +877,6 @@ impl ExecutionPlan for StreamingFanoutReaderExec {
 struct FanoutMetrics {
     source_partition_executions: AtomicUsize,
     batches_broadcast: AtomicUsize,
-    max_buffered_batches: AtomicUsize,
 }
 
 #[derive(Debug)]
@@ -788,27 +920,47 @@ impl StreamingFanoutState {
             return exec_err!("Streaming fan-out partition {partition} not found");
         };
         let receiver = partition_state.take_receiver(consumer)?;
-        partition_state.start(&input, partition, context, Arc::clone(&self.metrics))?;
+        let producer = partition_state.start(
+            &input,
+            partition,
+            context,
+            Arc::clone(&self.metrics),
+        )?;
 
         // Retaining `self` in the stream keeps the producer task alive until
         // this query execution finishes.
         let state = Arc::clone(self);
-        let stream = futures::stream::unfold(
+        let batches = futures::stream::unfold(
             (receiver, state),
             |(mut receiver, state)| async move {
                 let item = receiver.stream.next().await?;
                 Some((item, (receiver, state)))
             },
         );
-        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+        // Join the producer after the queue closes so task failures do not look
+        // like a successful, truncated stream.
+        let producer_failure = futures::stream::once(producer)
+            .filter_map(|result| async move { result.err() })
+            .map(|error| Err(DataFusionError::Shared(error)));
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            schema,
+            batches.chain(producer_failure),
+        )))
     }
 }
 
-#[derive(Debug)]
+type ProducerHandle = Shared<BoxFuture<'static, SharedResult<()>>>;
+
 struct FanoutPartition {
     senders: Mutex<Option<Vec<Sender<Result<RecordBatch>>>>>,
     receivers: Vec<Mutex<Option<FanoutReceiver>>>,
-    task: Mutex<Option<SpawnedTask<()>>>,
+    producer: Mutex<Option<ProducerHandle>>,
+}
+
+impl fmt::Debug for FanoutPartition {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        f.debug_struct("FanoutPartition").finish_non_exhaustive()
+    }
 }
 
 impl FanoutPartition {
@@ -828,7 +980,7 @@ impl FanoutPartition {
         Self {
             senders: Mutex::new(Some(senders)),
             receivers,
-            task: Mutex::new(None),
+            producer: Mutex::new(None),
         }
     }
 
@@ -850,17 +1002,33 @@ impl FanoutPartition {
         partition: usize,
         context: Arc<TaskContext>,
         metrics: Arc<FanoutMetrics>,
-    ) -> Result<()> {
-        let Some(senders) = self.senders.lock().unwrap().take() else {
-            return Ok(());
-        };
+    ) -> Result<ProducerHandle> {
+        let mut senders_slot = self.senders.lock().unwrap();
+        if let Some(producer) = self.producer.lock().unwrap().clone() {
+            return Ok(producer);
+        }
+        if senders_slot.is_none() {
+            return exec_err!(
+                "Streaming fan-out partition {partition} has no queues to write to"
+            );
+        }
         let input = input.execute(partition, context)?;
+        let senders = senders_slot.take().expect("checked above");
         metrics
             .source_partition_executions
             .fetch_add(1, Ordering::SeqCst);
         let task = SpawnedTask::spawn(run_producer(input, senders, metrics));
-        *self.task.lock().unwrap() = Some(task);
-        Ok(())
+        let producer: BoxFuture<'static, SharedResult<()>> = Box::pin(async move {
+            match task.join().await {
+                Ok(result) => result.map_err(Arc::new),
+                Err(error) => {
+                    Err(Arc::new(DataFusionError::ExecutionJoin(Box::new(error))))
+                }
+            }
+        });
+        let producer = producer.shared();
+        *self.producer.lock().unwrap() = Some(producer.clone());
+        Ok(producer)
     }
 }
 
@@ -878,24 +1046,24 @@ async fn run_producer(
     mut input: SendableRecordBatchStream,
     mut senders: Vec<Sender<Result<RecordBatch>>>,
     metrics: Arc<FanoutMetrics>,
-) {
+) -> Result<()> {
     while let Some(item) = input.next().await {
         let is_error = item.is_err();
         if !is_error {
             metrics.batches_broadcast.fetch_add(1, Ordering::SeqCst);
         }
         let item = item.map_err(Arc::new);
-        broadcast(&mut senders, &item, &metrics.max_buffered_batches).await;
+        broadcast(&mut senders, &item).await;
         if is_error || senders.is_empty() {
             break;
         }
     }
+    Ok(())
 }
 
 async fn broadcast(
     senders: &mut Vec<Sender<Result<RecordBatch>>>,
     item: &SharedResult<RecordBatch>,
-    max_buffered_batches: &AtomicUsize,
 ) {
     let mut index = 0;
     while index < senders.len() {
@@ -904,9 +1072,6 @@ async fn broadcast(
             senders.swap_remove(index);
             continue;
         };
-
-        let buffered = senders[index].max_capacity() - senders[index].capacity();
-        max_buffered_batches.fetch_max(buffered, Ordering::SeqCst);
         permit.send(match item {
             Ok(batch) => Ok(batch.clone()),
             Err(error) => Err(DataFusionError::Shared(Arc::clone(error))),
