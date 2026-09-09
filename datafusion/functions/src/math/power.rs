@@ -16,7 +16,7 @@
 // under the License.
 
 //! Math function: `power()`.
-use super::log::LogFunc;
+use super::log::{LogFunc, is_valid_log_base};
 
 use crate::utils::calculate_binary_math;
 use arrow::array::{Array, ArrayRef};
@@ -183,7 +183,7 @@ impl ScalarUDFImpl for PowerFunc {
                 if is_log(&func)
                     && args.len() == 2
                     && base == args[0]
-                    && !base_nullable =>
+                    && is_valid_log_base(&base) =>
             {
                 let b = args.pop().unwrap(); // length checked above
                 let b_type = info.get_data_type(&b)?;
