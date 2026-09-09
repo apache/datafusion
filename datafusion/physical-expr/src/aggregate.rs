@@ -947,7 +947,7 @@ impl AggregateFunctionExpr {
     /// same reason. `AggregateExec`, by contrast, pins its schema at
     /// construction, so it can use [`Self::reverse_expr`] and let the name
     /// reflect the function actually being evaluated.
-    pub fn reverse_expr_preserving_name(&self) -> Option<AggregateFunctionExpr> {
+    pub(crate) fn reverse_expr_preserving_name(&self) -> Option<AggregateFunctionExpr> {
         self.reverse_expr_inner(true)
     }
 
