@@ -1137,6 +1137,17 @@ config_namespace! {
         /// tables with a highly-selective join filter, but is also slightly slower.
         pub enforce_batch_size_in_joins: bool, default = false
 
+        /// (experimental) When enabled, `FilterExec` measures the selectivity
+        /// and evaluation cost of each conjunct of an `AND` predicate at
+        /// runtime and reorders them to run the ones that discard the most
+        /// rows per unit of CPU time first. Query results never change, but
+        /// the observable side effects of a fallible predicate can, in either
+        /// direction: reordering `b <> 0 AND 1/b > 2` can make a
+        /// divide-by-zero error appear or disappear, since each conjunct is
+        /// evaluated only on the rows the conjuncts before it kept. Predicates
+        /// containing volatile expressions are never reordered.
+        pub adaptive_filter_reordering: bool, default = false
+
         /// Size (bytes) of data buffer DataFusion uses when writing output files.
         /// This affects the size of the data chunks that are uploaded to remote
         /// object stores (e.g. AWS S3). If very large (>= 100 GiB) output files are being
