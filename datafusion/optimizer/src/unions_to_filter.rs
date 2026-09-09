@@ -27,7 +27,7 @@ use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion_expr::utils::disjunction;
 use datafusion_expr::{
-    Distinct, Expr, Filter, LogicalPlan, Projection, SubqueryAlias, Union,
+    Distinct, Expr, Filter, LogicalPlan, Projection, SubqueryAlias, TableSource, Union,
 };
 use log::debug;
 use std::sync::Arc;
@@ -115,9 +115,11 @@ fn try_rewrite_distinct_union(plan: LogicalPlan) -> Result<Option<LogicalPlan>> 
             return Ok(None);
         };
 
+        let table_sources = collect_table_sources(&branch.source)?;
         let key = GroupKey {
             source: branch.source,
             wrappers: branch.wrappers,
+            table_sources,
         };
         if let Some((_, conds)) = grouped.iter_mut().find(|(k, _)| k == &key) {
             conds.push(branch.predicate);
@@ -221,11 +223,29 @@ fn extract_branch(plan: LogicalPlan) -> Result<Option<UnionBranch>> {
     }))
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
 struct GroupKey {
     source: LogicalPlan,
     wrappers: Vec<Wrapper>,
+    // LogicalPlan equality deliberately ignores TableScan::source. Retain the
+    // corresponding Arcs so structurally identical scans over different data
+    // cannot be grouped together.
+    table_sources: Vec<Arc<dyn TableSource>>,
 }
+
+impl PartialEq for GroupKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.source == other.source
+            && self.wrappers == other.wrappers
+            && self.table_sources.len() == other.table_sources.len()
+            && self
+                .table_sources
+                .iter()
+                .zip(&other.table_sources)
+                .all(|(left, right)| Arc::ptr_eq(left, right))
+    }
+}
+
+impl Eq for GroupKey {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Wrapper {
@@ -334,6 +354,17 @@ fn source_is_safe(source: &LogicalPlan) -> Result<bool> {
         })
     })?;
     Ok(safe)
+}
+
+fn collect_table_sources(source: &LogicalPlan) -> Result<Vec<Arc<dyn TableSource>>> {
+    let mut table_sources = vec![];
+    source.apply(|node| {
+        if let LogicalPlan::TableScan(scan) = node {
+            table_sources.push(Arc::clone(&scan.source));
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(table_sources)
 }
 
 /// Returns `true` when every projection expression in `wrappers` is both
@@ -653,10 +684,11 @@ mod tests {
 
     #[test]
     fn rewrite_union_distinct_same_source_filters() -> Result<()> {
-        let left = LogicalPlanBuilder::from(test_table_scan_with_name("t")?)
+        let scan = test_table_scan_with_name("t")?;
+        let left = LogicalPlanBuilder::from(scan.clone())
             .filter(col("a").eq(lit(1)))?
             .build()?;
-        let right = LogicalPlanBuilder::from(test_table_scan_with_name("t")?)
+        let right = LogicalPlanBuilder::from(scan)
             .filter(col("a").eq(lit(2)))?
             .build()?;
 
@@ -671,6 +703,82 @@ mod tests {
               TableScan: t
         ")?;
         Ok(())
+    }
+
+    #[test]
+    fn keep_union_distinct_same_metadata_different_root_sources() -> Result<()> {
+        let left_scan_plan = test_table_scan_with_name("t")?;
+        let right_scan_plan = test_table_scan_with_name("t")?;
+
+        // TableScan equality compares metadata but deliberately ignores its provider.
+        assert_eq!(left_scan_plan, right_scan_plan);
+        let (LogicalPlan::TableScan(left_scan), LogicalPlan::TableScan(right_scan)) =
+            (&left_scan_plan, &right_scan_plan)
+        else {
+            panic!("test helper must return TableScan plans");
+        };
+        assert!(!Arc::ptr_eq(&left_scan.source, &right_scan.source));
+
+        let left = LogicalPlanBuilder::from(left_scan_plan)
+            .filter(col("a").eq(lit(1)))?
+            .build()?;
+        let right = LogicalPlanBuilder::from(right_scan_plan)
+            .filter(col("a").eq(lit(2)))?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .union_distinct(right)?
+            .build()?;
+
+        assert_not_rewritten(plan);
+        Ok(())
+    }
+
+    #[test]
+    fn keep_union_distinct_same_metadata_different_nested_sources() {
+        let left_scan_plan = test_table_scan_with_name("t").unwrap();
+        let right_scan_plan = test_table_scan_with_name("t").unwrap();
+        assert_eq!(left_scan_plan, right_scan_plan);
+        let left_sources = collect_table_sources(&left_scan_plan).unwrap();
+        let right_sources = collect_table_sources(&right_scan_plan).unwrap();
+        assert_eq!(left_sources.len(), 1);
+        assert_eq!(right_sources.len(), 1);
+        assert!(!Arc::ptr_eq(&left_sources[0], &right_sources[0]));
+
+        // Verify collection through the Projection/SubqueryAlias source shape
+        // retained below a branch Filter.
+        let left_source = LogicalPlanBuilder::from(left_scan_plan)
+            .project(vec![col("a")])
+            .unwrap()
+            .alias("x")
+            .unwrap()
+            .build()
+            .unwrap();
+        let right_source = LogicalPlanBuilder::from(right_scan_plan)
+            .project(vec![col("a")])
+            .unwrap()
+            .alias("x")
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(left_source, right_source);
+
+        let left = LogicalPlanBuilder::from(left_source)
+            .filter(col("x.a").eq(lit(1)))
+            .unwrap()
+            .build()
+            .unwrap();
+        let right = LogicalPlanBuilder::from(right_source)
+            .filter(col("x.a").eq(lit(2)))
+            .unwrap()
+            .build()
+            .unwrap();
+        let plan = LogicalPlanBuilder::from(left)
+            .union_distinct(right)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        assert_not_rewritten(plan);
     }
 
     #[test]
@@ -699,10 +807,11 @@ mod tests {
 
     #[test]
     fn keep_union_distinct_with_volatile_predicate() -> Result<()> {
-        let left = LogicalPlanBuilder::from(test_table_scan_with_name("t")?)
+        let scan = test_table_scan_with_name("t")?;
+        let left = LogicalPlanBuilder::from(scan.clone())
             .filter(volatile_expr().gt(lit(0.5_f64)))?
             .build()?;
-        let right = LogicalPlanBuilder::from(test_table_scan_with_name("t")?)
+        let right = LogicalPlanBuilder::from(scan)
             .filter(col("a").eq(lit(2)))?
             .build()?;
 
@@ -723,10 +832,11 @@ mod tests {
 
     #[test]
     fn rewrite_union_distinct_with_matching_projection_prefix() -> Result<()> {
-        let left = LogicalPlanBuilder::from(test_table_scan_with_name("emp")?)
+        let scan = test_table_scan_with_name("emp")?;
+        let left = LogicalPlanBuilder::from(scan.clone())
             .project(vec![col("a").alias("mgr"), col("b").alias("comm")])?
             .build()?;
-        let right = LogicalPlanBuilder::from(test_table_scan_with_name("emp")?)
+        let right = LogicalPlanBuilder::from(scan)
             .filter(col("b").eq(lit(5)))?
             .project(vec![col("a").alias("mgr"), col("b").alias("comm")])?
             .build()?;
@@ -746,13 +856,14 @@ mod tests {
 
     #[test]
     fn keep_union_distinct_with_computed_projection_below_filter() -> Result<()> {
-        let left = LogicalPlanBuilder::from(test_table_scan_with_name("prices")?)
+        let scan = test_table_scan_with_name("prices")?;
+        let left = LogicalPlanBuilder::from(scan.clone())
             .project(vec![col("a").add(lit(100)).alias("amount")])?
             .alias("prices")?
             .filter(col("amount").gt(lit(0)))?
             .project(vec![col("amount")])?
             .build()?;
-        let right = LogicalPlanBuilder::from(test_table_scan_with_name("prices")?)
+        let right = LogicalPlanBuilder::from(scan)
             .project(vec![col("a").add(lit(200)).alias("amount")])?
             .alias("prices")?
             .filter(col("amount").gt(lit(1)))?
@@ -786,11 +897,12 @@ mod tests {
     #[test]
     fn keep_union_distinct_with_volatile_projection() -> Result<()> {
         // Both branches project volatile_test() AS v over the same source.
-        let left = LogicalPlanBuilder::from(test_table_scan_with_name("t")?)
+        let scan = test_table_scan_with_name("t")?;
+        let left = LogicalPlanBuilder::from(scan.clone())
             .filter(col("a").eq(lit(1)))?
             .project(vec![volatile_expr().alias("v"), col("a")])?
             .build()?;
-        let right = LogicalPlanBuilder::from(test_table_scan_with_name("t")?)
+        let right = LogicalPlanBuilder::from(scan)
             .filter(col("a").eq(lit(2)))?
             .project(vec![volatile_expr().alias("v"), col("a")])?
             .build()?;
@@ -827,11 +939,12 @@ mod tests {
         );
         let sq = scalar_subquery(subquery_plan);
 
-        let left = LogicalPlanBuilder::from(test_table_scan_with_name("t")?)
+        let scan = test_table_scan_with_name("t")?;
+        let left = LogicalPlanBuilder::from(scan.clone())
             .filter(col("a").eq(lit(1)))?
             .project(vec![sq.clone().alias("sub"), col("a")])?
             .build()?;
-        let right = LogicalPlanBuilder::from(test_table_scan_with_name("t")?)
+        let right = LogicalPlanBuilder::from(scan)
             .filter(col("a").eq(lit(2)))?
             .project(vec![sq.alias("sub"), col("a")])?
             .build()?;
@@ -872,11 +985,12 @@ mod tests {
     /// single branch would lose the per-branch LIMIT semantics.
     #[test]
     fn keep_union_distinct_with_limit_branches() -> Result<()> {
-        let left = LogicalPlanBuilder::from(test_table_scan_with_name("emp")?)
+        let scan = test_table_scan_with_name("emp")?;
+        let left = LogicalPlanBuilder::from(scan.clone())
             .project(vec![col("a").alias("mgr"), col("b").alias("comm")])?
             .limit(0, Some(2))?
             .build()?;
-        let right = LogicalPlanBuilder::from(test_table_scan_with_name("emp")?)
+        let right = LogicalPlanBuilder::from(scan)
             .project(vec![col("a").alias("mgr"), col("b").alias("comm")])?
             .limit(0, Some(2))?
             .build()?;
@@ -903,11 +1017,12 @@ mod tests {
     /// in the result; merging the branches would silently discard the Sort.
     #[test]
     fn keep_union_distinct_with_sort_branches() -> Result<()> {
-        let left = LogicalPlanBuilder::from(test_table_scan_with_name("emp")?)
+        let scan = test_table_scan_with_name("emp")?;
+        let left = LogicalPlanBuilder::from(scan.clone())
             .project(vec![col("a").alias("mgr"), col("b").alias("comm")])?
             .sort(vec![col("a").sort(true, true)])?
             .build()?;
-        let right = LogicalPlanBuilder::from(test_table_scan_with_name("emp")?)
+        let right = LogicalPlanBuilder::from(scan)
             .project(vec![col("a").alias("mgr"), col("b").alias("comm")])?
             .sort(vec![col("a").sort(true, true)])?
             .build()?;
