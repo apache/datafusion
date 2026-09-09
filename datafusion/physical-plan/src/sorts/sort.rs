@@ -57,8 +57,8 @@ use crate::{
     PlanProperties, ReplaceChildrenOptions, SendableRecordBatchStream, Statistics,
 };
 
-use arrow::array::{RecordBatch, RecordBatchOptions};
-use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
+use arrow::array::{Array, RecordBatch, RecordBatchOptions};
+use arrow::compute::{concat_batches, interleave, lexsort_to_indices, take_arrays};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::SpillCompression;
 use datafusion_common::tree_node::TreeNodeRecursion;
@@ -77,6 +77,7 @@ use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
 
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
+use crate::sorts::arrow::sort::SortColumn;
 
 #[cfg(test)]
 mod spill_tests;
@@ -807,6 +808,48 @@ impl ExternalSorter {
         .try_flatten();
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+    }
+
+    fn sort_batches(
+        sort_expr: &LexOrdering,
+        batches: &[RecordBatch],
+        batch_size: usize,
+    ) -> Result<Vec<RecordBatch>> {
+        let Some(first) = batches.first() else {
+            return Ok(vec![]);
+        };
+        let schema = first.schema();
+
+        let columns = sort_expr
+          .iter()
+          .map(|sort_expr| {
+              let values = batches
+                .iter()
+                .map(|block| sort_expr.expr.evaluate(block)?.into_array(block.num_rows()))
+                .collect::<Result<Vec<_>>>()?;
+              Ok(SortColumn {
+                  values,
+                  options: Some(sort_expr.options),
+              })
+          })
+          .collect::<Result<Vec<_>>>()?;
+        let order = super::arrow::sort::lexsort_to_indices(&columns, None)?;
+        drop(columns);
+
+        let arrays: Vec<Vec<&dyn Array>> = (0..schema.fields().len())
+          .map(|column| batches.iter().map(|block| block.column(column).as_ref()).collect())
+          .collect();
+
+        order
+          .chunks(batch_size)
+          .map(|positions| -> Result<RecordBatch> {
+            let columns = arrays
+              .iter()
+              .map(|column| interleave(column, positions))
+              .collect::<std::result::Result<Vec<_>, _>>()?;
+            Ok(RecordBatch::try_new(Arc::clone(&schema), columns)?)
+        })
+          .collect::<Result<Vec<_>>>()
     }
 
     /// If this sort may spill, pre-allocates
