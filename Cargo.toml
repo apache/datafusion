@@ -435,3 +435,7 @@ arrow-string = { git = "https://github.com/apache/arrow-rs.git", rev = "e1e71ea8
 arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "e1e71ea89b211758e20254296008f96e744ed138" }
 arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "e1e71ea89b211758e20254296008f96e744ed138" }
 parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "e1e71ea89b211758e20254296008f96e744ed138" }
+
+## Temporary object_store patch to test the upcoming 0.14.2 release
+## https://github.com/apache/arrow-rs-object-store/issues/832
+object_store = { git = "https://github.com/apache/arrow-rs-object-store.git", rev = "135984fdf91f813c48c47b6288586d9b0e205164" }

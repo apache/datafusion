@@ -4457,12 +4457,11 @@ dependencies = [
 [[package]]
 name = "object_store"
 version = "0.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d354792e39fa5f0009e47623cf8b15b099bf9a652fa55c6f817fe28ac84fea50"
+source = "git+https://github.com/apache/arrow-rs-object-store.git?rev=135984fdf91f813c48c47b6288586d9b0e205164#135984fdf91f813c48c47b6288586d9b0e205164"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "chrono",
  "crc-fast",
@@ -5506,7 +5505,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
