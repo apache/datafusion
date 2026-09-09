@@ -627,6 +627,34 @@ NULL NULL
 statement ok
 DROP TABLE map_list_keys;
 
+# a typed NULL key matches nothing
+query T
+SELECT MAP {1:'a', 2:'b'}[arrow_cast(NULL, 'Int64')];
+----
+NULL
+
+# dictionary-encoded map keys are looked up by value
+query I
+SELECT MAP {arrow_cast('a', 'Dictionary(Int32, Utf8)'):1, arrow_cast('b', 'Dictionary(Int32, Utf8)'):2}['b'];
+----
+2
+
+# NULLIF turns a map row NULL without clearing its entries; the lookups must
+# report NULL rather than read those entries
+statement ok
+CREATE TABLE map_nullif AS
+SELECT MAP {'a': 1, 'b': 2} AS m, MAP {'a': 1, 'b': 2} AS n
+UNION ALL SELECT MAP {'a': 3, 'b': 4}, MAP {'x': 9};
+
+query ?I? rowsort
+SELECT NULLIF(m, n), NULLIF(m, n)['b'], map_extract(NULLIF(m, n), 'b') FROM map_nullif;
+----
+NULL NULL NULL
+{a: 3, b: 4} 4 [4]
+
+statement ok
+DROP TABLE map_nullif;
+
 # accessing map with non-string key
 query I
 SELECT MAKE_MAP(1, null, 2, 33, 3, null)[2];
@@ -754,7 +782,7 @@ NULL
 NULL
 
 
-query error DataFusion error: Arrow error: Invalid argument error
+query error DataFusion error: Execution error: The key type Null does not match the map key type Int64
 SELECT column1[NULL] FROM map_array_table_1;
 
 query ???
