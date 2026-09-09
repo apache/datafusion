@@ -1485,28 +1485,19 @@ impl LogicalPlanBuilder {
                 )
             })
             .unzip();
-        if is_all {
-            LogicalPlanBuilder::from(left_plan)
-                .join_detailed(
-                    right_plan,
-                    join_type,
-                    join_keys,
-                    None,
-                    NullEquality::NullEqualsNull,
-                )?
-                .build()
-        } else {
-            LogicalPlanBuilder::from(left_plan)
-                .distinct()?
-                .join_detailed(
-                    right_plan,
-                    join_type,
-                    join_keys,
-                    None,
-                    NullEquality::NullEqualsNull,
-                )?
-                .build()
+        let mut left_builder = LogicalPlanBuilder::from(left_plan);
+        if !is_all {
+            left_builder = left_builder.distinct()?;
         }
+        left_builder
+            .join_detailed(
+                right_plan,
+                join_type,
+                join_keys,
+                None,
+                NullEquality::NullEqualsNull,
+            )?
+            .build()
     }
 
     /// Build the plan

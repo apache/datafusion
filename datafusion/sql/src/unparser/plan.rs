@@ -1818,21 +1818,13 @@ impl Unparser<'_> {
                 Ok(())
             }
             LogicalPlan::Extension(extension) => {
-                if let Some(query) = query.as_mut() {
-                    self.extension_to_sql(
-                        extension.node.as_ref(),
-                        &mut Some(query),
-                        &mut Some(select),
-                        &mut Some(relation),
-                    )
-                } else {
-                    self.extension_to_sql(
-                        extension.node.as_ref(),
-                        &mut None,
-                        &mut Some(select),
-                        &mut Some(relation),
-                    )
-                }
+                let mut query = query.as_mut();
+                self.extension_to_sql(
+                    extension.node.as_ref(),
+                    &mut query,
+                    &mut Some(select),
+                    &mut Some(relation),
+                )
             }
             LogicalPlan::Unnest(unnest) => {
                 if !unnest.struct_type_columns.is_empty() {
