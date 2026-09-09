@@ -203,21 +203,9 @@ impl Time {
         self.nanos.fetch_add(more_nanos.max(1), Ordering::Relaxed);
     }
 
-    /// Add a duration without rounding it up to one nanosecond.
-    ///
-    /// Use for metrics that can record many tiny independent operations, where
-    /// a minimum per recording would materially inflate the total.
-    pub fn add_duration_exact(&self, duration: Duration) {
-        self.nanos
-            .fetch_add(duration.as_nanos() as usize, Ordering::Relaxed);
-    }
-
-    /// Add the number of nanoseconds of other `Time` to self.
-    ///
-    /// Unlike recording a new interval, merging must preserve an existing
-    /// zero-duration measurement.
+    /// Add the number of nanoseconds of other `Time` to self
     pub fn add(&self, other: &Time) {
-        self.add_duration_exact(Duration::from_nanos(other.value() as u64))
+        self.add_duration(Duration::from_nanos(other.value() as u64))
     }
 
     /// return a scoped guard that adds the amount of time elapsed
@@ -1288,6 +1276,14 @@ mod tests {
         for value in &values {
             assert_eq!("1.04µs", value.to_string(), "value {value:?}");
         }
+    }
+
+    #[test]
+    fn test_time_merge_marks_a_zero_duration_measurement_as_recorded() {
+        let merged = Time::new();
+        merged.add(&Time::new());
+
+        assert_eq!(merged.value(), 1);
     }
 
     #[test]
