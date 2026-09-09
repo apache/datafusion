@@ -28,10 +28,9 @@ use crate::{
 };
 
 use crate::cache::cache_manager::{CacheManager, CacheManagerConfig};
-use crate::memory_pool::MemoryLimit;
 #[cfg(feature = "parquet_encryption")]
 use crate::parquet_encryption::{EncryptionFactory, EncryptionFactoryRegistry};
-use crate::runtime_options::{RUNTIME_CONFIG_PREFIX, RuntimeOptions};
+use crate::runtime_options::RuntimeOptions;
 use datafusion_common::{Result, config::ConfigEntry};
 use object_store::ObjectStore;
 use std::sync::Arc;
@@ -181,23 +180,8 @@ impl RuntimeEnv {
     }
 
     /// Returns the current runtime configuration entries
-    ///
-    /// Keys, descriptions and ordering come from [`RuntimeOptions`]; the values
-    /// are read back from the live resource objects, which is why this is not
-    /// simply `RuntimeOptions::default().entries()`.
     pub fn config_entries(&self) -> Vec<ConfigEntry> {
-        let mut entries = RuntimeOptions::from_runtime_env(self).entries();
-
-        // An unbounded pool has no byte value to report, but it is not unset
-        // either, so `RuntimeOptions` cannot carry it.
-        if matches!(self.memory_pool.memory_limit(), MemoryLimit::Infinite) {
-            let key = format!("{RUNTIME_CONFIG_PREFIX}.memory_limit");
-            if let Some(entry) = entries.iter_mut().find(|e| e.key == key) {
-                entry.value = Some("unlimited".to_string());
-            }
-        }
-
-        entries
+        RuntimeOptions::env_entries(self)
     }
 }
 

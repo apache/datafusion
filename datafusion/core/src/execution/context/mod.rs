@@ -1163,34 +1163,29 @@ impl SessionContext {
     fn set_runtime_variable(&self, variable: &str, value: &str) -> Result<()> {
         let key = variable.strip_prefix("datafusion.runtime.").unwrap();
 
-        let mut state = self.state.write();
-
-        let mut options = RuntimeOptions::from_runtime_env(state.runtime_env());
+        let mut options = RuntimeOptions::default();
         options.set_entry(key, value)?;
-        self.apply_runtime_options(&mut state, &options, key)
+        self.apply_runtime_option(&options, key)
     }
 
     fn reset_runtime_variable(&self, variable: &str) -> Result<()> {
         let key = variable.strip_prefix("datafusion.runtime.").unwrap();
 
-        let mut state = self.state.write();
-
-        let mut options = RuntimeOptions::from_runtime_env(state.runtime_env());
+        // Every field of a fresh `RuntimeOptions` already holds its default, so
+        // this only has to reject an unknown key.
+        let mut options = RuntimeOptions::default();
         options.reset_entry(key)?;
-        self.apply_runtime_options(&mut state, &options, key)
+        self.apply_runtime_option(&options, key)
     }
 
-    /// Rebuild the session's [`RuntimeEnv`] with `key` taken from `options`.
+    /// Rebuild the session's `RuntimeEnv` with `key` taken from `options`.
     ///
     /// Only the named key is applied. Rebuilding every resource on each
     /// statement would replace the live memory pool and discard the
     /// reservations held against it.
-    fn apply_runtime_options(
-        &self,
-        state: &mut SessionState,
-        options: &RuntimeOptions,
-        key: &str,
-    ) -> Result<()> {
+    fn apply_runtime_option(&self, options: &RuntimeOptions, key: &str) -> Result<()> {
+        let mut state = self.state.write();
+
         let builder = options.apply_key(
             key,
             RuntimeEnvBuilder::from_runtime_env(state.runtime_env()),

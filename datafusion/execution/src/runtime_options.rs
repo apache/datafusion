@@ -17,16 +17,10 @@
 
 //! Typed schema for the `datafusion.runtime.*` configuration namespace.
 //!
-//! [`RuntimeOptions`] is the single source of truth for the runtime
-//! configuration keys, their descriptions, their defaults and how their string
-//! values are parsed. It is built with the same [`ConfigField`] machinery that
-//! backs [`ConfigOptions`], so `SET`/`RESET` handling no longer needs a
-//! hand-written `match` arm per key.
-//!
-//! [`RuntimeOptions`] deliberately does *not* live inside [`ConfigOptions`]:
+//! [`RuntimeOptions`] owns the runtime keys, their descriptions, their defaults
+//! and their parsing, using the same [`ConfigField`] machinery that backs
+//! `ConfigOptions`. It does not live inside `ConfigOptions` because
 //! `datafusion-execution` depends on `datafusion-common`, never the reverse.
-//!
-//! [`ConfigOptions`]: datafusion_common::config::ConfigOptions
 
 use std::fmt::{self, Display, Formatter};
 use std::time::Duration;
@@ -87,10 +81,8 @@ config_field!(CacheTtl, value => CacheTtl(parse_ttl(value)?));
 
 /// A count that must not be negative.
 ///
-/// A plain `usize` would parse through [`default_config_transform`], whose
-/// message names the Rust type rather than the constraint.
-///
-/// [`default_config_transform`]: datafusion_common::config::default_config_transform
+/// A plain `usize` would report `Error parsing '-1' as usize`, naming the Rust
+/// type rather than the constraint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct NonNegativeCount(pub usize);
 
@@ -180,11 +172,28 @@ impl RuntimeOptions {
         v.0
     }
 
+    /// The entries to report for `env`, with values read back from its live
+    /// resource objects rather than from whatever was last requested.
+    pub fn env_entries(env: &RuntimeEnv) -> Vec<ConfigEntry> {
+        let mut entries = Self::from_runtime_env(env).entries();
+
+        // An unbounded pool is not unset, but has no byte value to report, so
+        // `memory_limit` cannot carry it.
+        if matches!(env.memory_pool.memory_limit(), MemoryLimit::Infinite) {
+            let key = format!("{RUNTIME_CONFIG_PREFIX}.memory_limit");
+            if let Some(entry) = entries.iter_mut().find(|e| e.key == key) {
+                entry.value = Some("unlimited".to_string());
+            }
+        }
+
+        entries
+    }
+
     /// Read the values currently in effect from the live resource objects.
     ///
-    /// A [`MemoryLimit::Infinite`] pool has no representation here; callers that
-    /// report values handle it separately.
-    pub fn from_runtime_env(env: &RuntimeEnv) -> Self {
+    /// A [`MemoryLimit::Infinite`] pool has no representation here, which is why
+    /// [`Self::env_entries`] handles it separately.
+    fn from_runtime_env(env: &RuntimeEnv) -> Self {
         let memory_limit = match env.memory_pool.memory_limit() {
             MemoryLimit::Finite(size) => Some(CapacityLimit(size)),
             MemoryLimit::Infinite | MemoryLimit::Unknown => None,
