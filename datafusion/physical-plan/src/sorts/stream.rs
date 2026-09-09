@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::VecDeque;
+use crate::sorts::arrow::sort::SortColumn;
 use crate::sorts::cursor::{ArrayValues, CursorArray, RowValues};
 use crate::{EmptyRecordBatchStream, SendableRecordBatchStream};
 use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::array::{Array, UInt32Array};
-use arrow::compute::take_record_batch;
+use arrow::compute::{interleave, take_record_batch};
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, Rows, SortField};
@@ -30,12 +30,12 @@ use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::stream::{Fuse, StreamExt};
+use std::collections::VecDeque;
 use std::iter::FusedIterator;
 use std::marker::PhantomData;
 use std::mem;
 use std::sync::Arc;
 use std::task::{Context, Poll, ready};
-use crate::sorts::arrow::sort::SortColumn;
 
 /// A [`Stream`](futures::Stream) that has multiple partitions that can
 /// be polled separately but not concurrently
@@ -335,10 +335,10 @@ impl Iterator for IncrementalSortIterator {
         match self.indices.as_ref() {
             None => {
                 let sort_columns = match self
-                  .expressions
-                  .iter()
-                  .map(|expr| expr.evaluate_to_sort_column(&self.batch))
-                  .collect::<Result<Vec<_>>>()
+                    .expressions
+                    .iter()
+                    .map(|expr| expr.evaluate_to_sort_column(&self.batch))
+                    .collect::<Result<Vec<_>>>()
                 {
                     Ok(cols) => cols,
                     Err(e) => return Some(Err(e)),
@@ -388,6 +388,7 @@ impl Iterator for IncrementalSortIterator {
 
 impl FusedIterator for IncrementalSortIterator {}
 
+#[derive(Debug, PartialEq)]
 enum IncrementalMultiBranchIteratorState {
     Init {
         input_batches: Vec<RecordBatch>,
@@ -397,23 +398,9 @@ enum IncrementalMultiBranchIteratorState {
         // x batches of interleave (batch_index, row index)
         indices: VecDeque<Vec<(usize, usize)>>,
     },
-    Done
+    Done,
 }
 
-/// A lazy, memory-efficient sort iterator used as a fallback during aggregate
-/// spill when there is not enough memory for an eager sort (which requires ~2x
-/// peak memory to hold both the unsorted and sorted copies simultaneously).
-///
-/// On the first call to `next()`, a sorted index array (`UInt32Array`) is
-/// computed via `lexsort_to_indices`. Subsequent calls yield chunks of
-/// `batch_size` rows by `take`-ing from the original batch using slices of
-/// this index array. Each `take` copies data for the chunk (not zero-copy),
-/// but only one chunk is live at a time since the caller consumes it before
-/// requesting the next. Once all rows have been yielded, the original batch
-/// and index array are dropped to free memory.
-///
-/// The caller must reserve `sizeof(batch) + sizeof(one chunk)` for this iterator,
-/// and free the reservation once the iterator is depleted.
 pub(crate) struct IncrementalMultiBatchSortIterator {
     state: IncrementalMultiBranchIteratorState,
     total_len: usize,
@@ -428,14 +415,106 @@ impl IncrementalMultiBatchSortIterator {
         expressions: LexOrdering,
         batch_size: usize,
     ) -> Self {
+        let total_len = batches.iter().map(|b| b.num_rows()).sum();
         Self {
-            total_len: batches.iter().map(|b| b.num_rows()).sum(),
+            total_len,
             cursor: 0,
-            state: IncrementalMultiBranchIteratorState::Init {
-                input_batches: batches,
+            state: if total_len > 0 {
+                IncrementalMultiBranchIteratorState::Init {
+                    input_batches: batches,
+                }
+            } else {
+                IncrementalMultiBranchIteratorState::Done
             },
             expressions,
             batch_size,
+        }
+    }
+
+    fn take_next_output_batch(
+        input_batches: &[RecordBatch],
+        indices: &[(usize, usize)],
+    ) -> Result<RecordBatch> {
+        let schema = input_batches[0].schema();
+        let columns = (0..schema.fields().len())
+            .map(|i| {
+                let column_values: Vec<&dyn Array> = input_batches
+                    .iter()
+                    .map(|batch| batch.column(i).as_ref())
+                    .collect();
+                interleave(&column_values, indices)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(RecordBatch::try_new(schema, columns)?)
+    }
+
+    fn on_take_next(
+        &mut self,
+        input_batches: Vec<RecordBatch>,
+        mut indices: VecDeque<Vec<(usize, usize)>>,
+    ) -> Result<RecordBatch> {
+        let next_indices = indices.pop_front().expect("must not have empty indices");
+        self.cursor += next_indices.len();
+
+        let output = Self::take_next_output_batch(&input_batches, &next_indices);
+
+        self.state = if indices.is_empty() {
+            IncrementalMultiBranchIteratorState::Done
+        } else {
+            IncrementalMultiBranchIteratorState::CalculatedIndices {
+                input_batches,
+                indices,
+            }
+        };
+
+        output
+    }
+
+    fn next_batch(&mut self) -> Result<RecordBatch> {
+        match std::mem::replace(
+            &mut self.state,
+            IncrementalMultiBranchIteratorState::Done,
+        ) {
+            IncrementalMultiBranchIteratorState::Init { input_batches } => {
+                let columns = self
+                    .expressions
+                    .iter()
+                    .map(|sort_expr| {
+                        let values = input_batches
+                            .iter()
+                            .map(|block| {
+                                sort_expr
+                                    .expr
+                                    .evaluate(block)?
+                                    .into_array(block.num_rows())
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+                        Ok(SortColumn {
+                            values,
+                            options: Some(sort_expr.options),
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                let order = super::arrow::sort::lexsort_to_indices(&columns, None)?;
+
+                drop(columns);
+
+                let indices = order
+                    .chunks(self.batch_size)
+                    .map(|ch| ch.to_vec())
+                    .collect::<VecDeque<_>>();
+
+                self.on_take_next(input_batches, indices)
+            }
+            IncrementalMultiBranchIteratorState::CalculatedIndices {
+                input_batches,
+                mut indices,
+            } => self.on_take_next(input_batches, indices),
+            IncrementalMultiBranchIteratorState::Done => {
+                unreachable!("must not be done if reached here")
+            }
         }
     }
 }
@@ -444,133 +523,30 @@ impl Iterator for IncrementalMultiBatchSortIterator {
     type Item = Result<RecordBatch>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match std::mem::replace(&mut self.state, IncrementalMultiBranchIteratorState::Done) {
-            IncrementalMultiBranchIteratorState::Init { 
-                input_batches
-            } => {
-                self.state = IncrementalMultiBranchIteratorState::CalculatedIndices {
-                    
-                }
-            }
-            IncrementalMultiBranchIteratorState::CalculatedIndices { .. } => {}
-            IncrementalMultiBranchIteratorState::Done => {
-                return None;
-            }
-        }
-        
-        let IncrementalMultiBranchIteratorState::CalculatedIndices {
-            input_batches,
-            indices,
-        } = &mut self.state else {
-            unreachable!("set in before to calculated indices");
-        };
-        if self.cursor >= self.batch.num_rows() {
+        if self.total_len <= self.cursor {
+            assert_eq!(self.state, IncrementalMultiBranchIteratorState::Done);
             return None;
         }
 
-        match self.indices.as_ref() {
-            None => {
-                let Some(first) = self.input_batches.first() else {
-                    return None;
-                };
-                let schema = first.schema();
-
-                let columns_res = self.expressions
-                  .iter()
-                  .map(|sort_expr| {
-                      let values = self.batches
-                        .iter()
-                        .map(|block| sort_expr.expr.evaluate(block)?.into_array(block.num_rows()))
-                        .collect::<Result<Vec<_>>>()?;
-                      Ok(SortColumn {
-                          values,
-                          options: Some(sort_expr.options),
-                      })
-                  })
-                  .collect::<Result<Vec<_>>>();
-
-                let columns = match columns_res {
-                    Ok(columns) => columns,
-                    Err(e) => return Some(Err(e)),
-                };
-
-                let order_res = super::arrow::sort::lexsort_to_indices(&columns, None);
-
-                let order = match order_res {
-                    Ok(order) => order,
-                    Err(e) => return Some(Err(e)),
-                };
-                drop(columns);
-
-                let arrays: Vec<Vec<&dyn Array>> = (0..schema.fields().len())
-                  .map(|column| batches.iter().map(|block| block.column(column).as_ref()).collect())
-                  .collect();
-
-                order
-                  .chunks(self.batch_size)
-                  .map(|positions| -> Result<RecordBatch> {
-                      let columns = arrays
-                        .iter()
-                        .map(|column| interleave(column, positions))
-                        .collect::<std::result::Result<Vec<_>, _>>()?;
-                      Ok(RecordBatch::try_new(Arc::clone(&schema), columns)?)
-                  })
-                  .collect::<Result<Vec<_>>>()
-
-                let sort_columns = match self
-                  .expressions
-                  .iter()
-                  .map(|expr| expr.evaluate_to_sort_column(&self.batch))
-                  .collect::<Result<Vec<_>>>()
-                {
-                    Ok(cols) => cols,
-                    Err(e) => return Some(Err(e)),
-                };
-
-                let indices = match lexsort_to_indices(&sort_columns, None) {
-                    Ok(indices) => indices,
-                    Err(e) => return Some(Err(e.into())),
-                };
-                self.indices = Some(indices);
-
-                // Call again, this time it will hit the Some(indices) branch and return the first batch
-                self.next()
-            }
-            Some(indices) => {
-                let batch_size = self.batch_size.min(self.batch.num_rows() - self.cursor);
-
-                // Perform the take to produce the next batch
-                let new_batch_indices = indices.slice(self.cursor, batch_size);
-                let new_batch = match take_record_batch(&self.batch, &new_batch_indices) {
-                    Ok(batch) => batch,
-                    Err(e) => return Some(Err(e.into())),
-                };
-
-                self.cursor += batch_size;
-
-                // If this is the last batch, we can release the memory
-                if self.cursor >= self.batch.num_rows() {
-                    let schema = self.batch.schema();
-                    let _ = mem::replace(&mut self.batch, RecordBatch::new_empty(schema));
-                    self.indices = None;
-                }
-
-                // Return the new batch
-                Some(Ok(new_batch))
+        match self.next_batch() {
+            Ok(batch) => Some(Ok(batch)),
+            Err(e) => {
+                self.cursor = self.total_len;
+                // Release the memory
+                self.state = IncrementalMultiBranchIteratorState::Done;
+                Some(Err(e))
             }
         }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         let num_rows_left = self.total_len - self.cursor;
-        let num_batches = num_rows.div_ceil(self.batch_size);
+        let num_batches = num_rows_left.div_ceil(self.batch_size);
         (num_batches, Some(num_batches))
     }
 }
 
-
-impl ExactSizeIterator for IncrementalMultiBatchSortIterator {
-}
+impl ExactSizeIterator for IncrementalMultiBatchSortIterator {}
 
 impl FusedIterator for IncrementalMultiBatchSortIterator {}
 

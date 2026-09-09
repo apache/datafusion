@@ -78,6 +78,7 @@ use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
 use crate::sorts::arrow::sort::SortColumn;
+use crate::sorts::stream::IncrementalMultiBatchSortIterator;
 
 #[cfg(test)]
 mod spill_tests;
@@ -637,13 +638,17 @@ impl ExternalSorter {
             // so that growth can use it.
             self.merge_pool.release_unused();
             // Concatenate memory batches together and sort
-            let batch = concat_batches(&self.schema, &self.in_mem_batches)?;
-            self.in_mem_batches.clear();
+            let cap = self.in_mem_batches.capacity();
+            let batches = std::mem::replace(&mut self.in_mem_batches, Vec::with_capacity(cap));
+            let mut size_to_resize = 0;
+            for batch in &batches {
+                size_to_resize += get_reserved_bytes_for_record_batch(&batch)?;
+            }
             self.reservation
-                .try_resize(get_reserved_bytes_for_record_batch(&batch)?)
+                .try_resize(size_to_resize)
                 .map_err(Self::err_with_oom_context)?;
             let reservation = self.reservation.take();
-            let sorted_stream = self.sort_batch_stream(batch, reservation)?;
+            let sorted_stream = self.sort_batches_stream(batches, reservation)?;
             return Ok(self.observe_if_output(sorted_stream, is_output_stream));
         }
 
@@ -653,22 +658,36 @@ impl ExternalSorter {
         // left as one run per batch: the row-format merge of many small runs
         // beats sorting a few large runs with the lexicographic comparator.
         let batches = std::mem::take(&mut self.in_mem_batches);
-        let runs = if coalesce_runs && self.expr.len() == 1 {
-            self.coalesce_in_mem_batches_into_runs(batches)?
+        let streams = if coalesce_runs && self.expr.len() == 1 {
+            let runs = self.coalesce_in_mem_batches_into_runs(batches)?;
+
+            runs
+              .into_iter()
+              .map(|batches| {
+                  let mut size_to_split = 0;
+                  for batch in &batches {
+                      size_to_split += get_reserved_bytes_for_record_batch(&batch)?;
+                  }
+                  let reservation = self
+                    .reservation
+                    .split(size_to_split);
+                  let input = self.sort_batches_stream(batches, reservation)?;
+                  Ok(spawn_buffered(input, 1))
+              })
+              .collect::<Result<_>>()?
         } else {
             batches
-        };
-
-        let streams = runs
-            .into_iter()
-            .map(|batch| {
-                let reservation = self
+              .into_iter()
+              .map(|batch| {
+                  let reservation = self
                     .reservation
                     .split(get_reserved_bytes_for_record_batch(&batch)?);
-                let input = self.sort_batch_stream(batch, reservation)?;
-                Ok(spawn_buffered(input, 1))
-            })
-            .collect::<Result<_>>()?;
+                  let input = self.sort_batch_stream(batch, reservation)?;
+                  Ok(spawn_buffered(input, 1))
+              })
+              .collect::<Result<_>>()?
+        };
+
 
         StreamingMergeBuilder::new()
             .with_streams(streams)
@@ -692,22 +711,23 @@ impl ExternalSorter {
     fn coalesce_in_mem_batches_into_runs(
         &mut self,
         batches: Vec<RecordBatch>,
-    ) -> Result<Vec<RecordBatch>> {
+    ) -> Result<Vec<Vec<RecordBatch>>> {
         let target = self.sort_in_place_threshold_bytes.max(1);
-        let mut runs: Vec<RecordBatch> = Vec::new();
+        let mut runs: Vec<Vec<RecordBatch>> = Vec::new();
         let mut group: Vec<RecordBatch> = Vec::new();
         let mut group_bytes = 0usize;
 
         // Flush a group into a run, skipping the copy for a single-batch group.
         let flush = |group: &mut Vec<RecordBatch>,
-                     runs: &mut Vec<RecordBatch>,
+                     runs: &mut Vec<Vec<RecordBatch>>,
                      schema: &SchemaRef|
          -> Result<()> {
             match group.len() {
                 0 => {}
-                1 => runs.push(group.pop().unwrap()),
+                1 => runs.push(std::mem::take(group)),
                 _ => {
-                    runs.push(concat_batches(schema, group.iter())?);
+                    let run_group = std::mem::take(group);
+                    runs.push(run_group);
                     group.clear();
                 }
             }
@@ -771,14 +791,14 @@ impl ExternalSorter {
             // exceed the input estimate. Borrow only already-reserved spill
             // workspace; any remainder still uses the original sort consumer.
             let total_sorted_size: usize = sorted_batches
-                .iter()
-                .map(get_record_batch_memory_size)
-                .sum();
+              .iter()
+              .map(get_record_batch_memory_size)
+              .sum();
             let mut workspace =
-                merge_pool.borrow(total_sorted_size.saturating_sub(reservation.size()));
+              merge_pool.borrow(total_sorted_size.saturating_sub(reservation.size()));
             reservation
-                .try_resize(total_sorted_size - workspace.size())
-                .map_err(Self::err_with_oom_context)?;
+              .try_resize(total_sorted_size - workspace.size())
+              .map_err(Self::err_with_oom_context)?;
 
             if workspace.size() == 0 {
                 return Ok(Box::pin(ReservationStream::new(
@@ -805,7 +825,93 @@ impl ExternalSorter {
                 futures::stream::iter(batches),
             )) as SendableRecordBatchStream)
         })
-        .try_flatten();
+          .try_flatten();
+
+        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+    }
+
+    /// Sorts a single `RecordBatch` into a single stream.
+    ///
+    /// This may output multiple batches depending on the size of the
+    /// sorted data and the target batch size.
+    /// For single-batch output cases, `reservation` will be freed immediately after sorting,
+    /// as the batch will be output and is expected to be reserved by the consumer of the stream.
+    /// For multi-batch output cases, `reservation` and any borrowed spill workspace
+    /// cover the sorted output, releasing its memory as each batch is output.
+    /// (This leads to the same behaviour, as futures are only evaluated when polled by the consumer.)
+    fn sort_batches_stream(
+        &self,
+        batches: Vec<RecordBatch>,
+        reservation: MemoryReservation,
+    ) -> Result<SendableRecordBatchStream> {
+        assert_ne!(batches.len(), 0);
+        if batches.len() == 1 {
+            return self.sort_batch_stream(
+                batches.into_iter().next().unwrap(),
+                reservation,
+            );
+        }
+
+        let mut expected_size = 0;
+        for batch in &batches {
+            expected_size += get_reserved_bytes_for_record_batch(&batch)?;
+        }
+
+        assert_eq!(
+            expected_size,
+            reservation.size()
+        );
+
+        let schema = batches[0].schema();
+        let expressions = self.expr.clone();
+        let batch_size = self.batch_size;
+        let merge_pool = Arc::clone(&self.merge_pool);
+
+        let stream = futures::stream::once(async move {
+            let schema = batches[0].schema();
+
+            // Sort the batch immediately and get all output batches
+            let sorted_batches = sort_batches_chunked(batches, &expressions, batch_size)?;
+
+            // Chunked output can retain shared buffers in every batch and
+            // exceed the input estimate. Borrow only already-reserved spill
+            // workspace; any remainder still uses the original sort consumer.
+            let total_sorted_size: usize = sorted_batches
+              .iter()
+              .map(get_record_batch_memory_size)
+              .sum();
+            let mut workspace =
+              merge_pool.borrow(total_sorted_size.saturating_sub(reservation.size()));
+            reservation
+              .try_resize(total_sorted_size - workspace.size())
+              .map_err(Self::err_with_oom_context)?;
+
+            if workspace.size() == 0 {
+                return Ok(Box::pin(ReservationStream::new(
+                    Arc::clone(&schema),
+                    Box::pin(RecordBatchStreamAdapter::new(
+                        Arc::clone(&schema),
+                        futures::stream::iter(sorted_batches.into_iter().map(Ok)),
+                    )),
+                    reservation,
+                )) as SendableRecordBatchStream);
+            }
+
+            // Return borrowed workspace first so the merge's cursors can reuse
+            // it immediately. Both reservations also release on stream drop.
+            let batches = sorted_batches.into_iter().map(move |batch| {
+                let size = get_record_batch_memory_size(&batch);
+                let borrowed = size.min(workspace.size());
+                workspace.shrink(borrowed);
+                reservation.shrink(size - borrowed);
+                Ok(batch)
+            });
+            Result::<_, DataFusionError>::Ok(Box::pin(RecordBatchStreamAdapter::new(
+                Arc::clone(&schema),
+                futures::stream::iter(batches),
+            )) as SendableRecordBatchStream)
+        })
+          .try_flatten();
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
@@ -998,6 +1104,16 @@ pub fn sort_batch_chunked(
     batch_size: usize,
 ) -> Result<Vec<RecordBatch>> {
     IncrementalSortIterator::new(batch.clone(), expressions.clone(), batch_size).collect()
+}
+/// Sort a batch and return the result as multiple batches of size `batch_size`.
+/// This is useful when you want to avoid creating one large sorted batch in memory,
+/// and instead want to process the sorted data in smaller chunks.
+fn sort_batches_chunked(
+    batches: Vec<RecordBatch>,
+    expressions: &LexOrdering,
+    batch_size: usize,
+) -> Result<Vec<RecordBatch>> {
+    IncrementalMultiBatchSortIterator::new(batches, expressions.clone(), batch_size).collect()
 }
 
 /// Sort execution plan.
