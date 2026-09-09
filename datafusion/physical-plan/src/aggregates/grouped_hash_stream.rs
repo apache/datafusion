@@ -1498,12 +1498,76 @@ mod tests {
     use crate::ExecutionPlan;
     use crate::InputOrderMode;
     use crate::test::TestMemoryExec;
-    use arrow::array::{Int32Array, Int64Array};
+    use arrow::array::{Int32Array, Int64Array, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-    use datafusion_functions_aggregate::count::count_udaf;
+    use datafusion_functions_aggregate::{array_agg::array_agg_udaf, count::count_udaf};
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::col;
+
+    #[tokio::test]
+    async fn grouped_hash_stream_reports_distinct_array_agg_submetric() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("group", DataType::Int32, false),
+            Field::new("value", DataType::UInt32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 1, 2, 2])),
+                Arc::new(UInt32Array::from(vec![3, 3, 4, 4])),
+            ],
+        )?;
+        let input = Arc::new(TestMemoryExec::try_new(
+            &[vec![batch]],
+            Arc::clone(&schema),
+            None,
+        )?);
+        let group_by = PhysicalGroupBy::new_single(vec![(
+            col("group", &schema)?,
+            "group".to_string(),
+        )]);
+        let aggregate_expr = Arc::new(
+            AggregateExprBuilder::new(array_agg_udaf(), vec![col("value", &schema)?])
+                .schema(Arc::clone(&schema))
+                .distinct()
+                .alias("distinct_values")
+                .build()?,
+        );
+        let output_schema = Arc::new(create_schema(
+            &schema,
+            &group_by,
+            std::slice::from_ref(&aggregate_expr),
+            AggregateMode::Single,
+        )?);
+        let aggregate_exec = AggregateExec::try_new(
+            AggregateMode::Single,
+            group_by,
+            vec![aggregate_expr],
+            vec![None],
+            input,
+            output_schema,
+        )?;
+
+        let mut stream = GroupedHashAggregateStream::new(
+            &aggregate_exec,
+            &Arc::new(TaskContext::default()),
+            0,
+        )?;
+        while let Some(batch) = stream.next().await {
+            batch?;
+        }
+
+        assert!(
+            aggregate_exec
+                .metrics()
+                .unwrap()
+                .sum_by_name("agg_expr_0_internal_distinct_time")
+                .is_some_and(|metric| metric.as_usize() > 0)
+        );
+
+        Ok(())
+    }
 
     // Migrated to PartialHashAggregateStream coverage in hash_stream.rs;
     // kept here for the legacy GroupedHashAggregateStream implementation.
