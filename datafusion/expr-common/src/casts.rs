@@ -120,7 +120,9 @@ fn is_lossy_temporal_cast(from_type: &DataType, to_type: &DataType) -> bool {
     if is_date_type(from_type) && is_date_type(to_type) {
         return false;
     }
-    if let (DataType::Timestamp(_, from_tz), DataType::Timestamp(_, to_tz)) = (from_type, to_type) {
+    if let (DataType::Timestamp(_, from_tz), DataType::Timestamp(_, to_tz)) =
+        (from_type, to_type)
+    {
         if from_tz.is_some() != to_tz.is_some() {
             return true;
         }
@@ -1007,7 +1009,8 @@ mod tests {
     fn test_is_lossy_temporal_cast_timestamp_tz() {
         let ts_naive = DataType::Timestamp(TimeUnit::Millisecond, None);
         let ts_utc = DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into()));
-        let ts_sgt = DataType::Timestamp(TimeUnit::Millisecond, Some("Asia/Singapore".into()));
+        let ts_sgt =
+            DataType::Timestamp(TimeUnit::Millisecond, Some("Asia/Singapore".into()));
 
         // Naive <-> Tz-aware is lossy because it ignores session timezone
         assert!(is_lossy_temporal_cast(&ts_naive, &ts_utc));
