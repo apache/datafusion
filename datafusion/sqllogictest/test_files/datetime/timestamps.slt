@@ -1996,6 +1996,17 @@ FROM timestamps;
 ----
 0 days 8 hours 0 mins 0.000000000 secs 0 days 8 hours 0 mins 0.000000000 secs 0 days -8 hours 0 mins 0.000000000 secs
 
+# The session timezone is propagated when coercing a scalar subquery.
+query ?
+SELECT (
+  SELECT ts_tz - ts
+  FROM (
+    VALUES ('2024-11-01T00:00:00+00:00'::timestamptz, '2024-11-01T00:00:00'::timestamp)
+  ) AS timestamps(ts_tz, ts)
+);
+----
+0 days 8 hours 0 mins 0.000000000 secs
+
 # The session timezone, not the aware operand's timezone, controls the cast.
 query ??
 WITH timestamps(ts_tz, ts) AS (
