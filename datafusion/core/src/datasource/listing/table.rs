@@ -32,29 +32,29 @@ pub trait ListingTableConfigExt {
     /// Infer `ListingOptions` based on `table_path` and file suffix.
     ///
     /// The format is inferred based on the first `table_path`.
-    fn infer_options<'a>(
+    fn infer_options(
         self,
-        state: &'a dyn Session,
-    ) -> BoxFuture<'a, datafusion_common::Result<ListingTableConfig>>;
+        state: &dyn Session,
+    ) -> BoxFuture<'_, datafusion_common::Result<ListingTableConfig>>;
 
     /// Convenience method to call both [`Self::infer_options`] and [`ListingTableConfig::infer_schema`]
-    fn infer<'a>(
+    fn infer(
         self,
-        state: &'a dyn Session,
-    ) -> BoxFuture<'a, datafusion_common::Result<ListingTableConfig>>;
+        state: &dyn Session,
+    ) -> BoxFuture<'_, datafusion_common::Result<ListingTableConfig>>;
 }
 impl ListingTableConfigExt for ListingTableConfig {
-    fn infer_options<'a>(
+    fn infer_options(
         self,
-        state: &'a dyn Session,
-    ) -> BoxFuture<'a, datafusion_common::Result<ListingTableConfig>> {
+        state: &dyn Session,
+    ) -> BoxFuture<'_, datafusion_common::Result<ListingTableConfig>> {
         infer_options_boxed(self, state)
     }
 
-    fn infer<'a>(
+    fn infer(
         self,
-        state: &'a dyn Session,
-    ) -> BoxFuture<'a, datafusion_common::Result<Self>> {
+        state: &dyn Session,
+    ) -> BoxFuture<'_, datafusion_common::Result<Self>> {
         infer_boxed(self, state)
     }
 }

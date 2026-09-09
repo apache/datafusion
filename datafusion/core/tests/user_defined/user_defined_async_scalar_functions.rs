@@ -159,10 +159,10 @@ async fn test_async_udf_preserves_result_field_metadata() -> Result<()> {
         }
     }
     impl AsyncScalarUDFImpl for AsyncExtensionUDF {
-        fn invoke_async_with_args<'a>(
-            &'a self,
+        fn invoke_async_with_args(
+            &self,
             args: ScalarFunctionArgs,
-        ) -> BoxFuture<'a, Result<ColumnarValue>> {
+        ) -> BoxFuture<'_, Result<ColumnarValue>> {
             Box::pin(async move { Ok(args.args[0].clone()) })
         }
     }
@@ -252,10 +252,10 @@ impl AsyncScalarUDFImpl for TestAsyncUDFImpl {
     fn ideal_batch_size(&self) -> Option<usize> {
         Some(self.batch_size)
     }
-    fn invoke_async_with_args<'a>(
-        &'a self,
+    fn invoke_async_with_args(
+        &self,
         args: ScalarFunctionArgs,
-    ) -> BoxFuture<'a, Result<ColumnarValue>> {
+    ) -> BoxFuture<'_, Result<ColumnarValue>> {
         Box::pin(async move {
             let arg1 = &args.args[0];
             let results = call_external_service(arg1.clone()).await?;

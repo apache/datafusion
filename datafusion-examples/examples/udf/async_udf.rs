@@ -158,7 +158,6 @@ impl AskLLM {
 
 /// All async UDFs implement the `ScalarUDFImpl` trait, which provides the basic
 /// information for the function, such as its name, signature, and return type.
-
 impl ScalarUDFImpl for AskLLM {
     fn name(&self) -> &str {
         "ask_llm"
@@ -190,10 +189,10 @@ impl AsyncScalarUDFImpl for AskLLM {
     /// is processing the query, so you may wish to make actual network requests
     /// on a different `Runtime`, as explained in the `thread_pools.rs` example
     /// in this directory.
-    fn invoke_async_with_args<'a>(
-        &'a self,
+    fn invoke_async_with_args(
+        &self,
         args: ScalarFunctionArgs,
-    ) -> BoxFuture<'a, Result<ColumnarValue>> {
+    ) -> BoxFuture<'_, Result<ColumnarValue>> {
         Box::pin(async move {
             // in a real UDF you would likely want to special case constant
             // arguments to improve performance, but this example converts the

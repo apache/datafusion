@@ -56,6 +56,7 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     /// Returns:
     /// - `None` for tables that do not support constraints.
     /// - `Some(&Constraints)` for tables supporting constraints.
+    ///
     /// Therefore, a `Some(&Constraints::empty())` return value indicates that
     /// this table supports constraints, but there are no constraints.
     fn constraints(&self) -> Option<&Constraints> {
@@ -241,7 +242,7 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     ///
     /// Each element in the resulting `Vec` is one of the following:
     /// * [`Exact`] or [`Inexact`]: The TableProvider can apply the filter
-    /// during scan
+    ///   during scan
     /// * [`Unsupported`]: The TableProvider cannot apply the filter during scan
     ///
     /// By default, this function returns [`Unsupported`] for all filters,

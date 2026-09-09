@@ -800,13 +800,11 @@ fn register_async_abs_udf(ctx: &SessionContext) {
         }
     }
     impl AsyncScalarUDFImpl for AsyncAbs {
-        fn invoke_async_with_args<'a>(
-            &'a self,
+        fn invoke_async_with_args(
+            &self,
             args: ScalarFunctionArgs,
-        ) -> BoxFuture<'a, Result<ColumnarValue>> {
-            Box::pin(async move {
-                return self.inner_abs.invoke_with_args(args);
-            })
+        ) -> BoxFuture<'_, Result<ColumnarValue>> {
+            Box::pin(async move { self.inner_abs.invoke_with_args(args) })
         }
     }
     let async_abs = AsyncAbs::new();
