@@ -279,6 +279,11 @@ impl CatalogProviderList for CustomCatalogProviderList {
         Some(catalog)
     }
 
+    fn deregister_catalog(&self, name: &str) -> Result<Option<Arc<dyn CatalogProvider>>> {
+        let mut cats = self.catalogs.write().unwrap();
+        Ok(cats.remove(name))
+    }
+
     /// Retrieves the list of available catalog names
     fn catalog_names(&self) -> Vec<String> {
         let cats = self.catalogs.read().unwrap();
