@@ -1567,7 +1567,7 @@ async fn join_asof() -> Result<()> {
     let results = left
         .join_asof_using(
             right,
-            vec![col("symbol")],
+            vec![datafusion_common::Column::from_name("symbol")],
             col("trades.ts").gt_eq(col("prices.ts")),
         )?
         .select(vec![col("trade_id"), col("price")])?
