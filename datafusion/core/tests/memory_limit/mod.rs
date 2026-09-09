@@ -307,26 +307,38 @@ async fn nested_key_spill_keeps_groups_unique() {
             SessionContext::new_with_config_rt(config, runtime.build_arc().unwrap());
         ctx.register_table("t", Arc::new(nested_key_table()))
             .unwrap();
-        let batches = ctx
+
+        let df = ctx
             .sql(
                 "select st, count(v), count(distinct v), sum(v), avg(v), min(v), max(v) \
                                  from t group by st",
             )
             .await
-            .unwrap()
-            .collect()
-            .await
             .unwrap();
+        let plan = df.create_physical_plan().await.unwrap();
+
+        let task_ctx = ctx.task_ctx();
+        let batches = collect_batches(Arc::clone(&plan), task_ctx)
+            .await
+            .expect("Query execution failed");
+
+        let spill_count = plan_spill_count(plan.as_ref());
+        match memory_limit {
+            Some(_) => assert_ne!(spill_count, 0, "must have spilled"),
+            None => assert_eq!(spill_count, 0, "must not spill on unbounded memory"),
+        }
+
         batches_to_sort_string(&batches)
     }
 
     let expected = run_nested_key_query(None, false).await;
+    assert_eq!(
+        run_nested_key_query(None, true).await,
+        expected,
+        "unbounded, legacy=true"
+    );
+
     for legacy in [true, false] {
-        assert_eq!(
-            run_nested_key_query(None, legacy).await,
-            expected,
-            "unbounded, legacy={legacy}"
-        );
         assert_eq!(
             run_nested_key_query(Some(NESTED_KEY_MEMORY_LIMIT), legacy).await,
             expected,
