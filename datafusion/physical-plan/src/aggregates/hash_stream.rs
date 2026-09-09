@@ -420,6 +420,9 @@ impl PartialHashAggregateStream {
 
         let reservation =
             MemoryConsumer::new(format!("PartialHashAggregateStream[{partition}]"))
+                // We interpret 'can spill' as 'can handle memory back pressure'.
+                // This value needs to be set to true for the default memory pool implementations
+                // to ensure fair application of back pressure amongst the memory consumers.
                 .with_can_spill(true)
                 .register(context.memory_pool());
 
