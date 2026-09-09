@@ -136,6 +136,10 @@ fn process_map_array(
     let matches = keys.values();
 
     for entry in 0..map_array.len() {
+        if map_array.is_null(entry) {
+            mutable.try_extend_nulls(1)?;
+            continue;
+        }
         let start = offsets[entry] as usize;
         let end = offsets[entry + 1] as usize;
 
@@ -171,6 +175,10 @@ fn process_map_with_nested_key(
         MutableArrayData::with_capacities(vec![&original_data], true, capacity);
 
     for entry in 0..map_array.len() {
+        if map_array.is_null(entry) {
+            mutable.try_extend_nulls(1)?;
+            continue;
+        }
         let start = map_array.value_offsets()[entry] as usize;
         let end = map_array.value_offsets()[entry + 1] as usize;
 
@@ -215,9 +223,16 @@ fn extract_single_field(base: ColumnarValue, name: ScalarValue) -> Result<Column
                         "Field {field_name} not found in dictionary struct"
                     )
                 })?;
-            Ok(ColumnarValue::Array(
-                dict.with_values(Arc::clone(field_col)),
-            ))
+            let field_col = if let Some(parent_nulls) = values_struct.nulls()
+                && !field_col.data_type().is_null()
+            {
+                let nulls = NullBuffer::union(field_col.nulls(), Some(parent_nulls));
+                let data = field_col.to_data().into_builder().nulls(nulls).build()?;
+                make_array(data)
+            } else {
+                Arc::clone(field_col)
+            };
+            Ok(ColumnarValue::Array(dict.with_values(field_col)))
         }
         (DataType::Map(_, _), ScalarValue::List(arr), _) => {
             let key_array: Arc<dyn Array> = arr;
@@ -241,6 +256,10 @@ fn extract_single_field(base: ColumnarValue, name: ScalarValue) -> Result<Column
                 (None, _) => exec_err!("Field {k} not found in struct"),
                 (Some(col), None) => Ok(ColumnarValue::Array(Arc::clone(col))),
                 (Some(col), Some(parent_nulls)) => {
+                    // NullArray is already entirely null and cannot have a validity bitmap.
+                    if col.data_type().is_null() {
+                        return Ok(ColumnarValue::Array(Arc::clone(col)));
+                    }
                     let nulls = NullBuffer::union(col.nulls(), Some(parent_nulls));
                     let data = col.to_data().into_builder().nulls(nulls).build()?;
                     Ok(ColumnarValue::Array(make_array(data)))
@@ -743,6 +762,238 @@ mod tests {
         let expected = Int32Array::from(vec![Some(1), None, Some(3)]);
         assert_eq!(result.as_ref(), &expected as &dyn Array);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_field_map_parent_nulls() -> Result<()> {
+        use arrow::array::{Int32Builder, MapBuilder, StringBuilder};
+
+        let mut builder =
+            MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        for (key, value, valid) in [
+            ("key", Some(1), true),
+            ("key", Some(2), false),
+            ("key", Some(3), true),
+            ("key", None, true),
+            ("other", Some(4), true),
+        ] {
+            // The null map still has a matching key and a valid child value.
+            builder.keys().append_value(key);
+            builder.values().append_option(value);
+            builder.append(valid)?;
+        }
+        builder.append(true)?; // An empty map.
+        let map = builder.finish();
+        let expected = Int32Array::from(vec![Some(1), None, Some(3), None, None, None]);
+
+        for offset in [0, 1] {
+            let len = map.len() - offset;
+            let result = extract_single_field(
+                ColumnarValue::Array(Arc::new(map.slice(offset, len))),
+                ScalarValue::Utf8(Some("key".to_string())),
+            )?
+            .into_array(len)?;
+            assert_eq!(result.as_ref(), &expected.slice(offset, len) as &dyn Array);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_field_map_nested_keys_parent_nulls() -> Result<()> {
+        use arrow::array::{FixedSizeListArray, ListArray, MapArray};
+        use arrow::datatypes::Int32Type;
+        use arrow_buffer::OffsetBuffer;
+
+        let keys: Vec<ArrayRef> = vec![
+            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>([Some(
+                vec![Some(7)],
+            )])),
+            Arc::new(FixedSizeListArray::new(
+                Arc::new(Field::new("item", DataType::Int32, false)),
+                1,
+                Arc::new(Int32Array::from(vec![7])),
+                None,
+            )),
+            Arc::new(StructArray::new(
+                vec![Field::new("x", DataType::Int32, false)].into(),
+                vec![Arc::new(Int32Array::from(vec![7]))],
+                None,
+            )),
+        ];
+
+        for keys in keys {
+            let key = ScalarValue::try_from_array(keys.as_ref(), 0)?;
+            let entries = StructArray::new(
+                vec![
+                    Field::new("key", keys.data_type().clone(), false),
+                    Field::new("value", DataType::Int32, false),
+                ]
+                .into(),
+                vec![keys, Arc::new(Int32Array::from(vec![42]))],
+                None,
+            );
+            let map = MapArray::new(
+                Arc::new(Field::new("entries", entries.data_type().clone(), false)),
+                OffsetBuffer::new(vec![0, 1].into()),
+                entries,
+                Some(NullBuffer::from(vec![false])),
+                false,
+            );
+            let result =
+                extract_single_field(ColumnarValue::Array(Arc::new(map)), key.clone())?
+                    .into_array(1)?;
+            let expected = Int32Array::from(vec![None]);
+            assert_eq!(result.as_ref(), &expected as &dyn Array, "key: {key}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_field_nested_dict_struct_parent_nulls() -> Result<()> {
+        use arrow::array::{DictionaryArray, UInt32Array};
+        use arrow::datatypes::UInt32Type;
+
+        let inner = StructArray::new(
+            vec![Field::new("value", DataType::Int32, true)].into(),
+            vec![Arc::new(Int32Array::from(vec![Some(10), Some(20), None]))],
+            None,
+        );
+        let values = StructArray::new(
+            vec![Field::new("inner", inner.data_type().clone(), false)].into(),
+            vec![Arc::new(inner)],
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
+        let keys = UInt32Array::from(vec![Some(0), Some(1), None, Some(2), Some(1)]);
+        let dict =
+            DictionaryArray::<UInt32Type>::try_new(keys.clone(), Arc::new(values))?;
+
+        let inner = extract_single_field(
+            ColumnarValue::Array(Arc::new(dict)),
+            ScalarValue::Utf8(Some("inner".to_string())),
+        )?;
+        let result =
+            extract_single_field(inner, ScalarValue::Utf8(Some("value".to_string())))?
+                .into_array(keys.len())?;
+        let result_dict = result
+            .as_any()
+            .downcast_ref::<DictionaryArray<UInt32Type>>()
+            .unwrap();
+        assert_eq!(result_dict.keys(), &keys);
+        assert_eq!(result_dict.values().len(), 3);
+
+        let decoded = arrow::compute::cast(&result, &DataType::Int32)?;
+        let expected = Int32Array::from(vec![Some(10), None, None, None, None]);
+        assert_eq!(decoded.as_ref(), &expected as &dyn Array);
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_field_null_typed_child() -> Result<()> {
+        use arrow::array::{DictionaryArray, NullArray, UInt32Array};
+        use arrow::datatypes::UInt32Type;
+
+        let values = Arc::new(StructArray::new(
+            vec![Field::new("value", DataType::Null, true)].into(),
+            vec![Arc::new(NullArray::new(2))],
+            Some(NullBuffer::from(vec![true, false])),
+        )) as ArrayRef;
+        let dictionary = Arc::new(DictionaryArray::<UInt32Type>::try_new(
+            UInt32Array::from(vec![0, 1]),
+            Arc::clone(&values),
+        )?) as ArrayRef;
+
+        for input in [values, dictionary] {
+            let result = extract_single_field(
+                ColumnarValue::Array(input),
+                ScalarValue::Utf8(Some("value".to_string())),
+            )?
+            .into_array(2)?;
+            assert_eq!(result.logical_null_count(), 2);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_field_nested_return_field_nullability() -> Result<()> {
+        let dictionary = |value_type| {
+            DataType::Dictionary(Box::new(DataType::UInt32), Box::new(value_type))
+        };
+        let map = |value_type, nullable| {
+            let entries = DataType::Struct(
+                vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", value_type, nullable),
+                ]
+                .into(),
+            );
+            DataType::Map(Arc::new(Field::new("entries", entries, false)), false)
+        };
+        let names = [
+            ScalarValue::Utf8(Some("inner".to_string())),
+            ScalarValue::Utf8(Some("value".to_string())),
+        ];
+
+        for (outer_nullable, inner_nullable, leaf_nullable, expected_nullable) in [
+            (false, false, false, false),
+            (true, false, false, true),
+            (false, true, false, true),
+            (false, false, true, true),
+            (true, true, true, true),
+        ] {
+            let inner_type = DataType::Struct(
+                vec![Field::new("value", DataType::Int32, leaf_nullable)].into(),
+            );
+            let outer_type = DataType::Struct(
+                vec![Field::new("inner", inner_type.clone(), inner_nullable)].into(),
+            );
+            let struct_with_dict = DataType::Struct(
+                vec![Field::new(
+                    "inner",
+                    dictionary(inner_type.clone()),
+                    inner_nullable,
+                )]
+                .into(),
+            );
+            let struct_with_map = DataType::Struct(
+                vec![Field::new(
+                    "inner",
+                    map(DataType::Int32, leaf_nullable),
+                    inner_nullable,
+                )]
+                .into(),
+            );
+
+            for (data_type, expected_type, nullable) in [
+                (outer_type.clone(), DataType::Int32, expected_nullable),
+                (
+                    dictionary(outer_type),
+                    dictionary(DataType::Int32),
+                    expected_nullable,
+                ),
+                (
+                    struct_with_dict,
+                    dictionary(DataType::Int32),
+                    expected_nullable,
+                ),
+                // Map lookups can return null even when every field is non-nullable.
+                (map(inner_type, inner_nullable), DataType::Int32, true),
+                (struct_with_map, DataType::Int32, true),
+            ] {
+                let arg_fields = [
+                    Arc::new(Field::new("outer", data_type, outer_nullable)),
+                    Arc::new(Field::new("key", DataType::Utf8, false)),
+                    Arc::new(Field::new("key", DataType::Utf8, false)),
+                ];
+                let result =
+                    GetFieldFunc::new().return_field_from_args(ReturnFieldArgs {
+                        arg_fields: &arg_fields,
+                        scalar_arguments: &[None, Some(&names[0]), Some(&names[1])],
+                    })?;
+                assert_eq!(result.data_type(), &expected_type, "{arg_fields:?}");
+                assert_eq!(result.is_nullable(), nullable, "{arg_fields:?}");
+            }
+        }
         Ok(())
     }
 
