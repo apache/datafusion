@@ -1980,6 +1980,49 @@ SELECT '2000-01-01T00:00:00'::timestamp - '2010-01-01T00:00:00'::timestamp;
 ----
 -3653 days 0 hours 0 mins 0.000000000 secs
 
+# Regression test for https://github.com/apache/datafusion/issues/13212
+statement ok
+SET TIME ZONE = '+08'
+
+query ???
+WITH timestamps(ts_tz, ts) AS (
+  VALUES ('2024-11-01T00:00:00+00:00'::timestamptz, '2024-11-01T00:00:00'::timestamp)
+)
+SELECT
+  '2024-11-01T00:00:00+00:00'::timestamptz - '2024-11-01T00:00:00'::timestamp,
+  ts_tz - ts,
+  ts - ts_tz
+FROM timestamps;
+----
+0 days 8 hours 0 mins 0.000000000 secs 0 days 8 hours 0 mins 0.000000000 secs 0 days -8 hours 0 mins 0.000000000 secs
+
+# The session timezone, not the aware operand's timezone, controls the cast.
+query ??
+WITH timestamps(ts_tz, ts) AS (
+  VALUES (
+    arrow_cast('2024-11-01T00:00:00-04:00', 'Timestamp(Nanosecond, Some("America/New_York"))'),
+    '2024-11-01T00:00:00'::timestamp
+  )
+)
+SELECT ts_tz - ts, ts - ts_tz
+FROM timestamps;
+----
+0 days 12 hours 0 mins 0.000000000 secs 0 days -12 hours 0 mins 0.000000000 secs
+
+statement ok
+SET TIME ZONE = 'America/New_York'
+
+# The timezone-naive operand is interpreted in EST and EDT, respectively.
+query ??
+SELECT
+  '2024-01-15T00:00:00+00:00'::timestamptz - '2024-01-15T00:00:00'::timestamp,
+  '2024-07-15T00:00:00+00:00'::timestamptz - '2024-07-15T00:00:00'::timestamp;
+----
+0 days -5 hours 0 mins 0.000000000 secs 0 days -4 hours 0 mins 0.000000000 secs
+
+statement ok
+RESET datafusion.execution.time_zone
+
 # Interval - Timestamp => error
 query error Cannot coerce arithmetic expression Interval\(MonthDayNano\) - Timestamp\(ns\) to valid types
 SELECT i - ts1 from FOO;

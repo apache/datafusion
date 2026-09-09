@@ -102,7 +102,13 @@ impl AnalyzerRule for TypeCoercion {
 
         // recurse
         let transformed_plan = plan
-            .transform_up_with_subqueries(|plan| analyze_internal(&EMPTY_SCHEMA, plan))?
+            .transform_up_with_subqueries(|plan| {
+                analyze_internal(
+                    &EMPTY_SCHEMA,
+                    plan,
+                    config.execution.time_zone.as_deref(),
+                )
+            })?
             .data;
 
         // finish
@@ -116,6 +122,7 @@ impl AnalyzerRule for TypeCoercion {
 fn analyze_internal(
     external_schema: &DFSchema,
     plan: LogicalPlan,
+    session_time_zone: Option<&str>,
 ) -> Result<Transformed<LogicalPlan>> {
     // get schema representing all available input fields. This is used for data type
     // resolution only, so order does not matter here
@@ -157,7 +164,8 @@ fn analyze_internal(
         plan
     };
 
-    let mut expr_rewrite = TypeCoercionRewriter::new(&schema);
+    let mut expr_rewrite =
+        TypeCoercionRewriter::new(&schema).with_session_time_zone(session_time_zone);
 
     let name_preserver = NamePreserver::new(&plan);
     // apply coercion rewrite all expressions in the plan individually
@@ -175,13 +183,25 @@ fn analyze_internal(
 /// Rewrite expressions to apply type coercion.
 pub struct TypeCoercionRewriter<'a> {
     pub(crate) schema: &'a DFSchema,
+    session_time_zone: Option<&'a str>,
 }
 
 impl<'a> TypeCoercionRewriter<'a> {
     /// Create a new [`TypeCoercionRewriter`] with a provided schema
     /// representing both the inputs and output of the [`LogicalPlan`] node.
     pub fn new(schema: &'a DFSchema) -> Self {
-        Self { schema }
+        Self {
+            schema,
+            session_time_zone: None,
+        }
+    }
+
+    pub(crate) fn with_session_time_zone(
+        mut self,
+        session_time_zone: Option<&'a str>,
+    ) -> Self {
+        self.session_time_zone = session_time_zone;
+        self
     }
 
     /// Coerce the [`LogicalPlan`].
@@ -398,9 +418,14 @@ impl<'a> TypeCoercionRewriter<'a> {
     ) -> Result<(Expr, Expr)> {
         let left_data_type = left.get_type(left_schema)?;
         let right_data_type = right.get_type(right_schema)?;
-        let (left_type, right_type) =
+        let (left_type, right_type) = if let Some(types) =
+            self.timestamp_subtraction_input_types(&left_data_type, &op, &right_data_type)
+        {
+            types
+        } else {
             BinaryTypeCoercer::new(&left_data_type, &op, &right_data_type)
-                .get_input_types()?;
+                .get_input_types()?
+        };
         let left_cast_ok = can_cast_types(&left_data_type, &left_type);
         let right_cast_ok = can_cast_types(&right_data_type, &right_type);
 
@@ -432,6 +457,47 @@ impl<'a> TypeCoercionRewriter<'a> {
         };
 
         Ok((left_expr, right_expr))
+    }
+
+    /// Coerces the timezone-naive side of timestamp subtraction using the session
+    /// timezone, matching PostgreSQL and DuckDB. The timezone-aware side keeps its
+    /// timezone while both operands are widened to the same precision.
+    fn timestamp_subtraction_input_types(
+        &self,
+        left_type: &DataType,
+        op: &Operator,
+        right_type: &DataType,
+    ) -> Option<(DataType, DataType)> {
+        if op != &Operator::Minus {
+            return None;
+        }
+        let session_time_zone = self.session_time_zone?;
+        let (left_time_zone, right_time_zone) = match (left_type, right_type) {
+            (
+                DataType::Timestamp(_, Some(left_time_zone)),
+                DataType::Timestamp(_, None),
+            ) => (
+                Some(Arc::clone(left_time_zone)),
+                Some(Arc::from(session_time_zone)),
+            ),
+            (
+                DataType::Timestamp(_, None),
+                DataType::Timestamp(_, Some(right_time_zone)),
+            ) => (
+                Some(Arc::from(session_time_zone)),
+                Some(Arc::clone(right_time_zone)),
+            ),
+            _ => return None,
+        };
+        let DataType::Timestamp(unit, _) = comparison_coercion(left_type, right_type)?
+        else {
+            return None;
+        };
+
+        Some((
+            DataType::Timestamp(unit, left_time_zone),
+            DataType::Timestamp(unit, right_time_zone),
+        ))
     }
 
     fn coerce_date_time_math_op(
@@ -588,8 +654,12 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 outer_ref_columns,
                 spans,
             }) => {
-                let new_plan =
-                    analyze_internal(self.schema, Arc::unwrap_or_clone(subquery))?.data;
+                let new_plan = analyze_internal(
+                    self.schema,
+                    Arc::unwrap_or_clone(subquery),
+                    self.session_time_zone,
+                )?
+                .data;
                 Ok(Transformed::yes(Expr::ScalarSubquery(Subquery {
                     subquery: Arc::new(new_plan),
                     outer_ref_columns,
@@ -600,6 +670,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 let new_plan = analyze_internal(
                     self.schema,
                     Arc::unwrap_or_clone(subquery.subquery),
+                    self.session_time_zone,
                 )?
                 .data;
                 Ok(Transformed::yes(Expr::Exists(Exists {
@@ -619,6 +690,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 let new_plan = analyze_internal(
                     self.schema,
                     Arc::unwrap_or_clone(subquery.subquery),
+                    self.session_time_zone,
                 )?
                 .data;
                 let expr_type = expr.get_type(self.schema)?;
@@ -648,6 +720,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 let new_plan = analyze_internal(
                     self.schema,
                     Arc::unwrap_or_clone(subquery.subquery),
+                    self.session_time_zone,
                 )?
                 .data;
                 let expr_type = expr.get_type(self.schema)?;
@@ -2721,7 +2794,7 @@ mod test {
             vec![Field::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
-        let mut rewriter = TypeCoercionRewriter { schema: &schema };
+        let mut rewriter = TypeCoercionRewriter::new(&schema);
         let expr = is_true(lit(12i32).gt(lit(13i64)));
         let expected = is_true(cast(lit(12i32), DataType::Int64).gt(lit(13i64)));
         let result = expr.rewrite(&mut rewriter).data()?;
@@ -2732,7 +2805,7 @@ mod test {
             vec![Field::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
-        let mut rewriter = TypeCoercionRewriter { schema: &schema };
+        let mut rewriter = TypeCoercionRewriter::new(&schema);
         let expr = is_true(lit(12i32).eq(lit(13i64)));
         let expected = is_true(cast(lit(12i32), DataType::Int64).eq(lit(13i64)));
         let result = expr.rewrite(&mut rewriter).data()?;
@@ -2743,7 +2816,7 @@ mod test {
             vec![Field::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
-        let mut rewriter = TypeCoercionRewriter { schema: &schema };
+        let mut rewriter = TypeCoercionRewriter::new(&schema);
         let expr = is_true(lit(12i32).lt(lit(13i64)));
         let expected = is_true(cast(lit(12i32), DataType::Int64).lt(lit(13i64)));
         let result = expr.rewrite(&mut rewriter).data()?;
@@ -3198,6 +3271,53 @@ mod test {
         Projection: CAST(Utf8("1998-03-18") AS Timestamp(ns)) - CAST(Utf8("1998-03-18") AS Timestamp(ns))
           EmptyRelation: rows=0
         "#
+        )
+    }
+
+    #[test]
+    fn timestamp_subtraction_uses_session_timezone() -> Result<()> {
+        let schema = DFSchema::from_unqualified_fields(
+            vec![
+                Field::new(
+                    "tstz",
+                    DataType::Timestamp(
+                        TimeUnit::Second,
+                        Some("America/New_York".into()),
+                    ),
+                    true,
+                ),
+                Field::new("ts", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+            ]
+            .into(),
+            std::collections::HashMap::new(),
+        )?;
+        let input = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(schema),
+        }));
+        let subtract = |left, right| {
+            Expr::BinaryExpr(BinaryExpr::new(
+                Box::new(col(left)),
+                Operator::Minus,
+                Box::new(col(right)),
+            ))
+        };
+        let plan = LogicalPlan::Projection(Projection::try_new(
+            vec![subtract("tstz", "ts"), subtract("ts", "tstz")],
+            input,
+        )?);
+
+        let mut options = ConfigOptions::default();
+        options.execution.time_zone = Some("+08:00".to_string());
+        let rule = Arc::new(TypeCoercion::new());
+        assert_analyzed_plan_with_config_eq_snapshot!(
+            options,
+            rule,
+            plan,
+            @r#"
+        Projection: CAST(tstz AS Timestamp(ns, "America/New_York")) - CAST(ts AS Timestamp(ns, "+08:00")), CAST(ts AS Timestamp(ns, "+08:00")) - CAST(tstz AS Timestamp(ns, "America/New_York"))
+          EmptyRelation: rows=0
+        "#,
         )
     }
 

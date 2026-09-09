@@ -244,7 +244,7 @@ fn evaluate_expr_with_null_column<'a>(
 }
 
 fn coerce(expr: Expr, schema: &DFSchema) -> Result<Expr> {
-    let mut expr_rewrite = TypeCoercionRewriter { schema };
+    let mut expr_rewrite = TypeCoercionRewriter::new(schema);
     expr.rewrite(&mut expr_rewrite).data()
 }
 

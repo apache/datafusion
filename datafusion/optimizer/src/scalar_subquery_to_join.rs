@@ -398,9 +398,7 @@ fn build_join(
     // itself be NULL) otherwise.
     let mut compensation_exprs = HashMap::new();
     if let Some(expr_map) = collected_count_expr_map {
-        let mut expr_rewrite = TypeCoercionRewriter {
-            schema: new_plan.schema(),
-        };
+        let mut expr_rewrite = TypeCoercionRewriter::new(new_plan.schema());
         let having_arm = pull_up
             .pull_up_having_expr
             .as_ref()
