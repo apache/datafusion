@@ -165,9 +165,11 @@ accumulators in that partition share the same time, and normal metric display
 combines that time across partitions. An aggregate may request its submetric
 during accumulator construction, so it can appear even when its input is empty.
 For example, `array_agg(DISTINCT ...)` records the time spent deduplicating
-input values as `agg_expr_{index}_internal_distinct_time`. These submetrics
-complement the `update`, `merge`, `state`, and `evaluate` timers rather than
-subdividing or replacing them.
+input values as `agg_expr_{index}_internal_distinct_time`. Grouped accumulation
+records this once per input batch, rather than once per group, to avoid making
+metric collection proportional to group cardinality. These submetrics complement
+the `update`, `merge`, `state`, and `evaluate` timers rather than subdividing or
+replacing them.
 
 Except for the `Summary` metric `reduction_factor`, these operator-level and
 per-aggregate metrics are `Dev` metrics. They appear in `EXPLAIN ANALYZE` when
