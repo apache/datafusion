@@ -354,7 +354,7 @@ impl fmt::Display for CreateExternalCatalog {
     }
 }
 
-/// DataFusion extension `DROP EXTERNAL CATALOG` statement.
+/// DataFusion extension `DROP CATALOG` statement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DropCatalog {
     /// Catalog name
@@ -365,7 +365,7 @@ pub struct DropCatalog {
 
 impl fmt::Display for DropCatalog {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "DROP EXTERNAL CATALOG ")?;
+        write!(f, "DROP CATALOG ")?;
         if self.if_exists {
             write!(f, "IF EXISTS ")?;
         }
