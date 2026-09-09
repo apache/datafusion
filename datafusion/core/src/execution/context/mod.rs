@@ -20,7 +20,6 @@
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::{Arc, Weak};
-use std::time::Duration;
 
 use super::options::ReadOptions;
 use crate::datasource::dynamic_file::DynamicListTableFactory;
@@ -75,15 +74,9 @@ use datafusion_common::{
     tree_node::{TreeNodeRecursion, TreeNodeVisitor},
 };
 pub use datafusion_execution::TaskContext;
-use datafusion_execution::cache::cache_manager::{
-    DEFAULT_FILE_STATISTICS_MEMORY_LIMIT, DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT,
-    DEFAULT_LIST_FILES_CACHE_TTL, DEFAULT_METADATA_CACHE_LIMIT,
-};
 pub use datafusion_execution::config::SessionConfig;
-use datafusion_execution::disk_manager::{
-    DEFAULT_MAX_SPILL_MERGE_FAN_IN, DEFAULT_MAX_TEMP_DIRECTORY_SIZE, DiskManagerBuilder,
-};
 use datafusion_execution::registry::SerializerRegistry;
+use datafusion_execution::runtime_options::{self, RuntimeOptions};
 use datafusion_expr::HigherOrderUDF;
 pub use datafusion_expr::execution_props::ExecutionProps;
 #[cfg(feature = "sql")]
@@ -1172,50 +1165,9 @@ impl SessionContext {
 
         let mut state = self.state.write();
 
-        let mut builder = RuntimeEnvBuilder::from_runtime_env(state.runtime_env());
-        builder = match key {
-            "memory_limit" => {
-                let memory_limit = Self::parse_capacity_limit(variable, value)?;
-                builder.with_memory_limit(memory_limit, 1.0)
-            }
-            "max_temp_directory_size" => {
-                let directory_size = Self::parse_capacity_limit(variable, value)?;
-                builder.with_max_temp_directory_size(directory_size as u64)
-            }
-            "temp_directory" => builder.with_temp_file_path(value),
-            "metadata_cache_limit" => {
-                let limit = Self::parse_capacity_limit(variable, value)?;
-                builder.with_metadata_cache_limit(limit)
-            }
-            "list_files_cache_limit" => {
-                let limit = Self::parse_capacity_limit(variable, value)?;
-                builder.with_object_list_cache_limit(limit)
-            }
-            "list_files_cache_ttl" => {
-                let duration = Self::parse_duration(variable, value)?;
-                builder.with_object_list_cache_ttl(Some(duration))
-            }
-            "file_statistics_cache_limit" => {
-                let limit = Self::parse_capacity_limit(variable, value)?;
-                builder.with_file_statistics_cache_limit(limit)
-            }
-            "max_spill_merge_fan_in" => {
-                let fan_in = value.parse::<usize>().map_err(|e| {
-                    DataFusionError::Plan(format!(
-                        "Failed to parse non-negative integer from '{variable}', value '{value}': {e}"
-                    ))
-                })?;
-                builder.with_max_spill_merge_fan_in(fan_in)
-            }
-            _ => return plan_err!("Unknown runtime configuration: {variable}"),
-            // Remember to update `reset_runtime_variable()` when adding new options
-        };
-
-        *state = SessionStateBuilder::from(state.clone())
-            .with_runtime_env(Arc::new(builder.build()?))
-            .build();
-
-        Ok(())
+        let mut options = RuntimeOptions::from_runtime_env(state.runtime_env());
+        options.set_entry(key, value)?;
+        self.apply_runtime_options(&mut state, &options, key)
     }
 
     fn reset_runtime_variable(&self, variable: &str) -> Result<()> {
@@ -1223,40 +1175,27 @@ impl SessionContext {
 
         let mut state = self.state.write();
 
-        let mut builder = RuntimeEnvBuilder::from_runtime_env(state.runtime_env());
-        match key {
-            "memory_limit" => {
-                builder.memory_pool = None;
-            }
-            "max_temp_directory_size" => {
-                builder =
-                    builder.with_max_temp_directory_size(DEFAULT_MAX_TEMP_DIRECTORY_SIZE);
-            }
-            "temp_directory" => {
-                builder.disk_manager_builder = Some(DiskManagerBuilder::default());
-            }
-            "metadata_cache_limit" => {
-                builder = builder.with_metadata_cache_limit(DEFAULT_METADATA_CACHE_LIMIT);
-            }
-            "list_files_cache_limit" => {
-                builder = builder
-                    .with_object_list_cache_limit(DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT);
-            }
-            "list_files_cache_ttl" => {
-                builder =
-                    builder.with_object_list_cache_ttl(DEFAULT_LIST_FILES_CACHE_TTL);
-            }
-            "file_statistics_cache_limit" => {
-                builder = builder.with_file_statistics_cache_limit(
-                    DEFAULT_FILE_STATISTICS_MEMORY_LIMIT,
-                );
-            }
-            "max_spill_merge_fan_in" => {
-                builder =
-                    builder.with_max_spill_merge_fan_in(DEFAULT_MAX_SPILL_MERGE_FAN_IN);
-            }
-            _ => return plan_err!("Unknown runtime configuration: {variable}"),
-        }
+        let mut options = RuntimeOptions::from_runtime_env(state.runtime_env());
+        options.reset_entry(key)?;
+        self.apply_runtime_options(&mut state, &options, key)
+    }
+
+    /// Rebuild the session's [`RuntimeEnv`] with `key` taken from `options`.
+    ///
+    /// Only the named key is applied. Rebuilding every resource on each
+    /// statement would replace the live memory pool and discard the
+    /// reservations held against it.
+    fn apply_runtime_options(
+        &self,
+        state: &mut SessionState,
+        options: &RuntimeOptions,
+        key: &str,
+    ) -> Result<()> {
+        let builder = options.apply_key(
+            key,
+            RuntimeEnvBuilder::from_runtime_env(state.runtime_env()),
+        )?;
+
         *state = SessionStateBuilder::from(state.clone())
             .with_runtime_env(Arc::new(builder.build()?))
             .build();
@@ -1327,104 +1266,7 @@ impl SessionContext {
     /// );
     /// ```
     pub fn parse_capacity_limit(config_name: &str, limit: &str) -> Result<usize> {
-        if limit.trim().is_empty() {
-            return Err(plan_datafusion_err!(
-                "Empty limit value found for '{config_name}'"
-            ));
-        }
-        if limit == "0" {
-            return Ok(0);
-        }
-        let (unit_start, unit) = limit.char_indices().next_back().ok_or_else(|| {
-            plan_datafusion_err!("Empty limit value found for '{config_name}'")
-        })?;
-        let number = &limit[..unit_start];
-        let number: f64 = number.parse().map_err(|_| {
-            plan_datafusion_err!(
-                "Failed to parse number from '{config_name}', limit '{limit}'"
-            )
-        })?;
-        if number.is_sign_negative() || number.is_infinite() {
-            return Err(plan_datafusion_err!(
-                "Limit value should be positive finite number for '{config_name}'"
-            ));
-        }
-
-        match unit {
-            'K' => Ok((number * 1024.0) as usize),
-            'M' => Ok((number * 1024.0 * 1024.0) as usize),
-            'G' => Ok((number * 1024.0 * 1024.0 * 1024.0) as usize),
-            _ => plan_err!(
-                "Unsupported unit '{unit}' in '{config_name}', limit '{limit}'. \
-            Unit must be one of: 'K', 'M', 'G'"
-            ),
-        }
-    }
-
-    fn parse_duration(config_name: &str, duration: &str) -> Result<Duration> {
-        if duration.trim().is_empty() {
-            return Err(plan_datafusion_err!(
-                "Duration should not be empty or blank for '{config_name}'"
-            ));
-        }
-
-        let mut minutes = None;
-        let mut seconds = None;
-
-        for duration in duration.split_inclusive(&['m', 's']) {
-            let (unit_start, unit) =
-                duration.char_indices().next_back().ok_or_else(|| {
-                    plan_datafusion_err!(
-                        "Duration should not be empty or blank for '{config_name}'"
-                    )
-                })?;
-            let number = &duration[..unit_start];
-            let number: u64 = number.parse().map_err(|_| {
-                plan_datafusion_err!("Failed to parse number from duration '{duration}' for '{config_name}'")
-            })?;
-
-            match unit {
-                'm' if minutes.is_none() && seconds.is_none() => minutes = Some(number),
-                's' if seconds.is_none() => seconds = Some(number),
-                other => plan_err!(
-                    "Invalid duration unit: '{other}'. The unit must be either 'm' (minutes), or 's' (seconds), and be in the correct order for '{config_name}'"
-                )?,
-            }
-        }
-
-        let secs = Self::check_overflow(config_name, minutes, 60, seconds)?;
-        let duration = Duration::from_secs(secs);
-
-        if duration.is_zero() {
-            return plan_err!(
-                "Duration must be greater than 0 seconds for '{config_name}'"
-            );
-        }
-
-        Ok(duration)
-    }
-
-    fn check_overflow(
-        config_name: &str,
-        mins: Option<u64>,
-        multiplier: u64,
-        secs: Option<u64>,
-    ) -> Result<u64> {
-        let first_part_of_secs = mins.unwrap_or_default().checked_mul(multiplier);
-        if first_part_of_secs.is_none() {
-            plan_err!(
-                "Duration has overflowed allowed maximum limit due to 'mins * {multiplier}' when setting '{config_name}'"
-            )?
-        }
-        let second_part_of_secs = first_part_of_secs
-            .unwrap()
-            .checked_add(secs.unwrap_or_default());
-        if second_part_of_secs.is_none() {
-            plan_err!(
-                "Duration has overflowed allowed maximum limit due to 'mins * {multiplier} + secs' when setting '{config_name}'"
-            )?
-        }
-        Ok(second_part_of_secs.unwrap())
+        runtime_options::parse_capacity_limit(config_name, limit)
     }
 
     async fn create_custom_table(
@@ -2368,6 +2210,7 @@ mod tests {
     use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
     use std::error::Error;
     use std::path::PathBuf;
+    use std::time::Duration;
 
     use datafusion_common::test_util::batches_to_string;
     use datafusion_common_runtime::SpawnedTask;
@@ -2960,7 +2803,7 @@ mod tests {
             ("1m1s", Duration::from_secs(61)),
         ] {
             let have =
-                SessionContext::parse_duration(LIST_FILES_CACHE_TTL, duration).unwrap();
+                runtime_options::parse_duration(LIST_FILES_CACHE_TTL, duration).unwrap();
             assert_eq!(want, have);
         }
 
@@ -2969,7 +2812,7 @@ mod tests {
             "0s", "0m", "1s0m", "1s1m", "XYZ", "1h", "XYZm2s", "", " ", "-1m", "1m 1s",
             "1m1s ", " 1m1s", "1\u{b5}",
         ] {
-            let have = SessionContext::parse_duration(LIST_FILES_CACHE_TTL, duration);
+            let have = runtime_options::parse_duration(LIST_FILES_CACHE_TTL, duration);
             assert!(have.is_err());
             assert!(
                 have.unwrap_err()
@@ -3008,7 +2851,7 @@ mod tests {
             ),
         ] {
             let have =
-                SessionContext::parse_duration(LIST_FILES_CACHE_TTL, duration).unwrap();
+                runtime_options::parse_duration(LIST_FILES_CACHE_TTL, duration).unwrap();
             assert_eq!(want, have);
         }
 
@@ -3031,7 +2874,7 @@ mod tests {
                 "Duration has overflowed allowed maximum limit due to",
             ),
         ] {
-            let have = SessionContext::parse_duration(LIST_FILES_CACHE_TTL, duration);
+            let have = runtime_options::parse_duration(LIST_FILES_CACHE_TTL, duration);
             assert!(have.is_err());
             let error_message = have.unwrap_err().message().to_string();
             assert!(
