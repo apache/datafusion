@@ -234,8 +234,8 @@ impl RowValues {
 
     #[inline(always)]
     fn current_slice(&self) -> &[u8] {
-        // SAFETY: `set_offset` (or `new` for offset 0) populated `current_ptr`
-        // / `current_len` from `rows.row(offset).as_ref()`, and the ptr is
+        // SAFETY: `set_offset` (or `new` for offset 0) populated `current_ptr` / `current_len` 
+        // from `rows.row(offset).as_ref()`, and the ptr is
         // into `rows`'s Arc heap that stays alive as long as `self` does.
         unsafe { std::slice::from_raw_parts(self.current_ptr, self.current_len) }
     }
