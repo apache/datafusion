@@ -15,46 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Benchmarks for [`RepartitionExec`] and [`BatchPartitioner`].
-//!
-//! # Microbenchmarks (`BatchPartitioner`)
-//!
-//! These isolate the CPU cost of routing a batch to output partitions, with no
-//! channel or async overhead:
-//!
-//! - `hash_partitioner/partition_count`: hash routing across a mix of power-of-two
-//!   and non-power-of-two partition counts. The hot path uses [`StrengthReducedU64`]
-//!   (bit-mask for powers-of-two, reciprocal multiply otherwise), so both branches
-//!   are exercised.
-//!
-//! - `hash_partitioner/key_type`: hash cost per key type — `Int32`, `Int64`, `Utf8View`.
-//!
-//! - `hash_partitioner/key_count`: composite hash cost for 1, 2, and 3 key columns.
-//!   Each additional key column adds a separate hash pass.
-//!
-//! - `round_robin_partitioner/partition_count`: trivial round-robin routing (no
-//!   hashing). Establishes the baseline overhead of the `partition()` interface.
-//!
-//! # End-to-end benchmarks (`RepartitionExec`)
-//!
-//! These exercise the full async operator, including channel sends/receives,
-//! batch coalescing, and memory reservation:
-//!
-//! - `repartition_exec/hash_1_to_n`: 1 input partition fanned out to N output
-//!   partitions with hash partitioning.
-//!
-//! - `repartition_exec/round_robin_1_to_n`: same topology with round-robin
-//!   partitioning — compare against hash to isolate routing overhead.
-//!
-//! - `repartition_exec/hash_n_to_n`: N input partitions → N output partitions.
-//!   The N concurrent producer tasks are the realistic multi-threaded scenario.
-//!
-//! # Usage
-//!
-//! ```sh
-//! cargo bench -p datafusion-physical-plan --bench repartition
-//! ```
-
 use std::hint::black_box;
 use std::sync::Arc;
 
@@ -352,7 +312,7 @@ fn bench_hash_partitioner_key_count(c: &mut Criterion) {
 
 /// Round-robin routing at varying partition counts.
 ///
-/// Round-robin does no hashing — it simply increments a counter. This is the
+/// Round-robin does no hashing, it simply increments a counter. This is the
 /// baseline for the `partition()` interface overhead. Compare against
 /// `hash_partitioner/partition_count` to isolate pure hashing cost.
 fn bench_round_robin_partitioner(c: &mut Criterion) {
