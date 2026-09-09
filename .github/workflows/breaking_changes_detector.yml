@@ -85,7 +85,7 @@ jobs:
         if: steps.changed_crates.outputs.packages != ''
         run: |
           sudo rm -f /etc/apt/sources.list.d/google-chrome.list
-          sudo apt-get update -o Acquire::Retries=5
+          sudo apt-get update || true
           sudo apt-get install -y protobuf-compiler
 
       - name: Install cargo-semver-checks

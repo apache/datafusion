@@ -464,7 +464,7 @@ jobs:
           - name: Install dependencies
             run: |
               sudo rm -f /etc/apt/sources.list.d/google-chrome.list
-              sudo apt-get update -qq -o Acquire::Retries=5
+              sudo apt-get update -qq || true
               sudo apt-get install -y -qq clang
           - name: Setup wasm-pack
             uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026  # v2.85.11
