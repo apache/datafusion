@@ -66,7 +66,7 @@ struct AggregateSubMetric {
 
 impl AggregateMetric for AggregateSubMetric {
     fn add_duration(&self, duration: Duration) {
-        self.time.add_duration(duration);
+        self.time.add_duration_exact(duration);
     }
 }
 
@@ -366,7 +366,7 @@ mod tests {
     }
 
     #[test]
-    fn aggregate_submetrics_record_zero_duration() {
+    fn aggregate_submetrics_preserve_zero_duration_per_recording() {
         let metrics = ExecutionPlanMetricsSet::new();
         let submetrics = aggregate_sub_metrics(&metrics, 0, ["array_agg(DISTINCT a)"]);
 
@@ -377,10 +377,14 @@ mod tests {
         assert_eq!(
             metrics
                 .clone_inner()
-                .sum_by_name("agg_expr_0_internal_distinct_time")
+                .iter()
+                .find(|metric| {
+                    metric.value().name() == "agg_expr_0_internal_distinct_time"
+                })
                 .unwrap()
+                .value()
                 .as_usize(),
-            1
+            0
         );
     }
 
