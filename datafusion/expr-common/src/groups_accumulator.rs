@@ -485,51 +485,51 @@ pub struct FixedBlocksIndex(usize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub struct BlocksIndex {
-    flat_index: usize,
-    // block_index: usize,
-    // index_in_block: usize,
+    // flat_index: usize,
+    block_index: usize,
+    index_in_block: usize,
 }
 
 impl BlocksIndex {
     pub const ZERO: Self = Self {
-        flat_index: 0,
-        // block_index: 0,
-        // index_in_block: 0,
+        // flat_index: 0,
+        block_index: 0,
+        index_in_block: 0,
     };
     pub const MAX: Self = Self {
-        flat_index: usize::MAX,
-        // block_index: usize::MAX,
-        // index_in_block: usize::MAX,
+        // flat_index: usize::MAX,
+        block_index: usize::MAX,
+        index_in_block: usize::MAX,
     };
-    //
-    // pub fn new(block_index: usize, index_in_block: usize) -> Self {
-    //   Self {
-    //     block_index,
-    //     index_in_block,
-    //   }
-    // }
+
+    pub fn new(block_index: usize, index_in_block: usize) -> Self {
+      Self {
+        block_index,
+        index_in_block,
+      }
+    }
 
     #[inline(always)]
     pub fn new_in_first_block(index_in_block: usize) -> Self {
         // Implementation note:
         // not having From<usize> that will do this instead even when it will be more convenient
         // so we can later change the layout to be a single usize with bit shifts
-        // Self::new(0, index_in_block)
-        Self {
-            flat_index: index_in_block,
-        }
+        Self::new(0, index_in_block)
+        // Self {
+        //     flat_index: index_in_block,
+        // }
     }
 
     #[inline(always)]
     pub fn from_index_in_fixed_block_size(index: usize, block_size: usize) -> Self {
-        Self { flat_index: index }
-        // Self::new(index / block_size, index % block_size)
+        // Self { flat_index: index }
+        Self::new(index / block_size, index % block_size)
     }
 
     #[inline(always)]
     pub fn into_index_in_fixed_block_size(&self, block_size: usize) -> usize {
-        self.flat_index
-        // self.block_index * block_size + self.index_in_block
+        // self.flat_index
+        self.block_index * block_size + self.index_in_block
     }
 
     /// Flat position given the absolute start of every block, `head` is the absolute
@@ -540,53 +540,60 @@ impl BlocksIndex {
         block_starts: &[usize],
         head: usize,
     ) -> usize {
-        // block_starts[self.block_index()] - head + self.index_in_block()
-        self.flat_index
+        block_starts[self.block_index] - head + self.index_in_block
+        // self.flat_index
     }
 
     #[inline(always)]
     pub fn gte_flat(self, flat: usize, block_size: usize) -> bool {
-        self.flat_index >= flat
+        self.into_index_in_fixed_block_size(block_size) >= flat
+        // self.flat_index >= flat
     }
 
     #[inline(always)]
     pub fn gt_flat(self, flat: usize, block_size: usize) -> bool {
-        self.flat_index > flat
+        self.into_index_in_fixed_block_size(block_size) > flat
+        // self.flat_index > flat
     }
 
     #[inline(always)]
     pub fn lt_flat(self, flat: usize, block_size: usize) -> bool {
-        self.flat_index < flat
+        self.into_index_in_fixed_block_size(block_size) < flat
+        // self.flat_index < flat
     }
 
     #[inline(always)]
     pub fn lte_flat(self, flat: usize, block_size: usize) -> bool {
-        self.flat_index <= flat
+        self.into_index_in_fixed_block_size(block_size) <= flat
+        // self.flat_index <= flat
     }
 
     #[inline(always)]
     pub fn is_in_block_0(self, block_size: usize) -> bool {
-        self.flat_index < block_size
+        self.block_index == 0
+        // self.flat_index < block_size
     }
 
     #[inline(always)]
     pub fn block_index(&self, block_size: usize) -> usize {
-        // Block sizes are batch sizes, almost always a power of two, and this runs per
-        // row in every accumulator and group values loop: a shift beats a division
-        if block_size.is_power_of_two() {
-            self.flat_index >> block_size.trailing_zeros()
-        } else {
-            self.flat_index / block_size
-        }
+        self.block_index
+        // // Block sizes are batch sizes, almost always a power of two, and this runs per
+        // // row in every accumulator and group values loop: a shift beats a division
+        // if block_size.is_power_of_two() {
+        //     self.flat_index >> block_size.trailing_zeros()
+        // } else {
+        //     self.flat_index / block_size
+        // }
     }
 
     #[inline(always)]
     pub fn index_in_block(&self, block_size: usize) -> usize {
-        if block_size.is_power_of_two() {
-            self.flat_index & (block_size - 1)
-        } else {
-            self.flat_index % block_size
-        }
+        self.index_in_block
+        // if block_size.is_power_of_two() {
+        //     self.flat_index & (block_size - 1)
+        // } else {
+        //     self.flat_index % block_size
+        // }
     }
 
     #[inline(always)]
@@ -596,80 +603,106 @@ impl BlocksIndex {
 
     #[inline(always)]
     pub fn add_index_in_block(mut self, n: usize) -> Self {
-        self.flat_index += 1;
+        self.index_in_block += n;
+        // self.flat_index += n;
 
         self
     }
 
     #[inline(always)]
     pub fn add_fixed(mut self, n: usize, block_size: usize) -> Self {
-        self.flat_index += n;
+        self.block_index += (self.index_in_block + n) / block_size;
+        self.index_in_block = (self.index_in_block + n) % block_size;
+        // self.flat_index += n;
 
         self
     }
 
     #[inline(always)]
     pub fn add_mut_fixed(&mut self, n: usize, block_size: usize) {
-        self.flat_index += n;
+        self.block_index += (self.index_in_block + n) / block_size;
+        self.index_in_block = (self.index_in_block + n) % block_size;
+        // self.flat_index += n;
     }
 
     #[inline(always)]
     pub fn next_fixed(mut self, block_size: usize) -> Self {
-        self.flat_index += 1;
+        self.block_index += ((self.index_in_block + 1) == block_size) as usize;
+        self.index_in_block = (self.index_in_block + 1) % block_size;
+        // self.flat_index += 1;
 
         self
     }
 
     #[inline(always)]
     pub fn next_mut_fixed(&mut self, block_size: usize) {
-        self.flat_index += 1;
+        self.block_index += ((self.index_in_block + 1) == block_size) as usize;
+        self.index_in_block = (self.index_in_block + 1) % block_size;
+        // self.flat_index += 1;
     }
 
     #[inline(always)]
     pub fn prev_fixed(mut self, block_size: usize) -> Self {
-        self.flat_index -= 1;
+        self.block_index -= (self.index_in_block == 0) as usize;
+        self.index_in_block = self.index_in_block.wrapping_sub(1).min(block_size - 1);
+        // self.flat_index -= 1;
 
         self
     }
 
     #[inline(always)]
     pub fn prev_mut_fixed(&mut self, block_size: usize) {
-        self.flat_index -= 1;
+        self.block_index -= (self.index_in_block == 0) as usize;
+        self.index_in_block = self.index_in_block.wrapping_sub(1).min(block_size - 1);
+        // self.flat_index -= 1;
     }
 
     #[inline(always)]
     pub fn prev_block(mut self, block_size: usize) -> Self {
-        self.flat_index -= block_size;
+        self.block_index -= 1;
+        // self.flat_index -= block_size;
 
         self
     }
 
     #[inline(always)]
     pub fn prev_block_saturate(mut self, block_size: usize) -> Self {
-        self.flat_index = self.flat_index.saturating_sub(block_size);
+        self.block_index = self.block_index.saturating_sub(1);
+        // self.flat_index = self.flat_index.saturating_sub(block_size);
 
         self
     }
 
     #[inline(always)]
     pub fn prev_block_checked(mut self, block_size: usize) -> Option<Self> {
-        self.flat_index.checked_sub(block_size).map(|f| {
-            self.flat_index = f;
-
+        self.block_index.checked_sub(1).map(|block_index| {
+            self.block_index = block_index;
             self
         })
+        // self.flat_index.checked_sub(block_size).map(|f| {
+        //     self.flat_index = f;
+        //
+        //     self
+        // })
     }
 
     #[inline(always)]
     pub fn sub(mut self, rhs: Self, batch_size: usize) -> Self {
-        self.flat_index -= rhs.flat_index;
-        self
+        if self.index_in_block >= rhs.index_in_block {
+            BlocksIndex::new(self.block_index - rhs.block_index, self.index_in_block - rhs.index_in_block)
+        } else {
+            BlocksIndex::new(self.block_index - rhs.block_index - 1, batch_size - (rhs.index_in_block - self.index_in_block))
+        }
+        // self.flat_index -= rhs.flat_index;
+        // self
     }
 
     pub fn sub_flat(mut self, rhs_flat: usize, batch_size: usize) -> Self {
-        self.flat_index -= rhs_flat;
+        BlocksIndex::from_index_in_fixed_block_size(self.into_index_in_fixed_block_size(batch_size) - rhs_flat, batch_size)
 
-        self
+        // self.flat_index -= rhs_flat;
+
+        // self
     }
 
     pub fn sub_flat_checked(
@@ -677,16 +710,25 @@ impl BlocksIndex {
         rhs_flat: usize,
         batch_size: usize,
     ) -> Option<Self> {
-        if let Some(res) = self.flat_index.checked_sub(rhs_flat) {
-            self.flat_index = res;
-            Some(self)
-        } else {
-            None
-        }
+        Some(BlocksIndex::from_index_in_fixed_block_size(self.into_index_in_fixed_block_size(batch_size).checked_sub(rhs_flat)?, batch_size))
+
+        // if let Some(res) = self.flat_index.checked_sub(rhs_flat) {
+        //     self.flat_index = res;
+        //     Some(self)
+        // } else {
+        //     None
+        // }
     }
 
     pub fn sub_assign(&mut self, rhs: Self, batch_size: usize) {
-        self.flat_index -= rhs.flat_index;
+        if self.index_in_block >= rhs.index_in_block {
+            self.block_index -= rhs.block_index;
+            self.index_in_block -= rhs.index_in_block;
+        } else {
+            self.block_index = self.block_index - rhs.block_index - 1;
+            self.index_in_block = batch_size - (rhs.index_in_block - self.index_in_block);
+        }
+        // self.flat_index -= rhs.flat_index;
     }
 }
 
@@ -698,8 +740,8 @@ impl PartialOrd for BlocksIndex {
 
 impl Ord for BlocksIndex {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.flat_index.cmp(&other.flat_index)
-        // self.block_index.cmp(&other.block_index).then(self.index_in_block.cmp(&other.index_in_block))
+        // self.flat_index.cmp(&other.flat_index)
+        self.block_index.cmp(&other.block_index).then(self.index_in_block.cmp(&other.index_in_block))
     }
 }
 
