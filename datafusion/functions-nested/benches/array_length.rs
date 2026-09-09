@@ -19,7 +19,7 @@ use arrow::array::{ArrayRef, FixedSizeListArray, Int32Array, ListArray};
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field};
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use datafusion_common::{ScalarValue, config::ConfigOptions};
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions_nested::length::array_length_udf;
 use std::hint::black_box;
@@ -44,18 +44,14 @@ fn bench_array_length(c: &mut Criterion) {
     let fixed =
         Arc::new(FixedSizeListArray::new(field, width as i32, values, None)) as ArrayRef;
 
-    for (name, array, explicit_dimension) in [
-        ("list/default", Arc::clone(&flat), false),
-        ("list/dimension_1", Arc::clone(&flat), true),
-        ("fixed_size_list/default", fixed, false),
-        ("list/default", flat.slice(0, 1), false),
+    for (name, array) in [
+        ("list", Arc::clone(&flat)),
+        ("fixed_size_list", fixed),
+        ("list", flat.slice(0, 1)),
     ] {
         let number_rows = array.len();
         let id = BenchmarkId::new(name, number_rows);
-        let mut args = vec![ColumnarValue::Array(array)];
-        if explicit_dimension {
-            args.push(ColumnarValue::Scalar(ScalarValue::Int64(Some(1))));
-        }
+        let args = vec![ColumnarValue::Array(array)];
         let arg_fields: Vec<_> = args
             .iter()
             .map(|arg| Arc::new(Field::new("arg", arg.data_type(), true)))
