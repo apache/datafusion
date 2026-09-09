@@ -2489,6 +2489,7 @@ mod tests {
         interval_arithmetic::Interval,
         *,
     };
+    use datafusion_functions_aggregate::min_max::min_udaf;
     use datafusion_functions_window_common::field::WindowUDFFieldArgs;
     use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
     use datafusion_physical_expr::PhysicalExpr;
@@ -5393,6 +5394,23 @@ mod tests {
 
         let expected = aggregate_function_expr.clone();
         assert_eq!(simplify(aggregate_function_expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_min_drops_distinct() {
+        let min_agg = |distinct: bool| {
+            Expr::AggregateFunction(expr::AggregateFunction::new_udf(
+                min_udaf(),
+                vec![col("c3")],
+                distinct,
+                None,
+                vec![],
+                None,
+            ))
+        };
+
+        let simplified = simplify(min_agg(true));
+        assert_eq!(simplified, min_agg(false));
     }
 
     /// A Mock UDAF which defines `simplify` to be used in tests

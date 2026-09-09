@@ -131,7 +131,7 @@ EXPLAIN SELECT g, count(*) AS records, min(DISTINCT v) AS distinct_min_v FROM t 
 ----
 logical_plan
 01)Projection: t.g, count(Int64(1)) AS count(*) AS records, min(DISTINCT t.v) AS distinct_min_v
-02)--Aggregate: groupBy=[[t.g]], aggr=[[count(Int64(1)), min(DISTINCT t.v)]]
+02)--Aggregate: groupBy=[[t.g]], aggr=[[count(Int64(1)), min(t.v) AS min(DISTINCT t.v)]]
 03)----TableScan: t projection=[g, v]
 
 # The gate covers only the count. A plan that already qualified through sum,
