@@ -705,11 +705,12 @@ impl<'a> DFParser<'a> {
                         self.parser.next_token(); // RESET
                         self.parse_reset()
                     }
-                    Keyword::DROP if self.peek_drop_external_catalog() => {
-                        self.parser.next_token(); // DROP
-                        self.parser.next_token(); // EXTERNAL
-                        self.parser.next_token(); // CATALOG
-                        self.parse_drop_external_catalog()
+                    Keyword::DROP
+                        if self
+                            .parser
+                            .parse_keywords(&vec![Keyword::DROP, Keyword::CATALOG]) =>
+                    {
+                        self.parse_drop_catalog()
                     }
                     _ => {
                         // use sqlparser-rs parser
@@ -1419,27 +1420,8 @@ impl<'a> DFParser<'a> {
         }))
     }
 
-    /// Returns `true` if the upcoming tokens are `DROP EXTERNAL CATALOG`,
-    /// without consuming any tokens.
-    fn peek_drop_external_catalog(&mut self) -> bool {
-        matches!(
-            self.parser.peek_nth_token(1).token,
-            Token::Word(Word {
-                keyword: Keyword::EXTERNAL,
-                ..
-            })
-        ) && matches!(
-            self.parser.peek_nth_token(2).token,
-            Token::Word(Word {
-                keyword: Keyword::CATALOG,
-                ..
-            })
-        )
-    }
-
-    /// Parses a `DROP EXTERNAL CATALOG` statement, with `DROP EXTERNAL
-    /// CATALOG` already consumed.
-    fn parse_drop_external_catalog(&mut self) -> Result<Statement, DataFusionError> {
+    /// Parses a `DROP CATALOG` statement, with `DROP CATALOG` already consumed.
+    fn parse_drop_catalog(&mut self) -> Result<Statement, DataFusionError> {
         let if_exists = self.parser.parse_keywords(&[Keyword::IF, Keyword::EXISTS]);
         let name = self.parser.parse_object_name(true)?;
         Ok(Statement::DropCatalog(DropCatalog { name, if_exists }))
@@ -2108,7 +2090,7 @@ mod tests {
     }
 
     #[test]
-    fn drop_external_catalog() -> Result<(), DataFusionError> {
+    fn drop_catalog() -> Result<(), DataFusionError> {
         let sql = "DROP CATALOG c";
         let expected = Statement::DropCatalog(DropCatalog {
             name: ObjectName::from(vec![Ident::from("c")]),
