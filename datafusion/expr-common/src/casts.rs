@@ -134,7 +134,9 @@ fn is_lossy_temporal_cast(from_type: &DataType, to_type: &DataType) -> bool {
         (from_type, to_type)
     {
         match (from_tz, to_tz) {
-            (Some(tz), None) | (None, Some(tz)) if !is_zero_offset_timezone(tz.as_ref()) => {
+            (Some(tz), None) | (None, Some(tz))
+                if !is_zero_offset_timezone(tz.as_ref()) =>
+            {
                 return true;
             }
             _ => {}
