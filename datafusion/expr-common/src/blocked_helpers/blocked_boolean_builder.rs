@@ -121,6 +121,7 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedBooleanBuilder<FIXED_BLOCK_SIZING> {
         }
     }
 
+    #[inline]
     pub fn append(&mut self, is_set: bool) {
         let block = &mut self.blocks[self.current_block_index];
 
@@ -132,11 +133,13 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedBooleanBuilder<FIXED_BLOCK_SIZING> {
         }
     }
 
+    #[inline]
     pub fn get_bit(&self, blocked_index: BlocksIndex) -> bool {
         self.blocks[blocked_index.block_index(self.block_size)]
             .get_bit(blocked_index.index_in_block(self.block_size))
     }
 
+    #[inline]
     pub fn set_bit(&mut self, blocked_index: BlocksIndex, is_set: bool) {
         self.blocks[blocked_index.block_index(self.block_size)]
             .set_bit(blocked_index.index_in_block(self.block_size), is_set)
