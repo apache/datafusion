@@ -46,7 +46,6 @@ tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] 
 
 [dev-dependencies]
 arrow-flight = { workspace = true }
-async-trait = { workspace = true }
 bytes = { workspace = true }
 dashmap = { workspace = true }
 # note only use main datafusion crate for examples

@@ -26,7 +26,6 @@ use crate::extensions::Extensions;
 use crate::logical_plan::consumer::{
     field_from_substrait_type_without_names, from_lambda,
 };
-use async_trait::async_trait;
 use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion::catalog::TableProvider;
 use datafusion::common::datatype::FieldExt;
@@ -59,13 +58,13 @@ use substrait::proto::{
 /// # Example Usage
 ///
 /// ```
-/// # use async_trait::async_trait;
-/// # use datafusion::catalog::TableProvider;
+/// # /// # use datafusion::catalog::TableProvider;
 /// # use datafusion::common::{not_impl_err, substrait_err, DFSchema, ScalarValue, TableReference};
 /// # use datafusion::error::Result;
 /// # use datafusion::execution::{FunctionRegistry, SessionState};
 /// # use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 /// # use std::sync::Arc;
+/// # use futures::future::BoxFuture;
 /// # use substrait::proto;
 /// # use substrait::proto::{ExtensionLeafRel, FilterRel, ProjectRel, Type};
 /// # use datafusion::arrow::datatypes::DataType;
@@ -82,16 +81,17 @@ use substrait::proto::{
 ///     lambda_consumer: DefaultSubstraitLambdaConsumer,
 /// }
 ///
-/// #[async_trait]
 /// impl SubstraitConsumer for CustomSubstraitConsumer {
-///     async fn resolve_table_ref(
-///         &self,
-///         table_ref: &TableReference,
-///     ) -> Result<Option<Arc<dyn TableProvider>>> {
-///         let table = table_ref.table().to_string();
-///         let schema = self.state.schema_for_ref(table_ref.clone())?;
-///         let table_provider = schema.table(&table).await?;
-///         Ok(table_provider)
+///     fn resolve_table_ref<'a>(
+///         &'a self,
+///         table_ref: &'a TableReference,
+///     ) -> BoxFuture<'a, Result<Option<Arc<dyn TableProvider>>>> {
+///         Box::pin(async move {
+///             let table = table_ref.table().to_string();
+///             let schema = self.state.schema_for_ref(table_ref.clone())?;
+///             let table_provider = schema.table(&table).await?;
+///             Ok(table_provider)
+///         })
 ///     }
 ///
 ///     fn get_extensions(&self) -> &Extensions {
@@ -127,37 +127,49 @@ use substrait::proto::{
 ///    }
 ///
 ///     // You can reuse existing consumer code to assist in handling advanced extensions
-///     async fn consume_project(&self, rel: &ProjectRel) -> Result<LogicalPlan> {
-///         let df_plan = from_project_rel(self, rel).await?;
-///         if let Some(advanced_extension) = rel.advanced_extension.as_ref() {
-///             not_impl_err!(
-///                 "decode and handle an advanced extension: {:?}",
-///                 advanced_extension
-///             )
-///         } else {
-///             Ok(df_plan)
-///         }
+///     fn consume_project<'a>(
+///         &'a self,
+///         rel: &'a ProjectRel,
+///     ) -> BoxFuture<'a, Result<LogicalPlan>> {
+///         Box::pin(async move {
+///             let df_plan = from_project_rel(self, rel).await?;
+///             if let Some(advanced_extension) = rel.advanced_extension.as_ref() {
+///                 not_impl_err!(
+///                     "decode and handle an advanced extension: {:?}",
+///                     advanced_extension
+///                 )
+///             } else {
+///                 Ok(df_plan)
+///             }
+///         })
 ///     }
 ///
 ///     // You can implement a fully custom consumer method if you need special handling
-///     async fn consume_filter(&self, rel: &FilterRel) -> Result<LogicalPlan> {
-///         let input = self.consume_rel(rel.input.as_ref().unwrap()).await?;
-///         let expression =
-///             self.consume_expression(rel.condition.as_ref().unwrap(), input.schema())
-///                 .await?;
-///         // though this one is quite boring
-///         LogicalPlanBuilder::from(input).filter(expression)?.build()
+///     fn consume_filter<'a>(
+///         &'a self,
+///         rel: &'a FilterRel,
+///     ) -> BoxFuture<'a, Result<LogicalPlan>> {
+///         Box::pin(async move {
+///             let input = self.consume_rel(rel.input.as_ref().unwrap()).await?;
+///             let expression =
+///                 self.consume_expression(rel.condition.as_ref().unwrap(), input.schema())
+///                     .await?;
+///             // though this one is quite boring
+///             LogicalPlanBuilder::from(input).filter(expression)?.build()
+///         })
 ///     }
 ///
 ///     // You can add handlers for extension relations
-///     async fn consume_extension_leaf(
-///         &self,
-///         rel: &ExtensionLeafRel,
-///     ) -> Result<LogicalPlan> {
-///         not_impl_err!(
-///             "handle protobuf Any {} as you need",
-///             rel.detail.as_ref().unwrap().type_url
-///         )
+///     fn consume_extension_leaf<'a>(
+///         &'a self,
+///         rel: &'a ExtensionLeafRel,
+///     ) -> BoxFuture<'a, Result<LogicalPlan>> {
+///         Box::pin(async move {
+///             not_impl_err!(
+///                 "handle protobuf Any {} as you need",
+///                 rel.detail.as_ref().unwrap().type_url
+///             )
+///         })
 ///     }
 ///
 ///     // and handlers for user-define types

@@ -41,7 +41,6 @@ name = "datafusion_sqllogictest"
 
 [dependencies]
 arrow = { workspace = true }
-async-trait = { workspace = true }
 bigdecimal = { workspace = true }
 bytes = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }

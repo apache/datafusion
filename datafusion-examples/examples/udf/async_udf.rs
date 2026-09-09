@@ -158,7 +158,7 @@ impl AskLLM {
 
 /// All async UDFs implement the `ScalarUDFImpl` trait, which provides the basic
 /// information for the function, such as its name, signature, and return type.
-/// [async_trait]
+
 impl ScalarUDFImpl for AskLLM {
     fn name(&self) -> &str {
         "ask_llm"

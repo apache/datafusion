@@ -35,7 +35,6 @@ workspace = true
 
 [dependencies]
 async-recursion = "1.0"
-async-trait = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
 datafusion = { workspace = true, features = ["sql"] }

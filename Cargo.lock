@@ -1704,7 +1704,6 @@ version = "55.0.0"
 dependencies = [
  "arrow",
  "arrow-schema",
- "async-trait",
  "bytes",
  "bzip2",
  "chrono",
@@ -1809,7 +1808,6 @@ name = "datafusion-catalog"
 version = "55.0.0"
 dependencies = [
  "arrow",
- "async-trait",
  "dashmap",
  "datafusion-common",
  "datafusion-common-runtime",
@@ -1832,7 +1830,6 @@ name = "datafusion-catalog-listing"
 version = "55.0.0"
 dependencies = [
  "arrow",
- "async-trait",
  "chrono",
  "datafusion-catalog",
  "datafusion-common",
@@ -1856,7 +1853,6 @@ name = "datafusion-cli"
 version = "55.0.0"
 dependencies = [
  "arrow",
- "async-trait",
  "aws-config",
  "aws-credential-types",
  "chrono",
@@ -1928,7 +1924,6 @@ version = "55.0.0"
 dependencies = [
  "arrow",
  "async-compression",
- "async-trait",
  "bytes",
  "bzip2",
  "chrono",
@@ -1967,7 +1962,6 @@ version = "55.0.0"
 dependencies = [
  "arrow",
  "arrow-ipc",
- "async-trait",
  "bytes",
  "chrono",
  "datafusion-common",
@@ -1991,7 +1985,6 @@ version = "55.0.0"
 dependencies = [
  "arrow",
  "arrow-avro",
- "async-trait",
  "bytes",
  "datafusion-common",
  "datafusion-common-runtime",
@@ -2013,7 +2006,6 @@ name = "datafusion-datasource-csv"
 version = "55.0.0"
 dependencies = [
  "arrow",
- "async-trait",
  "bytes",
  "datafusion-common",
  "datafusion-common-runtime",
@@ -2035,7 +2027,6 @@ name = "datafusion-datasource-json"
 version = "55.0.0"
 dependencies = [
  "arrow",
- "async-trait",
  "bytes",
  "datafusion-common",
  "datafusion-common-runtime",
@@ -2059,7 +2050,6 @@ version = "55.0.0"
 dependencies = [
  "arrow",
  "arrow-schema",
- "async-trait",
  "bytes",
  "chrono",
  "criterion",
@@ -2099,7 +2089,6 @@ dependencies = [
  "arrow",
  "arrow-flight",
  "arrow-schema",
- "async-trait",
  "base64 0.23.1",
  "bytes",
  "dashmap",
@@ -2139,7 +2128,6 @@ version = "55.0.0"
 dependencies = [
  "arrow",
  "arrow-buffer",
- "async-trait",
  "bytes",
  "chrono",
  "dashmap",
@@ -2166,7 +2154,6 @@ version = "55.0.0"
 dependencies = [
  "arrow",
  "arrow-schema",
- "async-trait",
  "chrono",
  "ctor",
  "datafusion-common",
@@ -2206,7 +2193,6 @@ dependencies = [
  "arrow",
  "arrow-schema",
  "async-ffi",
- "async-trait",
  "chrono",
  "datafusion",
  "datafusion-catalog",
@@ -2334,7 +2320,6 @@ name = "datafusion-functions-table"
 version = "55.0.0"
 dependencies = [
  "arrow",
- "async-trait",
  "datafusion-catalog",
  "datafusion-common",
  "datafusion-expr",
@@ -2382,7 +2367,6 @@ name = "datafusion-optimizer"
 version = "55.0.0"
 dependencies = [
  "arrow",
- "async-trait",
  "chrono",
  "criterion",
  "ctor",
@@ -2494,7 +2478,6 @@ dependencies = [
  "arrow-ipc",
  "arrow-ord",
  "arrow-schema",
- "async-trait",
  "bytes",
  "criterion",
  "datafusion-common",
@@ -2533,7 +2516,6 @@ name = "datafusion-proto"
 version = "55.0.0"
 dependencies = [
  "arrow",
- "async-trait",
  "datafusion",
  "datafusion-catalog",
  "datafusion-catalog-listing",
@@ -2615,7 +2597,6 @@ name = "datafusion-session"
 version = "55.0.0"
 dependencies = [
  "arrow-schema",
- "async-trait",
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
@@ -2685,7 +2666,6 @@ name = "datafusion-sqllogictest"
 version = "55.0.0"
 dependencies = [
  "arrow",
- "async-trait",
  "bigdecimal",
  "bytes",
  "chrono",
@@ -2718,7 +2698,6 @@ name = "datafusion-substrait"
 version = "55.0.0"
 dependencies = [
  "async-recursion",
- "async-trait",
  "chrono",
  "datafusion",
  "datafusion-functions-aggregate",

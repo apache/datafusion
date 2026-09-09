@@ -17,7 +17,6 @@
 
 //! Default TableSource implementation used in DataFusion physical plans
 
-use futures::future::BoxFuture;
 use std::borrow::Cow;
 use std::sync::Arc;
 
@@ -101,6 +100,7 @@ pub fn source_as_provider(
 #[test]
 fn preserves_table_type() {
     use datafusion_common::DataFusionError;
+    use futures::future::BoxFuture;
 
     #[derive(Debug)]
     struct TestTempTable;

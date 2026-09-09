@@ -18,6 +18,7 @@
 //! Shows an example of a custom session context that unions the input plan with itself.
 //! To run this example, use `cargo run --example cli-session-context` from within the `datafusion-cli` directory.
 
+use futures::future::BoxFuture;
 use std::sync::Arc;
 
 use datafusion::{
@@ -47,7 +48,6 @@ impl Default for MyUnionerContext {
     }
 }
 
-#[async_trait::async_trait]
 impl CliSessionContext for MyUnionerContext {
     fn task_ctx(&self) -> Arc<TaskContext> {
         self.ctx.task_ctx()
@@ -69,15 +69,17 @@ impl CliSessionContext for MyUnionerContext {
         unimplemented!()
     }
 
-    async fn execute_logical_plan(
+    fn execute_logical_plan(
         &self,
         plan: LogicalPlan,
-    ) -> Result<DataFrame, DataFusionError> {
-        let new_plan = LogicalPlanBuilder::from(plan.clone())
-            .union(plan.clone())?
-            .build()?;
+    ) -> BoxFuture<'_, Result<DataFrame, DataFusionError>> {
+        Box::pin(async move {
+            let new_plan = LogicalPlanBuilder::from(plan.clone())
+                .union(plan.clone())?
+                .build()?;
 
-        self.ctx.execute_logical_plan(new_plan).await
+            self.ctx.execute_logical_plan(new_plan).await
+        })
     }
 }
 

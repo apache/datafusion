@@ -24,11 +24,11 @@ use datafusion::{
     logical_expr::LogicalPlan,
     prelude::SessionContext,
 };
+use futures::future::BoxFuture;
 use object_store::ObjectStore;
 
 use crate::object_storage::{AwsOptions, GcpOptions};
 
-#[async_trait::async_trait]
 /// The CLI session context trait provides a way to have a session context that can be used with datafusion's CLI code.
 pub trait CliSessionContext {
     /// Get an atomic reference counted task context.
@@ -48,13 +48,12 @@ pub trait CliSessionContext {
     fn register_table_options_extension_from_scheme(&self, scheme: &str);
 
     /// Execute a logical plan and return a DataFrame.
-    async fn execute_logical_plan(
+    fn execute_logical_plan(
         &self,
         plan: LogicalPlan,
-    ) -> Result<DataFrame, DataFusionError>;
+    ) -> BoxFuture<'_, Result<DataFrame, DataFusionError>>;
 }
 
-#[async_trait::async_trait]
 impl CliSessionContext for SessionContext {
     fn task_ctx(&self) -> Arc<TaskContext> {
         self.task_ctx()
@@ -89,10 +88,10 @@ impl CliSessionContext for SessionContext {
         }
     }
 
-    async fn execute_logical_plan(
+    fn execute_logical_plan(
         &self,
         plan: LogicalPlan,
-    ) -> Result<DataFrame, DataFusionError> {
-        self.execute_logical_plan(plan).await
+    ) -> BoxFuture<'_, Result<DataFrame, DataFusionError>> {
+        Box::pin(async move { self.execute_logical_plan(plan).await })
     }
 }

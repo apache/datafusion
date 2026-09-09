@@ -120,7 +120,6 @@ extended_tests = []
 [dependencies]
 arrow = { workspace = true }
 arrow-schema = { workspace = true, features = ["canonical_extension_types"] }
-async-trait = { workspace = true }
 bzip2 = { workspace = true, optional = true }
 chrono = { workspace = true }
 datafusion-catalog = { workspace = true }
@@ -167,7 +166,6 @@ uuid = { workspace = true, features = ["v4", "js"] }
 zstd = { workspace = true, optional = true }
 
 [dev-dependencies]
-async-trait = { workspace = true }
 criterion = { workspace = true, features = ["async_tokio", "async_futures"] }
 ctor = { workspace = true }
 dashmap = "6.2.1"
