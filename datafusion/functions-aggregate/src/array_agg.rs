@@ -1486,6 +1486,14 @@ mod tests {
     use datafusion_physical_expr::expressions::Column;
 
     #[test]
+    fn distinct_accumulator_preserves_unwind_auto_traits() {
+        fn assert_unwind_traits<T: std::panic::UnwindSafe + std::panic::RefUnwindSafe>() {
+        }
+
+        assert_unwind_traits::<DistinctArrayAggAccumulator>();
+    }
+
+    #[test]
     fn distinct_accumulator_size_includes_metric_handle() -> Result<()> {
         let accumulator =
             DistinctArrayAggAccumulator::try_new(&DataType::Int32, None, false)?;

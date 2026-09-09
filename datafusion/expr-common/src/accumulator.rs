@@ -27,7 +27,7 @@ use std::time::Duration;
 ///
 /// Aggregate implementations use this interface for optional internal
 /// subphases. The execution engine owns metric registration and aggregation.
-pub trait AggregateMetric: Debug + Send + Sync {
+pub trait AggregateMetric: Debug + Send + Sync + std::panic::RefUnwindSafe {
     /// Adds elapsed time to this metric.
     fn add_duration(&self, duration: Duration);
 }
