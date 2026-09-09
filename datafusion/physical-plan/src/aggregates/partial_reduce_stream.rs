@@ -16,11 +16,6 @@
 // under the License.
 
 //! Partial-reduce hash aggregation stream implementation.
-//!
-//! This stream is part of the incremental migration from
-//! [`crate::aggregates::grouped_hash_stream::GroupedHashAggregateStream`].
-//!
-//! See issue for details: <https://github.com/apache/datafusion/issues/22710>
 
 use std::ops::ControlFlow;
 use std::sync::Arc;
@@ -203,6 +198,10 @@ impl PartialReduceHashAggregateStream {
 
         let reservation =
             MemoryConsumer::new(format!("PartialReduceHashAggregateStream[{partition}]"))
+                // We interpret 'can spill' as 'can handle memory back pressure'.
+                // This value needs to be set to true for the default memory pool implementations
+                // to ensure fair application of back pressure amongst the memory consumers.
+                .with_can_spill(true)
                 .register(context.memory_pool());
 
         Ok(Self {
