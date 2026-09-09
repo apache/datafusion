@@ -716,7 +716,7 @@ example, to configure <code class="docutils literal notranslate"><span class="pr
 </tr>
 <tr class="row-even"><td><p>datafusion.execution.enable_migration_aggregate</p></td>
 <td><p>true</p></td>
-<td><p>Temporary switch for aggregate stream implementations that are being migrated from <code class="docutils literal notranslate"><span class="pre">GroupedHashAggregateStream</span></code>. When set to true, DataFusion tries the migrated implementations when their preconditions are satisfied. When set to false, grouped aggregation falls back to <code class="docutils literal notranslate"><span class="pre">GroupedHashAggregateStream</span></code>. This option will be removed after the migration is finished. See <a class="github reference external" href="https://github.com/apache/datafusion/issues/22710">apache/datafusion#22710</a> for details.</p></td>
+<td><p>Whether aggregation uses the implementation from the major refactor completed in the 56.0.0 release. When set to <code class="docutils literal notranslate"><span class="pre">false</span></code>, aggregation falls back to the implementation used before 55.0.0. The fallback exists only as a workaround for bugs in the new implementation and will be removed, together with this option, after the 56.0.0 release. See <a class="github reference external" href="https://github.com/apache/datafusion/issues/22710">apache/datafusion#22710</a> for details.</p></td>
 </tr>
 <tr class="row-odd"><td><p>datafusion.execution.spill_compression</p></td>
 <td><p>uncompressed</p></td>
