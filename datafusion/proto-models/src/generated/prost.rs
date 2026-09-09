@@ -1959,6 +1959,10 @@ pub struct FileScanExecConf {
         tag = "16"
     )]
     pub file_compression_type: ::core::option::Option<i32>,
+    /// Whether file processing order must be preserved. Absent payloads retain the
+    /// legacy behavior of deriving this from output_ordering.
+    #[prost(bool, optional, tag = "17")]
+    pub preserve_order: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ParquetScanExecNode {
@@ -2640,6 +2644,12 @@ pub struct PhysicalScalarSubqueryExprNode {
     pub nullable: bool,
     #[prost(uint32, tag = "3")]
     pub index: u32,
+    /// Serialized separately from data_type to keep older wire formats valid.
+    #[prost(map = "string, string", tag = "4")]
+    pub metadata: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
 }
 /// Identifies a built-in file format supported by DataFusion.
 /// Used by DefaultLogicalExtensionCodec to serialize/deserialize
