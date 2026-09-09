@@ -857,6 +857,12 @@ pub struct DistinctArrayAggAccumulator {
     distinct_metric: Option<Arc<dyn AggregateMetric>>,
 }
 
+/// Avoid per-group timer overhead when the adapter calls us with a tiny batch.
+///
+/// Batches below this threshold are not large enough for a useful timing
+/// sample, while timing each one adds two clock reads and an atomic update.
+const DISTINCT_METRIC_MIN_BATCH_SIZE: usize = 16;
+
 /// Returns `true` if `dt` is, or recursively contains, a `Dictionary` type.
 ///
 /// `RowConverter` always decodes to the physical (non-dictionary) type, so a
@@ -955,7 +961,10 @@ impl Accumulator for DistinctArrayAggAccumulator {
             return Ok(());
         }
 
-        let distinct_start = self.distinct_metric.is_some().then(Instant::now);
+        let distinct_metric = (col.len() >= DISTINCT_METRIC_MIN_BATCH_SIZE)
+            .then(|| self.distinct_metric.as_ref().cloned())
+            .flatten();
+        let distinct_start = distinct_metric.as_ref().map(|_| Instant::now());
         self.ensure_state(col.data_type())?;
 
         // Encode the entire incoming batch into rows_buffer in one pass.
@@ -1002,7 +1011,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
                 }
             }
         }
-        if let (Some(metric), Some(start)) = (&self.distinct_metric, distinct_start) {
+        if let (Some(metric), Some(start)) = (distinct_metric, distinct_start) {
             metric.add_duration(start.elapsed());
         }
         Ok(())
@@ -1484,6 +1493,58 @@ mod tests {
     use datafusion_common::internal_err;
     use datafusion_physical_expr::PhysicalExpr;
     use datafusion_physical_expr::expressions::Column;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Debug)]
+    struct CountingMetric(Arc<AtomicUsize>);
+
+    impl AggregateMetric for CountingMetric {
+        fn add_duration(&self, _duration: std::time::Duration) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[derive(Debug)]
+    struct CountingMetrics(Arc<AtomicUsize>);
+
+    impl AggregateMetrics for CountingMetrics {
+        fn metric(&self, _subphase: &'static str) -> Arc<dyn AggregateMetric> {
+            Arc::new(CountingMetric(Arc::clone(&self.0)))
+        }
+    }
+
+    #[test]
+    fn distinct_accumulator_skips_metric_for_small_batches() -> Result<()> {
+        let metric_updates = Arc::new(AtomicUsize::new(0));
+        let mut accumulator =
+            DistinctArrayAggAccumulator::try_new(&DataType::Int32, None, false)?;
+        accumulator.set_metrics(Arc::new(CountingMetrics(Arc::clone(&metric_updates))));
+
+        accumulator.update_batch(&[Arc::new(Int32Array::from(vec![
+            1;
+            DISTINCT_METRIC_MIN_BATCH_SIZE
+                - 1
+        ]))])?;
+
+        assert_eq!(metric_updates.load(Ordering::Relaxed), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_accumulator_records_metric_for_large_batches() -> Result<()> {
+        let metric_updates = Arc::new(AtomicUsize::new(0));
+        let mut accumulator =
+            DistinctArrayAggAccumulator::try_new(&DataType::Int32, None, false)?;
+        accumulator.set_metrics(Arc::new(CountingMetrics(Arc::clone(&metric_updates))));
+
+        accumulator.update_batch(&[Arc::new(Int32Array::from(vec![
+            1;
+            DISTINCT_METRIC_MIN_BATCH_SIZE
+        ]))])?;
+
+        assert_eq!(metric_updates.load(Ordering::Relaxed), 1);
+        Ok(())
+    }
 
     #[test]
     fn distinct_accumulator_preserves_unwind_auto_traits() {
