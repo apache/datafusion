@@ -20,12 +20,16 @@
 use crate::binary_map::OutputType;
 use arrow::array::NullBufferBuilder;
 use arrow::array::cast::AsArray;
-use arrow::array::{Array, ArrayRef, BinaryViewArray, ByteView, make_view};
+use arrow::array::{
+    Array, ArrayRef, BinaryViewArray, BinaryViewBuilder, ByteView, StringViewBuilder,
+    make_view,
+};
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::{BinaryViewType, ByteViewType, DataType, StringViewType};
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
+use datafusion_common::{Result, exec_err};
 use std::fmt::Debug;
 use std::mem::size_of;
 use std::sync::Arc;
@@ -155,10 +159,13 @@ where
     V: Debug + PartialEq + Eq + Clone + Copy + Default,
 {
     pub fn new(output_type: OutputType) -> Self {
+        let map = hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY);
+        let map_size = map.capacity() * size_of::<Entry<V>>();
+
         Self {
             output_type,
-            map: hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY),
-            map_size: 0,
+            map,
+            map_size,
             views: Vec::new(),
             in_progress: Vec::new(),
             completed: Vec::new(),
@@ -231,7 +238,7 @@ where
                 )
             }
             _ => unreachable!("Utf8/Binary should use `ArrowBytesSet`"),
-        };
+        }
     }
 
     /// Generic version of [`Self::insert_if_new`] that handles `ByteViewType`
@@ -375,6 +382,25 @@ where
         }
     }
 
+    /// Returns the bytes for the key at `index`, irrespective of nullness.
+    fn key(&self, index: usize) -> &[u8] {
+        let view = &self.views[index];
+        let byte_view = ByteView::from(*view);
+        let length = byte_view.length as usize;
+        if length <= 12 {
+            // SAFETY: `view` is a valid inline view with `length` bytes.
+            unsafe { BinaryViewArray::inline_value(view, length) }
+        } else {
+            let buffer_index = byte_view.buffer_index as usize;
+            let offset = byte_view.offset as usize;
+            if buffer_index < self.completed.len() {
+                &self.completed[buffer_index][offset..offset + length]
+            } else {
+                &self.in_progress[offset..offset + length]
+            }
+        }
+    }
+
     /// Converts this set into a `StringViewArray`, or `BinaryViewArray`,
     /// containing each distinct value
     /// that was inserted. This is done without copying the values.
@@ -404,6 +430,47 @@ where
             }
             _ => unreachable!("Utf8/Binary should use `ArrowBytesMap`"),
         }
+    }
+
+    /// Copies keys at `indices` into an array without changing this map.
+    ///
+    /// Keys are returned in index order, and duplicate indices are supported.
+    pub fn keys<I>(&self, indices: I) -> Result<ArrayRef>
+    where
+        I: IntoIterator<Item = usize>,
+    {
+        let indices = indices.into_iter();
+        let capacity = indices.size_hint().0;
+        let num_keys = self.views.len();
+        let null_index = self.null.map(|(_, index)| index);
+
+        macro_rules! build_keys {
+            ($builder:ty, $value:expr) => {{
+                let mut builder = <$builder>::with_capacity(capacity);
+                for index in indices {
+                    if index >= num_keys {
+                        return exec_err!(
+                            "Key index {index} is out of bounds for {num_keys} keys"
+                        );
+                    }
+                    if null_index == Some(index) {
+                        builder.append_null();
+                    } else {
+                        builder.append_value($value(self.key(index)));
+                    }
+                }
+                Arc::new(builder.finish()) as ArrayRef
+            }};
+        }
+
+        Ok(match self.output_type {
+            OutputType::BinaryView => build_keys!(BinaryViewBuilder, |value| value),
+            OutputType::Utf8View => build_keys!(StringViewBuilder, |value| unsafe {
+                // Inputs to an Utf8View map are validated UTF-8.
+                std::str::from_utf8_unchecked(value)
+            }),
+            _ => unreachable!("Utf8/Binary should use `ArrowBytesMap`"),
+        })
     }
 
     /// Append an already-computed inline view (len <= 12) directly, bypassing
@@ -469,11 +536,14 @@ where
     }
 
     /// Return the total size, in bytes, of memory used to store the data in
-    /// this set, not including `self`
+    /// this set, not including `self` or input-array buffers.
     pub fn size(&self) -> usize {
-        let views_size = self.views.len() * size_of::<u128>();
-        let in_progress_size = self.in_progress.capacity();
-        let completed_size: usize = self.completed.iter().map(|b| b.len()).sum();
+        // All fields below own their allocations. Count retained capacity rather
+        // than used length because this value drives memory accounting.
+        let views_size = self.views.allocated_size();
+        let in_progress_size = self.in_progress.allocated_size();
+        let completed_size = self.completed.allocated_size()
+            + self.completed.iter().map(Buffer::capacity).sum::<usize>();
         let nulls_size = self.nulls.allocated_size();
 
         self.map_size
@@ -715,6 +785,74 @@ mod tests {
         assert_eq!(set.len(), 10);
     }
 
+    #[test]
+    fn test_size_counts_initial_hash_table_capacity() {
+        let map = ArrowBytesViewMap::<()>::new(OutputType::Utf8View);
+
+        assert_eq!(map.size(), map.map.capacity() * size_of::<Entry<()>>());
+    }
+
+    #[test]
+    fn test_size_counts_retained_buffer_capacities() {
+        let first = "a".repeat(BYTE_VIEW_MAX_BLOCK_SIZE / 2 + 1);
+        let second = "b".repeat(BYTE_VIEW_MAX_BLOCK_SIZE / 2 + 1);
+        let third = "c".repeat(BYTE_VIEW_MAX_BLOCK_SIZE / 2 + 1);
+        let values: ArrayRef = Arc::new(StringViewArray::from(vec![
+            first.as_str(),
+            second.as_str(),
+            third.as_str(),
+        ]));
+
+        let mut map = ArrowBytesViewMap::new(OutputType::Utf8View);
+        map.insert_if_new(&values, |_| (), |_| {});
+
+        // Make unused vector capacity explicit; the completed buffers were created
+        // by the map's flush path.
+        map.views.shrink_to_fit();
+        map.views.reserve_exact(1);
+        map.completed.shrink_to_fit();
+        map.completed.reserve_exact(1);
+
+        // The map owns these allocations; `values` and its Arrow buffers remain external.
+        assert!(map.views.capacity() > map.views.len());
+        assert!(map.completed.capacity() > map.completed.len());
+        assert!(
+            map.completed
+                .iter()
+                .any(|buffer| buffer.capacity() > buffer.len())
+        );
+
+        let expected_size = map.map_size
+            + map.views.allocated_size()
+            + map.in_progress.allocated_size()
+            + map.completed.allocated_size()
+            + map.completed.iter().map(Buffer::capacity).sum::<usize>()
+            + map.nulls.allocated_size()
+            + map.hashes_buffer.allocated_size();
+        assert_eq!(map.size(), expected_size);
+
+        // Verify the retained-capacity delta independently from the production formula.
+        let legacy_size = map.map_size
+            + map.views.len() * size_of::<u128>()
+            + map.in_progress.capacity()
+            + map.completed.iter().map(Buffer::len).sum::<usize>()
+            + map.nulls.allocated_size()
+            + map.hashes_buffer.allocated_size();
+        let retained_capacity_delta = (map.views.capacity() - map.views.len())
+            * size_of::<u128>()
+            + map.completed.capacity() * size_of::<Buffer>()
+            + map
+                .completed
+                .iter()
+                .map(|buffer| buffer.capacity() - buffer.len())
+                .sum::<usize>();
+        assert_eq!(map.size() - legacy_size, retained_capacity_delta);
+
+        let size_after_insert = map.size();
+        map.insert_if_new(&values, |_| (), |_| {});
+        assert_eq!(map.size(), size_after_insert);
+    }
+
     #[derive(Debug, PartialEq, Eq, Default, Clone, Copy)]
     struct TestPayload {
         // store the string value to check against input
@@ -752,7 +890,7 @@ mod tests {
             // update self with new values, keeping track of newly added values
             for str in strings {
                 let str = str.map(|s| s.to_string());
-                let index = self.indexes.get(&str).cloned().unwrap_or_else(|| {
+                let index = self.indexes.get(&str).copied().unwrap_or_else(|| {
                     actual_new_strings.push(str.clone());
                     let index = self.strings.len();
                     self.strings.push(str.clone());

@@ -685,7 +685,7 @@ fn date_bin_impl(
                 stride: i64,
                 stride_fn: BinFunction,
                 array: &ArrayRef,
-                tz_opt: &Option<Arc<str>>,
+                tz_opt: Option<&Arc<str>>,
             ) -> Result<ColumnarValue>
             where
                 T: ArrowTimestampType,
@@ -697,29 +697,45 @@ fn date_bin_impl(
                     date_bin_timestamp_value::<T>(val, origin, stride, stride_fn)
                 });
 
-                let array = result.with_timezone_opt(tz_opt.clone());
+                let array = result.with_timezone_opt(tz_opt.cloned());
                 Ok(ColumnarValue::Array(Arc::new(array)))
             }
 
             match array.data_type() {
                 Timestamp(Nanosecond, tz_opt) => {
                     transform_array_with_stride::<TimestampNanosecondType>(
-                        origin, stride, stride_fn, array, tz_opt,
+                        origin,
+                        stride,
+                        stride_fn,
+                        array,
+                        tz_opt.as_ref(),
                     )?
                 }
                 Timestamp(Microsecond, tz_opt) => {
                     transform_array_with_stride::<TimestampMicrosecondType>(
-                        origin, stride, stride_fn, array, tz_opt,
+                        origin,
+                        stride,
+                        stride_fn,
+                        array,
+                        tz_opt.as_ref(),
                     )?
                 }
                 Timestamp(Millisecond, tz_opt) => {
                     transform_array_with_stride::<TimestampMillisecondType>(
-                        origin, stride, stride_fn, array, tz_opt,
+                        origin,
+                        stride,
+                        stride_fn,
+                        array,
+                        tz_opt.as_ref(),
                     )?
                 }
                 Timestamp(Second, tz_opt) => {
                     transform_array_with_stride::<TimestampSecondType>(
-                        origin, stride, stride_fn, array, tz_opt,
+                        origin,
+                        stride,
+                        stride_fn,
+                        array,
+                        tz_opt.as_ref(),
                     )?
                 }
                 Time32(Millisecond) => {
@@ -1153,49 +1169,47 @@ mod tests {
             ),
         ];
 
-        cases
-            .iter()
-            .for_each(|(original, tz_opt, origin, expected)| {
-                let input = original
-                    .iter()
-                    .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
-                    .collect::<TimestampNanosecondArray>()
-                    .with_timezone_opt(tz_opt.clone());
-                let right = expected
-                    .iter()
-                    .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
-                    .collect::<TimestampNanosecondArray>()
-                    .with_timezone_opt(tz_opt.clone());
-                let batch_len = input.len();
-                let args = vec![
-                    ColumnarValue::Scalar(ScalarValue::new_interval_dt(1, 0)),
-                    ColumnarValue::Array(Arc::new(input)),
-                    ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
-                        Some(string_to_timestamp_nanos(origin).unwrap()),
-                        tz_opt.clone(),
-                    )),
-                ];
-                let return_field = &Arc::new(Field::new(
-                    "f",
-                    DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
-                    true,
-                ));
-                let result =
-                    invoke_date_bin_with_args(args, batch_len, return_field).unwrap();
+        for (original, tz_opt, origin, expected) in &cases {
+            let input = original
+                .iter()
+                .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
+                .collect::<TimestampNanosecondArray>()
+                .with_timezone_opt(tz_opt.clone());
+            let right = expected
+                .iter()
+                .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
+                .collect::<TimestampNanosecondArray>()
+                .with_timezone_opt(tz_opt.clone());
+            let batch_len = input.len();
+            let args = vec![
+                ColumnarValue::Scalar(ScalarValue::new_interval_dt(1, 0)),
+                ColumnarValue::Array(Arc::new(input)),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                    Some(string_to_timestamp_nanos(origin).unwrap()),
+                    tz_opt.clone(),
+                )),
+            ];
+            let return_field = &Arc::new(Field::new(
+                "f",
+                DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
+                true,
+            ));
+            let result =
+                invoke_date_bin_with_args(args, batch_len, return_field).unwrap();
 
-                if let ColumnarValue::Array(result) = result {
-                    assert_eq!(
-                        result.data_type(),
-                        &DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone())
-                    );
-                    let left = arrow::array::cast::as_primitive_array::<
-                        TimestampNanosecondType,
-                    >(&result);
-                    assert_eq!(left, &right);
-                } else {
-                    panic!("unexpected column type");
-                }
-            });
+            if let ColumnarValue::Array(result) = result {
+                assert_eq!(
+                    result.data_type(),
+                    &DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone())
+                );
+                let left = arrow::array::cast::as_primitive_array::<
+                    TimestampNanosecondType,
+                >(&result);
+                assert_eq!(left, &right);
+            } else {
+                panic!("unexpected column type");
+            }
+        }
     }
 
     #[test]
@@ -1243,18 +1257,16 @@ mod tests {
             ),
         ];
 
-        cases
-            .iter()
-            .for_each(|((stride, source, origin), expected)| {
-                let stride = stride.unwrap();
-                let stride1 = stride.num_nanoseconds().unwrap();
-                let source1 = string_to_timestamp_nanos(source).unwrap();
-                let origin1 = string_to_timestamp_nanos(origin).unwrap();
+        for ((stride, source, origin), expected) in &cases {
+            let stride = stride.unwrap();
+            let stride1 = stride.num_nanoseconds().unwrap();
+            let source1 = string_to_timestamp_nanos(source).unwrap();
+            let origin1 = string_to_timestamp_nanos(origin).unwrap();
 
-                let expected1 = string_to_timestamp_nanos(expected).unwrap();
-                let result = date_bin_nanos_interval(stride1, source1, origin1).unwrap();
-                assert_eq!(result, expected1, "{source} = {expected}");
-            })
+            let expected1 = string_to_timestamp_nanos(expected).unwrap();
+            let result = date_bin_nanos_interval(stride1, source1, origin1).unwrap();
+            assert_eq!(result, expected1, "{source} = {expected}");
+        }
     }
 
     #[test]
@@ -1274,7 +1286,7 @@ mod tests {
             ),
         ];
 
-        cases.iter().for_each(|((stride, source), expected)| {
+        for ((stride, source), expected) in &cases {
             let stride = stride.unwrap();
             let stride1 = stride.num_nanoseconds().unwrap();
             let source1 = string_to_timestamp_nanos(source).unwrap();
@@ -1282,7 +1294,7 @@ mod tests {
             let expected1 = string_to_timestamp_nanos(expected).unwrap();
             let result = date_bin_nanos_interval(stride1, source1, 0).unwrap();
             assert_eq!(result, expected1, "{source} = {expected}");
-        })
+        }
     }
 
     #[test]

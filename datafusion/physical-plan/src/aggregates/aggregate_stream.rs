@@ -17,14 +17,18 @@
 
 //! Aggregate without grouping columns
 
+use crate::aggregates::group_values::{
+    AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
+};
 use crate::aggregates::{
     AccumulatorItem, AggrDynFilter, AggregateInputMode, AggregateMode,
-    DynamicFilterAggregateType, aggregate_expressions, create_accumulators,
-    finalize_aggregation,
+    AggregateOutputMode, DynamicFilterAggregateType, aggregate_expressions,
+    aggregate_metric_label, create_accumulators,
 };
 use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{RecordBatchStream, SendableRecordBatchStream};
+use arrow::array::ArrayRef;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, ScalarValue, internal_datafusion_err, internal_err};
@@ -33,6 +37,7 @@ use datafusion_expr::Operator;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::expressions::{BinaryExpr, lit};
 use futures::stream::BoxStream;
+use itertools::Itertools;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::sync::Arc;
@@ -64,6 +69,8 @@ struct AggregateStreamInner {
     input: SendableRecordBatchStream,
     aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
     filter_expressions: Arc<[Option<Arc<dyn PhysicalExpr>>]>,
+    aggregate_argument_metrics: AggregateArgumentMetrics,
+    aggregate_accumulator_metrics: AggregateAccumulatorMetrics,
 
     // ==== Runtime States/Buffers ====
     accumulators: Vec<AccumulatorItem>,
@@ -298,9 +305,30 @@ impl AggregateStream {
             AggregateInputMode::Partial => vec![None; agg.aggr_expr.len()].into(),
         };
         let accumulators = create_accumulators(&agg.aggr_expr)?;
+        let aggregate_labels = agg
+            .aggr_expr
+            .iter()
+            .map(|agg_expr| aggregate_metric_label(agg_expr))
+            .collect::<Vec<_>>();
+        let aggregate_argument_metrics = AggregateArgumentMetrics::new(
+            &agg.metrics,
+            partition,
+            aggregate_labels.clone(),
+        );
+        let aggregate_accumulator_metrics = AggregateAccumulatorMetrics::new(
+            &agg.metrics,
+            partition,
+            aggregate_labels,
+            accumulator_phases(&agg.mode),
+        );
 
         let reservation = MemoryConsumer::new(format!("AggregateStream[{partition}]"))
             .register(context.memory_pool());
+        // Accumulators that allocate their state at construction are invisible to the
+        // per-batch size deltas in `aggregate_batch`, so charge their initial sizes up
+        // front (mirroring `GroupsAccumulatorAdapter`, which charges `state.size()` when
+        // it creates each accumulator).
+        reservation.try_grow(accumulators.iter().map(|accum| accum.size()).sum())?;
 
         // Enable dynamic filter if:
         // 1. AggregateExec did the check and ensure it supports the dynamic filter
@@ -327,6 +355,8 @@ impl AggregateStream {
             baseline_metrics,
             aggregate_expressions,
             filter_expressions,
+            aggregate_argument_metrics,
+            aggregate_accumulator_metrics,
             accumulators,
             reservation,
             finished: false,
@@ -350,6 +380,8 @@ impl AggregateStream {
                                 &mut this.accumulators,
                                 &this.aggregate_expressions,
                                 &this.filter_expressions,
+                                &this.aggregate_argument_metrics,
+                                &this.aggregate_accumulator_metrics,
                             )
                         };
 
@@ -375,19 +407,17 @@ impl AggregateStream {
                         let input_schema = this.input.schema();
                         this.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
                         let timer = this.baseline_metrics.elapsed_compute().timer();
-                        let result =
-                            finalize_aggregation(&mut this.accumulators, &this.mode)
-                                .and_then(|columns| {
-                                    prepend_grouping_id_column(columns, None)
-                                })
-                                .and_then(|columns| {
-                                    RecordBatch::try_new(
-                                        Arc::clone(&this.schema),
-                                        columns,
-                                    )
-                                    .map_err(Into::into)
-                                })
-                                .record_output(&this.baseline_metrics);
+                        let result = finalize_aggregation_with_metrics(
+                            &mut this.accumulators,
+                            &this.mode,
+                            &this.aggregate_accumulator_metrics,
+                        )
+                        .and_then(|columns| prepend_grouping_id_column(columns, None))
+                        .and_then(|columns| {
+                            RecordBatch::try_new(Arc::clone(&this.schema), columns)
+                                .map_err(Into::into)
+                        })
+                        .record_output(&this.baseline_metrics);
 
                         timer.done();
 
@@ -440,6 +470,8 @@ fn aggregate_batch(
     accumulators: &mut [AccumulatorItem],
     expressions: &[Vec<Arc<dyn PhysicalExpr>>],
     filters: &[Option<Arc<dyn PhysicalExpr>>],
+    aggregate_argument_metrics: &AggregateArgumentMetrics,
+    aggregate_accumulator_metrics: &AggregateAccumulatorMetrics,
 ) -> Result<usize> {
     let mut allocated = 0usize;
 
@@ -453,21 +485,30 @@ fn aggregate_batch(
         .iter_mut()
         .zip(expressions)
         .zip(filters)
-        .try_for_each(|((accum, expr), filter)| {
-            // 1.2
-            let batch = match filter {
-                Some(filter) => Cow::Owned(batch_filter(batch, filter)?),
-                None => Cow::Borrowed(batch),
-            };
-
-            // 1.3
-            let values = evaluate_expressions_to_arrays(expr, batch.as_ref())?;
+        .enumerate()
+        .try_for_each(|(index, ((accum, expr), filter))| {
+            // 1.2 and 1.3
+            let values = aggregate_argument_metrics.time(index, || {
+                let batch = match filter {
+                    Some(filter) => Cow::Owned(batch_filter(batch, filter)?),
+                    None => Cow::Borrowed(batch),
+                };
+                evaluate_expressions_to_arrays(expr, batch.as_ref())
+            })?;
 
             // 1.4
             let size_pre = accum.size();
             let res = match mode.input_mode() {
-                AggregateInputMode::Raw => accum.update_batch(&values),
-                AggregateInputMode::Partial => accum.merge_batch(&values),
+                AggregateInputMode::Raw => aggregate_accumulator_metrics.time(
+                    index,
+                    AccumulatorPhase::Update,
+                    || accum.update_batch(&values),
+                ),
+                AggregateInputMode::Partial => aggregate_accumulator_metrics.time(
+                    index,
+                    AccumulatorPhase::Merge,
+                    || accum.merge_batch(&values),
+                ),
             };
             let size_post = accum.size();
             allocated += size_post.saturating_sub(size_pre);
@@ -475,4 +516,251 @@ fn aggregate_batch(
         })?;
 
     Ok(allocated)
+}
+
+fn accumulator_phases(mode: &AggregateMode) -> &'static [AccumulatorPhase] {
+    match mode {
+        AggregateMode::Partial => &[AccumulatorPhase::Update, AccumulatorPhase::State],
+        AggregateMode::PartialReduce => {
+            &[AccumulatorPhase::Merge, AccumulatorPhase::State]
+        }
+        AggregateMode::Final | AggregateMode::FinalPartitioned => {
+            &[AccumulatorPhase::Merge, AccumulatorPhase::Evaluate]
+        }
+        AggregateMode::Single | AggregateMode::SinglePartitioned => {
+            &[AccumulatorPhase::Update, AccumulatorPhase::Evaluate]
+        }
+    }
+}
+
+fn finalize_aggregation_with_metrics(
+    accumulators: &mut [AccumulatorItem],
+    mode: &AggregateMode,
+    metrics: &AggregateAccumulatorMetrics,
+) -> Result<Vec<ArrayRef>> {
+    match mode.output_mode() {
+        AggregateOutputMode::Final => accumulators
+            .iter_mut()
+            .enumerate()
+            .map(|(index, accumulator)| {
+                metrics
+                    .time(index, AccumulatorPhase::Evaluate, || accumulator.evaluate())
+                    .and_then(|value| value.to_array())
+            })
+            .collect(),
+        AggregateOutputMode::Partial => accumulators
+            .iter_mut()
+            .enumerate()
+            .map(|(index, accumulator)| {
+                metrics
+                    .time(index, AccumulatorPhase::State, || accumulator.state())
+                    .and_then(|values| {
+                        values
+                            .iter()
+                            .map(|value| value.to_array())
+                            .collect::<Result<Vec<_>>>()
+                    })
+            })
+            .flatten_ok()
+            .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::aggregates::PhysicalGroupBy;
+    use crate::metrics::{MetricValue, MetricsSet};
+    use crate::test::TestMemoryExec;
+    use crate::{ExecutionPlan, collect};
+    use arrow::array::Float64Array;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_functions_aggregate::sum::sum_udaf;
+    use datafusion_physical_expr::aggregate::{
+        AggregateExprBuilder, AggregateFunctionExpr,
+    };
+    use datafusion_physical_expr::expressions::col;
+
+    fn sum_aggregate(
+        schema: &SchemaRef,
+        column: &str,
+        alias: &str,
+    ) -> Result<Arc<AggregateFunctionExpr>> {
+        Ok(Arc::new(
+            AggregateExprBuilder::new(sum_udaf(), vec![col(column, schema)?])
+                .schema(Arc::clone(schema))
+                .alias(alias)
+                .build()?,
+        ))
+    }
+
+    fn aggregate_metrics(metrics: &MetricsSet, phase: &str) -> Vec<(String, String)> {
+        let mut result = metrics
+            .iter()
+            .filter_map(|metric| match metric.value() {
+                MetricValue::Time { name, .. }
+                    if name
+                        .strip_prefix("agg_expr_")
+                        .and_then(|name| name.split_once('_'))
+                        .is_some_and(|(_, suffix)| suffix == format!("{phase}_time")) =>
+                {
+                    Some((
+                        name.to_string(),
+                        metric
+                            .labels()
+                            .iter()
+                            .find(|label| label.name() == "aggregate")?
+                            .value()
+                            .to_string(),
+                    ))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        result.sort();
+        result
+    }
+
+    #[test]
+    fn accumulator_phases_match_aggregate_mode() {
+        let cases: [(AggregateMode, &[AccumulatorPhase]); 6] = [
+            (
+                AggregateMode::Partial,
+                &[AccumulatorPhase::Update, AccumulatorPhase::State],
+            ),
+            (
+                AggregateMode::PartialReduce,
+                &[AccumulatorPhase::Merge, AccumulatorPhase::State],
+            ),
+            (
+                AggregateMode::Final,
+                &[AccumulatorPhase::Merge, AccumulatorPhase::Evaluate],
+            ),
+            (
+                AggregateMode::FinalPartitioned,
+                &[AccumulatorPhase::Merge, AccumulatorPhase::Evaluate],
+            ),
+            (
+                AggregateMode::Single,
+                &[AccumulatorPhase::Update, AccumulatorPhase::Evaluate],
+            ),
+            (
+                AggregateMode::SinglePartitioned,
+                &[AccumulatorPhase::Update, AccumulatorPhase::Evaluate],
+            ),
+        ];
+
+        for (mode, expected) in cases {
+            assert!(accumulator_phases(&mode) == expected, "{mode:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn aggregate_stream_reports_per_aggregate_metrics() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Float64, false),
+            Field::new("b", DataType::Float64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0])),
+                Arc::new(Float64Array::from(vec![4.0, 5.0, 6.0])),
+            ],
+        )?;
+        let input =
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+        let aggregates = vec![
+            sum_aggregate(&schema, "a", "SUM(a)")?,
+            sum_aggregate(&schema, "b", "SUM(b)")?,
+        ];
+        let aggregate = Arc::new(AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::default(),
+            aggregates,
+            vec![None, None],
+            input,
+            schema,
+        )?);
+
+        let _ = collect(
+            Arc::clone(&aggregate) as Arc<dyn ExecutionPlan>,
+            Arc::new(TaskContext::default()),
+        )
+        .await?;
+
+        let metrics = aggregate.metrics().unwrap();
+        for phase in ["arguments", "update", "evaluate"] {
+            assert_eq!(
+                aggregate_metrics(&metrics, phase),
+                vec![
+                    (format!("agg_expr_0_{phase}_time"), "SUM(a)".to_string()),
+                    (format!("agg_expr_1_{phase}_time"), "SUM(b)".to_string()),
+                ]
+            );
+        }
+        assert!(aggregate_metrics(&metrics, "merge").is_empty());
+        assert!(aggregate_metrics(&metrics, "state").is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn aggregate_stream_reports_partial_and_final_phases() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Float64, false),
+            Field::new("b", DataType::Float64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0])),
+                Arc::new(Float64Array::from(vec![4.0, 5.0, 6.0])),
+            ],
+        )?;
+        let input =
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+        let aggregates = vec![
+            sum_aggregate(&schema, "a", "SUM(a)")?,
+            sum_aggregate(&schema, "b", "SUM(b)")?,
+        ];
+        let group_by = PhysicalGroupBy::default();
+        let partial = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by.clone(),
+            aggregates.clone(),
+            vec![None, None],
+            input,
+            Arc::clone(&schema),
+        )?);
+        let final_aggregate = Arc::new(AggregateExec::try_new(
+            AggregateMode::Final,
+            group_by.as_final(),
+            aggregates,
+            vec![None, None],
+            Arc::clone(&partial) as Arc<dyn ExecutionPlan>,
+            partial.schema(),
+        )?);
+        let _ = collect(
+            Arc::clone(&final_aggregate) as Arc<dyn ExecutionPlan>,
+            Arc::new(TaskContext::default()),
+        )
+        .await?;
+
+        let partial_metrics = partial.metrics().unwrap();
+        assert_eq!(aggregate_metrics(&partial_metrics, "update").len(), 2);
+        assert_eq!(aggregate_metrics(&partial_metrics, "state").len(), 2);
+        assert_eq!(aggregate_metrics(&partial_metrics, "arguments").len(), 2);
+        assert!(aggregate_metrics(&partial_metrics, "merge").is_empty());
+        assert!(aggregate_metrics(&partial_metrics, "evaluate").is_empty());
+
+        let final_metrics = final_aggregate.metrics().unwrap();
+        assert_eq!(aggregate_metrics(&final_metrics, "merge").len(), 2);
+        assert_eq!(aggregate_metrics(&final_metrics, "evaluate").len(), 2);
+        assert_eq!(aggregate_metrics(&final_metrics, "arguments").len(), 2);
+        assert!(aggregate_metrics(&final_metrics, "update").is_empty());
+        assert!(aggregate_metrics(&final_metrics, "state").is_empty());
+
+        Ok(())
+    }
 }

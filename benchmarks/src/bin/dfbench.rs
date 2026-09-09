@@ -17,7 +17,6 @@
 
 //! DataFusion benchmark runner
 use datafusion::error::Result;
-use datafusion_benchmarks::sort_pushdown;
 
 use clap::{Parser, Subcommand};
 
@@ -32,8 +31,8 @@ static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use datafusion_benchmarks::{
-    cancellation, clickbench, dict, h2o, hj, imdb, nlj, push_down_topk, smj, sort_tpch,
-    tpcds, tpch,
+    cancellation, clickbench, dict, h2o, hj, imdb, nlj, push_down_topk, smj,
+    sort_pushdown, sort_tpch, statistics, tpcds, tpch,
 };
 
 #[derive(Debug, Parser)]
@@ -54,6 +53,7 @@ enum Options {
     Nlj(nlj::RunOpt),
     PushDownTopk(push_down_topk::RunOpt),
     Smj(smj::RunOpt),
+    Statistics(statistics::RunOpt),
     SortPushdown(sort_pushdown::RunOpt),
     SortTpch(sort_tpch::RunOpt),
     Tpch(tpch::RunOpt),
@@ -76,6 +76,7 @@ pub async fn main() -> Result<()> {
         Options::Nlj(opt) => opt.run().await,
         Options::PushDownTopk(opt) => opt.run().await,
         Options::Smj(opt) => opt.run().await,
+        Options::Statistics(opt) => opt.run().await,
         Options::SortPushdown(opt) => opt.run().await,
         Options::SortTpch(opt) => opt.run().await,
         Options::Tpch(opt) => Box::pin(opt.run()).await,

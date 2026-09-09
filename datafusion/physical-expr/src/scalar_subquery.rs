@@ -157,6 +157,7 @@ impl PhysicalExpr for ScalarSubqueryExpr {
         &self,
         _ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        use datafusion_common::utils::usize_to_wire;
         use datafusion_proto_models::protobuf;
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: None,
@@ -164,12 +165,11 @@ impl PhysicalExpr for ScalarSubqueryExpr {
                 protobuf::PhysicalScalarSubqueryExprNode {
                     data_type: Some((&self.data_type).try_into()?),
                     nullable: self.nullable,
-                    index: u32::try_from(self.index.as_usize()).map_err(|_| {
-                        internal_datafusion_err!(
-                            "scalar subquery index {} does not fit in u32",
-                            self.index.as_usize()
-                        )
-                    })?,
+                    index: usize_to_wire(
+                        self.index.as_usize(),
+                        "ScalarSubqueryExpr",
+                        "index",
+                    )?,
                 },
             )),
         }))

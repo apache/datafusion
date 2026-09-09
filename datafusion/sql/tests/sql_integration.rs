@@ -35,9 +35,10 @@ use datafusion_expr::{
     expr::{HigherOrderFunction, LambdaVariable, ScalarFunction},
     lambda,
     logical_plan::LogicalPlan,
+    planner::{ExprPlanner, PlannerResult, RawScalarExpr},
     test::function_stub::sum_udaf,
 };
-use datafusion_functions::{string, unicode};
+use datafusion_functions::{core as core_functions, string, unicode};
 use datafusion_sql::{
     parser::DFParser,
     planner::{NullOrdering, ParserOptions, PlannerContext, SqlToRel},
@@ -836,6 +837,42 @@ fn select_scalar_func_with_literal_no_relation() {
     );
 }
 
+#[derive(Debug)]
+struct SingleArgumentCoalescePlanner;
+
+impl ExprPlanner for SingleArgumentCoalescePlanner {
+    fn plan_scalar(&self, expr: RawScalarExpr) -> Result<PlannerResult<RawScalarExpr>> {
+        if expr.func.name() == "coalesce"
+            && let [arg] = expr.args.as_slice()
+        {
+            Ok(PlannerResult::Planned(arg.clone()))
+        } else {
+            Ok(PlannerResult::Original(expr))
+        }
+    }
+}
+
+#[test]
+fn select_scalar_func_with_expr_planner() -> Result<()> {
+    let state = mock_session_state()
+        .with_scalar_function(core_functions::coalesce())
+        .with_expr_planner(Arc::new(SingleArgumentCoalescePlanner));
+    let plan = logical_plan_from_state(
+        "SELECT coalesce(42)",
+        &GenericDialect {},
+        ParserOptions::default(),
+        state,
+    )?;
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: Int64(42)
+      EmptyRelation: rows=1
+    "
+    );
+    Ok(())
+}
+
 #[test]
 fn select_simple_filter() {
     let sql = "SELECT id, first_name, last_name \
@@ -1502,6 +1539,113 @@ fn select_aggregate_with_group_by_with_having_using_count_star_not_in_select() {
           TableScan: person
     "
     );
+}
+
+/// Asserts that placeholder `id` (e.g. `"$1"`) was inferred as `expected` type
+/// somewhere in `plan`.
+fn assert_placeholder_type(plan: &LogicalPlan, id: &str, expected: DataType) {
+    let param_types = plan.get_parameter_types().unwrap();
+    assert_eq!(param_types.get(id), Some(&Some(expected)));
+}
+
+/// An expression containing a placeholder, written in both the SELECT list and
+/// the GROUP BY, has to be recognised as one expression the way its literal
+/// equivalent is. Otherwise the columns inside it read as ungrouped, because the
+/// SELECT list has its placeholder types inferred and the grouping key does not.
+#[test]
+fn select_aggregate_with_group_by_placeholder_expression() {
+    let sql = "SELECT CASE WHEN age < $1 THEN 'young' ELSE 'old' END, count(*)
+                   FROM person
+                   GROUP BY CASE WHEN age < $1 THEN 'young' ELSE 'old' END";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END, count(*)
+      Aggregate: groupBy=[[CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END]], aggr=[[count(*)]]
+        TableScan: person
+    "#
+    );
+    assert_placeholder_type(&plan, "$1", DataType::Int32);
+}
+
+/// The same, for a grouping expression repeated in HAVING.
+#[test]
+fn select_aggregate_with_having_placeholder_expression() {
+    let sql = "SELECT CASE WHEN age < $1 THEN 'young' ELSE 'old' END, count(*)
+                   FROM person
+                   GROUP BY CASE WHEN age < $1 THEN 'young' ELSE 'old' END
+                   HAVING CASE WHEN age < $1 THEN 'young' ELSE 'old' END = 'young'";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END, count(*)
+      Filter: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END = Utf8("young")
+        Aggregate: groupBy=[[CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END]], aggr=[[count(*)]]
+          TableScan: person
+    "#
+    );
+    assert_placeholder_type(&plan, "$1", DataType::Int32);
+}
+
+/// The same, for a grouping expression repeated in ORDER BY.
+#[test]
+fn select_aggregate_with_order_by_placeholder_expression() {
+    let sql = "SELECT CASE WHEN age < $1 THEN 'young' ELSE 'old' END, count(*)
+                   FROM person
+                   GROUP BY CASE WHEN age < $1 THEN 'young' ELSE 'old' END
+                   ORDER BY CASE WHEN age < $1 THEN 'young' ELSE 'old' END";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Sort: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END ASC NULLS LAST
+      Projection: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END, count(*)
+        Aggregate: groupBy=[[CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END]], aggr=[[count(*)]]
+          TableScan: person
+    "#
+    );
+    assert_placeholder_type(&plan, "$1", DataType::Int32);
+}
+
+/// The same, for a window expression repeated in QUALIFY. Here the two spellings
+/// of the window expression collide by name instead, since they print alike but
+/// do not compare equal.
+#[test]
+fn select_window_with_qualify_placeholder_expression() {
+    let sql = "SELECT first_name,
+                          row_number() OVER (PARTITION BY CASE WHEN age < $1 THEN 'young' ELSE 'old' END)
+                   FROM person
+                   QUALIFY row_number() OVER (PARTITION BY CASE WHEN age < $1 THEN 'young' ELSE 'old' END) = 1";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: person.first_name, row_number() PARTITION BY [CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+      Filter: row_number() PARTITION BY [CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING = Int64(1)
+        WindowAggr: windowExpr=[[row_number() PARTITION BY [CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+          TableScan: person
+    "#
+    );
+    assert_placeholder_type(&plan, "$1", DataType::Int32);
+}
+
+#[test]
+fn select_distinct_on_with_order_by_placeholder_expression() {
+    let sql =
+        "SELECT DISTINCT ON (CASE WHEN age < $1 THEN 'young' ELSE 'old' END) first_name
+                   FROM person
+                   ORDER BY CASE WHEN age < $1 THEN 'young' ELSE 'old' END";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    DistinctOn: on_expr=[[CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END]], select_expr=[[person.first_name]], sort_expr=[[CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END ASC NULLS LAST]]
+      TableScan: person
+    "#
+    );
+    assert_placeholder_type(&plan, "$1", DataType::Int32);
 }
 
 #[test]
@@ -5176,9 +5320,10 @@ fn assert_field_not_found(mut err: DataFusionError, name: &str) {
         DataFusionError::SchemaError(_, _) => {
             let msg = format!("{err}");
             let expected = format!("Schema error: No field named {name}.");
-            if !msg.starts_with(&expected) {
-                panic!("error [{msg}] did not start with [{expected}]");
-            }
+            assert!(
+                msg.starts_with(&expected),
+                "error [{msg}] did not start with [{expected}]"
+            )
         }
         _ => panic!("assert_field_not_found wrong error type"),
     }
@@ -5651,9 +5796,8 @@ impl HigherOrderUDFImpl for MockArrayReduce {
             unreachable!()
         };
 
-        let list_field = match list.data_type() {
-            DataType::List(field) => field,
-            _ => unreachable!(),
+        let DataType::List(list_field) = list.data_type() else {
+            unreachable!()
         };
 
         Ok(match (step, merge) {

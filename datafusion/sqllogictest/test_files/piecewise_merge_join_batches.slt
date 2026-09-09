@@ -1,0 +1,103 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Plan proof for piecewise_merge_join_matrix.slt. Not a matrix file: it fixes
+# batch_size=2 and enable_piecewise_merge_join=true so it can EXPLAIN what the
+# matrix relies on but cannot check itself -- the streamed side is a range
+# LazyMemoryExec with batch_size=2 (so range(3,8), 5 rows, arrives as 3 batches)
+# feeding a PiecewiseMergeJoin, not a fallback. A VALUES source would not show
+# batch_size in the plan.
+
+statement ok
+set datafusion.optimizer.enable_piecewise_merge_join = true;
+
+statement ok
+set datafusion.execution.batch_size = 2;
+
+statement ok
+CREATE TABLE pb_l(id INT, v INT) AS
+  SELECT CAST(value AS INT) AS id, CAST(value AS INT) AS v FROM range(1, 11);
+
+# Existence (LeftSemi): range streamed side (batch_size=2) -> LeftSemi PWMJ.
+query TT
+EXPLAIN SELECT count(*) FROM pb_l l WHERE EXISTS (SELECT 1 FROM range(3, 8) r WHERE l.v > r.value);
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----Projection:
+04)------LeftSemi Join:  Filter: CAST(l.v AS Int64) > __correlated_sq_1.value
+05)--------SubqueryAlias: l
+06)----------TableScan: pb_l projection=[v]
+07)--------SubqueryAlias: __correlated_sq_1
+08)----------SubqueryAlias: r
+09)------------TableScan: range() projection=[value]
+physical_plan
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
+02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+05)--------ProjectionExec: expr=[]
+06)----------PiecewiseMergeJoin: operator=Gt, join_type=LeftSemi, on=(CAST(v AS Int64) > value)
+07)------------SortPreservingMergeExec: [CAST(v@0 AS Int64) ASC]
+08)--------------SortExec: expr=[CAST(v@0 AS Int64) ASC], preserve_partitioning=[true]
+09)----------------DataSourceExec: partitions=4, partition_sizes=[2, 1, 1, 1]
+10)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+11)--------------LazyMemoryExec: partitions=1, batch_generators=[range: start=3, end=8, batch_size=2]
+
+# Same result the matrix asserts (v > min(3) -> {4..10} = 7).
+query I
+SELECT count(*) FROM pb_l l WHERE EXISTS (SELECT 1 FROM range(3, 8) r WHERE l.v > r.value);
+----
+7
+
+# Classic Inner: same range streamed side -> Inner PWMJ.
+query TT
+EXPLAIN SELECT count(*) FROM pb_l l JOIN range(3, 8) r ON l.v < r.value;
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----Projection:
+04)------Inner Join:  Filter: CAST(l.v AS Int64) < r.value
+05)--------SubqueryAlias: l
+06)----------TableScan: pb_l projection=[v]
+07)--------SubqueryAlias: r
+08)----------TableScan: range() projection=[value]
+physical_plan
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
+02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+05)--------ProjectionExec: expr=[]
+06)----------PiecewiseMergeJoin: operator=Lt, join_type=Inner, on=(CAST(v AS Int64) < value)
+07)------------SortPreservingMergeExec: [CAST(v@0 AS Int64) DESC]
+08)--------------SortExec: expr=[CAST(v@0 AS Int64) DESC], preserve_partitioning=[true]
+09)----------------DataSourceExec: partitions=4, partition_sizes=[2, 1, 1, 1]
+10)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+11)--------------LazyMemoryExec: partitions=1, batch_generators=[range: start=3, end=8, batch_size=2]
+
+query I
+SELECT count(*) FROM pb_l l JOIN range(3, 8) r ON l.v < r.value;
+----
+20
+
+statement ok
+RESET datafusion.execution.batch_size;
+
+statement ok
+RESET datafusion.optimizer.enable_piecewise_merge_join;

@@ -21,6 +21,7 @@ use datafusion_catalog_listing::{ListingOptions, ListingTableConfig};
 use datafusion_common::{config_datafusion_err, internal_datafusion_err};
 use datafusion_session::Session;
 use futures::StreamExt;
+use futures::future::BoxFuture;
 use std::collections::HashMap;
 
 /// Extension trait for [`ListingTableConfig`] that supports inferring schemas
@@ -47,17 +48,54 @@ pub trait ListingTableConfigExt {
 
 #[async_trait]
 impl ListingTableConfigExt for ListingTableConfig {
-    async fn infer_options(
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn infer_options<'life0, 'async_trait>(
         self,
-        state: &dyn Session,
-    ) -> datafusion_common::Result<ListingTableConfig> {
-        let store = if let Some(url) = self.table_paths.first() {
+        state: &'life0 dyn Session,
+    ) -> BoxFuture<'async_trait, datafusion_common::Result<ListingTableConfig>>
+    where
+        'life0: 'async_trait,
+        Self: 'async_trait,
+    {
+        infer_options_boxed(self, state)
+    }
+
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn infer<'life0, 'async_trait>(
+        self,
+        state: &'life0 dyn Session,
+    ) -> BoxFuture<'async_trait, datafusion_common::Result<Self>>
+    where
+        'life0: 'async_trait,
+        Self: 'async_trait,
+    {
+        infer_boxed(self, state)
+    }
+}
+
+/// Body of [`ListingTableConfigExt::infer`].
+fn infer_boxed(
+    config: ListingTableConfig,
+    state: &dyn Session,
+) -> BoxFuture<'_, datafusion_common::Result<ListingTableConfig>> {
+    Box::pin(async move { config.infer_options(state).await?.infer_schema(state).await })
+}
+
+/// Body of [`ListingTableConfigExt::infer_options`].
+fn infer_options_boxed(
+    config: ListingTableConfig,
+    state: &dyn Session,
+) -> BoxFuture<'_, datafusion_common::Result<ListingTableConfig>> {
+    Box::pin(async move {
+        let store = if let Some(url) = config.table_paths.first() {
             state.runtime_env().object_store(url)?
         } else {
-            return Ok(self);
+            return Ok(config);
         };
 
-        let file = self
+        let file = config
             .table_paths
             .first()
             .unwrap()
@@ -95,12 +133,8 @@ impl ListingTableConfigExt for ListingTableConfig {
         let listing_options =
             ListingOptions::new(file_format).with_file_extension(listing_file_extension);
 
-        Ok(self.with_listing_options(listing_options))
-    }
-
-    async fn infer(self, state: &dyn Session) -> datafusion_common::Result<Self> {
-        self.infer_options(state).await?.infer_schema(state).await
-    }
+        Ok(config.with_listing_options(listing_options))
+    })
 }
 
 #[cfg(test)]

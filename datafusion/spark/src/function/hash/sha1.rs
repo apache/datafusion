@@ -24,7 +24,7 @@ use datafusion_common::cast::{
     as_large_binary_array,
 };
 use datafusion_common::types::{NativeType, logical_string};
-use datafusion_common::utils::hex::{HexCase, encode_bytes};
+use datafusion_common::utils::hex::{HexCase, encode_bytes_into};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
@@ -92,7 +92,10 @@ impl ScalarUDFImpl for SparkSha1 {
 
 #[inline]
 fn spark_sha1_digest(value: &[u8]) -> String {
-    encode_bytes(&Sha1::digest(value), HexCase::Lower)
+    let mut out = Vec::with_capacity(40);
+    // Safe: `encode_bytes_into` only writes ASCII hex digits, which are valid UTF-8.
+    encode_bytes_into(&Sha1::digest(value), HexCase::Lower, &mut out);
+    unsafe { String::from_utf8_unchecked(out) }
 }
 
 fn spark_sha1_impl<'a>(input: impl Iterator<Item = Option<&'a [u8]>>) -> ArrayRef {

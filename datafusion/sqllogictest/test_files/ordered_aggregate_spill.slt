@@ -73,7 +73,7 @@ GROUP BY v1
 
 # ==================================================================================
 # Input is partially ordered by group keys (input order by (a), query is 'group by a,b')
-# 
+#
 # Try different memory limits, ensure result is the same, but spill count differ
 
 # HACK: check `spilled_bytes=x KB` to ensure it has spilled. If it has not spilled,

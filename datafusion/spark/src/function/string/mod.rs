@@ -32,6 +32,7 @@ pub mod quote;
 pub mod soundex;
 pub mod space;
 pub mod substring;
+pub mod to_binary;
 
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::make_udf_function;
@@ -55,6 +56,8 @@ make_udf_function!(soundex::SparkSoundex, soundex);
 make_udf_function!(make_valid_utf8::SparkMakeValidUtf8, make_valid_utf8);
 make_udf_function!(is_valid_utf8::SparkIsValidUtf8, is_valid_utf8);
 make_udf_function!(quote::SparkQuote, quote);
+make_udf_function!(to_binary::SparkToBinary, to_binary);
+make_udf_function!(to_binary::SparkTryToBinary, try_to_binary);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
@@ -141,6 +144,16 @@ pub mod expr_fn {
         "Returns str enclosed by single quotes and each instance of single quote in it is preceded by a backslash",
         str
     ));
+    export_functions!((
+        to_binary,
+        "Converts the input str to a binary value based on the supplied fmt, which must be a case-insensitive literal of 'hex', 'utf-8', 'utf8' or 'base64'. Defaults to 'hex'.",
+        str fmt
+    ));
+    export_functions!((
+        try_to_binary,
+        "Like to_binary, but returns NULL instead of raising an error when the conversion cannot be performed.",
+        str fmt
+    ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
@@ -163,5 +176,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         make_valid_utf8(),
         is_valid_utf8(),
         quote(),
+        to_binary(),
+        try_to_binary(),
     ]
 }

@@ -51,9 +51,8 @@ use datafusion::datasource::listing::{
 };
 use datafusion::error::Result;
 use datafusion::execution::SessionStateBuilder;
-use datafusion::physical_plan::{
-    display::DisplayableExecutionPlan, displayable, execute_stream,
-};
+use datafusion::physical_plan::display::DisplayableExecutionPlan;
+use datafusion::physical_plan::{displayable, execute_stream};
 use datafusion::prelude::*;
 use datafusion_common::DEFAULT_PARQUET_EXTENSION;
 use datafusion_common::instant::Instant;
@@ -120,7 +119,7 @@ impl RunOpt {
                 }
             }
         }
-        ids.sort();
+        ids.sort_unstable();
         ids
     }
 
@@ -156,7 +155,7 @@ impl RunOpt {
     async fn benchmark_query(&self, query_id: usize) -> Result<Vec<QueryResult>> {
         let sql = self.load_query(query_id)?;
 
-        let config = self.common.config()?;
+        let config = self.common.config()?.with_collect_statistics(true);
         let rt = self.common.build_runtime()?;
         let state = SessionStateBuilder::new()
             .with_config(config)
@@ -185,7 +184,7 @@ impl RunOpt {
         let avg = millis.iter().sum::<f64>() / millis.len() as f64;
         println!("Query {query_id} avg time: {avg:.2} ms");
 
-        print_memory_stats();
+        print_memory_stats(&*ctx.runtime_env().memory_pool);
         Ok(query_results)
     }
 

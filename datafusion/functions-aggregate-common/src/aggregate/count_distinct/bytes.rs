@@ -77,7 +77,7 @@ impl<O: OffsetSizeTrait> Accumulator for BytesDistinctCountAccumulator<O> {
         arr.iter().try_for_each(|maybe_list| {
             if let Some(list) = maybe_list {
                 self.0.insert(&list);
-            };
+            }
             Ok(())
         })
     }
@@ -138,7 +138,7 @@ impl Accumulator for BytesViewDistinctCountAccumulator {
         arr.iter().try_for_each(|maybe_list| {
             if let Some(list) = maybe_list {
                 self.0.insert(&list);
-            };
+            }
             Ok(())
         })
     }

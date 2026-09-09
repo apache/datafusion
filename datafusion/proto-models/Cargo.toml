@@ -45,6 +45,7 @@ default = []
 json = ["serde", "pbjson", "datafusion-proto-common/json"]
 
 [dependencies]
+datafusion-common = { workspace = true }
 datafusion-proto-common = { workspace = true }
 pbjson = { workspace = true, optional = true }
 prost = { workspace = true }

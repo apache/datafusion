@@ -42,6 +42,8 @@ mod schema_coercion;
 mod sink;
 mod sort;
 pub mod source;
+#[cfg(test)]
+mod statistics_order_tests;
 mod supported_predicates;
 #[cfg(test)]
 mod test_util;

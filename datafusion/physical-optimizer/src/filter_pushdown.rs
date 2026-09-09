@@ -39,11 +39,12 @@ use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Result, assert_eq_or_internal_err, config::ConfigOptions};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::physical_expr::is_volatile;
+use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::execution_plan::replace_children_if_necessary;
 use datafusion_physical_plan::filter_pushdown::{
     ChildFilterPushdownResult, ChildPushdownResult, FilterPushdownPhase,
     FilterPushdownPropagation, PushedDown,
 };
-use datafusion_physical_plan::{ExecutionPlan, with_new_children_if_necessary};
 
 use itertools::{Itertools, izip};
 
@@ -573,7 +574,7 @@ fn push_down_filters(
     }
 
     // Re-create this node with new children
-    let updated_node = with_new_children_if_necessary(Arc::clone(node), new_children)?;
+    let updated_node = replace_children_if_necessary(Arc::clone(node), new_children)?;
 
     // TODO: by calling `handle_child_pushdown_result` we are assuming that the
     // `ExecutionPlan` implementation will not change the plan itself.

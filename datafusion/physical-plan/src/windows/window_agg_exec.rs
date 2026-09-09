@@ -33,10 +33,10 @@ use crate::windows::{
     window_equivalence_properties,
 };
 use crate::{
-    ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
-    ExecutionPlanProperties, InputDistributionRequirements, PhysicalExpr, PlanProperties,
-    RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
-    check_if_same_properties,
+    ChildrenPropertiesMode, ColumnStatistics, DisplayAs, DisplayFormatType, Distribution,
+    ExecutionPlan, ExecutionPlanProperties, InputDistributionRequirements, PhysicalExpr,
+    PlanProperties, RecordBatchStream, ReplaceChildrenOptions, SendableRecordBatchStream,
+    Statistics, WindowExpr, validate_child_count,
 };
 
 use arrow::array::ArrayRef;
@@ -262,27 +262,44 @@ impl ExecutionPlan for WindowAggExec {
         }
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        Ok(Arc::new(WindowAggExec::try_new(
-            self.window_expr.clone(),
-            children.swap_remove(0),
-            true,
-        )?))
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                metrics: ExecutionPlanMetricsSet::new(),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesMode::Recompute => Ok(Arc::new(WindowAggExec::try_new(
+                self.window_expr.clone(),
+                children.swap_remove(0),
+                true,
+            )?)),
+        }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(&*self)
-        }))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn execute(
@@ -406,6 +423,7 @@ impl WindowAggExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         use super::BoundedWindowAggExec;
         use crate::InputOrderMode;
+        use datafusion_common::utils::usize_from_wire;
         use datafusion_proto_models::protobuf;
         use protobuf::window_agg_exec_node::InputOrderMode as ProtoInputOrderMode;
 
@@ -441,7 +459,12 @@ impl WindowAggExec {
                 ProtoInputOrderMode::PartiallySorted(
                     protobuf::PartiallySortedInputOrderMode { columns },
                 ) => InputOrderMode::PartiallySorted(
-                    columns.iter().map(|column| *column as usize).collect(),
+                    columns
+                        .iter()
+                        .map(|column| {
+                            usize_from_wire(*column, "WindowAggExec", "columns")
+                        })
+                        .collect::<Result<Vec<_>>>()?,
                 ),
                 ProtoInputOrderMode::Sorted(_) => InputOrderMode::Sorted,
             };

@@ -272,13 +272,13 @@ impl ParquetOptions {
 
         if let Some(bloom_filter_fpp) = bloom_filter_fpp {
             builder = builder.set_bloom_filter_fpp(*bloom_filter_fpp);
-        };
+        }
         if let Some(bloom_filter_ndv) = bloom_filter_ndv {
             builder = builder.set_bloom_filter_max_ndv(*bloom_filter_ndv);
-        };
+        }
         if let Some(dictionary_enabled) = dictionary_enabled {
             builder = builder.set_dictionary_enabled(*dictionary_enabled);
-        };
+        }
 
         // We do not have access to default ColumnProperties set in Arrow.
         // Therefore, only overwrite if these settings exist.
@@ -344,7 +344,7 @@ fn split_compression_string(str_setting: &str) -> Result<(String, Option<u32>)> 
 
 /// Helper to ensure compression codecs which don't support levels
 /// don't have one set. E.g. snappy(2) is invalid.
-fn check_level_is_none(codec: &str, level: &Option<u32>) -> Result<()> {
+fn check_level_is_none(codec: &str, level: Option<&u32>) -> Result<()> {
     if level.is_some() {
         return Err(DataFusionError::Configuration(format!(
             "Compression {codec} does not support specifying a level"
@@ -370,11 +370,11 @@ pub fn parse_compression_string(
     let codec = codec.as_str();
     match codec {
         "uncompressed" => {
-            check_level_is_none(codec, &level)?;
+            check_level_is_none(codec, level.as_ref())?;
             Ok(parquet::basic::Compression::UNCOMPRESSED)
         }
         "snappy" => {
-            check_level_is_none(codec, &level)?;
+            check_level_is_none(codec, level.as_ref())?;
             Ok(parquet::basic::Compression::SNAPPY)
         }
         "gzip" => {
@@ -390,7 +390,7 @@ pub fn parse_compression_string(
             )?))
         }
         "lz4" => {
-            check_level_is_none(codec, &level)?;
+            check_level_is_none(codec, level.as_ref())?;
             Ok(parquet::basic::Compression::LZ4)
         }
         "zstd" => {
@@ -400,7 +400,7 @@ pub fn parse_compression_string(
             )?))
         }
         "lz4_raw" => {
-            check_level_is_none(codec, &level)?;
+            check_level_is_none(codec, level.as_ref())?;
             Ok(parquet::basic::Compression::LZ4_RAW)
         }
         _ => Err(DataFusionError::Configuration(format!(

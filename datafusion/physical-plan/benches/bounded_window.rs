@@ -21,21 +21,36 @@
 //! `PartitionKey` (`Vec<ScalarValue>`) and, in `Linear` mode (input sorted
 //! by the ORDER BY column but not by the partition columns), visits every
 //! live partition on every batch while never retiring partitions until the
-//! input is exhausted. The cases here stress that path in different ways:
+//! input is exhausted. The cases here stress that path in different ways.
 //!
-//! - `linear N partitions`: dense round-robin keys -- every partition
-//!   receives rows in every batch, so per-visit fixed costs dominate.
-//! - `linear sparse N partitions`: keys are clustered in time, so each
-//!   batch touches only a small, fresh subset of keys while the set of live
-//!   partitions keeps growing -- per-batch work on quiet partitions
+//! Case names spell out the input order mode (`linear` / `sorted`), the key
+//! layout (`dense` / `sparse`), the window functions, an optional frame
+//! variant, and the partition count:
+//!
+//! - `linear dense count N partitions`: dense round-robin keys -- every
+//!   partition receives rows in every batch, so per-visit fixed costs
+//!   dominate.
+//! - `linear sparse count N partitions`: keys are clustered in time, so
+//!   each batch touches only a small, fresh subset of keys while the set of
+//!   live partitions keeps growing -- per-batch work on quiet partitions
 //!   dominates.
-//! - `linear rows N partitions`: the dense layout with a ROWS frame, whose
-//!   results can only be finalized as more rows of the same partition
-//!   arrive.
-//! - `linear multi N partitions`: two window expressions over the dense
-//!   layout, doubling the per-partition evaluation sweeps.
-//! - `sorted N partitions`: control; input sorted by partition key, so
-//!   finished partitions are pruned eagerly and the state maps stay small.
+//! - `linear dense count rows-frame N partitions`: the dense layout with a
+//!   ROWS frame, whose results can only be finalized as more rows of the
+//!   same partition arrive.
+//! - `linear dense count+sum N partitions`: two window expressions over the
+//!   dense layout, doubling the per-partition evaluation sweeps.
+//! - `linear dense row_number N partitions` / `linear sparse row_number N
+//!   partitions`: the dense / sparse layouts evaluated through
+//!   `StandardWindowExpr` and a `PartitionEvaluator` rather than an
+//!   aggregate accumulator.
+//! - `linear sparse lead N partitions`: the sparse layout with a non-causal
+//!   function, whose result for the last buffered row of a partition stays
+//!   pending until that partition receives another row.
+//! - `linear dense rank N partitions`: the dense layout with an evaluator
+//!   that compares ORDER BY values row by row.
+//! - `sorted count N partitions`: control; input sorted by partition key,
+//!   as `Sorted` mode requires, so finished partitions are pruned eagerly
+//!   and the state maps stay small.
 
 use std::sync::Arc;
 
@@ -50,8 +65,11 @@ use datafusion_expr::{
 };
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::sum::sum_udaf;
+use datafusion_functions_window::lead_lag::lead_udwf;
+use datafusion_functions_window::rank::rank_udwf;
+use datafusion_functions_window::row_number::row_number_udwf;
 use datafusion_physical_expr::expressions::col;
-use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
 use datafusion_physical_plan::test::TestMemoryExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, create_window_expr};
 use datafusion_physical_plan::{ExecutionPlan, InputOrderMode, collect};
@@ -135,14 +153,27 @@ fn rows_frame() -> WindowFrame {
     )
 }
 
-/// `<agg>(ts) OVER (PARTITION BY pk ORDER BY ts <window_frame>)` for each
-/// aggregate in `aggregates`.
+/// `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`, the default frame
+/// of a window that has an ORDER BY clause.
+fn default_frame() -> WindowFrame {
+    WindowFrame::new(Some(false))
+}
+
+/// A window function to benchmark: definition, display name, and arguments.
+type BenchWindowFn = (
+    WindowFunctionDefinition,
+    &'static str,
+    Vec<Arc<dyn PhysicalExpr>>,
+);
+
+/// `<fn>(<args>) OVER (PARTITION BY pk ORDER BY ts <window_frame>)` for each
+/// window function in `functions`.
 fn window_exec(
     batches: Vec<RecordBatch>,
     mode: InputOrderMode,
     input_ordering: Vec<PhysicalSortExpr>,
     window_frame: &WindowFrame,
-    aggregates: &[(WindowFunctionDefinition, &str)],
+    functions: &[BenchWindowFn],
 ) -> Arc<dyn ExecutionPlan> {
     let schema = schema();
     let source = TestMemoryExec::try_new(&[batches], Arc::clone(&schema), None)
@@ -150,19 +181,18 @@ fn window_exec(
         .try_with_sort_information(LexOrdering::new(input_ordering).into_iter().collect())
         .expect("sort information");
     let input = Arc::new(TestMemoryExec::update_cache(&Arc::new(source)));
-    let args = vec![col("ts", &schema).unwrap()];
     let partitionby_exprs = vec![col("pk", &schema).unwrap()];
     let orderby_exprs = vec![PhysicalSortExpr {
         expr: col("ts", &schema).unwrap(),
         options: Default::default(),
     }];
-    let window_expr = aggregates
+    let window_expr = functions
         .iter()
-        .map(|(fun, name)| {
+        .map(|(fun, name, args)| {
             create_window_expr(
                 fun,
                 name.to_string(),
-                &args,
+                args,
                 &partitionby_exprs,
                 &orderby_exprs,
                 Arc::new(window_frame.clone()),
@@ -180,15 +210,48 @@ fn window_exec(
     )
 }
 
-fn count() -> (WindowFunctionDefinition, &'static str) {
+fn ts_arg() -> Vec<Arc<dyn PhysicalExpr>> {
+    vec![col("ts", &schema()).unwrap()]
+}
+
+fn count() -> BenchWindowFn {
     (
         WindowFunctionDefinition::AggregateUDF(count_udaf()),
         "count",
+        ts_arg(),
     )
 }
 
-fn sum() -> (WindowFunctionDefinition, &'static str) {
-    (WindowFunctionDefinition::AggregateUDF(sum_udaf()), "sum")
+fn sum() -> BenchWindowFn {
+    (
+        WindowFunctionDefinition::AggregateUDF(sum_udaf()),
+        "sum",
+        ts_arg(),
+    )
+}
+
+fn row_number() -> BenchWindowFn {
+    (
+        WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+        "row_number",
+        vec![],
+    )
+}
+
+fn lead() -> BenchWindowFn {
+    (
+        WindowFunctionDefinition::WindowUDF(lead_udwf()),
+        "lead",
+        ts_arg(),
+    )
+}
+
+fn rank() -> BenchWindowFn {
+    (
+        WindowFunctionDefinition::WindowUDF(rank_udwf()),
+        "rank",
+        vec![],
+    )
 }
 
 fn bounded_window_benchmark(c: &mut Criterion) {
@@ -213,7 +276,7 @@ fn bounded_window_benchmark(c: &mut Criterion) {
 
     for n_partitions in [100, 10_000] {
         run_case(
-            format!("linear {n_partitions} partitions"),
+            format!("linear dense count {n_partitions} partitions"),
             window_exec(
                 dense_batches(n_partitions),
                 InputOrderMode::Linear,
@@ -226,7 +289,7 @@ fn bounded_window_benchmark(c: &mut Criterion) {
 
     run_case(
         format!(
-            "linear sparse {} partitions",
+            "linear sparse count {} partitions",
             N_BATCHES * SPARSE_KEYS_PER_BATCH
         ),
         window_exec(
@@ -239,7 +302,7 @@ fn bounded_window_benchmark(c: &mut Criterion) {
     );
 
     run_case(
-        "linear rows 10000 partitions".to_string(),
+        "linear dense count rows-frame 10000 partitions".to_string(),
         window_exec(
             dense_batches(10_000),
             InputOrderMode::Linear,
@@ -250,7 +313,7 @@ fn bounded_window_benchmark(c: &mut Criterion) {
     );
 
     run_case(
-        "linear multi 10000 partitions".to_string(),
+        "linear dense count+sum 10000 partitions".to_string(),
         window_exec(
             dense_batches(10_000),
             InputOrderMode::Linear,
@@ -260,10 +323,60 @@ fn bounded_window_benchmark(c: &mut Criterion) {
         ),
     );
 
+    run_case(
+        "linear dense row_number 10000 partitions".to_string(),
+        window_exec(
+            dense_batches(10_000),
+            InputOrderMode::Linear,
+            vec![sort_expr("ts")],
+            &default_frame(),
+            &[row_number()],
+        ),
+    );
+
+    run_case(
+        format!(
+            "linear sparse row_number {} partitions",
+            N_BATCHES * SPARSE_KEYS_PER_BATCH
+        ),
+        window_exec(
+            sparse_batches(),
+            InputOrderMode::Linear,
+            vec![sort_expr("ts")],
+            &default_frame(),
+            &[row_number()],
+        ),
+    );
+
+    run_case(
+        format!(
+            "linear sparse lead {} partitions",
+            N_BATCHES * SPARSE_KEYS_PER_BATCH
+        ),
+        window_exec(
+            sparse_batches(),
+            InputOrderMode::Linear,
+            vec![sort_expr("ts")],
+            &default_frame(),
+            &[lead()],
+        ),
+    );
+
+    run_case(
+        "linear dense rank 10000 partitions".to_string(),
+        window_exec(
+            dense_batches(10_000),
+            InputOrderMode::Linear,
+            vec![sort_expr("ts")],
+            &default_frame(),
+            &[rank()],
+        ),
+    );
+
     // Control: the same query over partition-sorted input, where finished
     // partitions are pruned eagerly and the state maps stay small.
     run_case(
-        "sorted 10000 partitions".to_string(),
+        "sorted count 10000 partitions".to_string(),
         window_exec(
             sorted_batches(10_000),
             InputOrderMode::Sorted,

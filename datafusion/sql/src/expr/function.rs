@@ -30,7 +30,7 @@ use datafusion_expr::{
         self, HigherOrderFunction, Lambda, NullTreatment, ScalarFunction, Unnest,
         WildcardOptions, WindowFunction,
     },
-    planner::{PlannerResult, RawAggregateExpr, RawWindowExpr},
+    planner::{PlannerResult, RawAggregateExpr, RawScalarExpr, RawWindowExpr},
     type_coercion::functions::value_fields_with_higher_order_udf,
 };
 use sqlparser::ast::{
@@ -48,24 +48,17 @@ pub fn suggest_valid_function(
     is_window_func: bool,
     ctx: &dyn ContextProvider,
 ) -> Option<String> {
-    let valid_funcs = if is_window_func {
+    let mut valid_funcs = Vec::new();
+    if is_window_func {
         // All aggregate functions and builtin window functions
-        let mut funcs = Vec::new();
-
-        funcs.extend(ctx.udaf_names());
-        funcs.extend(ctx.udwf_names());
-
-        funcs
+        valid_funcs.extend(ctx.udaf_names());
+        valid_funcs.extend(ctx.udwf_names());
     } else {
         // All scalar functions and aggregate functions
-        let mut funcs = Vec::new();
-
-        funcs.extend(ctx.udf_names());
-        funcs.extend(ctx.higher_order_function_names());
-        funcs.extend(ctx.udaf_names());
-
-        funcs
-    };
+        valid_funcs.extend(ctx.udf_names());
+        valid_funcs.extend(ctx.higher_order_function_names());
+        valid_funcs.extend(ctx.udaf_names());
+    }
     find_closest_match(valid_funcs, input_function_name)
 }
 
@@ -348,7 +341,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             };
 
             // After resolution, all arguments are positional
-            let inner = ScalarFunction::new_udf(fm, resolved_args);
+            let mut scalar_expr = RawScalarExpr {
+                func: fm,
+                args: resolved_args,
+            };
+
+            for planner in self.context_provider.get_expr_planners().iter() {
+                match planner.plan_scalar(scalar_expr)? {
+                    PlannerResult::Planned(expr) => return Ok(expr),
+                    PlannerResult::Original(expr) => scalar_expr = expr,
+                }
+            }
+
+            let RawScalarExpr { func, args } = scalar_expr;
+            let inner = ScalarFunction::new_udf(func, args);
 
             if name.eq_ignore_ascii_case(inner.name()) {
                 return Ok(Expr::ScalarFunction(inner));
@@ -735,32 +741,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // accept a WITHIN GROUP clause.
                 let supports_within_group = fm.supports_within_group_clause();
 
-                // Built-in ordered-set aggregates must also support WITHIN GROUP
-                let is_builtin_ordered_set = matches!(
-                    name.as_str(),
-                    "percentile_cont"
-                        | "quantile_cont"
-                        | "approx_percentile_cont"
-                        | "approx_percentile_cont_with_weight"
-                );
-
-                let supports_within_group =
-                    supports_within_group || is_builtin_ordered_set;
-
                 let mut within_group = within_group;
                 let mut order_by = order_by;
 
-                if supports_within_group
+                let is_inline_order_by = supports_within_group
                     && within_group.is_empty()
-                    && !order_by.is_empty()
-                {
+                    && !order_by.is_empty();
+
+                if is_inline_order_by {
                     // Inline ORDER BY syntax:
                     // quantile_cont(value, percentile ORDER BY value)
-                    if args.len() >= 2 {
-                        args.remove(0);
-                        arg_names.remove(0);
-                    }
-
                     within_group = order_by;
                     order_by = vec![];
                 }
@@ -786,6 +776,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             return plan_err!(
                                 "Only a single ordering expression is permitted in WITHIN GROUP clause"
                             );
+                        }
+
+                        // Remove the ordered value only when it is explicitly repeated.
+                        // This ensures these are equivalent:
+                        //   approx_percentile_cont(c3, 0.95, 200 ORDER BY c3)
+                        //   approx_percentile_cont(0.95, 200 ORDER BY c3)
+                        if is_inline_order_by && args.first() == Some(&sorts[0].expr) {
+                            args.remove(0);
+                            arg_names.remove(0);
                         }
 
                         // Prepend ordered value expression to args

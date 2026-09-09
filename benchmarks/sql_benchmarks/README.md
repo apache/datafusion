@@ -44,6 +44,7 @@ in the community:
 | `tpch`                | TPC‑H queries                                                      |
 | `wide_schema`         | Small-projection queries on a wide (1024-col, 256-file) synthetic dataset; runs `wide` + `narrow` subgroups for comparison |
 | `predicate_eval`      | Conjunctive (AND) filter-evaluation micro-benchmarks; each subgroup is a different predicate pattern, to test how an adaptive predicate-ordering system behaves across them ([#11262](https://github.com/apache/datafusion/issues/11262)). Subgroups (`--subgroup`): `costsel`, `cost`, `selectivity`, `cardinality`, `width`, `scale`, `neutral`, `correlation`, `drift`. Configure the system under test through its DataFusion settings. |
+| `parquet_row_filter_skip` | Micro-benchmark for the per-row-group fully-matched RowFilter skip on Parquet scans ([#23696](https://github.com/apache/datafusion/issues/23696)). Subgroups (`--subgroup`): `skip` (clustered key, most row groups fully matched by statistics so the per-row filter is skipped), `control` (scrambled key, no row group is ever fully matched). Size the data with `PRED_ROWS` and the row-group size with `RG_SIZE`. |
 
 # Running Benchmarks
 
@@ -168,8 +169,9 @@ Some benchmarks use custom environment variables as outlined below:
 | BENCH_SORTED                 | Used in the sort_tpch benchmark to indicate whether the lineitem table should be sorted.                                 | false         |
 | SORTED_BY                    | Used in the clickbench_sorted benchmark to indicate the column to sort by.                                               | `EventTime`   |
 | SORTED_ORDER                 | Used in the clickbench_sorted benchmark to indicate the sort order of the column.                                        | `ASC`         |
-| PRED_ROWS                    | Used in the predicate_eval benchmark to size the synthetic table (the `scale` subgroup overrides this per query).        | `1000000`     |
+| PRED_ROWS                    | Used in the predicate_eval benchmark to size the synthetic table (the `scale` subgroup overrides this per query), and in the parquet_row_filter_skip benchmark to size the generated Parquet datasets (default `10000000` there). | `1000000`     |
 | PRED_FILL                    | Used in the predicate_eval benchmark as the string-column width knob (filler chars per marker).                          | `30`          |
+| RG_SIZE                      | Used in the parquet_row_filter_skip benchmark as the Parquet `max_row_group_size` for the generated datasets.            | `1000000`     |
 
 ## How it works
 

@@ -30,6 +30,7 @@ use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::filter::batch_filter;
 use datafusion_physical_plan::filter_pushdown::{FilterPushdownPhase, PushedDown};
+use datafusion_physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, displayable,
     filter::FilterExec,
@@ -42,6 +43,7 @@ use datafusion_physical_plan::{
 use futures::StreamExt;
 use futures::{FutureExt, Stream};
 use object_store::ObjectStore;
+use std::fmt::Write as _;
 use std::{
     fmt::{Display, Formatter},
     pin::Pin,
@@ -433,13 +435,13 @@ pub fn format_execution_plan(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
 }
 
 fn format_lines(s: &str) -> Vec<String> {
-    s.trim().split('\n').map(|s| s.to_string()).collect()
+    s.trim().lines().map(|s| s.to_string()).collect()
 }
 
 pub fn format_plan_for_test(plan: &Arc<dyn ExecutionPlan>) -> String {
     let mut out = String::new();
     for line in format_execution_plan(plan) {
-        out.push_str(&format!("  - {line}\n"));
+        writeln!(out, "  - {line}").ok();
     }
     out.push('\n');
     out
@@ -489,16 +491,27 @@ impl ExecutionPlan for TestNode {
         vec![&self.input]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        assert!(children.len() == 1);
+        assert_eq!(children.len(), 1);
         Ok(Arc::new(TestNode::new(
             self.inject_filter,
             children[0].clone(),
             self.predicate.clone(),
         )))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(

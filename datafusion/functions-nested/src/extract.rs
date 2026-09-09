@@ -23,9 +23,8 @@ use arrow::array::{
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
-use arrow::datatypes::{
-    DataType::{FixedSizeList, LargeList, LargeListView, List, ListView, Null},
-    Field,
+use arrow::datatypes::DataType::{
+    FixedSizeList, LargeList, LargeListView, List, ListView, Null,
 };
 use datafusion_common::cast::as_large_list_array;
 use datafusion_common::cast::as_list_array;
@@ -48,7 +47,7 @@ use datafusion_expr::{
 use datafusion_macros::user_doc;
 use std::sync::Arc;
 
-use crate::utils::make_scalar_function;
+use crate::utils::{list_inner_field, make_scalar_function};
 
 // Create static instances of ScalarUDFs for each function
 make_udf_expr_and_func!(
@@ -134,15 +133,6 @@ impl ArrayElement {
 impl ScalarUDFImpl for ArrayElement {
     fn name(&self) -> &str {
         "array_element"
-    }
-
-    fn display_name(&self, args: &[Expr]) -> Result<String> {
-        let args_name = args.iter().map(ToString::to_string).collect::<Vec<_>>();
-        if args_name.len() != 2 {
-            return exec_err!("expect 2 args, got {}", args_name.len());
-        }
-
-        Ok(format!("{}[{}]", args_name[0], args_name[1]))
     }
 
     fn schema_name(&self, args: &[Expr]) -> Result<String> {
@@ -352,15 +342,6 @@ impl ArraySlice {
 }
 
 impl ScalarUDFImpl for ArraySlice {
-    fn display_name(&self, args: &[Expr]) -> Result<String> {
-        let args_name = args.iter().map(ToString::to_string).collect::<Vec<_>>();
-        if let Some((arr, indexes)) = args_name.split_first() {
-            Ok(format!("{arr}[{}]", indexes.join(":")))
-        } else {
-            exec_err!("no argument")
-        }
-    }
-
     fn schema_name(&self, args: &[Expr]) -> Result<String> {
         let args_name = args
             .iter()
@@ -622,9 +603,16 @@ where
     let values = array.values();
     let original_data = values.to_data();
     let capacity = Capacities::Array(original_data.len());
+    // Carry the input's list field through to the output so that the returned
+    // type matches the one promised by `return_type` / `return_field_from_args`,
+    // including the field name, nullability and metadata.
+    let field = list_inner_field("general_array_slice", array.data_type())?;
 
+    // `use_nulls` is false because we never call `try_extend_nulls`: null rows are
+    // emitted as empty slices. Arrow still allocates a validity buffer on its own
+    // if the child array has nulls.
     let mut mutable =
-        MutableArrayData::with_capacities(vec![&original_data], true, capacity);
+        MutableArrayData::with_capacities(vec![&original_data], false, capacity);
 
     // We have the slice syntax compatible with DuckDB v0.8.1.
     // The rule `adjusted_from_index` and `adjusted_to_index` follows the rule of array_slice in duckdb.
@@ -638,9 +626,11 @@ where
         let end = offset_window[1];
         let len = end - start;
 
+        // The row is null, so its contents are never observed. Emit an empty
+        // slice rather than a null child element: the input's list field may be
+        // non-nullable, in which case a null child would be invalid.
         if nulls.as_ref().is_some_and(|n| n.is_null(row_index)) {
-            mutable.try_extend_nulls(1)?;
-            offsets.push(offsets[row_index] + O::usize_as(1));
+            offsets.push(offsets[row_index]);
             continue;
         }
 
@@ -682,7 +672,7 @@ where
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new_list_field(array.value_type(), true)),
+        field,
         OffsetBuffer::<O>::new(offsets.into()),
         arrow::array::make_array(data),
         nulls,
@@ -704,12 +694,15 @@ where
     let field = match array.data_type() {
         ListView(field) | LargeListView(field) => Arc::clone(field),
         other => {
-            return internal_err!("array_slice got unexpected data type: {}", other);
+            return internal_err!(
+                "general_list_view_array_slice got unexpected data type: {other}"
+            );
         }
     };
 
+    // See the note on `use_nulls` in `general_array_slice`.
     let mut mutable =
-        MutableArrayData::with_capacities(vec![&original_data], true, capacity);
+        MutableArrayData::with_capacities(vec![&original_data], false, capacity);
 
     // We must build `offsets` and `sizes` buffers manually as ListView does not enforce
     // monotonically increasing offsets.
@@ -790,11 +783,11 @@ where
     syntax_example = "array_pop_front(array)",
     sql_example = r#"```sql
 > select array_pop_front([1, 2, 3]);
-+-------------------------------+
++--------------------------------+
 | array_pop_front(List([1,2,3])) |
-+-------------------------------+
-| [2, 3]                        |
-+-------------------------------+
++--------------------------------+
+| [2, 3]                         |
++--------------------------------+
 ```"#,
     argument(
         name = "array",
@@ -974,7 +967,7 @@ where
     syntax_example = "array_any_value(array)",
     sql_example = r#"```sql
 > select array_any_value([NULL, 1, 2, 3]);
-+-------------------------------+
++-------------------------------------+
 | array_any_value(List([NULL,1,2,3])) |
 +-------------------------------------+
 | 1                                   |

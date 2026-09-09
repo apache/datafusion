@@ -47,8 +47,8 @@ use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr, PlanProperties,
-    SendableRecordBatchStream,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr,
+    PlanProperties, ReplaceChildrenOptions, SendableRecordBatchStream,
 };
 use datafusion::prelude::SessionContext;
 use datafusion_common::config::{ConfigOptions, TableParquetOptions};
@@ -253,8 +253,8 @@ fn assert_dynamic_filter_update_is_visible(
 
     // Ensure both filters have the updated expr.
     let expected_current = r#"Literal { value: Int64(123), field: Field { name: "lit", data_type: Int64 } }"#;
-    assert_eq!(expected_current, format!("{:?}", left_filter.current()?),);
-    assert_eq!(expected_current, format!("{:?}", right_filter.current()?),);
+    assert_eq!(expected_current, format!("{:?}", left_filter.current()?));
+    assert_eq!(expected_current, format!("{:?}", right_filter.current()?));
 
     Ok(())
 }
@@ -789,11 +789,22 @@ impl ExecutionPlan for CustomExecWithExprs {
         datafusion_physical_plan::apply_expression_roots(&self.exprs, f)
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         unreachable!()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(

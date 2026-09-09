@@ -20,19 +20,23 @@
 mod boolean;
 mod bytes;
 pub mod bytes_view;
+mod dictionary;
+mod fixed_size_binary;
+mod list;
 pub mod primitive;
 pub mod row_backed;
 
 use std::mem::{self, size_of};
+use std::sync::Arc;
 
 use crate::aggregates::group_values::GroupValues;
 use crate::aggregates::group_values::multi_group_by::{
     boolean::BooleanGroupValueBuilder, bytes::ByteGroupValueBuilder,
-    bytes_view::ByteViewGroupValueBuilder, primitive::PrimitiveGroupValueBuilder,
-    row_backed::RowsGroupColumn,
+    bytes_view::ByteViewGroupValueBuilder,
+    fixed_size_binary::FixedSizeBinaryGroupValueBuilder,
+    primitive::PrimitiveGroupValueBuilder, row_backed::RowsGroupColumn,
 };
-use arrow::array::{Array, ArrayRef, BooleanBufferBuilder};
-use arrow::compute::cast;
+use arrow::array::{Array, ArrayRef, BooleanBufferBuilder, new_empty_array};
 use arrow::datatypes::{
     BinaryViewType, DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
     DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
@@ -46,9 +50,9 @@ use arrow::datatypes::{
 };
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::{Result, internal_datafusion_err, not_impl_err};
+use datafusion_common::{Result, not_impl_err};
 use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
-use datafusion_expr::EmitTo;
+use datafusion_expr::{EmitTo, GroupSelection};
 use datafusion_physical_expr::binary_map::OutputType;
 
 use hashbrown::hash_table::HashTable;
@@ -106,6 +110,10 @@ pub trait GroupColumn: Send + Sync {
 
     /// Builds a new array from all of the stored rows
     fn build(self: Box<Self>) -> ArrayRef;
+
+    /// Builds a new array from selected stored rows without changing this
+    /// column. Rows are returned in selection order.
+    fn values_preserving(&self, selection: GroupSelection<'_>) -> Result<ArrayRef>;
 
     /// Builds a new array from the first `n` stored rows, shifting the
     /// remaining rows to the start of the builder
@@ -908,15 +916,18 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
 /// `$nullable`: whether the input can contains nulls
 /// `$t`: the primitive type of the builder
 macro_rules! instantiate_primitive {
-    ($v:expr, $nullable:expr, $t:ty, $data_type:ident) => {
-        if $nullable {
-            let b = PrimitiveGroupValueBuilder::<$t, true>::new($data_type.to_owned());
-            $v.push(Box::new(b) as _)
+    ($nullable:expr, $t:ty, $data_type:ident) => {{
+        let builder: Box<dyn GroupColumn> = if $nullable {
+            Box::new(PrimitiveGroupValueBuilder::<$t, true>::new(
+                $data_type.to_owned(),
+            ))
         } else {
-            let b = PrimitiveGroupValueBuilder::<$t, false>::new($data_type.to_owned());
-            $v.push(Box::new(b) as _)
-        }
-    };
+            Box::new(PrimitiveGroupValueBuilder::<$t, false>::new(
+                $data_type.to_owned(),
+            ))
+        };
+        Some(builder)
+    }};
 }
 
 /// Returns true if the specified data type has a specialized
@@ -928,17 +939,7 @@ macro_rules! instantiate_primitive {
 /// builder for. The `group_column_supported_type_matches_make_group_column`
 /// test below pins this biconditional.
 fn group_column_supported_type(data_type: &DataType) -> bool {
-    // Nested types (Struct / List / LargeList / FixedSizeList, recursively) have
-    // no type-specialized `GroupColumn`; they are handled by the generic
-    // row-backed fallback in `make_group_column` whenever arrow's row format can
-    // encode them. Gate the fallback to nested types so intentionally-excluded
-    // scalar types (e.g. Float16, Decimal256) stay on `GroupValuesRows` and the
-    // `group_column_supported_type` ⇔ `make_group_column` invariant holds.
-    if data_type.is_nested() {
-        return RowsGroupColumn::supports_type(data_type);
-    }
-    matches!(
-        *data_type,
+    match data_type {
         DataType::Int8
             | DataType::Int16
             | DataType::Int32
@@ -956,6 +957,11 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
             | DataType::LargeUtf8
             | DataType::Binary
             | DataType::LargeBinary
+            // Only non-negative widths: a negative width is not a valid
+            // Arrow type (no array can be constructed for it), and the
+            // dispatcher in `make_group_column` rejects it. Keep the two
+            // in lockstep.
+            | DataType::FixedSizeBinary(0..)
             | DataType::Date32
             | DataType::Date64
             // Only the semantically valid Time variants per the Arrow spec.
@@ -972,8 +978,19 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
             | DataType::Interval(_)
             | DataType::Utf8View
             | DataType::BinaryView
-            | DataType::Boolean
-    )
+            | DataType::Boolean => true,
+        DataType::List(child_field) | DataType::LargeList(child_field)
+            if group_column_supported_type(child_field.data_type()) => true,
+        DataType::Dictionary(_, v) if group_column_supported_type(v) => true,
+        // Nested types (Struct / List / LargeList / FixedSizeList, recursively)
+        // that have no type-specialized `GroupColumn` as per the above are handled by the generic
+        // row-backed fallback in `make_group_column` whenever arrow's row format can
+        // encode them. Gate the fallback to nested types so intentionally-excluded
+        // scalar types (e.g. Float16, Decimal256) stay on `GroupValuesRows` and the
+        // `group_column_supported_type` ⇔ `make_group_column` invariant holds.
+        dt if dt.is_nested() => RowsGroupColumn::supports_type(dt),
+        _ => false,
+    }
 }
 
 /// Build a [`GroupColumn`] for a single schema field.
@@ -994,146 +1011,176 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
 fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
     let nullable = field.is_nullable();
     let data_type = field.data_type();
-    let mut v: Vec<Box<dyn GroupColumn>> = Vec::with_capacity(1);
-    match *data_type {
-        DataType::Int8 => instantiate_primitive!(v, nullable, Int8Type, data_type),
-        DataType::Int16 => instantiate_primitive!(v, nullable, Int16Type, data_type),
-        DataType::Int32 => instantiate_primitive!(v, nullable, Int32Type, data_type),
-        DataType::Int64 => instantiate_primitive!(v, nullable, Int64Type, data_type),
-        DataType::UInt8 => instantiate_primitive!(v, nullable, UInt8Type, data_type),
-        DataType::UInt16 => instantiate_primitive!(v, nullable, UInt16Type, data_type),
-        DataType::UInt32 => instantiate_primitive!(v, nullable, UInt32Type, data_type),
-        DataType::UInt64 => instantiate_primitive!(v, nullable, UInt64Type, data_type),
-        DataType::Float16 => {
-            instantiate_primitive!(v, nullable, Float16Type, data_type)
-        }
-        DataType::Float32 => {
-            instantiate_primitive!(v, nullable, Float32Type, data_type)
-        }
-        DataType::Float64 => {
-            instantiate_primitive!(v, nullable, Float64Type, data_type)
-        }
-        DataType::Date32 => instantiate_primitive!(v, nullable, Date32Type, data_type),
-        DataType::Date64 => instantiate_primitive!(v, nullable, Date64Type, data_type),
+    let builder: Option<Box<dyn GroupColumn>> = match data_type {
+        DataType::Int8 => instantiate_primitive!(nullable, Int8Type, data_type),
+        DataType::Int16 => instantiate_primitive!(nullable, Int16Type, data_type),
+        DataType::Int32 => instantiate_primitive!(nullable, Int32Type, data_type),
+        DataType::Int64 => instantiate_primitive!(nullable, Int64Type, data_type),
+        DataType::UInt8 => instantiate_primitive!(nullable, UInt8Type, data_type),
+        DataType::UInt16 => instantiate_primitive!(nullable, UInt16Type, data_type),
+        DataType::UInt32 => instantiate_primitive!(nullable, UInt32Type, data_type),
+        DataType::UInt64 => instantiate_primitive!(nullable, UInt64Type, data_type),
+        DataType::Float16 => instantiate_primitive!(nullable, Float16Type, data_type),
+        DataType::Float32 => instantiate_primitive!(nullable, Float32Type, data_type),
+        DataType::Float64 => instantiate_primitive!(nullable, Float64Type, data_type),
+        DataType::Date32 => instantiate_primitive!(nullable, Date32Type, data_type),
+        DataType::Date64 => instantiate_primitive!(nullable, Date64Type, data_type),
         DataType::Time32(t) => match t {
             TimeUnit::Second => {
-                instantiate_primitive!(v, nullable, Time32SecondType, data_type)
+                instantiate_primitive!(nullable, Time32SecondType, data_type)
             }
             TimeUnit::Millisecond => {
-                instantiate_primitive!(v, nullable, Time32MillisecondType, data_type)
+                instantiate_primitive!(nullable, Time32MillisecondType, data_type)
             }
             // Time32 with Microsecond / Nanosecond is not a valid Arrow type
             // combination; reject explicitly so group_column_supported_type
             // and this dispatcher stay in lockstep (see consistency fuzz below).
-            _ => return not_impl_err!("{data_type} not supported in GroupValuesColumn"),
+            _ => None,
         },
         DataType::Time64(t) => match t {
             TimeUnit::Microsecond => {
-                instantiate_primitive!(v, nullable, Time64MicrosecondType, data_type)
+                instantiate_primitive!(nullable, Time64MicrosecondType, data_type)
             }
             TimeUnit::Nanosecond => {
-                instantiate_primitive!(v, nullable, Time64NanosecondType, data_type)
+                instantiate_primitive!(nullable, Time64NanosecondType, data_type)
             }
             // Time64 with Second / Millisecond is not a valid Arrow type
             // combination; reject explicitly.
-            _ => return not_impl_err!("{data_type} not supported in GroupValuesColumn"),
+            _ => None,
         },
         DataType::Timestamp(t, _) => match t {
             TimeUnit::Second => {
-                instantiate_primitive!(v, nullable, TimestampSecondType, data_type)
+                instantiate_primitive!(nullable, TimestampSecondType, data_type)
             }
             TimeUnit::Millisecond => {
-                instantiate_primitive!(v, nullable, TimestampMillisecondType, data_type)
+                instantiate_primitive!(nullable, TimestampMillisecondType, data_type)
             }
             TimeUnit::Microsecond => {
-                instantiate_primitive!(v, nullable, TimestampMicrosecondType, data_type)
+                instantiate_primitive!(nullable, TimestampMicrosecondType, data_type)
             }
             TimeUnit::Nanosecond => {
-                instantiate_primitive!(v, nullable, TimestampNanosecondType, data_type)
+                instantiate_primitive!(nullable, TimestampNanosecondType, data_type)
             }
         },
         DataType::Duration(t) => match t {
             TimeUnit::Second => {
-                instantiate_primitive!(v, nullable, DurationSecondType, data_type)
+                instantiate_primitive!(nullable, DurationSecondType, data_type)
             }
             TimeUnit::Millisecond => {
-                instantiate_primitive!(v, nullable, DurationMillisecondType, data_type)
+                instantiate_primitive!(nullable, DurationMillisecondType, data_type)
             }
             TimeUnit::Microsecond => {
-                instantiate_primitive!(v, nullable, DurationMicrosecondType, data_type)
+                instantiate_primitive!(nullable, DurationMicrosecondType, data_type)
             }
             TimeUnit::Nanosecond => {
-                instantiate_primitive!(v, nullable, DurationNanosecondType, data_type)
+                instantiate_primitive!(nullable, DurationNanosecondType, data_type)
             }
         },
         // `IntervalUnit` has exactly three variants, so this match is exhaustive
         // with no fallback arm (unlike Time32 / Time64).
         DataType::Interval(u) => match u {
             IntervalUnit::YearMonth => {
-                instantiate_primitive!(v, nullable, IntervalYearMonthType, data_type)
+                instantiate_primitive!(nullable, IntervalYearMonthType, data_type)
             }
             IntervalUnit::DayTime => {
-                instantiate_primitive!(v, nullable, IntervalDayTimeType, data_type)
+                instantiate_primitive!(nullable, IntervalDayTimeType, data_type)
             }
             IntervalUnit::MonthDayNano => {
-                instantiate_primitive!(v, nullable, IntervalMonthDayNanoType, data_type)
+                instantiate_primitive!(nullable, IntervalMonthDayNanoType, data_type)
             }
         },
         DataType::Decimal128(_, _) => {
-            instantiate_primitive!(v, nullable, Decimal128Type, data_type)
+            instantiate_primitive!(nullable, Decimal128Type, data_type)
         }
         DataType::Decimal256(_, _) => {
-            instantiate_primitive!(v, nullable, Decimal256Type, data_type)
+            instantiate_primitive!(nullable, Decimal256Type, data_type)
         }
-        DataType::Utf8 => {
-            v.push(Box::new(ByteGroupValueBuilder::<i32>::new(
-                OutputType::Utf8,
-            )));
-        }
-        DataType::LargeUtf8 => {
-            v.push(Box::new(ByteGroupValueBuilder::<i64>::new(
-                OutputType::Utf8,
-            )));
-        }
-        DataType::Binary => {
-            v.push(Box::new(ByteGroupValueBuilder::<i32>::new(
-                OutputType::Binary,
-            )));
-        }
-        DataType::LargeBinary => {
-            v.push(Box::new(ByteGroupValueBuilder::<i64>::new(
-                OutputType::Binary,
-            )));
+        DataType::Utf8 => Some(Box::new(ByteGroupValueBuilder::<i32>::new(
+            OutputType::Utf8,
+        ))),
+        DataType::LargeUtf8 => Some(Box::new(ByteGroupValueBuilder::<i64>::new(
+            OutputType::Utf8,
+        ))),
+        DataType::Binary => Some(Box::new(ByteGroupValueBuilder::<i32>::new(
+            OutputType::Binary,
+        ))),
+        DataType::LargeBinary => Some(Box::new(ByteGroupValueBuilder::<i64>::new(
+            OutputType::Binary,
+        ))),
+        // A negative width is not a valid Arrow type; it falls to the `_`
+        // arm below, matching `group_column_supported_type`.
+        DataType::FixedSizeBinary(byte_width @ 0..) => {
+            Some(Box::new(FixedSizeBinaryGroupValueBuilder::new(*byte_width)))
         }
         DataType::Utf8View => {
-            v.push(Box::new(ByteViewGroupValueBuilder::<StringViewType>::new()));
+            Some(Box::new(ByteViewGroupValueBuilder::<StringViewType>::new()))
         }
         DataType::BinaryView => {
-            v.push(Box::new(ByteViewGroupValueBuilder::<BinaryViewType>::new()));
+            Some(Box::new(ByteViewGroupValueBuilder::<BinaryViewType>::new()))
         }
         DataType::Boolean => {
             if nullable {
-                v.push(Box::new(BooleanGroupValueBuilder::<true>::new()));
+                Some(Box::new(BooleanGroupValueBuilder::<true>::new()))
             } else {
-                v.push(Box::new(BooleanGroupValueBuilder::<false>::new()));
+                Some(Box::new(BooleanGroupValueBuilder::<false>::new()))
             }
         }
+        DataType::List(child_field) => match make_group_column(child_field.as_ref()) {
+            Ok(child) => Some(Box::new(list::ListGroupValueBuilder::<i32>::new(
+                Arc::clone(child_field),
+                child,
+            ))),
+            Err(_) => None,
+        },
+        DataType::LargeList(child_field) => match make_group_column(child_field.as_ref())
+        {
+            Ok(child) => Some(Box::new(list::ListGroupValueBuilder::<i64>::new(
+                Arc::clone(child_field),
+                child,
+            ))),
+            Err(_) => None,
+        },
+        DataType::Dictionary(key_dt, value_dt) => {
+            let new_field = Field::new("", *value_dt.clone(), true);
+            let inner = make_group_column(&new_field)?;
+            macro_rules! dict_col {
+                ($T:ty) => {
+                    Box::new(dictionary::DictionaryGroupValuesColumn::<$T>::new(
+                        inner, &new_field,
+                    ))
+                };
+            }
+            let col: Box<dyn GroupColumn> = match key_dt.as_ref() {
+                DataType::Int8 => dict_col!(Int8Type),
+                DataType::Int16 => dict_col!(Int16Type),
+                DataType::Int32 => dict_col!(Int32Type),
+                DataType::Int64 => dict_col!(Int64Type),
+                DataType::UInt8 => dict_col!(UInt8Type),
+                DataType::UInt16 => dict_col!(UInt16Type),
+                DataType::UInt32 => dict_col!(UInt32Type),
+                DataType::UInt64 => dict_col!(UInt64Type),
+                _ => {
+                    return not_impl_err!(
+                        "Dictionary key type {key_dt} not supported in GroupValuesColumn"
+                    );
+                }
+            };
+            Some(col)
+        }
+        _ => None,
+    };
+    match builder {
+        Some(b) => Ok(b),
         // Generic fallback for nested types (Struct / List / LargeList /
         // FixedSizeList, recursively) that lack a type-specialized builder but
         // can be encoded by arrow's row format. This is what lets a mixed
         // schema keep the column-wise fast path for its native columns instead
         // of dropping the whole key onto `GroupValuesRows`.
-        ref dt if dt.is_nested() && RowsGroupColumn::supports_type(dt) => {
-            v.push(Box::new(RowsGroupColumn::try_new(dt.clone())?));
+        None if data_type.is_nested() && RowsGroupColumn::supports_type(data_type) => {
+            Ok(Box::new(RowsGroupColumn::try_new(data_type.clone())?))
         }
-        _ => return not_impl_err!("{data_type} not supported in GroupValuesColumn"),
+        None => not_impl_err!("{data_type} not supported in GroupValuesColumn"),
     }
-    debug_assert_eq!(
-        v.len(),
-        1,
-        "make_group_column must push exactly one builder"
-    );
-    Ok(v.into_iter().next().unwrap())
 }
 
 impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
@@ -1166,7 +1213,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        let mut output = match emit_to {
+        let output = match emit_to {
             EmitTo::All => {
                 // Replace the column builders with a fresh set so the
                 // aggregator is immediately reusable after the drain.
@@ -1256,21 +1303,31 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
             }
         };
 
-        // TODO: Materialize dictionaries in group keys (#7647)
-        for (field, array) in self.schema.fields.iter().zip(&mut output) {
-            let expected = field.data_type();
-            if let DataType::Dictionary(_, v) = expected {
-                let actual = array.data_type();
-                if v.as_ref() != actual {
-                    return Err(internal_datafusion_err!(
-                        "Converted group rows expected dictionary of {v} got {actual}"
-                    ));
-                }
-                *array = cast(array.as_ref(), expected)?;
-            }
+        Ok(output)
+    }
+
+    fn values_preserving(
+        &mut self,
+        selection: GroupSelection<'_>,
+    ) -> Result<Vec<ArrayRef>> {
+        selection.validate_num_groups(self.len())?;
+        if self.group_values.is_empty() {
+            return Ok(self
+                .schema
+                .fields()
+                .iter()
+                .map(|field| new_empty_array(field.data_type()))
+                .collect());
         }
 
-        Ok(output)
+        self.group_values
+            .iter()
+            .map(|column| column.values_preserving(selection))
+            .collect()
+    }
+
+    fn supports_values_preserving(&self) -> bool {
+        true
     }
 
     fn clear_shrink(&mut self, num_rows: usize) {
@@ -1319,13 +1376,17 @@ mod tests {
     use std::{collections::HashMap, sync::Arc};
 
     use arrow::array::{
-        Array, ArrayRef, DurationMicrosecondArray, Float16Array, Int32Array, Int64Array,
-        PrimitiveArray, RecordBatch, StringArray, StringViewArray,
+        Array, ArrayRef, DurationMicrosecondArray, FixedSizeBinaryArray, Float16Array,
+        Int32Array, Int64Array, PrimitiveArray, RecordBatch, StringArray,
+        StringViewArray, UInt32Array,
     };
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use arrow::{compute::concat_batches, util::pretty::pretty_format_batches};
+    use arrow::{
+        compute::{concat_batches, take},
+        util::pretty::pretty_format_batches,
+    };
     use datafusion_common::utils::proxy::HashTableAllocExt;
-    use datafusion_expr::EmitTo;
+    use datafusion_expr::{EmitTo, GroupSelection};
 
     use crate::aggregates::group_values::{
         GroupValues, multi_group_by::GroupValuesColumn,
@@ -1599,6 +1660,24 @@ mod tests {
     /// it should be added to unsupported_cases.
     #[test]
     fn group_column_supported_type_matches_make_group_column() {
+        let utf8 = || Field::new("v", DataType::Utf8, true);
+        let int32 = || Field::new("v", DataType::Int32, true);
+        let f16 = || Field::new("v", DataType::Float16, true);
+        // A leaf that neither has a specialized `GroupColumn` nor is accepted
+        // by the row-backed fallback (`RowsGroupColumn::supports_type` rejects
+        // `RunEndEncoded` anywhere in the subtree), so nesting it keeps the
+        // whole type unsupported.
+        let ree = || {
+            Field::new(
+                "v",
+                DataType::RunEndEncoded(
+                    Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                    Arc::new(Field::new("values", DataType::Int64, true)),
+                ),
+                true,
+            )
+        };
+
         let supported_cases: Vec<DataType> = vec![
             DataType::Int8,
             DataType::Int64,
@@ -1614,6 +1693,9 @@ mod tests {
             DataType::Binary,
             DataType::LargeBinary,
             DataType::BinaryView,
+            DataType::FixedSizeBinary(16),
+            // Zero-width FixedSizeBinary is valid per the Arrow spec
+            DataType::FixedSizeBinary(0),
             DataType::Boolean,
             DataType::Date32,
             DataType::Date64,
@@ -1629,6 +1711,31 @@ mod tests {
             DataType::Interval(arrow::datatypes::IntervalUnit::YearMonth),
             DataType::Interval(arrow::datatypes::IntervalUnit::DayTime),
             DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano),
+            // Nested
+            DataType::List(Arc::new(int32())),
+            DataType::LargeList(Arc::new(int32())),
+            DataType::List(Arc::new(f16())),
+            DataType::LargeList(Arc::new(f16())),
+            DataType::List(Arc::new(utf8())),
+            DataType::List(Arc::new(Field::new(
+                "v",
+                DataType::List(Arc::new(int32())),
+                true,
+            ))),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int64)),
+            DataType::Dictionary(
+                Box::new(DataType::UInt16),
+                Box::new(DataType::LargeUtf8),
+            ),
+            DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Timestamp(
+                    arrow::datatypes::TimeUnit::Nanosecond,
+                    None,
+                )),
+            ),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Float16)),
         ];
 
         for dt in &supported_cases {
@@ -1636,6 +1743,8 @@ mod tests {
                 group_column_supported_type(dt),
                 "expected group_column_supported_type=true for {dt:?}"
             );
+            // Building a top-level Field and feeding it through the factory
+            // must succeed for every supported case.
             let field = Field::new("col", dt.clone(), true);
             make_group_column(&field).unwrap_or_else(|e| {
                 panic!(
@@ -1655,6 +1764,18 @@ mod tests {
             DataType::Time64(arrow::datatypes::TimeUnit::Millisecond),
             DataType::Time32(arrow::datatypes::TimeUnit::Microsecond),
             DataType::Time32(arrow::datatypes::TimeUnit::Nanosecond),
+            // Nested with an unsupported leaf
+            DataType::List(Arc::new(ree())),
+            DataType::LargeList(Arc::new(ree())),
+            // Deeply nested unsupported
+            DataType::List(Arc::new(Field::new(
+                "v",
+                DataType::List(Arc::new(ree())),
+                true,
+            ))),
+            // A negative width is representable in the DataType but is not
+            // a valid Arrow type; no array can be constructed for it.
+            DataType::FixedSizeBinary(-5),
         ];
 
         for dt in &unsupported_cases {
@@ -1886,6 +2007,56 @@ mod tests {
         }
     }
 
+    // https://github.com/apache/datafusion/issues/23127
+    // validate DictionaryGroupColumn deduplicates values — only k distinct keys appear
+    // in the values array even when there are more than 128 groups total.
+    #[test]
+    fn multi_col_groupby_dict_many_groups_two_values() {
+        use arrow::array::{AsArray, DictionaryArray, Int8Array};
+        use arrow::datatypes::Int8Type;
+
+        let n_groups = 129_usize;
+        let dict_vocab: ArrayRef = Arc::new(StringArray::from(vec!["cat", "dog"]));
+
+        // Each row has a unique label (forcing a new group) and alternates
+        // between the two dictionary values.  Int8 keys are used; only 2
+        // distinct values exist so the key type never overflows.
+        let labels: ArrayRef = Arc::new(StringArray::from(
+            (0..n_groups).map(|i| format!("g{i}")).collect::<Vec<_>>(),
+        ));
+        let dict_keys = Int8Array::from(
+            (0..n_groups)
+                .map(|i| Some((i % 2) as i8))
+                .collect::<Vec<_>>(),
+        );
+        let categories: ArrayRef = Arc::new(DictionaryArray::<Int8Type>::new(
+            dict_keys,
+            Arc::clone(&dict_vocab),
+        ));
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("label", DataType::Utf8, false),
+            Field::new(
+                "category",
+                DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
+                false,
+            ),
+        ]));
+
+        let mut gv = GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
+        gv.intern(&[labels, categories], &mut vec![]).unwrap();
+        let out = gv.emit(EmitTo::All).unwrap();
+
+        assert_eq!(out[0].len(), n_groups);
+        assert!(matches!(
+            out[1].data_type(),
+            DataType::Dictionary(k, v)
+                if k.as_ref() == &DataType::Int8 && v.as_ref() == &DataType::Utf8
+        ));
+        // Both vectorized and streaming paths now deduplicate dict values.
+        assert_eq!(out[1].as_dictionary::<Int8Type>().values().len(), 2);
+    }
+
     #[test]
     fn test_intern_for_vectorized_group_values() {
         let data_set = VectorizedTestDataSet::new();
@@ -1897,6 +2068,111 @@ mod tests {
         let actual_batch = RecordBatch::try_new(data_set.schema(), actual_batch).unwrap();
 
         check_result(&actual_batch, &data_set.expected_batch);
+    }
+
+    #[test]
+    fn test_intern_for_fixed_size_binary_group_values() {
+        // Two-column group by `(FixedSizeBinary(2), Int64)` exercising the
+        // vectorized intern path end-to-end (hashing included), with nulls,
+        // within-batch repeats and across-batch repeats.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::FixedSizeBinary(2), true),
+            Field::new("b", DataType::Int64, true),
+        ]));
+        let mut group_values =
+            GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
+
+        fn fsb(values: Vec<Option<&[u8; 2]>>) -> ArrayRef {
+            Arc::new(
+                FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+                    values.into_iter(),
+                    2,
+                )
+                .unwrap(),
+            )
+        }
+
+        let batch1: Vec<ArrayRef> = vec![
+            fsb(vec![Some(b"aa"), Some(b"aa"), None, None, Some(b"bb")]),
+            Arc::new(Int64Array::from(vec![
+                Some(1),
+                Some(1),
+                None,
+                Some(2),
+                None,
+            ])),
+        ];
+        // Mix of groups repeated from batch1 and new groups
+        let batch2: Vec<ArrayRef> = vec![
+            fsb(vec![Some(b"aa"), Some(b"cc"), None, Some(b"bb")]),
+            Arc::new(Int64Array::from(vec![Some(1), Some(1), None, Some(3)])),
+        ];
+
+        group_values.intern(&batch1, &mut vec![]).unwrap();
+        group_values.intern(&batch2, &mut vec![]).unwrap();
+
+        let actual_batch = group_values.emit(EmitTo::All).unwrap();
+        let actual_batch =
+            RecordBatch::try_new(Arc::clone(&schema), actual_batch).unwrap();
+
+        let expected_batch = RecordBatch::try_new(
+            schema,
+            vec![
+                fsb(vec![
+                    Some(b"aa"),
+                    None,
+                    None,
+                    Some(b"bb"),
+                    Some(b"cc"),
+                    Some(b"bb"),
+                ]),
+                Arc::new(Int64Array::from(vec![
+                    Some(1),
+                    None,
+                    Some(2),
+                    None,
+                    Some(1),
+                    Some(3),
+                ])),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(actual_batch.num_rows(), expected_batch.num_rows());
+        check_result(&actual_batch, &expected_batch);
+    }
+
+    #[test]
+    fn test_preserving_selected_vectorized_group_values() {
+        let data_set = VectorizedTestDataSet::new();
+        let mut group_values =
+            GroupValuesColumn::<false>::try_new(data_set.schema()).unwrap();
+        data_set.load_to_group_values(&mut group_values);
+
+        let selection = [16, 0, 4, 0];
+        let group_selection =
+            GroupSelection::try_from_indices(&selection, group_values.len()).unwrap();
+        let actual = group_values.values_preserving(group_selection).unwrap();
+        let indices = UInt32Array::from_iter_values(selection.map(|index| index as u32));
+        let mut destructive_group_values =
+            GroupValuesColumn::<false>::try_new(data_set.schema()).unwrap();
+        data_set.load_to_group_values(&mut destructive_group_values);
+        let all = destructive_group_values.emit(EmitTo::All).unwrap();
+        let expected = all
+            .iter()
+            .map(|column| take(column.as_ref(), &indices, None).unwrap())
+            .collect::<Vec<_>>();
+        let expected = RecordBatch::try_new(data_set.schema(), expected).unwrap();
+        let actual = RecordBatch::try_new(data_set.schema(), actual).unwrap();
+        assert_eq!(actual, expected);
+
+        // A repeated preserving read returns the same rows and leaves all groups.
+        let repeated = group_values.values_preserving(group_selection).unwrap();
+        assert_eq!(
+            RecordBatch::try_new(data_set.schema(), repeated).unwrap(),
+            expected
+        );
+        assert_eq!(group_values.len(), data_set.expected_batch.num_rows());
     }
 
     #[test]
@@ -1932,7 +2208,7 @@ mod tests {
 
                 num_remaining_rows -= num_emit;
             }
-            assert!(num_remaining_rows == 0);
+            assert_eq!(num_remaining_rows, 0);
 
             let actual_batch = concat_batches(&schema, &actual_sub_batches).unwrap();
             check_result(&actual_batch, &data_set.expected_batch);

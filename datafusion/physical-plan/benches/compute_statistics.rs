@@ -47,8 +47,8 @@ use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::CrossJoinExec;
 use datafusion_physical_plan::statistics::StatisticsArgs;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, Partitioning, SendableRecordBatchStream,
-    StatisticsContext,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, Partitioning,
+    ReplaceChildrenOptions, SendableRecordBatchStream, StatisticsContext,
 };
 
 /// Minimal leaf node for benchmarking
@@ -98,18 +98,29 @@ impl ExecutionPlan for BenchLeaf {
         vec![]
     }
 
+    fn replace_children(
+        self: Arc<Self>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
+    }
+
     fn apply_expressions(
         &self,
         _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         Ok(TreeNodeRecursion::Continue)
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(self)
     }
 
     fn execute(

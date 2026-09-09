@@ -173,6 +173,37 @@ fn cli_quick_test<'a>(
     assert_cmd_snapshot!(cmd);
 }
 
+#[test]
+fn spark_features_require_opt_in() {
+    let dialect_query = "SELECT CAST(1 AS LONG);";
+    let spark_query = "SELECT concat_ws(',', array(1, 2)), CAST(1 AS LONG);";
+
+    let output = cli()
+        .args(["-q", "--command", dialect_query])
+        .output()
+        .expect("failed to run datafusion-cli without --spark");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!output.status.success(), "query unexpectedly succeeded");
+    assert!(
+        stdout.contains("Unsupported SQL type LONG"),
+        "expected Spark SQL syntax to be unavailable without --spark, got:\n{stdout}"
+    );
+
+    let output = cli()
+        .args(["-q", "--spark", "--format", "csv", "--command", spark_query])
+        .output()
+        .expect("failed to run datafusion-cli with --spark");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "query failed with --spark, got:\n{stdout}"
+    );
+    assert!(
+        stdout.lines().any(|line| line == "\"1,2\",1"),
+        "expected Spark planner and dialect result, got:\n{stdout}"
+    );
+}
+
 /// Read data piped into the CLI via the `/dev/stdin` pseudo-path.
 ///
 /// Unix-only: `/dev/stdin` does not exist on Windows. This drives the real

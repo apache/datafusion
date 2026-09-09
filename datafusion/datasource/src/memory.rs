@@ -129,7 +129,12 @@ impl DataSource for MemorySourceConfig {
                 }
             }
             DisplayFormatType::TreeRender => {
-                let total_rows = self.partitions.iter().map(|b| b.len()).sum::<usize>();
+                let total_rows = self
+                    .partitions
+                    .iter()
+                    .flatten()
+                    .map(RecordBatch::num_rows)
+                    .sum::<usize>();
                 let total_bytes: usize = self
                     .partitions
                     .iter()
@@ -275,6 +280,7 @@ impl DataSource for MemorySourceConfig {
         &self,
         ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_common::utils::usize_to_wire;
         use datafusion_physical_expr_common::sort_expr::sort_exprs_try_to_proto;
         use datafusion_proto_models::protobuf;
 
@@ -310,7 +316,12 @@ impl DataSource for MemorySourceConfig {
                         projection,
                         sort_information,
                         show_sizes: self.show_sizes,
-                        fetch: self.fetch.map(|f| f as u32),
+                        fetch: self
+                            .fetch
+                            .map(|fetch| {
+                                usize_to_wire(fetch, "MemoryScanExecNode", "fetch")
+                            })
+                            .transpose()?,
                     },
                 ),
             ),
@@ -677,6 +688,7 @@ impl MemorySourceConfig {
         ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn datafusion_physical_plan::ExecutionPlan>> {
         use datafusion_common::internal_datafusion_err;
+        use datafusion_common::utils::usize_from_wire;
         use datafusion_physical_expr_common::sort_expr::sort_exprs_try_from_proto;
         use datafusion_proto_models::protobuf;
 
@@ -713,8 +725,12 @@ impl MemorySourceConfig {
             sort_information.extend(LexOrdering::new(sort_exprs));
         }
 
+        let fetch = scan
+            .fetch
+            .map(|fetch| usize_from_wire(fetch, "MemoryScanExecNode", "fetch"))
+            .transpose()?;
         let source = Self::try_new(&partitions, schema, projection)?
-            .with_limit(scan.fetch.map(|f| f as usize))
+            .with_limit(fetch)
             .with_show_sizes(scan.show_sizes)
             .try_with_sort_information(sort_information)?;
 

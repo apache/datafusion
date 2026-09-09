@@ -32,8 +32,6 @@ use parquet::file::properties::{WriterProperties, WriterVersion};
 use rand::distr::Alphanumeric;
 use rand::distr::uniform::SampleUniform;
 use rand::prelude::*;
-use std::fs::File;
-use std::io::Read;
 use std::ops::Range;
 use std::path::Path;
 use std::sync::Arc;
@@ -211,9 +209,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         .unwrap();
 
     // We read the queries from a file so they can be changed without recompiling the benchmark
-    let mut queries_file = File::open("benches/parquet_query_sql.sql").unwrap();
-    let mut queries = String::new();
-    queries_file.read_to_string(&mut queries).unwrap();
+    let queries = std::fs::read_to_string("benches/parquet_query_sql.sql").unwrap();
 
     for query in queries.split(';') {
         let query = query.trim();

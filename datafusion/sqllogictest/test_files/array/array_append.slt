@@ -269,5 +269,67 @@ select array_append(column1, arrow_cast(make_array(1, 11, 111), 'FixedSizeList(3
 [[1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4], [4, 5, 6], [1, 11, 111]] [[1, 2, 3], [11, 12, 13], [7, 8, 9]]
 [[4, 5, 6], [10, 11, 12], [4, 9, 8], [7, 8, 9], [10, 11, 12], [1, 8, 7], [1, 11, 111]] [[1, 2, 3], [11, 12, 13], [10, 11, 12]]
 
+# the input list's inner field is carried through to the output, so that the
+# returned type matches the one promised at planning time
+query ?T
+select
+  array_append(arrow_cast(column1, 'List(Int64, field: ''element'')'), 4),
+  arrow_typeof(array_append(arrow_cast(column1, 'List(Int64, field: ''element'')'), 4))
+from values (make_array(1, 2, 3));
+----
+[1, 2, 3, 4] List(Int64, field: 'element')
+
+query ?T
+select
+  array_append(arrow_cast(column1, 'LargeList(Int64, field: ''element'')'), 4),
+  arrow_typeof(array_append(arrow_cast(column1, 'LargeList(Int64, field: ''element'')'), 4))
+from values (make_array(1, 2, 3));
+----
+[1, 2, 3, 4] LargeList(Int64, field: 'element')
+
+# nested value types go through a different kernel path
+query ?T
+select
+  array_append(arrow_cast(column1, 'List(List(Int64), field: ''element'')'), make_array(2)),
+  arrow_typeof(array_append(arrow_cast(column1, 'List(List(Int64), field: ''element'')'), make_array(2)))
+from values (make_array(make_array(1)));
+----
+[[1], [2]] List(List(Int64), field: 'element')
+
+# a non-nullable inner field stays non-nullable when the appended element cannot be null
+query ??TT
+select
+  array_append(column1, 4),
+  array_append(arrow_cast(column1, 'LargeList(non-null Int64)'), 4),
+  arrow_typeof(array_append(column1, 4)),
+  arrow_typeof(array_append(arrow_cast(column1, 'LargeList(non-null Int64)'), 4))
+from values
+  (arrow_cast(make_array(), 'List(non-null Int64)')),
+  (arrow_cast(NULL, 'List(non-null Int64)')),
+  (arrow_cast(make_array(1, 2, 3), 'List(non-null Int64)'))
+;
+----
+[4] [4] List(non-null Int64) LargeList(non-null Int64)
+[4] [4] List(non-null Int64) LargeList(non-null Int64)
+[1, 2, 3, 4] [1, 2, 3, 4] List(non-null Int64) LargeList(non-null Int64)
+
+# ... and is widened when the appended element is nullable, since the result
+# genuinely contains a null element
+query ?T
+select
+  array_append(arrow_cast(make_array(1, 2), 'List(non-null Int64)'), NULL),
+  arrow_typeof(array_append(arrow_cast(make_array(1, 2), 'List(non-null Int64)'), NULL));
+----
+[1, 2, NULL] List(Int64)
+
+query ?T
+select
+  array_append(arrow_cast(make_array(1, 2), 'List(non-null Int64)'), column1),
+  arrow_typeof(array_append(arrow_cast(make_array(1, 2), 'List(non-null Int64)'), column1))
+from values (3), (NULL);
+----
+[1, 2, 3] List(Int64)
+[1, 2, NULL] List(Int64)
+
 
 include ./cleanup.slt.part

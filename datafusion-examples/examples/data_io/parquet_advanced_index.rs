@@ -406,7 +406,8 @@ impl IndexedFile {
         let file_size = path.metadata()?.len();
 
         let file = File::open(path).map_err(|e| {
-            DataFusionError::from(e).context(format!("Error opening file {path:?}"))
+            DataFusionError::from(e)
+                .context(format!("Error opening file {}", path.display()))
         })?;
 
         let options = ArrowReaderOptions::new()
@@ -464,7 +465,7 @@ impl TableProvider for IndexTableProvider {
     async fn scan(
         &self,
         state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -500,7 +501,7 @@ impl TableProvider for IndexTableProvider {
         );
         let file_scan_config = FileScanConfigBuilder::new(object_store_url, file_source)
             .with_limit(limit)
-            .with_projection_indices(projection.cloned())?
+            .with_projection_indices(projection.map(|p| p.to_vec()))?
             .with_file(partitioned_file)
             .build();
 
@@ -583,7 +584,7 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
         let metadata = self
             .metadata
             .get(&filename)
-            .expect("metadata for file not found: {filename}");
+            .unwrap_or_else(|| panic!("metadata for file not found: {filename}"));
         Ok(Box::new(ParquetReaderWithCache {
             filename,
             metadata: Arc::clone(metadata),

@@ -688,12 +688,12 @@ impl TDigest {
         }
 
         Ok(Self {
+            centroids,
             max_size,
             sum,
             count,
             max,
             min,
-            centroids,
         })
     }
 }
