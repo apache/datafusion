@@ -197,3 +197,8 @@ name = "range_repartition"
 [[bench]]
 harness = false
 name = "unnest"
+
+[[bench]]
+harness = false
+name = "repartition"
+required-features = ["test_utils"]
