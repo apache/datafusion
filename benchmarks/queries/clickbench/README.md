@@ -260,7 +260,6 @@ FROM hits
 WHERE "URL" < 'zzzz';
 ```
 
-
 ### Q14: Grouped `COUNT(DISTINCT <string>)` beside a non-distinct `COUNT(*)`
 
 **Question**: "For the top 10 search phrases by hit count, how many distinct
@@ -300,6 +299,46 @@ LIMIT 10;
 ```
 
 
+
+### Q15: Correlation of ad slot dimensions per user
+
+**Question**: "How correlated are the width and height of the screens each user
+browses from?"
+
+**Important Query Properties**: `covar_samp` over a very high cardinality
+`GROUP BY` (about 17.6M distinct `UserID`s). `covar_samp` has no native
+`GroupsAccumulator`, so both `AggregateExec`s hold one `Accumulator` per group
+behind `GroupsAccumulatorAdapter` and every input batch is routed through it.
+That makes the query a direct measure of the adapter's per-batch cost at high
+cardinality. The aggregate is cheap and the outer `MAX` keeps the result small,
+so the adapter dominates the runtime. Q16 is the low cardinality twin, and
+`corr` in place of `covar_samp` is the native-`GroupsAccumulator` control.
+
+```sql
+SELECT MAX(c) FROM (
+    SELECT covar_samp("ResolutionWidth", "ResolutionHeight") as c
+    FROM hits
+    GROUP BY "UserID"
+);
+```
+
+### Q16: Correlation of ad slot dimensions per region
+
+**Question**: "How correlated are the width and height of the screens browsed
+from in each region?"
+
+**Important Query Properties**: the same `covar_samp` aggregate as Q15 through
+`GroupsAccumulatorAdapter`, but over about 9,000 groups instead of 17.6M. It is
+the low cardinality control for Q15: work that trades per-group cost for
+per-batch cost has to leave this one alone.
+
+```sql
+SELECT MAX(c) FROM (
+    SELECT covar_samp("ResolutionWidth", "ResolutionHeight") as c
+    FROM hits
+    GROUP BY "RegionID"
+);
+```
 
 ## Data Notes
 
