@@ -23,6 +23,7 @@ use crate::aggregates::AggregateExec;
 use crate::aggregates::group_values::AccumulatorPhase;
 
 use super::common::{AggregateHashTable, HashAggregateAccumulator, SingleMarker};
+use crate::metrics::BaselineMetrics;
 
 /// Implementation specific to single aggregation, where the table stores final
 /// aggregate values and the input rows are raw rows.
@@ -57,10 +58,12 @@ impl AggregateHashTable<SingleMarker> {
     /// exhausted, and an internal error if polled in the `Building` state.
     pub(in crate::aggregates) fn next_output_batch(
         &mut self,
+        baseline_metrics: &BaselineMetrics,
     ) -> Result<Option<RecordBatch>> {
         self.next_output_batch_inner(
             HashAggregateAccumulator::evaluate_to_columns,
             AccumulatorPhase::Evaluate,
+            baseline_metrics,
         )
     }
 

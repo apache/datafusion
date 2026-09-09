@@ -30,7 +30,7 @@ use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
 use super::aggregate_hash_table::{AggregateHashTable, PartialReduceMarker};
-use crate::metrics::{BaselineMetrics, RecordOutput, SpillMetrics};
+use crate::metrics::{BaselineMetrics, SpillMetrics};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream};
 
@@ -315,12 +315,18 @@ impl PartialReduceHashAggregateStream {
         let state_batch_result = original_state.hash_table_mut().take_state_batch();
 
         match state_batch_result {
-            Ok(Some(remaining_groups)) => ControlFlow::Continue(
-                PartialReduceHashAggregateState::EmittingOnMemoryPressure {
-                    hash_table: original_state.into_hash_table(),
-                    remaining_groups,
-                },
-            ),
+            Ok(Some(remaining_groups)) => {
+                // The batch is emitted in `batch_size` slices that share its
+                // buffers. Record rows and bytes once here;
+                // `handle_emitting_on_memory_pressure` counts each slice.
+                self.baseline_metrics.record_output_bytes(&remaining_groups);
+                ControlFlow::Continue(
+                    PartialReduceHashAggregateState::EmittingOnMemoryPressure {
+                        hash_table: original_state.into_hash_table(),
+                        remaining_groups,
+                    },
+                )
+            }
             // No accumulated group to emit, so early emission cannot release any
             // memory: report the original error.
             Ok(None) => Self::break_with_err(oom),
@@ -368,10 +374,10 @@ impl PartialReduceHashAggregateStream {
         };
 
         debug_assert!(output_batch.num_rows() > 0);
-        ControlFlow::Break((
-            Poll::Ready(Some(Ok(output_batch.record_output(&self.baseline_metrics)))),
-            next_state,
-        ))
+        // Rows and bytes were recorded for the whole materialized batch in
+        // `resize_or_emit_early`; only count the emitted slice here.
+        self.baseline_metrics.output_batches().add(1);
+        ControlFlow::Break((Poll::Ready(Some(Ok(output_batch))), next_state))
     }
 
     /// Handle ProducingOutput state - emit merged partial aggregate state batches.
@@ -391,7 +397,11 @@ impl PartialReduceHashAggregateStream {
 
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let timer = elapsed_compute.timer();
-        let result = original_state.hash_table_mut().next_output_batch();
+        // The table records output metrics itself: rows and bytes once per
+        // materialization, batch count once per slice.
+        let result = original_state
+            .hash_table_mut()
+            .next_output_batch(&self.baseline_metrics);
         timer.done();
 
         match result {
@@ -408,10 +418,7 @@ impl PartialReduceHashAggregateStream {
                     original_state
                 };
 
-                ControlFlow::Break((
-                    Poll::Ready(Some(Ok(batch.record_output(&self.baseline_metrics)))),
-                    next_state,
-                ))
+                ControlFlow::Break((Poll::Ready(Some(Ok(batch))), next_state))
             }
             Ok(None) => {
                 let _ = self.reservation.try_resize(0);

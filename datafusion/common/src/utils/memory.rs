@@ -165,6 +165,16 @@ pub fn get_record_batch_memory_size(batch: &RecordBatch) -> usize {
 /// batch's buffers are kept alive by the batch even when only a sub-range is
 /// referenced, so counting unique buffers in full reflects the memory the
 /// batches actually retain.
+///
+/// # Every counted batch must stay alive while the counter is in use
+///
+/// Buffers are identified by allocation address. Once a counted batch is
+/// dropped, the allocator may hand its address to a new allocation, which this
+/// counter would then wrongly skip as already counted. This makes the counter
+/// suitable for accounting batches an operator retains (a join build side, a
+/// buffered input), and unsuitable for a stream of batches that are handed
+/// downstream and forgotten. For that case, count each materialized batch once
+/// before slicing it instead.
 #[derive(Debug, Default)]
 pub struct RecordBatchMemoryCounter {
     /// Start addresses of `Buffer`s that have already been counted (instead of

@@ -8479,4 +8479,160 @@ mod tests {
         assert!(agg.set_dynamic_filter(df).is_err());
         Ok(())
     }
+
+    /// Regression test for the aggregate's `output_bytes` metric.
+    ///
+    /// The aggregate materializes each emit as one batch and hands it
+    /// downstream in `batch_size` slices that share the materialized buffers.
+    /// Two failure modes are guarded against:
+    ///
+    /// * Recording every slice with `RecordBatch::record_output` charges the
+    ///   shared buffers once per slice, inflating `output_bytes`.
+    /// * Deduplicating buffers by address for the life of the stream
+    ///   undercounts, because a downstream consumer drops each batch and the
+    ///   allocator recycles its address for the next emit.
+    ///
+    /// The fix records rows and bytes once per materialization and only the
+    /// batch count per slice, so the result must not depend on whether the
+    /// consumer retains or drops batches, nor on how many slices an emit is
+    /// cut into.
+    ///
+    /// Sorted partial aggregation emits one materialization per completed key
+    /// range, giving many independently allocated emits. `batch_size` 8192
+    /// leaves them whole; `batch_size` 100 slices each 512-row emit into 6.
+    #[tokio::test]
+    async fn output_bytes_metric_is_exact_for_sliced_and_dropped_batches() -> Result<()> {
+        use datafusion_common::utils::memory::RecordBatchMemoryCounter;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("value", DataType::Int64, false),
+        ]));
+
+        // 200 input batches, each with 512 distinct, strictly increasing keys.
+        let keys_per_batch = 512;
+        let input_batches = (0..200i32)
+            .map(|i| {
+                let start = i * keys_per_batch;
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(Int32Array::from(
+                            (start..start + keys_per_batch).collect::<Vec<_>>(),
+                        )),
+                        Arc::new(Int64Array::from(vec![1i64; keys_per_batch as usize])),
+                    ],
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let ordering = LexOrdering::new([PhysicalSortExpr::new_default(Arc::new(
+            Column::new("key", 0),
+        ))])
+        .unwrap();
+        let input = TestMemoryExec::try_new(&[input_batches], Arc::clone(&schema), None)?
+            .try_with_sort_information(vec![ordering])?;
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(TestMemoryExec::update_cache(&Arc::new(input)));
+
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
+        let aggr_expr = vec![Arc::new(
+            AggregateExprBuilder::new(count_udaf(), vec![col("value", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("COUNT(value)")
+                .build()?,
+        )];
+        let new_aggregate = || -> Result<Arc<AggregateExec>> {
+            Ok(Arc::new(AggregateExec::try_new(
+                AggregateMode::Partial,
+                group_by.clone(),
+                aggr_expr.clone(),
+                vec![None],
+                Arc::clone(&input),
+                Arc::clone(&schema),
+            )?))
+        };
+        assert_eq!(new_aggregate()?.input_order_mode(), &InputOrderMode::Sorted);
+
+        let sum_metric = |aggregate: &AggregateExec, pick: fn(&MetricValue) -> bool| {
+            aggregate
+                .metrics()
+                .unwrap()
+                .sum(|m| pick(m.value()))
+                .unwrap()
+                .as_usize()
+        };
+
+        for (batch_size, expect_sliced) in [(8192, false), (100, true)] {
+            let task_ctx =
+                Arc::new(TaskContext::default().with_session_config(
+                    SessionConfig::new().with_batch_size(batch_size),
+                ));
+
+            // Pass 1: retain every output batch. While they are all alive no
+            // address can be recycled, so a `RecordBatchMemoryCounter` over
+            // them is the exact deduplicated size of what was emitted.
+            let aggregate = new_aggregate()?;
+            let retained = collect(aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
+            let output_batches = retained.len();
+            assert!(output_batches > 1, "test needs many separate emits");
+            let sliced = retained.iter().any(|b| b.num_rows() == batch_size);
+            assert_eq!(sliced, expect_sliced, "batch_size={batch_size}");
+            let mut ground_truth = RecordBatchMemoryCounter::new();
+            for batch in &retained {
+                ground_truth.count_batch(batch);
+            }
+            let expected_bytes = ground_truth.memory_usage();
+            let expected_rows: usize = retained.iter().map(|b| b.num_rows()).sum();
+            assert_eq!(expected_rows, 200 * keys_per_batch as usize);
+
+            let reported =
+                sum_metric(&aggregate, |v| matches!(v, MetricValue::OutputBytes(_)));
+            assert_eq!(
+                reported, expected_bytes,
+                "batch_size={batch_size}, retained consumer: output_bytes"
+            );
+            assert_eq!(
+                sum_metric(&aggregate, |v| matches!(v, MetricValue::OutputBatches(_))),
+                output_batches,
+                "batch_size={batch_size}, retained consumer: output_batches"
+            );
+            assert_eq!(
+                sum_metric(&aggregate, |v| matches!(v, MetricValue::OutputRows(_))),
+                expected_rows,
+                "batch_size={batch_size}, retained consumer: output_rows"
+            );
+            drop(retained);
+
+            // Pass 2: drop each batch as it arrives, like a real downstream
+            // operator. The metrics must be identical to pass 1.
+            let aggregate = new_aggregate()?;
+            let mut stream = aggregate.execute(0, task_ctx)?;
+            let mut dropped_batches = 0usize;
+            while let Some(batch) = stream.next().await {
+                batch?;
+                dropped_batches += 1;
+            }
+            assert_eq!(dropped_batches, output_batches);
+
+            let reported =
+                sum_metric(&aggregate, |v| matches!(v, MetricValue::OutputBytes(_)));
+            assert_eq!(
+                reported, expected_bytes,
+                "batch_size={batch_size}, dropping consumer: output_bytes"
+            );
+            assert_eq!(
+                sum_metric(&aggregate, |v| matches!(v, MetricValue::OutputBatches(_))),
+                output_batches,
+                "batch_size={batch_size}, dropping consumer: output_batches"
+            );
+            assert_eq!(
+                sum_metric(&aggregate, |v| matches!(v, MetricValue::OutputRows(_))),
+                expected_rows,
+                "batch_size={batch_size}, dropping consumer: output_rows"
+            );
+        }
+        Ok(())
+    }
 }

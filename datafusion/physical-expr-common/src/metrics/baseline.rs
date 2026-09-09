@@ -129,6 +129,11 @@ impl BaselineMetrics {
         &self.output_batches
     }
 
+    /// return the metric for the total number of output bytes produced
+    pub fn output_bytes(&self) -> &Count {
+        &self.output_bytes
+    }
+
     /// Returns a derived metric that summarizes how unevenly `output_rows`
     /// are distributed across partitions.
     ///
@@ -201,6 +206,18 @@ impl BaselineMetrics {
     /// batch output for other thing
     pub fn record_output(&self, num_rows: usize) {
         self.output_rows.add(num_rows);
+    }
+
+    /// Record the rows and memory of a materialized batch whose contents will
+    /// be emitted downstream as one or more zero-copy slices.
+    ///
+    /// Slices share the materialized batch's buffers, so recording each slice
+    /// with [`RecordOutput::record_output`] would count those buffers once per
+    /// slice. Instead, call this once on the materialized batch, and for each
+    /// emitted slice only bump [`Self::output_batches`].
+    pub fn record_output_bytes(&self, batch: &RecordBatch) {
+        self.output_rows.add(batch.num_rows());
+        self.output_bytes.add(get_record_batch_memory_size(batch));
     }
 
     /// If not previously recorded `done()`, record
