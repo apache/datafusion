@@ -227,15 +227,17 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
 impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Generate a logical plan from an DataFusion SQL statement
     pub fn statement_to_plan(&self, statement: DFStatement) -> Result<LogicalPlan> {
-        match statement {
-            DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s),
-            DFStatement::Statement(s) => self.sql_statement_to_plan(*s),
-            DFStatement::CopyTo(s) => self.copy_to_plan(s),
+        let plan = match statement {
+            DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s)?,
+            DFStatement::Statement(s) => self.sql_statement_to_plan(*s)?,
+            DFStatement::CopyTo(s) => self.copy_to_plan(s)?,
             DFStatement::Explain(ExplainStatement { options, statement }) => {
-                self.explain_to_plan(options, *statement)
+                self.explain_to_plan(options, *statement)?
             }
-            DFStatement::Reset(statement) => self.reset_statement_to_plan(statement),
-        }
+            DFStatement::Reset(statement) => self.reset_statement_to_plan(statement)?,
+        };
+        check_plan(&plan)?;
+        Ok(plan)
     }
 
     /// Generate a logical plan from an SQL statement
