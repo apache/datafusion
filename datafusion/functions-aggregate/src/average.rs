@@ -1246,12 +1246,9 @@ where
     fn size(&self) -> usize {
         // Heap buffers
         self.counts.capacity() * size_of::<u64>()
-        + self.sums.capacity() * size_of::<S::Native>()
-        // Vec struct overhead (ptr, len, cap) for each field
-        + size_of::<Vec<u64>>()
-        + size_of::<Vec<S::Native>>()
-        // Null tracking buffers
-        + self.null_state.size()
+            + self.sums.capacity() * size_of::<S::Native>()
+            // Null tracking buffers
+            + self.null_state.size()
     }
 }
 
@@ -1639,6 +1636,28 @@ mod tests {
             acc.evaluate()?,
             ScalarValue::Decimal64(Some(9_999_999_990_000), 13, 4)
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn avg_groups_size_excludes_accumulator_storage() -> Result<()> {
+        let mut accumulator = AvgGroupsAccumulator::<Float64Type, _>::new(
+            &DataType::Float64,
+            &DataType::Float64,
+            |sum, count| Ok(sum / count as f64),
+        );
+
+        assert_eq!(accumulator.size(), 0);
+
+        let values = Arc::new(Float64Array::from(vec![Some(2.0), None, Some(4.0)]));
+        accumulator.update_batch(&[values], &[0, 1, 2], None, 3)?;
+
+        let expected_size = accumulator.counts.capacity() * size_of::<u64>()
+            + accumulator.sums.capacity() * size_of::<f64>()
+            + accumulator.null_state.size();
+        assert_eq!(accumulator.size(), expected_size);
+        assert!(accumulator.size() > 0);
 
         Ok(())
     }
