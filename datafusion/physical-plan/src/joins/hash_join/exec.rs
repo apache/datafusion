@@ -7402,6 +7402,70 @@ mod tests {
         .unwrap()
     }
 
+    /// Builds the dictionary-encoded twin of
+    /// [`build_two_partition_probe_with_null_in_partition_0`]: the same two
+    /// probe partitions, but the join key is a dictionary and partition 0's
+    /// NULL exists only logically.
+    ///
+    /// Every dictionary key is a physically valid index; one of them points at
+    /// a NULL dictionary value. The array therefore reports
+    /// `null_count() == 0` while `logical_null_count() > 0`, which is the case
+    /// that a physical-NULL check silently misses.
+    fn build_two_partition_dict_probe_with_logical_null_in_partition_0()
+    -> Arc<dyn ExecutionPlan> {
+        let dict_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int32));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c2", dict_type, true),
+            Field::new("dummy", DataType::Int32, true),
+        ]));
+
+        // Dictionary values: [1, NULL]; keys: [0, 1] => logical [1, NULL].
+        let with_logical_null: ArrayRef = Arc::new(DictionaryArray::new(
+            Int32Array::from(vec![0, 1]),
+            Arc::new(Int32Array::from(vec![Some(1), None])),
+        ));
+        assert_eq!(
+            with_logical_null.null_count(),
+            0,
+            "the probe NULL must be logical only, or this test stops covering \
+             the logical_null_count path"
+        );
+        assert!(
+            with_logical_null.logical_null_count() > 0,
+            "the probe key must carry a logical NULL"
+        );
+
+        let partition_0 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                with_logical_null,
+                Arc::new(Int32Array::from(vec![Some(100), Some(400)])),
+            ],
+        )
+        .unwrap();
+
+        // Dictionary values: [2]; keys: [0] => logical [2], no NULL anywhere.
+        let partition_1 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(DictionaryArray::new(
+                    Int32Array::from(vec![0]),
+                    Arc::new(Int32Array::from(vec![Some(2)])),
+                )),
+                Arc::new(Int32Array::from(vec![Some(200)])),
+            ],
+        )
+        .unwrap();
+
+        TestMemoryExec::try_new_exec(
+            &[vec![partition_0], vec![partition_1]],
+            schema,
+            None,
+        )
+        .unwrap()
+    }
+
     /// Drains the probe partitions of `join` one after another in the given
     /// order and returns everything they emitted.
     async fn collect_partitions_in_order(
@@ -7465,6 +7529,60 @@ mod tests {
             assert_eq!(
                 rows, 0,
                 "probe order {order:?} emitted rows although a probe partition saw NULL"
+            );
+        }
+        Ok(())
+    }
+
+    /// The dictionary counterpart of
+    /// [`test_null_aware_anti_join_probe_null_in_other_partition`], where the
+    /// silencing probe NULL exists only logically.
+    ///
+    /// A dictionary key that points at a NULL dictionary value has
+    /// `null_count() == 0`, so only the `logical_null_count()` check in
+    /// `null_aware_skip_probe_batch` records it. This pins that check to the
+    /// cross-partition summary: the partition holding the logical NULL is not
+    /// the one that emits the build rows, in either drain order.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_anti_join_probe_logical_null_in_other_partition(
+        batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        for order in [[0, 1], [1, 0]] {
+            // Build keys are dictionary-encoded too, and NULL-free.
+            let left = build_table_dict_key(
+                "c1",
+                vec![Some(1), Some(2), Some(3), Some(4)],
+                vec![0, 1, 2, 3],
+                "dummy",
+                vec![Some(10), Some(20), Some(30), Some(40)],
+            );
+            let right = build_two_partition_dict_probe_with_logical_null_in_partition_0();
+
+            let on = vec![(
+                Arc::new(Column::new_with_schema("c1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("c2", &right.schema())?) as _,
+            )];
+
+            let join = HashJoinExec::try_new(
+                left,
+                right,
+                on,
+                None,
+                &JoinType::LeftAnti,
+                None,
+                PartitionMode::CollectLeft,
+                NullEquality::NullEqualsNothing,
+                true, // null_aware = true
+            )?;
+
+            let batches = collect_partitions_in_order(&join, &order, &task_ctx).await?;
+            let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+            assert_eq!(
+                rows, 0,
+                "probe order {order:?} emitted rows although a probe partition saw a logical NULL"
             );
         }
         Ok(())
