@@ -497,9 +497,9 @@ query TT
 EXPLAIN SELECT a, count(b) FROM agg_filter_pushdown WHERE a = 'x' GROUP BY a;
 ----
 physical_plan
-01)AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(agg_filter_pushdown.b)], ordering_mode=Sorted
+01)AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(agg_filter_pushdown.b)]
 02)--RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
-03)----AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(agg_filter_pushdown.b)], ordering_mode=Sorted
+03)----AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(agg_filter_pushdown.b)]
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_filter_pushdown.parquet]]}, projection=[a, b], file_type=parquet, predicate=a@0 = x, pruning_predicate=a_null_count@2 != row_count@3 AND a_min@0 <= x AND x <= a_max@1, required_guarantees=[a in (x)]
 
