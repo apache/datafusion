@@ -2693,12 +2693,38 @@ fn roundtrip_cast() {
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
+
+    let field =
+        Field::new("", DataType::Boolean, false).with_metadata(HashMap::from([(
+            String::from("key"),
+            String::from("value"),
+        )]));
+    let test_expr = Expr::Cast(Cast::new_from_field(
+        Box::new(lit(1.0_f32)),
+        Arc::new(field),
+    ));
+
+    let ctx = SessionContext::new();
+    roundtrip_expr_test(test_expr, ctx);
 }
 
 #[test]
 fn roundtrip_try_cast() {
     let test_expr =
         Expr::TryCast(TryCast::new(Box::new(lit(1.0_f32)), DataType::Boolean));
+
+    let ctx = SessionContext::new();
+    roundtrip_expr_test(test_expr, ctx);
+
+    let field =
+        Field::new("", DataType::Boolean, false).with_metadata(HashMap::from([(
+            String::from("key"),
+            String::from("value"),
+        )]));
+    let test_expr = Expr::TryCast(TryCast::new_from_field(
+        Box::new(lit(1.0_f32)),
+        Arc::new(field),
+    ));
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);

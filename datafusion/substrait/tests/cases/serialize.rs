@@ -27,7 +27,7 @@ mod tests {
     use datafusion::prelude::*;
 
     use insta::assert_snapshot;
-    use std::fs;
+    use std::{fs, sync::Arc};
     use substrait::proto::expression::field_reference::{ReferenceType, RootType};
     use substrait::proto::expression::reference_segment;
     use substrait::proto::expression::{ReferenceSegment, RexType};
@@ -100,6 +100,29 @@ mod tests {
         let convert_result = to_substrait_plan(&table_scan, &ctx.state());
         assert!(convert_result.is_ok());
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn asof_join_fails_closed_until_substrait_has_an_extension() -> Result<()> {
+        let ctx = create_context().await?;
+        let table = provider_as_source(ctx.table_provider("data").await?);
+        let left = LogicalPlanBuilder::scan("l", Arc::clone(&table), None)?.build()?;
+        let right = LogicalPlanBuilder::scan("r", table, None)?.build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .asof_join_on(
+                right,
+                Some(col("l.b").eq(col("r.b"))),
+                col("l.a").gt_eq(col("r.a")),
+            )?
+            .build()?;
+        let error = to_substrait_plan(&plan, &ctx.state())
+            .expect_err("ASOF must not be lowered to a generic Substrait join");
+        assert!(
+            error
+                .to_string()
+                .contains("Substrait ASOF join is not supported")
+        );
         Ok(())
     }
 

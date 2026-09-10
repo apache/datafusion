@@ -1043,7 +1043,7 @@ impl<'a> UdafSchemaNameBuilder<'a> {
 
         if let Some(filter) = filter {
             schema_name.write_fmt(format_args!(" FILTER (WHERE {filter})"))?;
-        };
+        }
 
         if !order_by.is_empty() {
             let clause = match supports_within_group_clause {
@@ -1056,7 +1056,7 @@ impl<'a> UdafSchemaNameBuilder<'a> {
                 clause,
                 schema_name_from_sorts(order_by)?
             ))?;
-        };
+        }
 
         Ok(schema_name)
     }
@@ -1132,14 +1132,14 @@ impl<'a> UdafHumanDisplayBuilder<'a> {
 
         if let Some(filter) = filter {
             schema_name.write_fmt(format_args!(" FILTER (WHERE {filter})"))?;
-        };
+        }
 
         if !order_by.is_empty() {
             schema_name.write_fmt(format_args!(
                 " ORDER BY [{}]",
                 schema_name_from_sorts(order_by)?
             ))?;
-        };
+        }
 
         Ok(schema_name)
     }
@@ -1426,7 +1426,7 @@ impl<'a> UdafWindowFunctionDisplayNameBuilder<'a> {
         if !order_by.is_empty() {
             display_name
                 .write_fmt(format_args!(" ORDER BY [{}]", expr_vec_fmt!(order_by)))?;
-        };
+        }
 
         display_name.write_fmt(format_args!(
             " {} BETWEEN {} AND {}",

@@ -31,10 +31,13 @@ use datafusion_expr::{
 };
 use datafusion_macros::user_doc;
 
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
+use datafusion_expr::simplify::{
+    ExprSimplifyResult, REGEX_PLANNING_SIZE_LIMIT_BYTES, SimplifyContext,
+};
 use datafusion_expr_common::operator::Operator;
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
-use regex::Regex;
+use regex::{Error as RegexError, Regex, RegexBuilder};
+use std::borrow::Cow;
 use std::sync::Arc;
 
 #[user_doc(
@@ -158,6 +161,35 @@ impl ScalarUDFImpl for RegexpLikeFunc {
                 regexp_like(&args).map(ColumnarValue::Array)
             }
         }
+    }
+
+    fn should_evaluate_const(&self, args: &[&ScalarValue]) -> bool {
+        let Some(pattern) = args.get(1).and_then(|arg| arg.try_as_str()).flatten() else {
+            return true;
+        };
+        let flags = args.get(2).and_then(|arg| arg.try_as_str()).flatten();
+
+        // Preserve normal error handling for unsupported and malformed flags.
+        if flags.is_some_and(|flags| flags.contains('g')) {
+            return true;
+        }
+
+        // regexp_like returns NULL without compiling the pattern when the
+        // value is NULL. Preserve that fast path during constant folding.
+        if args.first().is_some_and(|arg| arg.is_null()) {
+            return true;
+        }
+
+        let pattern = match flags {
+            Some(flags) => Cow::Owned(format!("(?{flags}){pattern}")),
+            None => Cow::Borrowed(pattern),
+        };
+        !matches!(
+            RegexBuilder::new(pattern.as_ref())
+                .size_limit(REGEX_PLANNING_SIZE_LIMIT_BYTES)
+                .build(),
+            Err(RegexError::CompiledTooBig(_))
+        )
     }
 
     fn simplify(
@@ -625,6 +657,39 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Boolean(Some(true))) => {}
             other => panic!("Unexpected result {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_const_evaluation_budget() {
+        let function = RegexpLikeFunc::new();
+        let args = |pattern: &str, flags: Option<&str>| {
+            let mut args = vec![
+                ScalarValue::Utf8(Some("aaaaa".to_string())),
+                ScalarValue::Utf8(Some(pattern.to_string())),
+            ];
+            if let Some(flags) = flags {
+                args.push(ScalarValue::Utf8(Some(flags.to_string())));
+            }
+            args
+        };
+        let should_evaluate = |args: Vec<ScalarValue>| {
+            let args = args.iter().collect::<Vec<_>>();
+            function.should_evaluate_const(&args)
+        };
+
+        assert!(should_evaluate(args("^a+$", None)));
+        assert!(!should_evaluate(args("a{5}{5}{5}{5}{5}{5}", None)));
+        assert!(!should_evaluate(args("a{5}{5}{5}{5}{5}{5}", Some("m"))));
+
+        let null_value = vec![
+            ScalarValue::Utf8(None),
+            ScalarValue::Utf8(Some("a{5}{5}{5}{5}{5}{5}{5}{5}".to_string())),
+        ];
+        assert!(should_evaluate(null_value));
+
+        // Unsupported flags and syntax errors retain their existing error paths.
+        assert!(should_evaluate(args("^a+$", Some("g"))));
+        assert!(should_evaluate(args("[", None)));
     }
 
     #[test]

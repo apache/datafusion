@@ -1,0 +1,315 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Sort-merge-join correctness across a config matrix. Every equijoin runs on
+# SortMergeJoin (prefer_hash_join=false) and HashJoin (true), so sweeping
+# {true,false} x batch_size {1,2,100,8192} requires them to agree row-for-row.
+# batch_size=1 forces equal-key runs to span single-row batches (historically
+# bug-prone). SMJ needs target_partitions>1 and repartition_joins, set below (not
+# swept). Null-aware NOT IN always uses HashJoin, so it is out of scope (see
+# null_aware_anti_join.slt). Matrix rules: no EXPLAIN, no in-file SET of a swept
+# knob, rowsort every multi-row query.
+
+# configMatrix: datafusion.optimizer.prefer_hash_join=true,false
+# configMatrix: datafusion.execution.batch_size=1,2,100,8192
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+set datafusion.optimizer.repartition_joins = true;
+
+# ------------------------------------------------------------------
+# Fixtures: duplicate keys, an unmatched key on each side, and a NULL key on
+# each side (a NULL key never matches under default equality).
+# ------------------------------------------------------------------
+statement ok
+CREATE TABLE smj_l(k INT, v VARCHAR) AS VALUES
+  (1, 'a'), (1, 'b'), (2, 'c'), (3, 'd'), (NULL, 'e');
+
+statement ok
+CREATE TABLE smj_r(k INT, w VARCHAR) AS VALUES
+  (1, 'x'), (1, 'y'), (2, 'z'), (4, 'q'), (NULL, 'n');
+
+# ------------------------------------------------------------------
+# Basic: Inner / Left / Right / Full on a single equi key
+# ------------------------------------------------------------------
+# INNER: k=1 gives 2x2, k=2 gives 1x1; k=3, k=4 and both NULLs are unmatched.
+query ITT rowsort
+SELECT l.k, l.v, r.w FROM smj_l l JOIN smj_r r ON l.k = r.k;
+----
+1 a x
+1 a y
+1 b x
+1 b y
+2 c z
+
+# LEFT: the INNER rows plus unmatched left rows (k=3, NULL) padded with NULL.
+query ITT rowsort
+SELECT l.k, l.v, r.w FROM smj_l l LEFT JOIN smj_r r ON l.k = r.k;
+----
+1 a x
+1 a y
+1 b x
+1 b y
+2 c z
+3 d NULL
+NULL e NULL
+
+# RIGHT: the INNER rows plus unmatched right rows (k=4, NULL) padded with NULL.
+query TIT rowsort
+SELECT l.v, r.k, r.w FROM smj_l l RIGHT JOIN smj_r r ON l.k = r.k;
+----
+NULL 4 q
+NULL NULL n
+a 1 x
+a 1 y
+b 1 x
+b 1 y
+c 2 z
+
+# FULL: INNER rows plus every unmatched row from both sides.
+query ITT rowsort
+SELECT l.k, l.v, r.w FROM smj_l l FULL JOIN smj_r r ON l.k = r.k;
+----
+1 a x
+1 a y
+1 b x
+1 b y
+2 c z
+3 d NULL
+NULL NULL n
+NULL NULL q
+NULL e NULL
+
+# ------------------------------------------------------------------
+# Existence joins over an equi key: LeftSemi / LeftAnti / RightSemi / RightAnti
+# ------------------------------------------------------------------
+# LeftSemi (EXISTS): left rows whose key matches, each kept once (k=1 twice
+# because the left side has two such rows, not because the right side does).
+query IT rowsort
+SELECT l.k, l.v FROM smj_l l WHERE EXISTS (SELECT 1 FROM smj_r r WHERE l.k = r.k);
+----
+1 a
+1 b
+2 c
+
+# LeftAnti (NOT EXISTS): the complementary left rows, including the NULL key.
+query IT rowsort
+SELECT l.k, l.v FROM smj_l l WHERE NOT EXISTS (SELECT 1 FROM smj_r r WHERE l.k = r.k);
+----
+3 d
+NULL e
+
+# RightSemi: right rows whose key matches some left row.
+query IT rowsort
+SELECT r.k, r.w FROM smj_l l RIGHT SEMI JOIN smj_r r ON l.k = r.k;
+----
+1 x
+1 y
+2 z
+
+# RightAnti: the complementary right rows, including the NULL key.
+query IT rowsort
+SELECT r.k, r.w FROM smj_l l RIGHT ANTI JOIN smj_r r ON l.k = r.k;
+----
+4 q
+NULL n
+
+# ------------------------------------------------------------------
+# Null-safe equality: `IS NOT DISTINCT FROM` makes NULL match NULL
+# ------------------------------------------------------------------
+# The INNER result gains the (NULL,e)-(NULL,n) pair that plain `=` drops.
+query ITT rowsort
+SELECT l.k, l.v, r.w FROM smj_l l JOIN smj_r r ON l.k IS NOT DISTINCT FROM r.k;
+----
+1 a x
+1 a y
+1 b x
+1 b y
+2 c z
+NULL e n
+
+# ------------------------------------------------------------------
+# Multiple equi keys
+# ------------------------------------------------------------------
+statement ok
+CREATE TABLE smj_mk_l(k1 INT, k2 INT, v INT) AS VALUES
+  (1, 1, 10), (1, 2, 20), (2, 2, 30), (NULL, 1, 40);
+
+statement ok
+CREATE TABLE smj_mk_r(k1 INT, k2 INT, w INT) AS VALUES
+  (1, 1, 100), (1, 2, 200), (2, 2, 300), (1, 3, 400);
+
+query IIII rowsort
+SELECT l.k1, l.k2, l.v, r.w
+FROM smj_mk_l l JOIN smj_mk_r r ON l.k1 = r.k1 AND l.k2 = r.k2;
+----
+1 1 10 100
+1 2 20 200
+2 2 30 300
+
+query IIII rowsort
+SELECT l.k1, l.k2, l.v, r.w
+FROM smj_mk_l l LEFT JOIN smj_mk_r r ON l.k1 = r.k1 AND l.k2 = r.k2;
+----
+1 1 10 100
+1 2 20 200
+2 2 30 300
+NULL 1 40 NULL
+
+# ------------------------------------------------------------------
+# Equi key plus a non-equi join filter in the ON clause
+# ------------------------------------------------------------------
+statement ok
+CREATE TABLE smj_a(k INT, x INT) AS VALUES (1, 10), (1, 20), (2, 30), (3, 40);
+
+statement ok
+CREATE TABLE smj_b(k INT, y INT) AS VALUES (1, 15), (1, 25), (2, 5), (4, 50);
+
+# INNER: only k=1 has matches, kept where x < y.
+query IIII rowsort
+SELECT l.k, l.x, r.k, r.y FROM smj_a l JOIN smj_b r ON l.k = r.k AND l.x < r.y;
+----
+1 10 1 15
+1 10 1 25
+1 20 1 25
+
+# LEFT: rows whose key never matches, or matches but fails the filter, keep the
+# left row with NULLs (k=2's x=30 fails 30<5; k=3 has no right key).
+query III rowsort
+SELECT l.k, l.x, r.y FROM smj_a l LEFT JOIN smj_b r ON l.k = r.k AND l.x < r.y;
+----
+1 10 15
+1 10 25
+1 20 25
+2 30 NULL
+3 40 NULL
+
+# FULL with the same filter: unmatched rows from both sides survive.
+query IIII rowsort
+SELECT l.k, l.x, r.k, r.y FROM smj_a l FULL JOIN smj_b r ON l.k = r.k AND l.x < r.y;
+----
+1 10 1 15
+1 10 1 25
+1 20 1 25
+2 30 NULL NULL
+3 40 NULL NULL
+NULL NULL 2 5
+NULL NULL 4 50
+
+# ------------------------------------------------------------------
+# Non-integer (string) key
+# ------------------------------------------------------------------
+statement ok
+CREATE TABLE smj_sk_l(k VARCHAR, v INT) AS VALUES ('a', 1), ('b', 2), ('a', 3);
+
+statement ok
+CREATE TABLE smj_sk_r(k VARCHAR, w INT) AS VALUES ('a', 10), ('c', 20);
+
+query TII rowsort
+SELECT l.k, l.v, r.w FROM smj_sk_l l JOIN smj_sk_r r ON l.k = r.k;
+----
+a 1 10
+a 3 10
+
+query TII rowsort
+SELECT l.k, l.v, r.w FROM smj_sk_l l FULL JOIN smj_sk_r r ON l.k = r.k;
+----
+NULL NULL 20
+a 1 10
+a 3 10
+b 2 NULL
+
+# ------------------------------------------------------------------
+# Empty inputs
+# ------------------------------------------------------------------
+statement ok
+CREATE TABLE smj_empty(k INT, w VARCHAR);
+
+# INNER against an empty side is empty; LEFT keeps every left row with NULLs.
+query ITT rowsort
+SELECT l.k, l.v, r.w FROM smj_l l JOIN smj_empty r ON l.k = r.k;
+----
+
+query ITT rowsort
+SELECT l.k, l.v, r.w FROM smj_l l LEFT JOIN smj_empty r ON l.k = r.k;
+----
+1 a NULL
+1 b NULL
+2 c NULL
+3 d NULL
+NULL e NULL
+
+# Empty left side with a RIGHT join keeps every right row with NULLs.
+query IIT rowsort
+SELECT l.k, r.k, r.w FROM smj_empty l RIGHT JOIN smj_r r ON l.k = r.k;
+----
+NULL 1 x
+NULL 1 y
+NULL 2 z
+NULL 4 q
+NULL NULL n
+
+# ------------------------------------------------------------------
+# Duplicate keys across batch boundaries (verified by count)
+# ------------------------------------------------------------------
+# SortExec re-batches to batch_size, so equal-key runs span batches (proof in
+# sort_merge_join_batches.slt). Left: five k=1, three k=2, one unmatched k=9;
+# right: four k=1, two k=2, one unmatched k=3. INNER = 5*4 + 3*2 = 26.
+statement ok
+CREATE TABLE smj_dup_l(k INT) AS VALUES
+  (1), (1), (1), (1), (1), (2), (2), (2), (9);
+
+statement ok
+CREATE TABLE smj_dup_r(k INT) AS VALUES
+  (1), (1), (1), (1), (2), (2), (3);
+
+query I
+SELECT count(*) FROM smj_dup_l l JOIN smj_dup_r r ON l.k = r.k;
+----
+26
+
+# LEFT = INNER + unmatched left k=9 = 27.
+query I
+SELECT count(*) FROM smj_dup_l l LEFT JOIN smj_dup_r r ON l.k = r.k;
+----
+27
+
+# RIGHT = INNER + unmatched right k=3 = 27.
+query I
+SELECT count(*) FROM smj_dup_l l RIGHT JOIN smj_dup_r r ON l.k = r.k;
+----
+27
+
+# FULL = INNER + both unmatched = 28.
+query I
+SELECT count(*) FROM smj_dup_l l FULL JOIN smj_dup_r r ON l.k = r.k;
+----
+28
+
+# LeftSemi = left rows with a match = 5 + 3 = 8.
+query I
+SELECT count(*) FROM smj_dup_l l WHERE EXISTS (SELECT 1 FROM smj_dup_r r WHERE l.k = r.k);
+----
+8
+
+# LeftAnti = unmatched left rows = 1 (k=9).
+query I
+SELECT count(*) FROM smj_dup_l l WHERE NOT EXISTS (SELECT 1 FROM smj_dup_r r WHERE l.k = r.k);
+----
+1

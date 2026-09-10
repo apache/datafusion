@@ -1115,14 +1115,18 @@ fn dict_from_scalar<K: ArrowDictionaryKeyType>(
 /// Useful for wrapping arrays in dictionary form.
 ///
 /// # Input
+/// ```text
 /// ["alice", "bob", "alice", null, "carol"]
+/// ```
 ///
 /// # Output
 /// `DictionaryArray<Int32>`
+/// ```text
 /// {
 ///   keys:   [0, 1, 2, 3, 4],
 ///   values: ["alice", "bob", "alice", null, "carol"]
 /// }
+/// ```
 pub fn dict_from_values<K: ArrowDictionaryKeyType>(
     values_array: ArrayRef,
 ) -> Result<ArrayRef> {
@@ -5756,7 +5760,7 @@ impl fmt::Display for ScalarValue {
             ScalarValue::Dictionary(_k, v) => write!(f, "{v}")?,
             ScalarValue::RunEndEncoded(_, _, v) => write!(f, "{v}")?,
             ScalarValue::Null => write!(f, "NULL")?,
-        };
+        }
         Ok(())
     }
 }
@@ -9898,7 +9902,7 @@ mod tests {
                 let timestamp2 = ts1.sub(intervals[idx].clone()).unwrap();
                 let back = timestamp2.add(intervals[idx].clone()).unwrap();
                 assert_eq!(ts1, &back);
-            };
+            }
         }
     }
 

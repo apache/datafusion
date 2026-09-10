@@ -68,7 +68,7 @@ name = "datafusion_functions"
 arrow = { workspace = true }
 arrow-buffer = { workspace = true }
 base64 = { version = "0.23", optional = true }
-blake2 = { version = "^0.10.2", optional = true }
+blake2 = { version = "^0.11.0", optional = true }
 blake3 = { version = "1.8", optional = true }
 chrono = { workspace = true }
 chrono-tz = { version = "0.10.4", optional = true }
@@ -132,11 +132,6 @@ required-features = ["unicode_expressions"]
 harness = false
 name = "crypto"
 required-features = ["crypto_expressions"]
-
-[[bench]]
-harness = false
-name = "dictionary_encoding"
-required-features = ["string_expressions", "unicode_expressions"]
 
 [[bench]]
 harness = false
