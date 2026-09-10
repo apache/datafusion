@@ -91,11 +91,7 @@ pub fn get_supported_types_columns(rng_seed: u64) -> Vec<ColumnDescr> {
             "interval_month_day_nano",
             DataType::Interval(IntervalUnit::MonthDayNano),
         ),
-        // Internal error: AggregationFuzzer task error: JoinError::Panic(Id(29108), "called `Option::unwrap()` on a `None` value", ...).
-        // ColumnDescr::new(
-        //     "duration_seconds",
-        //     DataType::Duration(TimeUnit::Second),
-        // ),
+        ColumnDescr::new("duration_seconds", DataType::Duration(TimeUnit::Second)),
         ColumnDescr::new(
             "duration_milliseconds",
             DataType::Duration(TimeUnit::Millisecond),
