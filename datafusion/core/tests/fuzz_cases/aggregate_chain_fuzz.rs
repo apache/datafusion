@@ -1304,8 +1304,11 @@ async fn aggregate_chain_fuzz() {
 /// One line per case; `spilled_stages` names the aggregate operators that
 /// spilled and flags when more than one did.
 const MAX_CONCURRENT_CASES: usize = 16;
-/// Generous: a case takes well under a second in debug builds.
-const CASE_TIMEOUT_SECS: u64 = 60;
+/// A case takes about two seconds alone in a debug build, but CI runs the
+/// whole fuzz binary on a four-core runner with `MAX_CONCURRENT_CASES` of
+/// them in flight, and has taken over a minute per case there. Generous, so
+/// only a real hang fires it.
+const CASE_TIMEOUT_SECS: u64 = 600;
 
 /// Waits for one case and files it under spilled, finished or failed. A
 /// failure does not stop the run, so one run reports every failing case.
