@@ -258,19 +258,6 @@ fn scalar_max(v1: &ScalarValue, v2: &ScalarValue) -> Result<ScalarValue> {
     }
 }
 
-/// Short-circuits `scalar_min` / `scalar_max` when either side is null.
-///
-/// Returns the non-null side, or a null when both sides are null. Returns
-/// `None` when neither side is null so the caller falls through to a real
-/// comparison.
-///
-/// A null bound means "no value seen yet", regardless of whether it is the
-/// untyped [`ScalarValue::Null`] or a typed null such as
-/// `ScalarValue::Int64(None)`. A typed null is what a partition produces when
-/// none of its rows carry the aggregated column, for example a Parquet file
-/// written before the column was added. Nulls must be handled here rather
-/// than in `partial_cmp`, where `None` orders before `Some(_)` and would win a
-/// `MIN` comparison against a real value.
 fn scalar_cmp_null_short_circuit(
     v1: &ScalarValue,
     v2: &ScalarValue,
