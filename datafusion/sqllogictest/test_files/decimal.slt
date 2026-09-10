@@ -1375,3 +1375,31 @@ query RB
 select arrow_cast('1.2300', 'Decimal32(9, 4)'), arrow_cast(arrow_cast('1.2300', 'Decimal32(9, 4)'), 'Utf8') == '1.2300';
 ----
 1.2300 true
+
+# Regression for https://github.com/apache/datafusion/issues/24850: coercing
+# Decimal256(76, 0) against Decimal256(76, 52) needs precision 128, computed in
+# `i8` before. Columns, not literals: literals are const-folded at plan time and
+# hit the same overflow inside arrow's decimal cast, which is a separate bug.
+
+statement ok
+CREATE TABLE decimal256_wide(a DECIMAL(76,0), b DECIMAL(76,52));
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+query TT
+EXPLAIN SELECT a < b FROM decimal256_wide;
+----
+logical_plan
+01)Projection: CAST(decimal256_wide.a AS Decimal256(76, 52)) < decimal256_wide.b
+02)--TableScan: decimal256_wide projection=[a, b]
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
+
+query B
+SELECT a < b FROM decimal256_wide;
+----
+
+statement ok
+DROP TABLE decimal256_wide;

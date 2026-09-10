@@ -3052,11 +3052,11 @@ mod tests {
     };
 
     use arrow::array::{
-        Array, ArrayRef, Date32Array, DictionaryArray, Int32Array, Int64Array,
+        Array, ArrayRef, AsArray, Date32Array, DictionaryArray, Int32Array, Int64Array,
         StructArray, UInt32Array, UInt64Array,
     };
     use arrow::buffer::NullBuffer;
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::{DataType, Field, Int32Type};
     use datafusion_common::hash_utils::create_hashes;
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{
@@ -3165,25 +3165,16 @@ mod tests {
     ) -> Arc<TaskContext> {
         let mut session_config = SessionConfig::default().with_batch_size(batch_size);
 
-        if use_perfect_hash_join_as_possible {
-            session_config
-                .options_mut()
-                .execution
-                .perfect_hash_join_small_build_threshold = 819200;
-            session_config
-                .options_mut()
-                .execution
-                .perfect_hash_join_min_key_density = 0.0;
-        } else {
-            session_config
-                .options_mut()
-                .execution
-                .perfect_hash_join_small_build_threshold = 0;
-            session_config
-                .options_mut()
-                .execution
-                .perfect_hash_join_min_key_density = f64::INFINITY;
-        }
+        // Either always take the perfect hash join path, or never take it.
+        let (small_build_threshold, min_key_density) =
+            if use_perfect_hash_join_as_possible {
+                (819200, 0.0)
+            } else {
+                (0, f64::INFINITY)
+            };
+        let execution = &mut session_config.options_mut().execution;
+        execution.perfect_hash_join_small_build_threshold = small_build_threshold;
+        execution.perfect_hash_join_min_key_density = min_key_density;
         Arc::new(TaskContext::default().with_session_config(session_config))
     }
 
@@ -4145,6 +4136,164 @@ mod tests {
 
         assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
         return Ok(());
+    }
+
+    /// Build side keyed `0..num_build_rows`, probe side holding only
+    /// `matched_keys`, joined on the key column.
+    fn final_build_rows_inputs(
+        num_build_rows: i32,
+        matched_keys: &[i32],
+    ) -> (Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>, JoinOn) {
+        let build_keys: Vec<i32> = (0..num_build_rows).collect();
+        let probe_keys = matched_keys.to_vec();
+        let left = build_table(
+            ("a1", &build_keys),
+            ("b1", &build_keys),
+            ("c1", &build_keys),
+        );
+        let right = build_table(
+            ("a2", &probe_keys),
+            ("b2", &probe_keys),
+            ("c2", &probe_keys),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema()).unwrap()) as _,
+        )];
+        (left, right, on)
+    }
+
+    /// Returns the sorted `(a1, matched)` pairs of the joined output, where
+    /// `matched` is read from the mark column for `LeftMark`, from the
+    /// presence of probe-side data for `Left`/`Full`, and is `None` for
+    /// existence joins whose output carries no match information.
+    fn build_rows_with_match_flag(batches: &[RecordBatch]) -> Vec<(i32, Option<bool>)> {
+        let mut rows = vec![];
+        for batch in batches {
+            let a1 = batch
+                .column_by_name("a1")
+                .unwrap()
+                .as_primitive::<Int32Type>();
+            let matched: Vec<Option<bool>> = match batch.column_by_name("mark") {
+                Some(mark) => mark.as_boolean().iter().collect(),
+                None => match batch.column_by_name("a2") {
+                    Some(a2) => (0..a2.len()).map(|i| Some(a2.is_valid(i))).collect(),
+                    None => vec![None; batch.num_rows()],
+                },
+            };
+            rows.extend(a1.values().iter().copied().zip(matched));
+        }
+        rows.sort_unstable();
+        rows
+    }
+
+    /// The `(a1, matched)` pairs a join of [`final_build_rows_inputs`] must
+    /// produce, in the format of [`build_rows_with_match_flag`].
+    fn expected_final_build_rows(
+        join_type: JoinType,
+        num_build_rows: i32,
+        matched_keys: &[i32],
+    ) -> Vec<(i32, Option<bool>)> {
+        (0..num_build_rows)
+            .filter_map(|key| {
+                let matched = matched_keys.contains(&key);
+                match join_type {
+                    JoinType::LeftSemi => matched.then_some((key, None)),
+                    JoinType::LeftAnti => (!matched).then_some((key, None)),
+                    _ => Some((key, Some(matched))),
+                }
+            })
+            .collect()
+    }
+
+    /// The final build-side rows (unmatched rows, or matched rows for
+    /// `LeftSemi`) must be emitted in chunks bounded by `batch_size` instead
+    /// of one batch over the whole build side.
+    #[rstest]
+    #[tokio::test]
+    async fn join_emits_final_build_rows_in_batch_size_chunks(
+        #[values(
+            JoinType::Left,
+            JoinType::Full,
+            JoinType::LeftAnti,
+            JoinType::LeftSemi,
+            JoinType::LeftMark
+        )]
+        join_type: JoinType,
+        #[values(1, 7, 8192)] batch_size: usize,
+        #[values(true, false)] use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
+        let num_build_rows = 100;
+        let matched_keys = [3, 50, 97];
+        let (left, right, on) = final_build_rows_inputs(num_build_rows, &matched_keys);
+
+        let (_, batches, metrics) = join_collect(
+            left,
+            right,
+            on,
+            &join_type,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
+        let expected =
+            expected_final_build_rows(join_type, num_build_rows, &matched_keys);
+        assert_eq!(build_rows_with_match_flag(&batches), expected);
+
+        for batch in &batches {
+            assert!(
+                batch.num_rows() <= batch_size,
+                "{join_type} join emitted a batch of {} rows with batch_size {batch_size}",
+                batch.num_rows()
+            );
+        }
+        assert!(
+            batches.len() >= expected.len().div_ceil(batch_size),
+            "{join_type} join emitted {} batches for {} rows with batch_size {batch_size}",
+            batches.len(),
+            expected.len()
+        );
+
+        Ok(())
+    }
+
+    /// A `fetch` limit that is reached in the middle of the final build-side
+    /// rows stops the emission at exactly `fetch` rows.
+    #[rstest]
+    #[tokio::test]
+    async fn join_fetch_stops_final_build_rows_mid_chunk(
+        #[values(JoinType::Left, JoinType::LeftAnti, JoinType::LeftMark)]
+        join_type: JoinType,
+    ) -> Result<()> {
+        let batch_size = 7;
+        let fetch = 20;
+        let num_build_rows = 100;
+        let matched_keys = [3, 50, 97];
+        let task_ctx = prepare_task_ctx(batch_size, false);
+        let (left, right, on) = final_build_rows_inputs(num_build_rows, &matched_keys);
+
+        let join = HashJoinExecBuilder::new(left, right, on, join_type)
+            .with_partition_mode(PartitionMode::CollectLeft)
+            .with_fetch(Some(fetch))
+            .build()?;
+        let batches = common::collect(join.execute(0, task_ctx)?).await?;
+
+        let num_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(num_rows, fetch);
+        for batch in &batches {
+            assert!(batch.num_rows() <= batch_size);
+        }
+        // Every emitted row is a genuine join result row.
+        let expected =
+            expected_final_build_rows(join_type, num_build_rows, &matched_keys);
+        for row in build_rows_with_match_flag(&batches) {
+            assert!(expected.contains(&row), "unexpected output row {row:?}");
+        }
+
+        Ok(())
     }
 
     #[apply(hash_join_exec_configs)]

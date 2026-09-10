@@ -115,6 +115,10 @@ name = "partial_ordering"
 
 [[bench]]
 harness = false
+name = "invariant_check"
+
+[[bench]]
+harness = false
 name = "union_schema"
 
 [[bench]]
