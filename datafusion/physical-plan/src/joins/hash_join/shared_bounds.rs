@@ -136,12 +136,15 @@ fn create_membership_predicate(
             )?)))
         }
         // Use hash table lookup for large build sides
-        PushdownStrategy::Map(hash_map) => Ok(Some(Arc::new(HashTableLookupExpr::new(
-            on_right.to_vec(),
-            random_state.clone(),
-            hash_map,
-            "hash_lookup".to_string(),
-        )) as Arc<dyn PhysicalExpr>)),
+        PushdownStrategy::Map(hash_map, pruning_literals) => {
+            Ok(Some(Arc::new(HashTableLookupExpr::new(
+                on_right.to_vec(),
+                random_state.clone(),
+                hash_map,
+                "hash_lookup".to_string(),
+                pruning_literals,
+            )) as Arc<dyn PhysicalExpr>))
+        }
         // Empty partition - should not create a filter for this
         PushdownStrategy::Empty => Ok(None),
     }
@@ -277,8 +280,10 @@ pub(crate) struct SharedBuildAccumulator {
 pub(crate) enum PushdownStrategy {
     /// Use InList for small build sides (< 128MB)
     InList(ArrayRef),
-    /// Use map lookup for large build sides
-    Map(Arc<Map>),
+    /// Use map lookup for large build sides. The second field is the distinct
+    /// build-side values for pruning only (see `hash_join_dynamic_pruning_max_distinct_values`),
+    /// `None` if unavailable.
+    Map(Arc<Map>, Option<ArrayRef>),
     /// There was no data in this partition, do not build a dynamic filter for it
     Empty,
 }
