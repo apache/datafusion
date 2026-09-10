@@ -33,9 +33,9 @@ use datafusion_macros::user_doc;
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
     description = r#"
-Converts an integer to RFC3339 timestamp format (`YYYY-MM-DDT00:00:00.000000000Z`).
-Integers and unsigned integers are interpreted as seconds since the unix epoch
-(`1970-01-01T00:00:00Z`) return the corresponding timestamp.
+Converts an integer to a timestamp with second precision (`Timestamp(Second)`).
+The integer is interpreted as the number of seconds since the unix epoch
+(`1970-01-01T00:00:00Z`).
 
 If the optional `timezone` argument is omitted, the timestamp is returned in the
 session time zone (`datafusion.execution.time_zone`), which is unset (i.e.
