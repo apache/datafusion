@@ -24,6 +24,7 @@ pub mod csv;
 
 use futures::Stream;
 use std::collections::HashMap;
+#[cfg(feature = "object_store")]
 use std::fmt::Formatter;
 use std::fs::File;
 use std::future::ready;
@@ -33,24 +34,31 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::catalog::{TableProvider, TableProviderFactory};
+#[cfg(feature = "object_store")]
 use crate::dataframe::DataFrame;
 use crate::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
 use crate::datasource::{empty::EmptyTable, provider_as_source};
 use crate::error::Result;
+#[cfg(feature = "object_store")]
 use crate::execution::session_state::CacheFactory;
 use crate::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
 use crate::physical_plan::ExecutionPlan;
-use crate::prelude::{CsvReadOptions, SessionContext};
+#[cfg(feature = "object_store")]
+use crate::prelude::CsvReadOptions;
+use crate::prelude::SessionContext;
 
-use crate::execution::{SendableRecordBatchStream, SessionState, SessionStateBuilder};
+use crate::execution::SendableRecordBatchStream;
+#[cfg(feature = "object_store")]
+use crate::execution::{SessionState, SessionStateBuilder};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_catalog::Session;
-use datafusion_common::{DFSchemaRef, TableReference, plan_err};
-use datafusion_expr::{
-    CreateExternalTable, Expr, LogicalPlan, SortExpr, TableType,
-    UserDefinedLogicalNodeCore,
-};
+#[cfg(feature = "object_store")]
+use datafusion_common::DFSchemaRef;
+use datafusion_common::{TableReference, plan_err};
+use datafusion_expr::{CreateExternalTable, Expr, SortExpr, TableType};
+#[cfg(feature = "object_store")]
+use datafusion_expr::{LogicalPlan, UserDefinedLogicalNodeCore};
 use std::pin::Pin;
 
 use async_trait::async_trait;
@@ -113,6 +121,7 @@ pub fn aggr_test_schema() -> SchemaRef {
 }
 
 /// Register session context for the aggregate_test_100.csv file
+#[cfg(feature = "object_store")]
 pub async fn register_aggregate_csv(
     ctx: &SessionContext,
     table_name: &str,
@@ -129,6 +138,7 @@ pub async fn register_aggregate_csv(
 }
 
 /// Create a table from the aggregate_test_100.csv file with the specified name
+#[cfg(feature = "object_store")]
 pub async fn test_table_with_name(name: &str) -> Result<DataFrame> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx, name).await?;
@@ -136,6 +146,7 @@ pub async fn test_table_with_name(name: &str) -> Result<DataFrame> {
 }
 
 /// Create a table from the aggregate_test_100.csv file with the name "aggregate_test_100"
+#[cfg(feature = "object_store")]
 pub async fn test_table() -> Result<DataFrame> {
     test_table_with_name("aggregate_test_100").await
 }
@@ -315,11 +326,13 @@ impl RecordBatchStream for BoundedStream {
     }
 }
 
+#[cfg(feature = "object_store")]
 #[derive(Hash, Eq, PartialEq, PartialOrd, Debug)]
 struct CacheNode {
     input: LogicalPlan,
 }
 
+#[cfg(feature = "object_store")]
 impl UserDefinedLogicalNodeCore for CacheNode {
     fn name(&self) -> &str {
         "CacheNode"
@@ -354,8 +367,10 @@ impl UserDefinedLogicalNodeCore for CacheNode {
 }
 
 #[derive(Debug)]
+#[cfg(feature = "object_store")]
 struct TestCacheFactory {}
 
+#[cfg(feature = "object_store")]
 impl CacheFactory for TestCacheFactory {
     fn create(
         &self,
@@ -369,6 +384,7 @@ impl CacheFactory for TestCacheFactory {
 }
 
 /// Create a test table registered to a session context with an associated cache factory
+#[cfg(feature = "object_store")]
 pub async fn test_table_with_cache_factory() -> Result<DataFrame> {
     let session_state = SessionStateBuilder::new()
         .with_cache_factory(Some(Arc::new(TestCacheFactory {})))

@@ -38,11 +38,13 @@ all-features = true
 workspace = true
 
 [features]
+object_store = ["datafusion-execution/object_store"]
 crypto_expressions = ["md-5", "sha2", "blake2", "blake3"]
 # enable datetime functions
 datetime_expressions = ["chrono-tz"]
 # Enable encoding by default so the doctests work. In general don't automatically enable all packages.
 default = [
+    "object_store",
     "datetime_expressions",
     "encoding_expressions",
     "math_expressions",

@@ -45,7 +45,7 @@ arrow-avro = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 datafusion-common = { workspace = true, features = ["object_store"] }
-datafusion-datasource = { workspace = true }
+datafusion-datasource = { workspace = true, features = ["object_store"] }
 datafusion-physical-expr-adapter = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-proto-models = { workspace = true, optional = true }

@@ -41,7 +41,8 @@ workspace = true
 name = "datafusion_sql"
 
 [features]
-default = ["unicode_expressions", "unparser"]
+object_store = ["datafusion-functions-nested/object_store"]
+default = ["object_store", "unicode_expressions", "unparser"]
 unicode_expressions = []
 unparser = []
 recursive_protection = ["dep:recursive", "dep:stacker"]

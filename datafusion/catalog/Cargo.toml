@@ -30,6 +30,16 @@ version.workspace = true
 [package.metadata.docs.rs]
 all-features = true
 
+[features]
+default = ["object_store"]
+object_store = [
+    "dep:object_store",
+    "datafusion-datasource/object_store",
+    "datafusion-execution/object_store",
+    "datafusion-physical-plan/object_store",
+    "datafusion-session/object_store",
+]
+
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }
@@ -45,7 +55,7 @@ datafusion-session = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
 log = { workspace = true }
-object_store = { workspace = true }
+object_store = { workspace = true, optional = true }
 parking_lot = { workspace = true }
 tokio = { workspace = true }
 

@@ -50,19 +50,42 @@ nested_expressions = ["datafusion-functions-nested"]
 # This feature is deprecated. Use the `nested_expressions` feature instead.
 array_expressions = ["nested_expressions"]
 # Used to enable the avro format
-avro = ["datafusion-datasource-avro"]
+avro = ["object_store", "datafusion-datasource-avro"]
 backtrace = ["datafusion-common/backtrace"]
 compression = [
     "liblzma",
     "bzip2",
     "flate2",
     "zstd",
-    "datafusion-datasource-arrow/compression",
+    "datafusion-datasource-arrow?/compression",
     "datafusion-datasource/compression",
 ]
 crypto_expressions = ["datafusion-functions/crypto_expressions"]
 datetime_expressions = ["datafusion-functions/datetime_expressions"]
+# Built-in file sources, object store registration, and file caches.
+# Disable default features and omit this feature for storage-independent embedding.
+object_store = [
+    "dep:object_store",
+    "datafusion-common/object_store",
+    "datafusion-execution/object_store",
+    "datafusion-datasource/object_store",
+    "datafusion-catalog/object_store",
+    "dep:datafusion-catalog-listing",
+    "dep:datafusion-datasource-arrow",
+    "dep:datafusion-datasource-csv",
+    "dep:datafusion-datasource-json",
+    "datafusion-functions/object_store",
+    "datafusion-functions-aggregate/object_store",
+    "datafusion-functions-nested?/object_store",
+    "datafusion-functions-table/object_store",
+    "datafusion-physical-expr-adapter/object_store",
+    "datafusion-physical-optimizer/object_store",
+    "datafusion-physical-plan/object_store",
+    "datafusion-session/object_store",
+    "datafusion-sql?/object_store",
+]
 default = [
+    "object_store",
     "nested_expressions",
     "crypto_expressions",
     "datetime_expressions",
@@ -79,7 +102,7 @@ encoding_expressions = ["datafusion-functions/encoding_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = ["datafusion-physical-plan/force_hash_collisions", "datafusion-common/force_hash_collisions"]
 math_expressions = ["datafusion-functions/math_expressions"]
-parquet = ["datafusion-common/parquet", "dep:parquet", "datafusion-datasource-parquet"]
+parquet = ["object_store", "datafusion-common/parquet", "dep:parquet", "datafusion-datasource-parquet"]
 parquet_encryption = [
     "parquet",
     "parquet/encryption",
@@ -124,14 +147,14 @@ async-trait = { workspace = true }
 bzip2 = { workspace = true, optional = true }
 chrono = { workspace = true }
 datafusion-catalog = { workspace = true }
-datafusion-catalog-listing = { workspace = true }
-datafusion-common = { workspace = true, features = ["object_store"] }
+datafusion-catalog-listing = { workspace = true, optional = true }
+datafusion-common = { workspace = true }
 datafusion-common-runtime = { workspace = true }
 datafusion-datasource = { workspace = true }
-datafusion-datasource-arrow = { workspace = true }
+datafusion-datasource-arrow = { workspace = true, optional = true }
 datafusion-datasource-avro = { workspace = true, optional = true }
-datafusion-datasource-csv = { workspace = true }
-datafusion-datasource-json = { workspace = true }
+datafusion-datasource-csv = { workspace = true, optional = true }
+datafusion-datasource-json = { workspace = true, optional = true }
 datafusion-datasource-parquet = { workspace = true, optional = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true, default-features = false }
@@ -155,7 +178,7 @@ indexmap = { workspace = true }
 itertools = { workspace = true }
 liblzma = { workspace = true, optional = true }
 log = { workspace = true }
-object_store = { workspace = true }
+object_store = { workspace = true, optional = true }
 parking_lot = { workspace = true }
 parquet = { workspace = true, optional = true, default-features = true }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }

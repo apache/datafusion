@@ -20,25 +20,31 @@
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::{Arc, Weak};
+#[cfg(feature = "object_store")]
 use std::time::Duration;
 
+#[cfg(feature = "object_store")]
+use super::options::ArrowReadOptions;
+#[cfg(feature = "object_store")]
 use super::options::ReadOptions;
+#[cfg(feature = "object_store")]
+use crate::catalog::listing_schema::ListingSchemaProvider;
+#[cfg(feature = "object_store")]
 use crate::datasource::dynamic_file::DynamicListTableFactory;
+#[cfg(feature = "object_store")]
+use crate::datasource::listing::{
+    ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
+};
 use crate::execution::session_state::SessionStateBuilder;
 use crate::{
-    catalog::listing_schema::ListingSchemaProvider,
     catalog::{
         CatalogProvider, CatalogProviderList, TableProvider, TableProviderFactory,
     },
     dataframe::DataFrame,
-    datasource::listing::{
-        ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
-    },
     datasource::{MemTable, ViewTable, provider_as_source},
     error::Result,
     execution::{
         FunctionRegistry,
-        options::ArrowReadOptions,
         runtime_env::{RuntimeEnv, RuntimeEnvBuilder},
     },
     logical_expr::AggregateUDF,
@@ -50,31 +56,36 @@ use crate::{
         SetVariable, TableType, UNNAMED_TABLE,
     },
     physical_expr::PhysicalExpr,
-    physical_plan::ExecutionPlan,
     variable::{VarProvider, VarType},
 };
 
 // backwards compatibility
 pub use crate::execution::session_state::SessionState;
 
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::Schema;
+#[cfg(feature = "object_store")]
+use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_catalog::MemoryCatalogProvider;
 use datafusion_catalog::memory::MemorySchemaProvider;
-use datafusion_catalog::{
-    DynamicFileCatalog, TableFunction, TableFunctionImpl, UrlTableFactory,
-};
+#[cfg(feature = "object_store")]
+use datafusion_catalog::{DynamicFileCatalog, UrlTableFactory};
+use datafusion_catalog::{TableFunction, TableFunctionImpl};
+#[cfg(feature = "object_store")]
 use datafusion_catalog_listing::SchemaSource;
 use datafusion_common::config::{ConfigField, ConfigOptions};
+#[cfg(feature = "object_store")]
+use datafusion_common::internal_datafusion_err;
 use datafusion_common::metadata::ScalarAndMetadata;
 use datafusion_common::{
     DFSchema, DataFusionError, ParamValues, SchemaError, SchemaReference, TableReference,
     config::{ConfigExtension, TableOptions},
-    exec_datafusion_err, exec_err, internal_datafusion_err, not_impl_err,
-    plan_datafusion_err, plan_err, schema_err,
+    exec_datafusion_err, exec_err, not_impl_err, plan_datafusion_err, plan_err,
+    schema_err,
     tree_node::{TreeNodeRecursion, TreeNodeVisitor},
 };
 pub use datafusion_execution::TaskContext;
+#[cfg(feature = "object_store")]
 use datafusion_execution::cache::cache_manager::{
     DEFAULT_FILE_STATISTICS_MEMORY_LIMIT, DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT,
     DEFAULT_LIST_FILES_CACHE_TTL, DEFAULT_METADATA_CACHE_LIMIT,
@@ -99,15 +110,22 @@ use datafusion_optimizer::analyzer::type_coercion::TypeCoercion;
 use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_optimizer::{Analyzer, OptimizerContext};
 use datafusion_optimizer::{AnalyzerRule, OptimizerRule};
+#[cfg(feature = "object_store")]
 use datafusion_session::SessionStore;
 
+#[cfg(any(test, feature = "object_store"))]
+use crate::physical_plan::ExecutionPlan;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+#[cfg(feature = "object_store")]
 use object_store::ObjectStore;
 use parking_lot::RwLock;
+#[cfg(feature = "object_store")]
 use url::Url;
 
+#[cfg(feature = "object_store")]
 mod csv;
+#[cfg(feature = "object_store")]
 mod json;
 #[cfg(feature = "parquet")]
 mod parquet;
@@ -118,29 +136,34 @@ mod avro;
 /// DataFilePaths adds a method to convert strings and vector of strings to vector of [`ListingTableUrl`] URLs.
 /// This allows methods such [`SessionContext::read_csv`] and [`SessionContext::read_avro`]
 /// to take either a single file or multiple files.
+#[cfg(feature = "object_store")]
 pub trait DataFilePaths {
     /// Parse to a vector of [`ListingTableUrl`] URLs.
     fn to_urls(self) -> Result<Vec<ListingTableUrl>>;
 }
 
+#[cfg(feature = "object_store")]
 impl DataFilePaths for &str {
     fn to_urls(self) -> Result<Vec<ListingTableUrl>> {
         Ok(vec![ListingTableUrl::parse(self)?])
     }
 }
 
+#[cfg(feature = "object_store")]
 impl DataFilePaths for String {
     fn to_urls(self) -> Result<Vec<ListingTableUrl>> {
         Ok(vec![ListingTableUrl::parse(self)?])
     }
 }
 
+#[cfg(feature = "object_store")]
 impl DataFilePaths for &String {
     fn to_urls(self) -> Result<Vec<ListingTableUrl>> {
         Ok(vec![ListingTableUrl::parse(self)?])
     }
 }
 
+#[cfg(feature = "object_store")]
 impl<P> DataFilePaths for Vec<P>
 where
     P: AsRef<str>,
@@ -312,6 +335,7 @@ impl SessionContext {
     }
 
     /// Finds any [`ListingSchemaProvider`]s and instructs them to reload tables from "disk"
+    #[cfg(feature = "object_store")]
     pub async fn refresh_catalogs(&self) -> Result<()> {
         let cat_names = self.catalog_names().clone();
         for cat_name in cat_names.iter() {
@@ -411,6 +435,7 @@ impl SessionContext {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(feature = "object_store")]
     pub fn enable_url_table(self) -> Self {
         let current_catalog_list = Arc::clone(self.state.read().catalog_list());
         let factory = Arc::new(DynamicListTableFactory::new(SessionStore::new()));
@@ -517,6 +542,7 @@ impl SessionContext {
     /// // All files with the file:// url prefix will be read from the local file system
     /// ctx.register_object_store(object_store_url.as_ref(), Arc::new(object_store));
     /// ```
+    #[cfg(feature = "object_store")]
     pub fn register_object_store(
         &self,
         url: &Url,
@@ -528,6 +554,7 @@ impl SessionContext {
     /// Deregisters an [`ObjectStore`] associated with the specific URL prefix.
     ///
     /// See [`RuntimeEnv::deregister_object_store`] for more details.
+    #[cfg(feature = "object_store")]
     pub fn deregister_object_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
         self.runtime_env().deregister_object_store(url)
     }
@@ -1183,18 +1210,22 @@ impl SessionContext {
                 builder.with_max_temp_directory_size(directory_size as u64)
             }
             "temp_directory" => builder.with_temp_file_path(value),
+            #[cfg(feature = "object_store")]
             "metadata_cache_limit" => {
                 let limit = Self::parse_capacity_limit(variable, value)?;
                 builder.with_metadata_cache_limit(limit)
             }
+            #[cfg(feature = "object_store")]
             "list_files_cache_limit" => {
                 let limit = Self::parse_capacity_limit(variable, value)?;
                 builder.with_object_list_cache_limit(limit)
             }
+            #[cfg(feature = "object_store")]
             "list_files_cache_ttl" => {
                 let duration = Self::parse_duration(variable, value)?;
                 builder.with_object_list_cache_ttl(Some(duration))
             }
+            #[cfg(feature = "object_store")]
             "file_statistics_cache_limit" => {
                 let limit = Self::parse_capacity_limit(variable, value)?;
                 builder.with_file_statistics_cache_limit(limit)
@@ -1235,17 +1266,21 @@ impl SessionContext {
             "temp_directory" => {
                 builder.disk_manager_builder = Some(DiskManagerBuilder::default());
             }
+            #[cfg(feature = "object_store")]
             "metadata_cache_limit" => {
                 builder = builder.with_metadata_cache_limit(DEFAULT_METADATA_CACHE_LIMIT);
             }
+            #[cfg(feature = "object_store")]
             "list_files_cache_limit" => {
                 builder = builder
                     .with_object_list_cache_limit(DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT);
             }
+            #[cfg(feature = "object_store")]
             "list_files_cache_ttl" => {
                 builder =
                     builder.with_object_list_cache_ttl(DEFAULT_LIST_FILES_CACHE_TTL);
             }
+            #[cfg(feature = "object_store")]
             "file_statistics_cache_limit" => {
                 builder = builder.with_file_statistics_cache_limit(
                     DEFAULT_FILE_STATISTICS_MEMORY_LIMIT,
@@ -1361,6 +1396,7 @@ impl SessionContext {
         }
     }
 
+    #[cfg(feature = "object_store")]
     fn parse_duration(config_name: &str, duration: &str) -> Result<Duration> {
         if duration.trim().is_empty() {
             return Err(plan_datafusion_err!(
@@ -1404,6 +1440,7 @@ impl SessionContext {
         Ok(duration)
     }
 
+    #[cfg(feature = "object_store")]
     fn check_overflow(
         config_name: &str,
         mins: Option<u64>,
@@ -1471,15 +1508,18 @@ impl SessionContext {
         Ok(false)
     }
 
+    #[cfg_attr(not(feature = "object_store"), expect(unused_variables))]
     fn invalidate_caches(
         &self,
         table_ref: &TableReference,
         table_type: TableType,
     ) -> Result<()> {
         if table_type == TableType::Base {
+            #[cfg(feature = "object_store")]
             if let Some(lfc) = self.runtime_env().cache_manager.get_list_files_cache() {
                 lfc.drop_table_entries(table_ref)?;
             }
+            #[cfg(feature = "object_store")]
             if let Some(fsc) = self.runtime_env().cache_manager.get_file_statistic_cache()
             {
                 fsc.drop_table_entries(table_ref)?;
@@ -1712,6 +1752,7 @@ impl SessionContext {
     ///
     /// For more control such as reading multiple files, you can use
     /// [`read_table`](Self::read_table) with a [`ListingTable`].
+    #[cfg(feature = "object_store")]
     async fn _read_type<'a, P: DataFilePaths>(
         &self,
         table_paths: P,
@@ -1765,6 +1806,7 @@ impl SessionContext {
     /// [`read_table`](Self::read_table) with a [`ListingTable`].
     ///
     /// For an example, see [`read_csv`](Self::read_csv)
+    #[cfg(feature = "object_store")]
     pub async fn read_arrow<P: DataFilePaths>(
         &self,
         table_paths: P,
@@ -1834,6 +1876,7 @@ impl SessionContext {
     /// This method is `async` because it might need to resolve the schema.
     ///
     /// [`ObjectStore`]: object_store::ObjectStore
+    #[cfg(feature = "object_store")]
     pub async fn register_listing_table(
         &self,
         table_ref: impl Into<TableReference>,
@@ -1859,6 +1902,7 @@ impl SessionContext {
         Ok(())
     }
 
+    #[cfg(feature = "object_store")]
     fn register_type_check<P: DataFilePaths>(
         &self,
         table_paths: P,
@@ -1884,6 +1928,7 @@ impl SessionContext {
 
     /// Registers an Arrow file as a table that can be referenced from
     /// SQL statements executed against this context.
+    #[cfg(feature = "object_store")]
     pub async fn register_arrow(
         &self,
         table_ref: impl Into<TableReference>,
@@ -2375,6 +2420,7 @@ mod tests {
 
     use crate::catalog::SchemaProvider;
     use crate::execution::session_state::SessionStateBuilder;
+    use crate::physical_plan::ExecutionPlan;
     use crate::physical_planner::PhysicalPlanner;
     use async_trait::async_trait;
     use datafusion_expr::planner::TypePlanner;

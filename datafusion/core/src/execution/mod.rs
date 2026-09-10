@@ -26,5 +26,6 @@ mod session_state_defaults;
 pub use session_state_defaults::SessionStateDefaults;
 
 // backwards compatibility
+#[cfg(feature = "object_store")]
 pub use crate::datasource::file_format::options;
 pub use datafusion_execution::*;

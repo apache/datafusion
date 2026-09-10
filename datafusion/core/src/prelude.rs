@@ -28,6 +28,7 @@
 pub use crate::dataframe;
 pub use crate::dataframe::DataFrame;
 pub use crate::execution::context::{SQLOptions, SessionConfig, SessionContext};
+#[cfg(feature = "object_store")]
 pub use crate::execution::options::{
     AvroReadOptions, CsvReadOptions, JsonReadOptions, ParquetReadOptions,
 };

@@ -38,6 +38,8 @@ all-features = true
 workspace = true
 
 [features]
+object_store = ["datafusion-execution/object_store", "datafusion-functions/object_store"]
+default = ["object_store"]
 force_hash_collisions = []
 test_utils = ["arrow/test_utils"]
 tokio_coop = []
@@ -88,7 +90,7 @@ num-traits = { workspace = true }
 parking_lot = { workspace = true }
 pin-project-lite = { workspace = true }
 serde_json = { workspace = true, features = ["preserve_order"] }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
 
 [dev-dependencies]
 arrow-data = { workspace = true }

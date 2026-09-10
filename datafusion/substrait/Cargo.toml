@@ -40,13 +40,13 @@ chrono = { workspace = true }
 datafusion = { workspace = true, features = ["sql"] }
 half = { workspace = true }
 itertools = { workspace = true }
-object_store = { workspace = true }
+object_store = { workspace = true, optional = true }
 # We need to match the version in substrait, so we don't use the workspace version here
 pbjson-types = { version = "0.8.0" }
 prost = { workspace = true }
 substrait = { version = "0.63.0", features = ["serde"] }
 url = { workspace = true }
-tokio = { workspace = true, features = ["fs"] }
+tokio = { workspace = true, features = ["fs", "io-util"] }
 
 [dev-dependencies]
 datafusion = { workspace = true, features = ["nested_expressions", "unicode_expressions"] }
@@ -57,7 +57,7 @@ insta = { workspace = true }
 
 [features]
 default = ["physical"]
-physical = ["datafusion/parquet"]
+physical = ["datafusion/parquet", "dep:object_store"]
 protoc = ["substrait/protoc"]
 
 [package.metadata.docs.rs]

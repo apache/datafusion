@@ -38,6 +38,13 @@ all-features = true
 workspace = true
 
 [features]
+object_store = [
+    "datafusion-execution/object_store",
+    "datafusion-physical-plan/object_store",
+    "datafusion-pruning/object_store",
+    "datafusion-session/object_store",
+]
+default = ["object_store"]
 recursive_protection = ["dep:recursive"]
 
 [dependencies]

@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#[cfg(feature = "object_store")]
 pub mod cache_manager;
 pub mod lru_queue;
 
@@ -24,9 +25,12 @@ use datafusion_common::arrow::datatypes::{DataType, Schema};
 use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use datafusion_common::instant::Instant;
 use datafusion_common::{HashMap, TableReference};
+#[cfg(feature = "object_store")]
 use object_store::path::Path;
 use std::collections::hash_map::DefaultHasher;
-use std::fmt::{Debug, Display, Formatter};
+#[cfg(feature = "object_store")]
+use std::fmt::Display;
+use std::fmt::{Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
@@ -123,6 +127,7 @@ impl<K: CacheKey, V: CacheValue> Debug for dyn Cache<K, V> {
     }
 }
 
+#[cfg(feature = "object_store")]
 impl CacheKey for Path {
     fn size(&self) -> usize {
         self.as_ref().heap_size(&mut DFHeapSizeCtx::default())
@@ -133,6 +138,7 @@ impl CacheKey for Path {
     }
 }
 
+#[cfg(feature = "object_store")]
 impl CacheKey for TableScopedPath {
     fn size(&self) -> usize {
         DFHeapSize::heap_size(self, &mut DFHeapSizeCtx::default())
@@ -146,18 +152,21 @@ impl CacheKey for TableScopedPath {
 /// Each entry is scoped to its use within a specific table so that the cache
 /// can differentiate between identical paths in different tables, and
 /// table-level cache invalidation.
+#[cfg(feature = "object_store")]
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub struct TableScopedPath {
     pub table: Option<TableReference>,
     pub path: Path,
 }
 
+#[cfg(feature = "object_store")]
 impl DFHeapSize for TableScopedPath {
     fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
         self.path.as_ref().heap_size(ctx) + self.table.heap_size(ctx)
     }
 }
 
+#[cfg(feature = "object_store")]
 impl Display for TableScopedPath {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         if let Some(table) = &self.table {

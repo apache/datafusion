@@ -24,20 +24,26 @@ use crate::{
     memory_pool::{
         GreedyMemoryPool, MemoryPool, TrackConsumersPool, UnboundedMemoryPool,
     },
-    object_store::{DefaultObjectStoreRegistry, ObjectStoreRegistry},
 };
 
+#[cfg(feature = "object_store")]
 use crate::cache::cache_manager::{CacheManager, CacheManagerConfig};
+#[cfg(feature = "object_store")]
+use crate::object_store::{DefaultObjectStoreRegistry, ObjectStoreRegistry};
 #[cfg(feature = "parquet_encryption")]
 use crate::parquet_encryption::{EncryptionFactory, EncryptionFactoryRegistry};
 use datafusion_common::{Result, config::ConfigEntry};
+#[cfg(feature = "object_store")]
 use object_store::ObjectStore;
+use std::path::PathBuf;
 use std::sync::Arc;
+#[cfg(feature = "object_store")]
+use std::time::Duration;
 use std::{
     fmt::{Debug, Formatter},
     num::NonZeroUsize,
 };
-use std::{path::PathBuf, time::Duration};
+#[cfg(feature = "object_store")]
 use url::Url;
 
 #[derive(Clone)]
@@ -76,8 +82,10 @@ pub struct RuntimeEnv {
     /// Manage temporary files during query execution
     pub disk_manager: Arc<DiskManager>,
     /// Manage temporary cache during query execution
+    #[cfg(feature = "object_store")]
     pub cache_manager: Arc<CacheManager>,
     /// Object Store Registry
+    #[cfg(feature = "object_store")]
     pub object_store_registry: Arc<dyn ObjectStoreRegistry>,
     /// Parquet encryption factory registry
     #[cfg(feature = "parquet_encryption")]
@@ -95,9 +103,13 @@ struct RuntimeConfigValues {
     max_temp_directory_size: Option<String>,
     max_spill_merge_fan_in: Option<String>,
     temp_directory: Option<String>,
+    #[cfg(feature = "object_store")]
     metadata_cache_limit: Option<String>,
+    #[cfg(feature = "object_store")]
     list_files_cache_limit: Option<String>,
+    #[cfg(feature = "object_store")]
     list_files_cache_ttl: Option<String>,
+    #[cfg(feature = "object_store")]
     file_statistics_cache_limit: Option<String>,
 }
 
@@ -113,9 +125,13 @@ impl RuntimeConfigValues {
             max_temp_directory_size,
             max_spill_merge_fan_in,
             temp_directory,
+            #[cfg(feature = "object_store")]
             metadata_cache_limit,
+            #[cfg(feature = "object_store")]
             list_files_cache_limit,
+            #[cfg(feature = "object_store")]
             list_files_cache_ttl,
+            #[cfg(feature = "object_store")]
             file_statistics_cache_limit,
         } = self;
         vec![
@@ -139,21 +155,25 @@ impl RuntimeConfigValues {
                 value: temp_directory,
                 description: "The path to the temporary file directory.",
             },
+            #[cfg(feature = "object_store")]
             ConfigEntry {
                 key: "datafusion.runtime.metadata_cache_limit".to_string(),
                 value: metadata_cache_limit,
                 description: "Maximum memory to use for file metadata cache such as Parquet metadata. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
             },
+            #[cfg(feature = "object_store")]
             ConfigEntry {
                 key: "datafusion.runtime.list_files_cache_limit".to_string(),
                 value: list_files_cache_limit,
                 description: "Maximum memory to use for list files cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
             },
+            #[cfg(feature = "object_store")]
             ConfigEntry {
                 key: "datafusion.runtime.list_files_cache_ttl".to_string(),
                 value: list_files_cache_ttl,
                 description: "TTL (time-to-live) of the entries in the list file cache. Supports units m (minutes), and s (seconds). Example: '2m' for 2 minutes.",
             },
+            #[cfg(feature = "object_store")]
             ConfigEntry {
                 key: "datafusion.runtime.file_statistics_cache_limit".to_string(),
                 value: file_statistics_cache_limit,
@@ -203,6 +223,7 @@ impl RuntimeEnv {
     /// // register the object store with the runtime environment
     /// runtime_env.register_object_store(&base_url, Arc::new(http_store));
     /// ```
+    #[cfg(feature = "object_store")]
     pub fn register_object_store(
         &self,
         url: &Url,
@@ -213,6 +234,7 @@ impl RuntimeEnv {
 
     /// Deregisters a custom `ObjectStore` previously registered for a specific url.
     /// See [`ObjectStoreRegistry::deregister_store`] for more details.
+    #[cfg(feature = "object_store")]
     pub fn deregister_object_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
         self.object_store_registry.deregister_store(url)
     }
@@ -220,6 +242,7 @@ impl RuntimeEnv {
     /// Retrieves a `ObjectStore` instance for a url by consulting the
     /// registry. See [`ObjectStoreRegistry::get_store`] for more
     /// details.
+    #[cfg(feature = "object_store")]
     pub fn object_store(&self, url: impl AsRef<Url>) -> Result<Arc<dyn ObjectStore>> {
         self.object_store_registry.get_store(url.as_ref())
     }
@@ -269,6 +292,7 @@ impl RuntimeEnv {
             }
         }
 
+        #[cfg(feature = "object_store")]
         fn format_duration(duration: Duration) -> String {
             let total = duration.as_secs();
             let mins = total / 60;
@@ -304,42 +328,61 @@ impl RuntimeEnv {
             )
         };
 
-        let metadata_cache_limit = self.cache_manager.get_metadata_cache_limit();
-        let metadata_cache_value = format_byte_size(
-            metadata_cache_limit
-                .try_into()
-                .expect("Metadata cache size conversion failed"),
-        );
+        #[cfg(feature = "object_store")]
+        let (
+            metadata_cache_value,
+            list_files_cache_value,
+            list_files_cache_ttl,
+            file_statistics_cache_value,
+        ) = {
+            let metadata_cache_limit = self.cache_manager.get_metadata_cache_limit();
+            let metadata_cache_value = format_byte_size(
+                metadata_cache_limit
+                    .try_into()
+                    .expect("Metadata cache size conversion failed"),
+            );
 
-        let list_files_cache_limit = self.cache_manager.get_list_files_cache_limit();
-        let list_files_cache_value = format_byte_size(
-            list_files_cache_limit
-                .try_into()
-                .expect("List files cache size conversion failed"),
-        );
+            let list_files_cache_limit = self.cache_manager.get_list_files_cache_limit();
+            let list_files_cache_value = format_byte_size(
+                list_files_cache_limit
+                    .try_into()
+                    .expect("List files cache size conversion failed"),
+            );
 
-        let list_files_cache_ttl = self
-            .cache_manager
-            .get_list_files_cache_ttl()
-            .map(format_duration);
+            let list_files_cache_ttl = self
+                .cache_manager
+                .get_list_files_cache_ttl()
+                .map(format_duration);
 
-        let file_statistics_cache_limit =
-            self.cache_manager.get_file_statistic_cache_limit();
-        let file_statistics_cache_value = format_byte_size(
-            file_statistics_cache_limit
-                .try_into()
-                .expect("File statistics cache size conversion failed"),
-        );
+            let file_statistics_cache_limit =
+                self.cache_manager.get_file_statistic_cache_limit();
+            let file_statistics_cache_value = format_byte_size(
+                file_statistics_cache_limit
+                    .try_into()
+                    .expect("File statistics cache size conversion failed"),
+            );
+
+            (
+                Some(metadata_cache_value),
+                Some(list_files_cache_value),
+                list_files_cache_ttl,
+                Some(file_statistics_cache_value),
+            )
+        };
 
         RuntimeConfigValues {
             memory_limit: memory_limit_value,
             max_temp_directory_size: Some(max_temp_dir_value),
             max_spill_merge_fan_in: Some(max_spill_merge_fan_in),
             temp_directory: temp_dir_value,
-            metadata_cache_limit: Some(metadata_cache_value),
-            list_files_cache_limit: Some(list_files_cache_value),
+            #[cfg(feature = "object_store")]
+            metadata_cache_limit: metadata_cache_value,
+            #[cfg(feature = "object_store")]
+            list_files_cache_limit: list_files_cache_value,
+            #[cfg(feature = "object_store")]
             list_files_cache_ttl,
-            file_statistics_cache_limit: Some(file_statistics_cache_value),
+            #[cfg(feature = "object_store")]
+            file_statistics_cache_limit: file_statistics_cache_value,
         }
         .into_config_entries()
     }
@@ -365,8 +408,10 @@ pub struct RuntimeEnvBuilder {
     /// Defaults to using an [`UnboundedMemoryPool`] if `None`
     pub memory_pool: Option<Arc<dyn MemoryPool>>,
     /// CacheManager to manage cache data
+    #[cfg(feature = "object_store")]
     pub cache_manager: CacheManagerConfig,
     /// ObjectStoreRegistry to get object store based on url
+    #[cfg(feature = "object_store")]
     pub object_store_registry: Arc<dyn ObjectStoreRegistry>,
     /// Parquet encryption factory registry
     #[cfg(feature = "parquet_encryption")]
@@ -386,7 +431,9 @@ impl RuntimeEnvBuilder {
             disk_manager: Default::default(),
             disk_manager_builder: Default::default(),
             memory_pool: Default::default(),
+            #[cfg(feature = "object_store")]
             cache_manager: Default::default(),
+            #[cfg(feature = "object_store")]
             object_store_registry: Arc::new(DefaultObjectStoreRegistry::default()),
             #[cfg(feature = "parquet_encryption")]
             parquet_encryption_factory_registry: Default::default(),
@@ -406,12 +453,14 @@ impl RuntimeEnvBuilder {
     }
 
     /// Customize cache policy
+    #[cfg(feature = "object_store")]
     pub fn with_cache_manager(mut self, cache_manager: CacheManagerConfig) -> Self {
         self.cache_manager = cache_manager;
         self
     }
 
     /// Customize object store registry
+    #[cfg(feature = "object_store")]
     pub fn with_object_store_registry(
         mut self,
         object_store_registry: Arc<dyn ObjectStoreRegistry>,
@@ -458,23 +507,27 @@ impl RuntimeEnvBuilder {
     }
 
     /// Specify the limit of the file-embedded metadata cache, in bytes.
+    #[cfg(feature = "object_store")]
     pub fn with_metadata_cache_limit(mut self, limit: usize) -> Self {
         self.cache_manager = self.cache_manager.with_metadata_cache_limit(limit);
         self
     }
 
     /// Specifies the memory limit for the object list cache, in bytes.
+    #[cfg(feature = "object_store")]
     pub fn with_object_list_cache_limit(mut self, limit: usize) -> Self {
         self.cache_manager = self.cache_manager.with_list_files_cache_limit(limit);
         self
     }
 
     /// Specifies the duration entries in the object list cache will be considered valid.
+    #[cfg(feature = "object_store")]
     pub fn with_object_list_cache_ttl(mut self, ttl: Option<Duration>) -> Self {
         self.cache_manager = self.cache_manager.with_list_files_cache_ttl(ttl);
         self
     }
 
+    #[cfg(feature = "object_store")]
     pub fn with_file_statistics_cache_limit(mut self, limit: usize) -> Self {
         self.cache_manager = self.cache_manager.with_file_statistics_cache_limit(limit);
         self
@@ -486,7 +539,9 @@ impl RuntimeEnvBuilder {
             disk_manager,
             disk_manager_builder,
             memory_pool,
+            #[cfg(feature = "object_store")]
             cache_manager,
+            #[cfg(feature = "object_store")]
             object_store_registry,
             #[cfg(feature = "parquet_encryption")]
             parquet_encryption_factory_registry,
@@ -503,7 +558,9 @@ impl RuntimeEnvBuilder {
         Ok(RuntimeEnv {
             memory_pool,
             disk_manager,
+            #[cfg(feature = "object_store")]
             cache_manager: CacheManager::try_new(&cache_manager)?,
+            #[cfg(feature = "object_store")]
             object_store_registry,
             #[cfg(feature = "parquet_encryption")]
             parquet_encryption_factory_registry,
@@ -517,6 +574,7 @@ impl RuntimeEnvBuilder {
 
     /// Create a new RuntimeEnvBuilder from an existing RuntimeEnv
     pub fn from_runtime_env(runtime_env: &RuntimeEnv) -> Self {
+        #[cfg(feature = "object_store")]
         let cache_config = CacheManagerConfig {
             file_statistics_cache: runtime_env.cache_manager.get_file_statistic_cache(),
             file_statistics_cache_limit: runtime_env
@@ -537,7 +595,9 @@ impl RuntimeEnvBuilder {
             disk_manager: Some(Arc::clone(&runtime_env.disk_manager)),
             disk_manager_builder: None,
             memory_pool: Some(Arc::clone(&runtime_env.memory_pool)),
+            #[cfg(feature = "object_store")]
             cache_manager: cache_config,
+            #[cfg(feature = "object_store")]
             object_store_registry: Arc::clone(&runtime_env.object_store_registry),
             #[cfg(feature = "parquet_encryption")]
             parquet_encryption_factory_registry: Arc::clone(
@@ -553,9 +613,13 @@ impl RuntimeEnvBuilder {
             max_temp_directory_size: Some("100G".to_string()),
             max_spill_merge_fan_in: Some("0".to_string()),
             temp_directory: None,
+            #[cfg(feature = "object_store")]
             metadata_cache_limit: Some("50M".to_owned()),
+            #[cfg(feature = "object_store")]
             list_files_cache_limit: Some("1M".to_owned()),
+            #[cfg(feature = "object_store")]
             list_files_cache_ttl: None,
+            #[cfg(feature = "object_store")]
             file_statistics_cache_limit: Some("20M".to_owned()),
         }
         .into_config_entries()
