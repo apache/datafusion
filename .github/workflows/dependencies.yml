@@ -38,7 +38,7 @@ permissions:
 jobs:
   depcheck:
     name: Circular Dependency Check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container:
       image: amd64/rust
     steps:
@@ -57,7 +57,7 @@ jobs:
 
   detect-unused-dependencies:
     name: Detect Unused Dependencies
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container:
       image: amd64/rust
     steps:

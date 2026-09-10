@@ -33,7 +33,7 @@ concurrency:
 
 jobs:
   license-header-check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     name: Check License Header
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
@@ -58,7 +58,7 @@ jobs:
 
   markdown-link-check:
     name: Check Markdown Links
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
       - name: Load tool versions
@@ -74,7 +74,7 @@ jobs:
 
   asf-yaml-check:
     name: Validate required_status_checks in .asf.yaml
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
       - run: pip install pyyaml
@@ -82,7 +82,7 @@ jobs:
 
   typos:
     name: Spell Check with Typos
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
