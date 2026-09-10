@@ -796,7 +796,7 @@ example, to configure <code class="docutils literal notranslate"><span class="pr
 </tr>
 <tr class="row-even"><td><p>datafusion.execution.enforce_batch_size_in_joins</p></td>
 <td><p>false</p></td>
-<td><p>Should DataFusion enforce batch size in joins or not. By default, DataFusion will not enforce batch size in joins. Enforcing batch size in joins can reduce memory usage when joining large tables with a highly-selective join filter, but is also slightly slower.</p></td>
+<td><p>Should DataFusion enforce batch size in joins or not. By default, DataFusion will not enforce batch size in joins. Enforcing batch size in joins can reduce memory usage when joining large tables with a highly-selective join filter, but is also slightly slower. Note: this option currently only applies to the symmetric hash join.</p></td>
 </tr>
 <tr class="row-odd"><td><p>datafusion.execution.objectstore_writer_buffer_size</p></td>
 <td><p>10485760</p></td>
