@@ -146,16 +146,44 @@ impl SimplifyExpressions {
             ))
         };
 
-        plan.map_expressions(|expr| {
-            // Preserve the aliasing of grouping sets.
-            if let Expr::GroupingSet(_) = &expr {
-                expr.map_children(&mut rewrite_expr)
-            } else {
-                rewrite_expr(expr)
-            }
-        })?
-        .transform_data(rewrite_aggregate_non_aggregate_aggr_expr)
+        let rewritten = plan
+            .map_expressions(|expr| {
+                // Preserve the aliasing of grouping sets.
+                if let Expr::GroupingSet(_) = &expr {
+                    expr.map_children(&mut rewrite_expr)
+                } else {
+                    rewrite_expr(expr)
+                }
+            })?
+            .transform_data(rewrite_aggregate_non_aggregate_aggr_expr)?;
+
+        if !rewritten.transformed {
+            return Ok(rewritten);
+        }
+
+        rewritten.map_data(refresh_projection_schema)
     }
+}
+
+/// Recomputes a `Projection`'s output schema after its expressions were
+/// simplified.
+///
+/// `LogicalPlan::map_expressions` replaces a projection's expressions while
+/// keeping its existing schema, so simplification can leave the two out of
+/// step: constant folding turns a function call, whose field the planner
+/// derived as nullable, into a non-null literal, whose field is not. The
+/// schema keeps the pre-folding answer.
+///
+/// Downstream rules that rebuild the projection with `Projection::try_new`
+/// used to paper over that by deriving the schema again, which made the
+/// discrepancy invisible but also made it depend on which rules happen to
+/// fire. Deriving it here instead keeps a projection's schema in step with
+/// its own expressions.
+fn refresh_projection_schema(plan: LogicalPlan) -> Result<LogicalPlan> {
+    let LogicalPlan::Projection(Projection { expr, input, .. }) = plan else {
+        return Ok(plan);
+    };
+    Projection::try_new(expr, input).map(LogicalPlan::Projection)
 }
 
 impl SimplifyExpressions {
