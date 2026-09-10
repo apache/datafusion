@@ -1231,19 +1231,22 @@ impl HashJoinExec {
             }
         };
 
-        let emission_type = if left.boundedness().is_unbounded() {
-            EmissionType::Final
-        } else if right.pipeline_behavior() == EmissionType::Incremental {
-            // Unmatched build-side rows can only be emitted once the probe side
-            // is exhausted; everything else is emitted incrementally.
-            if emits_unmatched_left_rows(join_type) {
-                EmissionType::Both
+        let emission_type =
+            // LeftSemi does not emit rows during probing. It records matching build-side
+            // rows in a bitmap and can only emit them after the probe side is exhausted.
+            if left.boundedness().is_unbounded() || join_type == JoinType::LeftSemi {
+                EmissionType::Final
+            } else if right.pipeline_behavior() == EmissionType::Incremental {
+                // Unmatched build-side rows can only be emitted once the probe side
+                // is exhausted; everything else is emitted incrementally.
+                if emits_unmatched_left_rows(join_type) {
+                    EmissionType::Both
+                } else {
+                    EmissionType::Incremental
+                }
             } else {
-                EmissionType::Incremental
-            }
-        } else {
-            right.pipeline_behavior()
-        };
+                right.pipeline_behavior()
+            };
 
         // If contains projection, update the PlanProperties.
         if let Some(projection) = projection {
@@ -4741,6 +4744,31 @@ mod tests {
             ("b2", &vec![8, 10, 6, 2, 10, 4]),
             ("c2", &vec![20, 40, 60, 80, 100, 120]),
         )
+    }
+
+    #[tokio::test]
+    async fn test_semi_left_join_reports_final_emission() -> Result<()> {
+        let (left_schema, right_schema, on) = build_schema_and_on()?;
+
+        let left = TestMemoryExec::try_new_exec(&[vec![]], left_schema, None)?;
+
+        let right = TestMemoryExec::try_new_exec(&[vec![]], right_schema, None)?;
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::LeftSemi,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+
+        assert_eq!(join.properties().emission_type, EmissionType::Final);
+
+        Ok(())
     }
 
     #[apply(hash_join_exec_configs)]

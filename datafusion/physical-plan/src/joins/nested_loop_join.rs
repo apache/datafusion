@@ -390,28 +390,31 @@ impl NestedLoopJoinExec {
         let mut output_partitioning =
             asymmetric_join_output_partitioning(left, right, &join_type)?;
 
-        let emission_type = if left.boundedness().is_unbounded() {
-            EmissionType::Final
-        } else if right.pipeline_behavior() == EmissionType::Incremental {
-            match join_type {
-                // If we only need to generate matched rows from the probe side,
-                // we can emit rows incrementally.
-                JoinType::Inner
-                | JoinType::LeftSemi
-                | JoinType::RightSemi
-                | JoinType::Right
-                | JoinType::RightAnti
-                | JoinType::RightMark => EmissionType::Incremental,
-                // If we need to generate unmatched rows from the *build side*,
-                // we need to emit them at the end.
-                JoinType::Left
-                | JoinType::LeftAnti
-                | JoinType::LeftMark
-                | JoinType::Full => EmissionType::Both,
-            }
-        } else {
-            right.pipeline_behavior()
-        };
+        let emission_type =
+            // LeftSemi does not emit rows during probing. It records matching build-side
+            // rows in a bitmap and can only emit them after the probe side is exhausted.
+            if left.boundedness().is_unbounded() || join_type == JoinType::LeftSemi {
+                EmissionType::Final
+            } else if right.pipeline_behavior() == EmissionType::Incremental {
+                match join_type {
+                    // If we only need to generate matched rows from the probe side,
+                    // we can emit rows incrementally.
+                    JoinType::Inner
+                    | JoinType::LeftSemi
+                    | JoinType::RightSemi
+                    | JoinType::Right
+                    | JoinType::RightAnti
+                    | JoinType::RightMark => EmissionType::Incremental,
+                    // If we need to generate unmatched rows from the *build side*,
+                    // we need to emit them at the end.
+                    JoinType::Left
+                    | JoinType::LeftAnti
+                    | JoinType::LeftMark
+                    | JoinType::Full => EmissionType::Both,
+                }
+            } else {
+                right.pipeline_behavior()
+            };
 
         if let Some(projection) = projection {
             // construct a map from the input expressions to the output expression of the Projection
@@ -4950,6 +4953,18 @@ pub(crate) mod tests {
         "));
 
         assert_join_metrics!(metrics, 5);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_left_semi_join_reports_final_emission() -> Result<()> {
+        let left = build_left_table();
+        let right = build_right_table();
+        let join =
+            NestedLoopJoinExec::try_new(left, right, None, &JoinType::LeftSemi, None)?;
+
+        assert_eq!(join.properties().emission_type, EmissionType::Final);
 
         Ok(())
     }
