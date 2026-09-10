@@ -17,6 +17,8 @@
 
 //! Input distribution requirements for physical execution plans.
 
+use std::sync::Arc;
+
 use datafusion_common::{Result, internal_err};
 use datafusion_physical_expr::{Distribution, Partitioning, PartitioningSatisfaction};
 
@@ -205,25 +207,46 @@ impl InputDistributionRequirements {
     }
 
     /// Validate the requirements against a plan's children.
-    pub(crate) fn check_invariants<P: ExecutionPlan + ?Sized>(
+    #[inline]
+    pub(crate) fn check_invariants(
         &self,
-        plan: &P,
+        plan_name: &str,
+        children: Vec<&Arc<dyn ExecutionPlan>>,
         check: InvariantLevel,
     ) -> Result<()> {
-        let children = plan.children();
-        self.validate_shape(plan.name(), children.len())?;
+        let children_len = children.len();
+        if self.children.len() != children_len {
+            return self.validate_shape(plan_name, children_len);
+        }
 
+        if let Some(co_partitioned) = &self.co_partitioned {
+            self.validate_shape(plan_name, children_len)?;
+            if matches!(check, InvariantLevel::Executable) {
+                return self.check_co_partitioning_invariant(
+                    plan_name,
+                    co_partitioned,
+                    children,
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    fn check_co_partitioning_invariant(
+        &self,
+        plan_name: &str,
+        co_partitioned: &[usize],
+        children: Vec<&Arc<dyn ExecutionPlan>>,
+    ) -> Result<()> {
         let children = children
             .into_iter()
             .map(|child| child.as_ref())
             .collect::<Vec<_>>();
-        if matches!(check, InvariantLevel::Executable)
-            && let Some(co_partitioned) = &self.co_partitioned
-            && !self.co_partitioning_satisfied(co_partitioned, &children)
-        {
+        if !self.co_partitioning_satisfied(co_partitioned, &children) {
             return internal_err!(
                 "{} requires children {:?} to be co-partitioned",
-                plan.name(),
+                plan_name,
                 co_partitioned
             );
         }

@@ -224,6 +224,129 @@ mod count_distinct_spill {
     }
 }
 
+/// `GROUP BY` on a single nested key under a memory limit, on both the legacy
+/// `GroupedHashAggregateStream` and the migrated streams. The legacy stream used
+/// to emit duplicate groups after spilling.
+#[tokio::test]
+async fn nested_key_spill_keeps_groups_unique() {
+    const NESTED_KEY_ROWS: usize = 200_000;
+    const NESTED_KEY_GROUPS: i64 = 16;
+    const NESTED_KEY_BATCH_ROWS: usize = 8_192;
+
+    /// Small enough that the final stages must spill their `count(distinct)`
+    /// state, large enough that the migrated final stream can hold one merged
+    /// batch under a `FairSpillPool` shared by four partitions.
+    const NESTED_KEY_MEMORY_LIMIT: usize = 8 * 1024 * 1024;
+
+    fn nested_key_struct_fields() -> Fields {
+        Fields::from(vec![
+            Field::new("list", DataType::new_list(DataType::Int64, true), true),
+            Field::new("num", DataType::Int64, true),
+        ])
+    }
+
+    fn nested_key_table() -> MemTable {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new_struct("st", nested_key_struct_fields(), true),
+            Field::new("v", DataType::Int64, false),
+        ]));
+        let batches = (0..NESTED_KEY_ROWS)
+            .step_by(NESTED_KEY_BATCH_ROWS)
+            .map(|start| {
+                let rows = start..(start + NESTED_KEY_BATCH_ROWS).min(NESTED_KEY_ROWS);
+                let mut list = ListBuilder::new(Int64Builder::new());
+                let mut num = Vec::with_capacity(rows.len());
+                let mut valid = Vec::with_capacity(rows.len());
+                for row in rows.clone() {
+                    let group = row as i64 % NESTED_KEY_GROUPS;
+                    match row % 37 {
+                        0 => list.append_null(),
+                        1 => list.append(true),
+                        _ => {
+                            list.values().append_value(group);
+                            list.values().append_value(group + 1);
+                            list.append(true);
+                        }
+                    }
+                    num.push((row % 41 != 0).then_some(group));
+                    valid.push(row % 43 != 0);
+                }
+                let st = StructArray::new(
+                    nested_key_struct_fields(),
+                    vec![Arc::new(list.finish()), Arc::new(Int64Array::from(num))],
+                    Some(NullBuffer::from(valid)),
+                );
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(st),
+                        Arc::new(Int64Array::from_iter_values(
+                            rows.map(|row| row as i64),
+                        )),
+                    ],
+                )
+                .unwrap()
+            })
+            .collect();
+        MemTable::try_new(schema, vec![batches]).unwrap()
+    }
+
+    async fn run_nested_key_query(memory_limit: Option<usize>, legacy: bool) -> String {
+        let mut runtime = RuntimeEnvBuilder::new()
+            .with_disk_manager_builder(DiskManagerBuilder::default());
+        if let Some(limit) = memory_limit {
+            runtime = runtime.with_memory_pool(Arc::new(FairSpillPool::new(limit)));
+        }
+        let config = SessionConfig::new()
+            .with_target_partitions(4)
+            // small batches: the merged spill stream arrives in many batches and
+            // groups span batch boundaries
+            .with_batch_size(64)
+            .set_bool("datafusion.execution.enable_migration_aggregate", !legacy);
+        let ctx =
+            SessionContext::new_with_config_rt(config, runtime.build_arc().unwrap());
+        ctx.register_table("t", Arc::new(nested_key_table()))
+            .unwrap();
+
+        let df = ctx
+            .sql(
+                "select st, count(v), count(distinct v), sum(v), avg(v), min(v), max(v) \
+                                 from t group by st",
+            )
+            .await
+            .unwrap();
+        let plan = df.create_physical_plan().await.unwrap();
+
+        let task_ctx = ctx.task_ctx();
+        let batches = collect_batches(Arc::clone(&plan), task_ctx)
+            .await
+            .expect("Query execution failed");
+
+        let spill_count = plan_spill_count(plan.as_ref());
+        match memory_limit {
+            Some(_) => assert_ne!(spill_count, 0, "must have spilled"),
+            None => assert_eq!(spill_count, 0, "must not spill on unbounded memory"),
+        }
+
+        batches_to_sort_string(&batches)
+    }
+
+    let expected = run_nested_key_query(None, false).await;
+    assert_eq!(
+        run_nested_key_query(None, true).await,
+        expected,
+        "unbounded, legacy=true"
+    );
+
+    for legacy in [true, false] {
+        assert_eq!(
+            run_nested_key_query(Some(NESTED_KEY_MEMORY_LIMIT), legacy).await,
+            expected,
+            "spilling, legacy={legacy}"
+        );
+    }
+}
+
 /// A grouped `COUNT(DISTINCT <string>)` gets one accumulator per group, and
 /// each of those owns a hash set of the distinct values it has seen. Those
 /// sets used to be created pre-allocated, which costs far more than the
