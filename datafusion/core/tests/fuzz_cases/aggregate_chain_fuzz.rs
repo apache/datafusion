@@ -151,6 +151,9 @@ enum Query {
     Grouped,
     /// The same aggregates without `GROUP BY`.
     NoGrouping,
+    /// `GROUP BY k1, k2` with no aggregate expressions, as `SELECT DISTINCT`
+    /// plans: the accumulator-free path of every stream.
+    Distinct,
     /// `GROUP BY k1` with `max(v)` only, the shape the TopK stream supports.
     /// Chains using `Operator::TopK` set a limit larger than any possible
     /// group count, so the result must still be the complete aggregate.
@@ -179,6 +182,7 @@ impl Query {
         match self {
             Query::Grouped => &["k1", "k2"],
             Query::NoGrouping => &[],
+            Query::Distinct => &["k1", "k2"],
             Query::TopK => &["k1"],
             Query::BooleanKey => &["b"],
             Query::BytesKey => &["s"],
@@ -341,6 +345,29 @@ const SHAPES: &[Shape] = &[
         &[Aggregate(Single)],
         1,
         Query::NoGrouping,
+    ),
+    shape("distinct_single", &[Aggregate(Single)], 1, Query::Distinct),
+    shape(
+        "distinct_partial_repartition_final",
+        &[
+            Aggregate(Partial),
+            HashRepartition,
+            Aggregate(FinalPartitioned),
+        ],
+        PARTITIONS,
+        Query::Distinct,
+    ),
+    shape(
+        "distinct_partial_repartition_reduce_repartition_final",
+        &[
+            Aggregate(Partial),
+            HashRepartition,
+            Aggregate(PartialReduce),
+            HashRepartition,
+            Aggregate(FinalPartitioned),
+        ],
+        PARTITIONS,
+        Query::Distinct,
     ),
     // TopK: same query without a limit is the reference for the TopK chains
     shape("top_k_query_single", &[Aggregate(Single)], 1, Query::TopK),
@@ -844,6 +871,9 @@ fn aggregates(schema: &SchemaRef, query: Query) -> Vec<Arc<AggregateFunctionExpr
                 .unwrap(),
         )
     };
+    if query == Query::Distinct {
+        return vec![];
+    }
     if query == Query::TopK {
         // TopK supports exactly one min/max aggregate over a non-nullable input
         return vec![build(
