@@ -736,6 +736,22 @@ fn plan_insert_preserves_target_extension_metadata() {
 }
 
 #[test]
+fn plan_insert_skips_cast_for_matching_extension_metadata() {
+    let sql = "INSERT INTO person_with_uuid_extension \
+               SELECT id, first_name, last_name FROM person_with_uuid_extension";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Dml: op=[Insert Into] table=[person_with_uuid_extension]
+      Projection: person_with_uuid_extension.id AS id, person_with_uuid_extension.first_name AS first_name, person_with_uuid_extension.last_name AS last_name
+        Projection: person_with_uuid_extension.id, person_with_uuid_extension.first_name, person_with_uuid_extension.last_name
+          TableScan: person_with_uuid_extension
+    "#
+    );
+}
+
+#[test]
 fn plan_insert_preserves_target_extension_metadata_on_type_cast() {
     let sql = "INSERT INTO string_with_extension SELECT id FROM test_decimal";
     let plan = logical_plan(sql).unwrap();
