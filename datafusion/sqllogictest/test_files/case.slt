@@ -906,3 +906,61 @@ drop table floats;
 #####
 # End of lookup table CASE tests
 #####
+
+statement ok
+CREATE VIEW guarded_cast AS SELECT * FROM (VALUES ('1'), ('abc'), ('2'), (NULL)) t(s);
+
+# A Boolean CASE must not become an AND that exposes the cast to 'abc'.
+# Regression for https://github.com/apache/datafusion/issues/25136.
+query T rowsort
+SELECT s FROM guarded_cast
+WHERE CASE WHEN s ~ '^[0-9]+$' THEN CAST(s AS INT) > 0 ELSE false END;
+----
+1
+2
+
+# Preserve branch evaluation in projections, including both forms of ELSE NULL.
+query TBBB rowsort
+SELECT s,
+  CASE WHEN s ~ '^[0-9]+$' THEN CAST(s AS INT) > 0 ELSE true END,
+  CASE WHEN s ~ '^[0-9]+$' THEN CAST(s AS INT) > 0 ELSE NULL END,
+  CASE WHEN s ~ '^[0-9]+$' THEN CAST(s AS INT) > 0 END
+FROM guarded_cast;
+----
+1 true true true
+2 true true true
+NULL true NULL NULL
+abc true NULL NULL
+
+# The ELSE expression also runs only on rows that reach it.
+query T rowsort
+SELECT s FROM guarded_cast
+WHERE CASE WHEN s ~ '^[a-z]+$' THEN false ELSE CAST(s AS INT) > 0 END;
+----
+1
+2
+
+# Literal outputs alone are insufficient: later WHEN expressions are conditional.
+query T rowsort
+SELECT s FROM guarded_cast
+WHERE CASE WHEN s ~ '^[a-z]+$' THEN false
+           WHEN CAST(s AS INT) > 0 THEN true ELSE false END;
+----
+1
+2
+
+# Division is another fallible branch expression, independent of cast handling.
+query I rowsort
+SELECT n FROM (VALUES (0), (1), (2), (NULL)) t(n)
+WHERE CASE WHEN n <> 0 THEN 10 / n > 1 ELSE false END;
+----
+1
+2
+
+# A selected invalid branch must still raise its original error.
+query error Cannot cast string 'abc' to value of Int32 type
+SELECT CASE WHEN s ~ '^[a-z]+$' THEN CAST(s AS INT) > 0 ELSE false END
+FROM guarded_cast;
+
+statement ok
+DROP VIEW guarded_cast;

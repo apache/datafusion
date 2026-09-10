@@ -1575,7 +1575,9 @@ impl TreeNodeRewriter for Simplifier<'_> {
             // ---> (X AND A) OR (Y AND B AND NOT X) OR ... (NOT (X OR Y) AND Q)
             //
             // Note: the rationale for this rewrite is that the expr can then be further
-            // simplified using the existing rules for AND/OR
+            // simplified using the existing rules for AND/OR. Unlike CASE, AND/OR
+            // do not guarantee branch-local evaluation, so only expose columns
+            // and literals from conditional branches.
             Expr::Case(Case {
                 expr: None,
                 when_then_expr,
@@ -1586,7 +1588,8 @@ impl TreeNodeRewriter for Simplifier<'_> {
                     // or all thens are literal bools and a small number of them are true
                     || (when_then_expr.iter().all(|(_, then)| is_bool_lit(then))
                         && when_then_expr.iter().filter(|(_, then)| is_true(then)).count() < 3))
-                && info.is_boolean_type(&when_then_expr[0].1)? =>
+                && info.is_boolean_type(&when_then_expr[0].1)?
+                && can_lower_case_to_boolean(&when_then_expr, else_expr.as_deref()) =>
             {
                 // String disjunction of all the when predicates encountered so far. Not nullable.
                 let mut filter_expr = lit(false);
@@ -1643,7 +1646,8 @@ impl TreeNodeRewriter for Simplifier<'_> {
                     .filter(|(_, then)| is_false(then))
                     .count()
                     < 3
-                && else_expr.as_deref().is_none_or(is_bool_lit) =>
+                && else_expr.as_deref().is_none_or(is_bool_lit)
+                && can_lower_case_to_boolean(&when_then_expr, else_expr.as_deref()) =>
             {
                 Transformed::yes(
                     Expr::Case(Case {
@@ -2432,6 +2436,26 @@ fn simplify_inlist_set_operation(
     }))
 }
 
+/// Conservatively checks the inputs whose evaluation can change when lowering
+/// CASE to AND/OR. [`Expr`] has no general fallibility analysis: only columns and
+/// literals are admitted from conditional branches, including later WHEN conditions.
+/// The first WHEN already runs on every row, but must not be volatile because
+/// the rewrite can evaluate it more than once.
+fn can_lower_case_to_boolean(
+    when_then_expr: &[(Box<Expr>, Box<Expr>)],
+    else_expr: Option<&Expr>,
+) -> bool {
+    let is_leaf = |expr: &Expr| matches!(expr, Expr::Column(_) | Expr::Literal(..));
+    when_then_expr.iter().enumerate().all(|(i, (when, then))| {
+        is_leaf(then)
+            && if i == 0 {
+                !when.is_volatile()
+            } else {
+                is_leaf(when)
+            }
+    }) && else_expr.is_none_or(is_leaf)
+}
+
 /// Returns expression testing a boolean `expr` for being exactly `true` (not `false` or NULL).
 fn is_exactly_true(expr: Expr, info: &SimplifyContext) -> Result<Expr> {
     if !info.nullable(&expr)? {
@@ -2577,12 +2601,15 @@ mod tests {
         //     ELSE false
         //   END
         //
-        // Can be simplified to `i < 5`
+        // Fold the constant conditions, but preserve CASE because the THEN
+        // expression is outside the conservative column/literal subset.
         let expr = when(col("i").gt(lit(5)).and(lit(false)), col("i").gt(lit(5)))
             .when(col("i").lt(lit(5)).and(lit(true)), col("i").lt(lit(5)))
             .otherwise(lit(false))
             .unwrap();
-        let expected = col("i").lt(lit(5));
+        let expected = when(col("i").lt(lit(5)), col("i").lt(lit(5)))
+            .otherwise(lit(false))
+            .unwrap();
         assert_eq!(expected, simplifier.simplify(expr).unwrap());
     }
 
@@ -4210,76 +4237,84 @@ mod tests {
             Some(Box::new(lit("ready"))),
         ));
 
-        assert_eq!(
-            simplify(binary_expr(
-                complex_case.clone(),
+        // Comparisons still fold into literal outputs, but later WHEN conditions must
+        // remain conditional: they are not columns or literals.
+        for (op, value, outputs) in [
+            (
                 Operator::Eq,
-                lit("completed"),
-            )),
-            not_distinct_from(col("c1").eq(lit("completed")), lit(true)).and(
-                distinct_from(col("c1").eq(lit("inboxed")), lit(true))
-                    .and(distinct_from(col("c1").eq(lit("scheduled")), lit(true)))
-            )
-        );
-
-        assert_eq!(
-            simplify(binary_expr(
-                complex_case.clone(),
+                "completed",
+                [false, false, true, false, false, false, false],
+            ),
+            (
                 Operator::NotEq,
-                lit("completed"),
-            )),
-            distinct_from(col("c1").eq(lit("completed")), lit(true))
-                .or(not_distinct_from(col("c1").eq(lit("inboxed")), lit(true))
-                    .or(not_distinct_from(col("c1").eq(lit("scheduled")), lit(true))))
-        );
-
-        assert_eq!(
-            simplify(binary_expr(
-                complex_case.clone(),
+                "completed",
+                [true, true, false, true, true, true, true],
+            ),
+            (
                 Operator::Eq,
-                lit("running"),
-            )),
-            not_distinct_from(col("c2"), lit(true)).and(
-                distinct_from(col("c1").eq(lit("inboxed")), lit(true))
-                    .and(distinct_from(col("c1").eq(lit("scheduled")), lit(true)))
-                    .and(distinct_from(col("c1").eq(lit("completed")), lit(true)))
-                    .and(distinct_from(col("c1").eq(lit("paused")), lit(true)))
-            )
-        );
-
-        assert_eq!(
-            simplify(binary_expr(
-                complex_case.clone(),
+                "running",
+                [false, false, false, false, true, false, false],
+            ),
+            (
                 Operator::Eq,
-                lit("ready"),
-            )),
-            distinct_from(col("c1").eq(lit("inboxed")), lit(true))
-                .and(distinct_from(col("c1").eq(lit("scheduled")), lit(true)))
-                .and(distinct_from(col("c1").eq(lit("completed")), lit(true)))
-                .and(distinct_from(col("c1").eq(lit("paused")), lit(true)))
-                .and(distinct_from(col("c2"), lit(true)))
-                .and(distinct_from(
-                    col("c1").eq(lit("invoked")).and(col("c3").gt(lit(0))),
-                    lit(true)
-                ))
-        );
-
-        assert_eq!(
-            simplify(binary_expr(
-                complex_case.clone(),
+                "ready",
+                [false, false, false, false, false, false, true],
+            ),
+            (
                 Operator::NotEq,
-                lit("ready"),
+                "ready",
+                [true, true, true, true, true, true, false],
+            ),
+        ] {
+            let Expr::Case(mut expected) = complex_case.clone() else {
+                unreachable!()
+            };
+            for ((_, then), value) in expected.when_then_expr.iter_mut().zip(outputs) {
+                **then = lit(value);
+            }
+            expected.else_expr = Some(Box::new(lit(outputs[6])));
+            assert_eq!(
+                simplify(binary_expr(complex_case.clone(), op, lit(value))),
+                Expr::Case(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn simplify_case_preserves_conditional_expressions() {
+        let fallible =
+            Expr::Cast(Cast::new(Box::new(col("c1")), DataType::Int32)).gt(lit(0_i32));
+        let volatile = Expr::ScalarFunction(ScalarFunction::new_udf(
+            Arc::new(ScalarUDF::new_from_impl(VolatileUdf::new())),
+            vec![],
+        ));
+        for expr in [
+            Expr::Case(Case::new(
+                None,
+                vec![(Box::new(col("c2")), Box::new(fallible.clone()))],
+                Some(Box::new(lit(false))),
             )),
-            not_distinct_from(col("c1").eq(lit("inboxed")), lit(true))
-                .or(not_distinct_from(col("c1").eq(lit("scheduled")), lit(true)))
-                .or(not_distinct_from(col("c1").eq(lit("completed")), lit(true)))
-                .or(not_distinct_from(col("c1").eq(lit("paused")), lit(true)))
-                .or(not_distinct_from(col("c2"), lit(true)))
-                .or(not_distinct_from(
-                    col("c1").eq(lit("invoked")).and(col("c3").gt(lit(0))),
-                    lit(true)
-                ))
-        );
+            Expr::Case(Case::new(
+                None,
+                vec![(Box::new(col("c2")), Box::new(lit(true)))],
+                Some(Box::new(fallible.clone())),
+            )),
+            Expr::Case(Case::new(
+                None,
+                vec![
+                    (Box::new(col("c2")), Box::new(lit(false))),
+                    (Box::new(fallible), Box::new(lit(true))),
+                ],
+                Some(Box::new(lit(false))),
+            )),
+            Expr::Case(Case::new(
+                None,
+                vec![(Box::new(volatile.gt(lit(0_i16))), Box::new(lit(true)))],
+                Some(Box::new(col("c2"))),
+            )),
+        ] {
+            assert_eq!(simplify(expr.clone()), expr);
+        }
     }
 
     #[test]
