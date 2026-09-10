@@ -3715,3 +3715,80 @@ async fn test_unique_build_outer_join_filter_requires_sort() -> Result<()> {
     );
     Ok(())
 }
+
+/// Dropping an independent primary key must not make the duplicate join key unique.
+#[tokio::test]
+async fn test_projected_constraints_join_limit() -> Result<()> {
+    let build_batch = record_batch!(
+        ("id", Int32, [1, 2]),
+        ("build_k", Int32, [1, 1]),
+        ("build_v", Int32, [10, 20])
+    )?;
+    let build_schema = build_batch.schema();
+    let build_ordering = LexOrdering::new([
+        sort_expr("build_k", &build_schema),
+        sort_expr("build_v", &build_schema),
+    ])
+    .unwrap();
+    let build = Arc::new(
+        DataSourceExec::new(Arc::new(
+            MemorySourceConfig::try_new(
+                &[vec![build_batch]],
+                Arc::clone(&build_schema),
+                None,
+            )?
+            .try_with_sort_information(vec![build_ordering])?,
+        ))
+        .with_constraints(Constraints::new_unverified(vec![
+            Constraint::PrimaryKey(vec![0]),
+        ])),
+    );
+    let build = projection_exec(
+        vec![
+            (col("build_k", &build_schema)?, "build_k".to_string()),
+            (col("build_v", &build_schema)?, "build_v".to_string()),
+        ],
+        build,
+    )?;
+    let probe_batch = record_batch!(("probe_k", Int32, [1, 1]))?;
+    let probe_schema = probe_batch.schema();
+    let probe_ordering = LexOrdering::new([sort_expr("probe_k", &probe_schema)]).unwrap();
+    let probe = DataSourceExec::from_data_source(
+        MemorySourceConfig::try_new(&[vec![probe_batch]], probe_schema, None)?
+            .try_with_sort_information(vec![probe_ordering])?,
+    );
+    let join = Arc::new(
+        HashJoinExecBuilder::new(
+            build,
+            probe,
+            vec![(
+                Arc::new(Column::new("build_k", 0)),
+                Arc::new(Column::new("probe_k", 0)),
+            )],
+            JoinType::Inner,
+        )
+        .with_partition_mode(PartitionMode::CollectLeft)
+        .build()?,
+    );
+    let required = LexOrdering::new([
+        sort_expr("probe_k", &join.schema()),
+        sort_expr("build_v", &join.schema()),
+    ])
+    .unwrap();
+    // Keep an explicit sort to exercise its runtime ordering check.
+    let plan = Arc::new(SortExec::new(required, join).with_fetch(Some(2)));
+    let ctx = SessionContext::new();
+    let batches = datafusion_physical_plan::collect(plan, ctx.task_ctx()).await?;
+    assert_batches_eq!(
+        [
+            "+---------+---------+---------+",
+            "| build_k | build_v | probe_k |",
+            "+---------+---------+---------+",
+            "| 1       | 10      | 1       |",
+            "| 1       | 10      | 1       |",
+            "+---------+---------+---------+",
+        ],
+        &batches
+    );
+    Ok(())
+}
