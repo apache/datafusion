@@ -952,7 +952,7 @@ impl DistinctArrayAggAccumulator {
         }
 
         let distinct_metric = record_metric
-            .then(|| self.distinct_metric.as_ref().cloned())
+            .then(|| self.distinct_metric.clone())
             .flatten();
         let distinct_start = distinct_metric.as_ref().map(|_| Instant::now());
         self.ensure_state(col.data_type())?;
@@ -1014,7 +1014,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
     }
 
     fn grouped_update_batch_metric(&self) -> Option<Arc<dyn AggregateMetric>> {
-        self.distinct_metric.as_ref().cloned()
+        self.distinct_metric.clone()
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
