@@ -1570,20 +1570,20 @@ async fn join_asof() -> Result<()> {
             vec![datafusion_common::Column::from_name("symbol")],
             col("trades.ts").gt_eq(col("prices.ts")),
         )?
-        .select(vec![col("trade_id"), col("price")])?
+        .select(vec![col("symbol"), col("trade_id"), col("price")])?
         .sort(vec![col("trade_id").sort(true, true)])?
         .collect()
         .await?;
 
     assert_batches_eq!(
         [
-            "+----------+-------+",
-            "| trade_id | price |",
-            "+----------+-------+",
-            "| 1        |       |",
-            "| 2        | 40    |",
-            "| 3        | 101   |",
-            "+----------+-------+",
+            "+--------+----------+-------+",
+            "| symbol | trade_id | price |",
+            "+--------+----------+-------+",
+            "| A      | 1        |       |",
+            "| A      | 2        | 40    |",
+            "| B      | 3        | 101   |",
+            "+--------+----------+-------+",
         ],
         &results
     );

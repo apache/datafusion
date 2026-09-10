@@ -1382,10 +1382,40 @@ impl DataFrame {
 
     /// Join this `DataFrame` to the closest eligible row in `right`.
     ///
-    /// Every left row is emitted exactly once. When present, `on` must contain
-    /// equality comparisons combined with `AND`. `match_condition` must be a
-    /// single `<`, `<=`, `>`, or `>=` comparison whose left and right operands
-    /// reference this `DataFrame` and `right`, respectively.
+    /// Every left row is emitted exactly once, with `NULL` values for the right
+    /// columns when no eligible row exists. `NULL` ordered values and equality
+    /// keys never match. When present, `on` must contain equality comparisons
+    /// combined with `AND`. `match_condition` must be a single `<`, `<=`, `>`,
+    /// or `>=` comparison whose left and right operands reference this
+    /// `DataFrame` and `right`, respectively.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion::arrow::array::record_batch;
+    /// # use datafusion::error::Result;
+    /// # use datafusion::prelude::*;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// # let ctx = SessionContext::new();
+    /// # let trades = ctx.read_batch(record_batch!(
+    /// #     ("symbol", Utf8, ["A"]),
+    /// #     ("ts", Int64, [4])
+    /// # )?)?.alias("trades")?;
+    /// # let prices = ctx.read_batch(record_batch!(
+    /// #     ("symbol", Utf8, ["A"]),
+    /// #     ("ts", Int64, [2]),
+    /// #     ("price", Int32, [20])
+    /// # )?)?.alias("prices")?;
+    /// // For each trade, find the latest price at or before its timestamp.
+    /// let joined = trades.join_asof(
+    ///     prices,
+    ///     Some(col("trades.symbol").eq(col("prices.symbol"))),
+    ///     col("trades.ts").gt_eq(col("prices.ts")),
+    /// )?;
+    /// # let _ = joined;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn join_asof(
         self,
         right: DataFrame,
@@ -1404,6 +1434,37 @@ impl DataFrame {
 
     /// Join this `DataFrame` to the closest eligible row in `right` using
     /// same-named equality keys.
+    ///
+    /// This has the same matching behavior as [`join_asof`](Self::join_asof),
+    /// but accepts columns that appear under the same name on both inputs.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion::arrow::array::record_batch;
+    /// # use datafusion::error::Result;
+    /// # use datafusion::prelude::*;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// # let ctx = SessionContext::new();
+    /// # let trades = ctx.read_batch(record_batch!(
+    /// #     ("symbol", Utf8, ["A"]),
+    /// #     ("ts", Int64, [4])
+    /// # )?)?.alias("trades")?;
+    /// # let prices = ctx.read_batch(record_batch!(
+    /// #     ("symbol", Utf8, ["A"]),
+    /// #     ("ts", Int64, [2]),
+    /// #     ("price", Int32, [20])
+    /// # )?)?.alias("prices")?;
+    /// // Same-named equality keys can be specified once.
+    /// let joined = trades.join_asof_using(
+    ///     prices,
+    ///     vec![Column::from_name("symbol")],
+    ///     col("trades.ts").gt_eq(col("prices.ts")),
+    /// )?;
+    /// # let _ = joined;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn join_asof_using(
         self,
         right: DataFrame,
