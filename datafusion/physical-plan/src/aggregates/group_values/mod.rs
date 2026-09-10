@@ -34,7 +34,7 @@ mod row;
 pub use row::GroupValuesRows;
 mod single_group_by;
 use datafusion_physical_expr::binary_map::OutputType;
-use multi_group_by::GroupValuesColumn;
+use multi_group_by::{GroupValuesColumn, GroupValuesOrdered};
 
 pub(crate) use single_group_by::primitive::HashValue;
 
@@ -144,6 +144,9 @@ pub trait GroupValues: Send {
 ///
 /// [`GroupValues`] implementations choosing logic:
 ///
+///   - Fully ordered multi-column keys with supported scalar types use adjacent
+///     comparisons and column builders, without a hash table.
+///
 ///   - If group by single column, and type of this column has
 ///     the specific [`GroupValues`] implementation, such implementation
 ///     will be chosen.
@@ -160,6 +163,11 @@ pub fn new_group_values(
     schema: SchemaRef,
     group_ordering: &GroupOrdering,
 ) -> Result<Box<dyn GroupValues>> {
+    if matches!(group_ordering, GroupOrdering::Full(_))
+        && GroupValuesOrdered::supports_schema(&schema)
+    {
+        return Ok(Box::new(GroupValuesOrdered::try_new(schema)?));
+    }
     if schema.fields.len() == 1 {
         let d = schema.fields[0].data_type();
 
