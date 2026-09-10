@@ -5643,3 +5643,41 @@ query P
 SELECT date_bin(NULL, TIMESTAMP '2023-01-01 12:30:00', TIMESTAMP '2023-01-01 12:00:00')
 ----
 NULL
+
+# KNOWN LIMITATION: `AT TIME ZONE` chooses its behaviour from the type that
+# `Expr::get_type` reports in the SQL planner, which runs BEFORE the type
+# coercion analyzer. For a `CASE` expression, `get_type` reports the type of the
+# first non-null `THEN` arm and ignores coercion. So the two queries below have
+# the same coerced input type, `Timestamp(ns, "UTC")`, but give different
+# results: the first still takes the timezone-naive path and keeps the old
+# aware-in aware-out shape.
+#
+# PostgreSQL gives `2024-01-01 05:00:00` as a naive timestamp for both.
+# A correct fix has to dispatch after coercion. Tracked here so the behaviour is
+# visible rather than silent.
+statement ok
+CREATE TABLE at_tz_case AS
+SELECT arrow_cast('2024-01-01T12:00:00Z', 'Timestamp(Nanosecond, Some("UTC"))') AS aware,
+       arrow_cast('2024-01-01T12:00:00', 'Timestamp(Nanosecond, None)') AS naive,
+       true AS b
+
+# both CASE expressions have the same type
+query TT
+SELECT arrow_typeof(CASE WHEN b THEN naive ELSE aware END),
+       arrow_typeof(CASE WHEN b THEN aware ELSE naive END)
+FROM at_tz_case
+----
+Timestamp(ns, "UTC") Timestamp(ns, "UTC")
+
+# but AT TIME ZONE does not agree on them
+query TPTP
+SELECT arrow_typeof((CASE WHEN b THEN naive ELSE aware END) AT TIME ZONE 'America/Denver'),
+       (CASE WHEN b THEN naive ELSE aware END) AT TIME ZONE 'America/Denver',
+       arrow_typeof((CASE WHEN b THEN aware ELSE naive END) AT TIME ZONE 'America/Denver'),
+       (CASE WHEN b THEN aware ELSE naive END) AT TIME ZONE 'America/Denver'
+FROM at_tz_case
+----
+Timestamp(ns, "America/Denver") 2024-01-01T05:00:00-07:00 Timestamp(ns) 2024-01-01T05:00:00
+
+statement ok
+DROP TABLE at_tz_case
