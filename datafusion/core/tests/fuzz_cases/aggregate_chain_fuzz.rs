@@ -73,9 +73,6 @@ use Operator::*;
 // Case space
 // ---------------------------------------------------------------------------
 
-/// About 2 MB per cardinality, half of `LIMITED_POOL_BYTES`. The
-/// order-preserving repartition holds a sorted low-cardinality input almost
-/// whole in its merges, which cannot spill, so the input has to fit.
 const ROWS: usize = 32 * 1024;
 const PARTITIONS: usize = 4;
 const BATCH_SIZE: usize = 64;
@@ -722,7 +719,7 @@ fn arrange(
                 .map(|partition| {
                     let start = (partition * per_partition).min(sorted.num_rows());
                     let length = per_partition.min(sorted.num_rows() - start);
-                    sorted.slice(start, length)
+                    copy_rows(&sorted, start, length)
                 })
                 .collect()
         }
@@ -738,18 +735,28 @@ fn arrange(
             (0..partition.num_rows())
                 .step_by(BATCH_SIZE)
                 .map(|start| {
-                    let slice = partition
-                        .slice(start, BATCH_SIZE.min(partition.num_rows() - start));
-                    {
-                        // `take` copies; `concat_batches` of one batch only slices
-                        let indices =
-                            UInt32Array::from_iter_values(0..slice.num_rows() as u32);
-                        take_record_batch(&slice, &indices).unwrap()
-                    }
+                    copy_rows(
+                        partition,
+                        start,
+                        BATCH_SIZE.min(partition.num_rows() - start),
+                    )
                 })
                 .collect()
         })
         .collect()
+}
+
+/// `batch[start..start + length]` in its own buffers. `take` copies where
+/// `slice` shares and `concat_batches` of one batch only slices.
+///
+/// Take from the unsliced batch: `take` on a list sizes the new values buffer
+/// as child length / list length * taken rows, so taking 64 rows out of a
+/// 64-row slice of a 32k-row list allocates a values buffer for the whole
+/// child, and `get_array_memory_size` reports capacity. That charged every
+/// batch about 500 KB instead of 5 KB.
+fn copy_rows(batch: &RecordBatch, start: usize, length: usize) -> RecordBatch {
+    let indices = UInt32Array::from_iter_values(start as u32..(start + length) as u32);
+    take_record_batch(batch, &indices).unwrap()
 }
 
 // ---------------------------------------------------------------------------
