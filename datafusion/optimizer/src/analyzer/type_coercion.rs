@@ -57,10 +57,10 @@ use datafusion_expr::type_coercion::{
 };
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
-    Cast, DmlStatement, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator,
-    Projection, Union, ValueOrLambda, WindowFrame, WindowFrameBound, WindowFrameUnits,
-    WriteOp, is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown,
-    lit, not,
+    AsOfJoin, AsOfMatch, Cast, DmlStatement, Expr, ExprSchemable, Join, Limit,
+    LogicalPlan, Operator, Projection, Union, ValueOrLambda, WindowFrame,
+    WindowFrameBound, WindowFrameUnits, WriteOp, is_false, is_not_false, is_not_true,
+    is_not_unknown, is_true, is_unknown, lit, not,
 };
 
 /// Performs type coercion by determining the schema
@@ -191,6 +191,7 @@ impl<'a> TypeCoercionRewriter<'a> {
     pub fn coerce_plan(&mut self, plan: LogicalPlan) -> Result<LogicalPlan> {
         match plan {
             LogicalPlan::Join(join) => self.coerce_join(join),
+            LogicalPlan::AsOfJoin(join) => self.coerce_asof_join(join),
             LogicalPlan::Union(union) => Self::coerce_union(union),
             LogicalPlan::Limit(limit) => Self::coerce_limit(limit),
             LogicalPlan::Dml(dml) => self.coerce_dml(dml),
@@ -282,6 +283,36 @@ impl<'a> TypeCoercionRewriter<'a> {
             .transpose()?;
 
         Ok(LogicalPlan::Join(join))
+    }
+
+    /// Coerce ASOF equality and ordered match expressions across input schemas.
+    pub fn coerce_asof_join(&mut self, mut join: AsOfJoin) -> Result<LogicalPlan> {
+        join.on = join
+            .on
+            .into_iter()
+            .map(|(left, right)| {
+                self.coerce_binary_op(
+                    left,
+                    join.left.schema(),
+                    Operator::Eq,
+                    right,
+                    join.right.schema(),
+                )
+            })
+            .collect::<Result<_>>()?;
+        let (left, right) = self.coerce_binary_op(
+            join.match_condition.left,
+            join.left.schema(),
+            join.match_condition.op,
+            join.match_condition.right,
+            join.right.schema(),
+        )?;
+        join.match_condition = Box::new(AsOfMatch {
+            left,
+            op: join.match_condition.op,
+            right,
+        });
+        Ok(LogicalPlan::AsOfJoin(join))
     }
 
     /// Coerce the union’s inputs to a common schema compatible with all inputs.
@@ -1088,6 +1119,8 @@ fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
         Ok(DataType::Interval(IntervalUnit::MonthDayNano))
     } else if let DataType::Dictionary(_, value_type) = col_type {
         extract_window_frame_target_type(value_type)
+    } else if let DataType::RunEndEncoded(_, value_type) = col_type {
+        extract_window_frame_target_type(value_type.data_type())
     } else {
         internal_err!("Cannot run range queries on datatype: {col_type}")
     }
@@ -1113,8 +1146,11 @@ fn coerce_window_frame(
                 // `current_value ± offset`, so it is only meaningful for target
                 // types that support arithmetic. Other orderable target types can
                 // still use free range frames, whose bounds require comparison only.
+                // REE arrays are not supported by arrow's numeric kernesl.
+                // Tracked at https://github.com/apache/arrow-rs/issues/10891).
                 let supports_offset_arithmetic =
-                    target_type.is_numeric() || is_interval(&target_type);
+                    !matches!(col_type, DataType::RunEndEncoded(_, _))
+                        && (target_type.is_numeric() || is_interval(&target_type));
                 if !supports_offset_arithmetic && !window_frame.free_range() {
                     return plan_err!(
                         "RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type {target_type}"

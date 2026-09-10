@@ -139,6 +139,12 @@ h2o_big_join:                   h2oai benchmark with large dataset (1e9 rows) fo
 h2o_small_window:               Extended h2oai benchmark with small dataset (1e7 rows) for window,  default file format is csv
 h2o_medium_window:              Extended h2oai benchmark with medium dataset (1e8 rows) for window, default file format is csv
 h2o_big_window:                 Extended h2oai benchmark with large dataset (1e9 rows) for window,  default file format is csv
+h2o_small_window_sorted:        Window Top-N over a declared-sorted h2o input, small dataset (1e7 rows),  default file format is csv
+h2o_medium_window_sorted:       Window Top-N over a declared-sorted h2o input, medium dataset (1e8 rows), default file format is csv
+h2o_big_window_sorted:          Window Top-N over a declared-sorted h2o input, large dataset (1e9 rows),  default file format is csv
+h2o_small_window_sorted_parquet:  Window Top-N over a declared-sorted h2o input, small dataset (1e7 rows),  source file format is parquet
+h2o_medium_window_sorted_parquet: Window Top-N over a declared-sorted h2o input, medium dataset (1e8 rows), source file format is parquet
+h2o_big_window_sorted_parquet:    Window Top-N over a declared-sorted h2o input, large dataset (1e9 rows),  source file format is parquet
 h2o_small_parquet:              h2oai benchmark with small dataset (1e7 rows) for groupby,  file format is parquet
 h2o_medium_parquet:             h2oai benchmark with medium dataset (1e8 rows) for groupby, file format is parquet
 h2o_big_parquet:                h2oai benchmark with large dataset (1e9 rows) for groupby,  file format is parquet
@@ -308,6 +314,26 @@ main() {
                     ;;
                 h2o_big_window)
                     data_h2o_join "BIG" "CSV"
+                    ;;
+                # the sorted window subgroup derives its data from the same
+                # source, then sorts it inside its load SQL
+                h2o_small_window_sorted)
+                    data_h2o_join "SMALL" "CSV"
+                    ;;
+                h2o_medium_window_sorted)
+                    data_h2o_join "MEDIUM" "CSV"
+                    ;;
+                h2o_big_window_sorted)
+                    data_h2o_join "BIG" "CSV"
+                    ;;
+                h2o_small_window_sorted_parquet)
+                    data_h2o_join "SMALL" "PARQUET"
+                    ;;
+                h2o_medium_window_sorted_parquet)
+                    data_h2o_join "MEDIUM" "PARQUET"
+                    ;;
+                h2o_big_window_sorted_parquet)
+                    data_h2o_join "BIG" "PARQUET"
                     ;;
                 h2o_small_parquet)
                     data_h2o "SMALL" "PARQUET"
@@ -533,6 +559,24 @@ main() {
                     ;;
                 h2o_big_window)
                     run_h2o_window "BIG" "CSV" "window"
+                    ;;
+                h2o_small_window_sorted)
+                    run_h2o_window_sorted "small" "csv"
+                    ;;
+                h2o_medium_window_sorted)
+                    run_h2o_window_sorted "medium" "csv"
+                    ;;
+                h2o_big_window_sorted)
+                    run_h2o_window_sorted "big" "csv"
+                    ;;
+                h2o_small_window_sorted_parquet)
+                    run_h2o_window_sorted "small" "parquet"
+                    ;;
+                h2o_medium_window_sorted_parquet)
+                    run_h2o_window_sorted "medium" "parquet"
+                    ;;
+                h2o_big_window_sorted_parquet)
+                    run_h2o_window_sorted "big" "parquet"
                     ;;
                 h2o_small_parquet)
                     run_h2o "SMALL" "PARQUET"
@@ -1264,6 +1308,38 @@ run_h2o_join() {
 # Runners for h2o join benchmark
 run_h2o_window() {
     h2o_runner "$1" "$2" "window"
+}
+
+# Runs the h2o window_sorted subgroup: window Top-N over an input that declares
+# the ordering the window requires.
+#
+# The `window` subgroup registers `x` with no declared ordering, so
+# `output_ordering()` is None and any plan that depends on a declared ordering is
+# unreachable from it, however the data happens to sit on disk. This subgroup's
+# load SQL writes a sorted copy and registers it `WITH ORDER`, then asserts a
+# per-partition top-K operator is actually in the plan so a silent fallback to
+# window-plus-filter cannot masquerade as a result.
+#
+# The sort happens in the untimed `load` step, so it stays out of the
+# measurement. Data comes from the same source as the window subgroup, so the
+# data step is data_h2o_join.
+#
+# H2O_FILE_TYPE selects the *source* format and so only affects that untimed
+# load: the measured query always reads the sorted Parquet copy, whatever the
+# source was. A Parquet source still makes the load markedly cheaper than
+# re-parsing a multi-GB CSV, which is why the `_parquet` entries exist; they are
+# expected to produce the same measured numbers as their CSV counterparts, not
+# different ones. Each entry pairs with the data step that generates its format.
+run_h2o_window_sorted() {
+    SIZE=${1:-"small"}
+    FILE_TYPE=${2:-"csv"}
+    echo "Running h2o window_sorted benchmark (size=${SIZE}, source format=${FILE_TYPE})..."
+    debug_run env BENCH_NAME=h2o \
+      BENCH_SUBGROUP=window_sorted \
+      H2O_BENCH_SIZE="${SIZE}" \
+      H2O_FILE_TYPE="${FILE_TYPE}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"} \
+      bash -c "$SQL_CARGO_COMMAND"
 }
 
 # Runs the external aggregation benchmark

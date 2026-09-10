@@ -207,6 +207,23 @@ async fn with_column_window_functions() -> DataFusionResult<()> {
 }
 
 #[tokio::test]
+async fn duplicated_window_functions_can_be_executed() -> Result<()> {
+    let wexpr = datafusion::functions_window::row_number::row_number_udwf().call(vec![]);
+
+    let plan = LogicalPlanBuilder::empty(true)
+        .window(vec![wexpr.clone(), wexpr.alias("aliased")])?
+        .build()?;
+
+    let ctx = SessionContext::new();
+
+    let collected = DataFrame::new(ctx.state(), plan).collect().await?;
+
+    assert_eq!(collected.iter().map(|b| b.num_rows()).sum::<usize>(), 1);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_coalesce_schema() -> Result<()> {
     let ctx = SessionContext::new();
 
@@ -1315,6 +1332,69 @@ async fn window_aggregates_with_filter() -> Result<()> {
     +---------+---------+---------+---------+---------+----+-----+
     "
     );
+
+    Ok(())
+}
+
+// Test issue: https://github.com/apache/datafusion/issues/24884
+//
+// When the physical optimizer reverses a window expression to avoid an extra
+// sort, the reversed expression must keep its output field name. Otherwise the
+// window exec's schema changes while the parent projection still references the
+// old column name, and planning fails.
+//
+// Note this only asserts on planning: executing the plan currently hits a
+// separate gap (missing `retract_batch` on the reversed sliding frame), tracked
+// by https://github.com/apache/datafusion/issues/24885. Once that is fixed, this
+// test can be extended to collect results.
+#[tokio::test]
+async fn window_reversal_preserves_output_field_names() -> Result<()> {
+    fn last_value_over(ascending: bool) -> Expr {
+        Expr::from(WindowFunction::new(
+            datafusion_functions_aggregate::first_last::last_value_udaf(),
+            vec![col("v")],
+        ))
+        .order_by(vec![col("t").sort(ascending, false)])
+        .build()
+        .unwrap()
+    }
+
+    // `t` must be non-nullable for the ordering equivalence that makes the
+    // optimizer reverse the second window instead of adding a second sort.
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("t", DataType::Int64, false),
+        Field::new("v", DataType::Int64, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int64Array::from(vec![1, 2])),
+            Arc::new(Int64Array::from(vec![None, Some(10)])),
+        ],
+    )?;
+
+    let ctx = SessionContext::new();
+    let df = ctx
+        .read_batch(batch)?
+        .with_column("asc_win", last_value_over(true))?
+        .with_column("desc_win", last_value_over(false))?;
+
+    let logical_schema = df.schema().clone();
+    // Planning used to fail here with an internal error from `EnsureRequirements`.
+    let physical_plan = df.create_physical_plan().await?;
+
+    let physical_names = physical_plan
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .collect::<Vec<_>>();
+    let logical_names = logical_schema
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .collect::<Vec<_>>();
+    assert_eq!(physical_names, logical_names);
 
     Ok(())
 }
@@ -6968,7 +7048,7 @@ async fn test_dataframe_from_columns() -> Result<()> {
     let strings: ArrayRef =
         Arc::new(StringArray::from(vec![Some("foo"), Some("bar"), None]));
 
-    let df = DataFrame::from_columns(vec![
+    let columns = [
         ("bool", bools),
         ("i8", i8s),
         ("i16", i16s),
@@ -6982,10 +7062,10 @@ async fn test_dataframe_from_columns() -> Result<()> {
         ("f32", f32s),
         ("f64", f64s),
         ("str", strings),
-    ])?;
+    ];
 
-    assert_eq!(df.schema().fields().len(), 13);
-    assert_eq!(df.clone().count().await?, 3);
+    let df1 = DataFrame::from_columns(columns.clone())?;
+    let df2 = DataFrame::from_columns(columns.to_vec())?;
 
     let expected_types = [
         ("bool", DataType::Boolean),
@@ -7003,14 +7083,89 @@ async fn test_dataframe_from_columns() -> Result<()> {
         ("str", DataType::Utf8),
     ];
 
-    let schema = df.schema();
+    for df in [df1, df2] {
+        assert_eq!(df.schema().fields().len(), expected_types.len());
+        assert_eq!(df.clone().count().await?, 3);
 
-    for (name, data_type) in expected_types {
-        assert_eq!(schema.field_with_name(None, name)?.data_type(), &data_type);
+        let schema = df.schema();
+
+        for (name, data_type) in &expected_types {
+            assert_eq!(schema.field_with_name(None, name)?.data_type(), data_type);
+        }
+
+        let rows = df.sort(vec![col("i32").sort(true, true)])?;
+
+        assert_batches_eq!(
+            &[
+                "+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",
+                "| bool  | i8 | i16 | i32 | i64 | u8 | u16 | u32 | u64 | f16 | f32 | f64 | str |",
+                "+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",
+                "| true  | -1 | -1  | -1  | -1  | 0  | 0   | 0   | 0   | 1   | 1.0 | 1.0 | foo |",
+                "| false | 0  | 0   | 0   | 0   | 1  | 1   | 1   | 1   | 2   | 2.0 | 2.0 | bar |",
+                "| true  | 1  | 1   | 1   | 1   | 2  | 2   | 2   | 2   | 3   | 3.0 | 3.0 |     |",
+                "+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",
+            ],
+            &rows.collect().await?
+        );
     }
 
-    let rows = df.sort(vec![col("i32").sort(true, true)])?;
+    Ok(())
+}
 
+#[test]
+fn test_dataframe_from_columns_empty() {
+    let result = DataFrame::from_columns(vec![]);
+    assert!(result.is_err());
+
+    let result = DataFrame::from_columns([]);
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn test_dataframe_from_columns_with_iterator() -> Result<()> {
+    let bools: ArrayRef = Arc::new(BooleanArray::from(vec![true, false, true]));
+    let i8s: ArrayRef = Arc::new(Int8Array::from(vec![-1, 0, 1]));
+    let i16s: ArrayRef = Arc::new(Int16Array::from(vec![-1, 0, 1]));
+    let i32s: ArrayRef = Arc::new(Int32Array::from(vec![-1, 0, 1]));
+    let i64s: ArrayRef = Arc::new(Int64Array::from(vec![-1, 0, 1]));
+
+    let u8s: ArrayRef = Arc::new(UInt8Array::from(vec![0, 1, 2]));
+    let u16s: ArrayRef = Arc::new(UInt16Array::from(vec![0, 1, 2]));
+    let u32s: ArrayRef = Arc::new(UInt32Array::from(vec![0, 1, 2]));
+    let u64s: ArrayRef = Arc::new(UInt64Array::from(vec![0, 1, 2]));
+
+    let f16s: ArrayRef = Arc::new(Float16Array::from(vec![
+        half::f16::from_f64(1.0),
+        half::f16::from_f64(2.0),
+        half::f16::from_f64(3.0),
+    ]));
+    let f32s: ArrayRef = Arc::new(Float32Array::from(vec![1.0, 2.0, 3.0]));
+    let f64s: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0]));
+
+    let strings: ArrayRef =
+        Arc::new(StringArray::from(vec![Some("foo"), Some("bar"), None]));
+
+    let columns = [
+        ("bool", bools),
+        ("i8", i8s),
+        ("i16", i16s),
+        ("i32", i32s),
+        ("i64", i64s),
+        ("u8", u8s),
+        ("u16", u16s),
+        ("u32", u32s),
+        ("u64", u64s),
+        ("f16", f16s),
+        ("f32", f32s),
+        ("f64", f64s),
+        ("str", strings),
+    ];
+
+    let df = DataFrame::from_columns(columns.into_iter())?;
+
+    assert_eq!(df.schema().fields().len(), 13);
+    assert_eq!(df.clone().count().await?, 3);
+    let rows = df.sort(vec![col("i32").sort(true, true)])?;
     assert_batches_eq!(
         &[
             "+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",

@@ -49,12 +49,12 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{OUTER_REFERENCE_COLUMN_PREFIX, UNNEST_COLUMN_PREFIX};
 use datafusion_expr::{
-    Aggregate, BinaryExpr, Distinct, Expr, FetchType, JoinConstraint, JoinType,
+    Aggregate, AsOfJoin, BinaryExpr, Distinct, Expr, FetchType, JoinConstraint, JoinType,
     LogicalPlan, LogicalPlanBuilder, Operator, Projection, SkipType, Sort, SortExpr,
     TableScan, Unnest, UserDefinedLogicalNode, Window, expr::Alias,
 };
 use sqlparser::ast::{self, Ident, OrderByKind, SetExpr, TableAliasColumnDef};
-use std::{sync::Arc, vec};
+use std::{collections::HashSet, sync::Arc, vec};
 
 /// Convert a DataFusion [`LogicalPlan`] to [`ast::Statement`]
 ///
@@ -164,6 +164,12 @@ impl<'a> UnparserAggScope<'a> {
     }
 }
 
+#[derive(Clone, Copy)]
+struct DerivedInputScope<'a> {
+    alias: &'static str,
+    schema: &'a DFSchema,
+}
+
 impl Unparser<'_> {
     pub fn plan_to_sql(&self, plan: &LogicalPlan) -> Result<ast::Statement> {
         let mut plan = normalize_union_schema(plan)?;
@@ -178,6 +184,7 @@ impl Unparser<'_> {
             | LogicalPlan::Aggregate(_)
             | LogicalPlan::Sort(_)
             | LogicalPlan::Join(_)
+            | LogicalPlan::AsOfJoin(_)
             | LogicalPlan::Repartition(_)
             | LogicalPlan::Union(_)
             | LogicalPlan::TableScan(_)
@@ -448,6 +455,102 @@ impl Unparser<'_> {
                     [input] if Self::contains_projection_before_relation(input)
                 )
             }
+        }
+    }
+
+    /// Return the alias recursion would assign when `plan` must become a
+    /// derived relation below an already rendered projection.
+    fn derived_input_alias(plan: &LogicalPlan) -> Option<&'static str> {
+        match plan {
+            LogicalPlan::Projection(_) => Some("derived_projection"),
+            LogicalPlan::Limit(_) => Some("derived_limit"),
+            LogicalPlan::Sort(_) => Some("derived_sort"),
+            LogicalPlan::Distinct(_) => Some("derived_distinct"),
+            LogicalPlan::Filter(filter) => {
+                Self::derived_input_alias(filter.input.as_ref())
+            }
+            LogicalPlan::Repartition(repartition) => {
+                Self::derived_input_alias(repartition.input.as_ref())
+            }
+            _ => None,
+        }
+    }
+
+    fn derived_input_scope<'a>(
+        plan: &'a LogicalPlan,
+        select: &SelectBuilder,
+    ) -> Option<DerivedInputScope<'a>> {
+        if select.inside_subquery_alias() {
+            return None;
+        }
+
+        if select.already_projected()
+            && find_unnest_node_within_select(plan).is_none()
+            && let Some(alias) = Self::derived_input_alias(plan)
+        {
+            return Some(DerivedInputScope {
+                alias,
+                schema: plan.schema().as_ref(),
+            });
+        }
+
+        match plan {
+            LogicalPlan::Projection(projection) => {
+                let alias = Self::derived_input_alias(projection.input.as_ref())?;
+                let qualified_projection = projection.expr.iter().any(|expr| {
+                    expr.column_refs()
+                        .iter()
+                        .any(|column| column.relation.is_some())
+                });
+                let mut input_names = HashSet::new();
+                let unique_input_names = projection
+                    .input
+                    .schema()
+                    .fields()
+                    .iter()
+                    .all(|field| input_names.insert(field.name()));
+
+                (qualified_projection
+                    && unique_input_names
+                    && find_unnest_node_within_select(plan).is_none())
+                .then_some(DerivedInputScope {
+                    alias,
+                    schema: projection.input.schema().as_ref(),
+                })
+            }
+            LogicalPlan::Filter(filter) => {
+                Self::derived_input_scope(filter.input.as_ref(), select)
+            }
+            LogicalPlan::Limit(limit) => {
+                Self::derived_input_scope(limit.input.as_ref(), select)
+            }
+            LogicalPlan::Sort(sort) => {
+                Self::derived_input_scope(sort.input.as_ref(), select)
+            }
+            LogicalPlan::Repartition(repartition) => {
+                Self::derived_input_scope(repartition.input.as_ref(), select)
+            }
+            _ => None,
+        }
+    }
+
+    fn rebase_derived_input_expr(
+        &self,
+        expr: Expr,
+        scope: Option<DerivedInputScope<'_>>,
+    ) -> Result<Expr> {
+        let Some(scope) = scope else {
+            return Ok(expr);
+        };
+        if self.dialect.requires_derived_table_alias() {
+            let mut alias_rewriter = TableAliasRewriter {
+                table_schema: scope.schema,
+                alias_name: TableReference::bare(scope.alias),
+                rewrite_unqualified: false,
+            };
+            expr.rewrite(&mut alias_rewriter).data()
+        } else {
+            Self::strip_column_qualifiers_for_schema(expr, scope.schema)
         }
     }
 
@@ -829,6 +932,26 @@ impl Unparser<'_> {
                         columns,
                     );
                 }
+
+                if let Some(scope) = Self::derived_input_scope(plan, select) {
+                    // The input is about to enter a new SQL scope. Preserve that
+                    // boundary explicitly and make the outer expressions resolve
+                    // against the relation that will actually be visible there.
+                    let requires_alias = self.dialect.requires_derived_table_alias();
+                    let alias = requires_alias
+                        .then(|| self.new_table_alias(scope.alias.to_string(), vec![]));
+                    self.derive(p.input.as_ref(), relation, alias, false)?;
+
+                    let items = p
+                        .expr
+                        .iter()
+                        .cloned()
+                        .map(|expr| self.rebase_derived_input_expr(expr, Some(scope)))
+                        .map(|expr| self.select_item_to_sql(&expr?))
+                        .collect::<Result<Vec<_>>>()?;
+                    select.projection(items);
+                    return Ok(());
+                }
                 // For Snowflake FLATTEN: when the outer Projection has
                 // UNNEST(...) display-name columns (from SELECT * / SELECT
                 // UNNEST(...)), generate a flatten alias now so that
@@ -1072,6 +1195,7 @@ impl Unparser<'_> {
                 self.select_to_sql_recursively(cur, query, select, relation)
             }
             LogicalPlan::Filter(filter) => {
+                let derived_input_scope = Self::derived_input_scope(plan, select);
                 let window = find_window_nodes_within_select(
                     plan,
                     None,
@@ -1088,15 +1212,23 @@ impl Unparser<'_> {
                         unprojected =
                             UnparserAggScope::new(agg).prepare(unprojected, None)?;
                     }
+                    unprojected =
+                        self.rebase_derived_input_expr(unprojected, derived_input_scope)?;
                     let filter_expr = self.expr_to_sql(&unprojected)?;
                     select.qualify(Some(filter_expr));
                 } else if let Some(agg) = agg {
-                    let unprojected = UnparserAggScope::new(agg)
+                    let mut unprojected = UnparserAggScope::new(agg)
                         .prepare(filter.predicate.clone(), None)?;
+                    unprojected =
+                        self.rebase_derived_input_expr(unprojected, derived_input_scope)?;
                     let filter_expr = self.expr_to_sql(&unprojected)?;
                     select.having(Some(filter_expr));
                 } else {
-                    let filter_expr = self.expr_to_sql(&filter.predicate)?;
+                    let predicate = self.rebase_derived_input_expr(
+                        filter.predicate.clone(),
+                        derived_input_scope,
+                    )?;
+                    let filter_expr = self.expr_to_sql(&predicate)?;
                     select.selection(Some(filter_expr));
                 }
 
@@ -1172,17 +1304,25 @@ impl Unparser<'_> {
                     ))));
                 }
 
+                let derived_input_scope = Self::derived_input_scope(plan, select);
                 let agg = find_agg_node_within_select(plan, select.already_projected());
                 // unproject sort expressions
                 let sort_exprs: Vec<SortExpr> = sort
                     .expr
                     .iter()
                     .map(|sort_expr| {
-                        Self::unproject_sort_expr_in_scope(
+                        let sort_expr = Self::unproject_sort_expr_in_scope(
                             sort_expr.clone(),
                             agg,
                             sort.input.as_ref(),
-                        )
+                        )?;
+                        Ok(SortExpr {
+                            expr: self.rebase_derived_input_expr(
+                                sort_expr.expr,
+                                derived_input_scope,
+                            )?,
+                            ..sort_expr
+                        })
                     })
                     .collect::<Result<Vec<_>>>()?;
 
@@ -1339,11 +1479,8 @@ impl Unparser<'_> {
 
                 let mut right_relation = RelationBuilder::default();
                 if already_projected
-                    && let Some(nested_relation) = self
-                        .qualified_passthrough_join_projection_to_nested_relation(
-                            right_plan.as_ref(),
-                            query,
-                        )?
+                    && let Some(nested_relation) =
+                        self.join_input_to_nested_relation(right_plan.as_ref(), query)?
                 {
                     right_relation = nested_relation;
                 } else {
@@ -1477,6 +1614,9 @@ impl Unparser<'_> {
 
                 Ok(())
             }
+            LogicalPlan::AsOfJoin(join) => {
+                self.asof_join_to_sql(join, query, select, relation)
+            }
             LogicalPlan::SubqueryAlias(plan_alias) => {
                 let (plan, mut columns) =
                     subquery_alias_inner_query_and_columns(plan_alias);
@@ -1537,7 +1677,8 @@ impl Unparser<'_> {
                     )]);
                 }
                 let plan = unparsed_table_scan.unwrap_or_else(|| plan.clone());
-                if !columns.is_empty()
+                select.enter_subquery_alias();
+                let recursive_result = if !columns.is_empty()
                     && !self.dialect.supports_column_alias_in_table_alias()
                 {
                     // Instead of specifying column aliases as part of the outer table, inject them directly into the inner projection
@@ -1558,10 +1699,12 @@ impl Unparser<'_> {
                         query,
                         select,
                         relation,
-                    )?;
+                    )
                 } else {
-                    self.select_to_sql_recursively(&plan, query, select, relation)?;
-                }
+                    self.select_to_sql_recursively(&plan, query, select, relation)
+                };
+                select.exit_subquery_alias();
+                recursive_result?;
 
                 relation.alias(Some(
                     self.new_table_alias(plan_alias.alias.table().to_string(), columns),
@@ -1675,21 +1818,13 @@ impl Unparser<'_> {
                 Ok(())
             }
             LogicalPlan::Extension(extension) => {
-                if let Some(query) = query.as_mut() {
-                    self.extension_to_sql(
-                        extension.node.as_ref(),
-                        &mut Some(query),
-                        &mut Some(select),
-                        &mut Some(relation),
-                    )
-                } else {
-                    self.extension_to_sql(
-                        extension.node.as_ref(),
-                        &mut None,
-                        &mut Some(select),
-                        &mut Some(relation),
-                    )
-                }
+                let mut query = query.as_mut();
+                self.extension_to_sql(
+                    extension.node.as_ref(),
+                    &mut query,
+                    &mut Some(select),
+                    &mut Some(relation),
+                )
             }
             LogicalPlan::Unnest(unnest) => {
                 if !unnest.struct_type_columns.is_empty() {
@@ -1772,6 +1907,129 @@ impl Unparser<'_> {
                 not_impl_err!("Unsupported operator: {plan:?}")
             }
         }
+    }
+
+    // Keep ASOF-specific locals out of the recursive plan unparser's stack frame.
+    #[inline(never)]
+    fn asof_join_to_sql(
+        &self,
+        join: &AsOfJoin,
+        query: &mut Option<QueryBuilder>,
+        select: &mut SelectBuilder,
+        relation: &mut RelationBuilder,
+    ) -> Result<()> {
+        let already_projected = select.already_projected();
+        let left_plan =
+            Self::unwrap_qualified_passthrough_join_projection(Arc::clone(&join.left));
+        let inline_left_join = matches!(
+            left_plan.as_ref(),
+            LogicalPlan::Join(_) | LogicalPlan::AsOfJoin(_)
+        );
+        let left_projection = if already_projected {
+            None
+        } else if inline_left_join {
+            self.select_to_sql_recursively(left_plan.as_ref(), query, select, relation)?;
+            select.pop_projections();
+            Some(self.derived_input_projection(join.left.as_ref(), None)?)
+        } else if Self::asof_input_requires_derived(join.left.as_ref()) {
+            let qualifier = self.derive_asof_input(join.left.as_ref(), relation)?;
+            Some(self.derived_input_projection(join.left.as_ref(), qualifier.as_ref())?)
+        } else {
+            self.select_to_sql_recursively(join.left.as_ref(), query, select, relation)?;
+            Some(select.pop_projections())
+        };
+        if already_projected {
+            if inline_left_join {
+                self.select_to_sql_recursively(
+                    left_plan.as_ref(),
+                    query,
+                    select,
+                    relation,
+                )?;
+            } else if Self::asof_input_requires_derived(join.left.as_ref()) {
+                self.derive_asof_input(join.left.as_ref(), relation)?;
+            } else {
+                self.select_to_sql_recursively(
+                    join.left.as_ref(),
+                    query,
+                    select,
+                    relation,
+                )?;
+            }
+        }
+
+        let mut right_relation = RelationBuilder::default();
+        let nested_right =
+            self.join_input_to_nested_relation(join.right.as_ref(), query)?;
+        let right_projection = if already_projected {
+            if let Some(nested_right) = nested_right {
+                right_relation = nested_right;
+            } else if Self::asof_input_requires_derived(join.right.as_ref()) {
+                self.derive_asof_input(join.right.as_ref(), &mut right_relation)?;
+            } else {
+                self.select_to_sql_recursively(
+                    join.right.as_ref(),
+                    query,
+                    select,
+                    &mut right_relation,
+                )?;
+            }
+            None
+        } else if let Some(nested_right) = nested_right {
+            right_relation = nested_right;
+            Some(self.derived_input_projection(join.right.as_ref(), None)?)
+        } else if Self::asof_input_requires_derived(join.right.as_ref()) {
+            let qualifier =
+                self.derive_asof_input(join.right.as_ref(), &mut right_relation)?;
+            Some(self.derived_input_projection(join.right.as_ref(), qualifier.as_ref())?)
+        } else {
+            self.select_to_sql_recursively(
+                join.right.as_ref(),
+                query,
+                select,
+                &mut right_relation,
+            )?;
+            Some(select.pop_projections())
+        };
+        let Ok(Some(relation)) = right_relation.build() else {
+            return internal_err!("Failed to build ASOF right relation");
+        };
+        let constraint =
+            self.join_constraint_to_sql(join.join_constraint, &join.on, None)?;
+        let match_condition = self.expr_to_sql(&Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(join.match_condition.left.clone()),
+            join.match_condition.op,
+            Box::new(join.match_condition.right.clone()),
+        )))?;
+        let ast_join = ast::Join {
+            relation,
+            global: false,
+            join_operator: ast::JoinOperator::AsOf {
+                match_condition,
+                constraint,
+            },
+        };
+        let mut from = select
+            .pop_from()
+            .ok_or_else(|| internal_datafusion_err!("ASOF left relation is missing"))?;
+        from.push_join(ast_join);
+        select.push_from(from);
+
+        if !already_projected {
+            let left_projection = left_projection.ok_or_else(|| {
+                internal_datafusion_err!("ASOF left projection is missing")
+            })?;
+            let right_projection = right_projection.ok_or_else(|| {
+                internal_datafusion_err!("ASOF right projection is missing")
+            })?;
+            select.projection(
+                left_projection
+                    .into_iter()
+                    .chain(right_projection)
+                    .collect(),
+            );
+        }
+        Ok(())
     }
 
     /// Walk through transparent nodes (SubqueryAlias) to find the inner
@@ -2072,6 +2330,74 @@ impl Unparser<'_> {
         )
     }
 
+    fn asof_input_requires_derived(plan: &LogicalPlan) -> bool {
+        let simple_scan =
+            |scan: &TableScan| scan.filters.is_empty() && scan.fetch.is_none();
+        match plan {
+            LogicalPlan::TableScan(scan) => !simple_scan(scan),
+            LogicalPlan::SubqueryAlias(alias) => {
+                !matches!(alias.input.as_ref(), LogicalPlan::TableScan(scan) if simple_scan(scan))
+            }
+            _ => true,
+        }
+    }
+
+    fn derive_asof_input(
+        &self,
+        plan: &LogicalPlan,
+        relation: &mut RelationBuilder,
+    ) -> Result<Option<TableReference>> {
+        if let LogicalPlan::SubqueryAlias(alias) = plan {
+            let (inner, columns) = subquery_alias_inner_query_and_columns(alias);
+            let table_alias = alias.alias.clone();
+            if !columns.is_empty() && !self.dialect.supports_column_alias_in_table_alias()
+            {
+                let rewritten =
+                    inject_column_aliases_into_subquery(inner.clone(), columns)?;
+                self.derive(
+                    &rewritten,
+                    relation,
+                    Some(self.new_table_alias(table_alias.table().to_string(), vec![])),
+                    false,
+                )?;
+            } else {
+                self.derive(
+                    inner,
+                    relation,
+                    Some(self.new_table_alias(table_alias.table().to_string(), columns)),
+                    false,
+                )?;
+            }
+            return Ok(Some(table_alias));
+        }
+
+        let qualifier = plan
+            .schema()
+            .iter()
+            .find_map(|(qualifier, _)| qualifier.cloned());
+        let alias = qualifier
+            .as_ref()
+            .map(|qualifier| self.new_table_alias(qualifier.table().to_string(), vec![]));
+        self.derive(plan, relation, alias, false)?;
+        Ok(qualifier)
+    }
+
+    fn derived_input_projection(
+        &self,
+        plan: &LogicalPlan,
+        qualifier: Option<&TableReference>,
+    ) -> Result<Vec<ast::SelectItem>> {
+        plan.schema()
+            .iter()
+            .map(|(field_qualifier, field)| {
+                self.select_item_to_sql(&Expr::Column(Column::new(
+                    qualifier.cloned().or_else(|| field_qualifier.cloned()),
+                    field.name(),
+                )))
+            })
+            .collect()
+    }
+
     fn is_qualified_passthrough_projection(projection: &Projection) -> bool {
         projection
             .expr
@@ -2083,7 +2409,10 @@ impl Unparser<'_> {
         plan: Arc<LogicalPlan>,
     ) -> Arc<LogicalPlan> {
         if let LogicalPlan::Projection(projection) = plan.as_ref()
-            && matches!(projection.input.as_ref(), LogicalPlan::Join(_))
+            && matches!(
+                projection.input.as_ref(),
+                LogicalPlan::Join(_) | LogicalPlan::AsOfJoin(_)
+            )
             && Self::is_qualified_passthrough_projection(projection)
         {
             Arc::clone(&projection.input)
@@ -2092,26 +2421,30 @@ impl Unparser<'_> {
         }
     }
 
-    fn qualified_passthrough_join_projection_to_nested_relation(
+    fn join_input_to_nested_relation(
         &self,
         plan: &LogicalPlan,
         query: &mut Option<QueryBuilder>,
     ) -> Result<Option<RelationBuilder>> {
-        let LogicalPlan::Projection(projection) = plan else {
-            return Ok(None);
+        let join_plan = match plan {
+            LogicalPlan::Join(_) | LogicalPlan::AsOfJoin(_) => plan,
+            LogicalPlan::Projection(projection)
+                if matches!(
+                    projection.input.as_ref(),
+                    LogicalPlan::Join(_) | LogicalPlan::AsOfJoin(_)
+                ) && Self::is_qualified_passthrough_projection(projection) =>
+            {
+                projection.input.as_ref()
+            }
+            _ => return Ok(None),
         };
-        if !matches!(projection.input.as_ref(), LogicalPlan::Join(_))
-            || !Self::is_qualified_passthrough_projection(projection)
-        {
-            return Ok(None);
-        }
 
         let original_query = query.clone();
         let mut nested_select = SelectBuilder::default();
         nested_select.push_from(TableWithJoinsBuilder::default());
         let mut nested_relation = RelationBuilder::default();
         self.select_to_sql_recursively(
-            projection.input.as_ref(),
+            join_plan,
             query,
             &mut nested_select,
             &mut nested_relation,
@@ -2122,11 +2455,11 @@ impl Unparser<'_> {
         }
 
         let Some(mut nested_from) = nested_select.pop_from() else {
-            return internal_err!("Failed to build nested join relation");
+            return internal_err!("Failed to build nested join input relation");
         };
         nested_from.relation(nested_relation);
         let Some(table_with_joins) = nested_from.build()? else {
-            return internal_err!("Failed to build nested join relation");
+            return internal_err!("Failed to build nested join input relation");
         };
 
         let mut relation = RelationBuilder::default();
