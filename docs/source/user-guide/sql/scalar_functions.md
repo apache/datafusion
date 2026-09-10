@@ -2659,7 +2659,13 @@ _Alias of [date_trunc](#date_trunc)._
 
 ### `from_unixtime`
 
-Converts an integer to RFC3339 timestamp format (`YYYY-MM-DDT00:00:00.000000000Z`). Integers and unsigned integers are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`) return the corresponding timestamp.
+Converts an integer to RFC3339 timestamp format (`YYYY-MM-DDT00:00:00.000000000Z`).
+Integers and unsigned integers are interpreted as seconds since the unix epoch
+(`1970-01-01T00:00:00Z`) return the corresponding timestamp.
+
+If the optional `timezone` argument is omitted, the timestamp is returned in the
+session time zone (`datafusion.execution.time_zone`), which is unset (i.e.
+timezone-naive) by default.
 
 ```sql
 from_unixtime(expression[, timezone])
@@ -2668,7 +2674,7 @@ from_unixtime(expression[, timezone])
 #### Arguments
 
 - **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **timezone**: Optional timezone to use when converting the integer to a timestamp. If not provided, the default timezone is UTC.
+- **timezone**: Optional timezone to use when converting the integer to a timestamp. If not provided, the session time zone (`datafusion.execution.time_zone`) is used, which is unset (timezone-naive) by default.
 
 #### Example
 
@@ -2679,6 +2685,15 @@ from_unixtime(expression[, timezone])
 +-----------------------------------------------------------+
 | 2020-09-08T09:42:29-04:00                                 |
 +-----------------------------------------------------------+
+
+-- Without an explicit timezone the session time zone is used
+> SET datafusion.execution.time_zone = 'America/New_York';
+> select from_unixtime(1599572549);
++----------------------------------+
+| from_unixtime(Int64(1599572549)) |
++----------------------------------+
+| 2020-09-08T09:42:29-04:00        |
++----------------------------------+
 ```
 
 ### `make_date`

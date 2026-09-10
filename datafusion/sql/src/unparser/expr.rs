@@ -3470,7 +3470,7 @@ mod tests {
         ] {
             let unparser = Unparser::new(dialect.as_ref());
             let expr = Expr::ScalarFunction(ScalarFunction {
-                func: Arc::new(ScalarUDF::from(FromUnixtimeFunc::new())),
+                func: Arc::new(ScalarUDF::from(FromUnixtimeFunc::default())),
                 args: vec![col("date_col")],
             });
 
