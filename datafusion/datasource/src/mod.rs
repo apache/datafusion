@@ -28,18 +28,29 @@
 //! A table that uses the `ObjectStore` listing capability
 //! to get the list of files to process.
 
+#[cfg(feature = "object_store")]
 pub mod boundary_stream;
 pub mod decoder;
+#[cfg(feature = "object_store")]
 pub mod display;
+#[cfg(feature = "object_store")]
 pub mod file;
+#[cfg(feature = "object_store")]
 pub mod file_compression_type;
+#[cfg(feature = "object_store")]
 pub mod file_format;
+#[cfg(feature = "object_store")]
 pub mod file_groups;
+#[cfg(feature = "object_store")]
 pub mod file_scan_config;
+#[cfg(feature = "object_store")]
 pub mod file_sink_config;
+#[cfg(feature = "object_store")]
 pub mod file_stream;
 pub mod memory;
+#[cfg(feature = "object_store")]
 pub mod morsel;
+#[cfg(feature = "object_store")]
 pub mod projection;
 /// Protobuf conversions for [`FileRange`], [`PartitionedFile`] and
 /// [`FileGroup`](crate::file_groups::FileGroup), gated on the `proto` feature.
@@ -48,28 +59,46 @@ mod proto;
 pub mod schema_adapter;
 pub mod sink;
 pub mod source;
+#[cfg(feature = "object_store")]
 mod statistics;
 pub mod table_schema;
 
 #[cfg(test)]
 pub mod test_util;
 
+#[cfg(feature = "object_store")]
 pub mod url;
+#[cfg(feature = "object_store")]
 pub mod write;
+#[cfg(feature = "object_store")]
 pub use self::file::as_file_source;
+#[cfg(feature = "object_store")]
 pub use self::url::ListingTableUrl;
+#[cfg(feature = "object_store")]
 use crate::file_groups::FileGroup;
+#[cfg(feature = "object_store")]
 use arrow::datatypes::SchemaRef;
+#[cfg(feature = "object_store")]
 use chrono::TimeZone;
+#[cfg(feature = "object_store")]
 use datafusion_common::stats::{Precision, is_known_empty};
+#[cfg(feature = "object_store")]
 use datafusion_common::{ColumnStatistics, Result, TableReference};
+#[cfg(feature = "object_store")]
 use datafusion_common::{ScalarValue, Statistics};
+#[cfg(feature = "object_store")]
 use datafusion_physical_expr::LexOrdering;
+#[cfg(feature = "object_store")]
 use futures::Stream;
+#[cfg(feature = "object_store")]
 use object_store::{ObjectMeta, path::Path};
+#[cfg(feature = "object_store")]
 pub use statistics::compute_all_files_statistics;
+#[cfg(feature = "object_store")]
 use std::any::Any;
+#[cfg(feature = "object_store")]
 use std::pin::Pin;
+#[cfg(feature = "object_store")]
 use std::sync::Arc;
 pub use table_schema::{TableSchema, TableSchemaBuilder};
 
@@ -85,12 +114,14 @@ pub type FileExtensions = datafusion_common::extensions::Extensions;
     since = "54.0.0",
     note = "This type is unused and will be removed in a future release"
 )]
+#[cfg(feature = "object_store")]
 pub type PartitionedFileStream =
     Pin<Box<dyn Stream<Item = Result<PartitionedFile>> + Send + Sync + 'static>>;
 
 /// Only scan a subset of Row Groups from the Parquet file whose data "midpoint"
 /// lies within the [start, end) byte offsets. This option can be used to scan non-overlapping
 /// sections of a Parquet file in parallel.
+#[cfg(feature = "object_store")]
 #[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord)]
 pub struct FileRange {
     /// Range start
@@ -99,6 +130,7 @@ pub struct FileRange {
     pub end: i64,
 }
 
+#[cfg(feature = "object_store")]
 impl FileRange {
     /// returns true if this file range contains the specified offset
     pub fn contains(&self, offset: i64) -> bool {
@@ -122,6 +154,7 @@ impl FileRange {
 /// - `distinct_count = 1` (single distinct value per file for each partition column)
 ///
 /// This enables query optimizers to use partition column bounds for pruning and planning.
+#[cfg(feature = "object_store")]
 pub struct PartitionedFile {
     /// Path for the file (e.g. URL, filesystem path, etc)
     pub object_meta: ObjectMeta,
@@ -176,6 +209,7 @@ pub struct PartitionedFile {
     pub arrow_schema: Option<SchemaRef>,
 }
 
+#[cfg(feature = "object_store")]
 impl PartitionedFile {
     /// Create a simple file without metadata or partition
     pub fn new(path: impl Into<String>, size: u64) -> Self {
@@ -395,6 +429,7 @@ impl PartitionedFile {
     }
 }
 
+#[cfg(feature = "object_store")]
 impl From<ObjectMeta> for PartitionedFile {
     fn from(object_meta: ObjectMeta) -> Self {
         PartitionedFile {
@@ -450,6 +485,7 @@ impl From<ObjectMeta> for PartitionedFile {
 /// File 2: [40, 140]
 /// File 3: [60, 160]
 /// File 4: [80, 180]
+#[cfg(feature = "object_store")]
 pub fn generate_test_files(num_files: usize, overlap_factor: f64) -> Vec<FileGroup> {
     let mut files = Vec::with_capacity(num_files);
     if num_files == 0 {
@@ -502,6 +538,7 @@ pub fn generate_test_files(num_files: usize, overlap_factor: f64) -> Vec<FileGro
 
 // Helper function to verify that files within each group maintain sort order
 /// Used by tests and benchmarks
+#[cfg(feature = "object_store")]
 pub fn verify_sort_integrity(file_groups: &[FileGroup]) -> bool {
     for group in file_groups {
         // Known-empty files contribute no rows and may not have min/max
@@ -539,6 +576,7 @@ mod tests {
     use datafusion_execution::object_store::{
         DefaultObjectStoreRegistry, ObjectStoreRegistry,
     };
+    #[cfg(feature = "object_store")]
     use object_store::{local::LocalFileSystem, path::Path};
     use std::{collections::HashMap, ops::Not, sync::Arc};
     use url::Url;

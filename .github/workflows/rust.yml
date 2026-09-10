@@ -222,6 +222,13 @@ jobs:
       #
       - name: Check datafusion (no-default-features)
         run: cargo xtask ci step check datafusion no-default
+      - name: Check datafusion (object_store)
+        run: cargo xtask ci step check datafusion object_store
+      - name: Check downstream storage feature contracts
+        run: |
+          ci/scripts/retry timeout 120 apt-get update
+          ci/scripts/retry timeout 120 apt-get install -y python3
+          python3 ci/scripts/check_object_store_features.py
       - name: Check datafusion (nested_expressions)
         run: cargo xtask ci step check datafusion nested_expressions
       - name: Check datafusion (array_expressions)

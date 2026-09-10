@@ -15,6 +15,13 @@ authors = { workspace = true }
 [lints]
 workspace = true
 
+[features]
+default = ["object_store"]
+object_store = [
+    "datafusion-datasource/object_store",
+    "datafusion-physical-plan/object_store",
+]
+
 [dependencies]
 arrow = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }

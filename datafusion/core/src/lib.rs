@@ -779,6 +779,7 @@ pub mod scalar;
 
 // Re-export dependencies that are part of DataFusion public API (e.g. via DataFusionError)
 pub use arrow;
+#[cfg(feature = "object_store")]
 pub use object_store;
 
 #[cfg(feature = "parquet")]

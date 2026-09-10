@@ -40,6 +40,10 @@ workspace = true
 [lib]
 name = "datafusion_functions_table"
 
+[features]
+object_store = ["datafusion-catalog/object_store", "datafusion-physical-plan/object_store"]
+default = ["object_store"]
+
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }

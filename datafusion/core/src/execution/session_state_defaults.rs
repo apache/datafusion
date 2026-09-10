@@ -15,16 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#[cfg(feature = "object_store")]
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::catalog::{CatalogProvider, TableProviderFactory};
+#[cfg(feature = "object_store")]
 use crate::datasource::file_format::FileFormatFactory;
+#[cfg(feature = "object_store")]
 use crate::datasource::file_format::arrow::ArrowFormatFactory;
 #[cfg(feature = "avro")]
 use crate::datasource::file_format::avro::AvroFormatFactory;
+#[cfg(feature = "object_store")]
 use crate::datasource::file_format::csv::CsvFormatFactory;
+#[cfg(feature = "object_store")]
 use crate::datasource::file_format::json::JsonFormatFactory;
 #[cfg(feature = "parquet")]
 use crate::datasource::file_format::parquet::ParquetFormatFactory;
+#[cfg(feature = "object_store")]
 use crate::datasource::provider::DefaultTableFactory;
 use crate::execution::context::SessionState;
 #[cfg(feature = "nested_expressions")]
@@ -33,6 +39,7 @@ use crate::{functions, functions_aggregate, functions_table, functions_window};
 use datafusion_catalog::TableFunction;
 use datafusion_catalog::{MemoryCatalogProvider, MemorySchemaProvider};
 use datafusion_execution::config::SessionConfig;
+#[cfg(feature = "object_store")]
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::planner::ExprPlanner;
@@ -40,6 +47,7 @@ use datafusion_expr::registry::ExtensionTypeRegistrationRef;
 use datafusion_expr::{AggregateUDF, HigherOrderUDF, ScalarUDF, WindowUDF};
 use std::collections::HashMap;
 use std::sync::Arc;
+#[cfg(feature = "object_store")]
 use url::Url;
 
 /// Defaults that are used as part of creating a SessionState such as table providers,
@@ -49,20 +57,27 @@ pub struct SessionStateDefaults {}
 impl SessionStateDefaults {
     /// returns a map of the default [`TableProviderFactory`]s
     pub fn default_table_factories() -> HashMap<String, Arc<dyn TableProviderFactory>> {
+        #[cfg_attr(not(feature = "object_store"), expect(unused_mut))]
         let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
             HashMap::new();
         #[cfg(feature = "parquet")]
         table_factories.insert("PARQUET".into(), Arc::new(DefaultTableFactory::new()));
+        #[cfg(feature = "object_store")]
         table_factories.insert("CSV".into(), Arc::new(DefaultTableFactory::new()));
+        #[cfg(feature = "object_store")]
         table_factories.insert("JSON".into(), Arc::new(DefaultTableFactory::new()));
+        #[cfg(feature = "object_store")]
         table_factories.insert("NDJSON".into(), Arc::new(DefaultTableFactory::new()));
+        #[cfg(feature = "object_store")]
         table_factories.insert("AVRO".into(), Arc::new(DefaultTableFactory::new()));
+        #[cfg(feature = "object_store")]
         table_factories.insert("ARROW".into(), Arc::new(DefaultTableFactory::new()));
 
         table_factories
     }
 
     /// returns the default MemoryCatalogProvider
+    #[cfg_attr(not(feature = "object_store"), expect(unused_variables))]
     pub fn default_catalog(
         config: &SessionConfig,
         table_factories: &HashMap<String, Arc<dyn TableProviderFactory>>,
@@ -77,6 +92,7 @@ impl SessionStateDefaults {
             )
             .expect("memory catalog provider can register schema");
 
+        #[cfg(feature = "object_store")]
         Self::register_default_schema(config, table_factories, runtime, &default_catalog);
 
         default_catalog
@@ -145,6 +161,7 @@ impl SessionStateDefaults {
     }
 
     /// returns the list of default [`FileFormatFactory`]s
+    #[cfg(feature = "object_store")]
     pub fn default_file_formats() -> Vec<Arc<dyn FileFormatFactory>> {
         let file_formats: Vec<Arc<dyn FileFormatFactory>> = vec![
             #[cfg(feature = "parquet")]
@@ -187,6 +204,7 @@ impl SessionStateDefaults {
     }
 
     /// registers the default schema
+    #[cfg(feature = "object_store")]
     pub fn register_default_schema(
         config: &SessionConfig,
         table_factories: &HashMap<String, Arc<dyn TableProviderFactory>>,
@@ -229,6 +247,7 @@ impl SessionStateDefaults {
     }
 
     /// registers the default [`FileFormatFactory`]s
+    #[cfg(feature = "object_store")]
     pub fn register_default_file_formats(state: &mut SessionState) {
         let formats = SessionStateDefaults::default_file_formats();
         for format in formats {

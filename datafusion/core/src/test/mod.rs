@@ -19,47 +19,63 @@
 
 #![allow(missing_docs)]
 
+#[cfg(feature = "object_store")]
 use std::fs::File;
+#[cfg(feature = "object_store")]
 use std::io::prelude::*;
+#[cfg(feature = "object_store")]
 use std::io::{BufReader, BufWriter};
+#[cfg(feature = "object_store")]
 use std::path::Path;
 use std::sync::Arc;
 
+#[cfg(feature = "object_store")]
 use crate::datasource::file_format::FileFormat;
+#[cfg(feature = "object_store")]
 use crate::datasource::file_format::csv::CsvFormat;
+#[cfg(feature = "object_store")]
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 
+#[cfg(feature = "object_store")]
 use crate::datasource::physical_plan::CsvSource;
 use crate::datasource::{MemTable, TableProvider};
 use crate::error::Result;
 use crate::logical_expr::LogicalPlan;
+#[cfg(feature = "object_store")]
 use crate::test_util::{aggr_test_schema, arrow_test_data};
 
+#[cfg(feature = "object_store")]
 use datafusion_common::config::CsvOptions;
 
 use arrow::array::{self, Array, ArrayRef, Decimal128Builder, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-#[cfg(feature = "compression")]
+#[cfg(all(feature = "compression", feature = "object_store"))]
 use datafusion_common::DataFusionError;
+#[cfg(feature = "object_store")]
 use datafusion_datasource::TableSchema;
+#[cfg(feature = "object_store")]
 use datafusion_datasource::source::DataSourceExec;
 
-#[cfg(feature = "compression")]
+#[cfg(all(feature = "compression", feature = "object_store"))]
 use bzip2::Compression as BzCompression;
-#[cfg(feature = "compression")]
+#[cfg(all(feature = "compression", feature = "object_store"))]
 use bzip2::write::BzEncoder;
+#[cfg(feature = "object_store")]
 use datafusion_datasource::file_groups::FileGroup;
+#[cfg(feature = "object_store")]
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+#[cfg(feature = "object_store")]
 use datafusion_datasource_csv::partitioned_csv_config;
-#[cfg(feature = "compression")]
+#[cfg(all(feature = "compression", feature = "object_store"))]
 use flate2::Compression as GzCompression;
-#[cfg(feature = "compression")]
+#[cfg(all(feature = "compression", feature = "object_store"))]
 use flate2::write::GzEncoder;
-#[cfg(feature = "compression")]
+#[cfg(all(feature = "compression", feature = "object_store"))]
 use liblzma::write::XzEncoder;
+#[cfg(feature = "object_store")]
 use object_store::local_unpartitioned_file;
-#[cfg(feature = "compression")]
+#[cfg(all(feature = "compression", feature = "object_store"))]
 use zstd::Encoder as ZstdEncoder;
 
 pub fn create_table_dual() -> Arc<dyn TableProvider> {
@@ -80,6 +96,7 @@ pub fn create_table_dual() -> Arc<dyn TableProvider> {
 }
 
 /// Returns a [`DataSourceExec`] that scans "aggregate_test_100.csv" with `partitions` partitions
+#[cfg(feature = "object_store")]
 pub fn scan_partitioned_csv(
     partitions: usize,
     work_dir: &Path,
@@ -113,6 +130,7 @@ pub fn scan_partitioned_csv(
 }
 
 /// Returns file groups [`Vec<FileGroup>`] for scanning `partitions` of `filename`
+#[cfg(feature = "object_store")]
 pub fn partitioned_file_groups(
     path: &str,
     filename: &str,
@@ -267,5 +285,6 @@ fn make_decimal() -> RecordBatch {
     RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap()
 }
 
+#[cfg(feature = "object_store")]
 pub mod object_store;
 pub mod variable;

@@ -19,11 +19,16 @@
 //!
 //! [`ListingTable`]: crate::datasource::listing::ListingTable
 
+#[cfg(feature = "object_store")]
 pub mod dynamic_file;
+#[cfg(feature = "object_store")]
 pub mod file_format;
+#[cfg(feature = "object_store")]
 pub mod listing;
+#[cfg(feature = "object_store")]
 pub mod listing_table_factory;
 mod memory_test;
+#[cfg(feature = "object_store")]
 pub mod physical_plan;
 pub mod provider;
 mod view_test;
@@ -42,11 +47,13 @@ pub use datafusion_catalog::empty;
 pub use datafusion_catalog::memory;
 pub use datafusion_catalog::stream;
 pub use datafusion_catalog::view;
+#[cfg(feature = "object_store")]
 pub use datafusion_datasource::projection;
 pub use datafusion_datasource::schema_adapter;
 pub use datafusion_datasource::sink;
 pub use datafusion_datasource::source;
 pub use datafusion_datasource::table_schema;
+#[cfg(feature = "object_store")]
 pub use datafusion_execution::object_store;
 pub use datafusion_physical_expr::create_ordering;
 

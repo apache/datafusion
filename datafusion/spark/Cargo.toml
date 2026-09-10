@@ -30,7 +30,14 @@ edition = { workspace = true }
 all-features = true
 
 [features]
-default = []
+default = ["object_store"]
+object_store = [
+    "datafusion?/object_store",
+    "datafusion-functions/object_store",
+    "datafusion-functions-aggregate/object_store",
+    "datafusion-functions-nested/object_store",
+    "datafusion-session/object_store",
+]
 core = ["datafusion"]
 
 # Note: add additional linter rules in lib.rs.

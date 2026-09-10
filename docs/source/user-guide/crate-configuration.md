@@ -52,6 +52,52 @@ datafusion = { git = "https://github.com/apache/datafusion", branch = "main", de
 
 More on [Cargo dependencies](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#specifying-dependencies)
 
+## Building without object_store
+
+The default-enabled `object_store` feature provides built-in file sources and
+sinks, listing tables, object store registration, and file caches. To embed
+DataFusion with your own `TableProvider` and `ExecutionPlan` implementations
+without depending on the `object_store` crate, disable default features and
+select the features you need:
+
+```toml
+datafusion = { version = "55.0.0", default-features = false, features = ["sql", "nested_expressions", "string_expressions"] }
+```
+
+Custom table providers, in-memory tables, SQL planning, relational execution,
+memory management, and local disk spilling remain available. Built-in file
+read/write APIs and the object store registry are unavailable. File `COPY TO`
+returns an error, and file cache settings are unavailable.
+
+The `parquet`, `avro`, and `parquet_encryption` features enable `object_store`
+automatically. File format crates, `datafusion-proto`, and the `physical` feature
+of `datafusion-substrait` also require it. Logical-only Substrait conversion can
+be used with `datafusion-substrait`'s default features disabled.
+
+Direct dependencies on child crates, such as `datafusion-execution`,
+`datafusion-datasource`, `datafusion-catalog`, `datafusion-physical-plan`, and
+`datafusion-pruning`, also enable storage support by default. Disable default
+features on those dependencies as well to opt out. Cargo unifies features across
+all dependencies: any dependency that enables storage support can bring
+`object_store` back into the graph. Check your application's enabled dependencies
+with `cargo tree --target all --edges all`; an entry in `Cargo.lock` alone does
+not mean an optional dependency is enabled.
+
+### Migrating existing builds with default features disabled
+
+Previously, built-in storage support was enabled even with
+`default-features = false`. Existing applications that use those APIs must now
+explicitly enable `object_store`, unless another selected feature, such as
+`parquet`, already enables it:
+
+```toml
+datafusion = { version = "55.0.0", default-features = false, features = ["sql", "object_store"] }
+datafusion-execution = { version = "55.0.0", default-features = false, features = ["object_store"] }
+```
+
+This also applies to direct users of child crates. With storage enabled, existing
+storage APIs and their concrete `object_store` types remain unchanged.
+
 ## Optimizing Builds
 
 Here are several suggestions to get the Rust compiler to produce faster code when

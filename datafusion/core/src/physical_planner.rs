@@ -21,8 +21,11 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+#[cfg(feature = "object_store")]
 use crate::datasource::file_format::file_type_to_format;
+#[cfg(feature = "object_store")]
 use crate::datasource::listing::ListingTableUrl;
+#[cfg(feature = "object_store")]
 use crate::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use crate::datasource::{DefaultTableSource, source_as_provider};
 use crate::error::{DataFusionError, Result};
@@ -76,8 +79,10 @@ use datafusion_common::{
 use datafusion_common::{
     TableReference, assert_eq_or_internal_err, assert_or_internal_err,
 };
+#[cfg(feature = "object_store")]
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::memory::MemorySourceConfig;
+#[cfg(feature = "object_store")]
 use datafusion_expr::dml::{CopyTo, InsertOp};
 use datafusion_expr::expr::{
     Alias, GroupingSet, NullTreatment, WindowFunction, WindowFunctionParams,
@@ -671,6 +676,7 @@ impl DefaultPhysicalPlanner {
             }
 
             // 1 Child
+            #[cfg(feature = "object_store")]
             LogicalPlan::Copy(CopyTo {
                 input,
                 output_url,
@@ -771,6 +777,10 @@ impl DefaultPhysicalPlanner {
                         ordering.map(Into::into),
                     )
                     .await?
+            }
+            #[cfg(not(feature = "object_store"))]
+            LogicalPlan::Copy(_) => {
+                return not_impl_err!("COPY TO requires the object_store feature");
             }
             LogicalPlan::Dml(DmlStatement {
                 target,
@@ -3367,6 +3377,7 @@ mod tests {
 
     use super::*;
     use crate::datasource::MemTable;
+    #[cfg(feature = "object_store")]
     use crate::datasource::file_format::options::CsvReadOptions;
     use crate::physical_plan::{
         DisplayAs, DisplayFormatType, Partitioning, PlanProperties,

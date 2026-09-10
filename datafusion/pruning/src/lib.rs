@@ -17,12 +17,14 @@
 
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
+#[cfg(feature = "object_store")]
 mod file_pruner;
 mod in_list;
 mod primitive_in_list;
 mod pruning_predicate;
 mod string_in_list;
 
+#[cfg(feature = "object_store")]
 pub use file_pruner::FilePruner;
 pub use pruning_predicate::{
     MAX_IN_LIST_SIZE, PredicateRewriter, PruningPredicate, PruningPredicateBuilder,

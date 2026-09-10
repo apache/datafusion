@@ -26,10 +26,10 @@ use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_plan::execution_plan::{
     Boundedness, EmissionType, SchedulingType,
 };
+#[cfg(feature = "object_store")]
+use datafusion_physical_plan::metrics::BaselineMetrics;
 use datafusion_physical_plan::metrics::SplitMetrics;
-use datafusion_physical_plan::metrics::{
-    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
-};
+use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::stream::BatchSplitStream;
 use datafusion_physical_plan::{
@@ -38,7 +38,9 @@ use datafusion_physical_plan::{
 };
 use itertools::Itertools;
 
+#[cfg(feature = "object_store")]
 use crate::file::FileSource;
+#[cfg(feature = "object_store")]
 use crate::file_scan_config::FileScanConfig;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
@@ -483,10 +485,12 @@ impl ExecutionPlan for DataSourceExec {
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
+        #[cfg_attr(not(feature = "object_store"), expect(unused_mut))]
         let mut metrics = self.data_source.metrics().clone_inner();
 
         // Add `output_rows_skew` metric to the metrics set.
         // Done here because it's a derived metric from output_rows metric.
+        #[cfg(feature = "object_store")]
         if let Some(file_scan_config) = self.data_source.downcast_ref::<FileScanConfig>()
             && file_scan_config.file_source().file_type() == "parquet"
             && let Some(output_rows_skew) =
@@ -682,6 +686,7 @@ impl DataSourceExec {
     /// Returns `None` if
     /// 1. the datasource is not scanning files (`FileScanConfig`)
     /// 2. The [`FileScanConfig::file_source`] is not of type `T`
+    #[cfg(feature = "object_store")]
     pub fn downcast_to_file_source<T: FileSource>(
         &self,
     ) -> Option<(&FileScanConfig, &T)> {

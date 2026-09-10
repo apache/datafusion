@@ -17,29 +17,40 @@
 
 //! Data source traits
 
+#[cfg(feature = "object_store")]
 use std::sync::Arc;
 
+#[cfg(feature = "object_store")]
 use async_trait::async_trait;
+#[cfg(feature = "object_store")]
 use datafusion_catalog::Session;
+#[cfg(feature = "object_store")]
 use datafusion_expr::CreateExternalTable;
 pub use datafusion_expr::{TableProviderFilterPushDown, TableType};
+#[cfg(feature = "object_store")]
 use futures::future::BoxFuture;
 
+#[cfg(feature = "object_store")]
 use crate::catalog::{TableProvider, TableProviderFactory};
+#[cfg(feature = "object_store")]
 use crate::datasource::listing_table_factory::ListingTableFactory;
+#[cfg(feature = "object_store")]
 use crate::datasource::stream::StreamTableFactory;
+#[cfg(feature = "object_store")]
 use crate::error::Result;
 
 /// The default [`TableProviderFactory`]
 ///
 /// If [`CreateExternalTable`] is unbounded calls [`StreamTableFactory::create`],
 /// otherwise calls [`ListingTableFactory::create`]
+#[cfg(feature = "object_store")]
 #[derive(Debug, Default)]
 pub struct DefaultTableFactory {
     stream: StreamTableFactory,
     listing: ListingTableFactory,
 }
 
+#[cfg(feature = "object_store")]
 impl DefaultTableFactory {
     /// Creates a new [`DefaultTableFactory`]
     pub fn new() -> Self {
@@ -47,6 +58,7 @@ impl DefaultTableFactory {
     }
 }
 
+#[cfg(feature = "object_store")]
 #[async_trait]
 impl TableProviderFactory for DefaultTableFactory {
     // Hand-written `#[async_trait]` expansion to reduce compile time. See
@@ -66,6 +78,7 @@ impl TableProviderFactory for DefaultTableFactory {
     }
 }
 
+#[cfg(feature = "object_store")]
 impl DefaultTableFactory {
     fn create_boxed<'a>(
         &'a self,

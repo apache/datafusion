@@ -24,6 +24,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::catalog::{CatalogProviderList, SchemaProvider, TableProviderFactory};
+#[cfg(feature = "object_store")]
 use crate::datasource::file_format::FileFormatFactory;
 #[cfg(feature = "sql")]
 use crate::datasource::provider_as_source;
@@ -45,8 +46,8 @@ use datafusion_common::config::{ConfigExtension, ConfigOptions, TableOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
-    DFSchema, DataFusionError, ResolvedTableReference, TableReference, config_err,
-    exec_err, plan_datafusion_err,
+    DFSchema, DataFusionError, ResolvedTableReference, TableReference, exec_err,
+    plan_datafusion_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::config::SessionConfig;
@@ -85,15 +86,21 @@ use datafusion_sql::{
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+#[cfg(feature = "object_store")]
+use datafusion_common::config_err;
 use futures::future::BoxFuture;
 use itertools::Itertools;
-use log::{debug, info};
+use log::debug;
+#[cfg(feature = "object_store")]
+use log::info;
+#[cfg(feature = "object_store")]
 use object_store::ObjectStore;
 #[cfg(feature = "sql")]
 use sqlparser::{
     ast::{Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias},
     dialect::dialect_from_str,
 };
+#[cfg(feature = "object_store")]
 use url::Url;
 use uuid::Uuid;
 
@@ -187,6 +194,7 @@ struct SessionStateInner {
     /// Deserializer registry for extensions.
     serializer_registry: Arc<dyn SerializerRegistry>,
     /// Holds registered external FileFormat implementations
+    #[cfg(feature = "object_store")]
     file_formats: HashMap<String, Arc<dyn FileFormatFactory>>,
     /// Session configuration
     config: SessionConfig,
@@ -241,8 +249,10 @@ impl Debug for SessionState {
             .field("config", &self.inner.config)
             .field("runtime_env", &self.inner.runtime_env)
             .field("catalog_list", &self.inner.catalog_list)
-            .field("serializer_registry", &self.inner.serializer_registry)
-            .field("file_formats", &self.inner.file_formats)
+            .field("serializer_registry", &self.inner.serializer_registry);
+        #[cfg(feature = "object_store")]
+        let ret = ret.field("file_formats", &self.inner.file_formats);
+        let ret = ret
             .field("execution_props", &self.execution_props)
             .field("table_options", &self.inner.table_options)
             .field("table_factories", &self.inner.table_factories)
@@ -967,6 +977,7 @@ impl SessionState {
     /// Adds or updates a [FileFormatFactory] which can be used with COPY TO or
     /// CREATE EXTERNAL TABLE statements for reading and writing files of custom
     /// formats.
+    #[cfg(feature = "object_store")]
     pub fn register_file_format(
         &mut self,
         file_format: Arc<dyn FileFormatFactory>,
@@ -996,6 +1007,7 @@ impl SessionState {
 
     /// Retrieves a [FileFormatFactory] based on file extension which has been registered
     /// via SessionContext::register_file_format. Extensions are not case sensitive.
+    #[cfg(feature = "object_store")]
     pub fn get_file_format_factory(
         &self,
         ext: &str,
@@ -1129,6 +1141,7 @@ pub struct SessionStateBuilder {
     window_functions: Option<Vec<Arc<WindowUDF>>>,
     extension_types: Option<ExtensionTypeRegistryRef>,
     serializer_registry: Option<Arc<dyn SerializerRegistry>>,
+    #[cfg(feature = "object_store")]
     file_formats: Option<Vec<Arc<dyn FileFormatFactory>>>,
     config: Option<SessionConfig>,
     table_options: Option<TableOptions>,
@@ -1172,6 +1185,7 @@ impl SessionStateBuilder {
             window_functions: None,
             extension_types: None,
             serializer_registry: None,
+            #[cfg(feature = "object_store")]
             file_formats: None,
             table_options: None,
             config: None,
@@ -1237,6 +1251,7 @@ impl SessionStateBuilder {
             window_functions: Some(existing.window_functions.into_values().collect_vec()),
             extension_types: Some(existing.extension_types),
             serializer_registry: Some(existing.serializer_registry),
+            #[cfg(feature = "object_store")]
             file_formats: Some(existing.file_formats.into_values().collect_vec()),
             config: Some(new_config),
             table_options: Some(existing.table_options),
@@ -1262,6 +1277,7 @@ impl SessionStateBuilder {
             .get_or_insert_with(HashMap::new)
             .extend(SessionStateDefaults::default_table_factories());
 
+        #[cfg(feature = "object_store")]
         self.file_formats
             .get_or_insert_with(Vec::new)
             .extend(SessionStateDefaults::default_file_formats());
@@ -1509,6 +1525,7 @@ impl SessionStateBuilder {
     }
 
     /// Set the map of [`FileFormatFactory`]s
+    #[cfg(feature = "object_store")]
     pub fn with_file_formats(
         mut self,
         file_formats: Vec<Arc<dyn FileFormatFactory>>,
@@ -1610,6 +1627,7 @@ impl SessionStateBuilder {
     ///     .with_default_features()
     ///     .build();
     /// ```
+    #[cfg(feature = "object_store")]
     pub fn with_object_store(
         mut self,
         url: &Url,
@@ -1650,6 +1668,7 @@ impl SessionStateBuilder {
             window_functions,
             extension_types,
             serializer_registry,
+            #[cfg(feature = "object_store")]
             file_formats,
             table_options,
             config,
@@ -1690,6 +1709,7 @@ impl SessionStateBuilder {
             extension_types: Arc::new(MemoryExtensionTypeRegistry::default()),
             serializer_registry: serializer_registry
                 .unwrap_or_else(|| Arc::new(EmptySerializerRegistry)),
+            #[cfg(feature = "object_store")]
             file_formats: HashMap::new(),
             table_options: table_options.unwrap_or_else(|| {
                 TableOptions::default_from_session_config(config.options())
@@ -1708,6 +1728,7 @@ impl SessionStateBuilder {
             execution_props: execution_props.unwrap_or_default(),
         };
 
+        #[cfg(feature = "object_store")]
         if let Some(file_formats) = file_formats {
             for file_format in file_formats {
                 if let Err(e) = state.register_file_format(file_format, false) {
@@ -1911,6 +1932,7 @@ impl SessionStateBuilder {
     }
 
     /// Returns the current file_formats value
+    #[cfg(feature = "object_store")]
     pub fn file_formats(&mut self) -> &mut Option<Vec<Arc<dyn FileFormatFactory>>> {
         &mut self.file_formats
     }
@@ -1984,8 +2006,10 @@ impl Debug for SessionStateBuilder {
             .field("config", &self.config)
             .field("runtime_env", &self.runtime_env)
             .field("catalog_list", &self.catalog_list)
-            .field("serializer_registry", &self.serializer_registry)
-            .field("file_formats", &self.file_formats)
+            .field("serializer_registry", &self.serializer_registry);
+        #[cfg(feature = "object_store")]
+        let ret = ret.field("file_formats", &self.file_formats);
+        let ret = ret
             .field("execution_props", &self.execution_props)
             .field("table_options", &self.table_options)
             .field("table_factories", &self.table_factories)
@@ -2177,6 +2201,12 @@ impl ContextProvider for SessionContextProvider<'_> {
     ) -> datafusion_common::Result<
         Arc<dyn datafusion_common::file_options::file_type::FileType>,
     > {
+        #[cfg(not(feature = "object_store"))]
+        return datafusion_common::not_impl_err!(
+            "File formats require the object_store feature: {ext}"
+        );
+
+        #[cfg(feature = "object_store")]
         self.state
             .inner
             .file_formats
