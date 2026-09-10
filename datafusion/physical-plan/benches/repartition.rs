@@ -112,7 +112,7 @@ fn make_multi_key_batch(
 }
 
 /// Build `num_partitions` input partition slots, each holding `rows_per_partition / batch_size`
-/// batches of random Int64 data.
+/// batches of mixed-type data: an Int64 key, an Int64 value, and a Utf8View tag column.
 fn make_partitioned_input(
     num_partitions: usize,
     rows_per_partition: usize,
@@ -120,9 +120,10 @@ fn make_partitioned_input(
     let schema = Arc::new(Schema::new(vec![
         Field::new("key", DataType::Int64, false),
         Field::new("val", DataType::Int64, false),
+        Field::new("tag", DataType::Utf8View, false),
     ]));
     let mut rng = StdRng::seed_from_u64(SEED);
-    let num_batches = (rows_per_partition + BATCH_SIZE - 1) / BATCH_SIZE;
+    let num_batches = rows_per_partition.div_ceil(BATCH_SIZE);
     let partitions = (0..num_partitions)
         .map(|_| {
             (0..num_batches)
@@ -131,11 +132,19 @@ fn make_partitioned_input(
                         .map(|_| rng.random_range(0..1_000_000i64))
                         .collect();
                     let vals: Vec<i64> = (0..BATCH_SIZE as i64).collect();
+                    let tag_vals: Vec<String> = (0..BATCH_SIZE)
+                        .map(|_| {
+                            format!("tag_{:08}", rng.random_range(0..1_000_000usize))
+                        })
+                        .collect();
                     RecordBatch::try_new(
                         Arc::clone(&schema),
                         vec![
                             Arc::new(Int64Array::from(keys)) as ArrayRef,
                             Arc::new(Int64Array::from(vals)),
+                            Arc::new(StringViewArray::from_iter_values(
+                                tag_vals.iter().map(String::as_str),
+                            )),
                         ],
                     )
                     .unwrap()
@@ -146,11 +155,6 @@ fn make_partitioned_input(
     (partitions, schema)
 }
 
-/// Hash routing at varying partition counts.
-///
-/// Power-of-two counts (8, 16, 32 …) use a bitmask inside `StrengthReducedU64`;
-/// non-powers (10, 100 …) use a reciprocal multiply. Both paths are included so
-/// the difference in routing cost is visible.
 fn bench_hash_partitioner_partition_count(c: &mut Criterion) {
     let mut group = c.benchmark_group("hash_partitioner/partition_count");
     group.throughput(Throughput::Elements(BATCH_SIZE as u64));
@@ -189,7 +193,6 @@ fn bench_hash_partitioner_key_types(c: &mut Criterion) {
     group.throughput(Throughput::Elements(BATCH_SIZE as u64));
     const N: usize = 32;
 
-    // Int32
     {
         let schema = Arc::new(Schema::new(vec![
             Field::new("key", DataType::Int32, false),
@@ -214,7 +217,6 @@ fn bench_hash_partitioner_key_types(c: &mut Criterion) {
         });
     }
 
-    // Int64
     {
         let schema = Arc::new(Schema::new(vec![
             Field::new("key", DataType::Int64, false),
@@ -239,7 +241,6 @@ fn bench_hash_partitioner_key_types(c: &mut Criterion) {
         });
     }
 
-    // Utf8View
     {
         let schema = Arc::new(Schema::new(vec![
             Field::new("key", DataType::Utf8View, false),
@@ -247,7 +248,7 @@ fn bench_hash_partitioner_key_types(c: &mut Criterion) {
         ]));
         let batch = make_utf8view_batch(&schema, BATCH_SIZE);
         let key_expr = col("key", &schema).unwrap();
-        group.bench_function("utf8", |b| {
+        group.bench_function("utf8_view", |b| {
             let mut p = BatchPartitioner::new_hash_partitioner(
                 vec![Arc::clone(&key_expr)],
                 N,
@@ -344,21 +345,18 @@ fn bench_round_robin_partitioner(c: &mut Criterion) {
 
 const E2E_ROWS: usize = 5_000_000;
 
-/// Hash repartition: 1 input partition → N output partitions.
-///
-/// Measures the full operator path: batch partitioning, channel sends,
-/// coalescing, memory reservation, and downstream collection.
-fn bench_repartition_exec_hash_1_to_n(c: &mut Criterion) {
+/// End-to-end repartition: 1 input partition → N output partitions, hash and round-robin.
+fn bench_repartition_exec_1_to_n(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     let task_ctx = Arc::new(TaskContext::default());
-    let mut group = c.benchmark_group("repartition_exec/hash_1_to_n");
+    let mut group = c.benchmark_group("repartition_exec/1_to_n");
     group.throughput(Throughput::Elements(E2E_ROWS as u64));
 
     let (partitions, schema) = make_partitioned_input(1, E2E_ROWS);
     let key_expr = col("key", &schema).unwrap();
 
     for &n in &[4usize, 8, 16, 32] {
-        group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, &n| {
+        group.bench_with_input(BenchmarkId::new("hash", n), &n, |b, &n| {
             b.iter_batched(
                 || {
                     let input =
@@ -380,24 +378,8 @@ fn bench_repartition_exec_hash_1_to_n(c: &mut Criterion) {
                 BatchSize::LargeInput,
             );
         });
-    }
-    group.finish();
-}
 
-/// Round-robin repartition: 1 input partition → N output partitions.
-///
-/// Compare against `hash_1_to_n` to isolate the cost of hash computation
-/// versus channel/coalescing overhead that both modes share.
-fn bench_repartition_exec_round_robin_1_to_n(c: &mut Criterion) {
-    let rt = Runtime::new().unwrap();
-    let task_ctx = Arc::new(TaskContext::default());
-    let mut group = c.benchmark_group("repartition_exec/round_robin_1_to_n");
-    group.throughput(Throughput::Elements(E2E_ROWS as u64));
-
-    let (partitions, schema) = make_partitioned_input(1, E2E_ROWS);
-
-    for &n in &[4usize, 8, 16, 32] {
-        group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, &n| {
+        group.bench_with_input(BenchmarkId::new("round_robin", n), &n, |b, &n| {
             b.iter_batched(
                 || {
                     let input =
@@ -420,16 +402,11 @@ fn bench_repartition_exec_round_robin_1_to_n(c: &mut Criterion) {
     group.finish();
 }
 
-/// Hash repartition: N input partitions → N output partitions.
-///
-/// Models the typical distributed query scenario where N concurrent producer
-/// tasks each hash-route their share of rows to N output channels. The
-/// contention on shared channels and coalescer locks shows up here but not
-/// in the 1→N benchmarks.
-fn bench_repartition_exec_hash_n_to_n(c: &mut Criterion) {
+/// End-to-end repartition: N input partitions → N output partitions, hash and round-robin.
+fn bench_repartition_exec_n_to_n(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     let task_ctx = Arc::new(TaskContext::default());
-    let mut group = c.benchmark_group("repartition_exec/hash_n_to_n");
+    let mut group = c.benchmark_group("repartition_exec/n_to_n");
     group.throughput(Throughput::Elements(E2E_ROWS as u64));
 
     for &n in &[4usize, 8, 16] {
@@ -437,7 +414,7 @@ fn bench_repartition_exec_hash_n_to_n(c: &mut Criterion) {
         let (partitions, schema) = make_partitioned_input(n, rows_per_partition);
         let key_expr = col("key", &schema).unwrap();
 
-        group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, &n| {
+        group.bench_with_input(BenchmarkId::new("hash", n), &n, |b, &n| {
             b.iter_batched(
                 || {
                     let input =
@@ -449,6 +426,26 @@ fn bench_repartition_exec_hash_n_to_n(c: &mut Criterion) {
                             Partitioning::Hash(vec![Arc::clone(&key_expr)], n),
                         )
                         .unwrap(),
+                    )
+                },
+                |plan| {
+                    rt.block_on(async {
+                        collect(plan, task_ctx.clone()).await.unwrap();
+                    });
+                },
+                BatchSize::LargeInput,
+            );
+        });
+
+        group.bench_with_input(BenchmarkId::new("round_robin", n), &n, |b, &n| {
+            b.iter_batched(
+                || {
+                    let input =
+                        TestMemoryExec::try_new_exec(&partitions, schema.clone(), None)
+                            .unwrap();
+                    Arc::new(
+                        RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(n))
+                            .unwrap(),
                     )
                 },
                 |plan| {
@@ -532,9 +529,8 @@ criterion_group!(
     bench_hash_partitioner_key_types,
     bench_hash_partitioner_key_count,
     bench_round_robin_partitioner,
-    bench_repartition_exec_hash_1_to_n,
-    bench_repartition_exec_round_robin_1_to_n,
-    bench_repartition_exec_hash_n_to_n,
+    bench_repartition_exec_1_to_n,
+    bench_repartition_exec_n_to_n,
     bench_repartition_exec_hash_m_to_n,
 );
 criterion_main!(benches);
