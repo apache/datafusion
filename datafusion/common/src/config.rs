@@ -3695,11 +3695,20 @@ impl TryFrom<&Arc<FileDecryptionProperties>> for ConfigFileDecryptionProperties 
     type Error = DataFusionError;
 
     fn try_from(f: &Arc<FileDecryptionProperties>) -> Result<Self> {
+        if f.uses_key_retriever() {
+            // Getting the keys is not possible without the key metadata from
+            // a Parquet file if a key retriever is used.
+            return Err(
+                DataFusionError::Configuration(
+                    "Cannot convert FileDecryptionProperties that use a key retriever to ConfigFileDecryptionProperties".into()
+                )
+            );
+        }
+
         let footer_key = f.footer_key(None).map_err(|e| {
+            // This shouldn't happen for FileDecryptionProperties that don't use a key retriever.
             DataFusionError::Configuration(format!(
-                "Could not retrieve footer key from FileDecryptionProperties. \
-                Note that conversion to ConfigFileDecryptionProperties is not supported \
-                when using a key retriever: {e}"
+                "Could not retrieve footer key from FileDecryptionProperties: {e}"
             ))
         })?;
 
@@ -4470,14 +4479,10 @@ mod tests {
 
     #[cfg(feature = "parquet_encryption")]
     impl parquet::encryption::decrypt::KeyRetriever for ParquetEncryptionKeyRetriever {
-        fn retrieve_key(&self, key_metadata: &[u8]) -> parquet::errors::Result<Vec<u8>> {
-            if !key_metadata.is_empty() {
-                Ok(b"1234567890123450".to_vec())
-            } else {
-                Err(parquet::errors::ParquetError::General(
-                    "Key metadata not provided".to_string(),
-                ))
-            }
+        fn retrieve_key(&self, _key_metadata: &[u8]) -> parquet::errors::Result<Vec<u8>> {
+            // Ignore key metadata so we can verify that the key retriever isn't used
+            // even if it can provide a key without using metadata.
+            Ok(b"1234567890123450".to_vec())
         }
     }
 
@@ -4497,8 +4502,10 @@ mod tests {
             (&decryption_properties).try_into();
         assert!(config_file_decryption_properties.is_err());
         let err = config_file_decryption_properties.unwrap_err().to_string();
-        assert!(err.contains("key retriever"));
-        assert!(err.contains("Key metadata not provided"));
+        assert_contains!(
+            err,
+            "Cannot convert FileDecryptionProperties that use a key retriever to ConfigFileDecryptionProperties"
+        );
     }
 
     #[cfg(feature = "parquet")]
