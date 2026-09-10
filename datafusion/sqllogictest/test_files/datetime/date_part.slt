@@ -1859,3 +1859,42 @@ logical_plan
 physical_plan
 01)FilterExec: c@0 >= 2024-01-01 AND c@0 < 2025-01-01
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A bound whose January 1 falls outside the timestamp unit's range must leave the
+# predicate alone rather than rewriting it against a NULL bound.
+
+statement ok
+CREATE VIEW year_bound AS SELECT * FROM (VALUES
+  ('2020-06-01T12:00:00'::timestamp),
+  ('1995-06-01T12:00:00'::timestamp)) s(ts);
+
+query I
+SELECT count(*) FROM year_bound WHERE EXTRACT(YEAR FROM ts) < 9999;
+----
+2
+
+query I
+SELECT count(*) FROM year_bound WHERE EXTRACT(YEAR FROM ts) <= 2262;
+----
+2
+
+query I
+SELECT count(*) FROM year_bound WHERE EXTRACT(YEAR FROM ts) >= 1000 OR EXTRACT(YEAR FROM ts) = 2020;
+----
+2
+
+query IB rowsort
+SELECT EXTRACT(YEAR FROM ts), EXTRACT(YEAR FROM ts) < 9999 FROM year_bound;
+----
+1995 true
+2020 true
+
+# A bound inside the nanosecond range still rewrites as before.
+
+query I
+SELECT count(*) FROM year_bound WHERE EXTRACT(YEAR FROM ts) >= 1678;
+----
+2
+
+statement ok
+DROP VIEW year_bound;
