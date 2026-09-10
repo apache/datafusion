@@ -79,6 +79,7 @@ pub fn last_value(expression: Expr, order_by: Vec<SortExpr>) -> Expr {
 fn create_groups_accumulator_helper<S: ValueState + 'static>(
     args: &AccumulatorArgs,
     is_first: bool,
+    is_input_pre_ordered: bool,
     state: S,
 ) -> Result<Box<dyn GroupsAccumulator>> {
     let Some(ordering) = LexOrdering::new(args.order_bys.to_vec()) else {
@@ -96,12 +97,14 @@ fn create_groups_accumulator_helper<S: ValueState + 'static>(
         args.ignore_nulls,
         &ordering_dtypes,
         is_first,
+        is_input_pre_ordered,
     )?))
 }
 
 fn create_groups_accumulator(
     args: &AccumulatorArgs,
     is_first: bool,
+    is_input_pre_ordered: bool,
     function_name: &str,
 ) -> Result<Box<dyn GroupsAccumulator>> {
     let data_type = args.return_field.data_type();
@@ -111,6 +114,7 @@ fn create_groups_accumulator(
             create_groups_accumulator_helper(
                 args,
                 is_first,
+                is_input_pre_ordered,
                 PrimitiveValueState::<$t>::new(data_type.clone()),
             )
         };
@@ -168,6 +172,7 @@ fn create_groups_accumulator(
         | DataType::BinaryView => create_groups_accumulator_helper(
             args,
             is_first,
+            is_input_pre_ordered,
             BytesValueState::try_new(data_type.clone())?,
         ),
 
@@ -185,6 +190,7 @@ fn create_groups_accumulator(
         | DataType::Map(_, _) => create_groups_accumulator_helper(
             args,
             is_first,
+            is_input_pre_ordered,
             GenericValueState::new(data_type.clone()),
         ),
 
@@ -346,7 +352,7 @@ impl AggregateUDFImpl for FirstValue {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
-        create_groups_accumulator(&args, true, self.name())
+        create_groups_accumulator(&args, true, self.is_input_pre_ordered, self.name())
     }
 
     fn with_beneficial_ordering(
@@ -393,10 +399,25 @@ struct FirstLastGroupsAccumulator<S: ValueState> {
     // to avoid calling `ScalarValue::size_of_vec` by Self.size.
     size_of_orderings: usize,
 
-    // buffer for `get_filtered_extreme_of_each_group`
-    // filter_min_of_each_group_buf.0[group_idx] -> idx_in_val
-    // only valid if filter_min_of_each_group_buf.1[group_idx] == true
+    // Per-batch scoreboard shared by `get_filtered_extreme_of_each_group`
+    // and the pre-ordered fast path:
+    // extreme_of_each_group_buf.0[group_idx] -> idx_in_val
+    // only valid if extreme_of_each_group_buf.1[group_idx] == true
     extreme_of_each_group_buf: (Vec<usize>, BooleanBufferBuilder),
+    // Set by `get_filtered_extreme_of_each_group` (merge_batch /
+    // convert_to_state), which clears the scoreboard at its start but leaves
+    // its winners' bits set on return. `update_batch_pre_ordered` keeps the
+    // scoreboard all-false between its own batches, but the two can
+    // interleave on one instance (the aggregation stream calls merge_batch on
+    // the same accumulators when replaying spilled state), so the fast path
+    // does one full reset when this is set.
+    extreme_buf_dirty: bool,
+    // Batch-local list of groups touched by `update_batch_pre_ordered`,
+    // reused across batches. It lets winner collection and the scoreboard
+    // reset run in O(groups touched by the batch) instead of
+    // O(total_num_groups): with 1M allocated groups and 64 touched per
+    // batch, a full-scoreboard sweep per batch dominates the runtime.
+    touched_groups_buf: Vec<usize>,
 
     // =========== option ============
 
@@ -409,6 +430,11 @@ struct FirstLastGroupsAccumulator<S: ValueState> {
     sort_options: Vec<SortOptions>,
     // Ignore null values.
     ignore_nulls: bool,
+    // When `true` (set through `with_beneficial_ordering` by the
+    // `OptimizeAggregateOrder` physical-optimizer rule), the optimizer has
+    // proven that every group's rows already arrive in `ordering_req` order,
+    // and `update_batch` takes the comparison-free fast path.
+    is_input_pre_ordered: bool,
     default_orderings: Vec<ScalarValue>,
 }
 
@@ -419,6 +445,7 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
         ignore_nulls: bool,
         ordering_dtypes: &[DataType],
         pick_first_in_group: bool,
+        is_input_pre_ordered: bool,
     ) -> Result<Self> {
         let default_orderings = ordering_dtypes
             .iter()
@@ -437,7 +464,10 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
             is_sets: BooleanBufferBuilder::new(0),
             size_of_orderings: 0,
             extreme_of_each_group_buf: (Vec::new(), BooleanBufferBuilder::new(0)),
+            extreme_buf_dirty: false,
+            touched_groups_buf: Vec::new(),
             pick_first_in_group,
+            is_input_pre_ordered,
         })
     }
 
@@ -553,14 +583,14 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
         vals: &ArrayRef,
         is_set_arr: Option<&BooleanArray>,
     ) -> Result<Vec<(usize, usize)>> {
-        // Set all values in min_of_each_group_buf.1 to false.
+        // Set all values in extreme_of_each_group_buf.1 to false.
         self.extreme_of_each_group_buf.1.truncate(0);
         self.extreme_of_each_group_buf
             .1
             .append_n(self.is_sets.len(), false);
 
-        // No need to call `clear` since `self.min_of_each_group_buf.0[group_idx]`
-        // is only valid when `self.min_of_each_group_buf.1[group_idx] == true`.
+        // No need to call `clear` since `self.extreme_of_each_group_buf.0[group_idx]`
+        // is only valid when `self.extreme_of_each_group_buf.1[group_idx] == true`.
 
         let comparator = {
             assert_eq!(orderings.len(), self.ordering_req.len());
@@ -614,6 +644,11 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
             }
         }
 
+        // Winners' bits stay set on return; tell the pre-ordered fast path
+        // that the scoreboard needs a reset before it can trust its all-false
+        // invariant again.
+        self.extreme_buf_dirty = true;
+
         Ok(self
             .extreme_of_each_group_buf
             .0
@@ -622,6 +657,108 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
             .filter(|(group_idx, _)| self.extreme_of_each_group_buf.1.get_bit(*group_idx))
             .map(|(group_idx, idx_in_val)| (group_idx, *idx_in_val))
             .collect::<Vec<_>>())
+    }
+
+    /// Comparison-free `update_batch` for pre-ordered input.
+    ///
+    /// `is_input_pre_ordered` is only set (through `with_beneficial_ordering`,
+    /// by the `OptimizeAggregateOrder` physical-optimizer rule) after the
+    /// optimizer has proven that the input ordering satisfies the ordered
+    /// group-by prefix followed by this aggregate's own ordering requirement.
+    /// Under that guarantee each group's rows arrive in `ordering_req` order,
+    /// so:
+    /// - within a batch, the extreme row of a group is simply its first
+    ///   (FIRST_VALUE) or last (LAST_VALUE) qualifying row, and
+    /// - across batches, a later batch's winner always beats an earlier one
+    ///   for LAST_VALUE, and never does for FIRST_VALUE.
+    ///
+    /// No lexicographic comparator is built and `compare_rows` never runs.
+    /// The winner's ordering values are still materialized into
+    /// `self.orderings`: partial state must carry them, because the final
+    /// aggregation stage merges states coming from different partitions whose
+    /// relative order is not guaranteed, so `merge_batch` keeps comparing.
+    ///
+    /// Tie handling: among rows whose ordering keys compare equal, this path
+    /// picks the physically last qualifying row for LAST_VALUE (and the first
+    /// for FIRST_VALUE), matching the single-group pre-ordered accumulator and
+    /// `Iterator::max_by`. The tournament path keeps the first-seen row of a
+    /// tie instead (its comparisons are strict). Both are valid answers —
+    /// which row of a tie wins is unspecified — but results can differ on
+    /// tied keys.
+    fn update_batch_pre_ordered(
+        &mut self,
+        values_and_order_cols: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<()> {
+        let vals = &values_and_order_cols[0];
+
+        // `extreme_of_each_group_buf.1` is sized by `resize_states` and kept
+        // all-false between batches: each batch records the groups it touched
+        // in `touched_groups_buf` and clears exactly those bits before
+        // returning. Neither the reset nor the winner collection may scan
+        // `total_num_groups` -- with 1M allocated groups and 64 touched, a
+        // full sweep turns a ~13us batch into ~400us and erases the win.
+        debug_assert!(self.touched_groups_buf.is_empty());
+        if self.extreme_buf_dirty {
+            // A merge (spill replay) ran on this instance and left its
+            // winners' bits set; restore the all-false invariant once.
+            self.extreme_of_each_group_buf.1.truncate(0);
+            self.extreme_of_each_group_buf
+                .1
+                .append_n(self.is_sets.len(), false);
+            self.extreme_buf_dirty = false;
+        }
+
+        for (idx_in_val, &group_idx) in group_indices.iter().enumerate() {
+            // A row passes the FILTER clause only when the predicate is
+            // `true`; rows whose predicate evaluates to `null` are excluded.
+            let passed_filter =
+                opt_filter.is_none_or(|x| x.is_valid(idx_in_val) && x.value(idx_in_val));
+            if !passed_filter {
+                continue;
+            }
+            if self.ignore_nulls && vals.is_null(idx_in_val) {
+                continue;
+            }
+
+            let touched_this_batch = self.extreme_of_each_group_buf.1.get_bit(group_idx);
+            if self.pick_first_in_group
+                && (self.is_sets.get_bit(group_idx) || touched_this_batch)
+            {
+                // The first qualifying row wins; groups decided by an earlier
+                // batch (or earlier in this batch) never change again.
+                continue;
+            }
+            if !touched_this_batch {
+                self.extreme_of_each_group_buf.1.set_bit(group_idx, true);
+                self.touched_groups_buf.push(group_idx);
+            }
+            // For LAST_VALUE, later qualifying rows unconditionally overwrite.
+            self.extreme_of_each_group_buf.0[group_idx] = idx_in_val;
+        }
+
+        let mut ordering_buf = Vec::with_capacity(self.ordering_req.len());
+        // Take the buffer to appease the borrow checker; `update_state`
+        // needs `&mut self`.
+        let touched = std::mem::take(&mut self.touched_groups_buf);
+        for &group_idx in &touched {
+            let idx = self.extreme_of_each_group_buf.0[group_idx];
+            extract_row_at_idx_to_buf(
+                &values_and_order_cols[1..],
+                idx,
+                &mut ordering_buf,
+            )?;
+            self.update_state(group_idx, &ordering_buf, vals, idx)?;
+        }
+        // Restore the all-false invariant by clearing only the touched bits.
+        for &group_idx in &touched {
+            self.extreme_of_each_group_buf.1.set_bit(group_idx, false);
+        }
+        self.touched_groups_buf = touched;
+        self.touched_groups_buf.clear();
+
+        Ok(())
     }
 }
 
@@ -635,6 +772,14 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
         total_num_groups: usize,
     ) -> Result<()> {
         self.resize_states(total_num_groups);
+
+        if self.is_input_pre_ordered {
+            return self.update_batch_pre_ordered(
+                values_and_order_cols,
+                group_indices,
+                opt_filter,
+            );
+        }
 
         let vals = &values_and_order_cols[0];
 
@@ -1147,7 +1292,7 @@ impl AggregateUDFImpl for LastValue {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
-        create_groups_accumulator(&args, false, self.name())
+        create_groups_accumulator(&args, false, self.is_input_pre_ordered, self.name())
     }
 }
 
@@ -1587,6 +1732,7 @@ mod tests {
             true,
             &[DataType::Int64],
             true,
+            false,
         )?;
 
         let mut val_with_orderings = {
@@ -1679,6 +1825,7 @@ mod tests {
             true,
             &[DataType::Int64],
             true,
+            false,
         )?;
 
         let val_with_orderings = {
@@ -1760,6 +1907,7 @@ mod tests {
             true,
             &[DataType::Int64],
             false,
+            false,
         )?;
 
         let mut val_with_orderings = {
@@ -1834,6 +1982,7 @@ mod tests {
             true,
             &[DataType::Int64],
             true,
+            false,
         )?;
 
         let val_with_orderings: Vec<ArrayRef> = vec![
@@ -1888,6 +2037,7 @@ mod tests {
             true,
             &[DataType::Int64],
             true,
+            false,
         )?;
 
         let val_with_orderings: Vec<ArrayRef> = vec![
@@ -1910,6 +2060,7 @@ mod tests {
             true,
             &[DataType::Int64],
             true,
+            false,
         )?;
 
         merging_acc.merge_batch(&state, &[0, 0], 1)?;
@@ -2104,6 +2255,7 @@ mod tests {
             false,
             &[DataType::Int64],
             /* pick_first = */ true,
+            false,
         )?;
 
         // Batch 1: four rows across two groups.
@@ -2187,6 +2339,7 @@ mod tests {
             false,
             &[DataType::Int64],
             true,
+            false,
         )?;
 
         // 10 groups × 10_000 candidate rows per group (100_000 total). Each
@@ -2277,6 +2430,7 @@ mod tests {
             false,
             &[DataType::Int64],
             true,
+            false,
         )?;
 
         const GROUPS: usize = 4;
@@ -2383,6 +2537,428 @@ mod tests {
                  {i}'s buffer; compact() is not making an owned copy"
             );
         }
+        Ok(())
+    }
+
+    // ==================== pre-ordered fast path (#24771) ====================
+
+    use arrow::datatypes::{Field, Int64Type};
+
+    /// Builds a grouped first/last accumulator over Int64 values with a
+    /// two-column Int64 ordering requirement `(o1, o2)`.
+    #[expect(clippy::fn_params_excessive_bools)]
+    fn grouped_acc(
+        pick_first: bool,
+        ignore_nulls: bool,
+        pre_ordered: bool,
+        descending: bool,
+    ) -> Result<FirstLastGroupsAccumulator<PrimitiveValueState<Int64Type>>> {
+        let schema = Schema::new(vec![
+            Field::new("v", DataType::Int64, true),
+            Field::new("o1", DataType::Int64, true),
+            Field::new("o2", DataType::Int64, true),
+        ]);
+        let options = SortOptions {
+            descending,
+            nulls_first: false,
+        };
+        let ordering = LexOrdering::new(vec![
+            PhysicalSortExpr::new(col("o1", &schema)?, options),
+            PhysicalSortExpr::new(col("o2", &schema)?, options),
+        ])
+        .unwrap();
+        FirstLastGroupsAccumulator::try_new(
+            PrimitiveValueState::<Int64Type>::new(DataType::Int64),
+            ordering,
+            ignore_nulls,
+            &[DataType::Int64, DataType::Int64],
+            pick_first,
+            pre_ordered,
+        )
+    }
+
+    /// `[value, o1, o2]` columns for one batch.
+    fn vo_batch(vals: &[Option<i64>], o1: &[i64], o2: &[i64]) -> Vec<ArrayRef> {
+        assert_eq!(vals.len(), o1.len());
+        assert_eq!(vals.len(), o2.len());
+        vec![
+            Arc::new(Int64Array::from(vals.to_vec())) as ArrayRef,
+            Arc::new(Int64Array::from(o1.to_vec())) as ArrayRef,
+            Arc::new(Int64Array::from(o2.to_vec())) as ArrayRef,
+        ]
+    }
+
+    type PreOrderedBatch = (Vec<ArrayRef>, Vec<usize>, Option<BooleanArray>, usize);
+
+    /// Feeds identical batches through the tournament path and the pre-ordered
+    /// fast path, then asserts that every emitted state column (value,
+    /// ordering columns, and the is_set flags) is identical.
+    fn assert_matches_tournament(
+        pick_first: bool,
+        ignore_nulls: bool,
+        descending: bool,
+        batches: &[PreOrderedBatch],
+    ) -> Result<()> {
+        let mut slow = grouped_acc(pick_first, ignore_nulls, false, descending)?;
+        let mut fast = grouped_acc(pick_first, ignore_nulls, true, descending)?;
+        for (cols, group_indices, filter, total_num_groups) in batches {
+            slow.update_batch(cols, group_indices, filter.as_ref(), *total_num_groups)?;
+            fast.update_batch(cols, group_indices, filter.as_ref(), *total_num_groups)?;
+        }
+        let slow_state = slow.state(EmitTo::All)?;
+        let fast_state = fast.state(EmitTo::All)?;
+        assert_eq!(slow_state.len(), fast_state.len());
+        for (col_idx, (s, f)) in slow_state.iter().zip(fast_state.iter()).enumerate() {
+            assert_eq!(
+                s.to_data(),
+                f.to_data(),
+                "state column {col_idx} differs between tournament and \
+                 pre-ordered fast path"
+            );
+        }
+        Ok(())
+    }
+
+    fn int64_values(arr: &ArrayRef) -> Vec<Option<i64>> {
+        let arr = arr.as_primitive::<Int64Type>();
+        (0..arr.len())
+            .map(|i| arr.is_valid(i).then(|| arr.value(i)))
+            .collect()
+    }
+
+    /// LAST_VALUE, ascending, groups interleaved (PartiallySorted-style shape:
+    /// each group's own rows are ordered even though groups mix), duplicate
+    /// `o1` broken by `o2`, one group appearing only in the second batch.
+    #[test]
+    fn pre_ordered_last_value_matches_tournament() -> Result<()> {
+        let batches: Vec<PreOrderedBatch> = vec![
+            (
+                vo_batch(
+                    &[Some(10), Some(20), Some(11), Some(12), Some(21)],
+                    &[1, 1, 2, 2, 3],
+                    &[1, 1, 1, 2, 1],
+                ),
+                vec![0, 1, 0, 0, 1],
+                None,
+                2,
+            ),
+            (
+                vo_batch(&[Some(13), Some(30), Some(22)], &[4, 1, 5], &[1, 1, 1]),
+                vec![0, 2, 1],
+                None,
+                3,
+            ),
+        ];
+        assert_matches_tournament(false, false, false, &batches)?;
+
+        // Explicit expected values, so both paths being wrong together is
+        // caught too: group 0 last row is (o=4,1)->13, group 1 is (5,1)->22,
+        // group 2 only saw (1,1)->30.
+        let mut fast = grouped_acc(false, false, true, false)?;
+        for (cols, gids, filter, total) in &batches {
+            fast.update_batch(cols, gids, filter.as_ref(), *total)?;
+        }
+        let out = fast.evaluate(EmitTo::All)?;
+        assert_eq!(int64_values(&out), vec![Some(13), Some(22), Some(30)]);
+        Ok(())
+    }
+
+    /// FIRST_VALUE, ascending: the first batch decides every group it saw;
+    /// later batches must not overwrite.
+    #[test]
+    fn pre_ordered_first_value_locks_after_first_qualifying_row() -> Result<()> {
+        let batches: Vec<PreOrderedBatch> = vec![
+            (
+                vo_batch(&[Some(10), Some(20)], &[1, 1], &[1, 2]),
+                vec![0, 1],
+                None,
+                2,
+            ),
+            (
+                vo_batch(&[Some(99), Some(98), Some(30)], &[2, 3, 1], &[1, 1, 1]),
+                vec![0, 1, 2],
+                None,
+                3,
+            ),
+        ];
+        assert_matches_tournament(true, false, false, &batches)?;
+
+        let mut fast = grouped_acc(true, false, true, false)?;
+        for (cols, gids, filter, total) in &batches {
+            fast.update_batch(cols, gids, filter.as_ref(), *total)?;
+        }
+        let out = fast.evaluate(EmitTo::All)?;
+        assert_eq!(int64_values(&out), vec![Some(10), Some(20), Some(30)]);
+        Ok(())
+    }
+
+    /// Descending ordering requirement with input laid out descending: the
+    /// physically-last row is still the requirement's extreme.
+    #[test]
+    fn pre_ordered_descending_matches_tournament() -> Result<()> {
+        let batches: Vec<PreOrderedBatch> = vec![
+            (
+                vo_batch(
+                    &[Some(1), Some(2), Some(3), Some(4)],
+                    &[9, 9, 7, 5],
+                    &[5, 3, 1, 1],
+                ),
+                vec![0, 0, 1, 0],
+                None,
+                2,
+            ),
+            (
+                vo_batch(&[Some(5), Some(6)], &[4, 2], &[9, 9]),
+                vec![0, 1],
+                None,
+                2,
+            ),
+        ];
+        assert_matches_tournament(false, false, true, &batches)?;
+        assert_matches_tournament(true, false, true, &batches)?;
+        Ok(())
+    }
+
+    /// FILTER interaction: a row with a `null` predicate is excluded; a group
+    /// whose rows are all filtered in the last batch keeps its earlier winner;
+    /// a group filtered everywhere stays unset (emits null + is_set=false).
+    #[test]
+    fn pre_ordered_respects_filter() -> Result<()> {
+        let batches: Vec<PreOrderedBatch> = vec![
+            (
+                vo_batch(
+                    &[Some(10), Some(11), Some(20), Some(30)],
+                    &[1, 2, 1, 1],
+                    &[1, 1, 1, 1],
+                ),
+                vec![0, 0, 1, 2],
+                Some(BooleanArray::from(vec![
+                    Some(true),
+                    Some(true),
+                    Some(true),
+                    Some(false),
+                ])),
+                3,
+            ),
+            (
+                vo_batch(&[Some(12), Some(21), Some(31)], &[3, 2, 2], &[1, 1, 1]),
+                vec![0, 1, 2],
+                Some(BooleanArray::from(vec![Some(false), None, Some(false)])),
+                3,
+            ),
+        ];
+        assert_matches_tournament(false, false, false, &batches)?;
+
+        let mut fast = grouped_acc(false, false, true, false)?;
+        for (cols, gids, filter, total) in &batches {
+            fast.update_batch(cols, gids, filter.as_ref(), *total)?;
+        }
+        let state = fast.state(EmitTo::All)?;
+        // value column: group 0 keeps batch-1 winner 11 (batch 2 filtered),
+        // group 1 keeps 20 (null predicate excluded), group 2 never set.
+        assert_eq!(int64_values(&state[0]), vec![Some(11), Some(20), None]);
+        let is_sets = state.last().unwrap().as_boolean();
+        assert_eq!(
+            (0..3).map(|i| is_sets.value(i)).collect::<Vec<_>>(),
+            vec![true, true, false]
+        );
+        Ok(())
+    }
+
+    /// IGNORE NULLS: null values are skipped, so the winner is the last
+    /// non-null row; an all-null group stays unset.
+    #[test]
+    fn pre_ordered_respects_ignore_nulls() -> Result<()> {
+        let batches: Vec<PreOrderedBatch> = vec![
+            (
+                vo_batch(
+                    &[Some(10), None, None, Some(20)],
+                    &[1, 2, 1, 1],
+                    &[1, 1, 1, 2],
+                ),
+                vec![0, 0, 1, 1],
+                None,
+                2,
+            ),
+            (
+                vo_batch(&[None, None], &[3, 2], &[1, 1]),
+                vec![0, 2],
+                None,
+                3,
+            ),
+        ];
+        assert_matches_tournament(false, true, false, &batches)?;
+        assert_matches_tournament(true, true, false, &batches)?;
+
+        let mut fast = grouped_acc(false, true, true, false)?;
+        for (cols, gids, filter, total) in &batches {
+            fast.update_batch(cols, gids, filter.as_ref(), *total)?;
+        }
+        let state = fast.state(EmitTo::All)?;
+        assert_eq!(int64_values(&state[0]), vec![Some(10), Some(20), None]);
+        Ok(())
+    }
+
+    /// Ties: among rows with equal ordering keys the fast path picks the
+    /// physically last row for LAST_VALUE / first row for FIRST_VALUE,
+    /// matching the single-group pre-ordered accumulator. (The tournament
+    /// path keeps the first-seen row of a tie, so the two paths may pick
+    /// different — equally valid — rows; this test pins the fast path's
+    /// choice rather than asserting equivalence.)
+    #[test]
+    fn pre_ordered_tie_picks_positional_extreme() -> Result<()> {
+        let cols = vo_batch(&[Some(10), Some(11), Some(12)], &[1, 1, 1], &[1, 1, 1]);
+        let mut last = grouped_acc(false, false, true, false)?;
+        last.update_batch(&cols, &[0, 0, 0], None, 1)?;
+        assert_eq!(int64_values(&last.evaluate(EmitTo::All)?), vec![Some(12)]);
+
+        let mut first = grouped_acc(true, false, true, false)?;
+        first.update_batch(&cols, &[0, 0, 0], None, 1)?;
+        assert_eq!(int64_values(&first.evaluate(EmitTo::All)?), vec![Some(10)]);
+        Ok(())
+    }
+
+    /// RESPECT NULLS (the default): a null value can itself be the winner;
+    /// the fast path must not treat value-nulls specially.
+    #[test]
+    fn pre_ordered_respect_nulls_null_can_win() -> Result<()> {
+        let batches: Vec<PreOrderedBatch> = vec![
+            (
+                vo_batch(&[Some(10), None], &[1, 2], &[1, 1]),
+                vec![0, 0],
+                None,
+                1,
+            ),
+            (
+                vo_batch(&[None, Some(7)], &[1, 2], &[1, 1]),
+                vec![1, 1],
+                None,
+                2,
+            ),
+        ];
+        assert_matches_tournament(false, false, false, &batches)?;
+        assert_matches_tournament(true, false, false, &batches)?;
+
+        let mut fast = grouped_acc(false, false, true, false)?;
+        for (cols, gids, filter, total) in &batches {
+            fast.update_batch(cols, gids, filter.as_ref(), *total)?;
+        }
+        // Group 0's last row is the null; it wins under RESPECT NULLS.
+        let out = fast.evaluate(EmitTo::All)?;
+        assert_eq!(int64_values(&out), vec![None, Some(7)]);
+        Ok(())
+    }
+
+    /// Draining with `EmitTo::First(n)` mid-stream shifts group indices; the
+    /// fast path must stay in lockstep with the tournament path across the
+    /// shift.
+    #[test]
+    fn pre_ordered_survives_partial_emit() -> Result<()> {
+        let mut slow = grouped_acc(false, false, false, false)?;
+        let mut fast = grouped_acc(false, false, true, false)?;
+
+        let b1 = vo_batch(&[Some(10), Some(20), Some(30)], &[1, 1, 1], &[1, 1, 1]);
+        for acc in [&mut slow, &mut fast] {
+            acc.update_batch(&b1, &[0, 1, 2], None, 3)?;
+        }
+
+        // Emit the first two groups; group 2 shifts down to index 0.
+        let s1 = slow.state(EmitTo::First(2))?;
+        let f1 = fast.state(EmitTo::First(2))?;
+        for (s, f) in s1.iter().zip(f1.iter()) {
+            assert_eq!(s.to_data(), f.to_data());
+        }
+        assert_eq!(int64_values(&f1[0]), vec![Some(10), Some(20)]);
+
+        // Keep feeding the surviving group (now index 0) plus a new group.
+        let b2 = vo_batch(&[Some(31), Some(40)], &[2, 1], &[1, 1]);
+        for acc in [&mut slow, &mut fast] {
+            acc.update_batch(&b2, &[0, 1], None, 2)?;
+        }
+        let s2 = slow.state(EmitTo::All)?;
+        let f2 = fast.state(EmitTo::All)?;
+        for (s, f) in s2.iter().zip(f2.iter()) {
+            assert_eq!(s.to_data(), f.to_data());
+        }
+        assert_eq!(int64_values(&f2[0]), vec![Some(31), Some(40)]);
+        Ok(())
+    }
+
+    /// End-to-end partial→final: states produced by the fast path carry the
+    /// winning ordering values, so a (never pre-ordered) final-stage
+    /// accumulator merging two partitions in either arrival order picks the
+    /// true global extreme.
+    #[test]
+    fn pre_ordered_partial_states_merge_correctly() -> Result<()> {
+        let make_partition_state = |o1: i64, val: i64| -> Result<Vec<ArrayRef>> {
+            let mut partial = grouped_acc(false, false, true, false)?;
+            partial.update_batch(&vo_batch(&[Some(val)], &[o1], &[1]), &[0], None, 1)?;
+            partial.state(EmitTo::All)
+        };
+        // Partition A saw the later row (o1=9), partition B the earlier one.
+        let a = make_partition_state(9, 900)?;
+        let b = make_partition_state(3, 300)?;
+
+        for order in [[&a, &b], [&b, &a]] {
+            let mut final_acc = grouped_acc(false, false, false, false)?;
+            for state in order {
+                final_acc.merge_batch(state, &[0], 1)?;
+            }
+            let out = final_acc.evaluate(EmitTo::All)?;
+            assert_eq!(int64_values(&out), vec![Some(900)]);
+        }
+        Ok(())
+    }
+
+    /// Winner collection and scoreboard reset must scale with the groups a
+    /// batch touches, not with `total_num_groups`. Correctness side of that:
+    /// sparse high group indices against a large total still resolve.
+    #[test]
+    fn pre_ordered_sparse_groups_large_total() -> Result<()> {
+        let total = 100_000;
+        let mut fast = grouped_acc(false, false, true, false)?;
+        fast.update_batch(
+            &vo_batch(&[Some(10), Some(20)], &[1, 1], &[1, 1]),
+            &[7, 42_000],
+            None,
+            total,
+        )?;
+        fast.update_batch(
+            &vo_batch(&[Some(11), Some(30)], &[2, 1], &[1, 1]),
+            &[7, 99_999],
+            None,
+            total,
+        )?;
+        let out = fast.evaluate(EmitTo::All)?;
+        let vals = int64_values(&out);
+        assert_eq!(vals.len(), total);
+        assert_eq!(vals[7], Some(11));
+        assert_eq!(vals[42_000], Some(20));
+        assert_eq!(vals[99_999], Some(30));
+        assert_eq!(vals[0], None);
+        Ok(())
+    }
+
+    /// The aggregation stream calls `merge_batch` on the same accumulators
+    /// when replaying spilled state, and the tournament helper leaves its
+    /// winners' scoreboard bits set. A later pre-ordered `update_batch` must
+    /// not mistake those for "touched in this batch", or a merged group's
+    /// newer row is dropped from the winner list.
+    #[test]
+    fn pre_ordered_update_after_merge_interleave() -> Result<()> {
+        let merged_state = {
+            let mut partial = grouped_acc(false, false, true, false)?;
+            partial.update_batch(&vo_batch(&[Some(100)], &[1], &[1]), &[0], None, 1)?;
+            partial.state(EmitTo::All)?
+        };
+
+        let mut acc = grouped_acc(false, false, true, false)?;
+        acc.merge_batch(&merged_state, &[0], 1)?;
+        // A newer row (higher ordering key) for the merged group arrives
+        // through the fast path afterwards.
+        acc.update_batch(&vo_batch(&[Some(500)], &[5], &[1]), &[0], None, 1)?;
+        let out = acc.evaluate(EmitTo::All)?;
+        assert_eq!(int64_values(&out), vec![Some(500)]);
         Ok(())
     }
 }
