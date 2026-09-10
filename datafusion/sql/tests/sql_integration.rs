@@ -3805,6 +3805,39 @@ fn plan_merge_into_rejects_invalid_actions_and_structure(
     );
 }
 
+/// A timezone-naive input is read as a wall clock in the target timezone, so it
+/// lowers to a plain `CAST` and preserves the input's `TimeUnit`.
+#[test]
+fn plan_at_time_zone_on_naive_timestamp() {
+    let plan =
+        logical_plan("SELECT birth_date AT TIME ZONE 'America/Denver' FROM person")
+            .unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: CAST(person.birth_date AS Timestamp(ns, "America/Denver"))
+      TableScan: person
+    "#
+    );
+}
+
+/// A timezone-aware input needs `to_local_time`, which is provided by
+/// `datafusion-functions`' `DatetimeFunctionPlanner`. The mock context provider
+/// used by these tests does not register it, so planning must fail with a clear
+/// message rather than silently falling back to the naive lowering.
+#[test]
+fn plan_at_time_zone_on_tz_aware_timestamp_without_planner() {
+    let err = logical_plan(
+        "SELECT (birth_date AT TIME ZONE 'UTC') AT TIME ZONE 'America/Denver' FROM person",
+    )
+    .unwrap_err();
+    assert!(
+        err.strip_backtrace()
+            .contains("AT TIME ZONE on a timezone-aware timestamp"),
+        "unexpected error: {err}"
+    );
+}
+
 fn logical_plan(sql: &str) -> Result<LogicalPlan> {
     logical_plan_with_options(sql, ParserOptions::default())
 }
