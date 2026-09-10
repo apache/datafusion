@@ -678,8 +678,8 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 <section id="bool-or">
 <h3><code class="docutils literal notranslate"><span class="pre">bool_or</span></code><a class="headerlink" href="#bool-or" title="Link to this heading">#</a></h3>
-<p>Returns true if all non-null input values are true, otherwise false.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">bool_and</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+<p>Returns true if any non-null input value is true, otherwise false.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">bool_or</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id10">
@@ -690,9 +690,9 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 <section id="id11">
 <h4>Example<a class="headerlink" href="#id11" title="Link to this heading">#</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">bool_and</span><span class="p">(</span><span class="k">column_name</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="p">;</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">bool_or</span><span class="p">(</span><span class="k">column_name</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">----------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">bool_and</span><span class="p">(</span><span class="k">column_name</span><span class="p">)</span><span class="w">      </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">bool_or</span><span class="p">(</span><span class="k">column_name</span><span class="p">)</span><span class="w">       </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">----------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                       </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">----------------------------+</span>
@@ -1095,8 +1095,8 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 <section id="covar-pop">
 <h3><code class="docutils literal notranslate"><span class="pre">covar_pop</span></code><a class="headerlink" href="#covar-pop" title="Link to this heading">#</a></h3>
-<p>Returns the sample covariance of a set of number pairs.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">covar_samp</span><span class="p">(</span><span class="n">expression1</span><span class="p">,</span><span class="w"> </span><span class="n">expression2</span><span class="p">)</span>
+<p>Returns the population covariance of a set of number pairs.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">covar_pop</span><span class="p">(</span><span class="n">expression1</span><span class="p">,</span><span class="w"> </span><span class="n">expression2</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id39">
@@ -1108,11 +1108,11 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 <section id="id40">
 <h4>Example<a class="headerlink" href="#id40" title="Link to this heading">#</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">covar_samp</span><span class="p">(</span><span class="n">column1</span><span class="p">,</span><span class="w"> </span><span class="n">column2</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="p">;</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">covar_pop</span><span class="p">(</span><span class="n">column1</span><span class="p">,</span><span class="w"> </span><span class="n">column2</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">-----------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">covar_samp</span><span class="p">(</span><span class="n">column1</span><span class="p">,</span><span class="w"> </span><span class="n">column2</span><span class="p">)</span><span class="w">      </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">covar_pop</span><span class="p">(</span><span class="n">column1</span><span class="p">,</span><span class="w"> </span><span class="n">column2</span><span class="p">)</span><span class="w">       </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">-----------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="mi">8</span><span class="p">.</span><span class="mi">25</span><span class="w">                              </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">7</span><span class="p">.</span><span class="mi">63333333333</span><span class="w">                     </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">-----------------------------------+</span>
 </pre></div>
 </div>
