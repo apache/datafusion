@@ -15,17 +15,32 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Hash aggregation
+//! Legacy hash aggregation.
+//!
+//! # Deprecation
+//!
+//! [`GroupedHashAggregateStream`] handled every grouped execution path before
+//! they were split into dedicated streams. It is no longer planned by default:
+//! it is only reachable by setting
+//! `datafusion.execution.enable_migration_aggregate` to `false`. It is kept as
+//! a fallback in case of major bugs in the new streams, and will be deleted
+//! after the 56.0.0 release together with that option.
+//!
+//! New features and improvements should go into the dedicated streams instead.
+//!
+//! See issue for details: <https://github.com/apache/datafusion/issues/22710>
 
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
 
+use super::aggregate_hash_table::accumulator_phases;
 use super::order::GroupOrdering;
 use super::skip_partial::SkipAggregationProbe;
 use super::{AggregateExec, format_human_display};
 use crate::aggregates::group_values::{
-    AggregateArgumentMetrics, GroupByMetrics, GroupValues, new_group_values,
+    AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
+    GroupByMetrics, GroupValues, new_group_values,
 };
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
@@ -57,7 +72,6 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 
 use crate::sorts::IncrementalSortIterator;
-use datafusion_common::instant::Instant;
 use datafusion_common::utils::memory::get_record_batch_memory_size;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
@@ -135,15 +149,8 @@ enum OutOfMemoryMode {
 
 /// HashTable based Grouping Aggregator
 ///
-/// # Development Note
-///
-/// This implementation is being incrementally refactored. See the tracking issue
-/// for details.
-///
-/// New features and improvements should go directly into the new implementation.
-/// Please coordinate through the tracking issue.
-///
-/// Issue: <https://github.com/apache/datafusion/issues/22710>
+/// This is the legacy implementation. See the [module documentation](self) for
+/// the deprecation schedule.
 ///
 /// # Design Goals
 ///
@@ -378,6 +385,9 @@ pub(crate) struct GroupedHashAggregateStream {
     /// Per-aggregate timing metrics for evaluating aggregate arguments.
     aggregate_argument_metrics: AggregateArgumentMetrics,
 
+    /// Per-aggregate timing metrics for accumulator phases.
+    aggregate_accumulator_metrics: AggregateAccumulatorMetrics,
+
     /// Reduction factor metric, calculated as `output_rows/input_rows` (only for partial aggregation)
     reduction_factor: Option<metrics::RatioMetrics>,
 }
@@ -398,12 +408,21 @@ impl GroupedHashAggregateStream {
         let input = agg.input.execute(partition, Arc::clone(context))?;
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let group_by_metrics = GroupByMetrics::new(&agg.metrics, partition);
+        let aggregate_labels = agg
+            .aggr_expr
+            .iter()
+            .map(|agg_expr| aggregate_metric_label(agg_expr))
+            .collect::<Vec<_>>();
         let aggregate_argument_metrics = AggregateArgumentMetrics::new(
             &agg.metrics,
             partition,
-            agg.aggr_expr
-                .iter()
-                .map(|agg_expr| aggregate_metric_label(agg_expr)),
+            aggregate_labels.iter().cloned(),
+        );
+        let aggregate_accumulator_metrics = AggregateAccumulatorMetrics::new(
+            &agg.metrics,
+            partition,
+            aggregate_labels,
+            accumulator_phases(&agg.mode),
         );
 
         let timer = baseline_metrics.elapsed_compute().timer();
@@ -615,6 +634,7 @@ impl GroupedHashAggregateStream {
             baseline_metrics,
             group_by_metrics,
             aggregate_argument_metrics,
+            aggregate_accumulator_metrics,
             batch_size,
             group_ordering,
             input_done: false,
@@ -699,7 +719,7 @@ impl Stream for GroupedHashAggregateStream {
                                 if let Some(batch) = self.emit(to_emit, false)? {
                                     self.exec_state =
                                         ExecutionState::ProducingOutput(batch);
-                                };
+                                }
                                 // make sure the exec_state just set is not overwritten below
                                 break 'reading_input;
                             }
@@ -854,109 +874,109 @@ impl RecordBatchStream for GroupedHashAggregateStream {
 impl GroupedHashAggregateStream {
     /// Perform group-by aggregation for the given [`RecordBatch`].
     fn group_aggregate_batch(&mut self, batch: &RecordBatch) -> Result<()> {
-        // Evaluate the grouping expressions
-        let group_by_values = if self.spill_state.is_stream_merging {
-            evaluate_group_by(&self.spill_state.merging_group_by, batch)?
-        } else {
-            evaluate_group_by(&self.group_by, batch)?
-        };
+        let is_stream_merging = self.spill_state.is_stream_merging;
 
-        // Only create the timer if there are actual aggregate arguments to evaluate
-        let timer = match (
-            self.spill_state.is_stream_merging,
-            self.spill_state.merging_aggregate_arguments.is_empty(),
-            self.aggregate_arguments.is_empty(),
-        ) {
-            (true, false, _) | (false, _, false) => {
-                Some(self.group_by_metrics.aggregate_arguments_time.timer())
+        // Evaluate the grouping expressions; interning happens below in the
+        // same group-key-preparation phase.
+        let group_by_values = self.group_by_metrics.time_group_key_preparation(|| {
+            if is_stream_merging {
+                evaluate_group_by(&self.spill_state.merging_group_by, batch)
+            } else {
+                evaluate_group_by(&self.group_by, batch)
             }
-            _ => None,
-        };
+        })?;
 
-        // Evaluate the aggregation expressions.
-        let aggregate_arguments = if self.spill_state.is_stream_merging {
+        // Evaluate aggregate arguments and filters together. Per-aggregate
+        // argument timers remain limited to their argument expressions because
+        // filters are evaluated collectively here.
+        let aggregate_arguments = if is_stream_merging {
             &self.spill_state.merging_aggregate_arguments
         } else {
             &self.aggregate_arguments
         };
-        let input_values = aggregate_arguments
-            .iter()
-            .enumerate()
-            .map(|(idx, expr)| {
-                self.aggregate_argument_metrics
-                    .time(idx, || evaluate_expressions_to_arrays(expr, batch))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        drop(timer);
-
-        // Evaluate the filter expressions, if any, against the inputs
-        let filter_values = if self.spill_state.is_stream_merging {
-            let filter_expressions = vec![None; self.accumulators.len()];
-            evaluate_optional(&filter_expressions, batch)?
-        } else {
-            evaluate_optional(&self.filter_expressions, batch)?
-        };
+        let (input_values, filter_values) =
+            self.group_by_metrics.time_aggregate_arguments(|| {
+                let input_values = aggregate_arguments
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, expr)| {
+                        self.aggregate_argument_metrics
+                            .time(idx, || evaluate_expressions_to_arrays(expr, batch))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let filter_values = if is_stream_merging {
+                    let filter_expressions = vec![None; self.accumulators.len()];
+                    evaluate_optional(&filter_expressions, batch)?
+                } else {
+                    evaluate_optional(&self.filter_expressions, batch)?
+                };
+                Ok::<_, DataFusionError>((input_values, filter_values))
+            })?;
 
         for group_values in &group_by_values {
-            let groups_start_time = Instant::now();
+            // Calculate group indices and update ordering information.
+            let total_num_groups =
+                self.group_by_metrics.time_group_key_preparation(|| {
+                    let starting_num_groups = self.group_values.len();
+                    self.group_values
+                        .intern(group_values, &mut self.current_group_indices)?;
+                    let group_indices = &self.current_group_indices;
+                    let total_num_groups = self.group_values.len();
+                    if total_num_groups > starting_num_groups {
+                        self.group_ordering.new_groups(
+                            group_values,
+                            group_indices,
+                            total_num_groups,
+                        )?;
+                    }
+                    Ok::<_, DataFusionError>(total_num_groups)
+                })?;
 
-            // calculate the group indices for each input row
-            let starting_num_groups = self.group_values.len();
-            self.group_values
-                .intern(group_values, &mut self.current_group_indices)?;
-            let group_indices = &self.current_group_indices;
+            // Convert filters before timing accumulator calls. The timer covers
+            // one interval across all accumulator operations, rather than a
+            // prefix sum charged once per aggregate expression.
+            let filters = filter_values
+                .iter()
+                .map(|filter| filter.as_ref().map(|filter| filter.as_boolean()))
+                .collect::<Vec<_>>();
+            self.group_by_metrics.time_aggregation(|| {
+                let group_indices = &self.current_group_indices;
+                let t = self
+                    .accumulators
+                    .iter_mut()
+                    .zip(input_values.iter())
+                    .zip(filters.iter());
 
-            // Update ordering information if necessary
-            let total_num_groups = self.group_values.len();
-            if total_num_groups > starting_num_groups {
-                self.group_ordering.new_groups(
-                    group_values,
-                    group_indices,
-                    total_num_groups,
-                )?;
-            }
+                for (idx, ((acc, values), opt_filter)) in t.enumerate() {
+                    if self.mode.input_mode() == AggregateInputMode::Raw && !is_stream_merging
+                    {
+                        self.aggregate_accumulator_metrics.time(
+                            idx,
+                            AccumulatorPhase::Update,
+                            || {
+                                acc.update_batch(
+                                    values,
+                                    group_indices,
+                                    *opt_filter,
+                                    total_num_groups,
+                                )
+                            },
+                        )?;
+                    } else {
+                        assert_or_internal_err!(
+                            opt_filter.is_none(),
+                            "aggregate filter should be applied in partial stage, there should be no filter in final stage"
+                        );
 
-            // Use this instant for both measurements to save a syscall
-            let agg_start_time = Instant::now();
-            self.group_by_metrics
-                .time_calculating_group_ids
-                .add_duration(agg_start_time - groups_start_time);
-
-            // Gather the inputs to call the actual accumulator
-            let t = self
-                .accumulators
-                .iter_mut()
-                .zip(input_values.iter())
-                .zip(filter_values.iter());
-
-            for ((acc, values), opt_filter) in t {
-                let opt_filter = opt_filter.as_ref().map(|filter| filter.as_boolean());
-
-                // Call the appropriate method on each aggregator with
-                // the entire input row and the relevant group indexes
-                if self.mode.input_mode() == AggregateInputMode::Raw
-                    && !self.spill_state.is_stream_merging
-                {
-                    acc.update_batch(
-                        values,
-                        group_indices,
-                        opt_filter,
-                        total_num_groups,
-                    )?;
-                } else {
-                    assert_or_internal_err!(
-                        opt_filter.is_none(),
-                        "aggregate filter should be applied in partial stage, there should be no filter in final stage"
-                    );
-
-                    // if aggregation is over intermediate states,
-                    // use merge
-                    acc.merge_batch(values, group_indices, total_num_groups)?;
+                        self.aggregate_accumulator_metrics.time(
+                            idx,
+                            AccumulatorPhase::Merge,
+                            || acc.merge_batch(values, group_indices, total_num_groups),
+                        )?;
+                    }
                 }
-                self.group_by_metrics
-                    .aggregation_time
-                    .add_elapsed(agg_start_time);
-            }
+                Ok::<(), DataFusionError>(())
+            })?;
         }
 
         Ok(())
@@ -1051,23 +1071,31 @@ impl GroupedHashAggregateStream {
             return Ok(None);
         }
 
-        let timer = self.group_by_metrics.emitting_time.timer();
-        let mut output = self.group_values.emit(emit_to)?;
-        if let EmitTo::First(n) = emit_to {
-            self.group_ordering.remove_groups(n);
-        }
-
-        // Next output each aggregate value
-        for acc in self.accumulators.iter_mut() {
-            if self.mode.output_mode() == AggregateOutputMode::Final && !spilling {
-                output.push(acc.evaluate(emit_to)?)
-            } else {
-                // Output partial state: either because we're in a non-final mode,
-                // or because we're spilling and will merge/re-evaluate later.
-                output.extend(acc.state(emit_to)?)
+        let group_by_metrics = self.group_by_metrics.clone();
+        let output = group_by_metrics.time_emitting(|| {
+            let mut output = self.group_values.emit(emit_to)?;
+            if let EmitTo::First(n) = emit_to {
+                self.group_ordering.remove_groups(n);
             }
-        }
-        drop(timer);
+
+            // Next output each aggregate value.
+            for (idx, acc) in self.accumulators.iter_mut().enumerate() {
+                if self.mode.output_mode() == AggregateOutputMode::Final && !spilling {
+                    output.push(self.aggregate_accumulator_metrics.time(
+                        idx,
+                        AccumulatorPhase::Evaluate,
+                        || acc.evaluate(emit_to),
+                    )?)
+                } else {
+                    output.extend(self.aggregate_accumulator_metrics.time(
+                        idx,
+                        AccumulatorPhase::State,
+                        || acc.state(emit_to),
+                    )?)
+                }
+            }
+            Ok::<_, DataFusionError>(output)
+        })?;
 
         // emit reduces the memory usage. Ignore Err from update_memory_reservation. Even if it is
         // over the target memory size after emission, we can emit again rather than returning Err.
@@ -1093,47 +1121,50 @@ impl GroupedHashAggregateStream {
             return Ok(());
         }
 
-        let max_ordinal = max_duplicate_ordinal(self.group_by.groups());
-        let mut ordinals: std::collections::HashMap<&[bool], usize> =
-            std::collections::HashMap::new();
-        let group_schema = self.group_by.group_schema(&self.input_schema)?;
-        let n_expr = self.group_by.expr().len();
-        let mut any_interned = false;
+        let group_by_metrics = self.group_by_metrics.clone();
+        let any_interned = group_by_metrics.time_group_key_preparation(|| {
+            let max_ordinal = max_duplicate_ordinal(self.group_by.groups());
+            let mut ordinals: std::collections::HashMap<&[bool], usize> =
+                std::collections::HashMap::new();
+            let group_schema = self.group_by.group_schema(&self.input_schema)?;
+            let n_expr = self.group_by.expr().len();
+            let mut any_interned = false;
 
-        for group in self.group_by.groups() {
-            let ordinal = {
-                let entry = ordinals.entry(group.as_slice()).or_insert(0);
-                let o = *entry;
-                *entry += 1;
-                o
-            };
+            for group in self.group_by.groups() {
+                let ordinal = {
+                    let entry = ordinals.entry(group.as_slice()).or_insert(0);
+                    let o = *entry;
+                    *entry += 1;
+                    o
+                };
 
-            if !group.iter().all(|&is_null| is_null) {
-                continue;
+                if !group.iter().all(|&is_null| is_null) {
+                    continue;
+                }
+
+                let mut cols: Vec<ArrayRef> = group_schema
+                    .fields()
+                    .iter()
+                    .take(n_expr)
+                    .map(|f| new_null_array(f.data_type(), 1))
+                    .collect();
+                cols.push(group_id_array(group, ordinal, max_ordinal, 1)?);
+
+                let starting_groups = self.group_values.len();
+                self.group_values
+                    .intern(&cols, &mut self.current_group_indices)?;
+                let total_groups = self.group_values.len();
+                if total_groups > starting_groups {
+                    self.group_ordering.new_groups(
+                        &cols,
+                        &self.current_group_indices,
+                        total_groups,
+                    )?;
+                }
+                any_interned = true;
             }
-
-            // Build the group key: one NULL per group-by expression, then the grouping_id.
-            let mut cols: Vec<ArrayRef> = group_schema
-                .fields()
-                .iter()
-                .take(n_expr)
-                .map(|f| new_null_array(f.data_type(), 1))
-                .collect();
-            cols.push(group_id_array(group, ordinal, max_ordinal, 1)?);
-
-            let starting_groups = self.group_values.len();
-            self.group_values
-                .intern(&cols, &mut self.current_group_indices)?;
-            let total_groups = self.group_values.len();
-            if total_groups > starting_groups {
-                self.group_ordering.new_groups(
-                    &cols,
-                    &self.current_group_indices,
-                    total_groups,
-                )?;
-            }
-            any_interned = true;
-        }
+            Ok::<_, DataFusionError>(any_interned)
+        })?;
 
         if any_interned {
             // Prime each accumulator for the registered group count with no data.
@@ -1178,9 +1209,28 @@ impl GroupedHashAggregateStream {
                 })
                 .collect::<Result<Vec<_>>>()?;
             let false_filter = BooleanArray::from(vec![false]);
-            for (acc, args) in self.accumulators.iter_mut().zip(null_args.iter()) {
-                acc.update_batch(args, &[0], Some(&false_filter), total_groups)?;
-            }
+            group_by_metrics.time_aggregation(|| {
+                for (idx, (acc, args)) in self
+                    .accumulators
+                    .iter_mut()
+                    .zip(null_args.iter())
+                    .enumerate()
+                {
+                    self.aggregate_accumulator_metrics.time(
+                        idx,
+                        AccumulatorPhase::Update,
+                        || {
+                            acc.update_batch(
+                                args,
+                                &[0],
+                                Some(&false_filter),
+                                total_groups,
+                            )
+                        },
+                    )?;
+                }
+                Ok::<(), DataFusionError>(())
+            })?;
         }
 
         Ok(())
@@ -1329,15 +1379,16 @@ impl GroupedHashAggregateStream {
 
             // Recreate `group_values` for streaming merge so group ids are assigned
             // in first-seen order, as required by `GroupOrderingFull`.
-            // The pre-spill multi-column collector may use `vectorized_intern`, which
-            // can assign new group ids out of input order under hash collisions.
+            // The pre-spill collector may use `vectorized_intern`, which can assign
+            // new group ids out of input order under hash collisions. That is the
+            // multi-column collector, which also serves a single group column
+            // whose type has no specialized single-column collector (for example
+            // `Struct` or `Map`), so recreate unconditionally.
             let group_schema = self
                 .spill_state
                 .merging_group_by
                 .group_schema(&self.spill_state.spill_schema)?;
-            if group_schema.fields().len() > 1 {
-                self.group_values = new_group_values(group_schema, &self.group_ordering)?;
-            }
+            self.group_values = new_group_values(group_schema, &self.group_ordering)?;
 
             // Use `OutOfMemoryMode::ReportError` from this point on
             // to ensure we don't spill the spilled data to disk again.
@@ -1360,7 +1411,7 @@ impl GroupedHashAggregateStream {
             // currently spilling is not supported for Partial aggregation
             assert!(self.spill_state.spills.is_empty());
             probe.update_state(input_rows, self.group_values.len());
-        };
+        }
     }
 
     /// In case the probe indicates that aggregation may be
@@ -1375,7 +1426,7 @@ impl GroupedHashAggregateStream {
             && let Some(batch) = self.emit(EmitTo::All, false)?
         {
             return Ok(Some(ExecutionState::ProducingOutput(batch)));
-        };
+        }
 
         Ok(None)
     }
@@ -1392,19 +1443,24 @@ impl GroupedHashAggregateStream {
 
     /// Transforms input batch to intermediate aggregate state, without grouping it
     fn transform_to_states(&self, batch: &RecordBatch) -> Result<RecordBatch> {
-        let mut group_values = evaluate_group_by(&self.group_by, batch)?;
-        let timer = self.group_by_metrics.aggregate_arguments_time.timer();
-        let input_values = self
-            .aggregate_arguments
-            .iter()
-            .enumerate()
-            .map(|(idx, expr)| {
-                self.aggregate_argument_metrics
-                    .time(idx, || evaluate_expressions_to_arrays(expr, batch))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        drop(timer);
-        let filter_values = evaluate_optional(&self.filter_expressions, batch)?;
+        let mut group_values = self
+            .group_by_metrics
+            .time_group_key_preparation(|| evaluate_group_by(&self.group_by, batch))?;
+
+        let (input_values, filter_values) =
+            self.group_by_metrics.time_aggregate_arguments(|| {
+                let input_values = self
+                    .aggregate_arguments
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, expr)| {
+                        self.aggregate_argument_metrics
+                            .time(idx, || evaluate_expressions_to_arrays(expr, batch))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let filter_values = evaluate_optional(&self.filter_expressions, batch)?;
+                Ok::<_, DataFusionError>((input_values, filter_values))
+            })?;
 
         assert_eq_or_internal_err!(
             group_values.len(),
@@ -1419,9 +1475,13 @@ impl GroupedHashAggregateStream {
             .zip(input_values.iter())
             .zip(filter_values.iter());
 
-        for ((acc, values), opt_filter) in iter {
+        for (idx, ((acc, values), opt_filter)) in iter.enumerate() {
             let opt_filter = opt_filter.as_ref().map(|filter| filter.as_boolean());
-            output.extend(acc.convert_to_state(values, opt_filter)?);
+            output.extend(self.aggregate_accumulator_metrics.time(
+                idx,
+                AccumulatorPhase::ConvertToState,
+                || acc.convert_to_state(values, opt_filter),
+            )?);
         }
 
         let states_batch = RecordBatch::try_new(self.schema(), output)?;

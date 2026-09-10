@@ -181,6 +181,10 @@ impl FilterExecBuilder {
 
     /// Build the FilterExec, computing properties once with all configured parameters
     pub fn build(self) -> Result<FilterExec> {
+        if self.batch_size == 0 {
+            return plan_err!("FilterExec: batch_size must be greater than 0");
+        }
+
         // Validate predicate type
         match self.predicate.data_type(self.input.schema().as_ref())? {
             DataType::Boolean => {}
@@ -282,6 +286,9 @@ impl FilterExec {
 
     /// Set the batch size
     pub fn with_batch_size(&self, batch_size: usize) -> Result<Self> {
+        if batch_size == 0 {
+            return plan_err!("FilterExec: batch_size must be greater than 0");
+        }
         Ok(Self {
             predicate: Arc::clone(&self.predicate),
             input: Arc::clone(&self.input),
@@ -858,6 +865,7 @@ impl ExecutionPlan for FilterExec {
         &self,
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_common::utils::usize_to_wire;
         use datafusion_proto_models::protobuf;
         // Destructure exhaustively (no `..`) so that adding a field to
         // `FilterExec` is a compile error here until it is either serialized or
@@ -876,6 +884,13 @@ impl ExecutionPlan for FilterExec {
         } = self;
         let input_node = ctx.encode_child(input)?;
         let expr = ctx.encode_expr(predicate)?;
+        if *batch_size == 0 {
+            return plan_err!("FilterExec: batch_size must be greater than 0");
+        }
+        let batch_size = usize_to_wire(*batch_size, "FilterExec", "batch_size")?;
+        let fetch = fetch
+            .map(|fetch| usize_to_wire(fetch, "FilterExec", "fetch"))
+            .transpose()?;
         // The identity projection `[0, 1, ..., num_fields - 1]` is the
         // canonical wire representation of a full projection, so `None` is
         // encoded that way (and decodes back to `None`).
@@ -894,8 +909,8 @@ impl ExecutionPlan for FilterExec {
                         expr: Some(expr),
                         default_filter_selectivity: *default_selectivity as u32,
                         projection,
-                        batch_size: *batch_size as u32,
-                        fetch: fetch.map(|f| f as u32),
+                        batch_size,
+                        fetch,
                     },
                 )),
             ),
@@ -916,6 +931,7 @@ impl FilterExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::utils::usize_from_wire;
         use datafusion_proto_models::protobuf;
         let filter_node = crate::expect_plan_variant!(
             node,
@@ -957,10 +973,18 @@ impl FilterExec {
         } else {
             Some(projection_vec)
         };
+        // Proto3's zero default means "use the builder default."
+        let batch_size = match *batch_size {
+            0 => FILTER_EXEC_DEFAULT_BATCH_SIZE,
+            batch_size => usize_from_wire(batch_size, "FilterExec", "batch_size")?,
+        };
+        let fetch = fetch
+            .map(|f| usize_from_wire(f, "FilterExec", "fetch"))
+            .transpose()?;
         let filter = FilterExecBuilder::new(predicate, input)
             .apply_projection(projection)?
-            .with_batch_size(*batch_size as usize)
-            .with_fetch(fetch.map(|f| f as usize))
+            .with_batch_size(batch_size)
+            .with_fetch(fetch)
             .build()?;
         match filter_selectivity {
             Ok(filter_selectivity) => Ok(Arc::new(
@@ -1519,6 +1543,22 @@ mod tests {
     use crate::test;
     use crate::test::exec::StatisticsExec;
     use arrow::datatypes::{Field, Schema, UnionFields, UnionMode};
+
+    #[test]
+    fn filter_rejects_zero_batch_size() -> Result<()> {
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
+        assert!(
+            FilterExecBuilder::new(lit(true), Arc::clone(&input))
+                .with_batch_size(0)
+                .build()
+                .is_err()
+        );
+
+        let filter = FilterExec::try_new(lit(true), input)?;
+        assert!(filter.with_batch_size(0).is_err());
+        Ok(())
+    }
 
     #[tokio::test]
     async fn collect_columns_predicates() -> Result<()> {

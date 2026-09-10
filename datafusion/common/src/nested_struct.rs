@@ -22,11 +22,12 @@ use arrow::{
         GenericListViewArray, MapArray, RecordBatch, StructArray, UInt64Array,
         UnionArray, downcast_integer, make_array, new_null_array,
     },
-    buffer::NullBuffer,
+    buffer::{NullBuffer, ScalarBuffer},
     compute::{CastOptions, can_cast_types, cast_with_options, take},
     datatypes::{
         DataType, DataType::Struct, Field, FieldRef, SchemaRef, UnionFields, UnionMode,
     },
+    error::ArrowError,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -35,13 +36,13 @@ use std::{
 
 /// Cast a struct column to match target struct fields, handling nested structs recursively.
 ///
-/// This function implements struct-to-struct casting with the assumption that **structs should
-/// always be allowed to cast to other structs**. However, the source column must already be
-/// a struct type - non-struct sources will result in an error.
+/// Structs can be cast to other structs as long as they share at least one field. The source column
+/// must already be a struct type - non-struct sources will result in an error.
 ///
 /// ## Field Matching Strategy
 /// - **By Name**: Source struct fields are matched to target fields by name (case-sensitive)
-/// - **No Positional Mapping**: Structs with no overlapping field names are rejected
+/// - **At Least One Mapped Field**: The source and target struct must share at least one field by name
+///   (unless the source struct has no fields at all)
 /// - **Type Adaptation**: When a matching field is found, it is recursively cast to the target field's type
 /// - **Missing Fields**: Target fields not present in the source are filled with null values
 /// - **Extra Fields**: Source fields not present in the target are ignored
@@ -74,7 +75,13 @@ fn cast_struct_column(
 
     if let Some(source_struct) = source_col.as_any().downcast_ref::<StructArray>() {
         let source_fields = source_struct.fields();
-        validate_struct_compatibility(source_fields, target_fields)?;
+        let mut mapped_source_fields: Vec<Option<usize>> =
+            Vec::with_capacity(target_fields.len());
+        map_struct_fields(
+            source_fields,
+            target_fields,
+            Some(&mut mapped_source_fields),
+        )?;
 
         if !source_col.is_empty() && source_col.null_count() == source_col.len() {
             return Ok(new_null_array(
@@ -88,14 +95,15 @@ fn cast_struct_column(
         let num_rows = source_col.len();
 
         // Iterate target fields and pick source child by name when present.
-        for target_child_field in target_fields.iter() {
+        for (source_child_opt, target_child_field) in
+            mapped_source_fields.iter().zip(target_fields.iter())
+        {
             fields.push(Arc::clone(target_child_field));
 
-            let source_child_opt =
-                source_struct.column_by_name(target_child_field.name());
-
             match source_child_opt {
-                Some(source_child_col) => {
+                Some(source_child_col_idx) => {
+                    let source_child_col = source_struct.column(*source_child_col_idx);
+
                     let adapted_child = cast_column(
                         source_child_col,
                         target_child_field.data_type(),
@@ -110,13 +118,19 @@ fn cast_struct_column(
                     arrays.push(adapted_child);
                 }
                 None => {
+                    // No need to check if `target_child_field` is nullable here
+                    // The call to `map_struct_fields` will have done that for us
                     arrays.push(new_null_array(target_child_field.data_type(), num_rows));
                 }
             }
         }
 
-        let struct_array =
-            StructArray::try_new(fields.into(), arrays, source_struct.nulls().cloned())?;
+        let struct_array = StructArray::try_new_with_length(
+            fields.into(),
+            arrays,
+            source_struct.nulls().cloned(),
+            source_struct.len(),
+        )?;
         Ok(Arc::new(struct_array))
     } else {
         // Return error if source is not a struct type
@@ -311,6 +325,18 @@ fn cast_list_column<O: arrow::array::OffsetSizeTrait>(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
     let source_list = source_col.as_list::<O>();
+    let offsets = source_list.value_offsets();
+    let needs_compaction = offsets[0] != O::usize_as(0)
+        || offsets[offsets.len() - 1].as_usize() != source_list.values().len()
+        || source_list
+            .offsets()
+            .has_non_empty_nulls(source_list.nulls());
+    let compacted_list = if needs_compaction {
+        Some(compact_list_values(source_list)?)
+    } else {
+        None
+    };
+    let source_list = compacted_list.as_ref().unwrap_or(source_list);
 
     let cast_values = cast_column(
         source_list.values(),
@@ -333,21 +359,125 @@ fn cast_list_view_column<O: arrow::array::OffsetSizeTrait>(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
     let source_list = source_col.as_list_view::<O>();
+    let compacted_values = compact_list_view_values(source_list)?;
+    let (offsets, sizes, values) = match compacted_values.as_ref() {
+        Some((offsets, sizes, values)) => (offsets, sizes, values),
+        None => (
+            source_list.offsets(),
+            source_list.sizes(),
+            source_list.values(),
+        ),
+    };
 
-    let cast_values = cast_column(
-        source_list.values(),
-        target_inner_field.data_type(),
-        cast_options,
-    )?;
+    let cast_values = cast_column(values, target_inner_field.data_type(), cast_options)?;
 
     let result = GenericListViewArray::<O>::try_new(
         Arc::clone(target_inner_field),
-        source_list.offsets().clone(),
-        source_list.sizes().clone(),
+        offsets.clone(),
+        sizes.clone(),
         cast_values,
         source_list.nulls().cloned(),
     )?;
     Ok(Arc::new(result))
+}
+
+fn compact_list_values<O: arrow::array::OffsetSizeTrait>(
+    list: &GenericListArray<O>,
+) -> Result<GenericListArray<O>> {
+    let indices = UInt64Array::from_iter_values(0..list.len() as u64);
+    Ok(take(list, &indices, None)?.as_list::<O>().clone())
+}
+
+type CompactedListView<O> = (ScalarBuffer<O>, ScalarBuffer<O>, ArrayRef);
+
+/// Selects the union of child ranges reachable from valid ListView rows.
+///
+/// ListView ranges may overlap or appear in any order, so selecting each row
+/// independently could duplicate a large number of child values. Merging the
+/// ranges first preserves sharing while excluding unreachable values.
+fn compact_list_view_values<O: arrow::array::OffsetSizeTrait>(
+    list: &GenericListViewArray<O>,
+) -> Result<Option<CompactedListView<O>>> {
+    let mut dense_end = 0;
+    let mut is_dense = true;
+    for row in 0..list.len() {
+        if list.is_null(row) || list.value_sizes()[row] == O::usize_as(0) {
+            continue;
+        }
+        let start = list.value_offsets()[row].as_usize();
+        if start != dense_end {
+            is_dense = false;
+            break;
+        }
+        dense_end = start + list.value_sizes()[row].as_usize();
+    }
+    if is_dense && dense_end == list.values().len() {
+        return Ok(None);
+    }
+
+    let mut ranges = list
+        .value_offsets()
+        .iter()
+        .zip(list.value_sizes())
+        .enumerate()
+        .filter(|(row, (_, size))| list.is_valid(*row) && **size != O::usize_as(0))
+        .map(|(_, (offset, size))| {
+            let start = offset.as_usize();
+            (start, start + size.as_usize())
+        })
+        .collect::<Vec<_>>();
+    ranges.sort_unstable_by_key(|range| range.0);
+
+    let mut merged_ranges: Vec<(usize, usize)> = Vec::with_capacity(ranges.len());
+    for (start, end) in ranges {
+        if let Some((_, previous_end)) = merged_ranges.last_mut()
+            && start <= *previous_end
+        {
+            *previous_end = (*previous_end).max(end);
+        } else {
+            merged_ranges.push((start, end));
+        }
+    }
+
+    if merged_ranges.as_slice() == [(0, list.values().len())] {
+        return Ok(None);
+    }
+
+    let mut range_bases = Vec::with_capacity(merged_ranges.len());
+    let mut selected_len = 0;
+    for &(start, end) in &merged_ranges {
+        range_bases.push(selected_len);
+        selected_len += end - start;
+    }
+
+    let mut offsets = Vec::with_capacity(list.len());
+    let mut sizes = Vec::with_capacity(list.len());
+    for row in 0..list.len() {
+        let size = list.value_sizes()[row];
+        if list.is_null(row) || size == O::usize_as(0) {
+            offsets.push(O::usize_as(0));
+            sizes.push(O::usize_as(0));
+            continue;
+        }
+
+        let source_offset = list.value_offsets()[row].as_usize();
+        let range_index =
+            merged_ranges.partition_point(|range| range.0 <= source_offset) - 1;
+        let new_offset =
+            range_bases[range_index] + source_offset - merged_ranges[range_index].0;
+        offsets.push(O::from_usize(new_offset).ok_or_else(|| {
+            ArrowError::ComputeError("ListView offset overflow during compaction".into())
+        })?);
+        sizes.push(size);
+    }
+
+    let child_indices = UInt64Array::from_iter_values(
+        merged_ranges
+            .iter()
+            .flat_map(|&(start, end)| (start..end).map(|index| index as u64)),
+    );
+    let values = take(list.values(), &child_indices, None)?;
+    Ok(Some((offsets.into(), sizes.into(), values)))
 }
 
 fn cast_fixed_size_list_column(
@@ -553,6 +683,8 @@ fn cast_dictionary_column(
 /// - **Field Matching**: Fields are matched by name (case-sensitive)
 /// - **Missing Target Fields**: Allowed - will be filled with null values during casting
 /// - **Extra Source Fields**: Allowed - will be ignored during casting
+/// - **At Least One Mapped Field**: source and target must share at least one field by name
+///   (unless source is empty)
 /// - **Type Compatibility**: Each matching field must be castable using Arrow's type system
 /// - **Nested Structs**: Recursively validates nested struct compatibility
 ///
@@ -581,23 +713,49 @@ pub fn validate_struct_compatibility(
     source_fields: &[FieldRef],
     target_fields: &[FieldRef],
 ) -> Result<()> {
-    let has_overlap = has_one_of_more_common_fields(source_fields, target_fields);
-    if !has_overlap {
-        return _plan_err!(
-            "Cannot cast struct with {} fields to {} fields because there is no field name overlap",
-            source_fields.len(),
-            target_fields.len()
-        );
+    map_struct_fields(source_fields, target_fields, None)
+}
+
+/// Performs the mapping of struct fields, checking compatibility and handling missing or extra fields.
+///
+/// # Arguments
+/// * `source_fields` - Fields from the source struct type
+/// * `target_fields` - Fields from the target struct type
+/// * `mapped_source_fields` - An optional `Vec` into which the indexes of the matching source fields
+///   are written in the order of the target fields
+///
+/// # Returns
+/// * `Ok(())` if the structs are compatible for casting
+/// * `Err(DataFusionError)` with detailed error message if incompatible
+fn map_struct_fields(
+    source_fields: &[FieldRef],
+    target_fields: &[FieldRef],
+    mut mapped_source_fields: Option<&mut Vec<Option<usize>>>,
+) -> Result<()> {
+    if !source_fields.is_empty() {
+        let has_overlap = has_one_of_more_common_fields(source_fields, target_fields);
+        if !has_overlap {
+            return _plan_err!(
+                "Cannot cast struct with {} fields to {} fields because there is no field name overlap",
+                source_fields.len(),
+                target_fields.len()
+            );
+        }
     }
 
     // Check compatibility for each target field
     for target_field in target_fields {
         // Look for matching field in source by name
-        if let Some(source_field) = source_fields
+        let source_field_opt = source_fields
             .iter()
-            .find(|f| f.name() == target_field.name())
+            .enumerate()
+            .find(|(_, f)| f.name() == target_field.name());
+        let source_field_idx = if let Some((source_field_idx, source_field)) =
+            source_field_opt
         {
             validate_field_compatibility(source_field, target_field)?;
+
+            Some(source_field_idx)
         } else {
             // Target field is missing from source
             // If it's non-nullable, we cannot fill it with NULL
@@ -608,6 +766,12 @@ pub fn validate_struct_compatibility(
                     target_field.name()
                 );
             }
+
+            None
+        };
+
+        if let Some(mapped_fields) = mapped_source_fields.as_mut() {
+            mapped_fields.push(source_field_idx);
         }
     }
 
@@ -1036,6 +1200,8 @@ mod tests {
         buffer::{NullBuffer, OffsetBuffer, ScalarBuffer},
         datatypes::{DataType, Field, FieldRef, Int32Type},
     };
+    use arrow_schema::Fields;
+
     /// Macro to extract and downcast a column from a StructArray
     macro_rules! get_column_as {
         ($struct_array:expr, $column_name:expr, $array_type:ty) => {
@@ -1170,6 +1336,65 @@ mod tests {
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
         assert!(error_msg.contains("Cannot cast struct field 'a'"));
+    }
+
+    #[test]
+    fn test_cast_struct_empty_source_and_target() {
+        // Source and target struct: {} (no fields)
+        let source =
+            StructArray::try_new_with_length(Fields::empty(), vec![], None, 1024)
+                .unwrap();
+        let source = Arc::new(source) as ArrayRef;
+
+        // Target struct: {}
+        let target_field = struct_field("s", vec![]);
+
+        // This should succeed - an empty struct is compatible with itself
+        let result =
+            cast_column(&source, target_field.data_type(), &DEFAULT_CAST_OPTIONS)
+                .unwrap();
+        let result = result.as_any().downcast_ref::<StructArray>().unwrap();
+
+        assert_eq!(result.len(), source.len());
+        assert_eq!(result.data_type(), target_field.data_type());
+    }
+
+    #[test]
+    fn test_cast_struct_compatibility_empty_source_nullable_target() {
+        // Source and target struct: {} (no fields)
+        let source =
+            StructArray::try_new_with_length(Fields::empty(), vec![], None, 1024)
+                .unwrap();
+        let source = Arc::new(source) as ArrayRef;
+
+        // Target struct: {a: Int32}
+        let target_field = struct_field("s", vec![field("a", DataType::Int32)]);
+
+        // This should succeed - all target fields are nullable
+        let result =
+            cast_column(&source, target_field.data_type(), &DEFAULT_CAST_OPTIONS)
+                .unwrap();
+        let result = result.as_any().downcast_ref::<StructArray>().unwrap();
+
+        assert_eq!(result.len(), source.len());
+        assert_eq!(result.data_type(), target_field.data_type());
+    }
+
+    #[test]
+    fn test_cast_struct_compatibility_empty_source_non_nullable_target() {
+        // Source and target struct: {} (no fields)
+        let source =
+            StructArray::try_new_with_length(Fields::empty(), vec![], None, 1024)
+                .unwrap();
+        let source = Arc::new(source) as ArrayRef;
+
+        // Target struct: {a: Int32}
+        let target_field = struct_field("s", vec![non_null_field("a", DataType::Int32)]);
+
+        // This should succeed - all target fields are nullable
+        let result =
+            cast_column(&source, target_field.data_type(), &DEFAULT_CAST_OPTIONS);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -1432,6 +1657,46 @@ mod tests {
         // and missing field 'b' is nullable
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_struct_compatibility_empty_source_and_target() {
+        // Source and target struct: {} (no fields)
+        let source_fields = vec![];
+        let target_fields = vec![];
+
+        // This should succeed - an empty struct is compatible with itself
+        let result = validate_struct_compatibility(&source_fields, &target_fields);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_struct_compatibility_empty_source_nullable_target() {
+        // Source and target struct: {} (no fields)
+        let source_fields = vec![];
+
+        // Target struct: {a: Int32}
+        let target_fields = vec![arc_field("a", DataType::Int32)];
+
+        // This should succeed - all target fields are nullable
+        let result = validate_struct_compatibility(&source_fields, &target_fields);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_struct_compatibility_empty_source_non_nullable_target() {
+        // Source and target struct: {} (no fields)
+        let source_fields = vec![];
+
+        // Target struct: {a: Int32 NOT NULL}
+        let target_fields = vec![
+            arc_field("a", DataType::Int32),
+            Arc::new(non_null_field("b", DataType::Utf8)),
+        ];
+
+        // This should fail - not all target fields are nullable
+        let result = validate_struct_compatibility(&source_fields, &target_fields);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -2603,6 +2868,266 @@ mod tests {
         assert_eq!(a_col.values(), &[1, 2, 3]);
         let b_col = get_column_as!(&struct_values, "b", StringArray);
         assert!(b_col.iter().all(|v| v.is_none()));
+    }
+
+    fn list_struct_values(values: Vec<&str>) -> ArrayRef {
+        Arc::new(StructArray::from(vec![(
+            arc_field("value", DataType::Utf8),
+            Arc::new(StringArray::from(values)) as ArrayRef,
+        )]))
+    }
+
+    fn list_struct_fields() -> (FieldRef, FieldRef) {
+        (
+            arc_field("item", struct_type(vec![field("value", DataType::Utf8)])),
+            arc_field("item", struct_type(vec![field("value", DataType::Int32)])),
+        )
+    }
+
+    fn assert_visible_list_value(list: &ArrayRef, row: usize, expected: i32) {
+        let values = list.as_list::<i32>().value(row);
+        let values = values.as_struct();
+        assert_eq!(
+            get_column_as!(values, "value", Int32Array).value(0),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_sliced_list_ignores_unreachable_invalid_nested_value() {
+        let (source_field, target_field) = list_struct_fields();
+        let source_col: ArrayRef = Arc::new(
+            ListArray::new(
+                source_field,
+                OffsetBuffer::new(vec![0, 1, 2].into()),
+                list_struct_values(vec!["bad", "2"]),
+                None,
+            )
+            .slice(1, 1),
+        );
+        let target_type = DataType::List(target_field);
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+
+        assert_eq!(result.data_type(), &target_type);
+        assert_visible_list_value(&result, 0, 2);
+    }
+
+    #[test]
+    fn test_null_list_parent_hides_invalid_nested_value() {
+        let (source_field, target_field) = list_struct_fields();
+        let source_col: ArrayRef = Arc::new(ListArray::new(
+            source_field,
+            OffsetBuffer::new(vec![0, 1, 2].into()),
+            list_struct_values(vec!["bad", "2"]),
+            Some(NullBuffer::from(vec![false, true])),
+        ));
+        let target_type = DataType::List(target_field);
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+
+        assert_eq!(result.data_type(), &target_type);
+        assert!(result.is_null(0));
+        assert_visible_list_value(&result, 1, 2);
+    }
+
+    #[test]
+    fn test_sliced_large_list_ignores_unreachable_invalid_nested_value() {
+        let (source_field, target_field) = list_struct_fields();
+        let source_col: ArrayRef = Arc::new(
+            GenericListArray::<i64>::new(
+                source_field,
+                OffsetBuffer::new(vec![0, 1, 2].into()),
+                list_struct_values(vec!["bad", "2"]),
+                None,
+            )
+            .slice(1, 1),
+        );
+        let target_type = DataType::LargeList(target_field);
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let values = result.as_list::<i64>().value(0);
+
+        assert_eq!(result.data_type(), &target_type);
+        assert_eq!(
+            get_column_as!(values.as_struct(), "value", Int32Array).value(0),
+            2
+        );
+    }
+
+    #[test]
+    fn test_list_view_ignores_unreachable_invalid_nested_values() {
+        let (source_field, target_field) = list_struct_fields();
+        let source_col: ArrayRef = Arc::new(ListViewArray::new(
+            source_field,
+            ScalarBuffer::from(vec![0i32, 1, 2]),
+            ScalarBuffer::from(vec![1i32, 1, 1]),
+            list_struct_values(vec!["bad", "2", "bad"]),
+            Some(NullBuffer::from(vec![false, true, true])),
+        ));
+        let source_col = source_col.slice(0, 2);
+        let target_type = DataType::ListView(target_field);
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let result = result.as_list_view::<i32>();
+        let values = result.value(1);
+
+        assert_eq!(result.data_type(), &target_type);
+        assert!(result.is_null(0));
+        assert_eq!(result.value_sizes(), &[0, 1]);
+        assert_eq!(
+            get_column_as!(values.as_struct(), "value", Int32Array).value(0),
+            2
+        );
+    }
+
+    #[test]
+    fn test_all_null_list_view_ignores_invalid_backing_values() {
+        let (source_field, target_field) = list_struct_fields();
+        let source_col: ArrayRef = Arc::new(ListViewArray::new(
+            source_field,
+            ScalarBuffer::from(vec![0i32, 1]),
+            ScalarBuffer::from(vec![1i32, 1]),
+            list_struct_values(vec!["bad", "also_bad"]),
+            Some(NullBuffer::from(vec![false, false])),
+        ));
+        let target_type = DataType::ListView(target_field);
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let result = result.as_list_view::<i32>();
+
+        assert_eq!(result.data_type(), &target_type);
+        assert_eq!(result.null_count(), 2);
+        assert_eq!(result.value_offsets(), &[0, 0]);
+        assert_eq!(result.value_sizes(), &[0, 0]);
+        assert!(result.values().is_empty());
+    }
+
+    #[test]
+    fn test_list_view_compacts_overlapping_out_of_order_ranges() {
+        let (source_field, target_field) = list_struct_fields();
+        let source_col: ArrayRef = Arc::new(ListViewArray::new(
+            source_field,
+            ScalarBuffer::from(vec![2i32, 0, 2]),
+            ScalarBuffer::from(vec![2i32, 1, 1]),
+            list_struct_values(vec!["1", "bad", "2", "3", "bad"]),
+            None,
+        ));
+        let target_type = DataType::ListView(target_field);
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let result = result.as_list_view::<i32>();
+        let first = result.value(0);
+        let second = result.value(1);
+
+        assert_eq!(result.value_offsets(), &[1, 0, 1]);
+        assert_eq!(result.value_sizes(), &[2, 1, 1]);
+        assert_eq!(
+            get_column_as!(first.as_struct(), "value", Int32Array).values(),
+            &[2, 3]
+        );
+        assert_eq!(
+            get_column_as!(second.as_struct(), "value", Int32Array).values(),
+            &[1]
+        );
+    }
+
+    #[test]
+    fn test_nested_sparse_list_view_compacts_backing_once() {
+        let (source_inner_field, target_inner_field) = list_struct_fields();
+        let inner = ListViewArray::new(
+            source_inner_field,
+            ScalarBuffer::from(vec![0i32, 1, 2, 3, 5]),
+            ScalarBuffer::from(vec![1i32, 1, 1, 2, 1]),
+            list_struct_values(vec!["bad", "1", "bad", "2", "3", "bad"]),
+            None,
+        );
+        let source_outer_field = arc_field("item", inner.data_type().clone());
+        let target_outer_field =
+            arc_field("item", DataType::ListView(Arc::clone(&target_inner_field)));
+        let source_col: ArrayRef = Arc::new(ListViewArray::new(
+            source_outer_field,
+            ScalarBuffer::from(vec![1i32, 3]),
+            ScalarBuffer::from(vec![1i32, 1]),
+            Arc::new(inner),
+            None,
+        ));
+        let target_type = DataType::ListView(target_outer_field);
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let outer = result.as_list_view::<i32>();
+        let inner = outer.values().as_list_view::<i32>();
+
+        assert_eq!(outer.value_offsets(), &[0, 1]);
+        assert_eq!(outer.value_sizes(), &[1, 1]);
+        assert_eq!(inner.len(), 2);
+        assert_eq!(inner.value_offsets(), &[0, 1]);
+        assert_eq!(inner.value_sizes(), &[1, 2]);
+        assert_eq!(inner.values().len(), 3);
+
+        let first = outer.value(0);
+        let first = first.as_list_view::<i32>().value(0);
+        assert_eq!(
+            get_column_as!(first.as_struct(), "value", Int32Array).values(),
+            &[1]
+        );
+        let second = outer.value(1);
+        let second = second.as_list_view::<i32>().value(0);
+        assert_eq!(
+            get_column_as!(second.as_struct(), "value", Int32Array).values(),
+            &[2, 3]
+        );
+    }
+
+    #[test]
+    fn test_sliced_large_list_view_ignores_unreachable_invalid_nested_value() {
+        let (source_field, target_field) = list_struct_fields();
+        let source_col: ArrayRef = Arc::new(
+            GenericListViewArray::<i64>::new(
+                source_field,
+                ScalarBuffer::from(vec![0i64, 1]),
+                ScalarBuffer::from(vec![1i64, 1]),
+                list_struct_values(vec!["bad", "2"]),
+                None,
+            )
+            .slice(1, 1),
+        );
+        let target_type = DataType::LargeListView(target_field);
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let result = result.as_list_view::<i64>();
+        let values = result.value(0);
+
+        assert_eq!(result.data_type(), &target_type);
+        assert_eq!(result.value_offsets(), &[0]);
+        assert_eq!(result.value_sizes(), &[1]);
+        assert_eq!(
+            get_column_as!(values.as_struct(), "value", Int32Array).value(0),
+            2
+        );
+    }
+
+    #[test]
+    fn test_large_list_view_visible_invalid_nested_value_returns_error() {
+        let (source_field, target_field) = list_struct_fields();
+        let source_col: ArrayRef = Arc::new(GenericListViewArray::<i64>::new(
+            source_field,
+            ScalarBuffer::from(vec![0i64]),
+            ScalarBuffer::from(vec![1i64]),
+            list_struct_values(vec!["bad"]),
+            None,
+        ));
+        let target_type = DataType::LargeListView(target_field);
+
+        assert!(cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).is_err());
     }
 
     fn fixed_size_list_struct_field(fields: Vec<(&str, DataType)>) -> FieldRef {

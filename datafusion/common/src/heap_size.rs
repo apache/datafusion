@@ -294,7 +294,7 @@ fn arc_ptr<T>(arc: &Arc<T>) -> usize {
 /// For unsized types, `Arc::as_ptr` returns the data address + metadata - we only need the thin address
 /// Casting through `*const i32` gets us the thin pointer
 fn arc_unsized_ptr<T: ?Sized>(arc: &Arc<T>) -> usize {
-    Arc::as_ptr(arc) as *const i32 as usize
+    Arc::as_ptr(arc).cast::<i32>() as usize
 }
 
 impl<T: DFHeapSize> DFHeapSize for Arc<T> {

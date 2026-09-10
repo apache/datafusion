@@ -38,13 +38,18 @@ use datafusion::physical_plan::coop::CooperativeExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{PhysicalSortExpr, col};
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion::physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
+use datafusion::physical_plan::{
+    ChildrenPropertiesMode, ExecutionPlan, ReplaceChildrenOptions,
+};
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_proto::physical_plan::{
-    DefaultPhysicalExtensionCodec, DefaultPhysicalProtoConverter,
+    AsExecutionPlan, DefaultPhysicalExtensionCodec, DefaultPhysicalProtoConverter,
 };
+#[cfg(target_pointer_width = "32")]
+use datafusion_proto::protobuf;
+use datafusion_proto::protobuf::PhysicalPlanNode;
 use std::sync::Arc;
 use std::vec;
 
@@ -72,6 +77,54 @@ fn roundtrip_global_skip_no_limit() -> Result<()> {
         10,
         None, // no limit
     )))
+}
+
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn local_limit_rejects_fetch_above_wire_range() {
+    let fetch = u32::MAX as usize + 1;
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(LocalLimitExec::new(
+        Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
+        fetch,
+    ));
+
+    let err =
+        PhysicalPlanNode::try_from_physical_plan(plan, &DefaultPhysicalExtensionCodec {})
+            .unwrap_err();
+    assert_eq!(
+        err.strip_backtrace(),
+        format!(
+            "Error during planning: LocalLimitExec: fetch value {fetch} is out of range for the plan wire format"
+        )
+    );
+}
+
+#[cfg(target_pointer_width = "32")]
+#[test]
+fn global_limit_rejects_fetch_above_usize() -> Result<()> {
+    let codec = DefaultPhysicalExtensionCodec {};
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(
+        Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
+        0,
+        Some(1),
+    ));
+    let mut node = PhysicalPlanNode::try_from_physical_plan(plan, &codec)?;
+    let Some(protobuf::physical_plan_node::PhysicalPlanType::GlobalLimit(limit)) =
+        &mut node.physical_plan_type
+    else {
+        panic!("expected GlobalLimitExecNode");
+    };
+    limit.fetch = i64::from(u32::MAX) + 1;
+
+    let ctx = SessionContext::new();
+    let err = node
+        .try_into_physical_plan(&ctx.task_ctx(), &codec)
+        .unwrap_err();
+    assert_eq!(
+        err.strip_backtrace(),
+        "Error during planning: GlobalLimitExec: fetch wire value 4294967296 is out of range for usize"
+    );
+    Ok(())
 }
 
 /// Sort key at index 1, so a decoder that misbinds column name vs index
@@ -196,6 +249,23 @@ fn roundtrip_coalesce_batches_with_fetch() -> Result<()> {
         CoalesceBatchesExec::new(Arc::new(EmptyExec::new(schema)), 8096)
             .with_fetch(Some(10)),
     ))
+}
+
+#[test]
+#[expect(deprecated)]
+fn coalesce_batches_rejects_zero_batch_size_on_encode() {
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(CoalesceBatchesExec::new(
+        Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
+        0,
+    ));
+
+    let err =
+        PhysicalPlanNode::try_from_physical_plan(plan, &DefaultPhysicalExtensionCodec {})
+            .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("CoalesceBatchesExec: target_batch_size must be greater than 0")
+    );
 }
 
 #[test]

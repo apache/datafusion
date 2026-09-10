@@ -20,6 +20,7 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema};
+use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
@@ -32,10 +33,13 @@ use datafusion_physical_expr::window::StandardWindowExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::window_topn::WindowTopN;
+use datafusion_physical_plan::collect;
 use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::metrics::MetricValue;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::sorts::partitioned_topk::PartitionedTopKExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, create_udwf_window_expr};
 use datafusion_physical_plan::{ExecutionPlan, InputOrderMode};
@@ -656,5 +660,70 @@ fn predicate_lt_1_no_change() -> Result<()> {
             "`{name} < 1` (limit 0) must not be rewritten"
         );
     }
+    Ok(())
+}
+
+// ----------------------------------------------------------------------
+// Execution: metrics exposure
+// ----------------------------------------------------------------------
+
+/// Recursively finds the `PartitionedTopKExec` node in `plan`.
+fn find_partitioned_topk(
+    plan: &Arc<dyn ExecutionPlan>,
+) -> Option<Arc<dyn ExecutionPlan>> {
+    if plan.is::<PartitionedTopKExec>() {
+        return Some(Arc::clone(plan));
+    }
+    plan.children().into_iter().find_map(find_partitioned_topk)
+}
+
+/// Regression test for #24470: `PartitionedTopKExec` builds an
+/// `ExecutionPlanMetricsSet` and hands it to the top-K state, but used to omit
+/// `ExecutionPlan::metrics()`, so nothing it recorded was ever observable (and
+/// `EXPLAIN ANALYZE` showed no metrics for the operator).
+///
+/// The `output_batches` assertion also covers the emit-side counting fixed for
+/// #24468: the per-partition heaps are coalesced into `batch_size` batches, so
+/// the metric must count the coalesced output, not the per-partition inputs.
+#[tokio::test]
+async fn partitioned_topk_exec_exposes_metrics() -> Result<()> {
+    let mut config = SessionConfig::new()
+        .with_batch_size(10)
+        .with_target_partitions(1);
+    config.options_mut().optimizer.enable_window_topn = true;
+    let ctx = SessionContext::new_with_config(config);
+
+    // 10 partition keys x 5 rows each; top-5 per key keeps all 50 rows, which
+    // at batch_size 10 must be emitted as 5 batches.
+    ctx.sql(
+        "CREATE TABLE t AS
+         SELECT v % 10 AS pk, v AS val FROM (SELECT unnest(range(0, 50)) AS v)",
+    )
+    .await?
+    .collect()
+    .await?;
+
+    let df = ctx
+        .sql(
+            "SELECT pk, val FROM (
+               SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) AS rn FROM t
+             ) WHERE rn <= 5",
+        )
+        .await?;
+    let plan = df.create_physical_plan().await?;
+    let batches = collect(Arc::clone(&plan), ctx.task_ctx()).await?;
+    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 50);
+
+    let topk = find_partitioned_topk(&plan).expect("plan has a PartitionedTopKExec");
+    let metrics = topk
+        .metrics()
+        .expect("PartitionedTopKExec should expose metrics");
+    assert_eq!(metrics.output_rows(), Some(50));
+    let output_batches = metrics
+        .sum(|m| matches!(m.value(), MetricValue::OutputBatches(_)))
+        .expect("output_batches metric")
+        .as_usize();
+    assert_eq!(output_batches, 5);
+
     Ok(())
 }

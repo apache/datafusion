@@ -20,8 +20,9 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, AsArray};
 use arrow::compute::{DecimalCast, rescale_decimal};
 use arrow::datatypes::{
-    ArrowNativeTypeOp, DataType, Decimal32Type, Decimal64Type, Decimal128Type,
-    Decimal256Type, DecimalType, Float32Type, Float64Type,
+    ArrowNativeTypeOp, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
+    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DataType, Decimal32Type,
+    Decimal64Type, Decimal128Type, Decimal256Type, DecimalType, Float32Type, Float64Type,
 };
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::interval_arithmetic::Interval;
@@ -35,7 +36,10 @@ use datafusion_expr::{
 use datafusion_macros::user_doc;
 use num_traits::{CheckedAdd, Float, One};
 
-use super::decimal::{apply_decimal_op, floor_decimal_value};
+use super::decimal::{
+    apply_decimal_op, decimal_floor_ceil_precision, decimal_floor_ceil_return_type,
+    floor_decimal_value,
+};
 
 #[user_doc(
     doc_section(label = "Math Functions"),
@@ -100,16 +104,22 @@ macro_rules! preimage_bounds {
         })
     };
 
-    // Decimal types: call decimal_preimage_bounds with precision/scale and wrap in ScalarValue
-    (decimal: $variant:ident, $decimal_type:ty, $value:expr, $precision:expr, $scale:expr) => {
-        decimal_preimage_bounds::<$decimal_type>($value, $precision, $scale).map(
-            |(lo, hi)| {
-                (
-                    ScalarValue::$variant(Some(lo), $precision, $scale),
-                    ScalarValue::$variant(Some(hi), $precision, $scale),
-                )
-            },
+    // Decimal types: call decimal_preimage_bounds with literal's precision/scale and
+    // wrap in ScalarValue in the argument's precision and scale
+    (decimal: $variant:ident, $decimal_type:ty, $value:expr, $lit_precision:expr, $lit_scale:expr, $arg_precision:expr, $arg_scale:expr) => {
+        decimal_preimage_bounds::<$decimal_type>(
+            $value,
+            $lit_precision,
+            $lit_scale,
+            $arg_precision,
+            $arg_scale,
         )
+        .map(|(lo, hi)| {
+            (
+                ScalarValue::$variant(Some(lo), $arg_precision, $arg_scale),
+                ScalarValue::$variant(Some(hi), $arg_precision, $arg_scale),
+            )
+        })
     };
 }
 
@@ -123,10 +133,7 @@ impl ScalarUDFImpl for FloorFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            DataType::Null => Ok(DataType::Float64),
-            other => Ok(other.clone()),
-        }
+        Ok(decimal_floor_ceil_return_type(&arg_types[0]))
     }
 
     fn is_strict(&self) -> bool {
@@ -181,8 +188,13 @@ impl ScalarUDFImpl for FloorFunc {
             DataType::Decimal32(precision, scale) => {
                 apply_decimal_op::<Decimal32Type, _>(
                     &value,
-                    *precision,
+                    decimal_floor_ceil_precision(
+                        *precision,
+                        *scale,
+                        DECIMAL32_MAX_PRECISION,
+                    ),
                     *scale,
+                    0,
                     self.name(),
                     floor_decimal_value,
                 )?
@@ -190,8 +202,13 @@ impl ScalarUDFImpl for FloorFunc {
             DataType::Decimal64(precision, scale) => {
                 apply_decimal_op::<Decimal64Type, _>(
                     &value,
-                    *precision,
+                    decimal_floor_ceil_precision(
+                        *precision,
+                        *scale,
+                        DECIMAL64_MAX_PRECISION,
+                    ),
                     *scale,
+                    0,
                     self.name(),
                     floor_decimal_value,
                 )?
@@ -199,8 +216,13 @@ impl ScalarUDFImpl for FloorFunc {
             DataType::Decimal128(precision, scale) => {
                 apply_decimal_op::<Decimal128Type, _>(
                     &value,
-                    *precision,
+                    decimal_floor_ceil_precision(
+                        *precision,
+                        *scale,
+                        DECIMAL128_MAX_PRECISION,
+                    ),
                     *scale,
+                    0,
                     self.name(),
                     floor_decimal_value,
                 )?
@@ -208,8 +230,13 @@ impl ScalarUDFImpl for FloorFunc {
             DataType::Decimal256(precision, scale) => {
                 apply_decimal_op::<Decimal256Type, _>(
                     &value,
-                    *precision,
+                    decimal_floor_ceil_precision(
+                        *precision,
+                        *scale,
+                        DECIMAL256_MAX_PRECISION,
+                    ),
                     *scale,
+                    0,
                     self.name(),
                     floor_decimal_value,
                 )?
@@ -235,7 +262,7 @@ impl ScalarUDFImpl for FloorFunc {
     }
 
     fn evaluate_bounds(&self, inputs: &[&Interval]) -> Result<Interval> {
-        let data_type = inputs[0].data_type();
+        let data_type = decimal_floor_ceil_return_type(&inputs[0].data_type());
         Interval::make_unbounded(&data_type)
     }
 
@@ -250,7 +277,7 @@ impl ScalarUDFImpl for FloorFunc {
         &self,
         args: &[Expr],
         lit_expr: &Expr,
-        _info: &SimplifyContext,
+        info: &SimplifyContext,
     ) -> Result<PreimageResult> {
         // floor takes exactly one argument and we do not expect to reach here with multiple arguments.
         debug_assert!(args.len() == 1, "floor() takes exactly one argument");
@@ -280,17 +307,41 @@ impl ScalarUDFImpl for FloorFunc {
             // DECIMAL(precision, scale) where precision ≤ 38 -> Decimal128(precision, scale)
             // DECIMAL(precision, scale) where precision > 38 -> Decimal256(precision, scale)
             // Decimal32 and Decimal64 are unreachable from SQL/SLT.
-            ScalarValue::Decimal32(Some(n), precision, scale) => {
-                preimage_bounds!(decimal: Decimal32, Decimal32Type, *n, *precision, *scale)
+            //
+            // Simce floor()/ceil() do not preserve argument's scale, the preimage bounds
+            // must be expressed in `arg`'s own (precision, scale), not the literal's
+            // Arg type resolution failure won't fail the query
+            ScalarValue::Decimal32(Some(n), lit_precision, lit_scale) => {
+                let Ok(DataType::Decimal32(arg_precision, arg_scale)) =
+                    info.get_data_type(&arg)
+                else {
+                    return Ok(PreimageResult::None);
+                };
+                preimage_bounds!(decimal: Decimal32, Decimal32Type, *n, *lit_precision, *lit_scale, arg_precision, arg_scale)
             }
-            ScalarValue::Decimal64(Some(n), precision, scale) => {
-                preimage_bounds!(decimal: Decimal64, Decimal64Type, *n, *precision, *scale)
+            ScalarValue::Decimal64(Some(n), lit_precision, lit_scale) => {
+                let Ok(DataType::Decimal64(arg_precision, arg_scale)) =
+                    info.get_data_type(&arg)
+                else {
+                    return Ok(PreimageResult::None);
+                };
+                preimage_bounds!(decimal: Decimal64, Decimal64Type, *n, *lit_precision, *lit_scale, arg_precision, arg_scale)
             }
-            ScalarValue::Decimal128(Some(n), precision, scale) => {
-                preimage_bounds!(decimal: Decimal128, Decimal128Type, *n, *precision, *scale)
+            ScalarValue::Decimal128(Some(n), lit_precision, lit_scale) => {
+                let Ok(DataType::Decimal128(arg_precision, arg_scale)) =
+                    info.get_data_type(&arg)
+                else {
+                    return Ok(PreimageResult::None);
+                };
+                preimage_bounds!(decimal: Decimal128, Decimal128Type, *n, *lit_precision, *lit_scale, arg_precision, arg_scale)
             }
-            ScalarValue::Decimal256(Some(n), precision, scale) => {
-                preimage_bounds!(decimal: Decimal256, Decimal256Type, *n, *precision, *scale)
+            ScalarValue::Decimal256(Some(n), lit_precision, lit_scale) => {
+                let Ok(DataType::Decimal256(arg_precision, arg_scale)) =
+                    info.get_data_type(&arg)
+                else {
+                    return Ok(PreimageResult::None);
+                };
+                preimage_bounds!(decimal: Decimal256, Decimal256Type, *n, *lit_precision, *lit_scale, arg_precision, arg_scale)
             }
 
             // Unsupported types
@@ -343,32 +394,52 @@ fn int_preimage_bounds<I: CheckedAdd + One + Copy>(n: I) -> Option<(I, I)> {
     Some((n, upper))
 }
 
-/// Compute preimage bounds for floor function on decimal types.
-/// For floor(x) = n, the preimage is [n, n+1).
+/// Compute preimage bounds for floor/ceil functions on decimal types.
+/// Argument and literal have different precision and scales.
+///
+/// For floor(x) = n, the preimage is [n, n+1) in the argument's own scale.
 /// Returns None if:
-/// - The value has a fractional part (floor always returns integers)
-/// - Adding 1 would overflow
+/// - The literal has a fractional part at its own scale
+/// - Rescaling to the argument's scale, or adding 1, would overflow
 fn decimal_preimage_bounds<D: DecimalType>(
-    value: D::Native,
-    precision: u8,
-    scale: i8,
+    lit_value: D::Native,
+    lit_precision: u8,
+    lit_scale: i8,
+    arg_precision: u8,
+    arg_scale: i8,
 ) -> Option<(D::Native, D::Native)>
 where
     D::Native: DecimalCast + ArrowNativeTypeOp + std::ops::Rem<Output = D::Native>,
 {
-    // Use rescale_decimal to compute "1" at target scale (avoids manual pow)
-    // Convert integer 1 (scale=0) to the target scale
+    if lit_scale > 0 {
+        let lit_factor: D::Native =
+            rescale_decimal::<D, D>(D::Native::ONE, 1, 0, lit_precision, lit_scale)?;
+        if lit_value % lit_factor != D::Native::ZERO {
+            // The literal has a fractional part at its own scale
+            return None;
+        }
+    }
+
+    // Rescale the literal's (integer) value into the argument's own scale.
+    let base: D::Native = rescale_decimal::<D, D>(
+        lit_value,
+        lit_precision,
+        lit_scale,
+        arg_precision,
+        arg_scale,
+    )?;
+
+    // Use rescale_decimal to compute "1" at the argument's scale (avoids manual pow)
     let one_scaled: D::Native = rescale_decimal::<D, D>(
         D::Native::ONE, // value = 1
         1,              // input_precision = 1
         0,              // input_scale = 0 (integer)
-        precision,      // output_precision
-        scale,          // output_scale
+        arg_precision,  // output_precision
+        arg_scale,      // output_scale
     )?;
 
-    // floor always returns an integer, so if value has a fractional part, there's no solution
-    // Check: value % one_scaled != 0 means fractional part exists
-    if scale > 0 && value % one_scaled != D::Native::ZERO {
+    if one_scaled.is_zero() {
+        // Avoid building zero-scale empty interval
         return None;
     }
 
@@ -377,27 +448,41 @@ where
     // MAX_DECIMAL128_FOR_EACH_PRECISION and MAX_DECIMAL256_FOR_EACH_PRECISION are used to validate the internal i128/i256.
     // Any invalid i128/i256 will not reach here.
     // Therefore, the add_checked will always succeed if tested via SQL/SLT path.
-    let upper = value.add_checked(one_scaled).ok()?;
+    let upper = base.add_checked(one_scaled).ok()?;
 
-    Some((value, upper))
+    Some((base, upper))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::datatypes::{Field, Schema};
     use arrow_buffer::i256;
+    use datafusion_common::DFSchema;
     use datafusion_expr::col;
 
-    /// Helper to test valid preimage cases that should return a Range
-    fn assert_preimage_range(
+    /// Build a `SimplifyContext` with real schema
+    fn simplify_context_for(arg_type: DataType) -> SimplifyContext {
+        let schema =
+            DFSchema::try_from(Schema::new(vec![Field::new("x", arg_type, true)]))
+                .expect("valid single-column schema");
+        SimplifyContext::builder()
+            .with_schema(Arc::new(schema))
+            .build()
+    }
+
+    /// Helper to test valid preimage cases that should return a Range, where the
+    /// argument's own type is `arg_type` (which may differ from the literal's).
+    fn assert_preimage_range_with_arg_type(
         input: ScalarValue,
+        arg_type: DataType,
         expected_lower: ScalarValue,
         expected_upper: ScalarValue,
     ) {
         let floor_func = FloorFunc::new();
         let args = vec![col("x")];
         let lit_expr = Expr::Literal(input.clone(), None);
-        let info = SimplifyContext::default();
+        let info = simplify_context_for(arg_type);
 
         let result = floor_func.preimage(&args, &lit_expr, &info).unwrap();
 
@@ -414,17 +499,37 @@ mod tests {
     }
 
     /// Helper to test cases that should return None
-    fn assert_preimage_none(input: ScalarValue) {
+    fn assert_preimage_range(
+        input: ScalarValue,
+        expected_lower: ScalarValue,
+        expected_upper: ScalarValue,
+    ) {
+        assert_preimage_range_with_arg_type(
+            input.clone(),
+            input.data_type(),
+            expected_lower,
+            expected_upper,
+        );
+    }
+
+    /// Helper to test cases that should return None, where the argument's own
+    /// type is `arg_type`.
+    fn assert_preimage_none_with_arg_type(input: ScalarValue, arg_type: DataType) {
         let floor_func = FloorFunc::new();
         let args = vec![col("x")];
         let lit_expr = Expr::Literal(input.clone(), None);
-        let info = SimplifyContext::default();
+        let info = simplify_context_for(arg_type);
 
         let result = floor_func.preimage(&args, &lit_expr, &info).unwrap();
         assert!(
             matches!(result, PreimageResult::None),
             "Expected None for input {input:?}"
         );
+    }
+
+    /// Helper to test cases that should return None
+    fn assert_preimage_none(input: ScalarValue) {
+        assert_preimage_none_with_arg_type(input.clone(), input.data_type());
     }
 
     #[test]
@@ -684,5 +789,49 @@ mod tests {
         assert_preimage_none(ScalarValue::Decimal64(None, 18, 2));
         assert_preimage_none(ScalarValue::Decimal128(None, 38, 2));
         assert_preimage_none(ScalarValue::Decimal256(None, 76, 2));
+    }
+
+    #[test]
+    fn test_floor_preimage_decimal_rescales_to_argument_scale() {
+        // `floor(x) = arrow_cast(100, 'Decimal128(9,0)')` with x: Decimal128(10, 2)
+        // must produce bounds in `x`'s own (10, 2), not the literal's (9, 0)
+        assert_preimage_range_with_arg_type(
+            ScalarValue::Decimal128(Some(100), 9, 0),
+            DataType::Decimal128(10, 2),
+            ScalarValue::Decimal128(Some(10000), 10, 2), // 100.00
+            ScalarValue::Decimal128(Some(10100), 10, 2), // 101.00
+        );
+
+        // Same, but the argument's scale is wide enough that the rescale needs
+        // more than one extra digit of headroom.
+        assert_preimage_range_with_arg_type(
+            ScalarValue::Decimal128(Some(-5), 9, 0),
+            DataType::Decimal128(12, 4),
+            ScalarValue::Decimal128(Some(-50000), 12, 4), // -5.0000
+            ScalarValue::Decimal128(Some(-40000), 12, 4), // -4.0000
+        );
+    }
+
+    #[test]
+    fn test_floor_preimage_decimal_argument_type_mismatch_returns_none() {
+        assert_preimage_none_with_arg_type(
+            ScalarValue::Decimal128(Some(100), 9, 0),
+            DataType::Decimal256(10, 2),
+        );
+    }
+
+    #[test]
+    fn test_floor_preimage_decimal_unresolvable_arg_type() {
+        // If the argument's type can't be resolved, degrade to PreimageResult::None gracefully
+        let floor_func = FloorFunc::new();
+        let info = simplify_context_for(DataType::Decimal128(10, 2));
+        let args = vec![col("y")];
+        let lit_expr = Expr::Literal(ScalarValue::Decimal128(Some(100), 9, 0), None);
+
+        let result = floor_func.preimage(&args, &lit_expr, &info).unwrap();
+        assert!(
+            matches!(result, PreimageResult::None),
+            "Expected None (not an Err) when the argument's type can't be resolved"
+        );
     }
 }

@@ -135,15 +135,6 @@ impl ScalarUDFImpl for ArrayElement {
         "array_element"
     }
 
-    fn display_name(&self, args: &[Expr]) -> Result<String> {
-        let args_name = args.iter().map(ToString::to_string).collect::<Vec<_>>();
-        if args_name.len() != 2 {
-            return exec_err!("expect 2 args, got {}", args_name.len());
-        }
-
-        Ok(format!("{}[{}]", args_name[0], args_name[1]))
-    }
-
     fn schema_name(&self, args: &[Expr]) -> Result<String> {
         let args_name = args
             .iter()
@@ -351,15 +342,6 @@ impl ArraySlice {
 }
 
 impl ScalarUDFImpl for ArraySlice {
-    fn display_name(&self, args: &[Expr]) -> Result<String> {
-        let args_name = args.iter().map(ToString::to_string).collect::<Vec<_>>();
-        if let Some((arr, indexes)) = args_name.split_first() {
-            Ok(format!("{arr}[{}]", indexes.join(":")))
-        } else {
-            exec_err!("no argument")
-        }
-    }
-
     fn schema_name(&self, args: &[Expr]) -> Result<String> {
         let args_name = args
             .iter()

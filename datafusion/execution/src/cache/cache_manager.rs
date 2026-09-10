@@ -175,7 +175,7 @@ impl CachedFileList {
     }
 
     /// Filter the files by prefix.
-    fn filter_by_prefix(&self, prefix: &Option<Path>) -> Vec<ObjectMeta> {
+    fn filter_by_prefix(&self, prefix: Option<&Path>) -> Vec<ObjectMeta> {
         match prefix {
             Some(prefix) => self
                 .files
@@ -194,7 +194,7 @@ impl CachedFileList {
     pub fn files_matching_prefix(&self, prefix: &Option<Path>) -> Arc<Vec<ObjectMeta>> {
         match prefix {
             None => Arc::clone(&self.files),
-            Some(p) => Arc::new(self.filter_by_prefix(&Some(p.clone()))),
+            Some(p) => Arc::new(self.filter_by_prefix(Some(p))),
         }
     }
 }

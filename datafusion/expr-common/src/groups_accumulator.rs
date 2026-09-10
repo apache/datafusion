@@ -18,7 +18,7 @@
 //! Vectorized [`GroupsAccumulator`]
 
 use arrow::array::{ArrayRef, BooleanArray};
-use datafusion_common::{Result, utils::split_vec_min_alloc};
+use datafusion_common::{Result, exec_err, not_impl_err, utils::split_vec_min_alloc};
 
 /// Describes how many rows should be emitted during grouping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +47,91 @@ impl EmitTo {
             }
             Self::First(n) => split_vec_min_alloc(v, *n),
         }
+    }
+}
+
+/// Selects groups for a non-destructive grouped aggregation read.
+///
+/// Unlike [`EmitTo`], this selection does not remove groups or change their
+/// indices. Selections created by [`Self::try_from_indices`] preserve the
+/// requested order and support duplicate indices.
+///
+/// A selection is validated once when it is constructed and can then be reused
+/// for the group values and accumulators participating in the same snapshot.
+/// Construct a new selection if the number or indexing of those groups changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GroupSelection<'a> {
+    total_num_groups: usize,
+    indices: Option<&'a [usize]>,
+}
+
+impl<'a> GroupSelection<'a> {
+    /// Selects all `total_num_groups` groups in group-index order.
+    pub fn all(total_num_groups: usize) -> Self {
+        Self {
+            total_num_groups,
+            indices: None,
+        }
+    }
+
+    /// Selects groups in the order specified by `indices`.
+    ///
+    /// Returns an error if an index is not less than `total_num_groups`. Empty
+    /// selections are valid, and duplicate indices are preserved.
+    pub fn try_from_indices(
+        indices: &'a [usize],
+        total_num_groups: usize,
+    ) -> Result<Self> {
+        if let Some(index) = indices.iter().find(|&&index| index >= total_num_groups) {
+            return exec_err!(
+                "Group index {index} is out of bounds for {total_num_groups} groups"
+            );
+        }
+        Ok(Self {
+            total_num_groups,
+            indices: Some(indices),
+        })
+    }
+
+    /// Returns the group count against which this selection was constructed.
+    pub fn total_num_groups(self) -> usize {
+        self.total_num_groups
+    }
+
+    /// Ensures this selection is being applied to the same number of groups
+    /// against which it was constructed.
+    ///
+    /// Preserving-read implementations should call this method with their
+    /// stored group count before using [`Self::iter`]. This check is `O(1)`;
+    /// the selected indices were already checked by [`Self::try_from_indices`].
+    pub fn validate_num_groups(self, actual_num_groups: usize) -> Result<()> {
+        if actual_num_groups != self.total_num_groups {
+            return exec_err!(
+                "Group selection was constructed for {} groups but applied to {actual_num_groups} groups",
+                self.total_num_groups
+            );
+        }
+        Ok(())
+    }
+
+    /// Returns the number of selected groups.
+    pub fn len(self) -> usize {
+        self.indices
+            .map_or(self.total_num_groups, |indices| indices.len())
+    }
+
+    /// Returns `true` if no groups are selected.
+    pub fn is_empty(self) -> bool {
+        self.len() == 0
+    }
+
+    /// Returns the selected group indices in output order.
+    pub fn iter(self) -> impl Iterator<Item = usize> + 'a {
+        let (all, indices): (_, &'a [usize]) = match self.indices {
+            None => (0..self.total_num_groups, &[]),
+            Some(indices) => (0..0, indices),
+        };
+        all.chain(indices.iter().copied())
     }
 }
 
@@ -154,6 +239,27 @@ pub trait GroupsAccumulator: Send + std::any::Any {
     /// `n`. See [`EmitTo::First`] for more details.
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef>;
 
+    /// Returns final aggregate values without changing the logical state or
+    /// group indices.
+    ///
+    /// Rows are returned in the order specified by `selection`. An empty
+    /// selection returns a correctly typed array with no rows.
+    ///
+    /// This method requires exclusive access because implementations may mutate
+    /// internal caches or builders. However, repeated calls and later updates
+    /// must observe the same logical accumulator state.
+    fn evaluate_preserving(
+        &mut self,
+        _selection: GroupSelection<'_>,
+    ) -> Result<ArrayRef> {
+        not_impl_err!("Preserving grouped evaluation is not implemented")
+    }
+
+    /// Returns `true` if [`Self::evaluate_preserving`] is implemented.
+    fn supports_evaluate_preserving(&self) -> bool {
+        false
+    }
+
     /// Returns the intermediate aggregate state for this accumulator,
     /// used for multi-phase grouping, resetting its internal state.
     ///
@@ -171,6 +277,28 @@ pub trait GroupsAccumulator: Send + std::any::Any {
     ///
     /// [`Accumulator::state`]: crate::accumulator::Accumulator::state
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>>;
+
+    /// Returns intermediate aggregate state without changing the logical state
+    /// or group indices.
+    ///
+    /// Each returned array has one row per selected group, in the order
+    /// specified by `selection`. An empty selection returns the normal number
+    /// of correctly typed state arrays, each with no rows.
+    ///
+    /// This method requires exclusive access because implementations may mutate
+    /// internal caches or builders. However, repeated calls and later updates
+    /// must observe the same logical accumulator state.
+    fn state_preserving(
+        &mut self,
+        _selection: GroupSelection<'_>,
+    ) -> Result<Vec<ArrayRef>> {
+        not_impl_err!("Preserving grouped state is not implemented")
+    }
+
+    /// Returns `true` if [`Self::state_preserving`] is implemented.
+    fn supports_state_preserving(&self) -> bool {
+        false
+    }
 
     /// Merges intermediate state (the output from [`Self::state`])
     /// into this accumulator's current state.
@@ -247,7 +375,7 @@ pub trait GroupsAccumulator: Send + std::any::Any {
 
 #[cfg(test)]
 mod tests {
-    use super::EmitTo;
+    use super::{EmitTo, GroupSelection};
 
     /// When `n` is small relative to `len`, the old `split_off(n) + swap` pattern had
     /// two allocation problems:
@@ -292,5 +420,37 @@ mod tests {
             v.capacity(),
             original_capacity,
         );
+    }
+
+    #[test]
+    fn group_selection_is_validated_once_and_reusable() {
+        let values = [10, 20, 30, 40];
+        let selected =
+            GroupSelection::try_from_indices(&[3, 1, 3], values.len()).unwrap();
+        assert_eq!(selected.total_num_groups(), values.len());
+        assert_eq!(selected.len(), 3);
+        assert_eq!(
+            selected
+                .iter()
+                .map(|index| values[index])
+                .collect::<Vec<_>>(),
+            vec![40, 20, 40]
+        );
+        selected.validate_num_groups(values.len()).unwrap();
+        let error = selected.validate_num_groups(values.len() - 1).unwrap_err();
+        assert!(error.to_string().contains("constructed for 4 groups"));
+
+        let all = GroupSelection::all(values.len());
+        assert_eq!(
+            all.iter().map(|index| values[index]).collect::<Vec<_>>(),
+            values
+        );
+
+        let empty = GroupSelection::try_from_indices(&[], values.len()).unwrap();
+        assert!(empty.is_empty());
+        assert!(empty.iter().next().is_none());
+
+        let error = GroupSelection::try_from_indices(&[4], values.len()).unwrap_err();
+        assert!(error.to_string().contains("out of bounds"));
     }
 }

@@ -414,6 +414,7 @@ impl UnnestExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::utils::usize_from_wire;
         use datafusion_proto_models::protobuf;
 
         let unnest = crate::expect_plan_variant!(
@@ -449,8 +450,8 @@ impl UnnestExec {
             .collect();
         let struct_column_indices = struct_type_columns
             .iter()
-            .map(|index| *index as _)
-            .collect();
+            .map(|index| usize_from_wire(*index, "UnnestExec", "struct_type_columns"))
+            .collect::<Result<Vec<_>>>()?;
         let options = options.as_ref().ok_or_else(|| {
             datafusion_common::internal_datafusion_err!(
                 "UnnestExec is missing required field 'options'"

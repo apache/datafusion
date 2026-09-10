@@ -821,6 +821,7 @@ impl BitwiseSortMergeJoinStream {
     async fn process_filtered_match_loop(
         &mut self,
         spill: Option<Arc<dyn SpillFile>>,
+        emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
         loop {
             self.process_key_match_with_filter(spill.as_ref()).await?;
@@ -836,6 +837,7 @@ impl BitwiseSortMergeJoinStream {
                 slice_keys(&self.outer_key_arrays, outer_batch.num_rows() - 1);
 
             self.emit_outer_batch()?;
+            self.emit_completed_batches(emitter).await;
 
             if !self.next_outer_batch().await? {
                 break;
@@ -856,7 +858,10 @@ impl BitwiseSortMergeJoinStream {
 
     /// Mark the outer key group as matched. If the outer key group continues
     /// into subsequent outer batches, keep marking there too.
-    async fn process_unfiltered_match_loop(&mut self) -> Result<()> {
+    async fn process_unfiltered_match_loop(
+        &mut self,
+        emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
+    ) -> Result<()> {
         loop {
             self.mark_outer_key_group_matched()?;
 
@@ -871,6 +876,7 @@ impl BitwiseSortMergeJoinStream {
                 slice_keys(&self.outer_key_arrays, outer_batch.num_rows() - 1);
 
             self.emit_outer_batch()?;
+            self.emit_completed_batches(emitter).await;
 
             if !self.next_outer_batch().await? {
                 return Ok(());
@@ -888,18 +894,21 @@ impl BitwiseSortMergeJoinStream {
 
     /// Keys at both cursors are equal: determine which outer rows in the key
     /// group have a match. Both key groups may span batch boundaries.
-    async fn process_key_match(&mut self) -> Result<()> {
+    async fn process_key_match(
+        &mut self,
+        emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
+    ) -> Result<()> {
         if self.filter.is_some() {
             // Buffer the inner key group so each inner row can be evaluated
             // against the outer key group, OR-ing filter results into the
             // matched bitset.
             let spill = self.buffer_inner_key_group().await?;
-            self.process_filtered_match_loop(spill).await
+            self.process_filtered_match_loop(spill, emitter).await
         } else {
             // Without a filter, key equality alone means every outer row in
             // the group matches; the inner rows themselves are not needed.
             self.advance_inner_past_key_group().await?;
-            self.process_unfiltered_match_loop().await
+            self.process_unfiltered_match_loop(emitter).await
         }
     }
 
@@ -1037,10 +1046,16 @@ impl BitwiseSortMergeJoinStream {
     /// current outer batch and all remaining ones with their current matched
     /// bits (semi drops unmatched rows, anti emits them, mark emits them
     /// with mark=false).
-    async fn drain_outer(&mut self) -> Result<()> {
-        self.emit_outer_batch()?;
-        while self.next_outer_batch().await? {
+    async fn drain_outer(
+        &mut self,
+        emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
+    ) -> Result<()> {
+        loop {
             self.emit_outer_batch()?;
+            self.emit_completed_batches(emitter).await;
+            if !self.next_outer_batch().await? {
+                break;
+            }
         }
         Ok(())
     }
@@ -1070,7 +1085,7 @@ impl BitwiseSortMergeJoinStream {
         // helpers are only entered at batch boundaries.
         while self.has_current_outer_row() || self.advance_outer_row(emitter).await? {
             if !(self.has_current_inner_row() || self.advance_inner_row().await?) {
-                self.drain_outer().await?;
+                self.drain_outer(emitter).await?;
                 break;
             }
 
@@ -1086,7 +1101,7 @@ impl BitwiseSortMergeJoinStream {
                 }
                 Ordering::Equal => {
                     if !self.try_process_key_match()? {
-                        self.process_key_match().await?;
+                        self.process_key_match(emitter).await?;
                     }
                 }
             }

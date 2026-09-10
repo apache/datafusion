@@ -208,7 +208,7 @@ async fn main_inner() -> Result<()> {
     if let Some(ref path) = args.data_path {
         let p = Path::new(path);
         env::set_current_dir(p).unwrap();
-    };
+    }
 
     let session_config = get_session_config(&args)?;
 
@@ -353,7 +353,7 @@ fn get_session_config(args: &Args) -> Result<SessionConfig> {
         }
         config_options.execution.batch_size =
             datafusion_common::config::ConfigNonZeroUsize::try_new(batch_size)?;
-    };
+    }
 
     // use easier to understand "tree" mode by default
     // if the user hasn't specified an explain format in the environment

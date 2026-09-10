@@ -648,7 +648,7 @@ impl InferredPredicates {
             || matches!(
                 is_restrict_null_predicate(
                     predicate.clone(),
-                    replace_map.keys().cloned()
+                    replace_map.keys().copied()
                 ),
                 Ok(true)
             )
@@ -790,7 +790,7 @@ impl OptimizerRule for PushDownFilter {
         let _ = config;
         if let LogicalPlan::Join(join) = plan {
             return push_down_join(join, None);
-        };
+        }
 
         let LogicalPlan::Filter(mut filter) = plan else {
             return Ok(Transformed::no(plan));

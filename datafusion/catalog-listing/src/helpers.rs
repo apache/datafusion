@@ -413,7 +413,7 @@ pub async fn pruned_partition_list<'a>(
             .try_filter_map(|object_meta| {
                 futures::future::ready(object_meta_to_partitioned_file(
                     object_meta,
-                    table_path.get_table_ref(),
+                    table_path.get_table_ref().as_ref(),
                 ))
             })
             .boxed())
@@ -443,7 +443,7 @@ pub async fn pruned_partition_list<'a>(
 
 fn object_meta_to_partitioned_file(
     object_meta: ObjectMeta,
-    table_ref: &Option<TableReference>,
+    table_ref: Option<&TableReference>,
 ) -> Result<Option<PartitionedFile>> {
     Ok(Some(PartitionedFile {
         object_meta,
@@ -454,7 +454,7 @@ fn object_meta_to_partitioned_file(
         ordering: None,
         extensions: FileExtensions::new(),
         metadata_size_hint: None,
-        table_reference: table_ref.clone(),
+        table_reference: table_ref.cloned(),
     }))
 }
 

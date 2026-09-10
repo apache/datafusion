@@ -138,7 +138,7 @@ impl Default for FilterMetadata {
 /// - A filter exists AND
 /// - The join type requires ensuring each input row produces at least one output
 pub fn needs_deferred_filtering(
-    filter: &Option<JoinFilter>,
+    filter: Option<&JoinFilter>,
     join_type: JoinType,
 ) -> bool {
     filter.is_some()
@@ -149,7 +149,7 @@ pub fn needs_deferred_filtering(
 ///
 /// Extracts the columns needed for filter evaluation from left and right batch columns
 pub fn get_filter_columns(
-    join_filter: &Option<JoinFilter>,
+    join_filter: Option<&JoinFilter>,
     left_columns: &[ArrayRef],
     right_columns: &[ArrayRef],
 ) -> Vec<ArrayRef> {
