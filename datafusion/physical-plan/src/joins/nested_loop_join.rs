@@ -285,6 +285,7 @@ impl NestedLoopJoinExecBuilder {
             &join_schema,
             join_type,
             projection.as_deref(),
+            filter.is_some(),
         )?;
         Ok(NestedLoopJoinExec {
             left,
@@ -359,6 +360,7 @@ impl NestedLoopJoinExec {
         schema: &SchemaRef,
         join_type: JoinType,
         projection: Option<&[usize]>,
+        has_filter: bool,
     ) -> Result<PlanProperties> {
         // Calculate equivalence properties:
         let mut eq_properties = join_equivalence_properties(
@@ -370,6 +372,7 @@ impl NestedLoopJoinExec {
             None,
             // No on columns in nested loop join
             &[],
+            has_filter,
         )?;
 
         let mut output_partitioning =

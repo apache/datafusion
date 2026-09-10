@@ -160,6 +160,7 @@ impl CrossJoinExec {
             &[false, false],
             None,
             &[],
+            false,
         )?;
 
         // Get output partitioning:

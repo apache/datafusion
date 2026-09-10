@@ -432,6 +432,8 @@ impl PiecewiseMergeJoinExec {
             // required sort and return wrongly ordered results. Range joins add
             // no column equivalences, so pass none.
             &[],
+            // The range predicate always filters matches beyond the equijoin keys.
+            true,
         )?;
 
         let output_partitioning =

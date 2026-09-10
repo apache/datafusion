@@ -16,6 +16,7 @@
 // under the License.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::memory_limit::DummyStreamPartition;
 use crate::physical_optimizer::test_utils::{
@@ -33,9 +34,10 @@ use arrow::compute::{SortOptions};
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::config::{ConfigOptions, CsvOptions};
 use datafusion_common::tree_node::{TreeNode, TransformedResult};
-use datafusion_common::{create_array, DataFusionError, NullEquality, Result, TableReference};
+use datafusion_common::{assert_batches_eq, create_array, Constraint, Constraints, DataFusionError, JoinSide, NullEquality, Result, TableReference};
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::source::DataSourceExec;
+use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_expr_common::operator::Operator;
 use datafusion_expr::{JoinType, SortExpr};
 use datafusion_execution::object_store::ObjectStoreUrl;
@@ -44,7 +46,8 @@ use datafusion_physical_expr_common::sort_expr::{
 };
 use datafusion_physical_expr::{Distribution, Partitioning, PhysicalExpr};
 use datafusion_physical_expr::expressions::{col, BinaryExpr, Column, NotExpr};
-use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+use datafusion_physical_plan::joins::{HashJoinExec, HashJoinExecBuilder, PartitionMode, SortMergeJoinExec};
+use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
@@ -65,12 +68,14 @@ use datafusion::prelude::*;
 use arrow::array::{record_batch, Array, ArrayRef, Int32Array, RecordBatch};
 use arrow::datatypes::{Field};
 use arrow_schema::Schema;
-use datafusion_execution::TaskContext;
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_catalog::streaming::StreamingTable;
 
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_physical_expr::projection::ProjectionExpr;
 use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use futures::StreamExt;
 use insta::{Settings, assert_snapshot};
 
@@ -3448,19 +3453,15 @@ async fn test_passthrough_wrapper_projection_keeps_ordering() -> Result<()> {
     )?;
     let schema = batch.schema();
     let source = Arc::new(DataSourceExec::new(Arc::new(
-        datafusion::datasource::memory::MemorySourceConfig::try_new(
-            &[vec![batch]],
-            schema.clone(),
-            None,
-        )?
-        .try_with_sort_information(vec![
-            LexOrdering::new([
-                sort_expr("a", &schema),
-                sort_expr("b", &schema),
-                sort_expr("c", &schema),
-            ])
-            .unwrap(),
-        ])?,
+        MemorySourceConfig::try_new(&[vec![batch]], schema.clone(), None)?
+            .try_with_sort_information(vec![
+                LexOrdering::new([
+                    sort_expr("a", &schema),
+                    sort_expr("b", &schema),
+                    sort_expr("c", &schema),
+                ])
+                .unwrap(),
+            ])?,
     ))) as Arc<dyn ExecutionPlan>;
 
     let projection = projection_exec(
@@ -3489,5 +3490,228 @@ async fn test_passthrough_wrapper_projection_keeps_ordering() -> Result<()> {
         "sort should be satisfied, ordering: {ordering}\nplan:\n{plan_str}"
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_unique_build_hash_join_unbounded_limit() -> Result<()> {
+    check_unique_build_join_unbounded_limit(JoinType::Inner).await
+}
+
+#[tokio::test]
+async fn test_unique_build_right_join_unbounded_limit() -> Result<()> {
+    check_unique_build_join_unbounded_limit(JoinType::Right).await
+}
+
+#[tokio::test]
+async fn test_unique_build_left_sort_merge_join_unbounded_limit() -> Result<()> {
+    check_unique_build_join_unbounded_limit(JoinType::Left).await
+}
+
+fn unique_join_build() -> Result<Arc<DataSourceExec>> {
+    let build_batch =
+        record_batch!(("build_k", Int32, [1, 2]), ("build_v", Int32, [100, 200]))?;
+    let build_schema = build_batch.schema();
+    let build_ordering = LexOrdering::new([
+        sort_expr("build_k", &build_schema),
+        sort_expr("build_v", &build_schema),
+    ])
+    .unwrap();
+    Ok(Arc::new(
+        DataSourceExec::new(Arc::new(
+            MemorySourceConfig::try_new(&[vec![build_batch]], build_schema, None)?
+                .try_with_sort_information(vec![build_ordering])?,
+        ))
+        .with_constraints(Constraints::new_unverified(vec![
+            Constraint::PrimaryKey(vec![0]),
+        ])),
+    ))
+}
+
+/// With no extra ON filter, equal probe keys match the same unique build row.
+/// LIMIT must return even if the probe-key group never finishes, including when
+/// the join preserves unmatched probe rows.
+async fn check_unique_build_join_unbounded_limit(join_type: JoinType) -> Result<()> {
+    #[derive(Debug)]
+    struct PendingPartition(RecordBatch);
+
+    impl PartitionStream for PendingPartition {
+        fn schema(&self) -> &SchemaRef {
+            self.0.schema_ref()
+        }
+
+        fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+            let stream = futures::stream::iter([Ok(self.0.clone())])
+                .chain(futures::stream::pending());
+            Box::pin(RecordBatchStreamAdapter::new(self.0.schema(), stream))
+        }
+    }
+
+    let build = unique_join_build()?;
+
+    let probe_batch = record_batch!(("probe_k", Int32, [1, 1]))?;
+    let probe_schema = probe_batch.schema();
+    let probe_ordering = LexOrdering::new([sort_expr("probe_k", &probe_schema)]).unwrap();
+    let probe = Arc::new(StreamingTableExec::try_new(
+        probe_schema,
+        vec![Arc::new(PendingPartition(probe_batch))],
+        None,
+        vec![probe_ordering],
+        true,
+        None,
+    )?);
+    // HashJoin probes the right side. Use SMJ to exercise a left probe.
+    let join: Arc<dyn ExecutionPlan> = if join_type == JoinType::Left {
+        Arc::new(SortMergeJoinExec::try_new(
+            probe,
+            build,
+            vec![(
+                Arc::new(Column::new("probe_k", 0)),
+                Arc::new(Column::new("build_k", 0)),
+            )],
+            None,
+            join_type,
+            vec![SortOptions::default()],
+            NullEquality::NullEqualsNothing,
+        )?)
+    } else {
+        Arc::new(
+            HashJoinExecBuilder::new(
+                build,
+                probe,
+                vec![(
+                    Arc::new(Column::new("build_k", 0)),
+                    Arc::new(Column::new("probe_k", 0)),
+                )],
+                join_type,
+            )
+            .with_partition_mode(PartitionMode::CollectLeft)
+            .build()?,
+        )
+    };
+    let required = LexOrdering::new([
+        sort_expr("probe_k", &join.schema()),
+        sort_expr("build_k", &join.schema()),
+        sort_expr("build_v", &join.schema()),
+    ])
+    .unwrap();
+    let mut plan: Arc<dyn ExecutionPlan> =
+        Arc::new(SortExec::new(required, join).with_fetch(Some(1)));
+    let ctx = SessionContext::new_with_config(
+        SessionConfig::new()
+            .with_target_partitions(1)
+            .with_batch_size(2),
+    );
+    let state = ctx.state();
+    for optimizer in state.physical_optimizers() {
+        plan = optimizer.optimize(plan, state.config_options())?;
+    }
+    if join_type == JoinType::Left {
+        assert!(
+            displayable(plan.as_ref())
+                .indent(true)
+                .to_string()
+                .contains("SortMergeJoinExec: join_type=Left")
+        );
+    }
+    let batches = tokio::time::timeout(
+        Duration::from_secs(5),
+        datafusion_physical_plan::collect(Arc::clone(&plan), ctx.task_ctx()),
+    )
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "LIMIT waited for an unfinished probe-key group:\n{}",
+            displayable(plan.as_ref()).indent(true)
+        )
+    })?;
+    // SMJ emits probe columns first; use the same column order for the assertion.
+    let batches = if join_type == JoinType::Left {
+        batches
+            .iter()
+            .map(|batch| batch.project(&[1, 2, 0]))
+            .collect::<std::result::Result<Vec<_>, _>>()?
+    } else {
+        batches
+    };
+    assert_batches_eq!(
+        [
+            "+---------+---------+---------+",
+            "| build_k | build_v | probe_k |",
+            "+---------+---------+---------+",
+            "| 1       | 100     | 1       |",
+            "+---------+---------+---------+",
+        ],
+        &batches
+    );
+    Ok(())
+}
+
+/// A filter can make equal probe keys alternate between a build row and NULLs.
+#[tokio::test]
+async fn test_unique_build_outer_join_filter_requires_sort() -> Result<()> {
+    let build = unique_join_build()?;
+    let probe_batch = record_batch!(
+        ("probe_k", Int32, [1, 1, 1]),
+        ("flag", Boolean, [true, false, true])
+    )?;
+    let probe_schema = probe_batch.schema();
+    let probe_ordering = LexOrdering::new([sort_expr("probe_k", &probe_schema)]).unwrap();
+    let probe = DataSourceExec::from_data_source(
+        MemorySourceConfig::try_new(&[vec![probe_batch]], probe_schema, None)?
+            .try_with_sort_information(vec![probe_ordering])?,
+    );
+    let filter = JoinFilter::new(
+        Arc::new(Column::new("flag", 0)),
+        vec![ColumnIndex {
+            index: 1,
+            side: JoinSide::Right,
+        }],
+        Arc::new(Schema::new(vec![Field::new(
+            "flag",
+            DataType::Boolean,
+            true,
+        )])),
+    );
+    let join = Arc::new(
+        HashJoinExecBuilder::new(
+            build,
+            probe,
+            vec![(
+                Arc::new(Column::new("build_k", 0)),
+                Arc::new(Column::new("probe_k", 0)),
+            )],
+            JoinType::Right,
+        )
+        .with_filter(Some(filter))
+        .with_partition_mode(PartitionMode::CollectLeft)
+        .build()?,
+    );
+    let required = LexOrdering::new([
+        sort_expr("probe_k", &join.schema()),
+        sort_expr("build_k", &join.schema()),
+        sort_expr("build_v", &join.schema()),
+    ])
+    .unwrap();
+    let mut plan: Arc<dyn ExecutionPlan> = Arc::new(SortExec::new(required, join));
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(1));
+    let state = ctx.state();
+    for optimizer in state.physical_optimizers() {
+        plan = optimizer.optimize(plan, state.config_options())?;
+    }
+    let batches = datafusion_physical_plan::collect(plan, ctx.task_ctx()).await?;
+    assert_batches_eq!(
+        [
+            "+---------+---------+---------+-------+",
+            "| build_k | build_v | probe_k | flag  |",
+            "+---------+---------+---------+-------+",
+            "|         |         | 1       | false |",
+            "| 1       | 100     | 1       | true  |",
+            "| 1       | 100     | 1       | true  |",
+            "+---------+---------+---------+-------+",
+        ],
+        &batches
+    );
     Ok(())
 }

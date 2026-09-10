@@ -194,8 +194,15 @@ impl SortMergeJoinExec {
 
         let schema =
             Arc::new(build_join_schema(&left_schema, &right_schema, &join_type).0);
-        let cache =
-            Self::compute_properties(&left, &right, &schema, join_type, &on, None)?;
+        let cache = Self::compute_properties(
+            &left,
+            &right,
+            &schema,
+            join_type,
+            &on,
+            None,
+            filter.is_some(),
+        )?;
         Ok(Self {
             left,
             right,
@@ -224,6 +231,7 @@ impl SortMergeJoinExec {
             self.join_type,
             &self.on,
             projection.as_deref(),
+            self.filter.is_some(),
         )?;
         Ok(Self {
             projection,
@@ -314,6 +322,7 @@ impl SortMergeJoinExec {
         join_type: JoinType,
         join_on: JoinOnRef,
         projection: Option<&[usize]>,
+        has_filter: bool,
     ) -> Result<PlanProperties> {
         // Calculate equivalence properties:
         let mut eq_properties = join_equivalence_properties(
@@ -324,6 +333,7 @@ impl SortMergeJoinExec {
             &Self::maintains_input_order(join_type),
             Some(Self::probe_side(&join_type)),
             join_on,
+            has_filter,
         )?;
 
         let mut output_partitioning =
