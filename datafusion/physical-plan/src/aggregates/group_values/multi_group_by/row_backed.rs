@@ -47,7 +47,7 @@
 //! [`GroupValuesRows`]: crate::aggregates::group_values::GroupValuesRows
 
 use crate::aggregates::group_values::multi_group_by::GroupColumn;
-use crate::aggregates::group_values::row::encode_array_if_necessary;
+pub(crate) use crate::aggregates::group_values::row::encode_array_if_necessary;
 
 use arrow::array::{Array, ArrayRef, BooleanBufferBuilder};
 use arrow::datatypes::DataType;

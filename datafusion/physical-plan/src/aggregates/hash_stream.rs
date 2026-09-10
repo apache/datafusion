@@ -1068,7 +1068,7 @@ mod tests {
         let exec = Arc::new(TestMemoryExec::update_cache(&Arc::new(exec)));
 
         // Use Partial mode where the race condition occurs
-        let aggregate_exec = AggregateExec::try_new(
+        let aggregate_exec = AggregateExec::actual_try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::new_single(group_expr),
             aggr_expr,
@@ -1213,7 +1213,7 @@ mod tests {
         let exec = Arc::new(TestMemoryExec::update_cache(&Arc::new(exec)));
 
         // Use Partial mode
-        let aggregate_exec = AggregateExec::try_new(
+        let aggregate_exec = AggregateExec::actual_try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::new_single(group_expr),
             aggr_expr,

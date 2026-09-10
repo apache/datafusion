@@ -60,6 +60,11 @@ pub mod select_expr;
 pub mod groups_accumulator {
     pub use datafusion_expr_common::groups_accumulator::*;
 }
+
+/// Blocked builders shared by the blocked groups accumulators
+pub mod blocked_helpers {
+    pub use datafusion_expr_common::blocked_helpers::*;
+}
 pub mod interval_arithmetic {
     pub use datafusion_expr_common::interval_arithmetic::*;
 }

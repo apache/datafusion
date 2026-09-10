@@ -24,12 +24,13 @@ use datafusion_physical_plan::aggregates::{AggregateExec, LimitOptions};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
-use datafusion_common::Result;
+use datafusion_common::{plan_err, Result};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 
 use crate::PhysicalOptimizerRule;
 use itertools::Itertools;
+use datafusion_physical_plan::aggregates_blocked::BlockedAggregateExec;
 
 /// An optimizer rule that passes a `limit` hint into grouped aggregations which don't require all
 /// rows in the group to be processed for correctness. Example queries fitting this description are:
@@ -45,7 +46,7 @@ impl LimitedDistinctAggregation {
     }
 
     fn transform_agg(
-        aggr: &AggregateExec,
+        aggr: &BlockedAggregateExec,
         limit: usize,
     ) -> Option<Arc<dyn ExecutionPlan>> {
         // rules for transforming this Aggregate are held in this method
@@ -102,9 +103,16 @@ impl LimitedDistinctAggregation {
             if !rewrite_applicable {
                 return Ok(Transformed::no(plan));
             }
-            if let Some(aggr) = plan.downcast_ref::<AggregateExec>() {
+            if plan.downcast_ref::<AggregateExec>().is_some() {
+                return plan_err!("should not get AggregateExec, should be migrated to BlockedAggregateExec already");
+            }
+            if let Some(aggr) = plan.downcast_ref::<BlockedAggregateExec>() {
+
+                if match_aggr.downcast_ref::<AggregateExec>().is_some() {
+                    return plan_err!("should not get AggregateExec, should be migrated to BlockedAggregateExec already");
+                }
                 if found_match_aggr
-                    && let Some(parent_aggr) = match_aggr.downcast_ref::<AggregateExec>()
+                    && let Some(parent_aggr) = match_aggr.downcast_ref::<BlockedAggregateExec>()
                     && !parent_aggr.group_expr().eq(aggr.group_expr())
                 {
                     // a partial and final aggregation with different groupings disqualifies

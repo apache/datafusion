@@ -2190,6 +2190,7 @@ dependencies = [
  "indexmap 2.14.2",
  "insta",
  "itertools 0.15.0",
+ "libc",
  "rstest",
 ]
 
@@ -2448,6 +2449,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr-common",
  "datafusion-proto-models",
+ "half",
  "hashbrown 0.17.1",
  "indexmap 2.14.2",
  "itertools 0.15.0",

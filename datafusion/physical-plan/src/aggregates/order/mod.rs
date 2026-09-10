@@ -21,8 +21,8 @@ use arrow::array::ArrayRef;
 use datafusion_common::Result;
 use datafusion_expr::EmitTo;
 
-mod full;
-mod partial;
+pub(crate) mod full;
+pub(crate) mod partial;
 
 use crate::InputOrderMode;
 pub use full::GroupOrderingFull;

@@ -24,7 +24,7 @@ use datafusion_common::Result;
 use std::sync::Arc;
 
 pub use datafusion_functions_aggregate_common::accumulator::{
-    AccumulatorArgs, AccumulatorFactoryFunction, StateFieldsArgs,
+    AccumulatorArgs, BlockedAccumulatorArgs, AccumulatorFactoryFunction, StateFieldsArgs,
 };
 
 use crate::expr::{AggregateFunction, WindowFunction};

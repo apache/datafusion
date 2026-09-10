@@ -48,6 +48,7 @@ use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::aggregates::AggregateMode;
 use datafusion_physical_plan::aggregates::PhysicalGroupBy;
+use datafusion_physical_plan::aggregates_blocked::BlockedAggregateExec;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::common;
 use datafusion_physical_plan::displayable;
@@ -74,7 +75,7 @@ fn mock_data() -> Result<Arc<DataSourceExec>> {
 
 /// Checks that the count optimization was applied and we still get the right result
 async fn assert_count_optim_success(
-    plan: AggregateExec,
+    plan: BlockedAggregateExec,
     agg: TestAggregate,
 ) -> Result<()> {
     let task_ctx = Arc::new(TaskContext::default());

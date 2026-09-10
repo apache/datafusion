@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{Result, plan_datafusion_err};
+use datafusion_common::{plan_datafusion_err, plan_err, Result};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
 use datafusion_physical_plan::aggregates::{
@@ -30,7 +30,7 @@ use datafusion_physical_plan::aggregates::{
 };
 use datafusion_physical_plan::windows::get_ordered_partition_by_indices;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
-
+use datafusion_physical_plan::aggregates_blocked::BlockedAggregateExec;
 use crate::PhysicalOptimizerRule;
 
 /// This optimizer rule checks ordering requirements of aggregate expressions.
@@ -78,7 +78,10 @@ impl PhysicalOptimizerRule for OptimizeAggregateOrder {
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_up(|plan| {
-            if let Some(aggr_exec) = plan.downcast_ref::<AggregateExec>() {
+            if plan.downcast_ref::<AggregateExec>().is_some() {
+                return plan_err!("should not get AggregateExec, should be migrated to BlockedAggregateExec");
+            }
+            if let Some(aggr_exec) = plan.downcast_ref::<BlockedAggregateExec>() {
                 // Final stage implementations do not rely on ordering -- those
                 // ordering fields may be pruned out by first stage aggregates.
                 // Hence, necessary information for proper merge is added during

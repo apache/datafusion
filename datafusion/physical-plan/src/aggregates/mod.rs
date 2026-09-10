@@ -208,11 +208,12 @@ use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use itertools::Itertools;
 use topk::hash_table::is_supported_hash_key_type;
 use topk::heap::is_supported_heap_type;
+use crate::aggregates_blocked::BlockedAggregateExec;
 
 mod aggregate_hash_table;
 mod aggregate_stream;
 pub mod group_values;
-mod grouped_hash_stream;
+pub(crate) mod grouped_hash_stream;
 mod grouped_topk_stream;
 mod hash_stream;
 pub mod order;
@@ -236,7 +237,7 @@ pub fn topk_types_supported(key_type: &DataType, value_type: &DataType) -> bool 
 }
 
 /// Hard-coded seed for aggregations to ensure hash values differ from `RepartitionExec`, avoiding collisions.
-const AGGREGATION_HASH_SEED: datafusion_common::hash_utils::RandomState =
+pub(crate) const AGGREGATION_HASH_SEED: datafusion_common::hash_utils::RandomState =
     // This seed is chosen to be a large 64-bit number
     datafusion_common::hash_utils::RandomState::with_seed(15395726432021054657);
 
@@ -530,7 +531,7 @@ impl PhysicalGroupBy {
     }
 
     /// The number of expressions in the output schema.
-    fn num_output_exprs(&self) -> usize {
+    pub(crate) fn num_output_exprs(&self) -> usize {
         let mut num_exprs = self.expr.len();
         if self.has_grouping_set {
             num_exprs += 1
@@ -609,7 +610,7 @@ impl PhysicalGroupBy {
     ///
     /// This might be different from the `group_fields` that might contain internal expressions that
     /// should not be part of the output schema.
-    fn output_fields(&self, input_schema: &Schema) -> Result<Vec<FieldRef>> {
+    pub(crate) fn output_fields(&self, input_schema: &Schema) -> Result<Vec<FieldRef>> {
         let mut fields = self.group_fields(input_schema)?;
         fields.truncate(self.num_output_exprs());
         Ok(fields)
@@ -957,6 +958,25 @@ impl AggregateExec {
         filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
+    ) -> Result<BlockedAggregateExec> {
+        BlockedAggregateExec::try_new(
+            mode,
+            group_by,
+            aggr_expr,
+            filter_expr,
+            input,
+            input_schema,
+        )
+    }
+
+    /// Create a new hash aggregate execution plan
+    pub fn actual_try_new(
+        mode: AggregateMode,
+        group_by: impl Into<Arc<PhysicalGroupBy>>,
+        aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
+        filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
+        input: Arc<dyn ExecutionPlan>,
+        input_schema: SchemaRef,
     ) -> Result<Self> {
         let group_by = group_by.into();
         let schema = create_schema(&input.schema(), &group_by, &aggr_expr, mode)?;
@@ -981,7 +1001,7 @@ impl AggregateExec {
     /// a rule may re-write aggregate expressions (e.g. reverse them) during
     /// initialization, field names may change inadvertently if one re-creates
     /// the schema in such cases.
-    fn try_new_with_schema(
+    pub(crate) fn try_new_with_schema(
         mode: AggregateMode,
         group_by: impl Into<Arc<PhysicalGroupBy>>,
         mut aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
@@ -1158,7 +1178,7 @@ impl AggregateExec {
     ///
     /// Only used to restore the filter when decoding a serialized plan: every
     /// other code path creates the filter in [`AggregateExec::try_new`].
-    fn set_dynamic_filter(
+    pub(crate) fn set_dynamic_filter(
         mut self,
         filter: Arc<DynamicFilterPhysicalExpr>,
     ) -> Result<Self> {
@@ -1189,6 +1209,18 @@ impl AggregateExec {
             supported_accumulators_info: dyn_filter.supported_accumulators_info.clone(),
         }));
         Ok(self)
+    }
+
+    pub(crate) fn unset_dynamic_filter(mut self) -> Self {
+        self.dynamic_filter = None;
+
+        self
+    }
+
+    pub(crate) fn set_metrics(mut self, metrics: ExecutionPlanMetricsSet) -> Self {
+        self.metrics = metrics;
+
+        self
     }
 
     /// Input plan
@@ -2698,7 +2730,7 @@ impl AggregateExec {
                 schema,
             )
         } else {
-            AggregateExec::try_new(
+            AggregateExec::actual_try_new(
                 mode,
                 group_by,
                 aggr_expr,
@@ -3063,7 +3095,7 @@ pub fn evaluate_many(
         .collect()
 }
 
-fn evaluate_optional(
+pub(crate) fn evaluate_optional(
     expr: &[Option<Arc<dyn PhysicalExpr>>],
     batch: &RecordBatch,
 ) -> Result<Vec<Option<ArrayRef>>> {
@@ -3693,7 +3725,7 @@ mod tests {
 
         let final_grouping_set = grouping_set.as_final();
 
-        let merged_aggregate = Arc::new(AggregateExec::try_new(
+        let merged_aggregate = Arc::new(AggregateExec::actual_try_new(
             AggregateMode::Final,
             final_grouping_set,
             aggregates,
@@ -4011,7 +4043,7 @@ mod tests {
             (2, groups_some, aggregates_v2),
         ] {
             let n_aggr = aggregates.len();
-            let partial_aggregate = Arc::new(AggregateExec::try_new(
+            let partial_aggregate = Arc::new(AggregateExec::actual_try_new(
                 AggregateMode::Single,
                 groups,
                 aggregates,
@@ -4083,7 +4115,7 @@ mod tests {
                 .alias("constructor_allocating(b)")
                 .build()?,
         )];
-        let aggregate = Arc::new(AggregateExec::try_new(
+        let aggregate = Arc::new(AggregateExec::actual_try_new(
             AggregateMode::Single,
             PhysicalGroupBy::default(),
             aggregates,
@@ -4206,7 +4238,7 @@ mod tests {
                 .build()?,
         )];
 
-        let partial_aggregate = Arc::new(AggregateExec::try_new(
+        let partial_aggregate = Arc::new(AggregateExec::actual_try_new(
             AggregateMode::Partial,
             group_by.clone(),
             aggregates.clone(),
@@ -4247,7 +4279,7 @@ mod tests {
         assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 3);
 
         let merge = Arc::new(CoalescePartitionsExec::new(partial_aggregate));
-        let final_aggregate = AggregateExec::try_new(
+        let final_aggregate = AggregateExec::actual_try_new(
             AggregateMode::Final,
             group_by.as_final(),
             aggregates,
@@ -4300,7 +4332,7 @@ mod tests {
                 .alias("no_first_emit(value)")
                 .build()?,
         )];
-        let aggregate = Arc::new(AggregateExec::try_new(
+        let aggregate = Arc::new(AggregateExec::actual_try_new(
             AggregateMode::Partial,
             group_by,
             aggregates,
@@ -4375,7 +4407,7 @@ mod tests {
             None,
         )?;
         let partial_aggregate = Arc::new(
-            AggregateExec::try_new(
+            AggregateExec::actual_try_new(
                 AggregateMode::Partial,
                 group_by.clone(),
                 vec![],
@@ -4416,7 +4448,7 @@ mod tests {
         let final_input =
             TestMemoryExec::try_new_exec(&[input_batches], Arc::clone(&schema), None)?;
         let final_aggregate = Arc::new(
-            AggregateExec::try_new(
+            AggregateExec::actual_try_new(
                 AggregateMode::Final,
                 group_by.as_final(),
                 vec![],
@@ -4483,7 +4515,7 @@ mod tests {
                 .build()?,
         )];
 
-        AggregateExec::try_new(
+        AggregateExec::actual_try_new(
             AggregateMode::Single,
             group_by,
             aggregates,
@@ -4563,7 +4595,7 @@ mod tests {
         let input = TestMemoryExec::try_new(&[input_batches], Arc::clone(&schema), None)?
             .try_with_sort_information(vec![ordering])?;
         let input = Arc::new(TestMemoryExec::update_cache(&Arc::new(input)));
-        let aggregate = AggregateExec::try_new(
+        let aggregate = AggregateExec::actual_try_new(
             AggregateMode::Single,
             PhysicalGroupBy::new_single(vec![
                 (col("sort_col", &schema)?, "sort_col".to_string()),
@@ -4632,7 +4664,7 @@ mod tests {
 
         let empty_input =
             TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(&schema), None)?;
-        let partial = AggregateExec::try_new(
+        let partial = AggregateExec::actual_try_new(
             AggregateMode::Partial,
             group_by.clone(),
             aggregates.clone(),
@@ -4654,7 +4686,7 @@ mod tests {
             None,
         )?;
 
-        AggregateExec::try_new(
+        AggregateExec::actual_try_new(
             AggregateMode::PartialReduce,
             group_by,
             aggregates,
@@ -4779,7 +4811,7 @@ mod tests {
             None,
         )?;
 
-        AggregateExec::try_new(
+        AggregateExec::actual_try_new(
             AggregateMode::PartialReduce,
             group_by,
             aggregates,
@@ -4890,7 +4922,7 @@ mod tests {
                 .alias("COUNT(value_col)")
                 .build()?,
         )];
-        let aggregate = AggregateExec::try_new(
+        let aggregate = AggregateExec::actual_try_new(
             AggregateMode::Partial,
             group_by,
             aggr_expr,
@@ -4947,7 +4979,7 @@ mod tests {
 
         let empty_input =
             TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(&schema), None)?;
-        let partial_aggregate = AggregateExec::try_new(
+        let partial_aggregate = AggregateExec::actual_try_new(
             AggregateMode::Partial,
             group_by.clone(),
             aggr_expr.clone(),
@@ -4972,7 +5004,7 @@ mod tests {
                 .try_with_sort_information(vec![ordering])?;
         let final_input = Arc::new(TestMemoryExec::update_cache(&Arc::new(final_input)));
 
-        let final_aggregate = AggregateExec::try_new(
+        let final_aggregate = AggregateExec::actual_try_new(
             AggregateMode::Final,
             group_by.as_final(),
             aggr_expr,
@@ -5037,7 +5069,7 @@ mod tests {
             .try_with_sort_information(vec![ordering])?;
         let input = Arc::new(TestMemoryExec::update_cache(&Arc::new(input)));
 
-        let aggregate = AggregateExec::try_new(
+        let aggregate = AggregateExec::actual_try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::new_single(vec![
                 (col("sort_col", &schema)?, "sort_col".to_string()),
@@ -5103,7 +5135,7 @@ mod tests {
 
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
         let refs = blocking_exec.refs();
-        let aggregate_exec = Arc::new(AggregateExec::try_new(
+        let aggregate_exec = Arc::new(AggregateExec::actual_try_new(
             AggregateMode::Partial,
             groups.clone(),
             aggregates.clone(),
@@ -5142,7 +5174,7 @@ mod tests {
 
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
         let refs = blocking_exec.refs();
-        let aggregate_exec = Arc::new(AggregateExec::try_new(
+        let aggregate_exec = Arc::new(AggregateExec::actual_try_new(
             AggregateMode::Partial,
             groups,
             aggregates.clone(),
@@ -5398,7 +5430,7 @@ mod tests {
             Arc::clone(&schema),
             None,
         )?;
-        let aggregate_exec = Arc::new(AggregateExec::try_new(
+        let aggregate_exec = Arc::new(AggregateExec::actual_try_new(
             AggregateMode::Partial,
             groups.clone(),
             aggregates.clone(),
@@ -5408,7 +5440,7 @@ mod tests {
         )?);
         let coalesce = Arc::new(CoalescePartitionsExec::new(aggregate_exec))
             as Arc<dyn ExecutionPlan>;
-        let aggregate_final = Arc::new(AggregateExec::try_new(
+        let aggregate_final = Arc::new(AggregateExec::actual_try_new(
             AggregateMode::Final,
             groups,
             aggregates.clone(),
@@ -5540,7 +5572,7 @@ mod tests {
             test_last_value_agg_expr(&schema, option_desc)?,
         ];
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
-        let aggregate_exec = Arc::new(AggregateExec::try_new(
+        let aggregate_exec = Arc::new(AggregateExec::actual_try_new(
             AggregateMode::Partial,
             groups,
             aggregates,
@@ -5617,7 +5649,7 @@ mod tests {
         let input =
             TestMemoryExec::try_new_exec(&[input_batches], Arc::clone(&schema), None)?;
 
-        let aggregate_exec = Arc::new(AggregateExec::try_new(
+        let aggregate_exec = Arc::new(AggregateExec::actual_try_new(
             AggregateMode::Single,
             groups,
             aggregates.clone(),
@@ -5731,7 +5763,7 @@ mod tests {
             Arc::<Schema>::clone(&batch.schema()),
             None,
         )?;
-        let aggregate_exec = Arc::new(AggregateExec::try_new(
+        let aggregate_exec = Arc::new(AggregateExec::actual_try_new(
             AggregateMode::FinalPartitioned,
             group_by,
             aggr_expr,
@@ -5799,7 +5831,7 @@ mod tests {
 
         let input =
             TestMemoryExec::try_new_exec(&[input_data], Arc::clone(&schema), None)?;
-        let aggregate_exec = Arc::new(AggregateExec::try_new(
+        let aggregate_exec = Arc::new(AggregateExec::actual_try_new(
             AggregateMode::Partial,
             group_by,
             aggr_expr,
@@ -5891,7 +5923,7 @@ mod tests {
 
         let input =
             TestMemoryExec::try_new_exec(&[input_data], Arc::clone(&schema), None)?;
-        let aggregate_exec = Arc::new(AggregateExec::try_new(
+        let aggregate_exec = Arc::new(AggregateExec::actual_try_new(
             AggregateMode::Partial,
             group_by,
             aggr_expr,
@@ -5974,7 +6006,7 @@ mod tests {
 
         let input =
             TestMemoryExec::try_new_exec(&[input_data], Arc::clone(&schema), None)?;
-        let aggregate_exec = Arc::new(AggregateExec::try_new(
+        let aggregate_exec = Arc::new(AggregateExec::actual_try_new(
             AggregateMode::Partial,
             group_by,
             aggr_expr,
@@ -6070,7 +6102,7 @@ mod tests {
 
         let input =
             TestMemoryExec::try_new_exec(&[input_data], Arc::clone(&schema), None)?;
-        let aggregate_exec = Arc::new(AggregateExec::try_new(
+        let aggregate_exec = Arc::new(AggregateExec::actual_try_new(
             AggregateMode::Partial,
             group_by,
             aggr_expr,
@@ -6167,7 +6199,7 @@ mod tests {
 
         let input =
             TestMemoryExec::try_new_exec(&[input_data], Arc::clone(&schema), None)?;
-        let aggregate_exec = Arc::new(AggregateExec::try_new(
+        let aggregate_exec = Arc::new(AggregateExec::actual_try_new(
             AggregateMode::Partial,
             group_by,
             aggr_expr,
@@ -6304,7 +6336,7 @@ mod tests {
             ),
         ];
 
-        let single_aggregate = Arc::new(AggregateExec::try_new(
+        let single_aggregate = Arc::new(AggregateExec::actual_try_new(
             AggregateMode::Single,
             grouping_set,
             aggregates,
@@ -6446,7 +6478,7 @@ mod tests {
             ),
         ];
 
-        let single_aggregate = Arc::new(AggregateExec::try_new(
+        let single_aggregate = Arc::new(AggregateExec::actual_try_new(
             AggregateMode::Single,
             grouping_set,
             aggregates,
@@ -6536,7 +6568,7 @@ mod tests {
 
         let single_input =
             Arc::new(EmptyExec::new(Arc::clone(&schema))) as Arc<dyn ExecutionPlan>;
-        let single_agg_zero = AggregateExec::try_new(
+        let single_agg_zero = AggregateExec::actual_try_new(
             AggregateMode::Single,
             PhysicalGroupBy::default(),
             vec![count_a_aggregate(&schema)?],
@@ -6613,7 +6645,7 @@ mod tests {
             Partitioning::RoundRobinBatch(4),
         )?) as Arc<dyn ExecutionPlan>;
 
-        let agg = AggregateExec::try_new(
+        let agg = AggregateExec::actual_try_new(
             AggregateMode::Partial,
             grouping_sets_with_empty(&schema, 1)?,
             vec![count_a_aggregate(&schema)?],
@@ -6746,7 +6778,7 @@ mod tests {
         let input = Arc::new(StatisticsExec::new(stats, (**schema).clone()))
             as Arc<dyn ExecutionPlan>;
 
-        let mut agg = AggregateExec::try_new(
+        let mut agg = AggregateExec::actual_try_new(
             mode,
             group_by,
             vec![count_a_aggregate(schema)?],
@@ -7193,7 +7225,7 @@ mod tests {
 
         let single_input =
             Arc::new(EmptyExec::new(Arc::clone(&schema))) as Arc<dyn ExecutionPlan>;
-        let single_agg = AggregateExec::try_new(
+        let single_agg = AggregateExec::actual_try_new(
             AggregateMode::Single,
             duplicate_empty_grouping_sets.clone(),
             vec![count_a_aggregate(&schema)?],
@@ -7211,7 +7243,7 @@ mod tests {
         let partial_input =
             Arc::new(EmptyExec::new(Arc::clone(&schema)).with_partitions(2))
                 as Arc<dyn ExecutionPlan>;
-        let partial_agg = Arc::new(AggregateExec::try_new(
+        let partial_agg = Arc::new(AggregateExec::actual_try_new(
             AggregateMode::Partial,
             duplicate_empty_grouping_sets,
             vec![count_a_aggregate(&schema)?],
@@ -7343,7 +7375,7 @@ mod tests {
             .unwrap(),
         ])?;
 
-        let aggr = Arc::new(AggregateExec::try_new(
+        let aggr = Arc::new(AggregateExec::actual_try_new(
             AggregateMode::Single,
             PhysicalGroupBy::new(
                 vec![
@@ -7444,7 +7476,7 @@ mod tests {
 
         let scan = TestMemoryExec::try_new(&batches, Arc::clone(&schema), None)?;
 
-        let aggr = Arc::new(AggregateExec::try_new(
+        let aggr = Arc::new(AggregateExec::actual_try_new(
             AggregateMode::Single,
             PhysicalGroupBy::new(
                 vec![(col("g", schema.as_ref())?, "g".to_string())],
@@ -7547,7 +7579,7 @@ mod tests {
         // Step 1: Partial aggregation on partition 1
         let input1 =
             TestMemoryExec::try_new_exec(&[partition_1], Arc::clone(&schema), None)?;
-        let partial1 = Arc::new(AggregateExec::try_new(
+        let partial1 = Arc::new(AggregateExec::actual_try_new(
             AggregateMode::Partial,
             groups.clone(),
             aggregates.clone(),
@@ -7559,7 +7591,7 @@ mod tests {
         // Step 2: Partial aggregation on partition 2
         let input2 =
             TestMemoryExec::try_new_exec(&[partition_2], Arc::clone(&schema), None)?;
-        let partial2 = Arc::new(AggregateExec::try_new(
+        let partial2 = Arc::new(AggregateExec::actual_try_new(
             AggregateMode::Partial,
             groups.clone(),
             aggregates.clone(),
@@ -7587,7 +7619,7 @@ mod tests {
         // Coalesce into a single partition for the PartialReduce
         let coalesced = Arc::new(CoalescePartitionsExec::new(combined_input));
 
-        let partial_reduce = Arc::new(AggregateExec::try_new(
+        let partial_reduce = Arc::new(AggregateExec::actual_try_new(
             AggregateMode::PartialReduce,
             groups.clone(),
             aggregates.clone(),
@@ -7611,7 +7643,7 @@ mod tests {
             Arc::clone(&partial_schema),
             None,
         )?;
-        let final_agg = Arc::new(AggregateExec::try_new(
+        let final_agg = Arc::new(AggregateExec::actual_try_new(
             AggregateMode::Final,
             groups.clone(),
             aggregates.clone(),
@@ -8338,7 +8370,7 @@ mod tests {
         let child = Arc::new(EmptyExec::new(Arc::clone(&schema)));
 
         // Partial min aggregate supports dynamic filtering
-        let agg = AggregateExec::try_new(
+        let agg = AggregateExec::actual_try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::new_single(vec![]),
             vec![Arc::new(
@@ -8429,7 +8461,7 @@ mod tests {
         let child = Arc::new(EmptyExec::new(Arc::clone(&schema)));
 
         // Final mode with a group-by does not support dynamic filters.
-        let agg = AggregateExec::try_new(
+        let agg = AggregateExec::actual_try_new(
             AggregateMode::Final,
             PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]),
             vec![Arc::new(
@@ -8458,7 +8490,7 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
         let child = Arc::new(EmptyExec::new(Arc::clone(&schema)));
 
-        let agg = AggregateExec::try_new(
+        let agg = AggregateExec::actual_try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::new_single(vec![]),
             vec![Arc::new(

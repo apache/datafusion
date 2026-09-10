@@ -60,7 +60,7 @@ pub struct GroupOrderingFull {
 }
 
 #[derive(Debug)]
-enum State {
+pub(crate) enum State {
     /// Seen no input yet
     Start,
 
@@ -77,6 +77,10 @@ impl GroupOrderingFull {
         Self {
             state: State::Start,
         }
+    }
+
+    pub(crate) fn new_from_state(state: State) -> Self {
+        Self { state }
     }
 
     // How many groups be emitted, or None if no data can be emitted

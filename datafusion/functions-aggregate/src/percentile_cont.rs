@@ -62,6 +62,10 @@ use datafusion_expr::{
     function::{AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs},
     simplify::SimplifyContext,
 };
+use datafusion_expr::blocked_helpers::BlockedVecBuilder;
+use datafusion_expr::blocked_helpers::get_heap_allocated_size::CommonHeapAllocatorSize;
+use datafusion_expr::groups_accumulator::{BlockedEmitTo, BlockedGroupsAccumulator, BlocksIndex};
+use datafusion_functions_aggregate_common::accumulator::BlockedAccumulatorArgs;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filtered_null_mask;
 use datafusion_functions_aggregate_common::utils::Hashable;
@@ -258,6 +262,24 @@ impl AggregateUDFImpl for PercentileCont {
         )
     }
 
+    fn blocked_groups_accumulator_supported(&self, args: BlockedAccumulatorArgs) -> bool {
+        !args.is_distinct && !args.expr_fields[0].data_type().is_null()
+    }
+
+    fn create_blocked_groups_accumulator(
+        &self,
+        args: BlockedAccumulatorArgs,
+    ) -> Result<Box<dyn BlockedGroupsAccumulator>> {
+        // Always verify percentiles
+        let percentile = get_percentile(&args)?;
+        create_percentile_blocked_groups_accumulator(
+            self.name(),
+            percentile,
+            args.expr_fields[0].data_type(),
+            args.batch_size,
+        )
+    }
+
     fn simplify(&self) -> Option<AggregateFunctionSimplification> {
         Some(Box::new(|aggregate_function, info| {
             simplify_percentile_cont_aggregate(aggregate_function, info)
@@ -347,6 +369,40 @@ pub fn create_percentile_groups_accumulator(
             Ok(Box::new(PercentileContGroupsAccumulator::<$t, $i>::new(
                 percentile,
                 $dt.clone(),
+            )))
+        };
+    }
+    match input_dt {
+        DataType::Float16 => helper!(Float16Type, FloatInterpolator, input_dt),
+        DataType::Float32 => helper!(Float32Type, FloatInterpolator, input_dt),
+        DataType::Float64 => helper!(Float64Type, FloatInterpolator, input_dt),
+        DataType::Decimal32(_, _) => {
+            helper!(Decimal32Type, DecimalInterpolator, input_dt)
+        }
+        DataType::Decimal64(_, _) => {
+            helper!(Decimal64Type, DecimalInterpolator, input_dt)
+        }
+        DataType::Decimal128(_, _) => {
+            helper!(Decimal128Type, DecimalInterpolator, input_dt)
+        }
+        DataType::Decimal256(_, _) => {
+            helper!(Decimal256Type, DecimalInterpolator, input_dt)
+        }
+        dt => internal_err!("Unsupported datatype for {} with {}", name, dt),
+    }
+}
+pub fn create_percentile_blocked_groups_accumulator(
+    name: &str,
+    percentile: f64,
+    input_dt: &DataType,
+    block_size: usize,
+) -> Result<Box<dyn BlockedGroupsAccumulator>> {
+    macro_rules! helper {
+        ($t:ty, $i:ty, $dt:expr) => {
+            Ok(Box::new(PercentileContBlockedGroupsAccumulator::<$t, $i>::new(
+                percentile,
+                $dt.clone(),
+                block_size
             )))
         };
     }
@@ -594,7 +650,7 @@ struct PercentileContGroupsAccumulator<
 }
 
 impl<T: ArrowNumericType + Debug, I: PercentileInterpolator<T>>
-    PercentileContGroupsAccumulator<T, I>
+PercentileContGroupsAccumulator<T, I>
 {
     fn new(percentile: f64, data_type: DataType) -> Self {
         Self {
@@ -608,8 +664,8 @@ impl<T: ArrowNumericType + Debug, I: PercentileInterpolator<T>>
 
 impl<T, I> GroupsAccumulator for PercentileContGroupsAccumulator<T, I>
 where
-    T: ArrowNumericType + Debug + Send,
-    I: PercentileInterpolator<T> + 'static,
+  T: ArrowNumericType + Debug + Send,
+  I: PercentileInterpolator<T> + 'static,
 {
     fn update_batch(
         &mut self,
@@ -652,14 +708,14 @@ where
 
         // Extend values to related groups
         group_indices
-            .iter()
-            .zip(input_group_values.iter())
-            .for_each(|(&group_index, values_opt)| {
-                if let Some(values) = values_opt {
-                    let values = values.as_primitive::<T>();
-                    self.group_values[group_index].extend(values.values().iter());
-                }
-            });
+          .iter()
+          .zip(input_group_values.iter())
+          .for_each(|(&group_index, values_opt)| {
+              if let Some(values) = values_opt {
+                  let values = values.as_primitive::<T>();
+                  self.group_values[group_index].extend(values.values().iter());
+              }
+          });
 
         Ok(())
     }
@@ -680,10 +736,10 @@ where
 
         // Build inner array
         let flatten_group_values =
-            emit_group_values.into_iter().flatten().collect::<Vec<_>>();
+          emit_group_values.into_iter().flatten().collect::<Vec<_>>();
         let group_values_array =
-            PrimitiveArray::<T>::new(ScalarBuffer::from(flatten_group_values), None)
-                .with_data_type(self.data_type.clone());
+          PrimitiveArray::<T>::new(ScalarBuffer::from(flatten_group_values), None)
+            .with_data_type(self.data_type.clone());
 
         // Build the result list array
         let result_list_array = ListArray::new(
@@ -702,11 +758,11 @@ where
 
         // Calculate percentile for each group
         let mut evaluate_result_builder =
-            PrimitiveBuilder::<T>::with_capacity(emit_group_values.len())
-                .with_data_type(self.data_type.clone());
+          PrimitiveBuilder::<T>::with_capacity(emit_group_values.len())
+            .with_data_type(self.data_type.clone());
         for values in &mut emit_group_values {
             let value =
-                calculate_percentile::<T, I>(values.as_mut_slice(), self.percentile)?;
+              calculate_percentile::<T, I>(values.as_mut_slice(), self.percentile)?;
             evaluate_result_builder.append_option(value);
         }
 
@@ -718,56 +774,276 @@ where
         values: &[ArrayRef],
         opt_filter: Option<&BooleanArray>,
     ) -> Result<Vec<ArrayRef>> {
-        assert_eq!(values.len(), 1, "one argument to merge_batch");
-
-        let input_array = values[0].as_primitive::<T>();
-
-        // Directly convert the input array to states, each row will be
-        // seen as a respective group.
-        // For detail, the `input_array` will be converted to a `ListArray`.
-        // And if row is `not null + not filtered`, it will be converted to a list
-        // with only one element; otherwise, this row in `ListArray` will be set
-        // to null.
-
-        // Reuse values buffer in `input_array` to build `values` in `ListArray`
-        let values = PrimitiveArray::<T>::new(input_array.values().clone(), None)
-            .with_data_type(self.data_type.clone());
-
-        // `offsets` in `ListArray`, each row as a list element
-        let offset_end = i32::try_from(input_array.len()).map_err(|e| {
-            internal_datafusion_err!(
-                "cast array_len to i32 failed in convert_to_state of group percentile_cont, err:{e:?}"
-            )
-        })?;
-        let offsets = (0..=offset_end).collect::<Vec<_>>();
-        // Safety: The offsets vector is constructed as a sequential range from 0 to input_array.len(),
-        // which guarantees all OffsetBuffer invariants:
-        // 1. Offsets are monotonically increasing (each element is prev + 1)
-        // 2. No offset exceeds the values array length (max offset = input_array.len())
-        // 3. First offset is 0 and last offset equals the total length
-        // Therefore new_unchecked is safe to use here.
-        let offsets = unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(offsets)) };
-
-        // `nulls` for converted `ListArray`
-        let nulls = filtered_null_mask(opt_filter, input_array);
-
-        let converted_list_array = ListArray::new(
-            Arc::new(Field::new_list_field(self.data_type.clone(), true)),
-            offsets,
-            Arc::new(values),
-            nulls,
-        );
-
-        Ok(vec![Arc::new(converted_list_array)])
+        convert_percentile_cont_to_state::<T>(values, opt_filter, self.data_type.clone())
     }
     fn size(&self) -> usize {
         self.group_values
-            .iter()
-            .map(|values| values.capacity() * size_of::<T::Native>())
-            .sum::<usize>()
-            // account for size of self.group_values too
-            + self.group_values.capacity() * size_of::<Vec<T::Native>>()
+          .iter()
+          .map(|values| values.capacity() * size_of::<T::Native>())
+          .sum::<usize>()
+          // account for size of self.group_values too
+          + self.group_values.capacity() * size_of::<Vec<T::Native>>()
     }
+}
+
+/// The percentile_cont groups accumulator accumulates the raw input values
+///
+/// For calculating the exact percentile of groups, we need to store all values
+/// of groups before final evaluation.
+/// So values in each group will be stored in a `Vec<T>`, and the total group values
+/// will be actually organized as a `Vec<Vec<T>>`.
+#[derive(Debug)]
+struct PercentileContBlockedGroupsAccumulator<
+    T: ArrowNumericType + Debug,
+    I: PercentileInterpolator<T>,
+> {
+    group_values: BlockedVecBuilder<true, Vec<T::Native>, CommonHeapAllocatorSize>,
+    percentile: f64,
+    data_type: DataType,
+    _interpolator: PhantomData<I>,
+}
+
+impl<T: ArrowNumericType + Debug, I: PercentileInterpolator<T>>
+PercentileContBlockedGroupsAccumulator<T, I>
+{
+    fn new(percentile: f64, data_type: DataType, batch_size: usize) -> Self {
+        Self {
+            group_values: BlockedVecBuilder::new(batch_size),
+            percentile,
+            data_type,
+            _interpolator: PhantomData,
+        }
+    }
+
+    fn build_state(&mut self, emit_group_values: Vec<Vec<<T as ArrowPrimitiveType>::Native>>) -> Vec<ArrayRef> {
+        // Build offsets
+        let mut offsets = Vec::with_capacity(emit_group_values.len() + 1);
+        offsets.push(0);
+        let mut cur_len = 0_i32;
+        for group_value in &emit_group_values {
+            cur_len += group_value.len() as i32;
+            offsets.push(cur_len);
+        }
+        let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));
+
+        // Build inner array
+        let flatten_group_values =
+          emit_group_values.into_iter().flatten().collect::<Vec<_>>();
+        let group_values_array =
+          PrimitiveArray::<T>::new(ScalarBuffer::from(flatten_group_values), None)
+            .with_data_type(self.data_type.clone());
+
+        // Build the result list array
+        let result_list_array = ListArray::new(
+            Arc::new(Field::new_list_field(self.data_type.clone(), true)),
+            offsets,
+            Arc::new(group_values_array),
+            None,
+        );
+
+        vec![Arc::new(result_list_array)]
+    }
+
+    fn build_evaluate(&mut self, mut emit_group_values: Vec<Vec<<T as ArrowPrimitiveType>::Native>>) -> Result<ArrayRef> {
+        // Calculate percentile for each group
+        let mut evaluate_result_builder =
+          PrimitiveBuilder::<T>::with_capacity(emit_group_values.len())
+            .with_data_type(self.data_type.clone());
+        for values in &mut emit_group_values {
+            let value =
+              calculate_percentile::<T, I>(values.as_mut_slice(), self.percentile)?;
+            evaluate_result_builder.append_option(value);
+        }
+
+        Ok(Arc::new(evaluate_result_builder.finish()))
+    }
+}
+
+impl<T, I> BlockedGroupsAccumulator for PercentileContBlockedGroupsAccumulator<T, I>
+where
+  T: ArrowNumericType + Debug + Send,
+  I: PercentileInterpolator<T> + 'static,
+{
+    fn batch_size(&self) -> usize {
+        self.group_values.block_size()
+    }
+
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[BlocksIndex],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        // For ordered-set aggregates, we only care about the ORDER BY column (first element)
+        // The percentile parameter is already stored in self.percentile
+
+        let values = values[0].as_primitive::<T>();
+
+        // Push the `not nulls + not filtered` row into its group
+        {
+            let prev_len = self.group_values.len();
+            assert!(total_num_groups >= prev_len);
+            self.group_values.push_value_n(Vec::new(), total_num_groups - prev_len);
+        }
+        accumulate(
+            group_indices,
+            values,
+            opt_filter,
+            |group_index, new_value| {
+                self.group_values.index_mut_with_size(group_index, |item| {
+                    item.push(new_value);
+                });
+            },
+        );
+
+        Ok(())
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[BlocksIndex],
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 1, "one argument to merge_batch");
+
+        let input_group_values = values[0].as_list::<i32>();
+
+        // Ensure group values big enough
+        {
+            let prev_len = self.group_values.len();
+            assert!(total_num_groups >= prev_len);
+            self.group_values.push_value_n(Vec::new(), total_num_groups - prev_len);
+        }
+
+        // Extend values to related groups
+        group_indices
+          .iter()
+          .zip(input_group_values.iter())
+          .for_each(|(&group_index, values_opt)| {
+              if let Some(values) = values_opt {
+                  let values = values.as_primitive::<T>();
+                  self.group_values.index_mut_with_size(group_index, |item| {
+                      item.extend(values.values().iter());
+                  });
+              }
+          });
+
+        Ok(())
+    }
+
+    fn state(&mut self, emit_to: BlockedEmitTo) -> Result<Vec<Vec<ArrayRef>>> {
+        match emit_to {
+            BlockedEmitTo::All => {
+                let mut blocks = Vec::with_capacity(self.group_values.num_blocks());
+
+                for block in self.group_values.take_all() {
+                    blocks.push(self.build_state(block));
+                }
+
+                Ok(blocks)
+            }
+            BlockedEmitTo::NextBlock => {
+                // Emit values
+                let Some(emit_group_values) = self.group_values.take_block() else {
+                    return Ok(vec![]);
+                };
+
+                Ok(vec![self.build_state(emit_group_values)])
+            }
+            BlockedEmitTo::First(n) => {
+                let values = self.group_values.take_n_fixed(n);
+                Ok(vec![self.build_state(values)])
+            }
+        }
+    }
+
+    fn evaluate(&mut self, emit_to: BlockedEmitTo) -> Result<Vec<ArrayRef>> {
+        match emit_to {
+            BlockedEmitTo::All => {
+                let mut blocks = Vec::with_capacity(self.group_values.num_blocks());
+
+                for block in self.group_values.take_all() {
+                    blocks.push(self.build_evaluate(block)?);
+                }
+
+                Ok(blocks)
+            }
+            BlockedEmitTo::NextBlock => {
+                // Emit values
+                let Some(emit_group_values) = self.group_values.take_block() else {
+                    return Ok(vec![]);
+                };
+
+                Ok(vec![self.build_evaluate(emit_group_values)?])
+            }
+            BlockedEmitTo::First(n) => {
+                let values = self.group_values.take_n_fixed(n);
+                Ok(vec![self.build_evaluate(values)?])
+            }
+        }
+    }
+
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        convert_percentile_cont_to_state::<T>(values, opt_filter, self.data_type.clone())
+    }
+
+    fn size(&self) -> usize {
+        self.group_values.allocated_size()
+    }
+}
+
+fn convert_percentile_cont_to_state<T: ArrowNumericType>(
+    values: &[ArrayRef],
+    opt_filter: Option<&BooleanArray>,
+    data_type: DataType,
+) -> Result<Vec<ArrayRef>> {
+    assert_eq!(values.len(), 1, "one argument to merge_batch");
+
+    let input_array = values[0].as_primitive::<T>();
+
+    // Directly convert the input array to states, each row will be
+    // seen as a respective group.
+    // For detail, the `input_array` will be converted to a `ListArray`.
+    // And if row is `not null + not filtered`, it will be converted to a list
+    // with only one element; otherwise, this row in `ListArray` will be set
+    // to null.
+
+    // Reuse values buffer in `input_array` to build `values` in `ListArray`
+    let values = PrimitiveArray::<T>::new(input_array.values().clone(), None)
+      .with_data_type(data_type.clone());
+
+    // `offsets` in `ListArray`, each row as a list element
+    let offset_end = i32::try_from(input_array.len()).map_err(|e| {
+        internal_datafusion_err!(
+                "cast array_len to i32 failed in convert_to_state of group percentile_cont, err:{e:?}"
+            )
+    })?;
+    let offsets = (0..=offset_end).collect::<Vec<_>>();
+    // Safety: The offsets vector is constructed as a sequential range from 0 to input_array.len(),
+    // which guarantees all OffsetBuffer invariants:
+    // 1. Offsets are monotonically increasing (each element is prev + 1)
+    // 2. No offset exceeds the values array length (max offset = input_array.len())
+    // 3. First offset is 0 and last offset equals the total length
+    // Therefore new_unchecked is safe to use here.
+    let offsets = unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(offsets)) };
+
+    // `nulls` for converted `ListArray`
+    let nulls = filtered_null_mask(opt_filter, input_array);
+
+    let converted_list_array = ListArray::new(
+        Arc::new(Field::new_list_field(data_type.clone(), true)),
+        offsets,
+        Arc::new(values),
+        nulls,
+    );
+
+    Ok(vec![Arc::new(converted_list_array)])
 }
 
 /// Sliding-window–capable accumulator for `percentile_cont(DISTINCT ...)`.
