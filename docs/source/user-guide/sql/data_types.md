@@ -105,12 +105,26 @@ The maximum supported precision for `DECIMAL` types is 76.
 
 ## Date/Time Types
 
-| SQL DataType | Arrow DataType                   |
-| ------------ | :------------------------------- |
-| `DATE`       | `Date32`                         |
-| `TIME`       | `Time64(Nanosecond)`             |
-| `TIMESTAMP`  | `Timestamp(Nanosecond, None)`    |
-| `INTERVAL`   | `Interval(IntervalMonthDayNano)` |
+| SQL DataType                                                       | Arrow DataType                   |
+| ------------------------------------------------------------------ | :------------------------------- |
+| `DATE`                                                             | `Date32`                         |
+| `TIME`                                                             | `Time64(Nanosecond)`             |
+| `TIMESTAMP` or `TIMESTAMP(p)`                                      | `Timestamp(unit, None)`          |
+| `TIMESTAMPTZ` or `TIMESTAMP WITH TIME ZONE`, optionally with `(p)` | `Timestamp(unit, tz)`            |
+| `INTERVAL`                                                         | `Interval(IntervalMonthDayNano)` |
+
+`unit` is determined by the optional precision `p`, which must be `0`, `3`, `6`
+or `9` for `Second`, `Millisecond`, `Microsecond` or `Nanosecond` respectively.
+Any other precision is rejected. When `p` is omitted the unit is `Nanosecond`.
+
+`tz` is the value of the [`datafusion.execution.time_zone`] setting. That
+setting is unset by default, so with the default configuration
+`TIMESTAMPTZ` and `TIMESTAMP WITH TIME ZONE` map to `Timestamp(unit, None)`,
+the same timezone-naive type as `TIMESTAMP`. Whether that should remain the
+mapping is an open question tracked in [issue #25166].
+
+[`datafusion.execution.time_zone`]: ../configs.md
+[issue #25166]: https://github.com/apache/datafusion/issues/25166
 
 ## Boolean Types
 
