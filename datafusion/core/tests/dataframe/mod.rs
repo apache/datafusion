@@ -5271,6 +5271,25 @@ async fn consecutive_projection_same_schema() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn window_function_in_group_by_is_rejected() -> Result<()> {
+    // https://github.com/apache/datafusion/issues/4610
+    //
+    // The SQL planner rejects this placement itself, but the DataFrame API
+    // has no such check, so the physical planner's backstop is what reports it
+    let err = test_table()
+        .await?
+        .aggregate(vec![row_number()], vec![count(col("c1"))])?
+        .collect()
+        .await
+        .expect_err("a window function cannot be a grouping expression");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Window function 'row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING' is not supported in this position. Window functions are supported in the SELECT list, ORDER BY, DISTINCT ON and QUALIFY"
+    );
+    Ok(())
+}
+
 async fn create_test_table(name: &str) -> Result<DataFrame> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),

@@ -7160,5 +7160,24 @@ WHERE a IN (SELECT a FROM window_in_filter_t QUALIFY row_number() OVER (ORDER BY
 ----
 1
 
+# Other positions where a window function cannot be evaluated are reported by
+# the physical planner, which names the function instead of dumping its
+# internal representation
+statement error DataFusion error: Error during planning: Window function 'row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING' is not supported in this position\. Window functions are supported in the SELECT list, ORDER BY, DISTINCT ON and QUALIFY
+SELECT count(*) FROM window_in_filter_t GROUP BY row_number() OVER ();
+
+statement error DataFusion error: Error during planning: Window function 'row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING' is not supported in this position\. Window functions are supported in the SELECT list, ORDER BY, DISTINCT ON and QUALIFY
+VALUES (row_number() OVER ());
+
+statement error DataFusion error: This feature is not implemented: Unsupported LIMIT expression: CAST\(row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS Int64\)
+SELECT a FROM window_in_filter_t LIMIT row_number() OVER ();
+
+statement error DataFusion error: This feature is not implemented: Unsupported OFFSET expression: CAST\(row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS Int64\)
+SELECT a FROM window_in_filter_t OFFSET row_number() OVER ();
+
+# ... and the same for an aggregate function
+statement error DataFusion error: This feature is not implemented: Unsupported LIMIT expression: count\(Int64\(1\)\) AS count\(\*\)
+SELECT a FROM window_in_filter_t LIMIT count(*);
+
 statement ok
 DROP TABLE window_in_filter_t;
