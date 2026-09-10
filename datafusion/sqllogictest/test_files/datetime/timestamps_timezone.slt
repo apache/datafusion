@@ -730,6 +730,41 @@ SELECT date_bin(INTERVAL '1 day', ts, arrow_cast('2024-01-01T00:00:00Z', 'Timest
 2024-06-30T18:00:00-06:00
 2024-06-30T18:00:00-06:00
 
+# KNOWN BUG: an explicit origin looks like a way to align bins to local
+# midnight, and it is -- until the zone's offset changes. `date_bin` steps a
+# fixed number of nanoseconds from a fixed instant, so it cannot track a local
+# day that is 23 or 25 hours long. The two rows below are the same local time
+# of day on either side of the America/Denver spring-forward transition, and
+# the origin is chosen so that bins land on local midnight.
+#
+# `date_trunc` is included as a control: it gets both rows right, so the drift
+# is a property of the origin arithmetic and not of the data.
+# See https://github.com/apache/datafusion/issues/25168
+statement ok
+CREATE TABLE dst_origin AS
+SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("America/Denver"))') AS ts
+FROM (VALUES ('2024-03-09T13:30:00Z'), ('2024-03-11T12:30:00Z'))
+
+query PPP
+SELECT ts,
+       date_bin(INTERVAL '1 day', ts, arrow_cast('2024-03-01T07:00:00Z', 'Timestamp(Nanosecond, Some("UTC"))')),
+       date_trunc('day', ts)
+FROM dst_origin ORDER BY ts
+----
+2024-03-09T06:30:00-07:00 2024-03-09T00:00:00-07:00 2024-03-09T00:00:00-07:00
+2024-03-11T06:30:00-06:00 2024-03-11T01:00:00-06:00 2024-03-11T00:00:00-06:00
+
+# The second row is the bug: 01:00 local, not midnight, one hour after the
+# transition. Use the `to_local_time` idiom instead of an origin when you need
+# local calendar bins.
+query B
+SELECT date_bin(INTERVAL '1 day', ts, arrow_cast('2024-03-01T07:00:00Z', 'Timestamp(Nanosecond, Some("UTC"))'))
+       = date_trunc('day', ts) AS origin_matches_local_midnight
+FROM dst_origin ORDER BY ts
+----
+true
+false
+
 # date_part reads the field in the value's own time zone. This matches
 # PostgreSQL whenever the session TimeZone equals the column's zone.
 query IIR rowsort
