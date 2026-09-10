@@ -2961,19 +2961,37 @@ async fn collect_left_input(
             .iter()
             .map(|arr| arr.get_array_memory_size())
             .sum::<usize>();
-        if left_values.is_empty()
-            || left_values[0].is_empty()
-            || estimated_size > config.optimizer.hash_join_inlist_pushdown_max_size
-            || map.num_of_distinct_key()
-                > config
+
+        let pushdown_inlist = !left_values.is_empty()
+            && !left_values[0].is_empty()
+            && estimated_size <= config.optimizer.hash_join_inlist_pushdown_max_size
+            && map.num_of_distinct_key()
+                <= config
                     .optimizer
-                    .hash_join_inlist_pushdown_max_distinct_values
+                    .hash_join_inlist_pushdown_max_distinct_values;
+
+        if pushdown_inlist
+            && let Some(in_list_values) = build_struct_inlist_values(&left_values)?
         {
-            PushdownStrategy::Map(Arc::clone(&map))
-        } else if let Some(in_list_values) = build_struct_inlist_values(&left_values)? {
             PushdownStrategy::InList(in_list_values)
         } else {
-            PushdownStrategy::Map(Arc::clone(&map))
+            // Past the InList threshold, retain raw values for pruning only (not row
+            // filtering) up to a separate, more generous cap; dedup happens lazily
+            // inside `HashTableLookupExpr` on first actual use, not eagerly here.
+            let pushdown_values = !left_values.is_empty()
+                && !left_values[0].is_empty()
+                && estimated_size <= config.optimizer.hash_join_dynamic_pruning_max_size
+                && map.num_of_distinct_key()
+                    <= config
+                        .optimizer
+                        .hash_join_dynamic_pruning_max_distinct_values;
+
+            if pushdown_values {
+                let pruning_literals = build_struct_inlist_values(&left_values)?;
+                PushdownStrategy::Map(Arc::clone(&map), pruning_literals)
+            } else {
+                PushdownStrategy::Map(Arc::clone(&map), None)
+            }
         }
     };
 
