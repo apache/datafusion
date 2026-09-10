@@ -719,7 +719,7 @@ fn test_window_function_in_where() -> Result<()> {
     assert_eq!(diag.span, Some(spans["a"]));
     assert_snapshot!(
         diag.helps[0].message,
-        @"Compute 'sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING' in an inner query and filter on its result, or use the QUALIFY clause"
+        @"Compute 'sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING' first, in a Window node or an inner query, and filter on its result"
     );
     Ok(())
 }

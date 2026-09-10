@@ -762,12 +762,32 @@ fn first_span(expr: &Expr) -> Option<Span> {
 ///
 /// [`Filter::try_new`] calls this for every predicate, so the SQL planner and
 /// the `DataFrame`/`LogicalPlanBuilder` paths are covered without callers
-/// invoking it directly; the SQL planner calls it again with the clause name to
-/// produce a more specific message. Window calls inside subqueries of `expr`
-/// are not visited and are legal.
+/// invoking it directly. Window calls inside subqueries of `expr` are not
+/// visited and are legal.
+///
+/// The error is built by [`window_function_not_allowed_err`] with the best
+/// effort span of the call (see [`Expr::spans`]) and a generic help message. A
+/// caller that knows where the call is in the original query, such as the SQL
+/// planner, can build a more precise error with that function directly.
 ///
 /// [`Filter::try_new`]: crate::logical_plan::Filter::try_new
 pub fn check_no_window_functions(expr: &Expr, clause: &str) -> Result<()> {
+    match first_window_function(expr) {
+        None => Ok(()),
+        Some(window) => Err(window_function_not_allowed_err(
+            window,
+            clause,
+            first_span(window),
+            format!(
+                "Compute '{window}' first, in a Window node or an inner query, and filter on its result"
+            ),
+        )),
+    }
+}
+
+/// The first window function call in `expr`, if any. Subqueries are not
+/// visited.
+fn first_window_function(expr: &Expr) -> Option<&Expr> {
     let mut window = None;
     expr.apply(|e| {
         if matches!(e, Expr::WindowFunction(_)) {
@@ -776,24 +796,26 @@ pub fn check_no_window_functions(expr: &Expr, clause: &str) -> Result<()> {
         } else {
             Ok(TreeNodeRecursion::Continue)
         }
-    })?;
+    })
+    .ok()?;
+    window
+}
 
-    match window {
-        None => Ok(()),
-        Some(window) => {
-            let message = format!("Window function calls are not allowed in {clause}");
-            Err(
-                plan_datafusion_err!("{message}: '{window}'").with_diagnostic(
-                    Diagnostic::new_error(message, first_span(window)).with_help(
-                        format!(
-                            "Compute '{window}' in an inner query and filter on its result, or use the QUALIFY clause"
-                        ),
-                        None,
-                    ),
-                ),
-            )
-        }
-    }
+/// The planning error for `window`, a window function call that appeared in
+/// `clause` where it is not allowed (see [`check_no_window_functions`]).
+///
+/// The message is `Window function calls are not allowed in {clause}:
+/// '{window}'`. The error carries a [`Diagnostic`] with the same message,
+/// pointing at `span`, and with `help`.
+pub fn window_function_not_allowed_err(
+    window: &Expr,
+    clause: &str,
+    span: Option<Span>,
+    help: impl Into<String>,
+) -> DataFusionError {
+    let message = format!("Window function calls are not allowed in {clause}");
+    plan_datafusion_err!("{message}: '{window}'")
+        .with_diagnostic(Diagnostic::new_error(message, span).with_help(help, None))
 }
 
 /// Collect all deeply nested `Expr::WindowFunction`. They are returned in order of occurrence
@@ -2173,7 +2195,7 @@ mod tests {
         );
         assert_snapshot!(
             diag.helps[0].message,
-            @"Compute 'sum(a) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING' in an inner query and filter on its result, or use the QUALIFY clause"
+            @"Compute 'sum(a) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING' first, in a Window node or an inner query, and filter on its result"
         );
 
         // a window call over an aggregate, nested below other expressions,
