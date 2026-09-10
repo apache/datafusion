@@ -107,11 +107,11 @@ always has a session time zone, and the default value is the local time zone of
 the machine. As a result, `TIMESTAMPTZ` in those systems is always an aware
 type:
 
-| System     | Default session time zone | `'2024-01-01T12:00:00Z'::timestamptz`       |
-| ---------- | ------------------------- | ------------------------------------------- |
-| DataFusion | not set                   | `Timestamp(ns)` — naive, the `Z` is removed |
-| PostgreSQL | the machine's time zone   | `timestamp with time zone` — aware          |
-| DuckDB     | the machine's time zone   | `TIMESTAMP WITH TIME ZONE` — aware          |
+| System     | Default time zone of the session | `'2024-01-01T12:00:00Z'::timestamptz`       |
+| ---------- | -------------------------------- | ------------------------------------------- |
+| DataFusion | not set                          | `Timestamp(ns)` — naive, the `Z` is removed |
+| PostgreSQL | the machine's time zone          | `timestamp with time zone` — aware          |
+| DuckDB     | the machine's time zone          | `TIMESTAMP WITH TIME ZONE` — aware          |
 
 There is also a difference in the data model. In DuckDB, `TIMESTAMP WITH TIME ZONE` is one type, and a value of that type has no time zone of its own. The
 session time zone controls the display of each value. In DataFusion, each value
@@ -401,7 +401,7 @@ CREATE OR REPLACE TABLE hits(t TIMESTAMP) AS VALUES
   (TIMESTAMP '2024-05-01T20:30:00');
 CREATE OR REPLACE VIEW hits_utc AS SELECT t AT TIME ZONE 'UTC' AS t FROM hits;
 
--- correct: group on the zone-aware value
+-- correct: group on the aware value
 SELECT date_trunc('day', t AT TIME ZONE 'Europe/Brussels') AS day, count(*) AS n
 FROM hits_utc GROUP BY 1 ORDER BY 1;
 
@@ -710,18 +710,18 @@ local wall clock.
 DataFusion follows PostgreSQL for most of the behavior above. These are the
 known differences today.
 
-| Behavior                                                 | DataFusion                                                                                             | PostgreSQL                                                                   | Issue                                               |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- | --------------------------------------------------- |
-| `TIMESTAMP WITH TIME ZONE` with no session zone set      | Zone-**naive** `Timestamp(_, None)`; the offset in a literal is discarded                              | Always zone-aware; `TimeZone` is always set                                  | —                                                   |
-| `AT TIME ZONE` applied to a zone-**aware** value         | Returns a zone-**aware** value in the named zone                                                       | Returns a zone-**naive** value                                               | <https://github.com/apache/datafusion/issues/12218> |
-| `tstz::timestamp`                                        | The **UTC** wall clock                                                                                 | The **session zone** wall clock                                              | <https://github.com/apache/datafusion/issues/12218> |
-| Zone-naive value compared with a zone-aware one          | The naive side is shifted into the **other operand's** zone, not the session zone                      | The naive side is read in the **session** zone                               | <https://github.com/apache/datafusion/issues/13212> |
-| Zone-naive **column** compared with a zone-aware literal | The optimizer drops the shift, giving the opposite answer to the same comparison written with literals | Consistent with the literal form                                             | <https://github.com/apache/datafusion/issues/25095> |
-| `tstz - timestamp`                                       | Naive side read as UTC, so the session offset is lost                                                  | Naive side read in the session zone                                          | <https://github.com/apache/datafusion/issues/13212> |
-| Ambiguous / nonexistent local time                       | Error                                                                                                  | Resolved (gap moves forward, ambiguity reads as standard time)               | <https://github.com/apache/datafusion/issues/25084> |
-| `from_unixtime`                                          | Zone-naive UTC wall clock; ignores the session zone                                                    | `to_timestamp(double)` returns `timestamptz`                                 | <https://github.com/apache/datafusion/issues/12892> |
-| `date_part` / `EXTRACT` on a zone-naive value            | Uses the stored wall clock; ignores the session zone                                                   | The same — but DataFusion's config docs once promised session-zone awareness | <https://github.com/apache/datafusion/issues/18228> |
-| `to_timestamp_*` on an already zone-aware input          | Rewrites the zone to the session zone, dropping it entirely when unset                                 | n/a                                                                          | <https://github.com/apache/datafusion/issues/23841> |
+| Behavior                                               | DataFusion                                                                                           | PostgreSQL                                                                   | Issue                                               |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------- |
+| `TIMESTAMP WITH TIME ZONE` with no session zone set    | **Naive** `Timestamp(_, None)`; DataFusion removes the offset in a literal                           | Always **aware**; `TimeZone` always has a value                              | —                                                   |
+| `AT TIME ZONE` used on an **aware** value              | Gives an **aware** value in the given time zone                                                      | Gives a **naive** value                                                      | <https://github.com/apache/datafusion/issues/12218> |
+| `tstz::timestamp`                                      | The **UTC** wall clock                                                                               | The **session zone** wall clock                                              | <https://github.com/apache/datafusion/issues/12218> |
+| **Naive** value compared with an **aware** value       | DataFusion shifts the naive side into the zone of the **other operand**, not the session zone        | PostgreSQL reads the naive side in the **session** zone                      | <https://github.com/apache/datafusion/issues/13212> |
+| **Naive** column compared with an **aware** literal    | The optimizer removes the shift. The answer is the opposite of the same comparison with two literals | The same answer as the literal form                                          | <https://github.com/apache/datafusion/issues/25095> |
+| `tstz - timestamp`                                     | Naive side read as UTC, so the session offset is lost                                                | Naive side read in the session zone                                          | <https://github.com/apache/datafusion/issues/13212> |
+| Ambiguous / nonexistent local time                     | Error                                                                                                | Resolved (gap moves forward, ambiguity reads as standard time)               | <https://github.com/apache/datafusion/issues/25084> |
+| `from_unixtime`                                        | Gives the UTC wall clock as a **naive** value. The session zone has no effect                        | `to_timestamp(double)` returns `timestamptz`                                 | <https://github.com/apache/datafusion/issues/12892> |
+| `date_part` / `EXTRACT` on a **naive** value           | Uses the wall clock in memory. The session zone has no effect                                        | The same — but DataFusion's config docs once promised session-zone awareness | <https://github.com/apache/datafusion/issues/18228> |
+| `to_timestamp_*` on an input that is already **aware** | Replaces the zone with the session zone. If the session zone has no value, the zone is removed       | n/a                                                                          | <https://github.com/apache/datafusion/issues/23841> |
 
 :::{note}
 The `AT TIME ZONE` row shows the behavior of DataFusion today. The DataFusion
