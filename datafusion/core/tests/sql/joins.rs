@@ -28,6 +28,93 @@ use datafusion_sql::unparser::plan_to_sql;
 use super::*;
 
 #[tokio::test]
+async fn hash_join_probe_selection_sql() -> Result<()> {
+    use arrow::array::Int64Array;
+    use datafusion::physical_plan::{ExecutionPlan, collect};
+
+    fn selected_partitions(plan: &dyn ExecutionPlan) -> usize {
+        let here = plan
+            .metrics()
+            .and_then(|m| m.sum_by_name("probe_selection_partitions"))
+            .map_or(0, |m| m.as_usize());
+        here + plan
+            .children()
+            .iter()
+            .map(|child| selected_partitions(child.as_ref()))
+            .sum::<usize>()
+    }
+
+    let mut config = SessionConfig::new().with_target_partitions(4);
+    let options = config.options_mut();
+    options.optimizer.hash_join_single_partition_threshold = 0;
+    options.optimizer.hash_join_single_partition_threshold_rows = 0;
+    options.optimizer.enable_join_dynamic_filter_pushdown = false;
+    for key_type in [DataType::Int64, DataType::Utf8, DataType::Utf8View] {
+        let ctx = SessionContext::new_with_config(config.clone());
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", key_type.clone(), true),
+            Field::new("id", DataType::Int64, false),
+        ]));
+        for (name, keys, ids) in [
+            (
+                "selection_left",
+                vec![Some(1), Some(1), Some(2), None],
+                vec![10, 20, 30, 40],
+            ),
+            (
+                "selection_right",
+                vec![Some(1), Some(2), None, Some(3)],
+                vec![15, 35, 45, 55],
+            ),
+        ] {
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    arrow::compute::cast(&Int64Array::from(keys), &key_type)?,
+                    Arc::new(Int64Array::from(ids)),
+                ],
+            )?;
+            ctx.register_table(
+                name,
+                Arc::new(MemTable::try_new(
+                    Arc::clone(&schema),
+                    (0..4).map(|row| vec![batch.slice(row, 1)]).collect(),
+                )?),
+            )?;
+        }
+        for enabled in [false, true] {
+            ctx.sql(&format!(
+                "SET datafusion.execution.enable_hash_join_probe_selection = '{enabled}'"
+            ))
+            .await?
+            .collect()
+            .await?;
+            let plan = ctx.sql("SELECT l.id AS l, r.id AS r FROM selection_left l JOIN selection_right r ON l.key = r.key AND l.id < r.id ORDER BY l.id")
+            .await?.create_physical_plan().await?;
+            let batches = collect(Arc::clone(&plan), ctx.task_ctx()).await?;
+            assert_batches_eq!(
+                [
+                    "+----+----+",
+                    "| l  | r  |",
+                    "+----+----+",
+                    "| 10 | 15 |",
+                    "| 30 | 35 |",
+                    "+----+----+",
+                ],
+                &batches
+            );
+            assert_eq!(
+                selected_partitions(plan.as_ref()),
+                if enabled { 4 } else { 0 },
+                "{}",
+                displayable(plan.as_ref()).indent(true)
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn join_change_in_planner() -> Result<()> {
     let config = SessionConfig::new().with_target_partitions(8);
     let ctx = SessionContext::new_with_config(config);

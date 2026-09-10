@@ -28,6 +28,7 @@
 /// with DataFusion without needing to reload the entire dataset each time.
 ///
 /// This example does not work on Windows.
+#[cfg_attr(target_os = "windows", expect(clippy::unused_async))]
 pub async fn file_stream_provider() -> datafusion::error::Result<()> {
     #[cfg(target_os = "windows")]
     {
