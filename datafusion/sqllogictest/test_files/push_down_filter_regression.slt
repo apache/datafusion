@@ -572,17 +572,15 @@ statement ok
 drop table agg_filter_pushdown;
 
 ########
-# Regression test for https://github.com/apache/datafusion/issues/25147
+# MIN/MAX dynamic filter over a schema-evolved dataset.
 #
-# MIN/MAX dynamic filter with a schema-evolved dataset: one of the files does
-# not contain the aggregated column at all. That partition's Partial
-# aggregate evaluates to a *typed* null (Int64(NULL)) rather than
-# ScalarValue::Null. The shared-bound merge used to only short-circuit on
-# the untyped Null, so the typed null fell through to `partial_cmp`, where
-# NULL orders before any value and replaced (or blocked) a valid shared MIN.
-# The dynamic filter then lost its lower bound and became `latency_ms > 204`
-# alone, which pruned the file holding the true minimum and returned 200
-# instead of 100.
+# One of the files does not contain the aggregated column at all, so that
+# partition's Partial aggregate evaluates to a typed null (Int64(NULL)) rather
+# than ScalarValue::Null. Merging that bound into the shared dynamic filter
+# bound must leave any real MIN/MAX from other partitions untouched. If the
+# typed null were compared as a value, it would win the MIN comparison, the
+# filter would collapse to `latency_ms > 204`, and the file holding the true
+# minimum would be pruned, returning 200 instead of 100.
 #
 # The wrong answer needs the file holding the minimum to be opened after the
 # other two partitions have published their bounds, so that file is named to
