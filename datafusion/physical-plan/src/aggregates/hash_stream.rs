@@ -1389,8 +1389,8 @@ mod tests {
         let first = tokio::time::timeout(Duration::from_secs(5), stream.next())
             .await
             .expect(
-                "no output before the input finished: the test setup no longer \
-                 triggers early emission under memory pressure",
+                "did not get early emit due to OOM, this probably means that the \
+                 memory limit is too high to trigger the OOM",
             )
             .expect("stream ended early")?;
         assert_eq!(first.num_rows(), batch_size);
@@ -1463,8 +1463,8 @@ mod tests {
         let first = tokio::time::timeout(Duration::from_secs(5), stream.next())
             .await
             .expect(
-                "no output before the input finished: the test setup no longer \
-                 triggers early emission under memory pressure",
+                "did not get early emit due to OOM, this probably means that the \
+                 memory limit is too high to trigger the OOM",
             )
             .expect("stream ended early")?;
 
@@ -1489,6 +1489,70 @@ mod tests {
 
         input.wait_finish().await;
         let mut total_rows = first.num_rows();
+        while let Some(batch) = stream.next().await {
+            total_rows += batch?.num_rows();
+        }
+        assert_eq!(total_rows, num_groups);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_partial_hash_stream_releases_held_batch_after_last_slice() -> Result<()>
+    {
+        // While the pressure-emitted state batch is sliced, the stream holds
+        // the remaining groups and keeps them reserved. Once the last slice is
+        // handed out nothing is held anymore, so the reservation must drop
+        // back to just the (emptied) hash table before the input is resumed.
+
+        let batch_size = 1024;
+        let num_slices = 4;
+        let num_groups = num_slices * batch_size;
+
+        let memory_limit = 100 * 1024;
+        let (mut stream, input, runtime) =
+            partial_stream_under_memory_limit(memory_limit, batch_size, num_groups)?;
+
+        // The input has not finished, so all of these are pressure-emitted slices
+        let mut held_size = 0;
+        for slice_idx in 0..num_slices {
+            let slice = if slice_idx == 0 {
+                tokio::time::timeout(Duration::from_secs(5), stream.next())
+                    .await
+                    .expect(
+                        "did not get early emit due to OOM, this probably means that the \
+                         memory limit is too high to trigger the OOM",
+                    )
+                    .expect("stream ended early")?
+            } else {
+                stream.next().await.expect("stream ended early")?
+            };
+
+            assert_eq!(slice.num_rows(), batch_size);
+
+            // Every slice shares buffers with the held state batch, so this is
+            // the size of the full held allocation
+            held_size = slice.get_array_memory_size();
+            let reserved = runtime.memory_pool.reserved();
+
+            if slice_idx + 1 < num_slices {
+                assert!(
+                    reserved >= held_size,
+                    "after slice {slice_idx} the stream still holds {held_size} \
+                     bytes but only {reserved} bytes are reserved"
+                );
+            } else {
+                assert!(
+                    reserved < held_size,
+                    "after the last slice nothing is held anymore but {reserved} \
+                     bytes are still reserved (held batch was {held_size} bytes)"
+                );
+            }
+        }
+        assert!(held_size > 0);
+
+        input.wait_finish().await;
+        let mut total_rows = num_groups;
         while let Some(batch) = stream.next().await {
             total_rows += batch?.num_rows();
         }
