@@ -105,12 +105,21 @@ The maximum supported precision for `DECIMAL` types is 76.
 
 ## Date/Time Types
 
-| SQL DataType | Arrow DataType                   |
-| ------------ | :------------------------------- |
-| `DATE`       | `Date32`                         |
-| `TIME`       | `Time64(Nanosecond)`             |
-| `TIMESTAMP`  | `Timestamp(Nanosecond, None)`    |
-| `INTERVAL`   | `Interval(IntervalMonthDayNano)` |
+| SQL DataType                                | Arrow DataType                                                |
+| ------------------------------------------- | :------------------------------------------------------------ |
+| `DATE`                                      | `Date32`                                                      |
+| `TIME`                                      | `Time64(Nanosecond)`                                          |
+| `TIMESTAMP`                                 | `Timestamp(Nanosecond, None)`                                 |
+| `TIMESTAMP WITH TIME ZONE` or `TIMESTAMPTZ` | `Timestamp(Nanosecond, Some(datafusion.execution.time_zone))` |
+| `INTERVAL`                                  | `Interval(IntervalMonthDayNano)`                              |
+
+`TIMESTAMP(p)` and `TIMESTAMP(p) WITH TIME ZONE` accept a precision `p` of 0, 3,
+6 or 9, selecting second, millisecond, microsecond or nanosecond precision.
+
+Note that `datafusion.execution.time_zone` defaults to unset, in which case
+`TIMESTAMP WITH TIME ZONE` maps to the timezone-**naive**
+`Timestamp(Nanosecond, None)`. See [Timestamps and Time Zones](timestamps.md)
+for what that means for casts, comparisons and the date/time functions.
 
 ## Boolean Types
 

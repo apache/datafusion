@@ -22,6 +22,7 @@ SQL Reference
    :maxdepth: 2
 
    data_types
+   timestamps
    struct_coercion
    select
    subqueries
