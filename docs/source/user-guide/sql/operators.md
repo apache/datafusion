@@ -507,6 +507,7 @@ Bitwise Shift Left
 - [|| (string concatenation)](#op_str_cat)
 - [@> (array contains)](#op_arr_contains)
 - [<@ (array is contained by)](#op_arr_contained_by)
+- [AT TIME ZONE](#op_at_time_zone)
 
 (op_str_cat)=
 
@@ -552,6 +553,67 @@ Array Is Contained By
 | true                                                                    |
 +-------------------------------------------------------------------------+
 ```
+
+(op_at_time_zone)=
+
+### `AT TIME ZONE`
+
+Converts between timezone-naive and timezone-aware timestamps, following
+PostgreSQL. `AT TIME ZONE` always returns the _other_ kind of timestamp from
+the one it is given:
+
+| Input type                               | Result type                              | Meaning                                                             |
+| ---------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------- |
+| `Timestamp(unit, None)` (timezone-naive) | `Timestamp(unit, Some(tz))` (tz-aware)   | Read the value as a wall clock in `tz`; the result is that instant. |
+| `Timestamp(unit, Some(_))` (tz-aware)    | `Timestamp(unit, None)` (timezone-naive) | Return the wall clock that instant has in `tz`.                     |
+
+A timezone-naive timestamp is a wall clock with no instant attached, so
+`AT TIME ZONE` pins it to one:
+
+```sql
+> SET datafusion.execution.time_zone = 'UTC';
+> SELECT
+  '2024-01-01 12:00:00'::timestamp AT TIME ZONE 'America/Denver' AS instant,
+  arrow_typeof('2024-01-01 12:00:00'::timestamp AT TIME ZONE 'America/Denver') AS type;
++---------------------------+---------------------------------+
+| instant                   | type                            |
++---------------------------+---------------------------------+
+| 2024-01-01T12:00:00-07:00 | Timestamp(ns, "America/Denver") |
++---------------------------+---------------------------------+
+```
+
+A timezone-aware timestamp already is an instant, so `AT TIME ZONE` reads off
+its wall clock in `tz` and drops the timezone. Daylight saving time is taken
+into account:
+
+```sql
+> SELECT
+  '2024-01-01T12:00:00Z'::timestamptz AT TIME ZONE 'America/Denver' AS wall_clock,
+  arrow_typeof('2024-01-01T12:00:00Z'::timestamptz AT TIME ZONE 'America/Denver') AS type;
++---------------------+---------------+
+| wall_clock          | type          |
++---------------------+---------------+
+| 2024-01-01T05:00:00 | Timestamp(ns) |
++---------------------+---------------+
+```
+
+The second form is equivalent to [`to_local_time`] applied to the timestamp
+after it has been relabelled into `tz`, and requires `to_local_time` to be
+registered with the session.
+
+Because the two forms return different types, applying `AT TIME ZONE` twice
+returns a timezone-aware timestamp again: the wall clock produced by the first
+application is re-read as a local time in the second timezone.
+
+`AT TIME ZONE` never changes the precision (`TimeUnit`) of its input. Inputs
+that are not timestamps at all (a string literal, for example) are cast to
+`Timestamp(Nanosecond, Some(tz))`.
+
+Note that a timezone written as a fixed offset string follows the ISO 8601
+convention, so `'+05:30'` is 5 hours 30 minutes _east_ of UTC. PostgreSQL
+applies the opposite (POSIX) convention to offsets spelled this way.
+
+[`to_local_time`]: scalar_functions.md#to_local_time
 
 ## Literals
 
