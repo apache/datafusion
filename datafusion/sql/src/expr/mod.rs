@@ -30,13 +30,14 @@ use sqlparser::ast::{
 use sqlparser::ast::{Query, Visit, Visitor};
 
 use datafusion_common::{
-    DFSchema, Diagnostic, Result, ScalarValue, Span, internal_datafusion_err,
+    DFSchema, Diagnostic, HashMap, Result, ScalarValue, Span, internal_datafusion_err,
     internal_err, not_impl_err, plan_err,
 };
 
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::SetQuantifier;
 use datafusion_expr::expr::{InList, WildcardOptions};
+use datafusion_expr::utils::find_window_exprs;
 use datafusion_expr::{
     Between, BinaryExpr, Cast, Expr, ExprSchemable, GetFieldAccess, Like, Literal,
     Operator, TryCast, lit, when,
@@ -137,10 +138,82 @@ impl<S: ContextProvider> Visitor for NullEqualityPredicateVisitor<'_, '_, S> {
     }
 }
 
+/// Finds the location of the first window function call in a SQL expression.
+/// An identifier that is an alias of a `SELECT` expression containing a window
+/// function call counts as well, since aliases are resolved before the window
+/// function check (`HAVING total > 0` where `total` is `sum(x) OVER ()`).
+/// Subqueries are skipped: window functions are legal there.
+struct WindowFunctionSpanVisitor<'a, 'b, S: ContextProvider> {
+    sql_to_rel: &'a SqlToRel<'b, S>,
+    aliases: &'a HashMap<String, Expr>,
+    subquery_depth: usize,
+    span: Option<sqlparser::tokenizer::Span>,
+}
+
+impl<S: ContextProvider> Visitor for WindowFunctionSpanVisitor<'_, '_, S> {
+    type Break = ();
+
+    fn pre_visit_query(&mut self, _query: &Query) -> ControlFlow<Self::Break> {
+        self.subquery_depth += 1;
+        ControlFlow::Continue(())
+    }
+
+    fn post_visit_query(&mut self, _query: &Query) -> ControlFlow<Self::Break> {
+        self.subquery_depth -= 1;
+        ControlFlow::Continue(())
+    }
+
+    fn pre_visit_expr(&mut self, expr: &SQLExpr) -> ControlFlow<Self::Break> {
+        if self.subquery_depth > 0 {
+            return ControlFlow::Continue(());
+        }
+        let found = match expr {
+            SQLExpr::Function(function) => function.over.is_some(),
+            SQLExpr::Identifier(ident) => {
+                let name = self.sql_to_rel.ident_normalizer.normalize(ident.clone());
+                self.aliases
+                    .get(&name)
+                    .is_some_and(|aliased| !find_window_exprs([aliased]).is_empty())
+            }
+            _ => false,
+        };
+        if found {
+            self.span = Some(expr.span());
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    }
+}
+
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(crate) fn warn_on_null_equality_predicate(&self, predicate: &SQLExpr) {
         let mut visitor = NullEqualityPredicateVisitor::new(self);
         let _ = predicate.visit(&mut visitor);
+    }
+
+    /// The location in the SQL text of the first window function call in
+    /// `expr`, or of the first identifier that is an alias (in `aliases`) of a
+    /// `SELECT` expression containing one. Falls back to the location of the
+    /// whole of `expr`, and returns `None` only if the parser recorded no
+    /// spans.
+    ///
+    /// Used to point the [`Diagnostic`] for a window function in `WHERE` or
+    /// `HAVING` at the offending call, which the planned [`Expr`] cannot do:
+    /// only columns carry spans there.
+    pub(crate) fn window_function_span(
+        &self,
+        expr: &SQLExpr,
+        aliases: &HashMap<String, Expr>,
+    ) -> Option<Span> {
+        let mut visitor = WindowFunctionSpanVisitor {
+            sql_to_rel: self,
+            aliases,
+            subquery_depth: 0,
+            span: None,
+        };
+        let _ = expr.visit(&mut visitor);
+        Span::try_from_sqlparser_span(visitor.span.unwrap_or_else(|| expr.span()))
     }
 
     pub(crate) fn sql_expr_to_logical_expr_with_alias(

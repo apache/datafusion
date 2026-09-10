@@ -32,7 +32,9 @@ use crate::utils::{
 use arrow::datatypes::DataType;
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, not_impl_err, plan_err};
+use datafusion_common::{
+    Column, DFSchema, DFSchemaRef, HashMap, Result, Span, not_impl_err, plan_err,
+};
 use datafusion_common::{NullHandling, RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::ExprSchemable;
 use datafusion_expr::builder::get_struct_unnested_columns;
@@ -43,8 +45,8 @@ use datafusion_expr::expr_rewriter::{
 };
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::utils::{
-    check_no_window_functions, expr_as_column_expr, expr_to_columns,
-    find_aggregate_exprs, find_window_exprs,
+    expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_window_exprs,
+    window_function_not_allowed_err,
 };
 use datafusion_expr::{
     Aggregate, Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder,
@@ -203,6 +205,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .having
             .map::<Result<Expr>, _>(|having_expr| {
                 self.warn_on_null_equality_predicate(&having_expr);
+                let window_span = self.window_function_span(&having_expr, &alias_map);
                 let having_expr = self.sql_expr_to_logical_expr(
                     having_expr,
                     &combined_schema,
@@ -225,7 +228,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // HAVING is evaluated before window functions are computed, so
                 // they may not appear there (checked after alias resolution so
                 // that an alias of a window function is rejected too)
-                check_no_window_functions(&having_expr, "HAVING")?;
+                reject_window_functions(&having_expr, "HAVING", window_span)?;
                 let having_expr = normalize_col(having_expr, &projected_plan)?;
                 let (having_expr, _) =
                     having_expr.infer_placeholder_types(&combined_schema)?;
@@ -890,6 +893,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let fallback_schemas = plan.fallback_normalize_schemas();
 
                 self.warn_on_null_equality_predicate(&predicate_expr);
+                let window_span =
+                    self.window_function_span(&predicate_expr, &HashMap::new());
                 let filter_expr =
                     self.sql_to_expr(predicate_expr, plan.schema(), planner_context)?;
 
@@ -903,7 +908,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
                 // WHERE is evaluated before window functions are computed, so
                 // they may not appear there either
-                check_no_window_functions(&filter_expr, "WHERE")?;
+                reject_window_functions(&filter_expr, "WHERE", window_span)?;
 
                 let mut using_columns = HashSet::new();
                 expr_to_columns(&filter_expr, &mut using_columns)?;
@@ -1518,4 +1523,22 @@ fn collect_unnest_null_handling(expr_groups: &[Vec<Expr>]) -> Result<NullHandlin
     } else {
         NullHandling::Drop
     })
+}
+
+/// Returns an error if `expr`, the planned `WHERE` or `HAVING` predicate,
+/// contains a window function call. `span` is the location of that call in
+/// the SQL text, see [`SqlToRel::window_function_span`].
+///
+/// [`Filter::try_new`] performs the same check with a generic message; this
+/// one names the clause, points at the call and suggests `QUALIFY`.
+fn reject_window_functions(expr: &Expr, clause: &str, span: Option<Span>) -> Result<()> {
+    match find_window_exprs([expr]).into_iter().next() {
+        None => Ok(()),
+        Some(window) => Err(window_function_not_allowed_err(
+            &window,
+            clause,
+            span,
+            "Move the condition that uses this window function to a QUALIFY clause, which is evaluated after window functions are computed",
+        )),
+    }
 }
