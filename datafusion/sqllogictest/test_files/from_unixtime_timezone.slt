@@ -95,3 +95,67 @@ query TP
 SELECT arrow_typeof(from_unixtime(1704110400)), from_unixtime(1704110400);
 ----
 Timestamp(s) 2024-01-01T12:00:00
+
+##########
+## Out of range values
+##
+## A `Timestamp(Second, Some(tz))` is rendered by shifting the UTC instant by
+## the zone's offset, and that shifted value has to stay inside the range
+## chrono's `NaiveDateTime` can represent, otherwise formatting the value
+## panics.
+##
+## https://github.com/apache/datafusion/issues/16594
+##########
+
+## The last value `America/New_York` can represent (its offset is -04:56 that
+## far in the past, so the local time runs out before the UTC instant does)
+query P
+SELECT from_unixtime(-8334601211038, 'America/New_York');
+----
+-262143-01-01T00:00:00-04:56
+
+## One second earlier is an error, not a panic
+query error DataFusion error: Execution error: Cannot convert \-8334601211039 to a timestamp in timezone "America/New_York" for function from_unixtime: the local date and time is outside the supported range
+SELECT from_unixtime(-8334601211039, 'America/New_York');
+
+## The same bound applies to the session time zone form
+statement ok
+SET datafusion.execution.time_zone = 'America/New_York';
+
+query P
+SELECT from_unixtime(-8334601211038);
+----
+-262143-01-01T00:00:00-04:56
+
+query error DataFusion error: Execution error: Cannot convert \-8334601211039 to a timestamp in timezone "America/New_York" for function from_unixtime: the local date and time is outside the supported range
+SELECT from_unixtime(-8334601211039);
+
+## ... and to array (not constant folded) input
+query error DataFusion error: Execution error: Cannot convert \-8334601211039 to a timestamp in timezone "America/New_York" for function from_unixtime: the local date and time is outside the supported range
+SELECT from_unixtime(v) FROM (VALUES (0), (-8334601211039)) AS t(v);
+
+## A zone that is ahead of UTC runs out at the other end
+statement ok
+SET datafusion.execution.time_zone = '+08:00';
+
+query P
+SELECT from_unixtime(8210266847999);
+----
++262142-12-31T23:59:59+08:00
+
+query error DataFusion error: Execution error: Cannot convert 8210266848000 to a timestamp in timezone "\+08:00" for function from_unixtime: the local date and time is outside the supported range
+SELECT from_unixtime(8210266848000);
+
+statement ok
+RESET datafusion.execution.time_zone
+
+## Without a time zone the full range stays usable
+query P
+SELECT from_unixtime(-8334601228800);
+----
+-262143-01-01T00:00:00
+
+query P
+SELECT from_unixtime(8210266876799);
+----
++262142-12-31T23:59:59
