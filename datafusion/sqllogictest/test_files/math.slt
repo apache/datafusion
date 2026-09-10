@@ -1213,7 +1213,9 @@ physical_plan
 01)ProjectionExec: expr=[log(column1@0, 1) as l1, log(column1@0, column1@0) as la, power(column1@0, 0) as p0, power(column1@0, log(column1@0, column2@1)) as pl]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
-# Non-nullable bases still use the existing simplifications
+# A column base is left alone even when it is not nullable, because its value is
+# not known to be outside {0, 1, negative}. power(a, 0) does not depend on the
+# base value, so it still folds.
 query TT
 EXPLAIN SELECT
   log(a, 1) AS l1,
@@ -1223,12 +1225,12 @@ EXPLAIN SELECT
 FROM (VALUES (2.0::double, 3.0::double)) AS t(a, b);
 ----
 logical_plan
-01)Projection: Float64(0) AS l1, Float64(1) AS la, Float64(1) AS p0, t.b AS pl
+01)Projection: log(t.a, Float64(1)) AS l1, log(t.a, t.a) AS la, Float64(1) AS p0, power(t.a, log(t.a, t.b)) AS pl
 02)--SubqueryAlias: t
-03)----Projection: column2 AS b
+03)----Projection: column1 AS a, column2 AS b
 04)------Values: (Float64(2), Float64(3))
 physical_plan
-01)ProjectionExec: expr=[0 as l1, 1 as la, 1 as p0, column2@1 as pl]
+01)ProjectionExec: expr=[log(column1@0, 1) as l1, log(column1@0, column1@0) as la, 1 as p0, power(column1@0, log(column1@0, column2@1)) as pl]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Float 16/32/64 for log
