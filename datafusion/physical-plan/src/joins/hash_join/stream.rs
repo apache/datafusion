@@ -210,6 +210,10 @@ pub(super) struct EmitUnmatchedBuildRowsState {
     visited: BooleanBuffer,
     /// Index of the next build row to examine
     cursor: usize,
+    /// What every probe partition together saw, needed by the null-aware
+    /// post-processing of each chunk. Captured with the bitmap snapshot
+    /// because [`JoinLeftData::report_probe_completed`] hands it out once.
+    probe_summary: ProbeSideSummary,
 }
 
 /// Lifecycle of this partition's build-data report to the shared coordinator.
@@ -1056,6 +1060,7 @@ impl HashJoinStream {
             HashJoinStreamState::EmitUnmatchedBuildRows(EmitUnmatchedBuildRowsState {
                 visited,
                 cursor: 0,
+                probe_summary,
             });
 
         Ok(StatefulStreamResult::Continue)
@@ -1082,6 +1087,8 @@ impl HashJoinStream {
         }
 
         let build_side = self.build_side.try_as_ready()?;
+
+        let probe_summary = state.probe_summary;
 
         // use the global left bitmap to produce the left indices and right indices
         let (left_side, right_side) = next_final_indices_chunk(
