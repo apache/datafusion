@@ -812,7 +812,13 @@ mod tests {
 
         // log(base, 1) => 0, log(base, base) => 1 and log(base, power(base, b)) => b
         // hold only for a base in (0, 1) union (1, inf).
-        for base in [lit(1.0), lit(0.0), lit(-2.0), lit(f64::NAN), lit(f64::INFINITY)] {
+        for base in [
+            lit(1.0),
+            lit(0.0),
+            lit(-2.0),
+            lit(f64::NAN),
+            lit(f64::INFINITY),
+        ] {
             let result = LogFunc::new()
                 .simplify(vec![base.clone(), lit(1.0)], &context)
                 .unwrap();
