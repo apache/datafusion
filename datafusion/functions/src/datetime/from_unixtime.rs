@@ -80,7 +80,7 @@ impl Default for FromUnixtimeFunc {
 }
 
 impl FromUnixtimeFunc {
-    #[deprecated(since = "55.0.0", note = "use `new_with_config` instead")]
+    #[deprecated(since = "56.0.0", note = "use `new_with_config` instead")]
     /// Deprecated constructor retained for backwards compatibility.
     ///
     /// Prefer [`FromUnixtimeFunc::new_with_config`], which picks up the session
