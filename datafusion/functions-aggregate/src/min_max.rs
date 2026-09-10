@@ -1747,7 +1747,7 @@ mod tests {
             vec![DataType::Int32],
             vec![DataType::Decimal128(10, 2)],
             vec![DataType::Decimal256(1, 1)],
-            vec![DataType::Utf8],
+            vec![Utf8],
         ];
         for fun in funs {
             for input_type in &input_types {
@@ -1760,9 +1760,9 @@ mod tests {
     #[test]
     fn test_get_min_max_return_type_coerce_dictionary() -> Result<()> {
         let data_type =
-            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(Utf8));
         let result = get_min_max_result_type(&[data_type])?;
-        assert_eq!(result, vec![DataType::Utf8]);
+        assert_eq!(result, vec![Utf8]);
         Ok(())
     }
 
@@ -1909,7 +1909,7 @@ mod tests {
     #[test]
     fn test_min_max_dictionary_multi_batch() -> Result<()> {
         let dict_type =
-            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(Utf8));
         let batch1 = string_dictionary_batch(&["b", "c"], &[Some(0), Some(1)]);
         let batch2 = string_dictionary_batch(&["a", "d"], &[Some(0), Some(1)]);
 
@@ -1919,7 +1919,7 @@ mod tests {
     #[test]
     fn test_min_max_dictionary_int8_keys() -> Result<()> {
         let dict_type =
-            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8));
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(Utf8));
         let dict_array_ref = string_dictionary_batch_with_keys(
             Int8Array::from(vec![Some(0), Some(1), Some(2), Some(3)]),
             &["b", "c", "a", "d"],

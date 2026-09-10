@@ -347,7 +347,7 @@ impl AggregateUDFImpl for Avg {
             | DataType::Decimal128(..)
             | DataType::Decimal256(..)) => avg_decimal_return_type(data_type),
             DataType::Duration(time_unit) => Ok(DataType::Duration(*time_unit)),
-            _ => Ok(DataType::Float64),
+            _ => Ok(Float64),
         }
     }
 
@@ -460,7 +460,7 @@ impl AggregateUDFImpl for Avg {
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         matches!(
             args.return_field.data_type(),
-            DataType::Float64
+            Float64
                 | DataType::Decimal32(_, _)
                 | DataType::Decimal64(_, _)
                 | DataType::Decimal128(_, _)
@@ -549,7 +549,7 @@ impl AggregateUDFImpl for Avg {
     fn blocked_groups_accumulator_supported(&self, args: BlockedAccumulatorArgs) -> bool {
         matches!(
             args.return_field.data_type(),
-            DataType::Float64
+            Float64
                 | DataType::Decimal32(_, _)
                 | DataType::Decimal64(_, _)
                 | DataType::Decimal128(_, _)
@@ -1903,8 +1903,8 @@ mod tests {
             AvgCase {
                 name: "float64",
                 values: Arc::new(Float64Array::from(vec![10.0, 20.0])),
-                return_type: DataType::Float64,
-                sum_type: DataType::Float64,
+                return_type: Float64,
+                sum_type:    Float64,
                 expected: ScalarValue::Float64(Some(15.0)),
             },
             AvgCase {
@@ -2193,8 +2193,8 @@ mod tests {
     #[test]
     fn average_groups_preserving_reads() -> Result<()> {
         let mut accumulator = AvgGroupsAccumulator::<Float64Type, _>::new(
-            &DataType::Float64,
-            &DataType::Float64,
+            &Float64,
+            &Float64,
             |sum, count| Ok(sum / count as f64),
         );
         let values = Arc::new(Float64Array::from(vec![

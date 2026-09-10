@@ -1,8 +1,4 @@
-use crate::blocked_helpers::blocked_custom_heap_allocated_input_builder::{
-    BlockedCustomHeapAllocatedInputBuilder, HeapAllocatedBlock,
-    HeapAllocatedBlockProvider, HeapAllocatedBlockProviderFinish,
-    HeapAllocatedBlockWithSlice,
-};
+use crate::blocked_helpers::blocked_custom_heap_allocated_input_builder::{BlockedCustomHeapAllocatedInputBuilder, HeapAllocatedBlock, HeapAllocatedBlockIterable, HeapAllocatedBlockProvider, HeapAllocatedBlockProviderFinish, HeapAllocatedBlockWithSlice};
 use crate::blocked_helpers::take_n_helpers_heap_allocated::HeapAllocatedBlockBuilder;
 use crate::blocked_helpers::{GetHeapAllocatedSize, OnlyOnStackSize};
 use arrow::buffer::ScalarBuffer;
@@ -117,6 +113,19 @@ impl<T: Clone> HeapAllocatedBlockWithSlice for Vec<T> {
 
     fn append_n(&mut self, item: Self::Item, n: usize) {
         self.resize(self.len() + n, item)
+    }
+}
+
+impl<T: Clone> HeapAllocatedBlockIterable for Vec<T> {
+    type Iter<'a> = std::slice::Iter<'a, T> where T: 'a;
+    type IterMut<'a> = std::slice::IterMut<'a, T> where T: 'a;
+
+    fn iter(&self) -> Self::Iter<'_> {
+        self.as_slice().iter()
+    }
+
+    fn iter_mut(&mut self) -> Self::IterMut<'_> {
+        self.as_mut_slice().iter_mut()
     }
 }
 

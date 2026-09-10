@@ -44,6 +44,14 @@ pub trait HeapAllocatedBlock {
     fn is_empty(&self) -> bool;
 }
 
+pub trait HeapAllocatedBlockIterable: HeapAllocatedBlock {
+    type Iter<'a>: Iterator<Item = &'a Self::Item> where <Self as HeapAllocatedBlock>::Item: 'a, Self: 'a;
+    type IterMut<'a>: Iterator<Item = &'a mut Self::Item> where <Self as HeapAllocatedBlock>::Item: 'a, Self: 'a;
+
+    fn iter(&self) -> Self::Iter<'_>;
+    fn iter_mut(&mut self) -> Self::IterMut<'_>;
+}
+
 pub trait HeapAllocatedBlockWithSlice: HeapAllocatedBlock {
     fn extend_from_slice(&mut self, slice: &[Self::Item]);
     fn append_n(&mut self, item: Self::Item, n: usize);
@@ -178,14 +186,11 @@ impl<
         index: BlocksIndex,
         update_fn: impl FnOnce(&mut <CustomBlockProvider::Block as HeapAllocatedBlock>::Item),
     ) where
-        Self: IndexMut<
-                BlocksIndex,
-                Output = <CustomBlockProvider::Block as HeapAllocatedBlock>::Item,
-            >,
+      CustomBlockProvider::Block: IndexMut<usize, Output = <CustomBlockProvider::Block as HeapAllocatedBlock>::Item>,
     {
         if Self::should_track_blocks_heap_allocation() {
             let before = HeapAllocatedSize::get_heap_allocated_size(&self[index]);
-            update_fn(&mut self[index]);
+            update_fn(&mut self.blocks[index.block_index(self.block_size)][index.index_in_block(self.block_size)]);
             let after = HeapAllocatedSize::get_heap_allocated_size(&self[index]);
             let mem =
                 &mut self.blocks_heap_allocated_sizes[index.block_index(self.block_size)];
@@ -198,8 +203,32 @@ impl<
                     self.finished_blocks_allocated_memory - before + after;
             }
         } else {
-            update_fn(&mut self[index]);
+            update_fn(&mut self.blocks[index.block_index(self.block_size)][index.index_in_block(self.block_size)]);
         }
+    }
+
+    /// Iterate mut over the items without changing the size
+    ///
+    /// SAFETY: the user must not change the memory size of each block and each item
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<Item = &<CustomBlockProvider::Block as HeapAllocatedBlock>::Item>
+    where
+      CustomBlockProvider::Block: HeapAllocatedBlockIterable,
+    {
+        self.blocks.iter().flat_map(|block| block.iter())
+    }
+
+    /// Iterate mut over the items without changing the size
+    ///
+    /// SAFETY: the user must not change the memory size of each block and each item
+    pub unsafe fn iter_mut_without_size(
+        &mut self,
+    ) -> impl Iterator<Item = &mut <CustomBlockProvider::Block as HeapAllocatedBlock>::Item>
+    where
+      CustomBlockProvider::Block: HeapAllocatedBlockIterable,
+    {
+        self.blocks.iter_mut().flat_map(|block| block.iter_mut())
     }
 
     /// Push length and return if the current block is now full
@@ -682,17 +711,17 @@ where
     }
 }
 
-impl<CustomBlockProvider, HeapAllocatedSize> IndexMut<usize>
+/// index mut only for stack based items so it won't modify the allocated size
+/// you can use instead `index_mut_with_size`
+impl<CustomBlockProvider> IndexMut<usize>
     for BlockedCustomHeapAllocatedInputBuilder<
         true,
         CustomBlockProvider,
-        HeapAllocatedSize,
+        OnlyOnStackSize,
     >
 where
     CustomBlockProvider: HeapAllocatedBlockProvider,
     CustomBlockProvider::Block: IndexMut<usize, Output = <CustomBlockProvider::Block as HeapAllocatedBlock>::Item>,
-    HeapAllocatedSize:
-        GetHeapAllocatedSize<<CustomBlockProvider::Block as HeapAllocatedBlock>::Item>,
 {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         self.index_mut(BlocksIndex::from_index_in_fixed_block_size(
@@ -724,20 +753,20 @@ where
     }
 }
 
-impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider, HeapAllocatedSize>
+/// index mut only for stack based items so it won't modify the allocated size causing a mismatch
+/// you can use instead `index_mut_with_size`
+impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider>
     IndexMut<BlocksIndex>
     for BlockedCustomHeapAllocatedInputBuilder<
         FIXED_BLOCK_SIZING,
         CustomBlockProvider,
-        HeapAllocatedSize,
+    OnlyOnStackSize
     >
 where
     CustomBlockProvider: HeapAllocatedBlockProvider,
     CustomBlockProvider::Block:
         Index<usize, Output = <CustomBlockProvider::Block as HeapAllocatedBlock>::Item>,
     CustomBlockProvider::Block: IndexMut<usize, Output = <CustomBlockProvider::Block as HeapAllocatedBlock>::Item>,
-    HeapAllocatedSize:
-        GetHeapAllocatedSize<<CustomBlockProvider::Block as HeapAllocatedBlock>::Item>,
 {
     fn index_mut(&mut self, index: BlocksIndex) -> &mut Self::Output {
         &mut self.blocks[index.block_index(self.block_size)]

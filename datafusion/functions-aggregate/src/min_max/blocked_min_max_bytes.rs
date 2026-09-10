@@ -419,19 +419,22 @@ impl BlockedMinMaxBytesState {
 
     /// Set the specified group to the given value, updating memory usage appropriately
     fn set_value(&mut self, group_index: BlocksIndex, new_val: &[u8]) {
-        match self.min_max[group_index].as_mut() {
-            None => {
-                self.min_max[group_index] = Some(new_val.to_vec());
-                self.total_data_bytes += new_val.len();
+        self.min_max.index_mut_with_size(group_index, |item| {
+            match item {
+                None => {
+                    *item = Some(new_val.to_vec());
+                    self.total_data_bytes += new_val.len();
+                }
+                Some(existing_val) => {
+                    // Copy data over to avoid re-allocating
+                    self.total_data_bytes -= existing_val.len();
+                    self.total_data_bytes += new_val.len();
+                    existing_val.clear();
+                    existing_val.extend_from_slice(new_val);
+                }
             }
-            Some(existing_val) => {
-                // Copy data over to avoid re-allocating
-                self.total_data_bytes -= existing_val.len();
-                self.total_data_bytes += new_val.len();
-                existing_val.clear();
-                existing_val.extend_from_slice(new_val);
-            }
-        }
+        })
+
     }
 
     /// Updates the min/max values for the given string values
