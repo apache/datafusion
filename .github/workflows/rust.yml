@@ -224,11 +224,17 @@ jobs:
         run: cargo xtask ci step check datafusion no-default
       - name: Check datafusion (object_store)
         run: cargo xtask ci step check datafusion object_store
-      - name: Check downstream storage feature contracts
+      - name: Check datafusion does not require object_store
         run: |
-          ci/scripts/retry timeout 120 apt-get update
-          ci/scripts/retry timeout 120 apt-get install -y python3
-          python3 ci/scripts/check_object_store_features.py
+          tree_file=$(mktemp)
+          trap 'rm -f "$tree_file"' EXIT
+          cargo tree -p datafusion --no-default-features --features sql \
+            --target all --edges all --prefix none --format '{p}' > "$tree_file"
+          if grep -q '^object_store v' "$tree_file"; then
+            cat "$tree_file"
+            echo "DataFusion without storage must not depend on object_store" >&2
+            exit 1
+          fi
       - name: Check datafusion (nested_expressions)
         run: cargo xtask ci step check datafusion nested_expressions
       - name: Check datafusion (array_expressions)
