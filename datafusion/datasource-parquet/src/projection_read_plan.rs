@@ -39,7 +39,7 @@ use datafusion_common::nested_struct::requires_nested_struct_cast;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_functions::core::file_row_index::FileRowIndexFunc;
 use datafusion_physical_expr::expressions::{CastExpr, Column};
-use datafusion_physical_expr::utils::collect_columns;
+use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
 use datafusion_physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 
 use crate::nested_schema_pruning::{
@@ -294,16 +294,7 @@ impl<'schema> PushdownChecker<'schema> {
 
         // Every key must resolve through Struct fields in the cast target.
         // In particular, a key following a Map field is a runtime lookup.
-        let mut data_type = cast.cast_type();
-        for name in field_path {
-            let DataType::Struct(fields) = data_type else {
-                return None;
-            };
-            data_type = fields
-                .iter()
-                .find(|field| field.name() == name)?
-                .data_type();
-        }
+        resolve_struct_field_type(cast.cast_type(), field_path)?;
 
         self.cast_accesses.push(CastColumnAccess {
             root_index: index,
@@ -412,18 +403,7 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
                     .field_with_name(column.name())
                     .ok()
                     .and_then(|root| {
-                        field_path.iter().try_fold(root.data_type(), |ty, name| {
-                            let DataType::Struct(fields) = ty else {
-                                return None;
-                            };
-                            let mut matches =
-                                fields.iter().filter(|field| field.name() == name);
-                            let field = matches.next()?;
-                            if matches.next().is_some() {
-                                return None;
-                            }
-                            Some(field.data_type())
-                        })
+                        resolve_struct_field_type(root.data_type(), &field_path)
                     });
                 if leaf_type.is_some()
                     && (!return_type.is_nested()
@@ -442,6 +422,30 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
         if let Some(function) = node.downcast_ref::<ScalarFunctionExpr>()
             && let Some(requirements) = function.required_input_fields(self.file_schema)
             && !requirements.is_empty()
+            // Declaring dependencies cannot bypass the List/Map pushdown policy.
+            && requirements.iter().all(|requirement| {
+                let argument = &function.args()[requirement.arg_index];
+                let data_type = if let Some(column) = argument.downcast_ref::<Column>() {
+                    // Column indices can still refer to an earlier schema.
+                    self.file_schema
+                        .field_with_name(column.name())
+                        .map(|field| field.data_type().clone())
+                        .ok()
+                } else {
+                    reassign_expr_columns(Arc::clone(argument), self.file_schema)
+                        .and_then(|argument| argument.data_type(self.file_schema))
+                        .ok()
+                };
+                data_type.is_some_and(|data_type| {
+                    requirement.field_paths.iter().all(|path| {
+                        resolve_struct_field_type(&data_type, path).is_some_and(|leaf| {
+                            matches!(leaf, DataType::Struct(_))
+                                || !leaf.is_nested()
+                                || self.is_nested_type_supported(leaf)
+                        })
+                    })
+                })
+            })
         {
             for (index, argument) in function.args().iter().enumerate() {
                 if let Some(requirement) =
@@ -519,6 +523,21 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
 
         Ok(TreeNodeRecursion::Continue)
     }
+}
+
+/// Resolve literal names through structs, rejecting missing or ambiguous fields.
+fn resolve_struct_field_type<'a>(
+    data_type: &'a DataType,
+    path: &[String],
+) -> Option<&'a DataType> {
+    path.iter().try_fold(data_type, |data_type, name| {
+        let DataType::Struct(fields) = data_type else {
+            return None;
+        };
+        let mut matches = fields.iter().filter(|field| field.name() == name);
+        let field = matches.next()?;
+        matches.next().is_none().then_some(field.data_type())
+    })
 }
 
 /// Result of checking which columns are required for filter pushdown.
@@ -1217,6 +1236,125 @@ mod test {
         datafusion_expr::InputFieldRequirement {
             arg_index: 1,
             field_paths: vec![vec!["value".into()], vec!["label".into()]],
+        }
+    }
+
+    #[test]
+    fn udf_input_requirements_respect_nested_pushdown_policy() {
+        #[derive(Debug, PartialEq, Eq, Hash)]
+        struct RequiredFieldsIsNull(Vec<String>);
+
+        impl datafusion_expr::ScalarUDFImpl for RequiredFieldsIsNull {
+            fn name(&self) -> &str {
+                "required_fields_is_null"
+            }
+
+            fn signature(&self) -> &datafusion_expr::Signature {
+                static SIGNATURE: std::sync::LazyLock<datafusion_expr::Signature> =
+                    std::sync::LazyLock::new(|| {
+                        datafusion_expr::Signature::any(
+                            1,
+                            datafusion_expr::Volatility::Immutable,
+                        )
+                    });
+                &SIGNATURE
+            }
+
+            fn return_type(&self, _: &[DataType]) -> Result<DataType> {
+                Ok(DataType::Boolean)
+            }
+
+            fn required_input_fields(
+                &self,
+                _: datafusion_expr::ReturnFieldArgs,
+            ) -> Option<Vec<datafusion_expr::InputFieldRequirement>> {
+                Some(vec![datafusion_expr::InputFieldRequirement {
+                    arg_index: 0,
+                    field_paths: vec![self.0.clone()],
+                }])
+            }
+
+            fn invoke_with_args(
+                &self,
+                args: datafusion_expr::ScalarFunctionArgs,
+            ) -> Result<datafusion_expr::ColumnarValue> {
+                Ok(datafusion_expr::ColumnarValue::Array(Arc::new(
+                    arrow::compute::is_null(
+                        args.args[0].to_array(args.number_rows)?.as_ref(),
+                    )?,
+                )))
+            }
+        }
+
+        let item = Arc::new(Field::new("item", DataType::Int32, true));
+        let map = DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(
+                    vec![
+                        Field::new("key", DataType::Utf8, false),
+                        Field::new("value", DataType::Int32, true),
+                    ]
+                    .into(),
+                ),
+                false,
+            )),
+            false,
+        );
+        for data_type in [
+            DataType::Int32,
+            DataType::Struct(vec![Field::new("value", DataType::Int32, true)].into()),
+            DataType::List(Arc::clone(&item)),
+            DataType::LargeList(Arc::clone(&item)),
+            DataType::FixedSizeList(item, 2),
+            map,
+        ] {
+            for nested in [false, true] {
+                let (input_type, path) = if nested {
+                    (
+                        DataType::Struct(
+                            vec![Field::new("selected", data_type.clone(), true)].into(),
+                        ),
+                        vec!["selected".into()],
+                    )
+                } else {
+                    (data_type.clone(), vec![])
+                };
+                let schema = Schema::new(vec![
+                    Field::new("id", DataType::Int32, false),
+                    Field::new("s", input_type, true),
+                ]);
+                let expr = logical2physical(
+                    &datafusion_expr::ScalarUDF::from(RequiredFieldsIsNull(path))
+                        .call(vec![col("s")]),
+                    &schema,
+                );
+                for index in [0, 1] {
+                    // Index 0 simulates an expression from an earlier schema.
+                    let expr = Arc::clone(&expr)
+                        .with_new_children(vec![Arc::new(PhysicalColumn::new(
+                            "s", index,
+                        ))])
+                        .unwrap();
+                    for allow_lists in [false, true] {
+                        let mut checker =
+                            PushdownChecker::new(&schema, allow_lists, false);
+                        expr.visit(&mut checker).unwrap();
+                        let blocked = match &data_type {
+                            DataType::Map(_, _) => true,
+                            DataType::List(_)
+                            | DataType::LargeList(_)
+                            | DataType::FixedSizeList(_, _) => !allow_lists,
+                            _ => false,
+                        };
+                        assert_eq!(
+                            checker.prevents_pushdown(),
+                            blocked,
+                            "{data_type:?}, nested={nested}, index={index}, allow_lists={allow_lists}"
+                        );
+                    }
+                }
+            }
         }
     }
 
