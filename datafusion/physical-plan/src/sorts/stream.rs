@@ -376,6 +376,8 @@ impl Iterator for IncrementalSortIterator {
         }
     }
 
+    // Not implementing ExactSizeIterator since in case of an error we stop and don't emit any more
+    // so the length would be wrong
     fn size_hint(&self) -> (usize, Option<usize>) {
         let num_rows = self.batch.num_rows().saturating_sub(self.cursor);
         let batch_size = self.batch_size;
@@ -383,8 +385,6 @@ impl Iterator for IncrementalSortIterator {
         (num_batches, Some(num_batches))
     }
 }
-
-impl ExactSizeIterator for IncrementalSortIterator {}
 
 impl FusedIterator for IncrementalSortIterator {}
 
@@ -548,11 +548,7 @@ mod tests {
         }
     }
 
-    fn assert_iterator_len_and_batch_len(
-        iter: &IncrementalSortIterator,
-        expected_len: usize,
-    ) {
-        assert_eq!(iter.len(), expected_len);
+    fn assert_iterator_size_hint(iter: &IncrementalSortIterator, expected_len: usize) {
         assert_eq!(iter.size_hint(), (expected_len, Some(expected_len)));
     }
 
@@ -564,28 +560,28 @@ mod tests {
         let (mut iterator, _) =
             create_incremental_sort_iter_on(original_len, batch_size)?;
 
-        assert_iterator_len_and_batch_len(&iterator, 4);
+        assert_iterator_size_hint(&iterator, 4);
 
         let batch = iterator.next().unwrap()?;
         assert_eq!(batch.num_rows(), batch_size);
 
-        assert_iterator_len_and_batch_len(&iterator, 3);
+        assert_iterator_size_hint(&iterator, 3);
 
         let batch = iterator.next().unwrap()?;
         assert_eq!(batch.num_rows(), batch_size);
 
-        assert_iterator_len_and_batch_len(&iterator, 2);
+        assert_iterator_size_hint(&iterator, 2);
 
         let batch = iterator.next().unwrap()?;
         assert_eq!(batch.num_rows(), batch_size);
 
-        assert_iterator_len_and_batch_len(&iterator, 1);
+        assert_iterator_size_hint(&iterator, 1);
 
         let batch = iterator.next().unwrap()?;
         // left over
         assert_eq!(batch.num_rows(), 1);
 
-        assert_iterator_len_and_batch_len(&iterator, 0);
+        assert_iterator_size_hint(&iterator, 0);
 
         assert!(iterator.next().is_none());
 
