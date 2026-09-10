@@ -3471,6 +3471,270 @@ mod tests {
         ))
     }
 
+    // This high-cardinality memory test would create quadratic collision scratch
+    // space; small group-value tests cover forced hash-collision correctness.
+    #[cfg(not(feature = "force_hash_collisions"))]
+    #[rstest::rstest]
+    #[case::final_hash(AggregateMode::Final, false)]
+    #[case::single_hash(AggregateMode::Single, false)]
+    #[case::ordered_final(AggregateMode::Final, true)]
+    #[case::ordered_single(AggregateMode::Single, true)]
+    #[tokio::test]
+    async fn migrated_aggregate_spill_merge_leaves_memory_for_replay(
+        #[case] mode: AggregateMode,
+        #[case] ordered: bool,
+    ) -> Result<()> {
+        use arrow::array::{ListArray, StringArray};
+        use arrow::buffer::OffsetBuffer;
+
+        const BATCH_SIZE: usize = 8192;
+        const KEYS_PER_PREFIX: usize = 25 * BATCH_SIZE;
+        const MEMORY_LIMIT: usize = 2 * 1024 * 1024;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("prefix", DataType::Int64, false),
+            Field::new("key", DataType::Int64, false),
+            Field::new("value", DataType::Utf8, false),
+        ]));
+        let group_by = PhysicalGroupBy::new_single(vec![
+            (col("prefix", &schema)?, "prefix".to_string()),
+            (col("key", &schema)?, "key".to_string()),
+        ]);
+        let aggregates = vec![Arc::new(
+            AggregateExprBuilder::new(array_agg_udaf(), vec![col("value", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("values")
+                .build()?,
+        )];
+        let input_schema = if mode == AggregateMode::Single {
+            Arc::clone(&schema)
+        } else {
+            Arc::new(create_schema(
+                &schema,
+                &group_by,
+                &aggregates,
+                AggregateMode::Partial,
+            )?)
+        };
+        let mut batches = vec![];
+        for prefix in 0..2 {
+            // Repeat every key across spill runs. Only the prefix is ordered;
+            // the second pass restarts the descending key sequence.
+            for value in 1..=2 {
+                for start in (0..KEYS_PER_PREFIX).step_by(BATCH_SIZE).rev() {
+                    let values: ArrayRef =
+                        Arc::new(StringArray::from(vec![
+                            format!("{value:08}");
+                            BATCH_SIZE
+                        ]));
+                    // Final takes singleton ARRAY_AGG states rather than raw strings.
+                    let values = if mode == AggregateMode::Single {
+                        values
+                    } else {
+                        let DataType::List(field) = input_schema.field(2).data_type()
+                        else {
+                            unreachable!("ARRAY_AGG state must be a list")
+                        };
+                        Arc::new(ListArray::new(
+                            Arc::clone(field),
+                            OffsetBuffer::from_lengths(std::iter::repeat_n(
+                                1, BATCH_SIZE,
+                            )),
+                            values,
+                            None,
+                        )) as ArrayRef
+                    };
+                    batches.push(RecordBatch::try_new(
+                        Arc::clone(&input_schema),
+                        vec![
+                            Arc::new(Int64Array::from(vec![prefix; BATCH_SIZE])),
+                            Arc::new(Int64Array::from_iter_values(
+                                (start..start + BATCH_SIZE).rev().map(|key| key as i64),
+                            )),
+                            values,
+                        ],
+                    )?);
+                }
+            }
+        }
+
+        let mut input =
+            TestMemoryExec::try_new(&[batches], Arc::clone(&input_schema), None)?;
+        if ordered {
+            input = input.try_with_sort_information(vec![
+                LexOrdering::new([PhysicalSortExpr::new_default(col(
+                    "prefix", &schema,
+                )?)])
+                .unwrap(),
+            ])?;
+        }
+        let aggregate = AggregateExec::try_new(
+            mode,
+            group_by,
+            aggregates,
+            vec![None],
+            Arc::new(input),
+            Arc::clone(&schema),
+        )?;
+        let context = Arc::new(
+            TaskContext::default()
+                .with_session_config(migrated_hash_session_config(BATCH_SIZE))
+                .with_runtime(
+                    RuntimeEnvBuilder::new()
+                        .with_memory_pool(Arc::new(FairSpillPool::new(MEMORY_LIMIT)))
+                        .build_arc()?,
+                ),
+        );
+        let stream = aggregate.execute_typed(0, &context)?;
+        match (mode, ordered, &stream) {
+            (AggregateMode::Final, false, StreamType::FinalHash(_))
+            | (AggregateMode::Single, false, StreamType::SingleHash(_)) => {}
+            (AggregateMode::Final, true, StreamType::OrderedFinalAggregate(_))
+            | (AggregateMode::Single, true, StreamType::OrderedSingleAggregate(_)) => {
+                assert_eq!(
+                    aggregate.input_order_mode(),
+                    &InputOrderMode::PartiallySorted(vec![0])
+                );
+            }
+            _ => panic!("unexpected stream for {mode:?}, ordered={ordered}"),
+        }
+        let result = collect(stream.into())
+            .await
+            .unwrap_or_else(|error| panic!("{mode:?}, ordered={ordered}: {error}"));
+        let mut seen = HashSet::new();
+        for batch in &result {
+            assert!(
+                batch
+                    .columns()
+                    .iter()
+                    .all(|column| column.null_count() == 0)
+            );
+            let columns = batch
+                .columns()
+                .iter()
+                .take(2)
+                .map(|column| column.as_any().downcast_ref::<Int64Array>().unwrap())
+                .collect::<Vec<_>>();
+            let values = batch
+                .column(2)
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .unwrap();
+            for row in 0..batch.num_rows() {
+                let prefix = columns[0].value(row);
+                let key = columns[1].value(row);
+                assert!((0..2).contains(&prefix));
+                assert!((0..KEYS_PER_PREFIX as i64).contains(&key));
+                let values = values.value(row);
+                assert_eq!(values.len(), 2);
+                assert_eq!(values.null_count(), 0);
+                let values = values.as_any().downcast_ref::<StringArray>().unwrap();
+                let mut values = [values.value(0), values.value(1)];
+                values.sort_unstable();
+                assert_eq!(values, ["00000001", "00000002"]);
+                assert!(seen.insert((prefix, key)), "duplicate group");
+            }
+        }
+        assert_eq!(seen.len(), 2 * KEYS_PER_PREFIX);
+        let metrics = aggregate.metrics().unwrap();
+        assert!(metrics.spill_count().unwrap() > 1);
+        assert!(metrics.spilled_rows().unwrap() > 0);
+        assert!(metrics.spilled_bytes().unwrap() > 0);
+        assert_eq!(context.memory_pool().reserved(), 0);
+        let progress = context.runtime_env().disk_manager.spilling_progress();
+        assert_eq!(progress.current_bytes, 0);
+        assert_eq!(progress.active_files_count, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn migrated_aggregate_spill_merge_allows_indivisible_rows() -> Result<()> {
+        use arrow::array::StringArray;
+        use datafusion_execution::memory_pool::{
+            GreedyMemoryPool, MemoryPool, PeakRecordingPool,
+        };
+
+        const KEY_BYTES: usize = 350_000;
+        const GROUPS: usize = 24;
+        const MEMORY_LIMIT: usize = 5 * 1024 * 1024 / 2;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Utf8, false),
+            Field::new("value", DataType::Int64, false),
+        ]));
+        let mut batches = Vec::new();
+        for _ in 0..2 {
+            for key in (0..GROUPS).rev() {
+                batches.push(RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(StringArray::from(vec![format!(
+                            "{key:02}{}",
+                            "x".repeat(KEY_BYTES - 2)
+                        )])),
+                        Arc::new(Int64Array::from(vec![1])),
+                    ],
+                )?);
+            }
+        }
+        let input = TestMemoryExec::try_new(&[batches], Arc::clone(&schema), None)?;
+        let aggregate = AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".into())]),
+            vec![Arc::new(
+                AggregateExprBuilder::new(sum_udaf(), vec![col("value", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("sum")
+                    .build()?,
+            )],
+            vec![None],
+            Arc::new(input),
+            schema,
+        )?;
+        let pool = Arc::new(PeakRecordingPool::new(Arc::new(GreedyMemoryPool::new(
+            MEMORY_LIMIT,
+        ))));
+        let context = Arc::new(
+            TaskContext::default()
+                .with_session_config(migrated_hash_session_config(1))
+                .with_runtime(
+                    RuntimeEnvBuilder::new()
+                        .with_memory_pool(Arc::clone(&pool) as Arc<dyn MemoryPool>)
+                        .build_arc()?,
+                ),
+        );
+
+        // Two one-row spill inputs need 1,400,064 bytes for merge buffers, more
+        // than half the pool. They cannot shrink, but merge plus replay fits.
+        let result = collect(aggregate.execute(0, Arc::clone(&context))?).await?;
+        let mut seen = HashSet::new();
+        for batch in result {
+            let keys = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            let sums = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap();
+            for row in 0..batch.num_rows() {
+                let key = keys.value(row);
+                assert_eq!(key.len(), KEY_BYTES);
+                let group = key[..2].parse::<usize>().unwrap();
+                assert!(group < GROUPS && seen.insert(group));
+                assert_eq!(sums.value(row), 2);
+            }
+        }
+        assert_eq!(seen.len(), GROUPS);
+        assert!(aggregate.metrics().unwrap().spill_count().unwrap() > 1);
+        assert!(pool.peak_reserved() <= MEMORY_LIMIT);
+        assert_eq!(pool.reserved(), 0);
+        let progress = context.runtime_env().disk_manager.spilling_progress();
+        assert_eq!(progress.current_bytes, 0);
+        assert_eq!(progress.active_files_count, 0);
+        Ok(())
+    }
+
     async fn check_grouping_sets(
         input: Arc<dyn ExecutionPlan>,
         spill: bool,
@@ -7429,32 +7693,22 @@ mod tests {
             Field::new("c", DataType::Int64, false),
         ]));
 
-        let batches = vec![vec![
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(Int64Array::from(vec![2])),
-                    Arc::new(Int64Array::from(vec![2])),
-                    Arc::new(Int64Array::from(vec![1])),
-                ],
-            )?,
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(Int64Array::from(vec![1])),
-                    Arc::new(Int64Array::from(vec![1])),
-                    Arc::new(Int64Array::from(vec![1])),
-                ],
-            )?,
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(Int64Array::from(vec![0])),
-                    Arc::new(Int64Array::from(vec![0])),
-                    Arc::new(Int64Array::from(vec![1])),
-                ],
-            )?,
-        ]];
+        let mut descending_batches = Vec::new();
+        for ordered_group in (0_i64..3).rev() {
+            // Multiple groups sharing the ordered prefix must remain in memory
+            // until its boundary, which forces an actual aggregation spill.
+            for unordered_group in 1_i64..=16 {
+                descending_batches.push(RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(Int64Array::from(vec![ordered_group])),
+                        Arc::new(Int64Array::from(vec![ordered_group])),
+                        Arc::new(Int64Array::from(vec![unordered_group])),
+                    ],
+                )?);
+            }
+        }
+        let batches = vec![descending_batches];
         let scan = TestMemoryExec::try_new(&batches, Arc::clone(&schema), None)?;
         let scan = scan.try_with_sort_information(vec![
             LexOrdering::new([PhysicalSortExpr::new(
@@ -7486,8 +7740,11 @@ mod tests {
             Arc::clone(&schema),
         )?);
 
-        let task_ctx = new_migrated_spill_ctx(1, 600);
+        // The merge input and replay aggregate now share one allowance. Keep
+        // enough space for both while the additional groups still force spilling.
+        let task_ctx = new_migrated_spill_ctx(1, 1024);
         let result = collect(aggr.execute(0, Arc::clone(&task_ctx))?).await?;
+        assert_eq!(task_ctx.memory_pool().reserved(), 0);
         assert_spill_count_metric(true, Arc::clone(&aggr));
         let metrics = aggr.metrics().unwrap();
         for phase in ["update", "state", "merge", "evaluate"] {
@@ -7501,13 +7758,58 @@ mod tests {
 
         allow_duplicates! {
             assert_snapshot!(batches_to_string(&result), @r"
-            +---+---+--------+
-            | b | c | SUM(c) |
-            +---+---+--------+
-            | 2 | 1 | 1      |
-            | 1 | 1 | 1      |
-            | 0 | 1 | 1      |
-            +---+---+--------+
+            +---+----+--------+
+            | b | c  | SUM(c) |
+            +---+----+--------+
+            | 2 | 1  | 1      |
+            | 2 | 2  | 2      |
+            | 2 | 3  | 3      |
+            | 2 | 4  | 4      |
+            | 2 | 5  | 5      |
+            | 2 | 6  | 6      |
+            | 2 | 7  | 7      |
+            | 2 | 8  | 8      |
+            | 2 | 9  | 9      |
+            | 2 | 10 | 10     |
+            | 2 | 11 | 11     |
+            | 2 | 12 | 12     |
+            | 2 | 13 | 13     |
+            | 2 | 14 | 14     |
+            | 2 | 15 | 15     |
+            | 2 | 16 | 16     |
+            | 1 | 1  | 1      |
+            | 1 | 2  | 2      |
+            | 1 | 3  | 3      |
+            | 1 | 4  | 4      |
+            | 1 | 5  | 5      |
+            | 1 | 6  | 6      |
+            | 1 | 7  | 7      |
+            | 1 | 8  | 8      |
+            | 1 | 9  | 9      |
+            | 1 | 10 | 10     |
+            | 1 | 11 | 11     |
+            | 1 | 12 | 12     |
+            | 1 | 13 | 13     |
+            | 1 | 14 | 14     |
+            | 1 | 15 | 15     |
+            | 1 | 16 | 16     |
+            | 0 | 1  | 1      |
+            | 0 | 2  | 2      |
+            | 0 | 3  | 3      |
+            | 0 | 4  | 4      |
+            | 0 | 5  | 5      |
+            | 0 | 6  | 6      |
+            | 0 | 7  | 7      |
+            | 0 | 8  | 8      |
+            | 0 | 9  | 9      |
+            | 0 | 10 | 10     |
+            | 0 | 11 | 11     |
+            | 0 | 12 | 12     |
+            | 0 | 13 | 13     |
+            | 0 | 14 | 14     |
+            | 0 | 15 | 15     |
+            | 0 | 16 | 16     |
+            +---+----+--------+
         ");
         }
         Ok(())

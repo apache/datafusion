@@ -96,6 +96,8 @@ pub struct StreamingMergeBuilder<'a> {
     fetch: Option<usize>,
     reservation: Option<MemoryReservation>,
     merge_pool: Option<Arc<MergeMemoryPool>>,
+    /// Optional fan-in budget when spill replay shares a consumer with its parent.
+    spill_merge_memory_limit: Option<usize>,
     enable_round_robin_tie_breaker: bool,
 }
 
@@ -161,6 +163,13 @@ impl<'a> StreamingMergeBuilder<'a> {
         self
     }
 
+    /// Limit spill-merge fan-in without reserving unused memory from its parent.
+    /// Temporary re-splitting workspace still uses the original memory pool.
+    pub(crate) fn with_spill_merge_memory_limit(mut self, limit: Option<usize>) -> Self {
+        self.spill_merge_memory_limit = limit;
+        self
+    }
+
     /// See [SortPreservingMergeExec::with_round_robin_repartition] for more
     /// information.
     ///
@@ -194,6 +203,7 @@ impl<'a> StreamingMergeBuilder<'a> {
             batch_size,
             reservation,
             merge_pool,
+            spill_merge_memory_limit,
             fetch,
             expressions,
             enable_round_robin_tie_breaker,
@@ -235,6 +245,7 @@ impl<'a> StreamingMergeBuilder<'a> {
                 enable_round_robin_tie_breaker,
             )
             .with_merge_pool(merge_pool)
+            .with_spill_merge_memory_limit(spill_merge_memory_limit)
             .create_spillable_merge_stream());
         }
 

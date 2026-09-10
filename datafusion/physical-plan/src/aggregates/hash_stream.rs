@@ -29,7 +29,7 @@ use datafusion_common::{
     DataFusionError, Result, assert_ne_or_internal_err, internal_datafusion_err,
     internal_err,
 };
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryLimit, MemoryReservation};
 use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr::expressions::Column;
@@ -333,9 +333,15 @@ impl FinalSpillContext {
         } = self;
 
         let spill_schema = Arc::clone(spill_manager.schema());
-        // The merge and replay table are two components of the same aggregate
-        // operator. Keep them under one consumer registration so a fair memory
-        // pool does not divide this operator's quota between its own phases.
+        // Bound merge buffers while sharing the operator's reservation, so the
+        // concurrent replay table can use any memory the merge does not need.
+        let merge_memory_limit = match context
+            .memory_pool()
+            .memory_limit_for(reservation.consumer())
+        {
+            MemoryLimit::Finite(limit) => Some(limit / 2),
+            MemoryLimit::Infinite | MemoryLimit::Unknown => None,
+        };
         let merge_reservation = reservation.new_empty();
         let merged = StreamingMergeBuilder::new()
             .with_schema(spill_schema)
@@ -345,6 +351,7 @@ impl FinalSpillContext {
             .with_metrics(baseline_metrics.intermediate())
             .with_batch_size(batch_size)
             .with_reservation(merge_reservation)
+            .with_spill_merge_memory_limit(merge_memory_limit)
             .build()?;
         let replay = OrderedFinalAggregateStream::new_with_input_and_metrics(
             &final_agg,

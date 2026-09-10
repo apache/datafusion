@@ -59,6 +59,10 @@ impl MemoryPool for UnboundedMemoryPool {
     fn memory_limit(&self) -> MemoryLimit {
         MemoryLimit::Infinite
     }
+
+    fn memory_limit_for(&self, _consumer: &MemoryConsumer) -> MemoryLimit {
+        self.memory_limit()
+    }
 }
 
 impl Display for UnboundedMemoryPool {
@@ -127,6 +131,10 @@ impl MemoryPool for GreedyMemoryPool {
     fn memory_limit(&self) -> MemoryLimit {
         MemoryLimit::Finite(self.pool_size)
     }
+
+    fn memory_limit_for(&self, _consumer: &MemoryConsumer) -> MemoryLimit {
+        self.memory_limit()
+    }
 }
 
 impl Display for GreedyMemoryPool {
@@ -163,6 +171,11 @@ impl Display for GreedyMemoryPool {
 ///    └───────────────────────z──────────────────────z───────────────┘
 /// ```
 ///
+/// Reservations created with [`MemoryReservation::new_empty`],
+/// [`MemoryReservation::split`], or [`MemoryReservation::take`] share their
+/// consumer's allowance. Registering a new consumer does not revoke existing
+/// reservations, but further fallible growth remains limited by total pool capacity.
+///
 /// Unspillable memory is allocated in a first-come, first-serve fashion
 #[derive(Debug)]
 pub struct FairSpillPool {
@@ -180,6 +193,12 @@ struct FairSpillPoolState {
     /// The total amount of memory reserved that can be spilled
     spillable: usize,
 
+    /// Total reservation across every sibling of each spillable consumer.
+    ///
+    /// `MemoryReservation::new_empty`, `split`, and `take` share a consumer
+    /// registration while maintaining separate reservation-size counters.
+    spillable_by_consumer: HashMap<usize, usize>,
+
     /// The total amount of memory reserved by consumers that cannot spill
     unspillable: usize,
 }
@@ -193,6 +212,7 @@ impl FairSpillPool {
             state: Mutex::new(FairSpillPoolState {
                 num_spill: 0,
                 spillable: 0,
+                spillable_by_consumer: HashMap::default(),
                 unspillable: 0,
             }),
         }
@@ -206,7 +226,9 @@ impl MemoryPool for FairSpillPool {
 
     fn register(&self, consumer: &MemoryConsumer) {
         if consumer.can_spill {
-            self.state.lock().num_spill += 1;
+            let mut state = self.state.lock();
+            state.num_spill += 1;
+            state.spillable_by_consumer.insert(consumer.id(), 0);
         }
     }
 
@@ -214,13 +236,22 @@ impl MemoryPool for FairSpillPool {
         if consumer.can_spill {
             let mut state = self.state.lock();
             state.num_spill = state.num_spill.checked_sub(1).unwrap();
+            let released = state.spillable_by_consumer.remove(&consumer.id());
+            debug_assert_eq!(released, Some(0));
         }
     }
 
     fn grow(&self, reservation: &MemoryReservation, additional: usize) {
         let mut state = self.state.lock();
         match reservation.registration.consumer.can_spill {
-            true => state.spillable += additional,
+            true => {
+                state.spillable += additional;
+                *state
+                    .spillable_by_consumer
+                    .get_mut(&reservation.consumer().id())
+                    .expect("spillable memory consumer must remain registered") +=
+                    additional;
+            }
             false => state.unspillable += additional,
         }
     }
@@ -228,7 +259,13 @@ impl MemoryPool for FairSpillPool {
     fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
         let mut state = self.state.lock();
         match reservation.registration.consumer.can_spill {
-            true => state.spillable -= shrink,
+            true => {
+                state.spillable -= shrink;
+                *state
+                    .spillable_by_consumer
+                    .get_mut(&reservation.consumer().id())
+                    .expect("spillable memory consumer must remain registered") -= shrink;
+            }
             false => state.unspillable -= shrink,
         }
     }
@@ -245,8 +282,16 @@ impl MemoryPool for FairSpillPool {
                 let available = spill_available
                     .checked_div(state.num_spill)
                     .unwrap_or(spill_available);
+                let consumer_used = state
+                    .spillable_by_consumer
+                    .get(&reservation.consumer().id())
+                    .copied()
+                    .expect("spillable memory consumer must remain registered");
 
-                if reservation.size() + additional > available {
+                if consumer_used
+                    .checked_add(additional)
+                    .is_none_or(|requested| requested > available)
+                {
                     return Err(insufficient_capacity_err(
                         reservation,
                         additional,
@@ -254,12 +299,28 @@ impl MemoryPool for FairSpillPool {
                         self,
                     ));
                 }
+                let remaining = self
+                    .pool_size
+                    .saturating_sub(state.unspillable.saturating_add(state.spillable));
+                if additional > remaining {
+                    return Err(insufficient_capacity_err(
+                        reservation,
+                        additional,
+                        remaining,
+                        self,
+                    ));
+                }
                 state.spillable += additional;
+                *state
+                    .spillable_by_consumer
+                    .get_mut(&reservation.consumer().id())
+                    .expect("spillable memory consumer must remain registered") +=
+                    additional;
             }
             false => {
                 let available = self
                     .pool_size
-                    .saturating_sub(state.unspillable + state.spillable);
+                    .saturating_sub(state.unspillable.saturating_add(state.spillable));
 
                 if available < additional {
                     return Err(insufficient_capacity_err(
@@ -282,6 +343,15 @@ impl MemoryPool for FairSpillPool {
 
     fn memory_limit(&self) -> MemoryLimit {
         MemoryLimit::Finite(self.pool_size)
+    }
+
+    fn memory_limit_for(&self, consumer: &MemoryConsumer) -> MemoryLimit {
+        if !consumer.can_spill() {
+            return self.memory_limit();
+        }
+        let state = self.state.lock();
+        let available = self.pool_size.saturating_sub(state.unspillable);
+        MemoryLimit::Finite(available.checked_div(state.num_spill).unwrap_or(available))
     }
 }
 
@@ -600,6 +670,10 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
     fn memory_limit(&self) -> MemoryLimit {
         self.inner.memory_limit()
     }
+
+    fn memory_limit_for(&self, consumer: &MemoryConsumer) -> MemoryLimit {
+        self.inner.memory_limit_for(consumer)
+    }
 }
 
 fn provide_top_memory_consumers_to_error_msg(
@@ -692,6 +766,195 @@ mod tests {
         let r4 = MemoryConsumer::new("s4").register(&pool);
         let err = r4.try_grow(30).unwrap_err().strip_backtrace();
         assert_snapshot!(err, @"Resources exhausted: Failed to allocate additional 30.0 B for s4 with 0.0 B already allocated for this reservation - 20.0 B remain available for the total memory pool: fair(pool_size: 100.0 B)");
+    }
+
+    #[test]
+    fn test_fair_sibling_reservations_share_one_consumer_limit() {
+        let pool: Arc<dyn MemoryPool> = Arc::new(FairSpillPool::new(100));
+        let parent = MemoryConsumer::new("spilling operator")
+            .with_can_spill(true)
+            .register(&pool);
+        let first_partition = parent.new_empty();
+        let second_partition = parent.new_empty();
+
+        first_partition.try_grow(60).unwrap();
+        second_partition.try_grow(40).unwrap();
+        assert_eq!(pool.reserved(), 100);
+        assert!(parent.try_grow(1).is_err());
+        assert!(second_partition.try_grow(1).is_err());
+        assert_eq!(pool.reserved(), 100);
+
+        drop(first_partition);
+        second_partition.try_grow(60).unwrap();
+        assert_eq!(pool.reserved(), 100);
+        drop(second_partition);
+        assert_eq!(pool.reserved(), 0);
+    }
+
+    #[test]
+    fn test_fair_siblings_respect_consumer_shares_and_global_capacity() {
+        let pool: Arc<dyn MemoryPool> = Arc::new(FairSpillPool::new(100));
+        let unspillable = MemoryConsumer::new("fixed").register(&pool);
+        unspillable.try_grow(20).unwrap();
+
+        let first = MemoryConsumer::new("same name")
+            .with_can_spill(true)
+            .register(&pool);
+        let second = MemoryConsumer::new("same name")
+            .with_can_spill(true)
+            .register(&pool);
+        let sibling = first.new_empty();
+
+        first.try_grow(25).unwrap();
+        sibling.try_grow(15).unwrap();
+        assert!(sibling.try_grow(1).is_err());
+        second.try_grow(40).unwrap();
+        assert_eq!(pool.reserved(), 100);
+
+        let split = first.split(10);
+        assert_eq!(pool.reserved(), 100);
+        assert!(split.try_grow(1).is_err());
+        drop(split);
+        second.try_grow(1).unwrap_err();
+        sibling.try_grow(10).unwrap();
+        assert_eq!(pool.reserved(), 100);
+    }
+
+    #[test]
+    fn test_fair_take_retains_usage_until_last_sibling_drops() {
+        let pool: Arc<dyn MemoryPool> = Arc::new(FairSpillPool::new(100));
+        let mut parent = MemoryConsumer::new("spilling operator")
+            .with_can_spill(true)
+            .register(&pool);
+        let other = MemoryConsumer::new("other")
+            .with_can_spill(true)
+            .register(&pool);
+        parent.try_grow(50).unwrap();
+        let taken = parent.take();
+        assert_eq!(parent.size(), 0);
+        assert_eq!(taken.size(), 50);
+        assert!(parent.try_grow(1).is_err());
+        assert!(taken.try_grow(1).is_err());
+        drop(parent);
+        assert_eq!(pool.reserved(), 50);
+        taken.shrink(10);
+        taken.try_grow(10).unwrap();
+        assert!(other.try_grow(51).is_err());
+        drop(taken);
+        other.try_grow(100).unwrap();
+        assert_eq!(pool.reserved(), 100);
+        drop(other);
+        assert_eq!(pool.reserved(), 0);
+    }
+
+    #[test]
+    fn test_fair_new_consumer_respects_existing_global_usage() {
+        let pool: Arc<dyn MemoryPool> = Arc::new(FairSpillPool::new(100));
+        let first = MemoryConsumer::new("first")
+            .with_can_spill(true)
+            .register(&pool);
+        first.try_grow(100).unwrap();
+        let second = MemoryConsumer::new("second")
+            .with_can_spill(true)
+            .register(&pool);
+        assert!(second.try_grow(1).is_err());
+        assert_eq!(pool.reserved(), 100);
+        first.shrink(50);
+        second.try_grow(50).unwrap();
+        assert_eq!(pool.reserved(), 100);
+    }
+
+    #[test]
+    fn test_fair_infallible_growth_is_charged_to_all_siblings() {
+        let pool: Arc<dyn MemoryPool> = Arc::new(FairSpillPool::new(100));
+        let first = MemoryConsumer::new("first")
+            .with_can_spill(true)
+            .register(&pool);
+        let sibling = first.new_empty();
+        // Infallible growth remains permitted, including beyond the configured capacity.
+        first.grow(110);
+        assert_eq!(pool.reserved(), 110);
+        assert!(sibling.try_grow(1).is_err());
+        first.shrink(20);
+        sibling.try_grow(10).unwrap();
+        assert_eq!(pool.reserved(), 100);
+        drop(first);
+        drop(sibling);
+        assert_eq!(pool.reserved(), 0);
+    }
+
+    #[test]
+    fn test_fair_oversized_sibling_growth_does_not_overflow() {
+        let pool: Arc<dyn MemoryPool> = Arc::new(FairSpillPool::new(100));
+        let parent = MemoryConsumer::new("spilling operator")
+            .with_can_spill(true)
+            .register(&pool);
+        parent.try_grow(1).unwrap();
+        let sibling = parent.new_empty();
+        assert!(sibling.try_grow(usize::MAX).is_err());
+        assert_eq!(pool.reserved(), 1);
+    }
+
+    #[test]
+    fn test_fair_consumer_memory_limit() {
+        use crate::memory_pool::PeakRecordingPool;
+
+        let top = NonZeroUsize::new(2).unwrap();
+        let pools: [Arc<dyn MemoryPool>; 6] = [
+            Arc::new(FairSpillPool::new(100)),
+            Arc::new(TrackConsumersPool::new(FairSpillPool::new(100), top)),
+            Arc::new(TrackConsumersPool::new(
+                TrackConsumersPool::new(FairSpillPool::new(100), top),
+                top,
+            )),
+            Arc::new(PeakRecordingPool::new(Arc::new(FairSpillPool::new(100)))),
+            Arc::new(TrackConsumersPool::new(
+                PeakRecordingPool::new(Arc::new(FairSpillPool::new(100))),
+                top,
+            )),
+            Arc::new(PeakRecordingPool::new(Arc::new(TrackConsumersPool::new(
+                FairSpillPool::new(100),
+                top,
+            )))),
+        ];
+        for pool in pools {
+            let check_limit = |reservation: &MemoryReservation, expected| {
+                let before = (pool.reserved(), reservation.size());
+                assert!(matches!(
+                    pool.memory_limit_for(reservation.consumer()),
+                    MemoryLimit::Finite(actual) if actual == expected
+                ));
+                assert_eq!((pool.reserved(), reservation.size()), before);
+            };
+            let fixed = MemoryConsumer::new("fixed").register(&pool);
+            fixed.grow(20);
+            let first = MemoryConsumer::new("first")
+                .with_can_spill(true)
+                .register(&pool);
+            check_limit(&first, 80);
+
+            let peer = MemoryConsumer::new("peer")
+                .with_can_spill(true)
+                .register(&pool);
+            let sibling = first.new_empty();
+            sibling.try_grow(30).unwrap();
+            for reservation in [&first, &peer, &sibling] {
+                check_limit(reservation, 40);
+            }
+            check_limit(&fixed, 100);
+            assert_eq!(pool.reserved(), 50);
+            assert!(matches!(pool.memory_limit(), MemoryLimit::Finite(100)));
+
+            drop(peer);
+            check_limit(&first, 80);
+            fixed.grow(100);
+            check_limit(&first, 0);
+            check_limit(&fixed, 100);
+            assert_eq!(pool.reserved(), 150);
+            assert!(matches!(pool.memory_limit(), MemoryLimit::Finite(100)));
+            drop((first, sibling, fixed));
+            assert_eq!(pool.reserved(), 0);
+        }
     }
 
     #[test]
