@@ -34,6 +34,7 @@ use datafusion::datasource::source::DataSourceExec;
 use datafusion::prelude::SessionConfig;
 use datafusion_common::Result;
 use datafusion_common::test_util::batches_to_sort_string;
+use datafusion_common::utils::get_available_parallelism;
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{FairSpillPool, TrackConsumersPool};
@@ -1237,6 +1238,10 @@ async fn aggregate_chain_fuzz() {
     println!("aggregate_chain_fuzz seed = {seed}");
     let mut total_spilled = 0;
     let mut failures: Vec<String> = vec![];
+    // Every in-flight case holds several copies of the dataset and its own
+    // partitioned streams, so bound the concurrency by the cores at hand
+    // instead of spawning the whole matrix.
+    let max_concurrent_cases = get_available_parallelism();
 
     for cardinality in Cardinality::ALL {
         let rows = Arc::new(generate_rows(cardinality, seed));
@@ -1264,9 +1269,7 @@ async fn aggregate_chain_fuzz() {
                 .find(|(query, _)| *query == case.shape.query)
                 .map(|(_, expected)| expected.clone())
                 .unwrap();
-            // Every in-flight case holds several copies of the dataset, so
-            // bound the concurrency instead of spawning the whole matrix.
-            while join_set.len() >= MAX_CONCURRENT_CASES {
+            while join_set.len() >= max_concurrent_cases {
                 collect_finished(
                     &mut join_set,
                     &mut spilled,
@@ -1301,13 +1304,9 @@ async fn aggregate_chain_fuzz() {
     );
 }
 
-/// One line per case; `spilled_stages` names the aggregate operators that
-/// spilled and flags when more than one did.
-const MAX_CONCURRENT_CASES: usize = 16;
 /// A case takes about two seconds alone in a debug build, but CI runs the
-/// whole fuzz binary on a four-core runner with `MAX_CONCURRENT_CASES` of
-/// them in flight, and has taken over a minute per case there. Generous, so
-/// only a real hang fires it.
+/// whole fuzz binary on a four-core runner, and has taken over a minute per
+/// case there. Generous, so only a real hang fires it.
 const CASE_TIMEOUT_SECS: u64 = 600;
 
 /// Waits for one case and files it under spilled, finished or failed. A
@@ -1328,6 +1327,8 @@ async fn collect_finished(
     }
 }
 
+/// One line per case; `spilled_stages` names the aggregate operators that
+/// spilled and flags when more than one did.
 fn print_cases(cardinality: Cardinality, outcome: &str, cases: &[(Case, Vec<String>)]) {
     let mut lines: Vec<String> = cases
         .iter()
