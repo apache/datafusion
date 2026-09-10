@@ -21,20 +21,18 @@
 //! [`super::HashJoinExec`]. See comments in [`HashJoinStream`] for more details.
 
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::task::Poll;
 
 use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
 use crate::joins::Map;
 use crate::joins::MapOffset;
 use crate::joins::PartitionMode;
-use crate::joins::hash_join::exec::JoinLeftData;
+use crate::joins::hash_join::exec::{JoinLeftData, NullAwareMode};
+use crate::joins::hash_join::probe_completion::ProbeSideSummary;
 use crate::joins::hash_join::shared_bounds::{
     PartitionBounds, PartitionBuildData, SharedBuildAccumulator,
 };
-use crate::joins::utils::{
-    OnceFut, equal_rows_arr, get_final_indices_from_shared_bitmap, matchable_join_keys,
-};
+use crate::joins::utils::{OnceFut, equal_rows_arr, matchable_join_keys};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
     RecordBatchStream, SendableRecordBatchStream, handle_state,
@@ -49,7 +47,7 @@ use crate::{
 };
 
 use arrow::array::{Array, ArrayRef, UInt32Array, UInt64Array};
-use arrow::buffer::NullBuffer;
+use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{
@@ -119,11 +117,18 @@ impl BuildSide {
 ///       WaitBuildSide
 ///             │
 ///             ▼
-///  ┌─► FetchProbeBatch ───► ExhaustedProbeSide ───► Completed
-///  │          │
-///  │          ▼
-///  └─ ProcessProbeBatch
+///  ┌─► FetchProbeBatch ───► ExhaustedProbeSide ──────────► Completed
+///  │          │                     │                          ▲
+///  │          ▼                     ▼                          │
+///  └─ ProcessProbeBatch      ┌─► EmitUnmatchedBuildRows ───────┘
+///                            └──────────┘
 /// ```
+///
+/// `ExhaustedProbeSide` moves to `EmitUnmatchedBuildRows` only for join types
+/// that emit build-side rows after the probe side is exhausted (see
+/// [`need_produce_result_in_final`]), and only in the partition that finished
+/// probing last. That state re-enters itself once per emitted chunk of at most
+/// `batch_size` rows.
 #[derive(Debug, Clone)]
 pub(super) enum HashJoinStreamState {
     /// Initial state for HashJoinStream indicating that build-side data not collected yet
@@ -136,6 +141,10 @@ pub(super) enum HashJoinStreamState {
     ProcessProbeBatch(ProcessProbeBatchState),
     /// Indicates that probe-side has been fully processed
     ExhaustedProbeSide,
+    /// Indicates that the probe side has been fully processed by every
+    /// partition, and this stream is emitting the final build-side rows
+    /// (unmatched rows, or matched rows for `LeftSemi`) in chunks
+    EmitUnmatchedBuildRows(EmitUnmatchedBuildRowsState),
     /// Indicates that HashJoinStream execution is completed
     Completed,
 }
@@ -147,6 +156,19 @@ impl HashJoinStreamState {
         match self {
             HashJoinStreamState::ProcessProbeBatch(state) => Ok(state),
             _ => internal_err!("Expected hash join stream in ProcessProbeBatch state"),
+        }
+    }
+
+    /// Tries to extract EmitUnmatchedBuildRowsState from HashJoinStreamState enum.
+    /// Returns an error if state is not EmitUnmatchedBuildRows.
+    fn try_as_emit_unmatched_build_rows_mut(
+        &mut self,
+    ) -> Result<&mut EmitUnmatchedBuildRowsState> {
+        match self {
+            HashJoinStreamState::EmitUnmatchedBuildRows(state) => Ok(state),
+            _ => {
+                internal_err!("Expected hash join stream in EmitUnmatchedBuildRows state")
+            }
         }
     }
 }
@@ -175,6 +197,23 @@ impl ProcessProbeBatchState {
             self.joined_probe_idx = joined_probe_idx;
         }
     }
+}
+
+/// Container for HashJoinStreamState::EmitUnmatchedBuildRows related data
+#[derive(Debug, Clone)]
+pub(super) struct EmitUnmatchedBuildRowsState {
+    /// Snapshot of the build-side visited bitmap, one bit per build row.
+    ///
+    /// Taken once every probe partition has reported completion, so no
+    /// further updates to the shared bitmap are possible and the snapshot
+    /// can be scanned without holding its lock.
+    visited: BooleanBuffer,
+    /// Index of the next build row to examine
+    cursor: usize,
+    /// What every probe partition together saw, needed by the null-aware
+    /// post-processing of each chunk. Captured with the bitmap snapshot
+    /// because [`JoinLeftData::report_probe_completed`] hands it out once.
+    probe_summary: ProbeSideSummary,
 }
 
 /// Lifecycle of this partition's build-data report to the shared coordinator.
@@ -345,8 +384,8 @@ pub(super) struct HashJoinStream {
     /// Output buffer for coalescing small batches into larger ones with optional fetch limit.
     /// Uses `LimitedBatchCoalescer` to efficiently combine batches and absorb limit with 'fetch'
     output_buffer: LimitedBatchCoalescer,
-    /// Whether this is a null-aware anti or mark join
-    null_aware: bool,
+    /// Null-aware (`NOT IN`) semantics of this join, if any
+    null_aware: Option<NullAwareMode>,
 }
 
 impl RecordBatchStream for HashJoinStream {
@@ -496,7 +535,7 @@ impl HashJoinStream {
         right_side_ordered: bool,
         build_accumulator: Option<Arc<SharedBuildAccumulator>>,
         mode: PartitionMode,
-        null_aware: bool,
+        null_aware: Option<NullAwareMode>,
         fetch: Option<usize>,
     ) -> Self {
         // Create output buffer with coalescing and optional fetch limit.
@@ -638,7 +677,10 @@ impl HashJoinStream {
                     handle_state!(self.process_probe_batch())
                 }
                 HashJoinStreamState::ExhaustedProbeSide => {
-                    handle_state!(self.process_unmatched_build_batch())
+                    handle_state!(self.prepare_unmatched_build_rows())
+                }
+                HashJoinStreamState::EmitUnmatchedBuildRows(_) => {
+                    handle_state!(self.emit_unmatched_build_rows())
                 }
                 HashJoinStreamState::Completed if !self.output_buffer.is_empty() => {
                     // Flush any remaining buffered data
@@ -767,103 +809,37 @@ impl HashJoinStream {
 
         let timer = self.join_metrics.join_time.timer();
 
-        // Null-aware anti join semantics:
-
-        // For LeftAnti: output LEFT (build) rows where LEFT.key NOT IN RIGHT.key
-        // 1. If RIGHT (probe) contains NULL in any batch, no LEFT rows should be output
-        // 2. LEFT rows with NULL keys should not be output (handled in final stage)
-
-        // For RightAnti: output RIGHT (probe) rows where RIGHT.key NOT IN LEFT.key
-        // 1. If LEFT (build) contains NULL, no RIGHT rows should be output
-        // 2. RIGHT rows with NULL keys should not be output
-        // 3. If LEFT (build) is empty, all RIGHT rows should be output
-        if self.null_aware {
-            match self.join_type {
-                JoinType::RightAnti => {
-                    if build_side.left_data.build_side_has_null {
-                        timer.done();
-                        self.state = HashJoinStreamState::FetchProbeBatch;
-                        return Ok(StatefulStreamResult::Continue);
-                    }
-                }
-                JoinType::LeftAnti => {
-                    // Mark that we've seen a probe batch with actual rows (probe side is non-empty)
-                    // Only set this if batch has rows - empty batches don't count
-                    // Use shared atomic state so all partitions can see this global information
-                    if state.batch.num_rows() > 0 {
-                        build_side
-                            .left_data
-                            .probe_side_non_empty
-                            .store(true, Ordering::Relaxed);
-                    }
-
-                    // Check if probe side (RIGHT) contains NULL
-                    // Since null_aware validation ensures single column join, we only check the first column
-                    let probe_key_column = &state.values[0];
-                    let probe_has_null = if self.filter.is_some() {
-                        probe_key_column.null_count() > 0
-                    } else {
-                        probe_key_column.logical_null_count() > 0
-                    };
-                    if probe_has_null {
-                        // Found NULL in probe side - set shared flag to prevent any output
-                        build_side
-                            .left_data
-                            .probe_side_has_null
-                            .store(true, Ordering::Relaxed);
-                    }
-
-                    // If probe side has NULL (detected in this or any other partition), return empty result
-                    if build_side
-                        .left_data
-                        .probe_side_has_null
-                        .load(Ordering::Relaxed)
-                    {
-                        timer.done();
-                        self.state = HashJoinStreamState::FetchProbeBatch;
-                        return Ok(StatefulStreamResult::Continue);
-                    }
-                }
-                JoinType::LeftMark => {
-                    if state.batch.num_rows() > 0 {
-                        build_side
-                            .left_data
-                            .probe_side_non_empty
-                            .store(true, Ordering::Relaxed);
-                    }
-
-                    let probe_key_column = &state.values[0];
-                    if probe_key_column.null_count() > 0 {
-                        build_side
-                            .left_data
-                            .probe_side_has_null
-                            .store(true, Ordering::Relaxed);
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        // For correlated null-aware LeftMark (`on[1..]` scope keys, hence
-        // values len > 1), record this batch's UNKNOWN candidates once, before
-        // the first chunked lookup (offset == (0, None)).
-        //
-        // Must precede the empty-build-map return below: an all-NULL-key build
-        // side has an empty full-key map but still needs UNKNOWN marks.
-        if self.null_aware
-            && self.join_type == JoinType::LeftMark
-            && state.values.len() > 1
-            && state.offset == (0, None)
-        {
-            mark_null_candidates_for_probe_batch(
-                build_side,
+        if let Some(mode) = self.null_aware {
+            if null_aware_skip_probe_batch(
+                mode,
                 state,
-                &self.random_state,
-                self.batch_size,
-                &mut self.null_mark_hashes_buffer,
-                &mut self.null_mark_probe_indices_buffer,
-                &mut self.null_mark_build_indices_buffer,
-            )?;
+                &build_side.left_data,
+                self.filter.is_some(),
+            ) {
+                timer.done();
+                self.state = HashJoinStreamState::FetchProbeBatch;
+                return Ok(StatefulStreamResult::Continue);
+            }
+
+            // For correlated null-aware LeftMark, record this batch's UNKNOWN
+            // candidates once, before the first chunked lookup
+            // (offset == (0, None)).
+            //
+            // Must precede the empty-build-map return below: an all-NULL-key
+            // build side has an empty full-key map but still needs UNKNOWN marks.
+            if matches!(mode, NullAwareMode::LeftMark { correlated: true })
+                && state.offset == (0, None)
+            {
+                mark_null_candidates_for_probe_batch(
+                    build_side,
+                    state,
+                    &self.random_state,
+                    self.batch_size,
+                    &mut self.null_mark_hashes_buffer,
+                    &mut self.null_mark_probe_indices_buffer,
+                    &mut self.null_mark_build_indices_buffer,
+                )?;
+            }
         }
 
         let is_empty = !build_side.left_data.has_matchable_build_rows();
@@ -989,24 +965,8 @@ impl HashJoinStream {
             self.right_side_ordered,
         )?;
 
-        // If null-aware RightAnti join, we don't want to emit NULL probe keys
-        if self.join_type == JoinType::RightAnti && self.null_aware {
-            let probe_key = &state.values[0];
-            // if the valid_keys mask is available, use that, else use the probe key
-            let mask = state
-                .valid_keys
-                .clone()
-                .or_else(|| probe_key.logical_nulls());
-            // we only need this copy if there are NULLs
-            if let Some(mask) = mask.filter(|m| m.null_count() > 0) {
-                let filtered_right_indices = right_indices
-                    .values()
-                    .iter()
-                    .copied()
-                    .filter(|idx| !mask.is_null(*idx as usize))
-                    .collect::<Vec<_>>();
-                right_indices = UInt32Array::from(filtered_right_indices);
-            }
+        if self.null_aware == Some(NullAwareMode::RightAnti) {
+            right_indices = drop_null_probe_keys(state, right_indices);
         }
 
         // Build output batch and push to coalescer
@@ -1053,10 +1013,14 @@ impl HashJoinStream {
         Ok(StatefulStreamResult::Continue)
     }
 
-    /// Processes unmatched build-side rows for certain join types and produces output batch
+    /// Decides whether this stream emits the final build-side rows (unmatched
+    /// rows, or matched rows for `LeftSemi`) once the probe side is exhausted.
     ///
-    /// Updates state to `Completed`
-    fn process_unmatched_build_batch(
+    /// Only the last partition to finish probing emits them, since the shared
+    /// visited bitmap is complete only at that point. Updates state to
+    /// `EmitUnmatchedBuildRows` when there are rows to emit, and to `Completed`
+    /// otherwise.
+    fn prepare_unmatched_build_rows(
         &mut self,
     ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
         let timer = self.join_metrics.join_time.timer();
@@ -1069,101 +1033,99 @@ impl HashJoinStream {
 
         let build_side = self.build_side.try_as_ready()?;
 
-        // For null-aware anti join, if probe side had NULL, no rows should be output
-        // Check shared atomic state to get global knowledge across all partitions
-        if self.null_aware
-            && self.join_type == JoinType::LeftAnti
-            && build_side
-                .left_data
-                .probe_side_has_null
-                .load(Ordering::Relaxed)
-        {
+        // Only the last probe partition to finish emits the build-side rows,
+        // and only it receives the shared probe-side summary (see
+        // `JoinLeftData::report_probe_completed` for why the flags are not
+        // readable any other way here).
+        let Some(probe_summary) = build_side.left_data.report_probe_completed() else {
+            timer.done();
+            self.state = HashJoinStreamState::Completed;
+            return Ok(StatefulStreamResult::Continue);
+        };
+
+        // Every probe partition has finished, so the bitmap is final: snapshot
+        // it once and release the lock for the whole emission phase.
+        let visited = build_side
+            .left_data
+            .visited_indices_bitmap()
+            .lock()
+            .finish_cloned();
+
+        // The final build rows count as one logical input batch; the rows are
+        // added chunk by chunk in `emit_unmatched_build_rows`.
+        self.join_metrics.input_batches.add(1);
+
+        timer.done();
+        self.state =
+            HashJoinStreamState::EmitUnmatchedBuildRows(EmitUnmatchedBuildRowsState {
+                visited,
+                cursor: 0,
+                probe_summary,
+            });
+
+        Ok(StatefulStreamResult::Continue)
+    }
+
+    /// Emits the next chunk of at most `batch_size` final build-side rows and
+    /// stays in `EmitUnmatchedBuildRows` until every build row has been
+    /// examined, then updates state to `Completed`.
+    ///
+    /// Emitting in chunks instead of one batch over the whole build side keeps
+    /// the output within `batch_size` and bounds the memory materialized at
+    /// once, which otherwise grows with the number of unmatched build rows
+    /// (e.g. a highly selective `LeftAnti` join over a large build side).
+    fn emit_unmatched_build_rows(
+        &mut self,
+    ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
+        let timer = self.join_metrics.join_time.timer();
+
+        let state = self.state.try_as_emit_unmatched_build_rows_mut()?;
+        if state.cursor >= state.visited.len() {
             timer.done();
             self.state = HashJoinStreamState::Completed;
             return Ok(StatefulStreamResult::Continue);
         }
 
-        if !build_side.left_data.report_probe_completed() {
-            timer.done();
-            self.state = HashJoinStreamState::Completed;
-            return Ok(StatefulStreamResult::Continue);
-        }
+        let build_side = self.build_side.try_as_ready()?;
+
+        let probe_summary = state.probe_summary;
 
         // use the global left bitmap to produce the left indices and right indices
-        let (mut left_side, mut right_side) = get_final_indices_from_shared_bitmap(
-            build_side.left_data.visited_indices_bitmap(),
+        let (left_side, right_side) = next_final_indices_chunk(
+            &state.visited,
+            &mut state.cursor,
             self.join_type,
-            true,
+            self.batch_size,
         );
 
-        // For null-aware anti join, filter out LEFT rows with NULL in join keys
-        // BUT only if the probe side (RIGHT) was non-empty. If probe side is empty,
-        // NULL NOT IN (empty) = TRUE, so NULL rows should be returned.
-        // Use shared atomic state to get global knowledge across all partitions
-        if self.null_aware
-            && self.join_type == JoinType::LeftAnti
-            && build_side
-                .left_data
-                .probe_side_non_empty
-                .load(Ordering::Relaxed)
-        {
-            // Since null_aware validation ensures single column join, we only check the first column
-            let build_key_column = &build_side.left_data.values()[0];
-
-            // Filter out indices where the key is NULL
-            let filtered_indices: Vec<u64> = left_side
-                .iter()
-                .filter_map(|idx| {
-                    let idx = idx.expect(
-                        "LeftAnti final indices should always contain build-side rows",
-                    );
-                    let idx_usize = idx as usize;
-                    if build_key_column.is_null(idx_usize) {
-                        None // Skip rows with NULL keys
-                    } else {
-                        Some(idx)
-                    }
-                })
-                .collect();
-
-            left_side = UInt64Array::from(filtered_indices);
-            right_side = UInt32Array::new_null(left_side.len());
-        }
-
-        self.join_metrics.input_batches.add(1);
-        self.join_metrics.input_rows.add(left_side.len());
-
-        // Push final unmatched indices to output buffer
-        if !left_side.is_empty() {
-            let mark_column = if self.null_aware && self.join_type == JoinType::LeftMark {
-                let probe_side_has_null = build_side
-                    .left_data
-                    .probe_side_has_null
-                    .load(Ordering::Relaxed);
-                let probe_side_non_empty = build_side
-                    .left_data
-                    .probe_side_non_empty
-                    .load(Ordering::Relaxed);
-                let build_key_column = &build_side.left_data.values()[0];
-                let null_indices_bitmap =
-                    if build_side.left_data.null_aware_mark_scope_map().is_some() {
-                        Some(build_side.left_data.null_indices_bitmap().lock())
-                    } else {
-                        None
-                    };
-
-                Some(build_null_aware_left_mark_column(
+        // Null-aware joins post-process the build rows under SQL three-valued
+        // logic; see the helpers for the rules.
+        let (left_side, right_side, mark_column) = match self.null_aware {
+            Some(NullAwareMode::LeftAnti) => {
+                let (left_side, right_side) = null_aware_left_anti_final_indices(
+                    &build_side.left_data,
+                    probe_summary,
+                    left_side,
+                    right_side,
+                );
+                (left_side, right_side, None)
+            }
+            Some(NullAwareMode::LeftMark { .. }) => {
+                let mark_column = null_aware_left_mark_column(
+                    &build_side.left_data,
+                    probe_summary,
                     &left_side,
                     &right_side,
-                    build_key_column.as_ref(),
-                    null_indices_bitmap.as_deref(),
-                    probe_side_has_null,
-                    probe_side_non_empty,
-                ))
-            } else {
-                None
-            };
+                );
+                (left_side, right_side, Some(mark_column))
+            }
+            _ => (left_side, right_side, None),
+        };
 
+        self.join_metrics.input_rows.add(left_side.len());
+
+        // Push this chunk of final indices to output buffer
+        if !left_side.is_empty() {
             let empty_right_batch = RecordBatch::new_empty(self.right.schema());
             let batch = build_batch_from_indices(
                 &self.schema,
@@ -1178,17 +1140,183 @@ impl HashJoinStream {
             )?;
             let push_status = self.output_buffer.push_batch(batch)?;
 
-            // If limit reached, finish the coalescer
+            // If limit reached, finish the coalescer and stop emitting
             if push_status == PushBatchStatus::LimitReached {
                 self.output_buffer.finish()?;
+                self.state = HashJoinStreamState::Completed;
             }
         }
 
         timer.done();
-        self.state = HashJoinStreamState::Completed;
 
         Ok(StatefulStreamResult::Continue)
     }
+}
+
+/// Returns the next chunk of final build-side indices for join types that
+/// produce build rows once the probe side is exhausted, starting at `cursor`
+/// and holding at most `batch_size` rows. Advances `cursor` past the build
+/// rows examined; `cursor == visited.len()` means every row has been examined.
+///
+/// The build indices are always valid. The probe indices are NULL for every
+/// row (`Left`, `LeftAnti`, `Full`, `LeftSemi`), except for `LeftMark`, where
+/// every build row is emitted and a NULL probe index marks an unmatched row.
+///
+/// For example, with `visited = [true, false, true, true, false]`:
+/// - `Left`: build `[1, 4]`, probe `[null, null]`
+/// - `LeftSemi`: build `[0, 2, 3]`, probe `[null, null, null]`
+/// - `LeftMark`: build `[0, 1, 2, 3, 4]`, probe `[0, null, 0, 0, null]`
+fn next_final_indices_chunk(
+    visited: &BooleanBuffer,
+    cursor: &mut usize,
+    join_type: JoinType,
+    batch_size: usize,
+) -> (UInt64Array, UInt32Array) {
+    let num_rows = visited.len();
+    let start = *cursor;
+
+    if join_type == JoinType::LeftMark {
+        // Every build row is emitted, so a chunk is a plain range of rows.
+        let end = (start + batch_size).min(num_rows);
+        let build_indices = (start as u64..end as u64).collect::<UInt64Array>();
+        let probe_indices = (start..end)
+            .map(|idx| visited.value(idx).then_some(0))
+            .collect::<UInt32Array>();
+        *cursor = end;
+        return (build_indices, probe_indices);
+    }
+
+    // `LeftSemi` emits the matched build rows; `Left`, `LeftAnti` and `Full`
+    // emit the unmatched ones.
+    let emit_visited = join_type == JoinType::LeftSemi;
+    let mut build_indices = Vec::with_capacity(batch_size.min(num_rows - start));
+    let mut idx = start;
+    while idx < num_rows && build_indices.len() < batch_size {
+        if visited.value(idx) == emit_visited {
+            build_indices.push(idx as u64);
+        }
+        idx += 1;
+    }
+    *cursor = idx;
+
+    let probe_indices = UInt32Array::new_null(build_indices.len());
+    (UInt64Array::from(build_indices), probe_indices)
+}
+
+/// Applies the pre-lookup bookkeeping of a null-aware join to a probe batch
+/// and returns `true` if the batch cannot contribute any output row.
+///
+/// Under SQL three-valued logic a NULL on either side of `NOT IN` makes the
+/// predicate UNKNOWN for every row of the other side:
+/// - `RightAnti` emits probe rows, so a NULL build key silences every batch.
+/// - `LeftAnti` emits build rows in the final stage, so a NULL probe key seen
+///   by any partition silences everything; the shared flags carry this to the
+///   final stage.
+/// - `LeftMark` only records the shared flags; the mark column is built in
+///   the final stage from them.
+fn null_aware_skip_probe_batch(
+    mode: NullAwareMode,
+    state: &ProcessProbeBatchState,
+    left_data: &JoinLeftData,
+    has_filter: bool,
+) -> bool {
+    match mode {
+        NullAwareMode::RightAnti => left_data.build_side_has_null,
+        NullAwareMode::LeftAnti | NullAwareMode::LeftMark { .. } => {
+            // `on[0]` is the `NOT IN` value key for both modes.
+            let probe_key_column = &state.values[0];
+            let probe_has_null = match mode {
+                NullAwareMode::LeftAnti if !has_filter => {
+                    probe_key_column.logical_null_count() > 0
+                }
+                _ => probe_key_column.null_count() > 0,
+            };
+            // Only batches with rows count: `NULL NOT IN (empty)` is TRUE.
+            left_data.record_probe_batch(state.batch.num_rows() > 0, probe_has_null);
+            // Best-effort early exit; the final stage re-checks the flag
+            // through `report_probe_completed`.
+            mode == NullAwareMode::LeftAnti && left_data.probe_side_has_null_hint()
+        }
+    }
+}
+
+/// Drops probe rows whose `NOT IN` key is NULL from the output of a null-aware
+/// `RightAnti` join: `NULL NOT IN (..)` is never TRUE.
+fn drop_null_probe_keys(
+    state: &ProcessProbeBatchState,
+    right_indices: UInt32Array,
+) -> UInt32Array {
+    let probe_key = &state.values[0];
+    // if the valid_keys mask is available, use that, else use the probe key
+    let mask = state
+        .valid_keys
+        .clone()
+        .or_else(|| probe_key.logical_nulls());
+    // we only need this copy if there are NULLs
+    match mask.filter(|m| m.null_count() > 0) {
+        Some(mask) => UInt32Array::from_iter_values(
+            right_indices
+                .values()
+                .iter()
+                .copied()
+                .filter(|idx| !mask.is_null(*idx as usize)),
+        ),
+        None => right_indices,
+    }
+}
+
+/// Final-stage rules of a null-aware `LeftAnti` join, evaluated by the last
+/// probe partition from what every partition together saw:
+/// - a NULL probe key seen by any partition makes `build.key NOT IN (probe)`
+///   UNKNOWN for every build row, so nothing is emitted;
+/// - otherwise a NULL build key means `NULL NOT IN (probe)`, which is UNKNOWN
+///   (row dropped) unless the probe side was empty, where it is TRUE (row
+///   kept).
+fn null_aware_left_anti_final_indices(
+    left_data: &JoinLeftData,
+    probe_summary: ProbeSideSummary,
+    left_side: UInt64Array,
+    right_side: UInt32Array,
+) -> (UInt64Array, UInt32Array) {
+    if probe_summary.has_null {
+        return (UInt64Array::new_null(0), UInt32Array::new_null(0));
+    }
+    if !probe_summary.non_empty {
+        return (left_side, right_side);
+    }
+    // null_aware validation ensures a single join key
+    let build_key_column = &left_data.values()[0];
+    let left_side = UInt64Array::from_iter_values(left_side.iter().filter_map(|idx| {
+        let idx =
+            idx.expect("LeftAnti final indices should always contain build-side rows");
+        (!build_key_column.is_null(idx as usize)).then_some(idx)
+    }));
+    let right_side = UInt32Array::new_null(left_side.len());
+    (left_side, right_side)
+}
+
+/// Builds the nullable mark column of a null-aware `LeftMark` join from the
+/// final indices and what every probe partition together saw.
+fn null_aware_left_mark_column(
+    left_data: &JoinLeftData,
+    probe_summary: ProbeSideSummary,
+    left_side: &UInt64Array,
+    right_side: &UInt32Array,
+) -> ArrayRef {
+    let build_key_column = &left_data.values()[0];
+    // Correlated joins precomputed the UNKNOWN decision per build row.
+    let null_indices_bitmap = left_data
+        .null_aware_mark_scope_map()
+        .is_some()
+        .then(|| left_data.null_indices_bitmap().lock());
+    build_null_aware_left_mark_column(
+        left_side,
+        right_side,
+        build_key_column.as_ref(),
+        null_indices_bitmap.as_deref(),
+        probe_summary.has_null,
+        probe_summary.non_empty,
+    )
 }
 
 /// Records which build rows of a correlated null-aware `LeftMark` join are

@@ -26,7 +26,6 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::joins::SharedBitmapBuilder;
 use crate::metrics::{
     self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
     MetricType,
@@ -1160,59 +1159,29 @@ pub(crate) fn need_produce_result_in_final(join_type: JoinType) -> bool {
     )
 }
 
-pub(crate) fn get_final_indices_from_shared_bitmap(
-    shared_bitmap: &SharedBitmapBuilder,
-    join_type: JoinType,
-    piecewise: bool,
-) -> (UInt64Array, UInt32Array) {
-    let bitmap = shared_bitmap.lock();
-    get_final_indices_from_bit_map(&bitmap, join_type, piecewise)
+/// Whether the join emits left rows that found no match on the right side
+/// (`LeftMark` emits them with a `false` mark). Those rows can only be produced
+/// once the right side has been fully consumed.
+pub(crate) fn emits_unmatched_left_rows(join_type: JoinType) -> bool {
+    matches!(
+        join_type,
+        JoinType::Left | JoinType::LeftAnti | JoinType::LeftMark | JoinType::Full
+    )
 }
 
-/// In the end of join execution, need to use bit map of the matched
-/// indices to generate the final left and right indices.
-///
-/// For example:
-///
-/// 1. left_bit_map: `[true, false, true, true, false]`
-/// 2. join_type: `Left`
-///
-/// The result is: `([1,4], [null, null])`
-pub(crate) fn get_final_indices_from_bit_map(
-    left_bit_map: &BooleanBufferBuilder,
-    join_type: JoinType,
-    // We add a flag for whether this is being passed from the `PiecewiseMergeJoin`
-    // because the bitmap can be for left + right `JoinType`s
-    piecewise: bool,
-) -> (UInt64Array, UInt32Array) {
-    let left_size = left_bit_map.len();
-    if join_type == JoinType::LeftMark || (join_type == JoinType::RightMark && piecewise)
-    {
-        let left_indices = (0..left_size as u64).collect::<UInt64Array>();
-        let right_indices = (0..left_size)
-            .map(|idx| left_bit_map.get_bit(idx).then_some(0))
-            .collect::<UInt32Array>();
-        return (left_indices, right_indices);
-    }
-    let left_indices = if join_type == JoinType::LeftSemi
-        || (join_type == JoinType::RightSemi && piecewise)
-    {
-        (0..left_size)
-            .filter_map(|idx| (left_bit_map.get_bit(idx)).then_some(idx as u64))
-            .collect::<UInt64Array>()
-    } else {
-        // just for `Left`, `LeftAnti` and `Full` join
-        // `LeftAnti`, `Left` and `Full` will produce the unmatched left row finally
-        (0..left_size)
-            .filter_map(|idx| (!left_bit_map.get_bit(idx)).then_some(idx as u64))
-            .collect::<UInt64Array>()
-    };
-    // right_indices
-    // all the element in the right side is None
-    let mut builder = UInt32Builder::with_capacity(left_indices.len());
-    builder.append_nulls(left_indices.len());
-    let right_indices = builder.finish();
-    (left_indices, right_indices)
+/// Whether the join only tests for the existence of a match (semi, anti and
+/// mark joins). Such joins output the columns of a single input, plus the
+/// mark column for mark joins.
+pub(crate) fn is_existence_join(join_type: JoinType) -> bool {
+    matches!(
+        join_type,
+        JoinType::LeftSemi
+            | JoinType::RightSemi
+            | JoinType::LeftAnti
+            | JoinType::RightAnti
+            | JoinType::LeftMark
+            | JoinType::RightMark
+    )
 }
 
 #[expect(clippy::too_many_arguments)]

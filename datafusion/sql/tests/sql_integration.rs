@@ -35,9 +35,10 @@ use datafusion_expr::{
     expr::{HigherOrderFunction, LambdaVariable, ScalarFunction},
     lambda,
     logical_plan::LogicalPlan,
+    planner::{ExprPlanner, PlannerResult, RawScalarExpr},
     test::function_stub::sum_udaf,
 };
-use datafusion_functions::{string, unicode};
+use datafusion_functions::{core as core_functions, string, unicode};
 use datafusion_sql::{
     parser::DFParser,
     planner::{NullOrdering, ParserOptions, PlannerContext, SqlToRel},
@@ -834,6 +835,42 @@ fn select_scalar_func_with_literal_no_relation() {
       EmptyRelation: rows=1
     "
     );
+}
+
+#[derive(Debug)]
+struct SingleArgumentCoalescePlanner;
+
+impl ExprPlanner for SingleArgumentCoalescePlanner {
+    fn plan_scalar(&self, expr: RawScalarExpr) -> Result<PlannerResult<RawScalarExpr>> {
+        if expr.func.name() == "coalesce"
+            && let [arg] = expr.args.as_slice()
+        {
+            Ok(PlannerResult::Planned(arg.clone()))
+        } else {
+            Ok(PlannerResult::Original(expr))
+        }
+    }
+}
+
+#[test]
+fn select_scalar_func_with_expr_planner() -> Result<()> {
+    let state = mock_session_state()
+        .with_scalar_function(core_functions::coalesce())
+        .with_expr_planner(Arc::new(SingleArgumentCoalescePlanner));
+    let plan = logical_plan_from_state(
+        "SELECT coalesce(42)",
+        &GenericDialect {},
+        ParserOptions::default(),
+        state,
+    )?;
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: Int64(42)
+      EmptyRelation: rows=1
+    "
+    );
+    Ok(())
 }
 
 #[test]
@@ -5812,4 +5849,44 @@ impl HigherOrderUDFImpl for MockArrayReduce {
     fn invoke_with_args(&self, _args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
         unreachable!()
     }
+}
+
+#[test]
+fn test_reserved_column_name() {
+    let sql = "SELECT 1 AS __common_expr_1";
+    let err = logical_plan(sql).unwrap_err().strip_backtrace();
+    assert_eq!(
+        err,
+        "Error during planning: __common_expr_1 is a reserved DataFusion column name, please use another name"
+    );
+}
+
+#[test]
+fn test_reserved_column_name_copy() {
+    let sql = "COPY (SELECT 1 AS __common_expr_1) TO 'output.csv' STORED AS CSV";
+    let err = logical_plan(sql).unwrap_err().strip_backtrace();
+    assert_eq!(
+        err,
+        "Error during planning: __common_expr_1 is a reserved DataFusion column name, please use another name"
+    );
+}
+
+#[test]
+fn test_reserved_column_name_boundary() {
+    let sql = "SELECT 1 AS user__common_expr_1";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(
+        format!("{plan}"),
+        "Projection: Int64(1) AS user__common_expr_1\n  EmptyRelation: rows=1"
+    );
+}
+
+#[test]
+fn test_reserved_column_name_explain_copy() {
+    let sql = "EXPLAIN COPY (SELECT 1 AS __common_expr_1) TO 'output.csv' STORED AS CSV";
+    let err = logical_plan(sql).unwrap_err().strip_backtrace();
+    assert_eq!(
+        err,
+        "Error during planning: __common_expr_1 is a reserved DataFusion column name, please use another name"
+    );
 }
