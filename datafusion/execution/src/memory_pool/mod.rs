@@ -230,6 +230,18 @@ pub trait MemoryPool: Any + Send + Sync + std::fmt::Debug + Display {
     fn memory_limit(&self) -> MemoryLimit {
         MemoryLimit::Unknown
     }
+
+    /// Return the current total allowance for a registered consumer, including
+    /// all of its sibling reservations, rather than its remaining free memory.
+    ///
+    /// This is an advisory snapshot: other consumers may register or reserve
+    /// memory after the call. Allocations must still use [`Self::try_grow`].
+    /// The default is [`MemoryLimit::Unknown`] because the global pool limit
+    /// need not be available to every consumer. Transparent wrappers should
+    /// delegate this method to their inner pool.
+    fn memory_limit_for(&self, _consumer: &MemoryConsumer) -> MemoryLimit {
+        MemoryLimit::Unknown
+    }
 }
 
 impl dyn MemoryPool {
