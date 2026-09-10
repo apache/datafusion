@@ -19,6 +19,7 @@ use std::collections::HashSet;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
+use crate::expr::{QUALIFY_HELP, reject_window_functions};
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::query::to_order_by_exprs_with_select;
 use crate::utils::{
@@ -33,7 +34,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{
-    Column, DFSchema, DFSchemaRef, HashMap, Result, Span, not_impl_err, plan_err,
+    Column, DFSchema, DFSchemaRef, HashMap, Result, not_impl_err, plan_err,
 };
 use datafusion_common::{NullHandling, RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::ExprSchemable;
@@ -46,7 +47,6 @@ use datafusion_expr::expr_rewriter::{
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::utils::{
     expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_window_exprs,
-    window_function_not_allowed_err,
 };
 use datafusion_expr::{
     Aggregate, Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder,
@@ -228,7 +228,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // HAVING is evaluated before window functions are computed, so
                 // they may not appear there (checked after alias resolution so
                 // that an alias of a window function is rejected too)
-                reject_window_functions(&having_expr, "HAVING", window_span)?;
+                reject_window_functions(
+                    &having_expr,
+                    "HAVING",
+                    QUALIFY_HELP,
+                    window_span,
+                )?;
                 let having_expr = normalize_col(having_expr, &projected_plan)?;
                 let (having_expr, _) =
                     having_expr.infer_placeholder_types(&combined_schema)?;
@@ -241,21 +246,31 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             exprs
                 .into_iter()
                 .map(|e| {
-                    let group_by_expr = self.sql_expr_to_logical_expr(
-                        e,
-                        &combined_schema,
-                        planner_context,
-                    )?;
-
                     // Aliases from the projection can conflict with same-named expressions in the input
                     let mut alias_map = alias_map.clone();
                     for f in base_plan.schema().fields() {
                         alias_map.remove(f.name());
                     }
+                    let window_span = self.window_function_span(&e, &alias_map);
+
+                    let group_by_expr = self.sql_expr_to_logical_expr(
+                        e,
+                        &combined_schema,
+                        planner_context,
+                    )?;
                     let group_by_expr =
                         resolve_aliases_to_exprs(group_by_expr, &alias_map)?;
                     let group_by_expr =
                         resolve_positions_to_exprs(group_by_expr, &select_exprs)?;
+                    // Window functions are computed after grouping, so they may
+                    // not be grouped on (checked after aliases and positions are
+                    // resolved so `GROUP BY rn` / `GROUP BY 1` are rejected too)
+                    reject_window_functions(
+                        &group_by_expr,
+                        "GROUP BY",
+                        "Compute the window function in a subquery and group by its result",
+                        window_span,
+                    )?;
                     let group_by_expr = normalize_col(group_by_expr, &projected_plan)?;
                     self.validate_schema_satisfies_exprs(
                         base_plan.schema(),
@@ -908,7 +923,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
                 // WHERE is evaluated before window functions are computed, so
                 // they may not appear there either
-                reject_window_functions(&filter_expr, "WHERE", window_span)?;
+                reject_window_functions(
+                    &filter_expr,
+                    "WHERE",
+                    QUALIFY_HELP,
+                    window_span,
+                )?;
 
                 let mut using_columns = HashSet::new();
                 expr_to_columns(&filter_expr, &mut using_columns)?;
@@ -1523,22 +1543,4 @@ fn collect_unnest_null_handling(expr_groups: &[Vec<Expr>]) -> Result<NullHandlin
     } else {
         NullHandling::Drop
     })
-}
-
-/// Returns an error if `expr`, the planned `WHERE` or `HAVING` predicate,
-/// contains a window function call. `span` is the location of that call in
-/// the SQL text, see [`SqlToRel::window_function_span`].
-///
-/// [`Filter::try_new`] performs the same check with a generic message; this
-/// one names the clause, points at the call and suggests `QUALIFY`.
-fn reject_window_functions(expr: &Expr, clause: &str, span: Option<Span>) -> Result<()> {
-    match find_window_exprs([expr]).into_iter().next() {
-        None => Ok(()),
-        Some(window) => Err(window_function_not_allowed_err(
-            &window,
-            clause,
-            span,
-            "Move the condition that uses this window function to a QUALIFY clause, which is evaluated after window functions are computed",
-        )),
-    }
 }

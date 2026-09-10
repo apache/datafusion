@@ -37,7 +37,7 @@ use datafusion_common::{
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::SetQuantifier;
 use datafusion_expr::expr::{InList, WildcardOptions};
-use datafusion_expr::utils::find_window_exprs;
+use datafusion_expr::utils::{find_window_exprs, window_function_not_allowed_err};
 use datafusion_expr::{
     Between, BinaryExpr, Cast, Expr, ExprSchemable, GetFieldAccess, Like, Literal,
     Operator, TryCast, lit, when,
@@ -183,6 +183,30 @@ impl<S: ContextProvider> Visitor for WindowFunctionSpanVisitor<'_, '_, S> {
         } else {
             ControlFlow::Continue(())
         }
+    }
+}
+
+/// Help for a window function in `WHERE` or `HAVING`: `QUALIFY` is the clause
+/// that filters on window function results.
+pub(crate) const QUALIFY_HELP: &str = "Move the condition that uses this window function to a QUALIFY clause, which is evaluated after window functions are computed";
+
+/// Returns an error if `expr`, planned from a clause where window functions
+/// cannot be evaluated, contains a window function call. `clause` names it in
+/// the message, `help` says how to rewrite the query and `span` is the location
+/// of the call in the SQL text, see [`SqlToRel::window_function_span`].
+///
+/// The physical planner rejects such expressions in every position, but
+/// without a span or a clause-specific hint. This check exists to give a
+/// better error for the common mistakes.
+pub(crate) fn reject_window_functions(
+    expr: &Expr,
+    clause: &str,
+    help: &str,
+    span: Option<Span>,
+) -> Result<()> {
+    match find_window_exprs([expr]).into_iter().next() {
+        None => Ok(()),
+        Some(window) => Err(window_function_not_allowed_err(&window, clause, span, help)),
     }
 }
 

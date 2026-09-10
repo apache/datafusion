@@ -2042,6 +2042,78 @@ fn select_window_function_in_having() {
 }
 
 #[test]
+fn select_window_function_in_join_on() {
+    // https://github.com/apache/datafusion/issues/4610
+    let err = logical_plan(
+        "SELECT p.id FROM person p JOIN person q ON p.id = q.id AND sum(p.age) OVER () > 0",
+    )
+    .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Window function calls are not allowed in JOIN ON: 'sum(p.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+    );
+
+    // a window function in a joined subquery is legal
+    let plan = logical_plan(
+        "SELECT p.id FROM person p JOIN (SELECT id FROM person QUALIFY sum(age) OVER () > 0) q ON p.id = q.id",
+    )
+    .unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: p.id
+      Inner Join:  Filter: p.id = q.id
+        SubqueryAlias: p
+          TableScan: person
+        SubqueryAlias: q
+          Projection: person.id
+            Filter: sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING > Int64(0)
+              WindowAggr: windowExpr=[[sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+                TableScan: person
+    "
+    );
+}
+
+#[test]
+fn select_window_function_in_group_by() {
+    // https://github.com/apache/datafusion/issues/4610
+    let err = logical_plan("SELECT count(*) FROM person GROUP BY sum(age) OVER ()")
+        .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Window function calls are not allowed in GROUP BY: 'sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+    );
+
+    // through an alias of a select expression
+    let err =
+        logical_plan("SELECT sum(age) OVER () AS w, count(*) FROM person GROUP BY w")
+            .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Window function calls are not allowed in GROUP BY: 'sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+    );
+
+    // through the position of a select expression
+    let err = logical_plan("SELECT sum(age) OVER (), count(*) FROM person GROUP BY 1")
+        .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Window function calls are not allowed in GROUP BY: 'sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+    );
+}
+
+#[test]
+fn values_window_function() {
+    // https://github.com/apache/datafusion/issues/4610
+    let err =
+        logical_plan("VALUES (1, sum(2) OVER ())").expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Window function calls are not allowed in VALUES: 'sum(Int64(2)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+    );
+}
+
+#[test]
 fn select_aggregate_inside_window_function() {
     // an aggregate as the argument of a window function is legal: the window
     // function is evaluated on top of the aggregate

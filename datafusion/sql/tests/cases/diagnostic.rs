@@ -752,6 +752,35 @@ fn test_window_function_in_having() -> Result<()> {
 }
 
 #[test]
+fn test_window_function_in_join_on() -> Result<()> {
+    let query = "SELECT p.id FROM person p JOIN person q ON p.id = q.id AND /*a*/sum(p.age/*a*/) OVER () > 0";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+    assert_snapshot!(diag.message, @"Window function calls are not allowed in JOIN ON");
+    assert_eq!(diag.span, Some(spans["a"]));
+    assert_snapshot!(
+        diag.helps[0].message,
+        @"Compute the window function in a subquery and join on its result"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_window_function_in_group_by() -> Result<()> {
+    let query =
+        "SELECT first_name FROM person GROUP BY first_name, /*a*/sum(age/*a*/) OVER ()";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+    assert_snapshot!(diag.message, @"Window function calls are not allowed in GROUP BY");
+    assert_eq!(diag.span, Some(spans["a"]));
+    assert_snapshot!(
+        diag.helps[0].message,
+        @"Compute the window function in a subquery and group by its result"
+    );
+    Ok(())
+}
+
+#[test]
 fn test_window_function_alias_in_having() -> Result<()> {
     // An alias of a window function is resolved before the check; the span
     // points at the alias
