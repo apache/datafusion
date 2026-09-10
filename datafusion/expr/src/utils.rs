@@ -750,6 +750,52 @@ fn first_span(expr: &Expr) -> Option<Span> {
     span
 }
 
+/// Returns an error if `expr` contains a window function call.
+///
+/// `clause` names where `expr` came from and completes the message
+/// `Window function calls are not allowed in {clause}`, for example `WHERE` or
+/// `HAVING`. Filters are evaluated before window functions are computed, so a
+/// window call in a filter predicate has no physical equivalent and is not
+/// valid SQL either (PostgreSQL: `window functions are not allowed in HAVING`).
+/// Rejecting it while the logical plan is built gives an error that names the
+/// offending call instead of a late physical planning failure.
+///
+/// [`Filter::try_new`] calls this for every predicate, so the SQL planner and
+/// the `DataFrame`/`LogicalPlanBuilder` paths are covered without callers
+/// invoking it directly; the SQL planner calls it again with the clause name to
+/// produce a more specific message. Window calls inside subqueries of `expr`
+/// are not visited and are legal.
+///
+/// [`Filter::try_new`]: crate::logical_plan::Filter::try_new
+pub fn check_no_window_functions(expr: &Expr, clause: &str) -> Result<()> {
+    let mut window = None;
+    expr.apply(|e| {
+        if matches!(e, Expr::WindowFunction(_)) {
+            window = Some(e);
+            Ok(TreeNodeRecursion::Stop)
+        } else {
+            Ok(TreeNodeRecursion::Continue)
+        }
+    })?;
+
+    match window {
+        None => Ok(()),
+        Some(window) => {
+            let message = format!("Window function calls are not allowed in {clause}");
+            Err(
+                plan_datafusion_err!("{message}: '{window}'").with_diagnostic(
+                    Diagnostic::new_error(message, first_span(window)).with_help(
+                        format!(
+                            "Compute '{window}' in an inner query and filter on its result, or use the QUALIFY clause"
+                        ),
+                        None,
+                    ),
+                ),
+            )
+        }
+    }
+}
+
 /// Collect all deeply nested `Expr::WindowFunction`. They are returned in order of occurrence
 /// (depth first), with duplicates omitted.
 pub fn find_window_exprs<'a>(exprs: impl IntoIterator<Item = &'a Expr>) -> Vec<Expr> {
@@ -2101,5 +2147,44 @@ mod tests {
             err.strip_backtrace(),
             @"Error during planning: Window function calls cannot be nested: 'sum(a) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING' is nested inside 'sum(sum(a) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
         );
+    }
+
+    #[test]
+    fn test_check_no_window_functions() -> Result<()> {
+        use crate::test::function_stub::sum;
+        use insta::assert_snapshot;
+
+        // columns, scalar expressions and aggregates are fine
+        check_no_window_functions(&col("a"), "WHERE")?;
+        check_no_window_functions(&(col("a") + lit(1)).gt(lit(0)), "WHERE")?;
+        check_no_window_functions(&sum(col("a")).gt(lit(0)), "HAVING")?;
+
+        // a bare window call
+        let err =
+            check_no_window_functions(&sum_over(vec![col("a")]), "WHERE").unwrap_err();
+        assert_snapshot!(
+            err.strip_backtrace(),
+            @"Error during planning: Window function calls are not allowed in WHERE: 'sum(a) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+        );
+        let diag = err.diagnostic().expect("diagnostic");
+        assert_snapshot!(
+            diag.message,
+            @"Window function calls are not allowed in WHERE"
+        );
+        assert_snapshot!(
+            diag.helps[0].message,
+            @"Compute 'sum(a) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING' in an inner query and filter on its result, or use the QUALIFY clause"
+        );
+
+        // a window call over an aggregate, nested below other expressions,
+        // names the clause it was given
+        let predicate = sum_over(vec![sum(col("a"))]).gt(lit(10)).and(col("b"));
+        let err = check_no_window_functions(&predicate, "HAVING").unwrap_err();
+        assert_snapshot!(
+            err.strip_backtrace(),
+            @"Error during planning: Window function calls are not allowed in HAVING: 'sum(sum(a)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+        );
+
+        Ok(())
     }
 }

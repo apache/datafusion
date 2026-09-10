@@ -1973,6 +1973,75 @@ fn select_nested_window_function() {
 }
 
 #[test]
+fn select_window_function_in_where() {
+    // https://github.com/apache/datafusion/issues/4610
+    let err = logical_plan("SELECT id FROM person WHERE sum(age) OVER () > 0")
+        .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Window function calls are not allowed in WHERE: 'sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+    );
+
+    // a window function inside a subquery of the predicate is legal
+    let plan = logical_plan(
+        "SELECT id FROM person WHERE id IN (SELECT id FROM person QUALIFY sum(age) OVER () > 0)",
+    )
+    .unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: person.id
+      Filter: person.id IN (<subquery>)
+        Subquery:
+          Projection: person.id
+            Filter: sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING > Int64(0)
+              WindowAggr: windowExpr=[[sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+                TableScan: person
+        TableScan: person
+    "
+    );
+}
+
+#[test]
+fn select_window_function_in_having() {
+    // https://github.com/apache/datafusion/issues/4610
+    let err = logical_plan(
+        "SELECT state, sum(count(age)) OVER () AS total FROM person GROUP BY state HAVING sum(count(age)) OVER () > 0",
+    )
+    .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Window function calls are not allowed in HAVING: 'sum(count(person.age)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+    );
+
+    // an alias of a window function is resolved before the check
+    let err = logical_plan(
+        "SELECT state, sum(count(age)) OVER () AS total FROM person GROUP BY state HAVING total > 0",
+    )
+    .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Window function calls are not allowed in HAVING: 'sum(count(person.age)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+    );
+
+    // the same window function is legal in the SELECT list and in QUALIFY
+    let plan = logical_plan(
+        "SELECT state, sum(count(age)) OVER () AS total FROM person GROUP BY state QUALIFY sum(count(age)) OVER () > 0",
+    )
+    .unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: person.state, sum(count(person.age)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS total
+      Filter: sum(count(person.age)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING > Int64(0)
+        WindowAggr: windowExpr=[[sum(count(person.age)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+          Aggregate: groupBy=[[person.state]], aggr=[[count(person.age)]]
+            TableScan: person
+    "
+    );
+}
+
+#[test]
 fn select_aggregate_inside_window_function() {
     // an aggregate as the argument of a window function is legal: the window
     // function is evaluated on top of the aggregate

@@ -43,7 +43,8 @@ use datafusion_expr::expr_rewriter::{
 };
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::utils::{
-    expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_window_exprs,
+    check_no_window_functions, expr_as_column_expr, expr_to_columns,
+    find_aggregate_exprs, find_window_exprs,
 };
 use datafusion_expr::{
     Aggregate, Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder,
@@ -221,6 +222,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 //   SELECT c1, MAX(c2) AS m FROM t GROUP BY c1 HAVING MAX(c2) > 10;
                 //
                 let having_expr = resolve_aliases_to_exprs(having_expr, &alias_map)?;
+                // HAVING is evaluated before window functions are computed, so
+                // they may not appear there (checked after alias resolution so
+                // that an alias of a window function is rejected too)
+                check_no_window_functions(&having_expr, "HAVING")?;
                 let having_expr = normalize_col(having_expr, &projected_plan)?;
                 let (having_expr, _) =
                     having_expr.infer_placeholder_types(&combined_schema)?;
@@ -896,6 +901,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         "Aggregate functions are not allowed in the WHERE clause. Consider using HAVING instead"
                     );
                 }
+                // WHERE is evaluated before window functions are computed, so
+                // they may not appear there either
+                check_no_window_functions(&filter_expr, "WHERE")?;
 
                 let mut using_columns = HashSet::new();
                 expr_to_columns(&filter_expr, &mut using_columns)?;

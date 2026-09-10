@@ -7093,3 +7093,72 @@ SELECT last_value() OVER () FROM (VALUES (1), (2), (3)) t(x)
 
 statement error DataFusion error: Error during planning: 'nth_value' does not support zero arguments
 SELECT nth_value() OVER () FROM (VALUES (1), (2), (3)) t(x)
+
+# Window functions are not allowed in WHERE or HAVING: both are evaluated before
+# window functions are computed, so they are rejected during planning
+# issue: https://github.com/apache/datafusion/issues/4610
+statement ok
+CREATE TABLE window_in_filter_t(a INT, b INT) AS VALUES (1, 1), (2, 2);
+
+statement error DataFusion error: Error during planning: Window function calls are not allowed in HAVING: 'sum\(count\(Int64\(1\)\) AS count\(\*\)\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+SELECT a, count(*) AS cnt, sum(count(*)) OVER () AS total
+FROM window_in_filter_t
+GROUP BY a
+HAVING sum(count(*)) OVER () >= 10;
+
+# ... also through an alias of the window function
+statement error DataFusion error: Error during planning: Window function calls are not allowed in HAVING: 'sum\(count\(Int64\(1\)\) AS count\(\*\)\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+SELECT a, count(*) AS cnt, sum(count(*)) OVER () AS total
+FROM window_in_filter_t
+GROUP BY a
+HAVING total >= 10;
+
+statement error DataFusion error: Error during planning: Window function calls are not allowed in HAVING: 'row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+SELECT a FROM window_in_filter_t GROUP BY a HAVING row_number() OVER () = 1;
+
+statement error DataFusion error: Error during planning: Window function calls are not allowed in WHERE: 'row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+SELECT a FROM window_in_filter_t WHERE row_number() OVER () = 1;
+
+# The same window function is legal in the SELECT list ...
+query III
+SELECT a, count(*) AS cnt, sum(count(*)) OVER () AS total
+FROM window_in_filter_t
+GROUP BY a
+ORDER BY a;
+----
+1 1 2
+2 1 2
+
+# ... in QUALIFY, which is the clause for filtering on a window function ...
+query III
+SELECT a, count(*) AS cnt, sum(count(*)) OVER () AS total
+FROM window_in_filter_t
+GROUP BY a
+QUALIFY sum(count(*)) OVER () >= 2
+ORDER BY a;
+----
+1 1 2
+2 1 2
+
+# ... in the WHERE of an outer query ...
+query III
+SELECT * FROM (
+  SELECT a, count(*) AS cnt, sum(count(*)) OVER () AS total
+  FROM window_in_filter_t
+  GROUP BY a
+) s
+WHERE total >= 2
+ORDER BY a;
+----
+1 1 2
+2 1 2
+
+# ... and inside a subquery of a WHERE predicate
+query I
+SELECT a FROM window_in_filter_t
+WHERE a IN (SELECT a FROM window_in_filter_t QUALIFY row_number() OVER (ORDER BY a) = 1);
+----
+1
+
+statement ok
+DROP TABLE window_in_filter_t;

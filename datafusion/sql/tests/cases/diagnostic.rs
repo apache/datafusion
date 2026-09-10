@@ -708,3 +708,29 @@ fn test_nested_window_function() -> Result<()> {
     assert_eq!(diag.span, Some(spans["a"]));
     Ok(())
 }
+
+#[test]
+fn test_window_function_in_where() -> Result<()> {
+    // https://github.com/apache/datafusion/issues/4610
+    let query = "SELECT id FROM person WHERE sum(/*a*/age/*a*/) OVER () > 0";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+    assert_snapshot!(diag.message, @"Window function calls are not allowed in WHERE");
+    assert_eq!(diag.span, Some(spans["a"]));
+    assert_snapshot!(
+        diag.helps[0].message,
+        @"Compute 'sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING' in an inner query and filter on its result, or use the QUALIFY clause"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_window_function_in_having() -> Result<()> {
+    // https://github.com/apache/datafusion/issues/4610
+    let query = "SELECT first_name FROM person GROUP BY first_name HAVING sum(sum(/*a*/age/*a*/)) OVER () > 0";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+    assert_snapshot!(diag.message, @"Window function calls are not allowed in HAVING");
+    assert_eq!(diag.span, Some(spans["a"]));
+    Ok(())
+}
