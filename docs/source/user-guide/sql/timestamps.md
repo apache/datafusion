@@ -609,6 +609,25 @@ cannot give these errors. Refer to
 <https://github.com/apache/datafusion/issues/25084> and to the correction in
 <https://github.com/apache/arrow-rs/pull/11038>.
 
+:::{warning}
+Do not use `to_local_time(t) AT TIME ZONE 'zone'` as a round trip across an
+ambiguous hour. The result is correct today, because the second step gives an
+error. But the correction in <https://github.com/apache/arrow-rs/pull/11038>
+removes that error. After DataFusion takes that correction, the round trip
+gives an instant one hour from the first instant, and there is no error and no
+warning:
+
+| Start value                 | After `to_local_time` | After the round trip        |
+| --------------------------- | --------------------- | --------------------------- |
+| `2021-10-31T02:00:00+02:00` | `2021-10-31T02:00:00` | `2021-10-31T02:00:00+01:00` |
+| `2021-10-31T02:30:00+02:00` | `2021-10-31T02:30:00` | `2021-10-31T02:30:00+01:00` |
+| `2021-10-31T03:00:00+01:00` | `2021-10-31T03:00:00` | `2021-10-31T03:00:00+01:00` |
+
+The first two rows move. The third row does not move. PostgreSQL gives the same
+results, because a local wall clock in the ambiguous hour cannot identify one
+instant. Keep the aware value if you must have the instant.
+:::
+
 ## Examples
 
 ### How to group UTC data by the local calendar day
