@@ -21,6 +21,7 @@ use arrow_schema::DataType;
 use datafusion_catalog::TableFunctionImpl;
 use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
+use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::{
     AggregateUDF, ColumnarValue, ExpressionPlacement, ScalarFunctionArgs, ScalarUDF,
@@ -168,6 +169,20 @@ impl ScalarUDFImpl for PlacementUDF {
         inputs: &[ExprProperties],
     ) -> datafusion_common::Result<bool> {
         Ok(inputs.iter().all(|input| input.preserves_lex_ordering))
+    }
+
+    fn evaluate_bounds(
+        &self,
+        inputs: &[&Interval],
+    ) -> datafusion_common::Result<Interval> {
+        inputs
+            .first()
+            .map(|interval| (*interval).clone())
+            .ok_or_else(|| {
+                datafusion_common::DataFusionError::Internal(
+                    "expected one input".to_string(),
+                )
+            })
     }
 }
 
