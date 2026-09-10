@@ -397,6 +397,7 @@ impl HashJoinExecBuilder {
     /// Set optional filter.
     pub fn with_filter(mut self, filter: Option<JoinFilter>) -> Self {
         self.exec.filter = filter;
+        self.preserve_properties = false;
         self
     }
 
