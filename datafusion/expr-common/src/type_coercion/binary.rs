@@ -267,6 +267,23 @@ impl<'a> BinaryTypeCoercer<'a> {
                 ret: Int64,
             });
         }
+        Plus | Minus if is_time_interval_arithmetic(lhs, rhs, self.op) => {
+            // `time ± interval` yields a `time` wrapped within the 24-hour clock,
+            // matching PostgreSQL and DuckDB (e.g. `time '23:30' + interval '2 hours'`
+            // is `01:30:00`). The interval is normalized to `MonthDayNano`; the time
+            // operand keeps its own unit and is also the result type -- mirroring
+            // `timestamp/date + interval`, which preserve their unit and apply the
+            // interval at that resolution. So, like `timestamp(s) + interval
+            // '1 nanosecond'`, `time(s) + interval '1 nanosecond'` is a no-op rather
+            // than widening the type.
+            let (lhs, rhs, ret) = match (lhs, rhs) {
+                (Interval(_), time) => {
+                    (Interval(MonthDayNano), time.clone(), time.clone())
+                }
+                (time, _) => (time.clone(), Interval(MonthDayNano), time.clone()),
+            };
+            return Ok(Signature { lhs, rhs, ret });
+        }
         Plus | Minus | Multiply | Divide | Modulo  =>  {
             if let Ok(ret) = self.get_result(lhs, rhs) {
 
@@ -360,6 +377,23 @@ fn is_date_minus_date(lhs: &DataType, rhs: &DataType) -> bool {
         (lhs, rhs),
         (DataType::Date32, DataType::Date32) | (DataType::Date64, DataType::Date64)
     )
+}
+
+/// Returns true for `time + interval`, `interval + time`, or `time - interval`.
+///
+/// These follow PostgreSQL/DuckDB semantics where the result is a `time` value
+/// wrapped within the 24-hour clock, rather than being widened to an interval.
+fn is_time_interval_arithmetic(lhs: &DataType, rhs: &DataType, op: &Operator) -> bool {
+    use DataType::{Interval, Time32, Time64};
+    match op {
+        Operator::Plus => matches!(
+            (lhs, rhs),
+            (Time32(_) | Time64(_), Interval(_)) | (Interval(_), Time32(_) | Time64(_))
+        ),
+        // `interval - time` is not meaningful, so only `time - interval` is accepted.
+        Operator::Minus => matches!((lhs, rhs), (Time32(_) | Time64(_), Interval(_))),
+        _ => false,
+    }
 }
 
 /// Coercion rules for mathematics operators between decimal and non-decimal types.
@@ -1017,7 +1051,7 @@ pub fn binary_numeric_coercion(
 ) -> Option<DataType> {
     if !lhs_type.is_numeric() || !rhs_type.is_numeric() {
         return None;
-    };
+    }
 
     // same type => all good
     if lhs_type == rhs_type {
@@ -1090,8 +1124,7 @@ fn get_wider_decimal_type_cross_variant(
 
     // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
     let s = s1.max(s2);
-    let range = (p1 as i8 - s1).max(p2 as i8 - s2);
-    let required_precision = (range + s) as u8;
+    let required_precision = required_decimal_precision(p1, s1, p2, s2);
 
     // Choose the larger variant between the two input types, while making sure we don't overflow the precision.
     match (lhs_type, rhs_type) {
@@ -1159,31 +1192,50 @@ fn get_wider_decimal_type(
 ) -> Option<DataType> {
     match (lhs_decimal_type, rhs_type) {
         (DataType::Decimal32(p1, s1), DataType::Decimal32(p2, s2)) => {
-            // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
             let s = *s1.max(s2);
-            let range = (*p1 as i8 - s1).max(*p2 as i8 - s2);
-            Some(create_decimal32_type((range + s) as u8, s))
+            Some(create_decimal32_type(
+                required_decimal_precision(*p1, *s1, *p2, *s2),
+                s,
+            ))
         }
         (DataType::Decimal64(p1, s1), DataType::Decimal64(p2, s2)) => {
-            // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
             let s = *s1.max(s2);
-            let range = (*p1 as i8 - s1).max(*p2 as i8 - s2);
-            Some(create_decimal64_type((range + s) as u8, s))
+            Some(create_decimal64_type(
+                required_decimal_precision(*p1, *s1, *p2, *s2),
+                s,
+            ))
         }
         (DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)) => {
-            // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
             let s = *s1.max(s2);
-            let range = (*p1 as i8 - s1).max(*p2 as i8 - s2);
-            Some(create_decimal128_type((range + s) as u8, s))
+            Some(create_decimal128_type(
+                required_decimal_precision(*p1, *s1, *p2, *s2),
+                s,
+            ))
         }
         (DataType::Decimal256(p1, s1), DataType::Decimal256(p2, s2)) => {
-            // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
             let s = *s1.max(s2);
-            let range = (*p1 as i8 - s1).max(*p2 as i8 - s2);
-            Some(create_decimal256_type((range + s) as u8, s))
+            Some(create_decimal256_type(
+                required_decimal_precision(*p1, *s1, *p2, *s2),
+                s,
+            ))
         }
         (_, _) => None,
     }
+}
+
+/// Computes `max(s1, s2) + max(p1 - s1, p2 - s2)`: the precision needed to hold
+/// any value of either decimal type.
+///
+/// The intermediate values do not fit in `i8` (the type of a decimal scale):
+/// `Decimal256` allows a precision and a scale of up to 76, so `p1 - s1` can
+/// reach 152 and the sum can reach 228. Computing this in `i8` panics with
+/// "attempt to add with overflow" in debug builds, so widen to `i32` and
+/// saturate into `u8` instead. Callers then either clamp the result to the
+/// variant's maximum precision (`create_decimal*_type`) or reject it.
+fn required_decimal_precision(p1: u8, s1: i8, p2: u8, s2: i8) -> u8 {
+    let s = s1.max(s2) as i32;
+    let range = (p1 as i32 - s1 as i32).max(p2 as i32 - s2 as i32);
+    (range + s).clamp(0, u8::MAX as i32) as u8
 }
 
 /// Convert the numeric data type to the decimal data type.
@@ -1450,7 +1502,7 @@ fn mathematics_numerical_coercion(
     // Error on any non-numeric type
     if !both_numeric_or_null_and_numeric(lhs_type, rhs_type) {
         return None;
-    };
+    }
 
     // These are ordered from most informative to least informative so
     // that the coercion removes the least amount of information

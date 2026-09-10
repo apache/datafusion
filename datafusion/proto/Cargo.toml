@@ -31,11 +31,18 @@ rust-version = { workspace = true }
 [package.metadata.docs.rs]
 all-features = true
 
+# Note: add additional linter rules in lib.rs.
+# Rust does not support workspace + new linter rules in subcrates yet
+# https://github.com/rust-lang/cargo/issues/13157
+[lints]
+workspace = true
+
 [lib]
 name = "datafusion_proto"
 
 [features]
 default = ["parquet"]
+recursive_protection = ["dep:recursive"]
 json = [
     "serde_json",
     "datafusion-proto-common/json",
@@ -50,18 +57,17 @@ avro = ["datafusion-datasource-avro"]
 
 [dependencies]
 arrow = { workspace = true }
-chrono = { workspace = true }
 datafusion-catalog = { workspace = true }
 datafusion-catalog-listing = { workspace = true }
 datafusion-common = { workspace = true }
-datafusion-datasource = { workspace = true }
-datafusion-datasource-arrow = { workspace = true }
-datafusion-datasource-avro = { workspace = true, optional = true }
-datafusion-datasource-csv = { workspace = true }
-datafusion-datasource-json = { workspace = true }
-datafusion-datasource-parquet = { workspace = true, optional = true }
+datafusion-datasource = { workspace = true, features = ["proto"] }
+datafusion-datasource-arrow = { workspace = true, features = ["proto"] }
+datafusion-datasource-avro = { workspace = true, optional = true, features = ["proto"] }
+datafusion-datasource-csv = { workspace = true, features = ["proto"] }
+datafusion-datasource-json = { workspace = true, features = ["proto"] }
+datafusion-datasource-parquet = { workspace = true, optional = true, features = ["proto"] }
 datafusion-execution = { workspace = true }
-datafusion-expr = { workspace = true }
+datafusion-expr = { workspace = true, features = ["proto"] }
 datafusion-functions-table = { workspace = true }
 datafusion-physical-expr = { workspace = true, features = ["proto"] }
 datafusion-physical-expr-common = { workspace = true, features = ["proto"] }
@@ -70,12 +76,14 @@ datafusion-proto-common = { workspace = true }
 datafusion-proto-models = { workspace = true }
 object_store = { workspace = true }
 prost = { workspace = true }
+recursive = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }
 datafusion = { workspace = true, default-features = false, features = [
     "sql",
+    "compression",
     "datetime_expressions",
     "nested_expressions",
     "unicode_expressions",
@@ -84,5 +92,7 @@ datafusion-functions = { workspace = true, default-features = true }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
 doc-comment = { workspace = true }
+flate2 = { workspace = true }
 pretty_assertions = "1.4"
+tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }

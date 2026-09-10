@@ -237,10 +237,10 @@ physical_plan after aggregate_statistics SAME TEXT AS ABOVE
 physical_plan after join_selection SAME TEXT AS ABOVE
 physical_plan after LimitedDistinctAggregation SAME TEXT AS ABOVE
 physical_plan after FilterPushdown SAME TEXT AS ABOVE
+physical_plan after WindowTopN SAME TEXT AS ABOVE
 physical_plan after EnsureRequirements SAME TEXT AS ABOVE
 physical_plan after CombinePartialFinalAggregate SAME TEXT AS ABOVE
 physical_plan after OptimizeAggregateOrder SAME TEXT AS ABOVE
-physical_plan after WindowTopN SAME TEXT AS ABOVE
 physical_plan after ProjectionPushdown SAME TEXT AS ABOVE
 physical_plan after OutputRequirements DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], file_type=csv, has_header=true
 physical_plan after LimitAggregation SAME TEXT AS ABOVE
@@ -317,10 +317,10 @@ physical_plan after aggregate_statistics SAME TEXT AS ABOVE
 physical_plan after join_selection SAME TEXT AS ABOVE
 physical_plan after LimitedDistinctAggregation SAME TEXT AS ABOVE
 physical_plan after FilterPushdown SAME TEXT AS ABOVE
+physical_plan after WindowTopN SAME TEXT AS ABOVE
 physical_plan after EnsureRequirements SAME TEXT AS ABOVE
 physical_plan after CombinePartialFinalAggregate SAME TEXT AS ABOVE
 physical_plan after OptimizeAggregateOrder SAME TEXT AS ABOVE
-physical_plan after WindowTopN SAME TEXT AS ABOVE
 physical_plan after ProjectionPushdown SAME TEXT AS ABOVE
 physical_plan after OutputRequirements
 01)GlobalLimitExec: skip=0, fetch=10, statistics=[Rows=Exact(8), Bytes=Absent, [(Col[0]: ScanBytes=Exact(32)),(Col[1]: ScanBytes=Inexact(24)),(Col[2]: ScanBytes=Exact(32)),(Col[3]: ScanBytes=Exact(32)),(Col[4]: ScanBytes=Exact(32)),(Col[5]: ScanBytes=Exact(64)),(Col[6]: ScanBytes=Exact(32)),(Col[7]: ScanBytes=Exact(64)),(Col[8]: ScanBytes=Inexact(88)),(Col[9]: ScanBytes=Inexact(49)),(Col[10]: ScanBytes=Exact(64))]]
@@ -363,10 +363,10 @@ physical_plan after aggregate_statistics SAME TEXT AS ABOVE
 physical_plan after join_selection SAME TEXT AS ABOVE
 physical_plan after LimitedDistinctAggregation SAME TEXT AS ABOVE
 physical_plan after FilterPushdown SAME TEXT AS ABOVE
+physical_plan after WindowTopN SAME TEXT AS ABOVE
 physical_plan after EnsureRequirements SAME TEXT AS ABOVE
 physical_plan after CombinePartialFinalAggregate SAME TEXT AS ABOVE
 physical_plan after OptimizeAggregateOrder SAME TEXT AS ABOVE
-physical_plan after WindowTopN SAME TEXT AS ABOVE
 physical_plan after ProjectionPushdown SAME TEXT AS ABOVE
 physical_plan after OutputRequirements
 01)GlobalLimitExec: skip=0, fetch=10
@@ -533,8 +533,13 @@ query error DataFusion error: Error during planning: EXPLAIN VERBOSE with FORMAT
 explain verbose format tree select * from values (1);
 
 # valid explain format
-query error DataFusion error: Invalid or Unsupported Configuration: Invalid explain format. Expected 'indent', 'tree', 'pgjson' or 'graphviz'. Got 'xxx'
+query error
 set datafusion.explain.format = "xxx";
+----
+DataFusion error: Error setting config datafusion.explain.format
+caused by
+Invalid or Unsupported Configuration: Invalid explain format. Expected 'indent', 'tree', 'pgjson' or 'graphviz'. Got 'xxx'
+
 
 # verbose uses indent mode even when a different mode (e.g tree) is set
 
@@ -611,10 +616,10 @@ physical_plan after aggregate_statistics SAME TEXT AS ABOVE
 physical_plan after join_selection SAME TEXT AS ABOVE
 physical_plan after LimitedDistinctAggregation SAME TEXT AS ABOVE
 physical_plan after FilterPushdown SAME TEXT AS ABOVE
+physical_plan after WindowTopN SAME TEXT AS ABOVE
 physical_plan after EnsureRequirements SAME TEXT AS ABOVE
 physical_plan after CombinePartialFinalAggregate SAME TEXT AS ABOVE
 physical_plan after OptimizeAggregateOrder SAME TEXT AS ABOVE
-physical_plan after WindowTopN SAME TEXT AS ABOVE
 physical_plan after ProjectionPushdown SAME TEXT AS ABOVE
 physical_plan after OutputRequirements DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], file_type=csv, has_header=true
 physical_plan after LimitAggregation SAME TEXT AS ABOVE

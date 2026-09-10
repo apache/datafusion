@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::{
-    array::{ArrayRef, StringArray, UInt64Array},
+    array::{ArrayRef, AsArray, StringArray, UInt64Array},
     record_batch::RecordBatch,
 };
 use arrow_schema::{SchemaRef, SortOptions};
@@ -193,5 +193,130 @@ fn bench_merge_sorted_preserving(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, bench_merge_sorted_preserving);
+/// Merge inputs whose keys are mostly *tied* and whose producers do real work
+/// per batch.
+///
+/// `SortPreservingMergeExec` runs each input in its own task, buffered one
+/// batch ahead (`spawn_buffered(_, 1)`). If the merge keeps draining a single
+/// partition during a run of equal keys, that partition's producer becomes the
+/// bottleneck while the others idle on their one buffered batch. The
+/// round-robin tie breaker is meant to spread consumption across the tied
+/// partitions so all producers stay busy.
+fn bench_merge_tied_keys_slow_producers(c: &mut Criterion) {
+    use datafusion_execution::memory_pool::{
+        MemoryConsumer, MemoryPool, UnboundedMemoryPool,
+    };
+    use datafusion_physical_plan::common::spawn_buffered;
+    use datafusion_physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
+    use datafusion_physical_plan::sorts::streaming_merge::StreamingMergeBuilder;
+    use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
+    use futures::StreamExt;
+
+    const ROWS: usize = 400_000;
+    const BATCH: usize = 8192;
+    const ROWS_PER_KEY: usize = 100_000;
+
+    let schema: SchemaRef = Arc::new(arrow_schema::Schema::new(vec![
+        arrow_schema::Field::new("key", arrow_schema::DataType::UInt64, false),
+        arrow_schema::Field::new("val", arrow_schema::DataType::UInt64, false),
+    ]));
+    let sort_order = LexOrdering::new(vec![PhysicalSortExpr::new(
+        col("key", &schema).unwrap(),
+        SortOptions::default(),
+    )])
+    .unwrap();
+
+    // Every partition holds the same long runs of equal keys.
+    let batches: Vec<RecordBatch> = (0..ROWS.div_ceil(BATCH))
+        .map(|b| {
+            let start = b * BATCH;
+            let n = BATCH.min(ROWS - start);
+            let keys = UInt64Array::from_iter_values(
+                (start..start + n).map(|i| (i / ROWS_PER_KEY) as u64),
+            );
+            let vals =
+                UInt64Array::from_iter_values((start..start + n).map(|i| i as u64));
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(keys), Arc::new(vals)],
+            )
+            .unwrap()
+        })
+        .collect();
+
+    /// Stand-in for an upstream operator: ~fixed CPU cost per batch.
+    fn produce(batch: RecordBatch) -> RecordBatch {
+        let vals = batch
+            .column(1)
+            .as_primitive::<arrow::datatypes::UInt64Type>();
+        let mut acc = 0u64;
+        for _ in 0..200 {
+            for v in vals.values() {
+                acc = acc.wrapping_mul(6364136223846793005).wrapping_add(*v);
+            }
+        }
+        std::hint::black_box(acc);
+        batch
+    }
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    // With 2 inputs the root comparison is the whole tree, so the tie breaker
+    // balances all producers; with 4 it only balances the two sub-tree winners.
+    //
+    // Each case is run with the tie breaker both enabled and disabled so the
+    // pair measures what the tie breaker actually buys on this workload: if
+    // the two ever converge, the balancing has regressed into the
+    // lowest-index-wins baseline.
+    for partitions in [2, 4] {
+        for (label, round_robin) in [("on", true), ("off", false)] {
+            c.bench_function(
+                &format!(
+                    "bench_merge_tied_keys_slow_producers/{partitions}_partitions/tie_breaker_{label}"
+                ),
+                |b| {
+                    b.iter(|| {
+                        rt.block_on(async {
+                            let streams = (0..partitions)
+                                .map(|_| {
+                                    let s = RecordBatchStreamAdapter::new(
+                                        Arc::clone(&schema),
+                                        futures::stream::iter(batches.clone())
+                                            .map(|b| Ok(produce(b))),
+                                    );
+                                    spawn_buffered(Box::pin(s), 1)
+                                })
+                                .collect();
+                            let pool: Arc<dyn MemoryPool> =
+                                Arc::new(UnboundedMemoryPool::default());
+                            let merged = StreamingMergeBuilder::new()
+                                .with_streams(streams)
+                                .with_schema(Arc::clone(&schema))
+                                .with_expressions(&sort_order)
+                                .with_metrics(BaselineMetrics::new(
+                                    &ExecutionPlanMetricsSet::new(),
+                                    0,
+                                ))
+                                .with_batch_size(BATCH)
+                                .with_reservation(
+                                    MemoryConsumer::new("bench").register(&pool),
+                                )
+                                .with_round_robin_tie_breaker(round_robin)
+                                .build()
+                                .unwrap();
+                            datafusion_physical_plan::common::collect(merged)
+                                .await
+                                .unwrap();
+                        })
+                    })
+                },
+            );
+        }
+    }
+}
+
+criterion_group!(
+    benches,
+    bench_merge_sorted_preserving,
+    bench_merge_tied_keys_slow_producers
+);
 criterion_main!(benches);

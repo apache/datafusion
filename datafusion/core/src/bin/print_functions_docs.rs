@@ -34,12 +34,11 @@ use std::sync::Arc;
 fn main() -> Result<()> {
     let args: Vec<String> = args().collect();
 
-    if args.len() != 2 {
-        panic!(
-            "Usage: {} type (one of 'aggregate', 'scalar', 'window')",
-            args[0]
-        );
-    }
+    assert!(
+        args.len() == 2,
+        "Usage: {} type (one of 'aggregate', 'scalar', 'window')",
+        args[0]
+    );
 
     let function_type = args[1].trim().to_lowercase();
     let docs = match function_type.as_str() {
@@ -137,9 +136,9 @@ fn print_docs(
         let names = get_names_and_aliases(&providers);
 
         // write out the list of function names and aliases
-        names.iter().for_each(|name| {
+        for name in &names {
             let _ = writeln!(docs, "- [{name}](#{name})");
-        });
+        }
 
         // write out each function and alias in the order of the sorted name list
         for name in names {
@@ -214,7 +213,7 @@ fn print_docs(
                 let _ = writeln!(docs, "#### Aliases");
 
                 for alias in f.get_aliases() {
-                    let _ = writeln!(docs, "- {}", alias.replace("_", r#"\_"#));
+                    let _ = writeln!(docs, "- {}", alias.replace('_', r#"\_"#));
                 }
             }
 

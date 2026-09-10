@@ -1,0 +1,127 @@
+{
+  "extensionUris": [
+    {
+      "extensionUriAnchor": 1,
+      "uri": "https://github.com/substrait-io/substrait/blob/main/extensions/functions_arithmetic.yaml"
+    }
+  ],
+  "extensions": [
+    {
+      "extensionFunction": {
+        "extensionUriReference": 1,
+        "functionAnchor": 1,
+        "name": "sum:i64"
+      }
+    }
+  ],
+  "relations": [
+    {
+      "root": {
+        "input": {
+          "aggregate": {
+            "common": {
+              "emit": {
+                "outputMapping": [0, 1, 2]
+              }
+            },
+            "input": {
+              "read": {
+                "baseSchema": {
+                  "names": ["c0", "c1"],
+                  "struct": {
+                    "nullability": "NULLABILITY_REQUIRED",
+                    "types": [
+                      {
+                        "i64": {
+                          "nullability": "NULLABILITY_REQUIRED"
+                        }
+                      },
+                      {
+                        "i64": {
+                          "nullability": "NULLABILITY_REQUIRED"
+                        }
+                      }
+                    ]
+                  }
+                },
+                "common": {
+                  "direct": {}
+                },
+                "virtualTable": {
+                  "expressions": [
+                    {
+                      "fields": [
+                        { "literal": { "i64": "1", "nullable": false } },
+                        { "literal": { "i64": "10", "nullable": false } }
+                      ]
+                    },
+                    {
+                      "fields": [
+                        { "literal": { "i64": "1", "nullable": false } },
+                        { "literal": { "i64": "20", "nullable": false } }
+                      ]
+                    },
+                    {
+                      "fields": [
+                        { "literal": { "i64": "2", "nullable": false } },
+                        { "literal": { "i64": "10", "nullable": false } }
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            "groupingExpressions": [
+              {
+                "selection": {
+                  "directReference": { "structField": {} },
+                  "rootReference": {}
+                }
+              },
+              {
+                "selection": {
+                  "directReference": { "structField": { "field": 1 } },
+                  "rootReference": {}
+                }
+              }
+            ],
+            "groupings": [
+              { "expressionReferences": [0] },
+              { "expressionReferences": [1] },
+              { "expressionReferences": [0, 1] }
+            ],
+            "measures": [
+              {
+                "measure": {
+                  "arguments": [
+                    {
+                      "value": {
+                        "selection": {
+                          "directReference": { "structField": {} },
+                          "rootReference": {}
+                        }
+                      }
+                    }
+                  ],
+                  "functionReference": 1,
+                  "invocation": "AGGREGATION_INVOCATION_ALL",
+                  "outputType": {
+                    "i64": {
+                      "nullability": "NULLABILITY_NULLABLE"
+                    }
+                  },
+                  "phase": "AGGREGATION_PHASE_INITIAL_TO_RESULT"
+                }
+              }
+            ]
+          }
+        },
+        "names": ["c0", "c1", "summation"]
+      }
+    }
+  ],
+  "version": {
+    "minorNumber": 29,
+    "producer": "substrait-go v4.2.0"
+  }
+}

@@ -121,8 +121,7 @@ physical_plan
 01)SortPreservingMergeExec: [column1@0 ASC NULLS LAST]
 02)--SortExec: expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----FilterExec: __datafusion_extracted_1@0 LIKE %first.parquet, projection=[column1@1]
-04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
-05)--------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/input_file_name/parquet/first.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/input_file_name/parquet/second.parquet]]}, projection=[input_file_name() as __datafusion_extracted_1, column1], file_type=parquet, predicate=input_file_name() LIKE %first.parquet
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/input_file_name/parquet/first.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/input_file_name/parquet/second.parquet]]}, projection=[input_file_name() as __datafusion_extracted_1, column1], file_type=parquet
 
 statement ok
 DROP TABLE pq_table;

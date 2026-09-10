@@ -82,6 +82,10 @@ impl ScalarUDFImpl for GcdFunc {
         Ok(arg_types[0].clone())
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         let [arg1, arg2] = take_function_args(self.name(), arg_types)?;
 

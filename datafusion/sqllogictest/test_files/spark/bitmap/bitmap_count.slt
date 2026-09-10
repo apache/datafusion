@@ -68,6 +68,21 @@ SELECT bitmap_count(arrow_cast(a, 'Dictionary(Int32, Binary)')) FROM (VALUES (X'
 16
 NULL
 
+# The CAST to Dictionary below comes from the explicit arrow_cast. There must
+# not be an additional outer CAST(... AS Binary) before bitmap_count.
+query TT
+EXPLAIN SELECT bitmap_count(arrow_cast(a, 'Dictionary(Int32, Binary)'))
+FROM (VALUES (X'1010'), (X'0AB0'), (X'FFFF'), (NULL)) AS t(a);
+----
+logical_plan
+01)Projection: bitmap_count(CAST(t.a AS Dictionary(Int32, Binary))) AS bitmap_count(arrow_cast(t.a,Utf8("Dictionary(Int32, Binary)")))
+02)--SubqueryAlias: t
+03)----Projection: column1 AS a
+04)------Values: (Binary("16,16")), (Binary("10,176")), (Binary("255,255")), (Binary(NULL))
+physical_plan
+01)ProjectionExec: expr=[bitmap_count(CAST(column1@0 AS Dictionary(Int32, Binary))) as bitmap_count(arrow_cast(t.a,Utf8("Dictionary(Int32, Binary)")))]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
 query I
 SELECT bitmap_count(arrow_cast(a, 'Dictionary(Int8, Binary)')) FROM (VALUES (X'1010'), (X'0AB0'), (X'FFFF'), (NULL)) AS t(a);
 ----

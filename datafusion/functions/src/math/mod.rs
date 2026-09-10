@@ -60,6 +60,7 @@ make_math_unary_udf!(
     acos,
     super::acos_order,
     super::bounds::acos_bounds,
+    true,
     super::get_acos_doc
 );
 make_math_unary_udf!(
@@ -68,6 +69,7 @@ make_math_unary_udf!(
     acosh,
     super::acosh_order,
     super::bounds::acosh_bounds,
+    true,
     super::get_acosh_doc
 );
 make_math_unary_udf!(
@@ -76,6 +78,7 @@ make_math_unary_udf!(
     asin,
     super::asin_order,
     super::bounds::asin_bounds,
+    true,
     super::get_asin_doc
 );
 make_math_unary_udf!(
@@ -84,6 +87,7 @@ make_math_unary_udf!(
     asinh,
     super::asinh_order,
     super::bounds::unbounded_bounds,
+    true,
     super::get_asinh_doc
 );
 make_math_unary_udf!(
@@ -92,6 +96,7 @@ make_math_unary_udf!(
     atan,
     super::atan_order,
     super::bounds::atan_bounds,
+    true,
     super::get_atan_doc
 );
 make_math_unary_udf!(
@@ -100,6 +105,7 @@ make_math_unary_udf!(
     atanh,
     super::atanh_order,
     super::bounds::unbounded_bounds,
+    true,
     super::get_atanh_doc
 );
 make_math_binary_udf!(
@@ -107,6 +113,7 @@ make_math_binary_udf!(
     atan2,
     atan2,
     super::atan2_order,
+    true,
     super::get_atan2_doc
 );
 make_math_unary_udf!(
@@ -115,6 +122,7 @@ make_math_unary_udf!(
     cbrt,
     super::cbrt_order,
     super::bounds::unbounded_bounds,
+    true,
     super::get_cbrt_doc
 );
 make_udf_function!(ceil::CeilFunc, ceil);
@@ -124,6 +132,7 @@ make_math_unary_udf!(
     cos,
     super::cos_order,
     super::bounds::cos_bounds,
+    true,
     super::get_cos_doc
 );
 make_math_unary_udf!(
@@ -132,6 +141,7 @@ make_math_unary_udf!(
     cosh,
     super::cosh_order,
     super::bounds::cosh_bounds,
+    true,
     super::get_cosh_doc
 );
 make_udf_function!(cot::CotFunc, cot);
@@ -141,6 +151,7 @@ make_math_unary_udf!(
     to_degrees,
     super::degrees_order,
     super::bounds::unbounded_bounds,
+    true,
     super::get_degrees_doc
 );
 make_math_unary_udf!(
@@ -149,6 +160,7 @@ make_math_unary_udf!(
     exp,
     super::exp_order,
     super::bounds::exp_bounds,
+    true,
     super::get_exp_doc
 );
 make_udf_function!(factorial::FactorialFunc, factorial);
@@ -164,6 +176,7 @@ make_math_unary_udf!(
     ln,
     super::ln_order,
     super::bounds::unbounded_bounds,
+    true,
     super::get_ln_doc
 );
 make_math_unary_udf!(
@@ -172,6 +185,7 @@ make_math_unary_udf!(
     log2,
     super::log2_order,
     super::bounds::unbounded_bounds,
+    true,
     super::get_log2_doc
 );
 make_math_unary_udf!(
@@ -180,6 +194,7 @@ make_math_unary_udf!(
     log10,
     super::log10_order,
     super::bounds::unbounded_bounds,
+    true,
     super::get_log10_doc
 );
 make_udf_function!(nanvl::NanvlFunc, nanvl);
@@ -191,6 +206,7 @@ make_math_unary_udf!(
     to_radians,
     super::radians_order,
     super::bounds::radians_bounds,
+    true,
     super::get_radians_doc
 );
 make_udf_function!(random::RandomFunc, random);
@@ -202,6 +218,7 @@ make_math_unary_udf!(
     sin,
     super::sin_order,
     super::bounds::sin_bounds,
+    true,
     super::get_sin_doc
 );
 make_math_unary_udf!(
@@ -210,6 +227,7 @@ make_math_unary_udf!(
     sinh,
     super::sinh_order,
     super::bounds::unbounded_bounds,
+    true,
     super::get_sinh_doc
 );
 make_math_unary_udf!(
@@ -218,6 +236,7 @@ make_math_unary_udf!(
     sqrt,
     super::sqrt_order,
     super::bounds::sqrt_bounds,
+    true,
     super::get_sqrt_doc,
     Some(super::validate_sqrt_input)
 );
@@ -227,6 +246,7 @@ make_math_unary_udf!(
     tan,
     super::tan_order,
     super::bounds::unbounded_bounds,
+    true,
     super::get_tan_doc
 );
 make_math_unary_udf!(
@@ -235,9 +255,145 @@ make_math_unary_udf!(
     tanh,
     super::tanh_order,
     super::bounds::tanh_bounds,
+    true,
     super::get_tanh_doc
 );
 make_udf_function!(trunc::TruncFunc, trunc);
+
+#[cfg(test)]
+mod strict_tests {
+    use super::*;
+    use arrow::datatypes::Field;
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::{
+        ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
+    };
+    use std::sync::Arc;
+
+    #[test]
+    fn strict_math_functions_propagate_nulls() {
+        let cases = vec![
+            (abs(), vec![ScalarValue::from(1.0)]),
+            (acos(), vec![ScalarValue::from(0.5)]),
+            (acosh(), vec![ScalarValue::from(1.5)]),
+            (asin(), vec![ScalarValue::from(0.5)]),
+            (asinh(), vec![ScalarValue::from(0.5)]),
+            (atan(), vec![ScalarValue::from(0.5)]),
+            (
+                atan2(),
+                vec![ScalarValue::from(0.5), ScalarValue::from(1.0)],
+            ),
+            (atanh(), vec![ScalarValue::from(0.5)]),
+            (cbrt(), vec![ScalarValue::from(8.0)]),
+            (ceil(), vec![ScalarValue::from(1.5)]),
+            (cos(), vec![ScalarValue::from(0.5)]),
+            (cosh(), vec![ScalarValue::from(0.5)]),
+            (cot(), vec![ScalarValue::from(0.5)]),
+            (degrees(), vec![ScalarValue::from(0.5)]),
+            (exp(), vec![ScalarValue::from(0.5)]),
+            (factorial(), vec![ScalarValue::from(5_i64)]),
+            (floor(), vec![ScalarValue::from(1.5)]),
+            (
+                gcd(),
+                vec![ScalarValue::from(48_i64), ScalarValue::from(18_i64)],
+            ),
+            (isnan(), vec![ScalarValue::from(1.0)]),
+            (iszero(), vec![ScalarValue::from(1.0)]),
+            (
+                lcm(),
+                vec![ScalarValue::from(4_i64), ScalarValue::from(5_i64)],
+            ),
+            (ln(), vec![ScalarValue::from(2.0)]),
+            (log(), vec![ScalarValue::from(10.0)]),
+            (
+                log(),
+                vec![ScalarValue::from(10.0), ScalarValue::from(100.0)],
+            ),
+            (log2(), vec![ScalarValue::from(2.0)]),
+            (log10(), vec![ScalarValue::from(10.0)]),
+            (
+                power(),
+                vec![ScalarValue::from(2.0), ScalarValue::from(3.0)],
+            ),
+            (radians(), vec![ScalarValue::from(90.0)]),
+            (round(), vec![ScalarValue::from(1.5)]),
+            (
+                round(),
+                vec![ScalarValue::from(1.5), ScalarValue::from(1_i32)],
+            ),
+            (signum(), vec![ScalarValue::from(-1.0)]),
+            (sin(), vec![ScalarValue::from(0.5)]),
+            (sinh(), vec![ScalarValue::from(0.5)]),
+            (sqrt(), vec![ScalarValue::from(4.0)]),
+            (tan(), vec![ScalarValue::from(0.5)]),
+            (tanh(), vec![ScalarValue::from(0.5)]),
+            (trunc(), vec![ScalarValue::from(1.5)]),
+            (
+                trunc(),
+                vec![ScalarValue::from(1.5), ScalarValue::from(1_i64)],
+            ),
+        ];
+
+        for (func, valid_args) in cases {
+            assert!(func.is_strict(), "{} should be marked strict", func.name());
+
+            for null_mask in 0..(1 << valid_args.len()) {
+                let mut args = valid_args.clone();
+                for (arg_idx, arg) in args.iter_mut().enumerate() {
+                    if null_mask & (1 << arg_idx) != 0 {
+                        *arg = ScalarValue::try_new_null(&arg.data_type()).unwrap();
+                    }
+                }
+
+                let result =
+                    invoke_with_scalar_args(&func, args).unwrap_or_else(|error| {
+                        panic!(
+                            "{} failed for NULL mask {null_mask:b}: {error}",
+                            func.name()
+                        )
+                    });
+                let expected_null = null_mask != 0;
+                let result = result.into_array(1).unwrap();
+                assert_eq!(
+                    result.null_count() == result.len(),
+                    expected_null,
+                    "{} returned {result:?} for NULL mask {null_mask:0width$b}",
+                    func.name(),
+                    width = valid_args.len(),
+                );
+            }
+        }
+    }
+
+    fn invoke_with_scalar_args(
+        func: &ScalarUDF,
+        args: Vec<ScalarValue>,
+    ) -> Result<ColumnarValue> {
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Arc::new(Field::new(
+                    format!("arg_{idx}"),
+                    arg.data_type(),
+                    arg.is_null(),
+                ))
+            })
+            .collect::<Vec<_>>();
+        let scalar_arguments = args.iter().map(Some).collect::<Vec<_>>();
+        let return_field = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &scalar_arguments,
+        })?;
+        func.invoke_with_args(ScalarFunctionArgs {
+            args: args.into_iter().map(ColumnarValue::Scalar).collect(),
+            arg_fields,
+            number_rows: 1,
+            return_field,
+            config_options: Arc::new(Default::default()),
+        })
+    }
+}
 
 pub mod expr_fn {
     export_functions!(

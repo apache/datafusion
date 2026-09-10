@@ -145,6 +145,8 @@ where **offset** is an non-negative integer.
 
 RANGE and GROUPS modes require an ORDER BY clause (with RANGE the ORDER BY must specify exactly one column).
 
+In RANGE mode an **offset** is measured in ORDER BY values rather than in rows, so the bound is computed by adding it to or subtracting it from the current row's ORDER BY value. That restricts `offset PRECEDING` and `offset FOLLOWING` to ORDER BY types supporting such arithmetic, namely the numeric, date, and timestamp types. Other orderable types, such as strings, binaries, and times, can still be used with `UNBOUNDED PRECEDING`, `CURRENT ROW` and `UNBOUNDED FOLLOWING`, which are located by comparing ORDER BY values.
+
 ## Filter clause for aggregate window functions
 
 Aggregate window functions support the SQL `FILTER (WHERE ...)` clause to include only rows that satisfy the predicate from the window frame in the aggregation.
@@ -496,7 +498,7 @@ nth_value(expression, n)
 #### Arguments
 
 - **expression**: The column from which to retrieve the nth value.
-- **n**: Integer. Specifies the row number (starting from 1) in the window frame.
+- **n**: Integer position in the window frame. Positive values count from the first row, starting at 1; negative values count backward from the last row, where -1 returns the last row.
 
 #### Example
 

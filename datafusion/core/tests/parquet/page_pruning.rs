@@ -38,6 +38,7 @@ use datafusion_expr::{Expr, col, lit};
 use datafusion_physical_expr::create_physical_expr;
 
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use futures::StreamExt;
 use object_store::ObjectMeta;
 use object_store::path::Path;
@@ -74,7 +75,13 @@ async fn get_parquet_exec(
 
     let df_schema = schema.clone().to_dfschema().unwrap();
     let execution_props = ExecutionProps::new();
-    let predicate = create_physical_expr(&filter, &df_schema, &execution_props).unwrap();
+    let predicate = create_physical_expr(
+        &filter,
+        &df_schema,
+        &execution_props,
+        &PhysicalPlanningContext::default(),
+    )
+    .unwrap();
 
     let source = Arc::new(
         ParquetSource::new(schema.clone())

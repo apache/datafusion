@@ -21,7 +21,6 @@ use std::sync::Arc;
 
 use arrow::array::timezone::Tz;
 use arrow::array::{Array, ArrayRef, Float64Array, Int32Array, Int64Array};
-use arrow::compute::kernels::cast_utils::IntervalUnit;
 use arrow::compute::{DatePart, binary, date_part};
 use arrow::datatypes::DataType::{
     Date32, Date64, Duration, Interval, Time32, Time64, Timestamp,
@@ -216,37 +215,14 @@ impl ScalarUDFImpl for DatePartFunc {
 
         let part_trim = part_normalization(&part);
 
-        // using IntervalUnit here means we hand off all the work of supporting plurals (like "seconds")
-        // and synonyms ( like "ms,msec,msecond,millisecond") to Arrow
-        let arr = if let Ok(interval_unit) = IntervalUnit::from_str(part_trim) {
-            match interval_unit {
-                IntervalUnit::Year => date_part(array.as_ref(), DatePart::Year)?,
-                IntervalUnit::Month => date_part(array.as_ref(), DatePart::Month)?,
-                IntervalUnit::Week => date_part(array.as_ref(), DatePart::Week)?,
-                IntervalUnit::Day => date_part(array.as_ref(), DatePart::Day)?,
-                IntervalUnit::Hour => date_part(array.as_ref(), DatePart::Hour)?,
-                IntervalUnit::Minute => date_part(array.as_ref(), DatePart::Minute)?,
-                IntervalUnit::Second => seconds_as_i32(array.as_ref(), Second)?,
-                IntervalUnit::Millisecond => seconds_as_i32(array.as_ref(), Millisecond)?,
-                IntervalUnit::Microsecond => seconds_as_i32(array.as_ref(), Microsecond)?,
-                IntervalUnit::Nanosecond => seconds_ns(array.as_ref())?,
-                // century and decade are not supported by `DatePart`, although they are supported in postgres
-                _ => return exec_err!("Date part '{part}' not supported"),
-            }
-        } else {
-            // special cases that can be extracted (in postgres) but are not interval units
-            match part_trim.to_lowercase().as_str() {
-                "isoyear" => date_part(array.as_ref(), DatePart::YearISO)?,
-                "qtr" | "quarter" => date_part(array.as_ref(), DatePart::Quarter)?,
-                "doy" => date_part(array.as_ref(), DatePart::DayOfYear)?,
-                "dow" => date_part(array.as_ref(), DatePart::DayOfWeekSunday0)?,
-                "isodow" => {
-                    // Postgres `isodow` is 1..=7 with Mon=1
-                    date_part(array.as_ref(), DatePart::DayOfWeekMonday1)?
-                }
-                "epoch" => epoch(array.as_ref())?,
-                _ => return exec_err!("Date part '{part}' not supported"),
-            }
+        let arr = match DatePart::from_str(part_trim) {
+            Ok(DatePart::Second) => seconds_as_i32(array.as_ref(), Second)?,
+            Ok(DatePart::Millisecond) => seconds_as_i32(array.as_ref(), Millisecond)?,
+            Ok(DatePart::Microsecond) => seconds_as_i32(array.as_ref(), Microsecond)?,
+            Ok(DatePart::Nanosecond) => seconds_ns(array.as_ref())?,
+            Ok(part) => date_part(array.as_ref(), part)?,
+            Err(_) if is_epoch(part_trim) => epoch(array.as_ref())?,
+            Err(_) => return exec_err!("Date part '{part}' not supported"),
         };
 
         Ok(if is_scalar {
@@ -256,7 +232,7 @@ impl ScalarUDFImpl for DatePartFunc {
         })
     }
 
-    // Only casting the year is supported since pruning other IntervalUnit is not possible
+    // Only casting the year is supported since pruning other date parts is not possible
     // date_part(col, YEAR) = 2024 => col >= '2024-01-01' and col < '2025-01-01'
     // But for anything less than YEAR simplifying is not possible without specifying the bigger interval
     // date_part(col, MONTH) = 1 => col = '2023-01-01' or col = '2024-01-01' or ... or col = '3000-01-01'
@@ -268,16 +244,16 @@ impl ScalarUDFImpl for DatePartFunc {
     ) -> Result<PreimageResult> {
         let [part, col_expr] = take_function_args(self.name(), args)?;
 
-        // Get the interval unit from the part argument
-        let interval_unit = part
+        // Get the date part from the part argument
+        let date_part = part
             .as_literal()
             .and_then(|sv| sv.try_as_str().flatten())
             .map(part_normalization)
-            .and_then(|s| IntervalUnit::from_str(s).ok());
+            .and_then(|s| DatePart::from_str(s).ok());
 
         // only support extracting year
-        match interval_unit {
-            Some(IntervalUnit::Year) => (),
+        match date_part {
+            Some(DatePart::Year) => (),
             _ => return Ok(PreimageResult::None),
         }
 
@@ -336,8 +312,8 @@ fn is_epoch(part: &str) -> bool {
 }
 
 fn is_nanosecond(part: &str) -> bool {
-    IntervalUnit::from_str(part_normalization(part))
-        .map(|p| matches!(p, IntervalUnit::Nanosecond))
+    DatePart::from_str(part_normalization(part))
+        .map(|p| matches!(p, DatePart::Nanosecond))
         .unwrap_or(false)
 }
 

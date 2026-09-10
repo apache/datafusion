@@ -827,7 +827,7 @@ async fn test_physical_plan_display_indent_multi_children() {
 }
 
 #[tokio::test]
-#[cfg_attr(tarpaulin, ignore)]
+#[cfg_attr(coverage, ignore)]
 async fn csv_explain_analyze() {
     // This test uses the execute function to run an actual plan under EXPLAIN ANALYZE
     let ctx = SessionContext::new();
@@ -849,7 +849,7 @@ async fn csv_explain_analyze() {
 }
 
 #[tokio::test]
-#[cfg_attr(tarpaulin, ignore)]
+#[cfg_attr(coverage, ignore)]
 async fn csv_explain_analyze_order_by() {
     let ctx = SessionContext::new();
     register_aggregate_csv_by_sql(&ctx).await;
@@ -866,7 +866,7 @@ async fn csv_explain_analyze_order_by() {
 }
 
 #[tokio::test]
-#[cfg_attr(tarpaulin, ignore)]
+#[cfg_attr(coverage, ignore)]
 async fn parquet_explain_analyze() {
     let ctx = SessionContext::new();
     register_alltypes_parquet(&ctx).await;
@@ -889,6 +889,7 @@ async fn parquet_explain_analyze() {
     );
     assert_contains!(&formatted, "output_rows_skew=0%");
     assert_contains!(&formatted, "scan_efficiency_ratio=13.99%");
+    assert_contains!(&formatted, "bytes_processed=");
 
     // The order of metrics is expected to be the same as the actual pruning order
     // (file-> row-group -> page)
@@ -913,7 +914,7 @@ async fn parquet_explain_analyze() {
 // (e.g. nested/recursive expansion causing full schema to be scanned).
 // Keeping this test ensures we don't regress that behavior.
 #[tokio::test]
-#[cfg_attr(tarpaulin, ignore)]
+#[cfg_attr(coverage, ignore)]
 async fn parquet_recursive_projection_pushdown() -> Result<()> {
     use parquet::arrow::arrow_writer::ArrowWriter;
     use parquet::file::properties::WriterProperties;
@@ -1030,7 +1031,7 @@ async fn parquet_recursive_projection_pushdown() -> Result<()> {
 }
 
 #[tokio::test]
-#[cfg_attr(tarpaulin, ignore)]
+#[cfg_attr(coverage, ignore)]
 async fn parquet_explain_analyze_verbose() {
     let ctx = SessionContext::new();
     register_alltypes_parquet(&ctx).await;
@@ -1047,7 +1048,7 @@ async fn parquet_explain_analyze_verbose() {
 }
 
 #[tokio::test]
-#[cfg_attr(tarpaulin, ignore)]
+#[cfg_attr(coverage, ignore)]
 async fn csv_explain_analyze_verbose() {
     // This test uses the execute function to run an actual plan under EXPLAIN VERBOSE ANALYZE
     let ctx = SessionContext::new();
@@ -1061,6 +1062,47 @@ async fn csv_explain_analyze_verbose() {
 
     let verbose_needle = "Output Rows";
     assert_contains!(formatted, verbose_needle);
+}
+
+#[tokio::test]
+#[cfg_attr(coverage, ignore)]
+async fn explain_analyze_aggregate_metrics_map_indices_to_expressions() {
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(1));
+    register_aggregate_csv_by_sql(&ctx).await;
+
+    let query =
+        "SELECT c1, SUM(c5), SUM(c6), COUNT(c7) FROM aggregate_test_100 GROUP BY c1";
+    let normal = execute_to_batches(&ctx, &format!("EXPLAIN ANALYZE {query}")).await;
+    let normal = arrow::util::pretty::pretty_format_batches(&normal)
+        .unwrap()
+        .to_string();
+    assert_contains!(
+        normal.as_str(),
+        "aggr=[sum(aggregate_test_100.c5), sum(aggregate_test_100.c6), count(aggregate_test_100.c7)]"
+    );
+    assert_contains!(normal.as_str(), "agg_expr_0_arguments_time");
+    assert_contains!(normal.as_str(), "agg_expr_1_arguments_time");
+    assert_contains!(normal.as_str(), "agg_expr_2_arguments_time");
+    assert!(!normal.contains("aggregate="));
+
+    let verbose =
+        execute_to_batches(&ctx, &format!("EXPLAIN ANALYZE VERBOSE {query}")).await;
+    let verbose = arrow::util::pretty::pretty_format_batches(&verbose)
+        .unwrap()
+        .to_string();
+    assert_contains!(
+        verbose.as_str(),
+        "agg_expr_0_arguments_time{partition=0, aggregate=sum(aggregate_test_100.c5)}"
+    );
+    assert_contains!(
+        verbose.as_str(),
+        "agg_expr_1_arguments_time{partition=0, aggregate=sum(aggregate_test_100.c6)}"
+    );
+    assert_contains!(
+        verbose.as_str(),
+        "agg_expr_2_arguments_time{partition=0, aggregate=count(aggregate_test_100.c7)}"
+    );
 }
 
 #[tokio::test]

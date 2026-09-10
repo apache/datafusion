@@ -70,12 +70,12 @@ pub async fn deserialize(path: impl AsRef<Path>) -> Result<Box<Plan>> {
     let mut file = OpenOptions::new().read(true).open(path).await?;
     file.read_to_end(&mut protobuf_in).await?;
 
-    deserialize_bytes(protobuf_in).await
+    deserialize_bytes(&protobuf_in)
 }
 
 /// Deserializes a plan from the bytes.
-pub async fn deserialize_bytes(proto_bytes: Vec<u8>) -> Result<Box<Plan>> {
-    Ok(Box::new(Message::decode(&*proto_bytes).map_err(|e| {
+pub fn deserialize_bytes(proto_bytes: &[u8]) -> Result<Box<Plan>> {
+    Ok(Box::new(Message::decode(proto_bytes).map_err(|e| {
         DataFusionError::Substrait(format!("Failed to decode plan: {e}"))
     })?))
 }

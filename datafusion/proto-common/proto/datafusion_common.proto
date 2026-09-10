@@ -431,6 +431,7 @@ enum CompressionTypeVariant {
 
 message JsonWriterOptions {
   CompressionTypeVariant compression = 1;
+  optional uint32 compression_level = 2;
 }
 
 
@@ -616,6 +617,8 @@ message ParquetOptions {
   uint64 data_page_row_count_limit = 18;
 
   uint64 max_row_group_size = 15;
+
+  uint64 max_in_list_size = 38;
 
   string created_by = 16;
 

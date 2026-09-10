@@ -22,7 +22,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use super::{StandardWindowFunctionExpr, WindowExpr};
-use crate::window::window_expr::{WindowFn, get_orderby_values};
+use crate::window::window_expr::{WindowEvalContext, WindowFn, get_orderby_values};
 use crate::window::{PartitionBatches, PartitionWindowAggStates, WindowState};
 use crate::{EquivalenceProperties, PhysicalExpr};
 
@@ -128,7 +128,7 @@ impl WindowExpr for StandardWindowExpr {
             let mut window_frame_ctx =
                 WindowFrameContext::new(Arc::clone(&self.window_frame), sort_options);
             let mut last_range = Range { start: 0, end: 0 };
-            // We iterate on each row to calculate window frame range and and window function result
+            // We iterate on each row to calculate window frame range and window function result
             for idx in 0..num_rows {
                 let range = window_frame_ctx.calculate_range(
                     order_bys_ref,
@@ -157,6 +157,7 @@ impl WindowExpr for StandardWindowExpr {
         &self,
         partition_batches: &PartitionBatches,
         window_agg_state: &mut PartitionWindowAggStates,
+        _eval_ctx: &WindowEvalContext<'_>,
     ) -> Result<()> {
         let field = self.expr.field()?;
         let out_type = field.data_type();
@@ -175,11 +176,16 @@ impl WindowExpr for StandardWindowExpr {
                         .or_insert(WindowState {
                             state: new_state.clone(),
                             window_fn: WindowFn::Builtin(evaluator),
+                            published: false,
                         })
                 };
-            let evaluator = match &mut window_state.window_fn {
-                WindowFn::Builtin(evaluator) => evaluator,
-                _ => unreachable!(),
+            // Skip partitions whose input is unchanged since the last
+            // evaluation pass.
+            if window_state.state.is_input_unchanged(partition_batch_state) {
+                continue;
+            }
+            let WindowFn::Builtin(evaluator) = &mut window_state.window_fn else {
+                unreachable!()
             };
             let state = &mut window_state.state;
 

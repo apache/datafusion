@@ -367,11 +367,6 @@ where
             Arc::new(counts) as ArrayRef,
         ])
     }
-
-    fn supports_convert_to_state(&self) -> bool {
-        true
-    }
-
     fn size(&self) -> usize {
         self.counts.capacity() * size_of::<i64>() + self.sums.capacity() * size_of::<T>()
     }
@@ -387,12 +382,6 @@ mod tests {
             Ok(sum / count as f64)
         })
     }
-
-    #[test]
-    fn supports_convert_to_state() {
-        assert!(make_acc().supports_convert_to_state());
-    }
-
     #[test]
     fn convert_to_state_basic() {
         let acc = make_acc();

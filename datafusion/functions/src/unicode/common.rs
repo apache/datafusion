@@ -50,6 +50,16 @@ pub(crate) fn try_as_scalar_i64(cv: &ColumnarValue) -> Option<i64> {
     }
 }
 
+/// Estimates data capacity for `pad` based on `length_array` with row length.
+/// For ASCII, one row is at most `target_len` bytes.
+/// For UTF8, it could be larger
+pub(crate) fn pad_data_capacity(length_array: &Int64Array) -> usize {
+    length_array
+        .iter()
+        .flatten()
+        .fold(0, |acc, len| acc.saturating_add(len as usize))
+}
+
 /// A trait for `left` and `right` byte slicing operations
 pub(crate) trait LeftRightSlicer {
     fn slice(string: &str, n: i64) -> Range<usize>;
@@ -115,16 +125,22 @@ pub(crate) enum StringCharLen {
 /// Calculate the byte length of the substring of `n` chars from string `string`
 #[inline]
 fn left_right_byte_length(string: &str, n: i64) -> usize {
+    let abs = n.unsigned_abs().min(usize::MAX as u64) as usize;
+    // For ASCII input every character is exactly one byte, so the byte offset of
+    // the n-th codepoint is just the (clamped) character count. This avoids the
+    // per-character `char_indices()` scan of the general path.
     match n.cmp(&0) {
+        Ordering::Equal => 0,
+        // `abs` chars trimmed from the end: keep the leading `len - abs`.
+        Ordering::Less if string.is_ascii() => string.len().saturating_sub(abs),
         Ordering::Less => string
             .char_indices()
-            .nth_back((n.unsigned_abs().min(usize::MAX as u64) - 1) as usize)
+            .nth_back(abs - 1)
             .map(|(index, _)| index)
             .unwrap_or(0),
-        Ordering::Equal => 0,
-        Ordering::Greater => {
-            byte_offset_of_char(string, n.unsigned_abs().min(usize::MAX as u64) as usize)
-        }
+        // First `abs` chars, but never past the end of the string.
+        Ordering::Greater if string.is_ascii() => abs.min(string.len()),
+        Ordering::Greater => byte_offset_of_char(string, abs),
     }
 }
 

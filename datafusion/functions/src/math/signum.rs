@@ -34,7 +34,8 @@ use datafusion_macros::user_doc;
     doc_section(label = "Math Functions"),
     description = r#"Returns the sign of a number.
 Negative numbers return `-1`.
-Zero and positive numbers return `1`."#,
+Zero returns `0`.
+Positive numbers return `1`."#,
     syntax_example = "signum(numeric_expression)",
     standard_argument(name = "numeric_expression", prefix = "Numeric"),
     sql_example = r#"```sql
@@ -84,6 +85,10 @@ impl ScalarUDFImpl for SignumFunc {
             Float32 => Ok(Float32),
             _ => Ok(Float64),
         }
+    }
+
+    fn is_strict(&self) -> bool {
+        true
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {

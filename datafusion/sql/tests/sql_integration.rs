@@ -35,9 +35,10 @@ use datafusion_expr::{
     expr::{HigherOrderFunction, LambdaVariable, ScalarFunction},
     lambda,
     logical_plan::LogicalPlan,
+    planner::{ExprPlanner, PlannerResult, RawScalarExpr},
     test::function_stub::sum_udaf,
 };
-use datafusion_functions::{string, unicode};
+use datafusion_functions::{core as core_functions, string, unicode};
 use datafusion_sql::{
     parser::DFParser,
     planner::{NullOrdering, ParserOptions, PlannerContext, SqlToRel},
@@ -836,6 +837,42 @@ fn select_scalar_func_with_literal_no_relation() {
     );
 }
 
+#[derive(Debug)]
+struct SingleArgumentCoalescePlanner;
+
+impl ExprPlanner for SingleArgumentCoalescePlanner {
+    fn plan_scalar(&self, expr: RawScalarExpr) -> Result<PlannerResult<RawScalarExpr>> {
+        if expr.func.name() == "coalesce"
+            && let [arg] = expr.args.as_slice()
+        {
+            Ok(PlannerResult::Planned(arg.clone()))
+        } else {
+            Ok(PlannerResult::Original(expr))
+        }
+    }
+}
+
+#[test]
+fn select_scalar_func_with_expr_planner() -> Result<()> {
+    let state = mock_session_state()
+        .with_scalar_function(core_functions::coalesce())
+        .with_expr_planner(Arc::new(SingleArgumentCoalescePlanner));
+    let plan = logical_plan_from_state(
+        "SELECT coalesce(42)",
+        &GenericDialect {},
+        ParserOptions::default(),
+        state,
+    )?;
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: Int64(42)
+      EmptyRelation: rows=1
+    "
+    );
+    Ok(())
+}
+
 #[test]
 fn select_simple_filter() {
     let sql = "SELECT id, first_name, last_name \
@@ -1504,6 +1541,113 @@ fn select_aggregate_with_group_by_with_having_using_count_star_not_in_select() {
     );
 }
 
+/// Asserts that placeholder `id` (e.g. `"$1"`) was inferred as `expected` type
+/// somewhere in `plan`.
+fn assert_placeholder_type(plan: &LogicalPlan, id: &str, expected: DataType) {
+    let param_types = plan.get_parameter_types().unwrap();
+    assert_eq!(param_types.get(id), Some(&Some(expected)));
+}
+
+/// An expression containing a placeholder, written in both the SELECT list and
+/// the GROUP BY, has to be recognised as one expression the way its literal
+/// equivalent is. Otherwise the columns inside it read as ungrouped, because the
+/// SELECT list has its placeholder types inferred and the grouping key does not.
+#[test]
+fn select_aggregate_with_group_by_placeholder_expression() {
+    let sql = "SELECT CASE WHEN age < $1 THEN 'young' ELSE 'old' END, count(*)
+                   FROM person
+                   GROUP BY CASE WHEN age < $1 THEN 'young' ELSE 'old' END";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END, count(*)
+      Aggregate: groupBy=[[CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END]], aggr=[[count(*)]]
+        TableScan: person
+    "#
+    );
+    assert_placeholder_type(&plan, "$1", DataType::Int32);
+}
+
+/// The same, for a grouping expression repeated in HAVING.
+#[test]
+fn select_aggregate_with_having_placeholder_expression() {
+    let sql = "SELECT CASE WHEN age < $1 THEN 'young' ELSE 'old' END, count(*)
+                   FROM person
+                   GROUP BY CASE WHEN age < $1 THEN 'young' ELSE 'old' END
+                   HAVING CASE WHEN age < $1 THEN 'young' ELSE 'old' END = 'young'";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END, count(*)
+      Filter: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END = Utf8("young")
+        Aggregate: groupBy=[[CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END]], aggr=[[count(*)]]
+          TableScan: person
+    "#
+    );
+    assert_placeholder_type(&plan, "$1", DataType::Int32);
+}
+
+/// The same, for a grouping expression repeated in ORDER BY.
+#[test]
+fn select_aggregate_with_order_by_placeholder_expression() {
+    let sql = "SELECT CASE WHEN age < $1 THEN 'young' ELSE 'old' END, count(*)
+                   FROM person
+                   GROUP BY CASE WHEN age < $1 THEN 'young' ELSE 'old' END
+                   ORDER BY CASE WHEN age < $1 THEN 'young' ELSE 'old' END";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Sort: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END ASC NULLS LAST
+      Projection: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END, count(*)
+        Aggregate: groupBy=[[CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END]], aggr=[[count(*)]]
+          TableScan: person
+    "#
+    );
+    assert_placeholder_type(&plan, "$1", DataType::Int32);
+}
+
+/// The same, for a window expression repeated in QUALIFY. Here the two spellings
+/// of the window expression collide by name instead, since they print alike but
+/// do not compare equal.
+#[test]
+fn select_window_with_qualify_placeholder_expression() {
+    let sql = "SELECT first_name,
+                          row_number() OVER (PARTITION BY CASE WHEN age < $1 THEN 'young' ELSE 'old' END)
+                   FROM person
+                   QUALIFY row_number() OVER (PARTITION BY CASE WHEN age < $1 THEN 'young' ELSE 'old' END) = 1";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: person.first_name, row_number() PARTITION BY [CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+      Filter: row_number() PARTITION BY [CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING = Int64(1)
+        WindowAggr: windowExpr=[[row_number() PARTITION BY [CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+          TableScan: person
+    "#
+    );
+    assert_placeholder_type(&plan, "$1", DataType::Int32);
+}
+
+#[test]
+fn select_distinct_on_with_order_by_placeholder_expression() {
+    let sql =
+        "SELECT DISTINCT ON (CASE WHEN age < $1 THEN 'young' ELSE 'old' END) first_name
+                   FROM person
+                   ORDER BY CASE WHEN age < $1 THEN 'young' ELSE 'old' END";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    DistinctOn: on_expr=[[CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END]], select_expr=[[person.first_name]], sort_expr=[[CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END ASC NULLS LAST]]
+      TableScan: person
+    "#
+    );
+    assert_placeholder_type(&plan, "$1", DataType::Int32);
+}
+
 #[test]
 fn select_binary_expr() {
     let sql = "SELECT age + salary from person";
@@ -1768,6 +1912,81 @@ fn select_simple_aggregate_with_groupby_position_out_of_range() {
     assert_snapshot!(
         err2.strip_backtrace(),
         @"Error during planning: Cannot find column with position 5 in SELECT clause. Valid columns: 1 to 2"
+    );
+}
+
+#[test]
+fn select_nested_aggregate() {
+    // https://github.com/apache/datafusion/issues/23812
+    let err = logical_plan("SELECT sum(sum(age)) FROM person")
+        .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Aggregate function calls cannot be nested: 'sum(person.age)' is nested inside 'sum(sum(person.age))'"
+    );
+
+    let err = logical_plan("SELECT state, sum(count(age)) FROM person GROUP BY state")
+        .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Aggregate function calls cannot be nested: 'count(person.age)' is nested inside 'sum(count(person.age))'"
+    );
+
+    let err =
+        logical_plan("SELECT state FROM person GROUP BY state HAVING sum(sum(age)) > 0")
+            .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Aggregate function calls cannot be nested: 'sum(person.age)' is nested inside 'sum(sum(person.age))'"
+    );
+}
+
+#[test]
+fn select_window_function_inside_aggregate() {
+    // https://github.com/apache/datafusion/issues/23812
+    let err = logical_plan("SELECT sum(sum(age) OVER ()) FROM person")
+        .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Aggregate function calls cannot contain window function calls: 'sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING' is nested inside 'sum(sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)'"
+    );
+}
+
+#[test]
+fn select_nested_window_function() {
+    // https://github.com/apache/datafusion/issues/23812
+    let err = logical_plan("SELECT sum(sum(age) OVER ()) OVER () FROM person")
+        .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Window function calls cannot be nested: 'sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING' is nested inside 'sum(sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+    );
+
+    let err = logical_plan(
+        "SELECT rank() OVER (ORDER BY rank() OVER (ORDER BY age)) FROM person",
+    )
+    .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Window function calls cannot be nested: 'rank() ORDER BY [person.age ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW' is nested inside 'rank() ORDER BY [rank() ORDER BY [person.age ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW'"
+    );
+}
+
+#[test]
+fn select_aggregate_inside_window_function() {
+    // an aggregate as the argument of a window function is legal: the window
+    // function is evaluated on top of the aggregate
+    let plan =
+        logical_plan("SELECT state, sum(sum(age)) OVER () FROM person GROUP BY state")
+            .unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: person.state, sum(sum(person.age)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+      WindowAggr: windowExpr=[[sum(sum(person.age)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+        Aggregate: groupBy=[[person.state]], aggr=[[sum(person.age)]]
+          TableScan: person
+    "
     );
 }
 
@@ -2276,6 +2495,29 @@ fn create_external_table_csv() {
         plan,
         @r#"CreateExternalTable: Bare { table: "t" }"#
     );
+}
+
+#[test]
+fn create_external_table_multiple_locations() {
+    let sql = "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION ('foo.csv', 'bar.csv')";
+    let plan = logical_plan(sql).unwrap();
+    let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = plan else {
+        panic!("expected a CreateExternalTable plan");
+    };
+    assert_eq!(
+        cmd.locations,
+        vec!["foo.csv".to_string(), "bar.csv".to_string()]
+    );
+}
+
+#[test]
+fn create_external_table_location_with_literal_comma() {
+    let sql = "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION 'foo,bar.csv'";
+    let plan = logical_plan(sql).unwrap();
+    let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = plan else {
+        panic!("expected a CreateExternalTable plan");
+    };
+    assert_eq!(cmd.locations, vec!["foo,bar.csv".to_string()]);
 }
 
 #[test]
@@ -3499,6 +3741,104 @@ fn select_groupby_orderby_aggregate_on_non_selected_column_original_issue() {
           Aggregate: groupBy=[[person.id]], aggr=[[min(person.age)]]
             TableScan: person
     "
+    );
+}
+
+#[test]
+fn plan_merge_into_canonicalizes_qualifiers_and_preserves_quoted_columns() {
+    let plan = logical_plan(
+        "MERGE INTO person_quoted_cols AS t USING j2 AS s ON t.id = s.j2_id \
+         WHEN MATCHED THEN UPDATE SET \"First Name\" = s.j2_string \
+         WHEN NOT MATCHED THEN INSERT (id, \"Age\") VALUES (s.j2_id, 42)",
+    )
+    .unwrap();
+    let LogicalPlan::Dml(dml) = &plan else {
+        panic!("expected Dml, got {plan:?}");
+    };
+    let datafusion_expr::WriteOp::MergeInto(merge_op) = &dml.op else {
+        panic!("expected MergeInto, got {:?}", dml.op);
+    };
+
+    assert_eq!(merge_op.on.to_string(), "person_quoted_cols.id = s.j2_id");
+
+    let datafusion_expr::dml::MergeIntoAction::Update(assignments) =
+        &merge_op.clauses[0].action
+    else {
+        panic!("expected UPDATE");
+    };
+    assert_eq!(assignments[0].0, "First Name");
+    assert_eq!(assignments[0].1.to_string(), "s.j2_string");
+
+    let datafusion_expr::dml::MergeIntoAction::Insert { columns, values } =
+        &merge_op.clauses[1].action
+    else {
+        panic!("expected INSERT");
+    };
+    assert_eq!(columns, &["id".to_string(), "Age".to_string()]);
+    assert_eq!(values[0].to_string(), "s.j2_id");
+}
+
+#[rstest]
+#[case(
+    "MERGE INTO j1 USING j2 ON j1.j1_id = j2.j2_id \
+     WHEN MATCHED THEN UPDATE SET j1_string = j2.j2_string WHERE false",
+    "MERGE UPDATE WHERE predicates are not supported"
+)]
+#[case(
+    "MERGE INTO j1 USING j2 ON j1.j1_id = j2.j2_id \
+     WHEN MATCHED THEN UPDATE SET j1_string = j2.j2_string DELETE WHERE false",
+    "MERGE UPDATE DELETE WHERE predicates are not supported"
+)]
+#[case(
+    "MERGE INTO j1 USING j2 ON j1.j1_id = j2.j2_id \
+     WHEN NOT MATCHED THEN INSERT (j1_id, j1_string) \
+     VALUES (j2.j2_id, j2.j2_string) WHERE false",
+    "MERGE INSERT WHERE predicates are not supported"
+)]
+#[case(
+    "MERGE INTO j1 USING j2 ON j1.j1_id = j2.j2_id \
+     WHEN MATCHED THEN UPDATE SET j1_string = 'a', j1_string = 'b'",
+    "Duplicate column 'j1_string' in MERGE UPDATE"
+)]
+#[case(
+    "MERGE INTO j1 AS t USING j2 AS s ON t.j1_id = s.j2_id \
+     WHEN MATCHED THEN UPDATE SET s.j1_string = s.j2_string",
+    "MERGE assignment target 's.j1_string' must reference target table 't'"
+)]
+#[case(
+    "MERGE INTO j1 AS t USING j2 AS s ON t.j1_id = s.j2_id \
+     WHEN NOT MATCHED THEN INSERT (s.j1_id) VALUES (s.j2_id)",
+    "MERGE assignment target 's.j1_id' must reference target table 't'"
+)]
+#[case(
+    "MERGE INTO j1 USING j2 ON j1.j1_id = j2.j2_id",
+    "MERGE INTO requires at least one WHEN clause"
+)]
+#[case(
+    "MERGE INTO j1 USING j2 ON j1.j1_id = j2.j2_id \
+     WHEN NOT MATCHED THEN INSERT (j1_id, J1_ID) VALUES (1, 2)",
+    "Duplicate column 'j1_id' in MERGE INSERT"
+)]
+#[case(
+    "MERGE INTO j1() USING j2 ON true WHEN MATCHED THEN DELETE",
+    "MERGE target table modifiers are not supported"
+)]
+#[case(
+    "MERGE INTO j1 PARTITION (p0) USING j2 ON true WHEN MATCHED THEN DELETE",
+    "MERGE target table modifiers are not supported"
+)]
+#[case(
+    "MERGE INTO j1 AS t(a) USING j2 ON true WHEN MATCHED THEN DELETE",
+    "MERGE target alias column lists are not supported"
+)]
+fn plan_merge_into_rejects_invalid_actions_and_structure(
+    #[case] sql: &str,
+    #[case] expected: &str,
+) {
+    let err = logical_plan(sql).unwrap_err();
+    assert!(
+        err.strip_backtrace().contains(expected),
+        "unexpected error: {err}"
     );
 }
 
@@ -4980,9 +5320,10 @@ fn assert_field_not_found(mut err: DataFusionError, name: &str) {
         DataFusionError::SchemaError(_, _) => {
             let msg = format!("{err}");
             let expected = format!("Schema error: No field named {name}.");
-            if !msg.starts_with(&expected) {
-                panic!("error [{msg}] did not start with [{expected}]");
-            }
+            assert!(
+                msg.starts_with(&expected),
+                "error [{msg}] did not start with [{expected}]"
+            )
         }
         _ => panic!("assert_field_not_found wrong error type"),
     }
@@ -5455,9 +5796,8 @@ impl HigherOrderUDFImpl for MockArrayReduce {
             unreachable!()
         };
 
-        let list_field = match list.data_type() {
-            DataType::List(field) => field,
-            _ => unreachable!(),
+        let DataType::List(list_field) = list.data_type() else {
+            unreachable!()
         };
 
         Ok(match (step, merge) {
@@ -5509,4 +5849,44 @@ impl HigherOrderUDFImpl for MockArrayReduce {
     fn invoke_with_args(&self, _args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
         unreachable!()
     }
+}
+
+#[test]
+fn test_reserved_column_name() {
+    let sql = "SELECT 1 AS __common_expr_1";
+    let err = logical_plan(sql).unwrap_err().strip_backtrace();
+    assert_eq!(
+        err,
+        "Error during planning: __common_expr_1 is a reserved DataFusion column name, please use another name"
+    );
+}
+
+#[test]
+fn test_reserved_column_name_copy() {
+    let sql = "COPY (SELECT 1 AS __common_expr_1) TO 'output.csv' STORED AS CSV";
+    let err = logical_plan(sql).unwrap_err().strip_backtrace();
+    assert_eq!(
+        err,
+        "Error during planning: __common_expr_1 is a reserved DataFusion column name, please use another name"
+    );
+}
+
+#[test]
+fn test_reserved_column_name_boundary() {
+    let sql = "SELECT 1 AS user__common_expr_1";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(
+        format!("{plan}"),
+        "Projection: Int64(1) AS user__common_expr_1\n  EmptyRelation: rows=1"
+    );
+}
+
+#[test]
+fn test_reserved_column_name_explain_copy() {
+    let sql = "EXPLAIN COPY (SELECT 1 AS __common_expr_1) TO 'output.csv' STORED AS CSV";
+    let err = logical_plan(sql).unwrap_err().strip_backtrace();
+    assert_eq!(
+        err,
+        "Error during planning: __common_expr_1 is a reserved DataFusion column name, please use another name"
+    );
 }

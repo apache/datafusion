@@ -53,7 +53,7 @@ async fn multi_parquet_coercion() {
     // batch2: c2(int64), c3(float32)
     let batch2 = RecordBatch::try_from_iter(vec![("c2", c2), ("c3", c3)]).unwrap();
 
-    let (meta, _files) = store_parquet(vec![batch1, batch2]).await.unwrap();
+    let (meta, _files) = store_parquet(vec![batch1, batch2]).unwrap();
     let file_group = meta.into_iter().map(Into::into).collect();
 
     // cast c1 to utf8, c2 to int32, c3 to float64
@@ -107,7 +107,7 @@ async fn multi_parquet_coercion_projection() {
     let batch2 =
         RecordBatch::try_from_iter(vec![("c2", c2), ("c1", c1s), ("c3", c3)]).unwrap();
 
-    let (meta, _files) = store_parquet(vec![batch1, batch2]).await.unwrap();
+    let (meta, _files) = store_parquet(vec![batch1, batch2]).unwrap();
     let file_group = meta.into_iter().map(Into::into).collect();
 
     // cast c1 to utf8, c2 to int32, c3 to float64
@@ -146,7 +146,7 @@ async fn multi_parquet_coercion_projection() {
 }
 
 /// Writes `batches` to a temporary parquet file
-pub async fn store_parquet(
+pub fn store_parquet(
     batches: Vec<RecordBatch>,
 ) -> Result<(Vec<ObjectMeta>, Vec<NamedTempFile>)> {
     // Each batch writes to their own file

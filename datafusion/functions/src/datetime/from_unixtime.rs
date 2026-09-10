@@ -22,6 +22,7 @@ use arrow::datatypes::TimeUnit::Second;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::TypeSignature::Exact;
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
     Signature, Volatility,
@@ -145,6 +146,24 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
             },
             _ => unreachable!(),
         }
+    }
+
+    fn output_ordering(&self, inputs: &[ExprProperties]) -> Result<SortProperties> {
+        // The optional timezone argument must be a constant string and only
+        // affects the display metadata, not the stored epoch value, so the
+        // output ordering follows the first argument.
+        Ok(inputs[0].sort_properties)
+    }
+
+    fn preserves_lex_ordering(&self, _inputs: &[ExprProperties]) -> Result<bool> {
+        Ok(true)
+    }
+
+    fn strictly_order_preserving(&self, _inputs: &[ExprProperties]) -> Result<bool> {
+        // `from_unixtime` stores the input's exact `Int64` value as a
+        // `Timestamp(Second)`: the mapping is one-to-one, order-preserving,
+        // and maps nulls to nulls.
+        Ok(true)
     }
 
     fn documentation(&self) -> Option<&Documentation> {

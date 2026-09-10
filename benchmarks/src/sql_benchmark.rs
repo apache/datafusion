@@ -1761,6 +1761,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::literal_string_with_formatting_args,
+        reason = "The `${VAR:-default}` braces are shell-style placeholders, not format args"
+    )]
     fn process_replacements_uses_default_for_missing_variable() {
         let replacements = HashMap::new();
 
@@ -2300,6 +2304,10 @@ NULL|(empty)
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::literal_string_with_formatting_args,
+        reason = "The `${VAR:-default}` braces are shell-style placeholders, not format args"
+    )]
     async fn parser_applies_data_dir_replacement_in_load_query_file() {
         let temp_dir = tempdir().expect("failed to create benchmark test directory");
         let data_dir = temp_dir.path().join("non_default_data");

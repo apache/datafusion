@@ -274,9 +274,8 @@ impl Accumulator for CovarianceAccumulator {
         let values2 = as_float64_array(&values[1])?;
 
         for (value1, value2) in values1.iter().zip(values2) {
-            let (value1, value2) = match (value1, value2) {
-                (Some(a), Some(b)) => (a, b),
-                _ => continue,
+            let (Some(value1), Some(value2)) = (value1, value2) else {
+                continue;
             };
 
             let new_count = self.count + 1;
@@ -300,9 +299,8 @@ impl Accumulator for CovarianceAccumulator {
         let values2 = as_float64_array(&values[1])?;
 
         for (value1, value2) in values1.iter().zip(values2) {
-            let (value1, value2) = match (value1, value2) {
-                (Some(a), Some(b)) => (a, b),
-                _ => continue,
+            let (Some(value1), Some(value2)) = (value1, value2) else {
+                continue;
             };
 
             if self.count <= 1 {

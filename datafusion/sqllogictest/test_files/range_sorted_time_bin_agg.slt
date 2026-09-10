@@ -1,0 +1,183 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# GROUP BY on a table that is:
+# - range partitioned on timestamp into two 60-minute file groups
+# - sorted within each file on (key, timestamp)
+#
+# Query:
+#   SELECT key, date_bin(INTERVAL '60 seconds', timestamp) AS time_bin, sum(value)
+#   FROM range_sorted_time_bin
+#   WHERE col4 = 'a'
+#   GROUP BY key, time_bin
+#
+# Scan metadata already advertises:
+# 1. Range([timestamp]) and output_ordering=[key, timestamp]
+# 2. Two file_groups, so the two 60-minute streams run in parallel
+#
+# Improvement opportunity:
+# date_bin(60s) is monotonic in timestamp and the hour split is aligned to bin
+# boundaries, so (key, time_bin) is partition-disjoint. Aggregation could be a
+# single streaming SinglePartitioned step with no hash shuffle.
+#
+# Today's plan still hash-repartitions:
+#   Partial AggregateExec (ordering_mode=Sorted)
+#     -> RepartitionExec Hash([key, date_bin(...)])
+#     -> FinalPartitioned AggregateExec (ordering_mode=Sorted)
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+statement ok
+set datafusion.execution.collect_statistics = false;
+
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+set datafusion.optimizer.subset_repartition_threshold = 2;
+
+statement ok
+set datafusion.optimizer.preserve_file_partitions = 1;
+
+statement ok
+set datafusion.optimizer.enable_round_robin_repartition = false;
+
+statement ok
+set datafusion.optimizer.enable_join_dynamic_filter_pushdown = false;
+
+statement ok
+set datafusion.optimizer.enable_topk_dynamic_filter_pushdown = false;
+
+statement ok
+set datafusion.optimizer.enable_aggregate_dynamic_filter_pushdown = false;
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+##########
+# TEST 1: Scan metadata — range partitioned on timestamp, sorted on (key, timestamp),
+# two parallel file groups covering 60-minute intervals.
+##########
+
+query TT
+EXPLAIN SELECT key, timestamp, value FROM range_sorted_time_bin;
+----
+physical_plan DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_sorted_time_bin/part-0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_sorted_time_bin/part-1.parquet]]}, projection=[key, timestamp, value], output_ordering=[key@0 ASC, timestamp@1 ASC], output_partitioning=Range([timestamp@1 ASC], [(1704070800000000000)], 2), file_type=parquet
+
+##########
+# TEST 2: Filtered time-bin aggregation.
+# GROUP BY keys are (key, date_bin(timestamp)). Input is sorted on those keys
+# (date_bin is monotonic in timestamp) and range-partitioned so bins do not
+# overlap across the two 60-minute streams.
+#
+# Today this is still Partial + hash RepartitionExec + Final, even though
+# ordering_mode=Sorted is already recognized.
+##########
+
+query TT
+EXPLAIN SELECT key, date_bin(INTERVAL '60 seconds', timestamp) AS time_bin, sum(value)
+FROM range_sorted_time_bin
+WHERE col4 = 'a'
+GROUP BY key, time_bin;
+----
+physical_plan
+01)ProjectionExec: expr=[key@0 as key, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),range_sorted_time_bin.timestamp)@1 as time_bin, sum(range_sorted_time_bin.value)@2 as sum(range_sorted_time_bin.value)]
+02)--AggregateExec: mode=FinalPartitioned, gby=[key@0 as key, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),range_sorted_time_bin.timestamp)@1 as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),range_sorted_time_bin.timestamp)], aggr=[sum(range_sorted_time_bin.value)], ordering_mode=Sorted
+03)----RepartitionExec: partitioning=Hash([key@0, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),range_sorted_time_bin.timestamp)@1], 2), input_partitions=2, preserve_order=true, sort_exprs=key@0 ASC, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),range_sorted_time_bin.timestamp)@1 ASC
+04)------AggregateExec: mode=Partial, gby=[key@0 as key, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }, timestamp@1) as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),range_sorted_time_bin.timestamp)], aggr=[sum(range_sorted_time_bin.value)], ordering_mode=Sorted
+05)--------FilterExec: col4@1 = a, projection=[key@0, timestamp@2, value@3]
+06)----------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_sorted_time_bin/part-0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_sorted_time_bin/part-1.parquet]]}, projection=[key, col4, timestamp, value], output_ordering=[key@0 ASC, timestamp@2 ASC], output_partitioning=Range([timestamp@2 ASC], [(1704070800000000000)], 2), file_type=parquet, predicate=col4@4 = a, pruning_predicate=col4_null_count@2 != row_count@3 AND col4_min@0 <= a AND a <= col4_max@1, required_guarantees=[col4 in (a)]
+
+query TPI
+SELECT key, date_bin(INTERVAL '60 seconds', timestamp) AS time_bin, sum(value)
+FROM range_sorted_time_bin
+WHERE col4 = 'a'
+GROUP BY key, time_bin
+ORDER BY key, time_bin;
+----
+k1 2024-01-01T00:00:00 3
+k1 2024-01-01T01:00:00 30
+k2 2024-01-01T00:30:00 7
+k2 2024-01-01T01:30:00 30
+k2 2024-01-01T01:45:00 5
+
+##########
+# TEST 3: Same aggregation without the col4 filter. The scan still has two
+# 60-minute file groups, and today's plan still hash-repartitions.
+##########
+
+query TT
+EXPLAIN SELECT key, date_bin(INTERVAL '60 seconds', timestamp) AS time_bin, sum(value)
+FROM range_sorted_time_bin
+GROUP BY key, time_bin;
+----
+physical_plan
+01)ProjectionExec: expr=[key@0 as key, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),range_sorted_time_bin.timestamp)@1 as time_bin, sum(range_sorted_time_bin.value)@2 as sum(range_sorted_time_bin.value)]
+02)--AggregateExec: mode=FinalPartitioned, gby=[key@0 as key, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),range_sorted_time_bin.timestamp)@1 as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),range_sorted_time_bin.timestamp)], aggr=[sum(range_sorted_time_bin.value)], ordering_mode=Sorted
+03)----RepartitionExec: partitioning=Hash([key@0, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),range_sorted_time_bin.timestamp)@1], 2), input_partitions=2, preserve_order=true, sort_exprs=key@0 ASC, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),range_sorted_time_bin.timestamp)@1 ASC
+04)------AggregateExec: mode=Partial, gby=[key@0 as key, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }, timestamp@1) as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),range_sorted_time_bin.timestamp)], aggr=[sum(range_sorted_time_bin.value)], ordering_mode=Sorted
+05)--------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_sorted_time_bin/part-0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_sorted_time_bin/part-1.parquet]]}, projection=[key, timestamp, value], output_ordering=[key@0 ASC, timestamp@1 ASC], output_partitioning=Range([timestamp@1 ASC], [(1704070800000000000)], 2), file_type=parquet
+
+query TPI
+SELECT key, date_bin(INTERVAL '60 seconds', timestamp) AS time_bin, sum(value)
+FROM range_sorted_time_bin
+GROUP BY key, time_bin
+ORDER BY key, time_bin;
+----
+k1 2024-01-01T00:00:00 3
+k1 2024-01-01T00:01:00 99
+k1 2024-01-01T01:00:00 30
+k2 2024-01-01T00:30:00 7
+k2 2024-01-01T01:30:00 30
+k2 2024-01-01T01:45:00 5
+
+##########
+# CLEANUP
+##########
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
+# reset it explicitly.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+reset datafusion.explain.physical_plan_only;
+
+statement ok
+reset datafusion.execution.collect_statistics;
+
+statement ok
+reset datafusion.optimizer.subset_repartition_threshold;
+
+statement ok
+reset datafusion.optimizer.preserve_file_partitions;
+
+statement ok
+reset datafusion.optimizer.enable_round_robin_repartition;
+
+statement ok
+reset datafusion.optimizer.enable_join_dynamic_filter_pushdown;
+
+statement ok
+reset datafusion.optimizer.enable_topk_dynamic_filter_pushdown;
+
+statement ok
+reset datafusion.optimizer.enable_aggregate_dynamic_filter_pushdown;
+
+statement ok
+reset datafusion.execution.parquet.pushdown_filters;

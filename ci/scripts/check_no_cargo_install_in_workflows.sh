@@ -22,7 +22,7 @@ set -euo pipefail
 SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
 WORKFLOWS_DIR=".github/workflows"
 
-if grep -R -n --include='*.yml' --include='*.yaml' -- 'cargo install' "${WORKFLOWS_DIR}"; then
+if grep -R -E -w -n --include='*.yml' --include='*.yaml' -- 'cargo.*install' "${WORKFLOWS_DIR}"; then
   echo "[${SCRIPT_NAME}] Found workflow Rust tool installs that should use taiki-e/install-action instead." >&2
   exit 1
 fi

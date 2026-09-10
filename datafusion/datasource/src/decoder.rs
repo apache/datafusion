@@ -180,7 +180,7 @@ pub fn deserialize_stream<'a>(
             match ready!(input.poll_next_unpin(cx)).transpose()? {
                 Some(b) => _ = deserializer.digest(b),
                 None => deserializer.finish(),
-            };
+            }
 
             return match deserializer.next()? {
                 DeserializerOutput::RecordBatch(rb) => Poll::Ready(Some(Ok(rb))),

@@ -281,7 +281,7 @@ SELECT
   cast(binary as varchar) as str,
   character_length(binary) as binary_len,
   cast(largebinary as varchar) as large_str,
-  character_length(binary) as largebinary_len
+  character_length(largebinary) as largebinary_len
 from t;
 ----
 Foo 3 Foo 3
@@ -297,6 +297,20 @@ SELECT character_length(X'20');
 # still errors on values that can not be coerced to utf8
 query error Encountered non UTF\-8 data: invalid utf\-8 sequence of 1 bytes from index 0
 SELECT character_length(X'c328');
+
+# reverse function
+query TTTT
+SELECT
+  cast(binary as varchar) as str,
+  reverse(binary) as binary_reversed,
+  cast(largebinary as varchar) as large_str,
+  reverse(largebinary) as largebinary_reversed
+from t;
+----
+Foo ooF Foo ooF
+NULL NULL NULL NULL
+Bar raB Bar raB
+FooBar raBooF FooBar raBooF
 
 # regexp_replace
 query TTTT

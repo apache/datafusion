@@ -591,8 +591,7 @@ mod tests {
 
         //convert compressed_stream to decoded_stream
         let decoded_stream = compressed_csv
-            .read_to_delimited_chunks_from_stream(compressed_stream.unwrap())
-            .await;
+            .read_to_delimited_chunks_from_stream(compressed_stream.unwrap());
         let (schema, records_read) = compressed_csv
             .infer_schema_from_stream(&session_state, records_to_read, decoded_stream)
             .await?;
@@ -988,18 +987,10 @@ mod tests {
 
         let files: Vec<_> = std::fs::read_dir(&path).unwrap().collect();
         assert_eq!(files.len(), 1);
-        assert!(
-            files
-                .last()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .path()
-                .file_name()
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .ends_with(".csv")
+        let file_path = files.last().unwrap().as_ref().unwrap().path();
+        assert_eq!(
+            file_path.extension().and_then(|ext| ext.to_str()),
+            Some("csv")
         );
 
         Ok(())
@@ -1626,6 +1617,33 @@ mod tests {
         for f in exec.schema().fields() {
             assert_eq!(*f.data_type(), DataType::Utf8);
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn infer_schema_rejects_duplicate_header_names() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("duplicate_header.csv");
+        std::fs::write(&path, "id,value,value\n1,10,100\n")?;
+
+        let store = Arc::new(LocalFileSystem::new()) as _;
+        let meta = crate::test::object_store::local_unpartitioned_file(&path);
+
+        let ctx = SessionContext::new().state();
+        let error = CsvFormat::default()
+            .with_has_header(true)
+            .infer_schema(&ctx, &store, std::slice::from_ref(&meta))
+            .await
+            .expect_err("duplicate header names must not infer a schema")
+            .to_string();
+
+        assert!(
+            error.contains("duplicate unqualified field name")
+                && error.contains("value")
+                && error.contains("duplicate_header.csv"),
+            "unexpected error: {error}"
+        );
 
         Ok(())
     }

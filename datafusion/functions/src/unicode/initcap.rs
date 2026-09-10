@@ -17,18 +17,17 @@
 
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, GenericStringArray, OffsetSizeTrait};
+use arrow::array::{Array, ArrayRef, AsArray, GenericStringArray, OffsetSizeTrait};
 use arrow::buffer::Buffer;
 use arrow::datatypes::DataType;
 
 use crate::strings::{GenericStringArrayBuilder, StringViewArrayBuilder};
-use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::types::logical_string;
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, Documentation, EncodingPreservation, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -64,9 +63,10 @@ impl InitcapFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::coercible(
-                vec![Coercion::new_exact(TypeSignatureClass::Native(
-                    logical_string(),
-                ))],
+                vec![
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string()))
+                        .with_encoding_preservation(EncodingPreservation::dictionary()),
+                ],
                 Volatility::Immutable,
             ),
         }
@@ -83,60 +83,71 @@ impl ScalarUDFImpl for InitcapFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if let DataType::Utf8View = arg_types[0] {
-            Ok(DataType::Utf8View)
-        } else {
-            utf8_to_str_type(&arg_types[0], "initcap")
-        }
+        Ok(arg_types[0].clone())
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let arg = &args.args[0];
-
-        // Scalar fast path - handle directly without array conversion
-        if let ColumnarValue::Scalar(scalar) = arg {
-            return match scalar {
-                ScalarValue::Utf8(None)
-                | ScalarValue::LargeUtf8(None)
-                | ScalarValue::Utf8View(None) => Ok(arg.clone()),
-                ScalarValue::Utf8(Some(s)) => {
-                    let mut result = String::new();
-                    initcap_string(s, &mut result);
-                    Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(result))))
-                }
-                ScalarValue::LargeUtf8(Some(s)) => {
-                    let mut result = String::new();
-                    initcap_string(s, &mut result);
-                    Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(result))))
-                }
-                ScalarValue::Utf8View(Some(s)) => {
-                    let mut result = String::new();
-                    initcap_string(s, &mut result);
-                    Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(Some(result))))
-                }
-                other => {
-                    exec_err!(
-                        "Unsupported data type {:?} for function `initcap`",
-                        other.data_type()
-                    )
-                }
-            };
-        }
-
-        // Array path
-        let args = &args.args;
-        match args[0].data_type() {
-            DataType::Utf8 => make_scalar_function(initcap::<i32>, vec![])(args),
-            DataType::LargeUtf8 => make_scalar_function(initcap::<i64>, vec![])(args),
-            DataType::Utf8View => make_scalar_function(initcap_utf8view, vec![])(args),
-            other => {
-                exec_err!("Unsupported data type {other:?} for function `initcap`")
+        match &args.args[0] {
+            ColumnarValue::Scalar(scalar) => {
+                Ok(ColumnarValue::Scalar(initcap_scalar(scalar)?))
+            }
+            ColumnarValue::Array(array) => {
+                Ok(ColumnarValue::Array(initcap_array(array)?))
             }
         }
     }
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+fn initcap_scalar(scalar: &ScalarValue) -> Result<ScalarValue> {
+    match scalar {
+        ScalarValue::Utf8(None)
+        | ScalarValue::LargeUtf8(None)
+        | ScalarValue::Utf8View(None) => Ok(scalar.clone()),
+        ScalarValue::Utf8(Some(s)) => {
+            let mut result = String::new();
+            initcap_string(s, &mut result);
+            Ok(ScalarValue::Utf8(Some(result)))
+        }
+        ScalarValue::LargeUtf8(Some(s)) => {
+            let mut result = String::new();
+            initcap_string(s, &mut result);
+            Ok(ScalarValue::LargeUtf8(Some(result)))
+        }
+        ScalarValue::Utf8View(Some(s)) => {
+            let mut result = String::new();
+            initcap_string(s, &mut result);
+            Ok(ScalarValue::Utf8View(Some(result)))
+        }
+        ScalarValue::Dictionary(key_type, value) => Ok(ScalarValue::Dictionary(
+            key_type.clone(),
+            Box::new(initcap_scalar(value)?),
+        )),
+        other => {
+            exec_err!(
+                "Unsupported data type {:?} for function `initcap`",
+                other.data_type()
+            )
+        }
+    }
+}
+
+fn initcap_array(array: &ArrayRef) -> Result<ArrayRef> {
+    match array.data_type() {
+        DataType::Utf8 => initcap::<i32>(&[Arc::clone(array)]),
+        DataType::LargeUtf8 => initcap::<i64>(&[Arc::clone(array)]),
+        DataType::Utf8View => initcap_utf8view(&[Arc::clone(array)]),
+        DataType::Dictionary(_, _) => {
+            let dictionary = array.as_any_dictionary();
+            let converted = initcap_array(dictionary.values())?;
+            Ok(dictionary.with_values(converted))
+        }
+        other => {
+            exec_err!("Unsupported data type {other:?} for function `initcap`")
+        }
     }
 }
 
