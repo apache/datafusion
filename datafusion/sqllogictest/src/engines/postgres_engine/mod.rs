@@ -15,15 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use bytes::Bytes;
 use datafusion::common::runtime::SpawnedTask;
 use futures::{SinkExt, StreamExt};
 use log::{debug, info};
 use sqllogictest::DBOutput;
+use std::future::Future;
 /// Postgres engine implementation for sqllogictest.
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -250,98 +251,118 @@ fn schema_name(relative_path: &Path) -> String {
         .to_string()
 }
 
-#[async_trait]
 impl sqllogictest::AsyncDB for Postgres {
     type Error = Error;
     type ColumnType = DFColumnType;
 
-    async fn run(
-        &mut self,
-        sql: &str,
-    ) -> Result<DBOutput<Self::ColumnType>, Self::Error> {
-        debug!(
-            "[{}] Running query: \"{}\"",
-            self.relative_path.display(),
-            sql
-        );
+    fn run<'life0, 'life1, 'async_trait>(
+        &'life0 mut self,
+        sql: &'life1 str,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<DBOutput<Self::ColumnType>, Self::Error>>
+                + Send
+                + 'async_trait,
+        >,
+    >
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            debug!(
+                "[{}] Running query: \"{}\"",
+                self.relative_path.display(),
+                sql
+            );
 
-        let tracked_sql = self.currently_executing_sql_tracker.set_sql(sql);
+            let tracked_sql = self.currently_executing_sql_tracker.set_sql(sql);
 
-        let lower_sql = sql.trim_start().to_ascii_lowercase();
+            let lower_sql = sql.trim_start().to_ascii_lowercase();
 
-        let is_query_sql = {
-            lower_sql.starts_with("select")
-                || lower_sql.starts_with("values")
-                || lower_sql.starts_with("show")
-                || lower_sql.starts_with("with")
-                || lower_sql.starts_with("describe")
-                || ((lower_sql.starts_with("insert")
-                    || lower_sql.starts_with("update")
-                    || lower_sql.starts_with("delete"))
-                    && lower_sql.contains("returning"))
-        };
+            let is_query_sql = {
+                lower_sql.starts_with("select")
+                    || lower_sql.starts_with("values")
+                    || lower_sql.starts_with("show")
+                    || lower_sql.starts_with("with")
+                    || lower_sql.starts_with("describe")
+                    || ((lower_sql.starts_with("insert")
+                        || lower_sql.starts_with("update")
+                        || lower_sql.starts_with("delete"))
+                        && lower_sql.contains("returning"))
+            };
 
-        if lower_sql.starts_with("copy") {
+            if lower_sql.starts_with("copy") {
+                self.pb.inc(1);
+                let result = self.run_copy_command(sql).await;
+                self.currently_executing_sql_tracker.remove_sql(tracked_sql);
+
+                return result;
+            }
+
+            if !is_query_sql {
+                self.get_client().execute(sql, &[]).await?;
+                self.currently_executing_sql_tracker.remove_sql(tracked_sql);
+                self.pb.inc(1);
+                return Ok(DBOutput::StatementComplete(0));
+            }
+            // Use a prepared statement to get the output column types
+            let statement = self.get_client().prepare(sql).await?;
+            let types: Vec<Type> = statement
+                .columns()
+                .iter()
+                .map(|c| c.type_().clone())
+                .collect();
+
+            // Run the actual query using the "simple query" protocol that returns all
+            // rows as text. Doing this avoids having to convert values from the binary
+            // format to strings, which is somewhat tricky for numeric types.
+            // See https://github.com/apache/datafusion/pull/19666#discussion_r2668090587
+            let start = Instant::now();
+            let messages = self.get_client().simple_query(sql).await?;
+            let duration = start.elapsed();
+
+            if duration.gt(&Duration::from_millis(500)) {
+                self.update_slow_count();
+            }
+
             self.pb.inc(1);
-            let result = self.run_copy_command(sql).await;
+
             self.currently_executing_sql_tracker.remove_sql(tracked_sql);
 
-            return result;
-        }
+            let rows = convert_rows(&types, &messages);
 
-        if !is_query_sql {
-            self.get_client().execute(sql, &[]).await?;
-            self.currently_executing_sql_tracker.remove_sql(tracked_sql);
-            self.pb.inc(1);
-            return Ok(DBOutput::StatementComplete(0));
-        }
-        // Use a prepared statement to get the output column types
-        let statement = self.get_client().prepare(sql).await?;
-        let types: Vec<Type> = statement
-            .columns()
-            .iter()
-            .map(|c| c.type_().clone())
-            .collect();
-
-        // Run the actual query using the "simple query" protocol that returns all
-        // rows as text. Doing this avoids having to convert values from the binary
-        // format to strings, which is somewhat tricky for numeric types.
-        // See https://github.com/apache/datafusion/pull/19666#discussion_r2668090587
-        let start = Instant::now();
-        let messages = self.get_client().simple_query(sql).await?;
-        let duration = start.elapsed();
-
-        if duration.gt(&Duration::from_millis(500)) {
-            self.update_slow_count();
-        }
-
-        self.pb.inc(1);
-
-        self.currently_executing_sql_tracker.remove_sql(tracked_sql);
-
-        let rows = convert_rows(&types, &messages);
-
-        if rows.is_empty() && types.is_empty() {
-            Ok(DBOutput::StatementComplete(0))
-        } else {
-            Ok(DBOutput::Rows {
-                types: convert_types(types),
-                rows,
-            })
-        }
+            if rows.is_empty() && types.is_empty() {
+                Ok(DBOutput::StatementComplete(0))
+            } else {
+                Ok(DBOutput::Rows {
+                    types: convert_types(types),
+                    rows,
+                })
+            }
+        })
     }
 
     fn engine_name(&self) -> &str {
         "postgres"
     }
 
-    async fn shutdown(&mut self) {
-        if let Some(client) = self.client.take() {
-            drop(client);
-        }
-        if let Some(spawned_task) = self.spawned_task.take() {
-            spawned_task.join().await.ok();
-        }
+    fn shutdown<'life0, 'async_trait>(
+        &'life0 mut self,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'async_trait>>
+    where
+        'life0: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            if let Some(client) = self.client.take() {
+                drop(client);
+            }
+            if let Some(spawned_task) = self.spawned_task.take() {
+                spawned_task.join().await.ok();
+            }
+        })
     }
 }
 

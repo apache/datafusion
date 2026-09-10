@@ -21,7 +21,9 @@ pub use datafusion_datasource_csv::file_format::*;
 #[cfg(test)]
 mod tests {
     use std::fmt::{self, Display};
+    use std::future::Future;
     use std::ops::Range;
+    use std::pin::Pin;
     use std::sync::{Arc, Mutex};
 
     use super::*;
@@ -54,7 +56,6 @@ mod tests {
     use arrow::compute::concat_batches;
     use arrow::csv::ReaderBuilder;
     use arrow::util::pretty::pretty_format_batches;
-    use async_trait::async_trait;
     use bytes::Bytes;
     use chrono::DateTime;
     use datafusion_common::parsers::CompressionTypeVariant;
@@ -86,64 +87,110 @@ mod tests {
             write!(f, "VariableStream")
         }
     }
-    #[async_trait]
     impl ObjectStore for VariableStream {
-        async fn put_opts(
-            &self,
-            _location: &Path,
+        fn put_opts<'life0, 'life1, 'async_trait>(
+            &'life0 self,
+            _location: &'life1 Path,
             _payload: PutPayload,
             _opts: PutOptions,
-        ) -> object_store::Result<PutResult> {
-            unimplemented!()
+        ) -> Pin<
+            Box<
+                dyn Future<Output = object_store::Result<PutResult>>
+                    + Send
+                    + 'async_trait,
+            >,
+        >
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(async move { unimplemented!() })
         }
 
-        async fn put_multipart_opts(
-            &self,
-            _location: &Path,
+        fn put_multipart_opts<'life0, 'life1, 'async_trait>(
+            &'life0 self,
+            _location: &'life1 Path,
             _opts: PutMultipartOptions,
-        ) -> object_store::Result<Box<dyn MultipartUpload>> {
-            unimplemented!()
+        ) -> Pin<
+            Box<
+                dyn Future<Output = object_store::Result<Box<dyn MultipartUpload>>>
+                    + Send
+                    + 'async_trait,
+            >,
+        >
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(async move { unimplemented!() })
         }
 
-        async fn get_opts(
-            &self,
-            location: &Path,
+        fn get_opts<'life0, 'life1, 'async_trait>(
+            &'life0 self,
+            location: &'life1 Path,
             _opts: GetOptions,
-        ) -> object_store::Result<GetResult> {
-            let bytes = self.bytes_to_repeat.clone();
-            let len = bytes.len() as u64;
-            let range = 0..len * self.max_iterations;
-            let arc = self.iterations_detected.clone();
-            #[expect(clippy::result_large_err)]
-            // closure only ever returns Ok; Err type is never constructed
-            let stream = futures::stream::repeat_with(move || {
-                let arc_inner = arc.clone();
-                *arc_inner.lock().unwrap() += 1;
-                Ok(bytes.clone())
-            })
-            .take(self.max_iterations as usize)
-            .boxed();
+        ) -> Pin<
+            Box<
+                dyn Future<Output = object_store::Result<GetResult>>
+                    + Send
+                    + 'async_trait,
+            >,
+        >
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(async move {
+                let bytes = self.bytes_to_repeat.clone();
+                let len = bytes.len() as u64;
+                let range = 0..len * self.max_iterations;
+                let arc = self.iterations_detected.clone();
+                #[expect(clippy::result_large_err)]
+                // closure only ever returns Ok; Err type is never constructed
+                let stream = futures::stream::repeat_with(move || {
+                    let arc_inner = arc.clone();
+                    *arc_inner.lock().unwrap() += 1;
+                    Ok(bytes.clone())
+                })
+                .take(self.max_iterations as usize)
+                .boxed();
 
-            Ok(GetResult {
-                payload: GetResultPayload::Stream(stream),
-                meta: ObjectMeta {
-                    location: location.clone(),
-                    last_modified: Default::default(),
-                    size: range.end,
-                    e_tag: None,
-                    version: None,
-                },
-                range: Default::default(),
-                attributes: Attributes::default(),
+                Ok(GetResult {
+                    payload: GetResultPayload::Stream(stream),
+                    meta: ObjectMeta {
+                        location: location.clone(),
+                        last_modified: Default::default(),
+                        size: range.end,
+                        e_tag: None,
+                        version: None,
+                    },
+                    range: Default::default(),
+                    attributes: Attributes::default(),
+                })
             })
         }
 
-        async fn get_ranges(
-            &self,
-            _location: &Path,
-            _ranges: &[Range<u64>],
-        ) -> object_store::Result<Vec<Bytes>> {
-            unimplemented!()
+        fn get_ranges<'life0, 'life1, 'life2, 'async_trait>(
+            &'life0 self,
+            _location: &'life1 Path,
+            _ranges: &'life2 [Range<u64>],
+        ) -> Pin<
+            Box<
+                dyn Future<Output = object_store::Result<Vec<Bytes>>>
+                    + Send
+                    + 'async_trait,
+            >,
+        >
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            'life2: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(async move { unimplemented!() })
         }
 
         fn list(
@@ -153,20 +200,37 @@ mod tests {
             unimplemented!()
         }
 
-        async fn list_with_delimiter(
-            &self,
-            _prefix: Option<&Path>,
-        ) -> object_store::Result<ListResult> {
-            unimplemented!()
+        fn list_with_delimiter<'life0, 'life1, 'async_trait>(
+            &'life0 self,
+            _prefix: Option<&'life1 Path>,
+        ) -> Pin<
+            Box<
+                dyn Future<Output = object_store::Result<ListResult>>
+                    + Send
+                    + 'async_trait,
+            >,
+        >
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(async move { unimplemented!() })
         }
 
-        async fn copy_opts(
-            &self,
-            _from: &Path,
-            _to: &Path,
+        fn copy_opts<'life0, 'life1, 'life2, 'async_trait>(
+            &'life0 self,
+            _from: &'life1 Path,
+            _to: &'life2 Path,
             _options: object_store::CopyOptions,
-        ) -> object_store::Result<()> {
-            unimplemented!()
+        ) -> Pin<Box<dyn Future<Output = object_store::Result<()>> + Send + 'async_trait>>
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            'life2: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(async move { unimplemented!() })
         }
 
         fn delete_stream(

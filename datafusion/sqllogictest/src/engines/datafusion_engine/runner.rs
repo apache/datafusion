@@ -17,6 +17,8 @@
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::{path::PathBuf, time::Duration};
 
@@ -25,7 +27,6 @@ use crate::engines::currently_executed_sql::CurrentlyExecutingSqlTracker;
 use crate::engines::output::{DFColumnType, DFOutput};
 use crate::is_spark_path;
 use arrow::record_batch::RecordBatch;
-use async_trait::async_trait;
 use datafusion::physical_plan::common::collect;
 use datafusion::physical_plan::execute_stream;
 use datafusion::prelude::SessionContext;
@@ -137,42 +138,52 @@ impl DataFusion {
     }
 }
 
-#[async_trait]
 impl sqllogictest::AsyncDB for DataFusion {
     type Error = DFSqlLogicTestError;
     type ColumnType = DFColumnType;
 
-    async fn run(&mut self, sql: &str) -> Result<DFOutput> {
-        if log_enabled!(Debug) {
-            debug!(
-                "[{}] Running query: \"{}\"",
-                self.relative_path.display(),
-                sql
-            );
-        }
+    fn run<'life0, 'life1, 'async_trait>(
+        &'life0 mut self,
+        sql: &'life1 str,
+    ) -> Pin<Box<dyn Future<Output = Result<DFOutput>> + Send + 'async_trait>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            if log_enabled!(Debug) {
+                debug!(
+                    "[{}] Running query: \"{}\"",
+                    self.relative_path.display(),
+                    sql
+                );
+            }
 
-        let tracked_sql = self.currently_executing_sql_tracker.set_sql(sql);
+            let tracked_sql = self.currently_executing_sql_tracker.set_sql(sql);
 
-        let start = Instant::now();
-        let result = run_query(&self.ctx, is_spark_path(&self.relative_path), sql).await;
-        let duration = start.elapsed();
+            let start = Instant::now();
+            let result =
+                run_query(&self.ctx, is_spark_path(&self.relative_path), sql).await;
+            let duration = start.elapsed();
 
-        self.currently_executing_sql_tracker.remove_sql(tracked_sql);
+            self.currently_executing_sql_tracker.remove_sql(tracked_sql);
 
-        if duration.gt(&Duration::from_millis(500)) {
-            self.update_slow_count();
-        }
+            if duration.gt(&Duration::from_millis(500)) {
+                self.update_slow_count();
+            }
 
-        self.pb.inc(1);
+            self.pb.inc(1);
 
-        if log_enabled!(Info) && duration.gt(&Duration::from_secs(2)) {
-            warn!(
-                "[{}] Running query took more than 2 sec ({duration:?}): \"{sql}\"",
-                self.relative_path.display()
-            );
-        }
+            if log_enabled!(Info) && duration.gt(&Duration::from_secs(2)) {
+                warn!(
+                    "[{}] Running query took more than 2 sec ({duration:?}): \"{sql}\"",
+                    self.relative_path.display()
+                );
+            }
 
-        result
+            result
+        })
     }
 
     /// Engine name of current database.
@@ -185,17 +196,32 @@ impl sqllogictest::AsyncDB for DataFusion {
     /// The default implementation is `std::thread::sleep`, which is universal to any async runtime
     /// but would block the current thread. If you are running in tokio runtime, you should override
     /// this by `tokio::time::sleep`.
-    async fn sleep(dur: Duration) {
-        tokio::time::sleep(dur).await;
+    fn sleep<'async_trait>(
+        dur: Duration,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'async_trait>>
+    where
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            tokio::time::sleep(dur).await;
+        })
     }
 
     /// Shutdown and check no DataFusion configuration has changed during test
-    async fn shutdown(&mut self) {
-        if let Some(config_change_errors) = self.config_change_errors.clone()
-            && let Err(error) = self.validate_config_unchanged()
-        {
-            config_change_errors.lock().unwrap().push(error.to_string());
-        }
+    fn shutdown<'life0, 'async_trait>(
+        &'life0 mut self,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'async_trait>>
+    where
+        'life0: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            if let Some(config_change_errors) = self.config_change_errors.clone()
+                && let Err(error) = self.validate_config_unchanged()
+            {
+                config_change_errors.lock().unwrap().push(error.to_string());
+            }
+        })
     }
 }
 

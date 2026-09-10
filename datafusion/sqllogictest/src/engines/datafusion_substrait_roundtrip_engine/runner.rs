@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::{path::PathBuf, time::Duration};
 
@@ -23,7 +25,6 @@ use crate::engines::datafusion_engine::Result;
 use crate::engines::output::{DFColumnType, DFOutput};
 use crate::{DFSqlLogicTestError, convert_batches, convert_schema_to_types};
 use arrow::record_batch::RecordBatch;
-use async_trait::async_trait;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::common::collect;
 use datafusion::physical_plan::execute_stream;
@@ -83,42 +84,51 @@ impl DataFusionSubstraitRoundTrip {
     }
 }
 
-#[async_trait]
 impl sqllogictest::AsyncDB for DataFusionSubstraitRoundTrip {
     type Error = DFSqlLogicTestError;
     type ColumnType = DFColumnType;
 
-    async fn run(&mut self, sql: &str) -> Result<DFOutput> {
-        if log_enabled!(Debug) {
-            debug!(
-                "[{}] Running query: \"{}\"",
-                self.relative_path.display(),
-                sql
-            );
-        }
+    fn run<'life0, 'life1, 'async_trait>(
+        &'life0 mut self,
+        sql: &'life1 str,
+    ) -> Pin<Box<dyn Future<Output = Result<DFOutput>> + Send + 'async_trait>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            if log_enabled!(Debug) {
+                debug!(
+                    "[{}] Running query: \"{}\"",
+                    self.relative_path.display(),
+                    sql
+                );
+            }
 
-        let tracked_sql = self.currently_executing_sql_tracker.set_sql(sql);
+            let tracked_sql = self.currently_executing_sql_tracker.set_sql(sql);
 
-        let start = Instant::now();
-        let result = run_query_substrait_round_trip(&self.ctx, sql).await;
-        let duration = start.elapsed();
+            let start = Instant::now();
+            let result = run_query_substrait_round_trip(&self.ctx, sql).await;
+            let duration = start.elapsed();
 
-        self.currently_executing_sql_tracker.remove_sql(tracked_sql);
+            self.currently_executing_sql_tracker.remove_sql(tracked_sql);
 
-        if duration.gt(&Duration::from_millis(500)) {
-            self.update_slow_count();
-        }
+            if duration.gt(&Duration::from_millis(500)) {
+                self.update_slow_count();
+            }
 
-        self.pb.inc(1);
+            self.pb.inc(1);
 
-        if log_enabled!(Info) && duration.gt(&Duration::from_secs(2)) {
-            warn!(
-                "[{}] Running query took more than 2 sec ({duration:?}): \"{sql}\"",
-                self.relative_path.display()
-            );
-        }
+            if log_enabled!(Info) && duration.gt(&Duration::from_secs(2)) {
+                warn!(
+                    "[{}] Running query took more than 2 sec ({duration:?}): \"{sql}\"",
+                    self.relative_path.display()
+                );
+            }
 
-        result
+            result
+        })
     }
 
     /// Engine name of current database.
@@ -131,11 +141,26 @@ impl sqllogictest::AsyncDB for DataFusionSubstraitRoundTrip {
     /// The default implementation is `std::thread::sleep`, which is universal to any async runtime
     /// but would block the current thread. If you are running in tokio runtime, you should override
     /// this by `tokio::time::sleep`.
-    async fn sleep(dur: Duration) {
-        tokio::time::sleep(dur).await;
+    fn sleep<'async_trait>(
+        dur: Duration,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'async_trait>>
+    where
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            tokio::time::sleep(dur).await;
+        })
     }
 
-    async fn shutdown(&mut self) {}
+    fn shutdown<'life0, 'async_trait>(
+        &'life0 mut self,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'async_trait>>
+    where
+        'life0: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {})
+    }
 }
 
 async fn run_query_substrait_round_trip(

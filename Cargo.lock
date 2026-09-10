@@ -1777,7 +1777,6 @@ name = "datafusion-benchmarks"
 version = "55.0.0"
 dependencies = [
  "arrow",
- "async-trait",
  "bytes",
  "clap",
  "criterion",
