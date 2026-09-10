@@ -26,6 +26,10 @@ use super::metrics::{
     MetricsSet, SplitMetrics,
 };
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
+use crate::filter_pushdown::{
+    ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    FilterPushdownPropagation,
+};
 use crate::stream::{BatchSplitStream, EmptyRecordBatchStream, ObservedStream};
 use crate::{
     ChildrenPropertiesMode, DisplayFormatType, Distribution, ExecutionPlan,
@@ -34,9 +38,9 @@ use crate::{
 };
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, BooleanBufferBuilder, FixedSizeListArray, Int64Array,
-    LargeListArray, LargeListViewArray, ListArray, ListViewArray, PrimitiveArray, Scalar,
-    StructArray, new_null_array,
+    Array, ArrayRef, AsArray, FixedSizeListArray, Int64Array, LargeListArray,
+    LargeListViewArray, ListArray, ListViewArray, PrimitiveArray, Scalar, StructArray,
+    new_null_array,
 };
 use arrow::compute::kernels::length::length;
 use arrow::compute::kernels::zip::zip;
@@ -45,6 +49,7 @@ use arrow::datatypes::{DataType, Int64Type, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_ord::cmp::lt;
 use async_trait::async_trait;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Constraints, HashMap, HashSet, Result, UnnestOptions, exec_datafusion_err, exec_err,
@@ -115,48 +120,32 @@ impl UnnestExec {
         struct_column_indices: &[usize],
         schema: &SchemaRef,
     ) -> Result<PlanProperties> {
-        // Find out which indices are not unnested, such that they can be copied over from the input plan
         let input_schema = input.schema();
-        let mut unnested_indices = BooleanBufferBuilder::new(input_schema.fields().len());
-        unnested_indices.append_n(input_schema.fields().len(), false);
-        for list_unnest in list_column_indices {
-            unnested_indices.set_bit(list_unnest.index_in_input_schema, true);
-        }
-        for struct_unnest in struct_column_indices {
-            unnested_indices.set_bit(*struct_unnest, true)
-        }
-        let unnested_indices = unnested_indices.finish();
-        let non_unnested_indices: Vec<usize> = (0..input_schema.fields().len())
-            .filter(|idx| !unnested_indices.value(*idx))
-            .collect();
 
-        // Manually build projection mapping from non-unnested input columns to their positions in the output
-        let input_schema = input.schema();
-        let projection_mapping: ProjectionMapping = non_unnested_indices
-            .iter()
-            .map(|&input_idx| {
-                // Find what index the input column has in the output schema
-                let input_field = input_schema.field(input_idx);
-                let output_idx = schema
-                    .fields()
-                    .iter()
-                    .position(|output_field| output_field.name() == input_field.name())
-                    .ok_or_else(|| {
-                        exec_datafusion_err!(
-                            "Non-unnested column '{}' must exist in output schema",
-                            input_field.name()
-                        )
-                    })?;
-
-                let input_col = Arc::new(Column::new(input_field.name(), input_idx))
-                    as Arc<dyn PhysicalExpr>;
-                let target_col = Arc::new(Column::new(input_field.name(), output_idx))
-                    as Arc<dyn PhysicalExpr>;
-                // Use From<Vec<(Arc<dyn PhysicalExpr>, usize)>> for ProjectionTargets
-                let targets = vec![(target_col, output_idx)].into();
-                Ok((input_col, targets))
-            })
-            .collect::<Result<ProjectionMapping>>()?;
+        // Passthrough columns keep their input equivalences, at whatever index
+        // the unnest's in-place expansion leaves them. Derived positionally a
+        // struct expansion synthesizes names like `s.f1` that can collide with a
+        // real column of that name, and resolving by name would then map an
+        // input column onto an unrelated output one.
+        let projection_mapping: ProjectionMapping = Self::passthrough_columns(
+            &input_schema,
+            schema,
+            list_column_indices,
+            struct_column_indices,
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(input_idx, output_idx)| {
+            let name = input_schema.field(input_idx).name();
+            let input_col =
+                Arc::new(Column::new(name, input_idx)) as Arc<dyn PhysicalExpr>;
+            let target_col =
+                Arc::new(Column::new(name, output_idx)) as Arc<dyn PhysicalExpr>;
+            // Use From<Vec<(Arc<dyn PhysicalExpr>, usize)>> for ProjectionTargets
+            let targets = vec![(target_col, output_idx)].into();
+            (input_col, targets)
+        })
+        .collect();
 
         // Create the unnest's equivalence properties by copying the input plan's equivalence properties
         // for the unaffected columns. Except for the constraints, which are removed entirely because
@@ -196,6 +185,56 @@ impl UnnestExec {
 
     pub fn options(&self) -> &UnnestOptions {
         &self.options
+    }
+
+    /// The columns that pass through this unnest untouched with
+    /// input_schema_index = output_schema_index. This is needed to
+    /// find out columns which potentially can be pushdown and to also make
+    /// sure these pushdown columns do not conflict with the new columns
+    /// expanded through unnest.
+    ///
+    /// Each input column is replaced in place by however many columns it
+    /// expands into, so the output index of a passthrough column is the running
+    /// total of the widths before it. Physical expressions are index-based
+    /// precisely so such duplicates stay distinguishable.
+    ///
+    /// Returns `None` when the reconstruction disagrees with the real output
+    /// schema. We then then fall back to pushing down nothing rather than acting on a guess.
+    fn passthrough_columns(
+        input_schema: &SchemaRef,
+        output_schema: &SchemaRef,
+        list_column_indices: &[ListUnnest],
+        struct_column_indices: &[usize],
+    ) -> Option<Vec<(usize, usize)>> {
+        let input_len = input_schema.fields().len();
+
+        // A list column is replaced by one column per `ListUnnest` entry naming
+        // it, several when it is unnested at multiple depths.
+        let mut list_counts = vec![0usize; input_len];
+        for list_unnest in list_column_indices {
+            *list_counts.get_mut(list_unnest.index_in_input_schema)? += 1;
+        }
+
+        let mut passthrough = Vec::with_capacity(input_len);
+        let mut output_idx = 0;
+        for (input_idx, &list_count) in list_counts.iter().enumerate() {
+            if list_count > 0 {
+                // Unnested into `list_count` generated columns.
+                output_idx += list_count;
+            } else if struct_column_indices.contains(&input_idx) {
+                // Flattened into one column per struct field.
+                let DataType::Struct(fields) = input_schema.field(input_idx).data_type()
+                else {
+                    return None;
+                };
+                output_idx += fields.len();
+            } else {
+                passthrough.push((input_idx, output_idx));
+                output_idx += 1;
+            }
+        }
+
+        (output_idx == output_schema.fields().len()).then_some(passthrough)
     }
 }
 
@@ -326,6 +365,61 @@ impl ExecutionPlan for UnnestExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    fn gather_filters_for_pushdown(
+        &self,
+        _phase: FilterPushdownPhase,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        _config: &ConfigOptions,
+    ) -> Result<FilterDescription> {
+        // Filters that reference only passthrough columns commute with unnest.
+        // So dropping an input row before the unnest removes exactly the output
+        // rows the filter would have dropped after it. Filters referencing unnested
+        // list/struct columns must stay above this node.
+        let Some(passthrough) = Self::passthrough_columns(
+            &self.input.schema(),
+            &self.schema,
+            &self.list_column_indices,
+            &self.struct_column_indices,
+        ) else {
+            return Ok(FilterDescription::all_unsupported(
+                &parent_filters,
+                &[&self.input],
+            ));
+        };
+
+        let input_schema = self.input.schema();
+        let allowed_output_indices: std::collections::HashSet<usize> = passthrough
+            .into_iter()
+            // `FilterRemapper` rewrites a pushed column by looking its *name* up
+            // in the input schema, so a column is only safe to admit when that
+            // lookup lands back on the very column it came from. Duplicate input
+            // names would otherwise redirect the filter to an unrelated column.
+            .filter(|&(input_idx, _)| {
+                matches!(
+                    input_schema.index_of(input_schema.field(input_idx).name()),
+                    Ok(found) if found == input_idx
+                )
+            })
+            .map(|(_, output_idx)| output_idx)
+            .collect();
+
+        let child = ChildFilterDescription::from_child_with_allowed_indices(
+            &parent_filters,
+            allowed_output_indices,
+            &self.input,
+        )?;
+        Ok(FilterDescription::new().with_child(child))
+    }
+
+    fn handle_child_pushdown_result(
+        &self,
+        _phase: FilterPushdownPhase,
+        child_pushdown_result: ChildPushdownResult,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
     }
 
     #[cfg(feature = "proto")]
@@ -2271,6 +2365,62 @@ mod tests {
                     .collect::<Vec<_>>()
             })
             .collect()
+    }
+
+    /// Unnesting struct `s` synthesizes an output column named `s.f1`, colliding
+    /// with the genuine passthrough column of that name. The equivalence
+    /// properties must follow the *positional* expansion. The passthrough column
+    /// lands at output index 1, so an input ordering on it must be reported on
+    /// `s.f1@1`. Matching by name would attach it to the generated `s.f1@0` and
+    /// could wrongly elide a sort on an unrelated column.
+    #[test]
+    fn test_compute_properties_with_colliding_struct_field_name() -> Result<()> {
+        let input_schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "s",
+                DataType::Struct(vec![Field::new("f1", DataType::Utf8, true)].into()),
+                true,
+            ),
+            Field::new("s.f1", DataType::Utf8, false),
+        ]));
+        // `s` expands in place, so the generated `s.f1` takes index 0 and the
+        // passthrough column of the same name is pushed to index 1.
+        let output_schema = Arc::new(Schema::new(vec![
+            Field::new("s.f1", DataType::Utf8, true),
+            Field::new("s.f1", DataType::Utf8, false),
+        ]));
+
+        assert_eq!(
+            UnnestExec::passthrough_columns(&input_schema, &output_schema, &[], &[0]),
+            Some(vec![(1, 1)]),
+        );
+
+        use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::new(
+            Column::new("s.f1", 1),
+        )
+            as Arc<dyn PhysicalExpr>)])
+        .expect("single-element ordering");
+        let source = crate::test::TestMemoryExec::try_new(
+            &[vec![]],
+            Arc::clone(&input_schema),
+            None,
+        )?
+        .try_with_sort_information(vec![ordering])?;
+        let input =
+            Arc::new(crate::test::TestMemoryExec::update_cache(&Arc::new(source)));
+
+        let unnest = UnnestExec::new(
+            input,
+            vec![],
+            vec![0],
+            output_schema,
+            UnnestOptions::default(),
+        )?;
+
+        let orderings = unnest.properties().equivalence_properties().oeq_class();
+        assert_snapshot!(orderings.to_string(), @"[[s.f1@1 ASC]]");
+        Ok(())
     }
 
     /// Output batch sizes are fully determined by the input lengths and `batch_size`, so

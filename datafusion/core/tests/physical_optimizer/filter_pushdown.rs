@@ -810,6 +810,217 @@ fn test_pushdown_through_aggregates_preserves_parent_filter_order() {
     );
 }
 
+/// Schema for the unnest pushdown tests: two passthrough columns and a list
+/// column that gets unnested.
+fn unnest_input_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new(
+            "l",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            true,
+        ),
+    ]))
+}
+
+/// Output schema of unnesting `l` in [`unnest_input_schema`]: the list column
+/// is replaced in place by its element type.
+fn unnest_output_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("l", DataType::Utf8, true),
+    ]))
+}
+
+fn unnest_over(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+    use datafusion_common::UnnestOptions;
+    use datafusion_physical_plan::unnest::{ListUnnest, UnnestExec};
+    Arc::new(
+        UnnestExec::new(
+            input,
+            vec![ListUnnest {
+                index_in_input_schema: 2,
+                depth: 1,
+            }],
+            vec![],
+            unnest_output_schema(),
+            UnnestOptions::default(),
+        )
+        .unwrap(),
+    )
+}
+
+#[test]
+fn test_pushdown_through_unnest_on_passthrough_columns() {
+    // A filter conjunct on a passthrough (non-unnested) column commutes with
+    // the unnest and gets absorbed into the scan; the conjunct on the unnested
+    // column must stay above the UnnestExec.
+    let scan = TestScanBuilder::new(unnest_input_schema())
+        .with_support(true)
+        .build();
+    let unnest = unnest_over(scan);
+
+    let predicate = Arc::new(BinaryExpr::new(
+        col_lit_predicate("a", "foo", &unnest_output_schema()),
+        Operator::And,
+        col_lit_predicate("l", "bar", &unnest_output_schema()),
+    ));
+    let plan = Arc::new(FilterExec::try_new(predicate, unnest).unwrap());
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo AND l@2 = bar
+        -   UnnestExec
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, l], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - FilterExec: l@2 = bar
+          -   UnnestExec
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, l], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+    "
+    );
+}
+
+/// Probe-side batch with a list column, so the unnest has real rows to expand.
+fn unnest_probe_batch() -> RecordBatch {
+    use arrow::array::{ListBuilder, StringArray, StringBuilder};
+    let mut list = ListBuilder::new(StringBuilder::new());
+    for items in [["x", "y"].as_slice(), &["z"], &["w"], &["v"]] {
+        for item in items {
+            list.values().append_value(item);
+        }
+        list.append(true);
+    }
+    RecordBatch::try_new(
+        unnest_input_schema(),
+        vec![
+            Arc::new(StringArray::from(vec!["aa", "ab", "ac", "ad"])),
+            Arc::new(StringArray::from(vec!["ba", "bb", "bc", "bd"])),
+            Arc::new(list.finish()),
+        ],
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn test_hashjoin_dynamic_filter_pushdown_through_unnest() {
+    // A CollectLeft hash join's dynamic filter on a passthrough column must
+    // reach the scan below an UnnestExec on the probe side, and must actually
+    // prune there: the bounds come from the build side, and the probe scan
+    // applies them *before* the unnest multiplies its rows.
+    let build_side_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("c", DataType::Float64, false),
+    ]));
+    let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
+        .with_support(true)
+        .with_batches(vec![
+            record_batch!(
+                ("a", Utf8, ["aa", "ab"]),
+                ("b", Utf8, ["ba", "bb"]),
+                ("c", Float64, [1.0, 2.0])
+            )
+            .unwrap(),
+        ])
+        .build();
+
+    let probe_scan = TestScanBuilder::new(unnest_input_schema())
+        .with_support(true)
+        .with_batches(vec![unnest_probe_batch()])
+        .build();
+    let probe_unnest = unnest_over(Arc::clone(&probe_scan));
+
+    let on = vec![(
+        col("a", &build_side_schema).unwrap(),
+        col("a", &unnest_output_schema()).unwrap(),
+    )];
+    let hash_join = Arc::new(
+        HashJoinExec::try_new(
+            build_scan,
+            probe_unnest,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    );
+
+    // Sort on the unnested column for deterministic output.
+    let plan = Arc::new(SortExec::new(
+        LexOrdering::new(vec![PhysicalSortExpr::new(
+            col("l", &hash_join.schema()).unwrap(),
+            SortOptions::new(false, false),
+        )])
+        .unwrap(),
+        Arc::clone(&hash_join) as Arc<dyn ExecutionPlan>,
+    )) as Arc<dyn ExecutionPlan>;
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(Arc::clone(&plan), FilterPushdown::new_post_optimization(), true),
+        @"
+    OptimizationTest:
+      input:
+        - SortExec: expr=[l@5 ASC NULLS LAST], preserve_partitioning=[false]
+        -   HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -     UnnestExec
+        -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, l], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - SortExec: expr=[l@5 ASC NULLS LAST], preserve_partitioning=[false]
+          -   HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+          -     UnnestExec
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, l], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]
+    "
+    );
+
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let (plan, batches) = optimize_and_collect_pushdown_plan(plan, config).await;
+
+    // The filter that reached the scan below the unnest carries the build
+    // side's real bounds on the passthrough column, not an empty placeholder.
+    insta::assert_snapshot!(
+        format!("{}", format_plan_for_test(&plan)),
+        @"
+    - SortExec: expr=[l@5 ASC NULLS LAST], preserve_partitioning=[false]
+    -   HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]
+    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+    -     UnnestExec
+    -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, l], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND a@0 IN (SET) ([aa, ab]) ]
+    "
+    );
+
+    // Only the two rows whose `a` matches the build side survive, and they are
+    // dropped before the unnest expands them.
+    assert_eq!(probe_scan.metrics().unwrap().output_rows().unwrap(), 2);
+
+    insta::assert_snapshot!(
+        format!("{}", pretty_format_batches(&batches).unwrap()),
+        @r"
+    +----+----+-----+----+----+---+
+    | a  | b  | c   | a  | b  | l |
+    +----+----+-----+----+----+---+
+    | aa | ba | 1.0 | aa | ba | x |
+    | aa | ba | 1.0 | aa | ba | y |
+    | ab | bb | 2.0 | ab | bb | z |
+    +----+----+-----+----+----+---+
+    "
+    );
+}
+
 /// Test various combinations of handling of child pushdown results
 /// in an ExecutionPlan in combination with support/not support in a DataSource.
 #[test]
@@ -3851,5 +4062,166 @@ fn post_phase_is_idempotent_on_hash_join() {
         get_plan_string(&once),
         get_plan_string(&twice),
         "second invocation of FilterPushdown::new_post_optimization mutated the plan",
+    );
+}
+
+#[test]
+fn test_pushdown_through_struct_unnest_shifts_column_indices() {
+    // A struct expands into *multiple* output columns in place, so passthrough
+    // columns after it sit at a different index above the unnest than below it
+    // (`b` is 3 in the output, 2 in the input). The pushed filter must be
+    // rewritten to the input's indices.
+    use datafusion_common::UnnestOptions;
+    use datafusion_physical_plan::unnest::UnnestExec;
+
+    let input_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new(
+            "s",
+            DataType::Struct(
+                vec![
+                    Field::new("f1", DataType::Utf8, true),
+                    Field::new("f2", DataType::Utf8, true),
+                ]
+                .into(),
+            ),
+            true,
+        ),
+        Field::new("b", DataType::Utf8, false),
+    ]));
+    let output_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("s.f1", DataType::Utf8, true),
+        Field::new("s.f2", DataType::Utf8, true),
+        Field::new("b", DataType::Utf8, false),
+    ]));
+
+    let scan = TestScanBuilder::new(Arc::clone(&input_schema))
+        .with_support(true)
+        .build();
+    let unnest = Arc::new(
+        UnnestExec::new(
+            scan,
+            vec![],
+            vec![1],
+            Arc::clone(&output_schema),
+            UnnestOptions::default(),
+        )
+        .unwrap(),
+    );
+
+    let predicate = Arc::new(BinaryExpr::new(
+        col_lit_predicate("b", "x", &output_schema),
+        Operator::And,
+        col_lit_predicate("s.f1", "y", &output_schema),
+    ));
+    let plan = Arc::new(FilterExec::try_new(predicate, unnest).unwrap());
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @"
+    OptimizationTest:
+      input:
+        - FilterExec: b@3 = x AND s.f1@1 = y
+        -   UnnestExec
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, s, b], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - FilterExec: s.f1@1 = y
+          -   UnnestExec
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, s, b], file_type=test, pushdown_supported=true, predicate=b@2 = x
+    "
+    );
+}
+
+#[test]
+fn test_no_pushdown_when_unnested_struct_field_name_collides() {
+    // Unnesting struct `s` synthesizes an output column named `s.f1`, which
+    // collides with the genuine passthrough column physically named `s.f1`.
+    // The output then holds two `s.f1` fields, distinguished only by index.
+    // A filter on the *generated* one (`s.f1@0`) must not be pushed: resolving
+    // by name would hand it the unrelated passthrough input column instead.
+    use datafusion_common::UnnestOptions;
+    use datafusion_physical_plan::unnest::UnnestExec;
+
+    let input_schema = Arc::new(Schema::new(vec![
+        Field::new(
+            "s",
+            DataType::Struct(vec![Field::new("f1", DataType::Utf8, true)].into()),
+            true,
+        ),
+        Field::new("s.f1", DataType::Utf8, false),
+    ]));
+    // `s` expands in place, so the generated `s.f1` lands at index 0 and the
+    // passthrough column of the same name is pushed to index 1.
+    let output_schema = Arc::new(Schema::new(vec![
+        Field::new("s.f1", DataType::Utf8, true),
+        Field::new("s.f1", DataType::Utf8, false),
+    ]));
+
+    let scan = TestScanBuilder::new(Arc::clone(&input_schema))
+        .with_support(true)
+        .build();
+    let unnest = Arc::new(
+        UnnestExec::new(
+            scan,
+            vec![],
+            vec![0],
+            Arc::clone(&output_schema),
+            UnnestOptions::default(),
+        )
+        .unwrap(),
+    );
+
+    // Filter on the generated column: must stay above the unnest.
+    let generated = Arc::new(
+        FilterExec::try_new(
+            col_lit_predicate("s.f1", "x", &output_schema),
+            Arc::clone(&unnest) as Arc<dyn ExecutionPlan>,
+        )
+        .unwrap(),
+    );
+    insta::assert_snapshot!(
+        OptimizationTest::new(generated, FilterPushdown::new(), true),
+        @"
+    OptimizationTest:
+      input:
+        - FilterExec: s.f1@0 = x
+        -   UnnestExec
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[s, s.f1], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - FilterExec: s.f1@0 = x
+          -   UnnestExec
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[s, s.f1], file_type=test, pushdown_supported=true
+    "
+    );
+
+    // Filter on the real passthrough column at index 1: safe to push, and must
+    // be rewritten to that column's index in the input schema.
+    let passthrough = Arc::new(
+        FilterExec::try_new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("s.f1", 1)),
+                Operator::Eq,
+                Arc::new(Literal::new(ScalarValue::from("x"))),
+            )),
+            unnest,
+        )
+        .unwrap(),
+    );
+    insta::assert_snapshot!(
+        OptimizationTest::new(passthrough, FilterPushdown::new(), true),
+        @"
+    OptimizationTest:
+      input:
+        - FilterExec: s.f1@1 = x
+        -   UnnestExec
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[s, s.f1], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - UnnestExec
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[s, s.f1], file_type=test, pushdown_supported=true, predicate=s.f1@1 = x
+    "
     );
 }
