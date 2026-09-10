@@ -1070,6 +1070,107 @@ async fn test_spill_file_compressed_with_lz4_frame() -> Result<()> {
 
     Ok(())
 }
+
+/// Number of groups the `covar_samp` queries below produce.
+const ADAPTER_GROUPS: i64 = 128;
+/// Rows per input batch for the `covar_samp` queries below.
+const ADAPTER_BATCH_SIZE: i64 = 8192;
+/// Bytes of scratch row indices `GroupsAccumulatorAdapter` retains for the
+/// `covar_samp` queries below: one `u32` per row of the largest batch each
+/// group has ever received, kept for the lifetime of the group.
+const ADAPTER_RETAINED_BYTES: usize =
+    (ADAPTER_GROUPS * ADAPTER_BATCH_SIZE) as usize * size_of::<u32>();
+
+/// Runs a `GROUP BY` `covar_samp` query under `memory_limit` and returns the
+/// executed plan so the caller can inspect its metrics.
+///
+/// `covar_samp` has no native [`GroupsAccumulator`], so its per-group state is
+/// held by `GroupsAccumulatorAdapter`. The adapter keeps one scratch `Vec<u32>`
+/// of row indices per group, grown to the largest number of rows that group
+/// has ever taken from a single input batch and retained (cleared, but not
+/// deallocated) for the lifetime of the group.
+///
+/// The query hands each of the [`ADAPTER_GROUPS`] groups `batches_per_group`
+/// consecutive full batches of [`ADAPTER_BATCH_SIZE`] rows, so the adapter
+/// retains [`ADAPTER_RETAINED_BYTES`] (4 MiB) of scratch capacity however many
+/// batches each group receives. Everything else the aggregate holds is two
+/// orders of magnitude smaller.
+///
+/// `target_partitions = 1` puts the aggregate in `Single` mode, which spills
+/// under memory pressure instead of emitting groups early, so the accounting
+/// is observable as a spill.
+///
+/// [`GroupsAccumulator`]: datafusion_expr::GroupsAccumulator
+async fn run_adapter_query(
+    memory_limit: usize,
+    batches_per_group: i64,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::new(GreedyMemoryPool::new(memory_limit)))
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+        )
+        .build_arc()?;
+
+    let config = SessionConfig::new()
+        .with_target_partitions(1)
+        .with_batch_size(ADAPTER_BATCH_SIZE as usize);
+    let ctx = SessionContext::new_with_config_rt(config, runtime);
+
+    let rows_per_group = ADAPTER_BATCH_SIZE * batches_per_group;
+    let sql = format!(
+        "SELECT v / {rows_per_group} AS g, covar_samp(v, v) AS c \
+         FROM generate_series(0, {}) AS t(v) \
+         GROUP BY v / {rows_per_group}",
+        ADAPTER_GROUPS * rows_per_group - 1
+    );
+
+    let plan = ctx.sql(&sql).await?.create_physical_plan().await?;
+    let batches = collect_batches(Arc::clone(&plan), ctx.task_ctx()).await?;
+
+    let rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+    assert_eq!(rows, ADAPTER_GROUPS as usize);
+
+    Ok(plan)
+}
+
+/// The scratch capacity `GroupsAccumulatorAdapter` retains is four times the
+/// memory limit, so the aggregate must spill. Without the capacity everything
+/// the aggregate reports is far under the limit, and the query runs to
+/// completion without ever asking the pool for what it is really using.
+#[tokio::test]
+async fn aggregate_adapter_spills_on_retained_indices() -> Result<()> {
+    let plan = run_adapter_query(ADAPTER_RETAINED_BYTES / 4, 1).await?;
+
+    let spill_count = plan_spill_count(plan.as_ref());
+    assert!(
+        spill_count > 0,
+        "the aggregate retains {ADAPTER_RETAINED_BYTES} bytes of scratch indices \
+         against a limit of a quarter of that, so it must spill, \
+         but spill_count was {spill_count}"
+    );
+
+    Ok(())
+}
+
+/// The retained scratch capacity is charged once, not once per batch. Every
+/// group receives four batches, so charging the capacity per batch would
+/// report four times the retained bytes, and the memory limit of twice the
+/// retained bytes fits the aggregate only if it is charged once.
+#[tokio::test]
+async fn aggregate_adapter_charges_retained_indices_once() -> Result<()> {
+    let plan = run_adapter_query(ADAPTER_RETAINED_BYTES * 2, 4).await?;
+
+    let spill_count = plan_spill_count(plan.as_ref());
+    assert_eq!(
+        spill_count, 0,
+        "the aggregate retains {ADAPTER_RETAINED_BYTES} bytes of scratch indices \
+         under a limit of twice that, so it must not spill"
+    );
+
+    Ok(())
+}
+
 /// Run the query with the specified memory limit,
 /// and verifies the expected errors are returned
 #[derive(Clone, Debug)]
