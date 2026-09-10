@@ -294,6 +294,7 @@ impl NestedLoopJoinExecBuilder {
             &join_schema,
             join_type,
             projection.as_deref(),
+            filter.is_some(),
         )?;
         let right_partition_count = right.output_partitioning().partition_count().max(1);
         let with_visited_bitmap = need_produce_result_in_final(join_type);
@@ -374,6 +375,7 @@ impl NestedLoopJoinExec {
         schema: &SchemaRef,
         join_type: JoinType,
         projection: Option<&[usize]>,
+        has_filter: bool,
     ) -> Result<PlanProperties> {
         // Calculate equivalence properties:
         let mut eq_properties = join_equivalence_properties(
@@ -385,6 +387,8 @@ impl NestedLoopJoinExec {
             None,
             // No on columns in nested loop join
             &[],
+            has_filter,
+            NullEquality::NullEqualsNothing,
         )?;
 
         let mut output_partitioning =

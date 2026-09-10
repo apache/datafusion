@@ -23,7 +23,7 @@ use arrow::{
 use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::not_impl_err;
 use datafusion_common::tree_node::TreeNodeRecursion;
-use datafusion_common::{JoinSide, Result, internal_err};
+use datafusion_common::{JoinSide, NullEquality, Result, internal_err};
 use datafusion_execution::{
     SendableRecordBatchStream,
     memory_pool::{MemoryConsumer, MemoryReservation},
@@ -432,6 +432,9 @@ impl PiecewiseMergeJoinExec {
             // required sort and return wrongly ordered results. Range joins add
             // no column equivalences, so pass none.
             &[],
+            // The range predicate always filters matches beyond the equijoin keys.
+            true,
+            NullEquality::NullEqualsNothing,
         )?;
 
         let output_partitioning =

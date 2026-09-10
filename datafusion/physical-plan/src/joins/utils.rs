@@ -169,45 +169,13 @@ pub fn calculate_join_output_ordering(
     join_type: JoinType,
     left_columns_len: usize,
     maintains_input_order: &[bool],
-    probe_side: Option<JoinSide>,
+    _probe_side: Option<JoinSide>,
 ) -> Result<Option<LexOrdering>> {
     match maintains_input_order {
-        [true, false] => {
-            // Special case, we can prefix ordering of right side with the ordering of left side.
-            if join_type == JoinType::Inner
-                && probe_side == Some(JoinSide::Left)
-                && let Some(right_ordering) = right_ordering.cloned()
-            {
-                let right_offset = add_offset_to_physical_sort_exprs(
-                    right_ordering,
-                    left_columns_len as _,
-                )?;
-                return if let Some(left_ordering) = left_ordering {
-                    let mut result = left_ordering.clone();
-                    result.extend(right_offset);
-                    Ok(Some(result))
-                } else {
-                    Ok(LexOrdering::new(right_offset))
-                };
-            }
-            Ok(left_ordering.cloned())
-        }
+        // Matches from the other side can repeat for duplicate probe keys,
+        // so only the maintained side's ordering is guaranteed.
+        [true, false] => Ok(left_ordering.cloned()),
         [false, true] => {
-            // Special case, we can prefix ordering of left side with the ordering of right side.
-            if join_type == JoinType::Inner && probe_side == Some(JoinSide::Right) {
-                return if let Some(right_ordering) = right_ordering.cloned() {
-                    let mut right_offset = add_offset_to_physical_sort_exprs(
-                        right_ordering,
-                        left_columns_len as _,
-                    )?;
-                    if let Some(left_ordering) = left_ordering {
-                        right_offset.extend(left_ordering.clone());
-                    }
-                    Ok(LexOrdering::new(right_offset))
-                } else {
-                    Ok(left_ordering.cloned())
-                };
-            }
             let Some(right_ordering) = right_ordering else {
                 return Ok(None);
             };
@@ -4452,19 +4420,10 @@ mod tests {
         let probe_sides = [Some(JoinSide::Left), Some(JoinSide::Right)];
 
         let expected = [
-            LexOrdering::new(vec![
-                PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0))),
-                PhysicalSortExpr::new_default(Arc::new(Column::new("c", 2))),
-                PhysicalSortExpr::new_default(Arc::new(Column::new("d", 3))),
-                PhysicalSortExpr::new_default(Arc::new(Column::new("z", 7))),
-                PhysicalSortExpr::new_default(Arc::new(Column::new("y", 6))),
-            ]),
+            left_ordering.clone(),
             LexOrdering::new(vec![
                 PhysicalSortExpr::new_default(Arc::new(Column::new("z", 7))),
                 PhysicalSortExpr::new_default(Arc::new(Column::new("y", 6))),
-                PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0))),
-                PhysicalSortExpr::new_default(Arc::new(Column::new("c", 2))),
-                PhysicalSortExpr::new_default(Arc::new(Column::new("d", 3))),
             ]),
         ];
 

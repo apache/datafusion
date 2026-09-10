@@ -3376,10 +3376,8 @@ physical_plan
 statement ok
 set datafusion.optimizer.prefer_existing_sort = false;
 
-# SortMergeJoinExec should add ordering equivalences of
-# right table as lexicographical append to the global ordering
-# below query shouldn't add any SortExec for order by clause.
-# since its requirement is already satisfied at the output of SortMergeJoinExec
+# The right ordering cannot be appended to the left ordering: duplicate
+# left keys restart the right matches. Keep a SortExec above SortMergeJoinExec.
 query TT
 EXPLAIN SELECT *
   FROM (SELECT *, ROW_NUMBER() OVER() as rn1
@@ -3402,15 +3400,16 @@ logical_plan
 10)----------TableScan: annotated_data projection=[a0, a, b, c, d]
 physical_plan
 01)SortPreservingMergeExec: [a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST, rn1@11 ASC NULLS LAST]
-02)--SortMergeJoinExec: join_type=Inner, on=[(a@1, a@1)]
-03)----RepartitionExec: partitioning=Hash([a@1], 2), input_partitions=1, maintains_sort_order=true
-04)------ProjectionExec: expr=[a0@0 as a0, a@1 as a, b@2 as b, c@3 as c, d@4 as d, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@5 as rn1]
-05)--------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
-07)----RepartitionExec: partitioning=Hash([a@1], 2), input_partitions=1, maintains_sort_order=true
-08)------ProjectionExec: expr=[a0@0 as a0, a@1 as a, b@2 as b, c@3 as c, d@4 as d, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@5 as rn1]
-09)--------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
-10)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
+02)--SortExec: expr=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST, rn1@11 ASC NULLS LAST], preserve_partitioning=[true]
+03)----SortMergeJoinExec: join_type=Inner, on=[(a@1, a@1)]
+04)------RepartitionExec: partitioning=Hash([a@1], 2), input_partitions=1, maintains_sort_order=true
+05)--------ProjectionExec: expr=[a0@0 as a0, a@1 as a, b@2 as b, c@3 as c, d@4 as d, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@5 as rn1]
+06)----------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
+07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
+08)------RepartitionExec: partitioning=Hash([a@1], 2), input_partitions=1, maintains_sort_order=true
+09)--------ProjectionExec: expr=[a0@0 as a0, a@1 as a, b@2 as b, c@3 as c, d@4 as d, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@5 as rn1]
+10)----------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
+11)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 
 statement ok
 set datafusion.optimizer.prefer_hash_join = true;
@@ -3488,9 +3487,10 @@ logical_plan
 05)----SubqueryAlias: r_table
 06)------TableScan: annotated_data projection=[a0, a, b, c, d]
 physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=Right, on=[(b@2, b@2)]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
-03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
+01)SortExec: expr=[a@6 ASC, b@7 ASC NULLS LAST, c@8 ASC NULLS LAST, a@1 ASC], preserve_partitioning=[false]
+02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(b@2, b@2)]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 
 query TT
 EXPLAIN SELECT l.a, LAST_VALUE(r.b ORDER BY r.a ASC NULLS FIRST) as last_col1
@@ -6300,3 +6300,86 @@ reset datafusion.optimizer.repartition_file_scans;
 
 statement ok
 set datafusion.execution.target_partitions = 4;
+
+# Duplicate probe keys restart the build-side ordering for each matching row.
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+set datafusion.optimizer.prefer_hash_join = false;
+
+statement ok
+CREATE TABLE duplicate_join_left AS VALUES (1, 10), (1, 20), (2, 30);
+
+statement ok
+CREATE TABLE duplicate_join_right AS VALUES (1, 100), (1, 200), (2, 300);
+
+# Sorting the build side alone must not satisfy the output ordering.
+query II
+SELECT l.column1, r.column2
+FROM duplicate_join_left l JOIN duplicate_join_right r ON l.column1 = r.column1
+ORDER BY l.column1, r.column2;
+----
+1 100
+1 100
+1 200
+1 200
+2 300
+
+query II
+SELECT l.column1, r.column2
+FROM duplicate_join_left l JOIN duplicate_join_right r ON l.column1 = r.column1
+ORDER BY l.column1, r.column2 LIMIT 2;
+----
+1 100
+1 100
+
+query IIII rowsort
+SELECT r.column2,
+row_number() OVER (ORDER BY l.column1, r.column2),
+rank() OVER (ORDER BY l.column1, r.column2),
+dense_rank() OVER (ORDER BY l.column1, r.column2)
+FROM duplicate_join_left l JOIN duplicate_join_right r ON l.column1 = r.column1;
+----
+100 1 1 1
+100 2 1 1
+200 3 3 2
+200 4 3 2
+300 5 5 3
+
+# Ordered sources exercise HashJoin's output properties. Filtering the build
+# input also leaves an unmatched probe row, covering null extension.
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+set datafusion.optimizer.prefer_hash_join = true;
+
+statement ok
+COPY (SELECT * FROM duplicate_join_left ORDER BY column1, column2)
+TO 'test_files/scratch/joins/duplicate_ordering.csv'
+STORED AS CSV OPTIONS ('format.has_header' 'true');
+
+statement ok
+CREATE EXTERNAL TABLE duplicate_ordering (column1 BIGINT, column2 BIGINT)
+STORED AS CSV WITH ORDER (column1 ASC, column2 ASC)
+LOCATION 'test_files/scratch/joins/duplicate_ordering.csv'
+OPTIONS ('format.has_header' 'true');
+
+query III
+SELECT r.column1, l.column1, l.column2
+FROM (SELECT * FROM duplicate_ordering WHERE column1 = 1) l
+RIGHT JOIN duplicate_ordering r ON l.column1 = r.column1
+ORDER BY r.column1, l.column1, l.column2;
+----
+1 1 10
+1 1 10
+1 1 20
+1 1 20
+2 NULL NULL
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+reset datafusion.optimizer.prefer_hash_join;

@@ -34,6 +34,7 @@ use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn};
 use crate::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
 use crate::metrics::{ExecutionPlanMetricsSet, SpillMetrics};
 use crate::projection::{ProjectionExec, ProjectionExpr};
+use crate::sorts::sort::SortExec;
 use crate::spill::spill_manager::SpillManager;
 use crate::test::TestMemoryExec;
 use crate::test::exec::BarrierExec;
@@ -73,6 +74,7 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::expressions::Literal;
+use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_expr_common::physical_expr::PhysicalExprRef;
 use futures::{Stream, StreamExt};
 use insta::assert_snapshot;
@@ -552,6 +554,70 @@ async fn join_inner_one() -> Result<()> {
     | 3  | 5  | 9  | 20 | 5  | 80 |
     +----+----+----+----+----+----+
     ");
+    Ok(())
+}
+
+#[tokio::test]
+async fn join_inner_order_by_with_limit() -> Result<()> {
+    let left_batch =
+        build_table_i32_two_cols(("left_k", &vec![1, 1]), ("left_v", &vec![10, 10]));
+    let right_batch =
+        build_table_i32_two_cols(("right_k", &vec![1, 1]), ("right_v", &vec![100, 200]));
+    let left_ordering = LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::new(
+        Column::new("left_k", 0),
+    ))])
+    .unwrap();
+    let right_ordering = LexOrdering::new(vec![
+        PhysicalSortExpr::new_default(Arc::new(Column::new("right_k", 0))),
+        PhysicalSortExpr::new_default(Arc::new(Column::new("right_v", 1))),
+    ])
+    .unwrap();
+    let left = Arc::new(
+        TestMemoryExec::try_new(&[vec![left_batch.clone()]], left_batch.schema(), None)?
+            .try_with_sort_information(vec![left_ordering])?,
+    );
+    let right = Arc::new(
+        TestMemoryExec::try_new(
+            &[vec![right_batch.clone()]],
+            right_batch.schema(),
+            None,
+        )?
+        .try_with_sort_information(vec![right_ordering])?,
+    );
+    let join = SortMergeJoinExec::try_new(
+        left,
+        right,
+        vec![(
+            Arc::new(Column::new("left_k", 0)),
+            Arc::new(Column::new("right_k", 0)),
+        )],
+        None,
+        Inner,
+        vec![SortOptions::default()],
+        NullEquality::NullEqualsNothing,
+    )?;
+    // Each left row restarts the right values at 100, so the join emits
+    // 100, 200, 100, 200. An explicit SortExec must not skip sorting based
+    // on the join's ordering metadata, even without physical optimization.
+    let ordering = LexOrdering::new(vec![
+        PhysicalSortExpr::new_default(Arc::new(Column::new("left_k", 0))),
+        PhysicalSortExpr::new_default(Arc::new(Column::new("right_v", 3))),
+    ])
+    .unwrap();
+    let sort = SortExec::new(ordering, Arc::new(join)).with_fetch(Some(2));
+    let batches =
+        common::collect(sort.execute(0, Arc::new(TaskContext::default()))?).await?;
+    assert_batches_eq!(
+        [
+            "+--------+--------+---------+---------+",
+            "| left_k | left_v | right_k | right_v |",
+            "+--------+--------+---------+---------+",
+            "| 1      | 10     | 1       | 100     |",
+            "| 1      | 10     | 1       | 100     |",
+            "+--------+--------+---------+---------+",
+        ],
+        &batches
+    );
     Ok(())
 }
 
