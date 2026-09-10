@@ -1656,7 +1656,7 @@ mod tests {
         ));
         let simplified = simplify_not_null_conjuncts(predicate, &input);
         assert_eq!(
-            format!("{}", simplified),
+            format!("{simplified}"),
             "a@0 > 5",
             "IS NOT NULL conjunct should be dropped, keeping the range predicate"
         );
