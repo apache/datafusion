@@ -2567,7 +2567,7 @@ date_part(part, expression)
   - timezone_hour (whole hours of the UTC offset)
   - timezone_minute (whole minutes of the UTC offset, excluding the hours)
 
-  The `timezone`, `timezone_hour` and `timezone_minute` parts are only defined for timestamps that carry a timezone; extracting them from a timezone-naive timestamp, a date, a time or an interval is an error. They report the offset that applies at that instant, so they follow daylight saving time: `Europe/Brussels` yields `3600` in January and `7200` in July. For a negative offset both parts carry the sign, so `America/St_Johns` in January yields `-3` hours and `-30` minutes.
+  The `timezone`, `timezone_hour` and `timezone_minute` parts are only defined for timestamps that carry a timezone; extracting them from a timezone-naive timestamp, a date, a time or an interval is an error. They report the offset that applies at that instant, so they follow daylight saving time: `Europe/Brussels` yields `3600` in January and `7200` in July. For a negative offset each non-zero part carries the sign, so `America/St_Johns` in January yields `-3` hours and `-30` minutes. An offset smaller than one hour has a zero hour part, which cannot show a sign: `Africa/Monrovia` before 1972 yields `0` hours and `-43` minutes.
 
 - **expression**: Time expression to operate on. Can be a constant, column, or function.
 
