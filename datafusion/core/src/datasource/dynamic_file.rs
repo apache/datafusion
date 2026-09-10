@@ -30,7 +30,6 @@ use datafusion_catalog::UrlTableFactory;
 use datafusion_common::plan_datafusion_err;
 use datafusion_session::SessionStore;
 
-use async_trait::async_trait;
 use futures::future::BoxFuture;
 
 /// [DynamicListTableFactory] is a factory that can create a [ListingTable] from the given url.
@@ -51,20 +50,11 @@ impl DynamicListTableFactory {
         &self.session_store
     }
 }
-
-#[async_trait]
 impl UrlTableFactory for DynamicListTableFactory {
-    // Hand-written `#[async_trait]` expansion to reduce compile time. See
-    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
-    fn try_new<'life0, 'life1, 'async_trait>(
-        &'life0 self,
-        url: &'life1 str,
-    ) -> BoxFuture<'async_trait, Result<Option<Arc<dyn TableProvider>>>>
-    where
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        Self: 'async_trait,
-    {
+    fn try_new<'a>(
+        &'a self,
+        url: &'a str,
+    ) -> BoxFuture<'a, Result<Option<Arc<dyn TableProvider>>>> {
         self.try_new_boxed(url)
     }
 }

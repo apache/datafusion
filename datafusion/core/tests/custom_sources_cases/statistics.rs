@@ -17,6 +17,7 @@
 
 //! This module contains end to end tests of statistics propagation
 
+use futures::future::BoxFuture;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -40,8 +41,6 @@ use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::{
     ChildrenPropertiesMode, ReplaceChildrenOptions, StatisticsArgs, StatisticsContext,
 };
-
-use async_trait::async_trait;
 
 /// This is a testing structure for statistics
 /// It will act both as a table provider and execution plan
@@ -77,8 +76,6 @@ impl StatisticsValidation {
         )
     }
 }
-
-#[async_trait]
 impl TableProvider for StatisticsValidation {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
@@ -88,41 +85,43 @@ impl TableProvider for StatisticsValidation {
         TableType::Base
     }
 
-    async fn scan(
-        &self,
-        _state: &dyn Session,
-        projection: Option<&[usize]>,
-        filters: &[Expr],
+    fn scan<'a>(
+        &'a self,
+        _state: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        filters: &'a [Expr],
         // limit is ignored because it is not mandatory for a `TableProvider` to honor it
         _limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Filters should not be pushed down as they are marked as unsupported by default.
-        assert_eq!(
-            0,
-            filters.len(),
-            "Unsupported expressions should not be pushed down"
-        );
-        let projection = match projection.map(|p| p.to_vec()) {
-            Some(p) => p,
-            None => (0..self.schema.fields().len()).collect(),
-        };
-        let projected_schema = project_schema(&self.schema, Some(&projection))?;
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            // Filters should not be pushed down as they are marked as unsupported by default.
+            assert_eq!(
+                0,
+                filters.len(),
+                "Unsupported expressions should not be pushed down"
+            );
+            let projection = match projection.map(|p| p.to_vec()) {
+                Some(p) => p,
+                None => (0..self.schema.fields().len()).collect(),
+            };
+            let projected_schema = project_schema(&self.schema, Some(&projection))?;
 
-        let current_stat = self.stats.clone();
+            let current_stat = self.stats.clone();
 
-        let proj_col_stats = projection
-            .iter()
-            .map(|i| current_stat.column_statistics[*i].clone())
-            .collect();
-        Ok(Arc::new(Self::new(
-            Statistics {
-                num_rows: current_stat.num_rows,
-                column_statistics: proj_col_stats,
-                // TODO stats: knowing the type of the new columns we can guess the output size
-                total_byte_size: Precision::Absent,
-            },
-            projected_schema,
-        )))
+            let proj_col_stats = projection
+                .iter()
+                .map(|i| current_stat.column_statistics[*i].clone())
+                .collect();
+            Ok(Arc::new(Self::new(
+                Statistics {
+                    num_rows: current_stat.num_rows,
+                    column_statistics: proj_col_stats,
+                    // TODO stats: knowing the type of the new columns we can guess the output size
+                    total_byte_size: Precision::Absent,
+                },
+                projected_schema,
+            )) as Arc<dyn ExecutionPlan>)
+        })
     }
 }
 

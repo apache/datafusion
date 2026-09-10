@@ -18,7 +18,6 @@
 //! See `main.rs` for how to run it.
 //!
 //! Simple example of a catalog/schema implementation.
-use async_trait::async_trait;
 use datafusion::{
     arrow::util::pretty,
     catalog::{CatalogProvider, CatalogProviderList, SchemaProvider},
@@ -31,6 +30,7 @@ use datafusion::{
     execution::context::SessionState,
     prelude::SessionContext,
 };
+use futures::future::BoxFuture;
 use std::sync::RwLock;
 use std::{collections::HashMap, path::Path, sync::Arc};
 use std::{fs::File, io::Write};
@@ -175,17 +175,20 @@ impl DirSchema {
         }))
     }
 }
-
-#[async_trait]
 impl SchemaProvider for DirSchema {
     fn table_names(&self) -> Vec<String> {
         let tables = self.tables.read().unwrap();
         tables.keys().cloned().collect::<Vec<_>>()
     }
 
-    async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
-        let tables = self.tables.read().unwrap();
-        Ok(tables.get(name).cloned())
+    fn table<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<Arc<dyn TableProvider>>>> {
+        Box::pin(async move {
+            let tables = self.tables.read().unwrap();
+            Ok(tables.get(name).cloned())
+        })
     }
 
     fn table_exist(&self, name: &str) -> bool {

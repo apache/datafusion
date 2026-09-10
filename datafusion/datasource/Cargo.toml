@@ -52,7 +52,6 @@ async-compression = { version = "0.4.40", features = [
     "zstd",
     "tokio",
 ], optional = true }
-async-trait = { workspace = true }
 bytes = { workspace = true }
 bzip2 = { workspace = true, optional = true }
 chrono = { workspace = true }

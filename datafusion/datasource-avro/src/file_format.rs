@@ -16,6 +16,7 @@
 // under the License.
 
 //! Apache Avro [`FileFormat`] abstractions
+use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -54,7 +55,6 @@ use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
 
-use async_trait::async_trait;
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore, ObjectStoreExt};
 use tokio::io::AsyncWriteExt;
 
@@ -106,8 +106,6 @@ impl GetExt for AvroFormatFactory {
 /// Avro [`FileFormat`] implementation.
 #[derive(Default, Debug)]
 pub struct AvroFormat;
-
-#[async_trait]
 impl FileFormat for AvroFormat {
     fn get_ext(&self) -> String {
         AvroFormatFactory::new().get_ext()
@@ -128,63 +126,71 @@ impl FileFormat for AvroFormat {
         None
     }
 
-    async fn infer_schema(
-        &self,
-        _state: &dyn Session,
-        store: &Arc<dyn ObjectStore>,
-        objects: &[ObjectMeta],
-    ) -> Result<SchemaRef> {
-        let mut schemas = vec![];
-        for object in objects {
-            let r = store.as_ref().get(&object.location).await?;
-            let schema = match r.payload {
-                GetResultPayload::File(mut file, _) => {
-                    read_avro_schema_from_reader(&mut file)?
-                }
-                GetResultPayload::Stream(_) => {
-                    // TODO: Fetching entire file to get schema is potentially wasteful
-                    let data = r.bytes().await?;
-                    read_avro_schema_from_reader(&mut data.as_ref())?
-                }
-            };
-            schemas.push(schema);
-        }
-        let merged_schema = Schema::try_merge(schemas)?;
-        Ok(Arc::new(merged_schema))
+    fn infer_schema<'a>(
+        &'a self,
+        _state: &'a dyn Session,
+        store: &'a Arc<dyn ObjectStore>,
+        objects: &'a [ObjectMeta],
+    ) -> BoxFuture<'a, Result<SchemaRef>> {
+        Box::pin(async move {
+            let mut schemas = vec![];
+            for object in objects {
+                let r = store.as_ref().get(&object.location).await?;
+                let schema = match r.payload {
+                    GetResultPayload::File(mut file, _) => {
+                        read_avro_schema_from_reader(&mut file)?
+                    }
+                    GetResultPayload::Stream(_) => {
+                        // TODO: Fetching entire file to get schema is potentially wasteful
+                        let data = r.bytes().await?;
+                        read_avro_schema_from_reader(&mut data.as_ref())?
+                    }
+                };
+                schemas.push(schema);
+            }
+            let merged_schema = Schema::try_merge(schemas)?;
+            Ok(Arc::new(merged_schema))
+        })
     }
 
-    async fn infer_stats(
-        &self,
-        _state: &dyn Session,
-        _store: &Arc<dyn ObjectStore>,
+    fn infer_stats<'a>(
+        &'a self,
+        _state: &'a dyn Session,
+        _store: &'a Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
-        _object: &ObjectMeta,
-    ) -> Result<Statistics> {
-        Ok(Statistics::new_unknown(&table_schema))
+        _object: &'a ObjectMeta,
+    ) -> BoxFuture<'a, Result<Statistics>> {
+        Box::pin(async move { Ok(Statistics::new_unknown(&table_schema)) })
     }
 
-    async fn create_physical_plan(
-        &self,
-        _state: &dyn Session,
+    fn create_physical_plan<'a>(
+        &'a self,
+        _state: &'a dyn Session,
         conf: FileScanConfig,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(DataSourceExec::from_data_source(conf))
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            Ok(DataSourceExec::from_data_source(conf) as Arc<dyn ExecutionPlan>)
+        })
     }
 
-    async fn create_writer_physical_plan(
-        &self,
+    fn create_writer_physical_plan<'a>(
+        &'a self,
         input: Arc<dyn ExecutionPlan>,
-        _state: &dyn Session,
+        _state: &'a dyn Session,
         conf: FileSinkConfig,
         order_requirements: Option<LexRequirement>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        if conf.insert_op != InsertOp::Append {
-            return not_impl_err!("Overwrites are not implemented yet for Avro format");
-        }
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            if conf.insert_op != InsertOp::Append {
+                return not_impl_err!(
+                    "Overwrites are not implemented yet for Avro format"
+                );
+            }
 
-        let sink = Arc::new(AvroFileSink::new(conf));
+            let sink = Arc::new(AvroFileSink::new(conf));
 
-        Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
+            Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
+        })
     }
 
     fn file_source(
@@ -206,102 +212,105 @@ impl AvroFileSink {
     }
 }
 
-#[async_trait]
 impl FileSink for AvroFileSink {
     fn config(&self) -> &FileSinkConfig {
         &self.config
     }
 
-    async fn spawn_writer_tasks_and_join(
-        &self,
-        context: &Arc<TaskContext>,
+    fn spawn_writer_tasks_and_join<'a>(
+        &'a self,
+        context: &'a Arc<TaskContext>,
         demux_task: SpawnedTask<Result<()>>,
         mut file_stream_rx: DemuxedStreamReceiver,
         object_store: Arc<dyn ObjectStore>,
-    ) -> Result<u64> {
-        let mut file_write_tasks: JoinSet<std::result::Result<usize, DataFusionError>> =
-            JoinSet::new();
+    ) -> BoxFuture<'a, Result<u64>> {
+        Box::pin(async move {
+            let mut file_write_tasks: JoinSet<
+                std::result::Result<usize, DataFusionError>,
+            > = JoinSet::new();
 
-        let writer_schema = get_writer_schema(&self.config);
-        while let Some((path, mut rx)) = file_stream_rx.recv().await {
-            let shared_buffer = SharedBuffer::new(INITIAL_BUFFER_BYTES);
-            let mut avro_writer: AvroWriter<SharedBuffer> =
-                WriterBuilder::new(writer_schema.as_ref().clone())
-                    .build::<_, AvroOcfFormat>(shared_buffer.clone())
-                    .map_err(|e| {
-                        internal_datafusion_err!("Failed to create Avro writer: {e}")
-                    })?;
-            let mut object_store_writer = ObjectWriterBuilder::new(
-                FileCompressionType::UNCOMPRESSED,
-                &path,
-                Arc::clone(&object_store),
-            )
-            .with_buffer_size(Some(
-                context
-                    .session_config()
-                    .options()
-                    .execution
-                    .objectstore_writer_buffer_size,
-            ))
-            .build()?;
-            file_write_tasks.spawn(async move {
-                let mut row_count = 0;
-                while let Some(batch) = rx.recv().await {
-                    row_count += batch.num_rows();
-                    avro_writer
-                        .write(&batch)
-                        .map_err(|e| internal_datafusion_err!("{e}"))?;
-                    let mut buff_to_flush = shared_buffer.buffer.try_lock().unwrap();
-                    if buff_to_flush.len() > BUFFER_FLUSH_BYTES {
-                        object_store_writer
-                            .write_all(buff_to_flush.as_slice())
-                            .await?;
-                        buff_to_flush.clear();
+            let writer_schema = get_writer_schema(&self.config);
+            while let Some((path, mut rx)) = file_stream_rx.recv().await {
+                let shared_buffer = SharedBuffer::new(INITIAL_BUFFER_BYTES);
+                let mut avro_writer: AvroWriter<SharedBuffer> =
+                    WriterBuilder::new(writer_schema.as_ref().clone())
+                        .build::<_, AvroOcfFormat>(shared_buffer.clone())
+                        .map_err(|e| {
+                            internal_datafusion_err!("Failed to create Avro writer: {e}")
+                        })?;
+                let mut object_store_writer = ObjectWriterBuilder::new(
+                    FileCompressionType::UNCOMPRESSED,
+                    &path,
+                    Arc::clone(&object_store),
+                )
+                .with_buffer_size(Some(
+                    context
+                        .session_config()
+                        .options()
+                        .execution
+                        .objectstore_writer_buffer_size,
+                ))
+                .build()?;
+                file_write_tasks.spawn(async move {
+                    let mut row_count = 0;
+                    while let Some(batch) = rx.recv().await {
+                        row_count += batch.num_rows();
+                        avro_writer
+                            .write(&batch)
+                            .map_err(|e| internal_datafusion_err!("{e}"))?;
+                        let mut buff_to_flush = shared_buffer.buffer.try_lock().unwrap();
+                        if buff_to_flush.len() > BUFFER_FLUSH_BYTES {
+                            object_store_writer
+                                .write_all(buff_to_flush.as_slice())
+                                .await?;
+                            buff_to_flush.clear();
+                        }
                     }
-                }
-                if let Err(e) = avro_writer.finish() {
-                    return Err(match e {
-                        AvroError::NYI(e) => DataFusionError::NotImplemented(e),
-                        AvroError::EOF(e) => DataFusionError::IoError(io::Error::new(
-                            io::ErrorKind::UnexpectedEof,
-                            e,
-                        )),
-                        AvroError::ArrowError(e) => DataFusionError::ArrowError(e, None),
-                        AvroError::External(e) => DataFusionError::External(e),
-                        AvroError::IoError(msg, e) => DataFusionError::IoError(e)
-                            .with_diagnostic(Diagnostic::new_error(msg, None)),
-                        _ => internal_datafusion_err!("{e}"),
-                    });
-                }
-                let final_buff = shared_buffer.buffer.try_lock().unwrap();
+                    if let Err(e) = avro_writer.finish() {
+                        return Err(match e {
+                            AvroError::NYI(e) => DataFusionError::NotImplemented(e),
+                            AvroError::EOF(e) => DataFusionError::IoError(
+                                io::Error::new(io::ErrorKind::UnexpectedEof, e),
+                            ),
+                            AvroError::ArrowError(e) => {
+                                DataFusionError::ArrowError(e, None)
+                            }
+                            AvroError::External(e) => DataFusionError::External(e),
+                            AvroError::IoError(msg, e) => DataFusionError::IoError(e)
+                                .with_diagnostic(Diagnostic::new_error(msg, None)),
+                            _ => internal_datafusion_err!("{e}"),
+                        });
+                    }
+                    let final_buff = shared_buffer.buffer.try_lock().unwrap();
 
-                object_store_writer.write_all(final_buff.as_slice()).await?;
-                object_store_writer.shutdown().await?;
-                Ok(row_count)
-            });
-        }
+                    object_store_writer.write_all(final_buff.as_slice()).await?;
+                    object_store_writer.shutdown().await?;
+                    Ok(row_count)
+                });
+            }
 
-        let mut row_count = 0;
-        while let Some(result) = file_write_tasks.join_next().await {
-            match result {
-                Ok(r) => {
-                    row_count += r?;
-                }
-                Err(e) => {
-                    if e.is_panic() {
-                        std::panic::resume_unwind(e.into_panic());
-                    } else {
-                        unreachable!();
+            let mut row_count = 0;
+            while let Some(result) = file_write_tasks.join_next().await {
+                match result {
+                    Ok(r) => {
+                        row_count += r?;
+                    }
+                    Err(e) => {
+                        if e.is_panic() {
+                            std::panic::resume_unwind(e.into_panic());
+                        } else {
+                            unreachable!();
+                        }
                     }
                 }
             }
-        }
 
-        demux_task
-            .join_unwind()
-            .await
-            .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
-        Ok(row_count as u64)
+            demux_task
+                .join_unwind()
+                .await
+                .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
+            Ok(row_count as u64)
+        })
     }
 }
 
@@ -327,17 +336,16 @@ impl DisplayAs for AvroFileSink {
     }
 }
 
-#[async_trait]
 impl DataSink for AvroFileSink {
     fn schema(&self) -> &SchemaRef {
         self.config.output_schema()
     }
 
-    async fn write_all(
-        &self,
+    fn write_all<'a>(
+        &'a self,
         data: SendableRecordBatchStream,
-        context: &Arc<TaskContext>,
-    ) -> Result<u64> {
-        FileSink::write_all(self, data, context).await
+        context: &'a Arc<TaskContext>,
+    ) -> BoxFuture<'a, Result<u64>> {
+        Box::pin(async move { FileSink::write_all(self, data, context).await })
     }
 }

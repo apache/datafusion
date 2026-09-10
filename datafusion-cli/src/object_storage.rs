@@ -20,7 +20,6 @@ pub(crate) mod stdin;
 
 pub use stdin::{StdinCarriesCommands, is_stdin_location};
 
-use async_trait::async_trait;
 use aws_config::BehaviorVersion;
 use aws_credential_types::provider::{
     ProvideCredentials, SharedCredentialsProvider, error::CredentialsError,
@@ -43,6 +42,8 @@ use object_store::{
     gcp::GoogleCloudStorageBuilder,
     http::HttpBuilder,
 };
+use std::future::Future;
+use std::pin::Pin;
 use std::{
     any::Any,
     error::Error,
@@ -237,24 +238,37 @@ struct S3CredentialProvider {
     credentials: SharedCredentialsProvider,
 }
 
-#[async_trait]
 impl CredentialProvider for S3CredentialProvider {
     type Credential = AwsCredential;
 
-    async fn get_credential(&self) -> object_store::Result<Arc<Self::Credential>> {
-        let creds =
-            self.credentials
-                .provide_credentials()
-                .await
-                .map_err(|e| Generic {
-                    store: "S3",
-                    source: Box::new(e),
-                })?;
-        Ok(Arc::new(AwsCredential {
-            key_id: creds.access_key_id().to_string(),
-            secret_key: creds.secret_access_key().to_string(),
-            token: creds.session_token().map(ToString::to_string),
-        }))
+    fn get_credential<'life0, 'async_trait>(
+        &'life0 self,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = object_store::Result<Arc<Self::Credential>>>
+                + Send
+                + 'async_trait,
+        >,
+    >
+    where
+        'life0: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            let creds =
+                self.credentials
+                    .provide_credentials()
+                    .await
+                    .map_err(|e| Generic {
+                        store: "S3",
+                        source: Box::new(e),
+                    })?;
+            Ok(Arc::new(AwsCredential {
+                key_id: creds.access_key_id().to_string(),
+                secret_key: creds.secret_access_key().to_string(),
+                token: creds.session_token().map(ToString::to_string),
+            }))
+        })
     }
 }
 

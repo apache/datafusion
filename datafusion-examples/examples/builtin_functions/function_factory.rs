@@ -30,6 +30,7 @@ use datafusion::logical_expr::{
     ColumnarValue, CreateFunction, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
     Signature, Volatility,
 };
+use futures::future::BoxFuture;
 use std::hash::Hash;
 use std::result::Result as RResult;
 use std::sync::Arc;
@@ -92,18 +93,19 @@ pub async fn function_factory() -> Result<()> {
 #[derive(Debug, Default)]
 struct CustomFunctionFactory {}
 
-#[async_trait::async_trait]
 impl FunctionFactory for CustomFunctionFactory {
     /// This function takes the parsed `CREATE FUNCTION` statement and returns
     /// the function instance.
-    async fn create(
-        &self,
-        _state: &SessionState,
+    fn create<'a>(
+        &'a self,
+        _state: &'a SessionState,
         statement: CreateFunction,
-    ) -> Result<RegisterFunction> {
-        let f: ScalarFunctionWrapper = statement.try_into()?;
+    ) -> BoxFuture<'a, Result<RegisterFunction>> {
+        Box::pin(async move {
+            let f: ScalarFunctionWrapper = statement.try_into()?;
 
-        Ok(RegisterFunction::Scalar(Arc::new(ScalarUDF::from(f))))
+            Ok(RegisterFunction::Scalar(Arc::new(ScalarUDF::from(f))))
+        })
     }
 }
 

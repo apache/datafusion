@@ -19,7 +19,6 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use datafusion_catalog::Session;
 use datafusion_expr::CreateExternalTable;
 pub use datafusion_expr::{TableProviderFilterPushDown, TableType};
@@ -46,22 +45,12 @@ impl DefaultTableFactory {
         Self::default()
     }
 }
-
-#[async_trait]
 impl TableProviderFactory for DefaultTableFactory {
-    // Hand-written `#[async_trait]` expansion to reduce compile time. See
-    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
-    fn create<'life0, 'life1, 'life2, 'async_trait>(
-        &'life0 self,
-        state: &'life1 dyn Session,
-        cmd: &'life2 CreateExternalTable,
-    ) -> BoxFuture<'async_trait, Result<Arc<dyn TableProvider>>>
-    where
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        'life2: 'async_trait,
-        Self: 'async_trait,
-    {
+    fn create<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        cmd: &'a CreateExternalTable,
+    ) -> BoxFuture<'a, Result<Arc<dyn TableProvider>>> {
         self.create_boxed(state, cmd)
     }
 }

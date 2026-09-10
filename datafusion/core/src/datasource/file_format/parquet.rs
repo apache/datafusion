@@ -106,6 +106,10 @@ pub(crate) mod test_util {
 #[cfg(test)]
 mod tests {
 
+    use std::future::Future;
+
+    use std::pin::Pin;
+
     use std::fmt::{self, Display, Formatter};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -151,7 +155,6 @@ mod tests {
         types::Int32Type,
     };
     use arrow::datatypes::{DataType, Field};
-    use async_trait::async_trait;
     use datafusion_datasource::file_groups::FileGroup;
     use datafusion_datasource_parquet::metadata::DFParquetMetadata;
     use futures::StreamExt;
@@ -303,33 +306,66 @@ mod tests {
             self.clone()
         }
     }
-
-    #[async_trait]
     impl ObjectStore for RequestCountingObjectStore {
-        async fn put_opts(
-            &self,
-            _location: &Path,
+        fn put_opts<'life0, 'life1, 'async_trait>(
+            &'life0 self,
+            _location: &'life1 Path,
             _payload: PutPayload,
             _opts: PutOptions,
-        ) -> object_store::Result<PutResult> {
-            unimplemented!()
+        ) -> Pin<
+            Box<
+                dyn Future<Output = object_store::Result<PutResult>>
+                    + Send
+                    + 'async_trait,
+            >,
+        >
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(async move { unimplemented!() })
         }
 
-        async fn put_multipart_opts(
-            &self,
-            _location: &Path,
+        fn put_multipart_opts<'life0, 'life1, 'async_trait>(
+            &'life0 self,
+            _location: &'life1 Path,
             _opts: PutMultipartOptions,
-        ) -> object_store::Result<Box<dyn MultipartUpload>> {
-            unimplemented!()
+        ) -> Pin<
+            Box<
+                dyn Future<Output = object_store::Result<Box<dyn MultipartUpload>>>
+                    + Send
+                    + 'async_trait,
+            >,
+        >
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(async move { unimplemented!() })
         }
 
-        async fn get_opts(
-            &self,
-            location: &Path,
+        fn get_opts<'life0, 'life1, 'async_trait>(
+            &'life0 self,
+            location: &'life1 Path,
             options: GetOptions,
-        ) -> object_store::Result<GetResult> {
-            self.request_count.fetch_add(1, Ordering::SeqCst);
-            self.inner.get_opts(location, options).await
+        ) -> Pin<
+            Box<
+                dyn Future<Output = object_store::Result<GetResult>>
+                    + Send
+                    + 'async_trait,
+            >,
+        >
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(async move {
+                self.request_count.fetch_add(1, Ordering::SeqCst);
+                self.inner.get_opts(location, options).await
+            })
         }
 
         fn delete_stream(
@@ -346,20 +382,37 @@ mod tests {
             unimplemented!()
         }
 
-        async fn list_with_delimiter(
-            &self,
-            _prefix: Option<&Path>,
-        ) -> object_store::Result<ListResult> {
-            unimplemented!()
+        fn list_with_delimiter<'life0, 'life1, 'async_trait>(
+            &'life0 self,
+            _prefix: Option<&'life1 Path>,
+        ) -> Pin<
+            Box<
+                dyn Future<Output = object_store::Result<ListResult>>
+                    + Send
+                    + 'async_trait,
+            >,
+        >
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(async move { unimplemented!() })
         }
 
-        async fn copy_opts(
-            &self,
-            _from: &Path,
-            _to: &Path,
+        fn copy_opts<'life0, 'life1, 'life2, 'async_trait>(
+            &'life0 self,
+            _from: &'life1 Path,
+            _to: &'life2 Path,
             _options: CopyOptions,
-        ) -> object_store::Result<()> {
-            unimplemented!()
+        ) -> Pin<Box<dyn Future<Output = object_store::Result<()>> + Send + 'async_trait>>
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            'life2: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(async move { unimplemented!() })
         }
     }
 

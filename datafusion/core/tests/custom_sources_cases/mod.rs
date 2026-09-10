@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use futures::future::BoxFuture;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -47,7 +48,6 @@ use datafusion_physical_plan::{
     ChildrenPropertiesMode, PlanProperties, ReplaceChildrenOptions,
 };
 
-use async_trait::async_trait;
 use futures::stream::Stream;
 
 mod dml_planning;
@@ -233,8 +233,6 @@ impl ExecutionPlan for CustomExecutionPlan {
         Ok(TreeNodeRecursion::Continue)
     }
 }
-
-#[async_trait]
 impl TableProvider for CustomTableProvider {
     fn schema(&self) -> SchemaRef {
         TEST_CUSTOM_SCHEMA_REF!()
@@ -244,16 +242,19 @@ impl TableProvider for CustomTableProvider {
         TableType::Base
     }
 
-    async fn scan(
-        &self,
-        _state: &dyn Session,
-        projection: Option<&[usize]>,
-        _filters: &[Expr],
+    fn scan<'a>(
+        &'a self,
+        _state: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        _filters: &'a [Expr],
         _limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(CustomExecutionPlan::new(
-            projection.map(|p| p.to_vec()),
-        )))
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            Ok(
+                Arc::new(CustomExecutionPlan::new(projection.map(|p| p.to_vec())))
+                    as Arc<dyn ExecutionPlan>,
+            )
+        })
     }
 }
 

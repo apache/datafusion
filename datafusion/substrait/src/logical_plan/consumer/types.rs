@@ -444,7 +444,6 @@ mod tests {
     use super::*;
     use crate::extensions::Extensions;
     use crate::logical_plan::consumer::DefaultSubstraitConsumer;
-    use async_trait::async_trait;
     use datafusion::catalog::TableProvider;
     use datafusion::common::TableReference;
     use datafusion::execution::{FunctionRegistry, SessionState, SessionStateBuilder};
@@ -460,14 +459,15 @@ mod tests {
         inner: DefaultSubstraitConsumer<'a>,
         metadata: Option<HashMap<String, String>>,
     }
+    use futures::future::BoxFuture;
 
-    #[async_trait]
     impl SubstraitConsumer for MetadataConsumer<'_> {
-        async fn resolve_table_ref(
-            &self,
-            table_ref: &TableReference,
-        ) -> datafusion::common::Result<Option<Arc<dyn TableProvider>>> {
-            self.inner.resolve_table_ref(table_ref).await
+        fn resolve_table_ref<'a>(
+            &'a self,
+            table_ref: &'a TableReference,
+        ) -> BoxFuture<'a, datafusion::common::Result<Option<Arc<dyn TableProvider>>>>
+        {
+            Box::pin(async move { self.inner.resolve_table_ref(table_ref).await })
         }
 
         fn get_extensions(&self) -> &Extensions {

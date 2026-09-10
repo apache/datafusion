@@ -25,12 +25,12 @@
 //! access the runtime, then you will get a panic when trying to do operations
 //! such as spawning a tokio task.
 
+use futures::future::BoxFuture;
 use std::fmt::Debug;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
-use async_trait::async_trait;
 use datafusion_catalog::{MemoryCatalogProvider, TableProvider};
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, exec_err};
@@ -125,8 +125,6 @@ pub fn start_async_provider() -> (AsyncTableProvider, Handle) {
 
     (table_provider, tokio_rt)
 }
-
-#[async_trait]
 impl TableProvider for AsyncTableProvider {
     fn schema(&self) -> Arc<Schema> {
         super::create_test_schema()
@@ -136,34 +134,37 @@ impl TableProvider for AsyncTableProvider {
         datafusion_expr::TableType::Base
     }
 
-    async fn scan(
-        &self,
-        state: &dyn Session,
-        _projection: Option<&[usize]>,
-        _filters: &[Expr],
+    fn scan<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        _projection: Option<&'a [usize]>,
+        _filters: &'a [Expr],
         _limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let catalog = state.catalog_list().catalog("datafusion").ok_or_else(|| {
-            datafusion_common::exec_datafusion_err!("missing datafusion catalog")
-        })?;
-        let schema = catalog.schema("public").ok_or_else(|| {
-            datafusion_common::exec_datafusion_err!("missing public schema")
-        })?;
-        if schema.table("external_table").await?.is_none() {
-            return exec_err!("missing external_table");
-        }
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            let catalog =
+                state.catalog_list().catalog("datafusion").ok_or_else(|| {
+                    datafusion_common::exec_datafusion_err!("missing datafusion catalog")
+                })?;
+            let schema = catalog.schema("public").ok_or_else(|| {
+                datafusion_common::exec_datafusion_err!("missing public schema")
+            })?;
+            if schema.table("external_table").await?.is_none() {
+                return exec_err!("missing external_table");
+            }
 
-        // Register a catalog from the dynamically loaded library so the host
-        // can verify that catalog mutations cross the FFI boundary as well.
-        state.catalog_list().register_catalog(
-            "ffi_registered".to_owned(),
-            Arc::new(MemoryCatalogProvider::new()),
-        );
+            // Register a catalog from the dynamically loaded library so the host
+            // can verify that catalog mutations cross the FFI boundary as well.
+            state.catalog_list().register_catalog(
+                "ffi_registered".to_owned(),
+                Arc::new(MemoryCatalogProvider::new()),
+            );
 
-        Ok(Arc::new(AsyncTestExecutionPlan::new(
-            self.batch_request.clone(),
-            self.batch_receiver.resubscribe(),
-        )))
+            Ok(Arc::new(AsyncTestExecutionPlan::new(
+                self.batch_request.clone(),
+                self.batch_receiver.resubscribe(),
+            )))
+        })
     }
 }
 

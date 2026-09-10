@@ -87,6 +87,8 @@ use std::{
     task::{Context, Poll},
 };
 
+use futures::future::BoxFuture;
+
 use arrow::datatypes::{Float64Type, Int64Type};
 use arrow::{
     array::{ArrayRef, Int32Array, RecordBatch, StringArray, UInt32Array},
@@ -98,7 +100,6 @@ use futures::{
     stream::{Stream, StreamExt},
 };
 use rand::{Rng, SeedableRng, rngs::StdRng};
-use tonic::async_trait;
 
 use datafusion::{
     catalog::Session,
@@ -563,49 +564,50 @@ impl Hash for HashableF64 {
 /// convert [`TableSamplePlanNode`] into [`SampleExec`].
 #[derive(Debug)]
 struct TableSampleQueryPlanner;
-
-#[async_trait]
 impl QueryPlanner for TableSampleQueryPlanner {
-    async fn create_physical_plan(
-        &self,
-        logical_plan: &LogicalPlan,
-        session_state: &dyn Session,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let planner = DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
-            TableSampleExtensionPlanner,
-        )]);
-        planner
-            .create_physical_plan(logical_plan, session_state)
-            .await
+    fn create_physical_plan<'a>(
+        &'a self,
+        logical_plan: &'a LogicalPlan,
+        session_state: &'a dyn Session,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            let planner =
+                DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
+                    TableSampleExtensionPlanner,
+                )]);
+            planner
+                .create_physical_plan(logical_plan, session_state)
+                .await
+        })
     }
 }
 
 /// Extension planner that converts [`TableSamplePlanNode`] to [`SampleExec`].
 struct TableSampleExtensionPlanner;
-
-#[async_trait]
 impl ExtensionPlanner for TableSampleExtensionPlanner {
-    async fn plan_extension(
-        &self,
-        _planner: &dyn PhysicalPlanner,
-        node: &dyn UserDefinedLogicalNode,
-        _logical_inputs: &[&LogicalPlan],
-        physical_inputs: &[Arc<dyn ExecutionPlan>],
-        _session_state: &dyn Session,
-        _planning_ctx: &PhysicalPlanningContext,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        let Some(sample_node) = node.as_any().downcast_ref::<TableSamplePlanNode>()
-        else {
-            return Ok(None);
-        };
+    fn plan_extension<'a>(
+        &'a self,
+        _planner: &'a dyn PhysicalPlanner,
+        node: &'a dyn UserDefinedLogicalNode,
+        _logical_inputs: &'a [&'a LogicalPlan],
+        physical_inputs: &'a [Arc<dyn ExecutionPlan>],
+        _session_state: &'a dyn Session,
+        _planning_ctx: &'a PhysicalPlanningContext,
+    ) -> BoxFuture<'a, Result<Option<Arc<dyn ExecutionPlan>>>> {
+        Box::pin(async move {
+            let Some(sample_node) = node.as_any().downcast_ref::<TableSamplePlanNode>()
+            else {
+                return Ok(None);
+            };
 
-        let exec = SampleExec::try_new(
-            Arc::clone(&physical_inputs[0]),
-            sample_node.lower_bound.0,
-            sample_node.upper_bound.0,
-            sample_node.seed,
-        )?;
-        Ok(Some(Arc::new(exec)))
+            let exec = SampleExec::try_new(
+                Arc::clone(&physical_inputs[0]),
+                sample_node.lower_bound.0,
+                sample_node.upper_bound.0,
+                sample_node.seed,
+            )?;
+            Ok(Some(Arc::new(exec) as Arc<dyn ExecutionPlan>))
+        })
     }
 }
 

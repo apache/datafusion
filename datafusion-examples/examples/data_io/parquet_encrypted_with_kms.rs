@@ -19,7 +19,6 @@
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
 use arrow_schema::SchemaRef;
-use async_trait::async_trait;
 use base64::Engine;
 use datafusion::common::extensions_options;
 use datafusion::config::{EncryptionFactoryOptions, TableParquetOptions};
@@ -34,6 +33,7 @@ use datafusion::parquet::encryption::{
 };
 use datafusion::prelude::SessionContext;
 use futures::StreamExt;
+use futures::future::BoxFuture;
 use object_store::path::Path;
 use rand::rand_core::{OsRng, TryRngCore};
 use std::collections::HashSet;
@@ -213,7 +213,6 @@ struct TestEncryptionFactory {}
 
 /// `EncryptionFactory` is a DataFusion trait for types that generate
 /// file encryption and decryption properties.
-#[async_trait]
 impl EncryptionFactory for TestEncryptionFactory {
     /// Generate file encryption properties to use when writing a Parquet file.
     /// The `schema` is provided so that it may be used to dynamically configure
@@ -222,58 +221,63 @@ impl EncryptionFactory for TestEncryptionFactory {
     /// but other implementations may want to use this to compute an
     /// AAD prefix for the file, or to allow use of external key material
     /// (where key metadata is stored in a JSON file alongside Parquet files).
-    async fn get_file_encryption_properties(
-        &self,
-        options: &EncryptionFactoryOptions,
-        schema: &SchemaRef,
-        _file_path: &Path,
-    ) -> Result<Option<Arc<FileEncryptionProperties>>> {
-        let config: EncryptionConfig = options.to_extension_options()?;
+    fn get_file_encryption_properties<'a>(
+        &'a self,
+        options: &'a EncryptionFactoryOptions,
+        schema: &'a SchemaRef,
+        _file_path: &'a Path,
+    ) -> BoxFuture<'a, Result<Option<Arc<FileEncryptionProperties>>>> {
+        Box::pin(async move {
+            let config: EncryptionConfig = options.to_extension_options()?;
 
-        // Generate a random encryption key for this file.
-        let mut key = vec![0u8; 16];
-        OsRng.try_fill_bytes(&mut key).unwrap();
+            // Generate a random encryption key for this file.
+            let mut key = vec![0u8; 16];
+            OsRng.try_fill_bytes(&mut key).unwrap();
 
-        // Generate the key metadata that allows retrieving the key when reading the file.
-        let key_metadata = wrap_key(&key);
+            // Generate the key metadata that allows retrieving the key when reading the file.
+            let key_metadata = wrap_key(&key);
 
-        let mut builder = FileEncryptionProperties::builder(key.to_vec())
-            .with_footer_key_metadata(key_metadata.clone());
+            let mut builder = FileEncryptionProperties::builder(key.to_vec())
+                .with_footer_key_metadata(key_metadata.clone());
 
-        let encrypted_columns: HashSet<&str> =
-            config.encrypted_columns.split(',').collect();
-        if !encrypted_columns.is_empty() {
-            // Set up per-column encryption.
-            for field in schema.fields().iter() {
-                if encrypted_columns.contains(field.name().as_str()) {
-                    // Here we re-use the same key for all encrypted columns,
-                    // but new keys could also be generated per column.
-                    builder = builder.with_column_key_and_metadata(
-                        field.name().as_str(),
-                        key.clone(),
-                        key_metadata.clone(),
-                    );
+            let encrypted_columns: HashSet<&str> =
+                config.encrypted_columns.split(',').collect();
+            if !encrypted_columns.is_empty() {
+                // Set up per-column encryption.
+                for field in schema.fields().iter() {
+                    if encrypted_columns.contains(field.name().as_str()) {
+                        // Here we re-use the same key for all encrypted columns,
+                        // but new keys could also be generated per column.
+                        builder = builder.with_column_key_and_metadata(
+                            field.name().as_str(),
+                            key.clone(),
+                            key_metadata.clone(),
+                        );
+                    }
                 }
             }
-        }
 
-        let encryption_properties = builder.build()?;
+            let encryption_properties = builder.build()?;
 
-        Ok(Some(encryption_properties))
+            Ok(Some(encryption_properties))
+        })
     }
 
     /// Generate file decryption properties to use when reading a Parquet file.
     /// Rather than provide the AES keys directly for decryption, we set a `KeyRetriever`
     /// that can determine the keys using the encryption metadata.
-    async fn get_file_decryption_properties(
-        &self,
-        _options: &EncryptionFactoryOptions,
-        _file_path: &Path,
-    ) -> Result<Option<Arc<FileDecryptionProperties>>> {
-        let decryption_properties =
-            FileDecryptionProperties::with_key_retriever(Arc::new(TestKeyRetriever {}))
-                .build()?;
-        Ok(Some(decryption_properties))
+    fn get_file_decryption_properties<'a>(
+        &'a self,
+        _options: &'a EncryptionFactoryOptions,
+        _file_path: &'a Path,
+    ) -> BoxFuture<'a, Result<Option<Arc<FileDecryptionProperties>>>> {
+        Box::pin(async move {
+            let decryption_properties = FileDecryptionProperties::with_key_retriever(
+                Arc::new(TestKeyRetriever {}),
+            )
+            .build()?;
+            Ok(Some(decryption_properties))
+        })
     }
 }
 

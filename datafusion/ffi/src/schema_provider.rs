@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use futures::future::BoxFuture;
 use std::ffi::c_void;
 use std::sync::Arc;
 
 use async_ffi::{FfiFuture, FutureExt};
-use async_trait::async_trait;
 use datafusion_catalog::{SchemaProvider, TableProvider};
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_proto::logical_plan::{
@@ -309,8 +309,6 @@ impl Clone for FFI_SchemaProvider {
         unsafe { (self.clone)(self) }
     }
 }
-
-#[async_trait]
 impl SchemaProvider for ForeignSchemaProvider {
     fn owner_name(&self) -> Option<&str> {
         let name: Option<&SString> = self.0.owner_name.as_ref();
@@ -326,18 +324,20 @@ impl SchemaProvider for ForeignSchemaProvider {
         }
     }
 
-    async fn table(
-        &self,
-        name: &str,
-    ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError> {
-        unsafe {
-            let table: Option<FFI_TableProvider> =
-                df_result!((self.0.table)(&self.0, name.into()).await)?.into();
+    fn table<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<Arc<dyn TableProvider>>, DataFusionError>> {
+        Box::pin(async move {
+            unsafe {
+                let table: Option<FFI_TableProvider> =
+                    df_result!((self.0.table)(&self.0, name.into()).await)?.into();
 
-            let table = table.as_ref().map(<Arc<dyn TableProvider>>::from);
+                let table = table.as_ref().map(<Arc<dyn TableProvider>>::from);
 
-            Ok(table)
-        }
+                Ok(table)
+            }
+        })
     }
 
     fn register_table(

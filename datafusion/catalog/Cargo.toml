@@ -32,7 +32,6 @@ all-features = true
 
 [dependencies]
 arrow = { workspace = true }
-async-trait = { workspace = true }
 dashmap = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-common-runtime = { workspace = true }

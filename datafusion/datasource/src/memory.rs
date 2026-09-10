@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use futures::future::BoxFuture;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::fmt;
@@ -46,7 +47,6 @@ use datafusion_physical_plan::{
     SendableRecordBatchStream, Statistics, common,
 };
 
-use async_trait::async_trait;
 use datafusion_physical_plan::coop::cooperative;
 use datafusion_physical_plan::execution_plan::SchedulingType;
 use futures::StreamExt;
@@ -956,38 +956,38 @@ impl MemSink {
         Ok(Self { batches, schema })
     }
 }
-
-#[async_trait]
 impl DataSink for MemSink {
     fn schema(&self) -> &SchemaRef {
         &self.schema
     }
 
-    async fn write_all(
-        &self,
+    fn write_all<'a>(
+        &'a self,
         mut data: SendableRecordBatchStream,
-        _context: &Arc<TaskContext>,
-    ) -> Result<u64> {
-        let num_partitions = self.batches.len();
+        _context: &'a Arc<TaskContext>,
+    ) -> BoxFuture<'a, Result<u64>> {
+        Box::pin(async move {
+            let num_partitions = self.batches.len();
 
-        // buffer up the data round robin style into num_partitions
+            // buffer up the data round robin style into num_partitions
 
-        let mut new_batches = vec![vec![]; num_partitions];
-        let mut i = 0;
-        let mut row_count = 0;
-        while let Some(batch) = data.next().await.transpose()? {
-            row_count += batch.num_rows();
-            new_batches[i].push(batch);
-            i = (i + 1) % num_partitions;
-        }
+            let mut new_batches = vec![vec![]; num_partitions];
+            let mut i = 0;
+            let mut row_count = 0;
+            while let Some(batch) = data.next().await.transpose()? {
+                row_count += batch.num_rows();
+                new_batches[i].push(batch);
+                i = (i + 1) % num_partitions;
+            }
 
-        // write the outputs into the batches
-        for (target, mut batches) in self.batches.iter().zip(new_batches) {
-            // Append all the new batches in one go to minimize locking overhead
-            target.write().await.append(&mut batches);
-        }
+            // write the outputs into the batches
+            for (target, mut batches) in self.batches.iter().zip(new_batches) {
+                // Append all the new batches in one go to minimize locking overhead
+                target.write().await.append(&mut batches);
+            }
 
-        Ok(row_count as u64)
+            Ok(row_count as u64)
+        })
     }
 }
 

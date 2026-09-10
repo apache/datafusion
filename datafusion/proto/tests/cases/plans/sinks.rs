@@ -19,7 +19,6 @@
 
 use super::{roundtrip_test, roundtrip_test_and_return};
 use arrow::csv::WriterBuilder;
-use async_trait::async_trait;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::file_format::csv::CsvSink;
@@ -51,6 +50,7 @@ use datafusion_proto::physical_plan::{
 };
 use datafusion_proto::protobuf;
 use datafusion_proto::protobuf::PhysicalPlanNode;
+use futures::future::BoxFuture;
 use std::fmt::Formatter;
 use std::sync::Arc;
 use std::vec;
@@ -65,19 +65,19 @@ impl DisplayAs for ProtoHookSink {
         write!(f, "ProtoHookSink")
     }
 }
-
-#[async_trait]
 impl DataSink for ProtoHookSink {
     fn schema(&self) -> &SchemaRef {
         &self.schema
     }
 
-    async fn write_all(
-        &self,
+    fn write_all<'a>(
+        &'a self,
         _data: SendableRecordBatchStream,
-        _context: &Arc<TaskContext>,
-    ) -> Result<u64> {
-        unreachable!("serialization test does not execute the sink")
+        _context: &'a Arc<TaskContext>,
+    ) -> BoxFuture<'a, Result<u64>> {
+        Box::pin(
+            async move { unreachable!("serialization test does not execute the sink") },
+        )
     }
 
     fn try_to_proto(

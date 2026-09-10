@@ -19,7 +19,9 @@
 
 use std::collections::BTreeSet;
 use std::fs::File;
+use std::future::Future;
 use std::io::{Read, Seek, SeekFrom};
+use std::pin::Pin;
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
@@ -40,7 +42,6 @@ use datafusion_common::test_util::batches_to_sort_string;
 use datafusion_execution::config::SessionConfig;
 use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 
-use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{TimeZone, Utc};
 use futures::StreamExt;
@@ -655,69 +656,97 @@ impl MirroringObjectStore {
     }
 }
 
-#[async_trait]
 impl ObjectStore for MirroringObjectStore {
-    async fn put_opts(
-        &self,
-        _location: &Path,
+    fn put_opts<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        _location: &'life1 Path,
         _put_payload: PutPayload,
         _opts: PutOptions,
-    ) -> object_store::Result<PutResult> {
-        unimplemented!()
+    ) -> Pin<
+        Box<dyn Future<Output = object_store::Result<PutResult>> + Send + 'async_trait>,
+    >
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move { unimplemented!() })
     }
 
-    async fn put_multipart_opts(
-        &self,
-        _location: &Path,
+    fn put_multipart_opts<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        _location: &'life1 Path,
         _opts: PutMultipartOptions,
-    ) -> object_store::Result<Box<dyn MultipartUpload>> {
-        unimplemented!()
+    ) -> Pin<
+        Box<
+            dyn Future<Output = object_store::Result<Box<dyn MultipartUpload>>>
+                + Send
+                + 'async_trait,
+        >,
+    >
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move { unimplemented!() })
     }
 
-    async fn get_opts(
-        &self,
-        location: &Path,
+    fn get_opts<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        location: &'life1 Path,
         options: GetOptions,
-    ) -> object_store::Result<GetResult> {
-        self.files.iter().find(|x| *x == location).unwrap();
-        let path = std::path::PathBuf::from(&self.mirrored_file);
-        let file = File::open(&path).unwrap();
-        let metadata = file.metadata().unwrap();
+    ) -> Pin<
+        Box<dyn Future<Output = object_store::Result<GetResult>> + Send + 'async_trait>,
+    >
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            self.files.iter().find(|x| *x == location).unwrap();
+            let path = std::path::PathBuf::from(&self.mirrored_file);
+            let file = File::open(&path).unwrap();
+            let metadata = file.metadata().unwrap();
 
-        let meta = ObjectMeta {
-            location: location.clone(),
-            last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
-            size: metadata.len(),
-            e_tag: None,
-            version: None,
-        };
-
-        let payload = if options.head {
-            // no content for head requests
-            GetResultPayload::Stream(stream::empty().boxed())
-        } else if let Some(range) = options.range {
-            let GetRange::Bounded(range) = range else {
-                unimplemented!("Unbounded range not supported in MirroringObjectStore");
+            let meta = ObjectMeta {
+                location: location.clone(),
+                last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
+                size: metadata.len(),
+                e_tag: None,
+                version: None,
             };
-            let mut file = File::open(path).unwrap();
-            file.seek(SeekFrom::Start(range.start)).unwrap();
 
-            let to_read = range.end - range.start;
-            let to_read: usize = to_read.try_into().unwrap();
-            let mut data = Vec::with_capacity(to_read);
-            let read = file.take(to_read as u64).read_to_end(&mut data).unwrap();
-            assert_eq!(read, to_read);
-            let stream = stream::once(async move { Ok(Bytes::from(data)) }).boxed();
-            GetResultPayload::Stream(stream)
-        } else {
-            GetResultPayload::File(file, path)
-        };
+            let payload = if options.head {
+                // no content for head requests
+                GetResultPayload::Stream(stream::empty().boxed())
+            } else if let Some(range) = options.range {
+                let GetRange::Bounded(range) = range else {
+                    unimplemented!(
+                        "Unbounded range not supported in MirroringObjectStore"
+                    );
+                };
+                let mut file = File::open(path).unwrap();
+                file.seek(SeekFrom::Start(range.start)).unwrap();
 
-        Ok(GetResult {
-            range: 0..meta.size,
-            payload,
-            meta,
-            attributes: Attributes::default(),
+                let to_read = range.end - range.start;
+                let to_read: usize = to_read.try_into().unwrap();
+                let mut data = Vec::with_capacity(to_read);
+                let read = file.take(to_read as u64).read_to_end(&mut data).unwrap();
+                assert_eq!(read, to_read);
+                let stream = stream::once(async move { Ok(Bytes::from(data)) }).boxed();
+                GetResultPayload::Stream(stream)
+            } else {
+                GetResultPayload::File(file, path)
+            };
+
+            Ok(GetResult {
+                range: 0..meta.size,
+                payload,
+                meta,
+                attributes: Attributes::default(),
+            })
         })
     }
 
@@ -750,42 +779,51 @@ impl ObjectStore for MirroringObjectStore {
         )))
     }
 
-    async fn list_with_delimiter(
-        &self,
-        prefix: Option<&Path>,
-    ) -> object_store::Result<ListResult> {
-        let root = Path::default();
-        let prefix = prefix.unwrap_or(&root);
+    fn list_with_delimiter<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        prefix: Option<&'life1 Path>,
+    ) -> Pin<
+        Box<dyn Future<Output = object_store::Result<ListResult>> + Send + 'async_trait>,
+    >
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            let root = Path::default();
+            let prefix = prefix.unwrap_or(&root);
 
-        let mut common_prefixes = BTreeSet::new();
-        let mut objects = vec![];
+            let mut common_prefixes = BTreeSet::new();
+            let mut objects = vec![];
 
-        for k in &self.files {
-            let Some(mut parts) = k.prefix_match(prefix) else {
-                continue;
-            };
-
-            // Pop first element
-            let Some(common_prefix) = parts.next() else {
-                continue;
-            };
-
-            if parts.next().is_some() {
-                common_prefixes.insert(prefix.clone().join(common_prefix));
-            } else {
-                let object = ObjectMeta {
-                    location: k.clone(),
-                    last_modified: Utc.timestamp_nanos(0),
-                    size: self.file_size,
-                    e_tag: None,
-                    version: None,
+            for k in &self.files {
+                let Some(mut parts) = k.prefix_match(prefix) else {
+                    continue;
                 };
-                objects.push(object);
+
+                // Pop first element
+                let Some(common_prefix) = parts.next() else {
+                    continue;
+                };
+
+                if parts.next().is_some() {
+                    common_prefixes.insert(prefix.clone().join(common_prefix));
+                } else {
+                    let object = ObjectMeta {
+                        location: k.clone(),
+                        last_modified: Utc.timestamp_nanos(0),
+                        size: self.file_size,
+                        e_tag: None,
+                        version: None,
+                    };
+                    objects.push(object);
+                }
             }
-        }
-        Ok(ListResult {
-            common_prefixes: common_prefixes.into_iter().collect(),
-            objects,
+            Ok(ListResult {
+                common_prefixes: common_prefixes.into_iter().collect(),
+                objects,
+            })
         })
     }
 
@@ -796,12 +834,18 @@ impl ObjectStore for MirroringObjectStore {
         unimplemented!()
     }
 
-    async fn copy_opts(
-        &self,
-        _from: &Path,
-        _to: &Path,
+    fn copy_opts<'life0, 'life1, 'life2, 'async_trait>(
+        &'life0 self,
+        _from: &'life1 Path,
+        _to: &'life2 Path,
         _options: CopyOptions,
-    ) -> object_store::Result<()> {
-        unimplemented!()
+    ) -> Pin<Box<dyn Future<Output = object_store::Result<()>> + Send + 'async_trait>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move { unimplemented!() })
     }
 }

@@ -19,13 +19,13 @@
 //! or more Parquet files to an [`ObjectStore`], optionally with parallel
 //! per-column and per-row-group serialization.
 
+use futures::future::BoxFuture;
 use std::fmt;
 use std::fmt::Debug;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::{Schema, SchemaRef};
-use async_trait::async_trait;
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{DataFusionError, HashMap, Result, internal_datafusion_err};
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
@@ -253,150 +253,152 @@ async fn set_writer_encryption_properties(
 ) -> Result<WriterPropertiesBuilder> {
     Ok(builder)
 }
-
-#[async_trait]
 impl FileSink for ParquetSink {
     fn config(&self) -> &FileSinkConfig {
         &self.config
     }
 
-    async fn spawn_writer_tasks_and_join(
-        &self,
-        context: &Arc<TaskContext>,
+    fn spawn_writer_tasks_and_join<'a>(
+        &'a self,
+        context: &'a Arc<TaskContext>,
         demux_task: SpawnedTask<Result<()>>,
         mut file_stream_rx: DemuxedStreamReceiver,
         object_store: Arc<dyn ObjectStore>,
-    ) -> Result<u64> {
-        let rows_written_counter = MetricBuilder::new(&self.metrics)
-            .with_category(MetricCategory::Rows)
-            .global_counter("rows_written");
-        // Note: bytes_written is the sum of compressed row group sizes, which
-        // may differ slightly from the actual on-disk file size (excludes footer,
-        // page indexes, and other Parquet metadata overhead).
-        let bytes_written_counter =
-            MetricBuilder::new(&self.metrics).global_bytes_counter("bytes_written");
-        let elapsed_compute = MetricBuilder::new(&self.metrics).elapsed_compute(0);
+    ) -> BoxFuture<'a, Result<u64>> {
+        Box::pin(async move {
+            let rows_written_counter = MetricBuilder::new(&self.metrics)
+                .with_category(MetricCategory::Rows)
+                .global_counter("rows_written");
+            // Note: bytes_written is the sum of compressed row group sizes, which
+            // may differ slightly from the actual on-disk file size (excludes footer,
+            // page indexes, and other Parquet metadata overhead).
+            let bytes_written_counter =
+                MetricBuilder::new(&self.metrics).global_bytes_counter("bytes_written");
+            let elapsed_compute = MetricBuilder::new(&self.metrics).elapsed_compute(0);
 
-        let parquet_opts = &self.parquet_options;
+            let parquet_opts = &self.parquet_options;
 
-        let mut file_write_tasks: JoinSet<
-            std::result::Result<(Path, ParquetMetaData), DataFusionError>,
-        > = JoinSet::new();
+            let mut file_write_tasks: JoinSet<
+                std::result::Result<(Path, ParquetMetaData), DataFusionError>,
+            > = JoinSet::new();
 
-        let runtime = context.runtime_env();
-        let parallel_options = ParallelParquetWriterOptions {
-            max_parallel_row_groups: parquet_opts
-                .global
-                .maximum_parallel_row_group_writers,
-            max_buffered_record_batches_per_stream: parquet_opts
-                .global
-                .maximum_buffered_record_batches_per_stream,
-        };
+            let runtime = context.runtime_env();
+            let parallel_options = ParallelParquetWriterOptions {
+                max_parallel_row_groups: parquet_opts
+                    .global
+                    .maximum_parallel_row_group_writers,
+                max_buffered_record_batches_per_stream: parquet_opts
+                    .global
+                    .maximum_buffered_record_batches_per_stream,
+            };
 
-        while let Some((path, mut rx)) = file_stream_rx.recv().await {
-            let parquet_props = self.create_writer_props(&runtime, &path).await?;
-            // CDC requires the sequential writer: the chunker state lives in ArrowWriter
-            // and persists across row groups. The parallel path bypasses ArrowWriter entirely.
-            if !parquet_opts.global.allow_single_file_parallelism
-                || parquet_opts.global.content_defined_chunking.enabled
-            {
-                let mut writer = self.create_async_arrow_writer(
-                    &path,
-                    Arc::clone(&object_store),
-                    context,
-                    parquet_props.clone(),
-                )?;
-                let reservation = MemoryConsumer::new(format!("ParquetSink[{path}]"))
-                    .register(context.memory_pool());
-                file_write_tasks.spawn(
-                    async move {
-                        while let Some(batch) = rx.recv().await {
-                            writer.write(&batch).await?;
-                            reservation.try_resize(writer.memory_size())?;
+            while let Some((path, mut rx)) = file_stream_rx.recv().await {
+                let parquet_props = self.create_writer_props(&runtime, &path).await?;
+                // CDC requires the sequential writer: the chunker state lives in ArrowWriter
+                // and persists across row groups. The parallel path bypasses ArrowWriter entirely.
+                if !parquet_opts.global.allow_single_file_parallelism
+                    || parquet_opts.global.content_defined_chunking.enabled
+                {
+                    let mut writer = self.create_async_arrow_writer(
+                        &path,
+                        Arc::clone(&object_store),
+                        context,
+                        parquet_props.clone(),
+                    )?;
+                    let reservation = MemoryConsumer::new(format!("ParquetSink[{path}]"))
+                        .register(context.memory_pool());
+                    file_write_tasks.spawn(
+                        async move {
+                            while let Some(batch) = rx.recv().await {
+                                writer.write(&batch).await?;
+                                reservation.try_resize(writer.memory_size())?;
+                            }
+                            let parquet_meta_data =
+                                writer.close().await.map_err(|e| {
+                                    DataFusionError::ParquetError(Box::new(e))
+                                })?;
+                            Ok((path, parquet_meta_data))
                         }
-                        let parquet_meta_data = writer
-                            .close()
-                            .await
-                            .map_err(|e| DataFusionError::ParquetError(Box::new(e)))?;
-                        Ok((path, parquet_meta_data))
-                    }
-                    .with_elapsed_compute(elapsed_compute.clone()),
-                );
-            } else {
-                let writer = ObjectWriterBuilder::new(
-                    // Parquet files as a whole are never compressed, since they
-                    // manage compressed blocks themselves.
-                    FileCompressionType::UNCOMPRESSED,
-                    &path,
-                    Arc::clone(&object_store),
-                )
-                .with_buffer_size(Some(
-                    context
-                        .session_config()
-                        .options()
-                        .execution
-                        .objectstore_writer_buffer_size,
-                ))
-                .build()?;
-                let ctx = ParquetFileWriteContext {
-                    schema: get_writer_schema(&self.config),
-                    props: Arc::new(parquet_props),
-                    skip_arrow_metadata: self.parquet_options.global.skip_arrow_metadata,
-                    parallel_options: Arc::new(parallel_options.clone()),
-                    pool: Arc::clone(context.memory_pool()),
-                };
-                let encoding_time = elapsed_compute.clone();
-                file_write_tasks.spawn(async move {
-                    let parquet_meta_data = output_single_parquet_file_parallelized(
-                        writer,
-                        rx,
-                        ctx,
-                        encoding_time,
+                        .with_elapsed_compute(elapsed_compute.clone()),
+                    );
+                } else {
+                    let writer = ObjectWriterBuilder::new(
+                        // Parquet files as a whole are never compressed, since they
+                        // manage compressed blocks themselves.
+                        FileCompressionType::UNCOMPRESSED,
+                        &path,
+                        Arc::clone(&object_store),
                     )
-                    .await?;
-                    Ok((path, parquet_meta_data))
-                });
-            }
-        }
-
-        while let Some(result) = file_write_tasks.join_next().await {
-            match result {
-                Ok(r) => {
-                    let (path, parquet_meta_data) = r?;
-                    let file_rows = parquet_meta_data.file_metadata().num_rows() as usize;
-                    let file_bytes: usize = parquet_meta_data
-                        .row_groups()
-                        .iter()
-                        .map(|rg| rg.compressed_size() as usize)
-                        .sum();
-                    rows_written_counter.add(file_rows);
-                    bytes_written_counter.add(file_bytes);
-                    let mut written_files = self.written.lock();
-                    written_files
-                        .try_insert(path.clone(), parquet_meta_data)
-                        .map_err(|e| internal_datafusion_err!("duplicate entry detected for partitioned file {path}: {e}"))?;
-                    drop(written_files);
+                    .with_buffer_size(Some(
+                        context
+                            .session_config()
+                            .options()
+                            .execution
+                            .objectstore_writer_buffer_size,
+                    ))
+                    .build()?;
+                    let ctx = ParquetFileWriteContext {
+                        schema: get_writer_schema(&self.config),
+                        props: Arc::new(parquet_props),
+                        skip_arrow_metadata: self
+                            .parquet_options
+                            .global
+                            .skip_arrow_metadata,
+                        parallel_options: Arc::new(parallel_options.clone()),
+                        pool: Arc::clone(context.memory_pool()),
+                    };
+                    let encoding_time = elapsed_compute.clone();
+                    file_write_tasks.spawn(async move {
+                        let parquet_meta_data = output_single_parquet_file_parallelized(
+                            writer,
+                            rx,
+                            ctx,
+                            encoding_time,
+                        )
+                        .await?;
+                        Ok((path, parquet_meta_data))
+                    });
                 }
-                Err(e) => {
-                    if e.is_panic() {
-                        std::panic::resume_unwind(e.into_panic());
-                    } else {
-                        unreachable!();
+            }
+
+            while let Some(result) = file_write_tasks.join_next().await {
+                match result {
+                    Ok(r) => {
+                        let (path, parquet_meta_data) = r?;
+                        let file_rows =
+                            parquet_meta_data.file_metadata().num_rows() as usize;
+                        let file_bytes: usize = parquet_meta_data
+                            .row_groups()
+                            .iter()
+                            .map(|rg| rg.compressed_size() as usize)
+                            .sum();
+                        rows_written_counter.add(file_rows);
+                        bytes_written_counter.add(file_bytes);
+                        let mut written_files = self.written.lock();
+                        written_files
+                            .try_insert(path.clone(), parquet_meta_data)
+                            .map_err(|e| internal_datafusion_err!("duplicate entry detected for partitioned file {path}: {e}"))?;
+                        drop(written_files);
+                    }
+                    Err(e) => {
+                        if e.is_panic() {
+                            std::panic::resume_unwind(e.into_panic());
+                        } else {
+                            unreachable!();
+                        }
                     }
                 }
             }
-        }
 
-        demux_task
-            .join_unwind()
-            .await
-            .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
+            demux_task
+                .join_unwind()
+                .await
+                .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
 
-        Ok(rows_written_counter.value() as u64)
+            Ok(rows_written_counter.value() as u64)
+        })
     }
 }
-
-#[async_trait]
 impl DataSink for ParquetSink {
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
@@ -406,12 +408,12 @@ impl DataSink for ParquetSink {
         self.config.output_schema()
     }
 
-    async fn write_all(
-        &self,
+    fn write_all<'a>(
+        &'a self,
         data: SendableRecordBatchStream,
-        context: &Arc<TaskContext>,
-    ) -> Result<u64> {
-        FileSink::write_all(self, data, context).await
+        context: &'a Arc<TaskContext>,
+    ) -> BoxFuture<'a, Result<u64>> {
+        Box::pin(async move { FileSink::write_all(self, data, context).await })
     }
 
     #[cfg(feature = "proto")]

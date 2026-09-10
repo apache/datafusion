@@ -25,6 +25,8 @@ use object_store::{
     ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, path::Path,
 };
 use std::fmt::{Debug, Display, Formatter};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 /// Returns an `ObjectStore` that asserts it can trace its calls back to the root tokio task.
@@ -54,34 +56,64 @@ impl Display for TraceableObjectStore {
 
 /// All trait methods are forwarded to the inner object store,
 /// after asserting they can trace their calls back to the root tokio task.
-#[async_trait::async_trait]
 impl ObjectStore for TraceableObjectStore {
-    async fn put_opts(
-        &self,
-        location: &Path,
+    fn put_opts<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        location: &'life1 Path,
         payload: PutPayload,
         opts: PutOptions,
-    ) -> object_store::Result<PutResult> {
-        assert_traceability().await;
-        self.inner.put_opts(location, payload, opts).await
+    ) -> Pin<
+        Box<dyn Future<Output = object_store::Result<PutResult>> + Send + 'async_trait>,
+    >
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            assert_traceability().await;
+            self.inner.put_opts(location, payload, opts).await
+        })
     }
 
-    async fn put_multipart_opts(
-        &self,
-        location: &Path,
+    fn put_multipart_opts<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        location: &'life1 Path,
         opts: PutMultipartOptions,
-    ) -> object_store::Result<Box<dyn MultipartUpload>> {
-        assert_traceability().await;
-        self.inner.put_multipart_opts(location, opts).await
+    ) -> Pin<
+        Box<
+            dyn Future<Output = object_store::Result<Box<dyn MultipartUpload>>>
+                + Send
+                + 'async_trait,
+        >,
+    >
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            assert_traceability().await;
+            self.inner.put_multipart_opts(location, opts).await
+        })
     }
 
-    async fn get_opts(
-        &self,
-        location: &Path,
+    fn get_opts<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        location: &'life1 Path,
         options: GetOptions,
-    ) -> object_store::Result<GetResult> {
-        assert_traceability().await;
-        self.inner.get_opts(location, options).await
+    ) -> Pin<
+        Box<dyn Future<Output = object_store::Result<GetResult>> + Send + 'async_trait>,
+    >
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            assert_traceability().await;
+            self.inner.get_opts(location, options).await
+        })
     }
 
     fn delete_stream(
@@ -105,21 +137,38 @@ impl ObjectStore for TraceableObjectStore {
         self.inner.list(prefix)
     }
 
-    async fn list_with_delimiter(
-        &self,
-        prefix: Option<&Path>,
-    ) -> object_store::Result<ListResult> {
-        assert_traceability().await;
-        self.inner.list_with_delimiter(prefix).await
+    fn list_with_delimiter<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        prefix: Option<&'life1 Path>,
+    ) -> Pin<
+        Box<dyn Future<Output = object_store::Result<ListResult>> + Send + 'async_trait>,
+    >
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            assert_traceability().await;
+            self.inner.list_with_delimiter(prefix).await
+        })
     }
 
-    async fn copy_opts(
-        &self,
-        from: &Path,
-        to: &Path,
+    fn copy_opts<'life0, 'life1, 'life2, 'async_trait>(
+        &'life0 self,
+        from: &'life1 Path,
+        to: &'life2 Path,
         options: CopyOptions,
-    ) -> object_store::Result<()> {
-        assert_traceability().await;
-        self.inner.copy_opts(from, to, options).await
+    ) -> Pin<Box<dyn Future<Output = object_store::Result<()>> + Send + 'async_trait>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            assert_traceability().await;
+            self.inner.copy_opts(from, to, options).await
+        })
     }
 }

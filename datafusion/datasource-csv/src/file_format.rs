@@ -17,6 +17,7 @@
 
 //! [`CsvFormat`], Comma Separated Value (CSV) [`FileFormat`] abstractions
 
+use futures::future::BoxFuture;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug};
 use std::sync::Arc;
@@ -55,7 +56,6 @@ use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
 
-use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use datafusion_datasource::source::DataSourceExec;
 use futures::stream::BoxStream;
@@ -354,8 +354,6 @@ impl Debug for CsvSerializer {
             .finish()
     }
 }
-
-#[async_trait]
 impl FileFormat for CsvFormat {
     fn get_ext(&self) -> String {
         CsvFormatFactory::new().get_ext()
@@ -373,133 +371,139 @@ impl FileFormat for CsvFormat {
         Some(self.options.compression.into())
     }
 
-    async fn infer_schema(
-        &self,
-        state: &dyn Session,
-        store: &Arc<dyn ObjectStore>,
-        objects: &[ObjectMeta],
-    ) -> Result<SchemaRef> {
-        let mut schemas = vec![];
+    fn infer_schema<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        store: &'a Arc<dyn ObjectStore>,
+        objects: &'a [ObjectMeta],
+    ) -> BoxFuture<'a, Result<SchemaRef>> {
+        Box::pin(async move {
+            let mut schemas = vec![];
 
-        let mut records_to_read = self
-            .options
-            .schema_infer_max_rec
-            .unwrap_or(DEFAULT_SCHEMA_INFER_MAX_RECORD);
+            let mut records_to_read = self
+                .options
+                .schema_infer_max_rec
+                .unwrap_or(DEFAULT_SCHEMA_INFER_MAX_RECORD);
 
-        for object in objects {
-            let stream = self.read_to_delimited_chunks(store, object).await;
-            let (schema, records_read) = self
-                .infer_schema_from_stream(state, records_to_read, stream)
-                .await
-                .map_err(|err| {
+            for object in objects {
+                let stream = self.read_to_delimited_chunks(store, object).await;
+                let (schema, records_read) = self
+                    .infer_schema_from_stream(state, records_to_read, stream)
+                    .await
+                    .map_err(|err| {
+                        DataFusionError::Context(
+                            format!("Error when processing CSV file {}", object.location),
+                            Box::new(err),
+                        )
+                    })?;
+                records_to_read -= records_read;
+                schemas.push((&object.location, schema));
+                if records_to_read == 0 {
+                    break;
+                }
+            }
+
+            let mut seen = HashSet::new();
+            for (location, schema) in &schemas {
+                ensure_unique_field_names(schema, &mut seen).map_err(|err| {
                     DataFusionError::Context(
-                        format!("Error when processing CSV file {}", object.location),
+                        format!("Error when processing CSV file {location}"),
                         Box::new(err),
                     )
                 })?;
-            records_to_read -= records_read;
-            schemas.push((&object.location, schema));
-            if records_to_read == 0 {
-                break;
             }
-        }
+            drop(seen);
 
-        let mut seen = HashSet::new();
-        for (location, schema) in &schemas {
-            ensure_unique_field_names(schema, &mut seen).map_err(|err| {
-                DataFusionError::Context(
-                    format!("Error when processing CSV file {location}"),
-                    Box::new(err),
-                )
-            })?;
-        }
-        drop(seen);
-
-        let schemas = schemas.into_iter().map(|(_, schema)| schema);
-        let merged_schema = Schema::try_merge(schemas)?;
-        Ok(Arc::new(merged_schema))
+            let schemas = schemas.into_iter().map(|(_, schema)| schema);
+            let merged_schema = Schema::try_merge(schemas)?;
+            Ok(Arc::new(merged_schema))
+        })
     }
 
-    async fn infer_stats(
-        &self,
-        _state: &dyn Session,
-        _store: &Arc<dyn ObjectStore>,
+    fn infer_stats<'a>(
+        &'a self,
+        _state: &'a dyn Session,
+        _store: &'a Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
-        _object: &ObjectMeta,
-    ) -> Result<Statistics> {
-        Ok(Statistics::new_unknown(&table_schema))
+        _object: &'a ObjectMeta,
+    ) -> BoxFuture<'a, Result<Statistics>> {
+        Box::pin(async move { Ok(Statistics::new_unknown(&table_schema)) })
     }
 
-    async fn create_physical_plan(
-        &self,
-        state: &dyn Session,
+    fn create_physical_plan<'a>(
+        &'a self,
+        state: &'a dyn Session,
         conf: FileScanConfig,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Consult configuration options for default values
-        let has_header = self
-            .options
-            .has_header
-            .unwrap_or_else(|| state.config_options().catalog.has_header);
-        let newlines_in_values = self
-            .options
-            .newlines_in_values
-            .unwrap_or_else(|| state.config_options().catalog.newlines_in_values);
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            // Consult configuration options for default values
+            let has_header = self
+                .options
+                .has_header
+                .unwrap_or_else(|| state.config_options().catalog.has_header);
+            let newlines_in_values = self
+                .options
+                .newlines_in_values
+                .unwrap_or_else(|| state.config_options().catalog.newlines_in_values);
 
-        let mut csv_options = self.options.clone();
-        csv_options.has_header = Some(has_header);
-        csv_options.newlines_in_values = Some(newlines_in_values);
+            let mut csv_options = self.options.clone();
+            csv_options.has_header = Some(has_header);
+            csv_options.newlines_in_values = Some(newlines_in_values);
 
-        // Get the existing CsvSource and update its options
-        // We need to preserve the table_schema from the original source (which includes partition columns)
-        let csv_source = conf
-            .file_source
-            .downcast_ref::<CsvSource>()
-            .expect("file_source should be a CsvSource");
-        let source = Arc::new(csv_source.clone().with_csv_options(csv_options));
+            // Get the existing CsvSource and update its options
+            // We need to preserve the table_schema from the original source (which includes partition columns)
+            let csv_source = conf
+                .file_source
+                .downcast_ref::<CsvSource>()
+                .expect("file_source should be a CsvSource");
+            let source = Arc::new(csv_source.clone().with_csv_options(csv_options));
 
-        let config = FileScanConfigBuilder::from(conf)
-            .with_file_compression_type(self.options.compression.into())
-            .with_source(source)
-            .build();
+            let config = FileScanConfigBuilder::from(conf)
+                .with_file_compression_type(self.options.compression.into())
+                .with_source(source)
+                .build();
 
-        Ok(DataSourceExec::from_data_source(config))
+            Ok(DataSourceExec::from_data_source(config) as Arc<dyn ExecutionPlan>)
+        })
     }
 
-    async fn create_writer_physical_plan(
-        &self,
+    fn create_writer_physical_plan<'a>(
+        &'a self,
         input: Arc<dyn ExecutionPlan>,
-        state: &dyn Session,
+        state: &'a dyn Session,
         conf: FileSinkConfig,
         order_requirements: Option<LexRequirement>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        if conf.insert_op != InsertOp::Append {
-            return not_impl_err!("Overwrites are not implemented yet for CSV");
-        }
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            if conf.insert_op != InsertOp::Append {
+                return not_impl_err!("Overwrites are not implemented yet for CSV");
+            }
 
-        // `has_header` and `newlines_in_values` fields of CsvOptions may inherit
-        // their values from session from configuration settings. To support
-        // this logic, writer options are built from the copy of `self.options`
-        // with updated values of these special fields.
-        let has_header = self
-            .options()
-            .has_header
-            .unwrap_or_else(|| state.config_options().catalog.has_header);
-        let newlines_in_values = self
-            .options()
-            .newlines_in_values
-            .unwrap_or_else(|| state.config_options().catalog.newlines_in_values);
+            // `has_header` and `newlines_in_values` fields of CsvOptions may inherit
+            // their values from session from configuration settings. To support
+            // this logic, writer options are built from the copy of `self.options`
+            // with updated values of these special fields.
+            let has_header = self
+                .options()
+                .has_header
+                .unwrap_or_else(|| state.config_options().catalog.has_header);
+            let newlines_in_values = self
+                .options()
+                .newlines_in_values
+                .unwrap_or_else(|| state.config_options().catalog.newlines_in_values);
 
-        let options = self
-            .options()
-            .clone()
-            .with_has_header(has_header)
-            .with_newlines_in_values(newlines_in_values);
+            let options = self
+                .options()
+                .clone()
+                .with_has_header(has_header)
+                .with_newlines_in_values(newlines_in_values);
 
-        let writer_options = CsvWriterOptions::try_from(&options)?;
+            let writer_options = CsvWriterOptions::try_from(&options)?;
 
-        let sink = Arc::new(CsvSink::new(conf, writer_options));
+            let sink = Arc::new(CsvSink::new(conf, writer_options));
 
-        Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
+            Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
+        })
     }
 
     fn file_source(&self, table_schema: TableSchema) -> Arc<dyn FileSource> {
@@ -791,52 +795,50 @@ impl CsvSink {
         &self.writer_options
     }
 }
-
-#[async_trait]
 impl FileSink for CsvSink {
     fn config(&self) -> &FileSinkConfig {
         &self.config
     }
 
-    async fn spawn_writer_tasks_and_join(
-        &self,
-        context: &Arc<TaskContext>,
+    fn spawn_writer_tasks_and_join<'a>(
+        &'a self,
+        context: &'a Arc<TaskContext>,
         demux_task: SpawnedTask<Result<()>>,
         file_stream_rx: DemuxedStreamReceiver,
         object_store: Arc<dyn ObjectStore>,
-    ) -> Result<u64> {
-        let builder = self.writer_options.writer_options.clone();
-        let header = builder.header();
-        let serializer = Arc::new(
-            CsvSerializer::new()
-                .with_builder(builder)
-                .with_header(header),
-        ) as _;
-        spawn_writer_tasks_and_join(
-            context,
-            serializer,
-            self.writer_options.compression.into(),
-            self.writer_options.compression_level,
-            object_store,
-            demux_task,
-            file_stream_rx,
-        )
-        .await
+    ) -> BoxFuture<'a, Result<u64>> {
+        Box::pin(async move {
+            let builder = self.writer_options.writer_options.clone();
+            let header = builder.header();
+            let serializer = Arc::new(
+                CsvSerializer::new()
+                    .with_builder(builder)
+                    .with_header(header),
+            ) as _;
+            spawn_writer_tasks_and_join(
+                context,
+                serializer,
+                self.writer_options.compression.into(),
+                self.writer_options.compression_level,
+                object_store,
+                demux_task,
+                file_stream_rx,
+            )
+            .await
+        })
     }
 }
-
-#[async_trait]
 impl DataSink for CsvSink {
     fn schema(&self) -> &SchemaRef {
         self.config.output_schema()
     }
 
-    async fn write_all(
-        &self,
+    fn write_all<'a>(
+        &'a self,
         data: SendableRecordBatchStream,
-        context: &Arc<TaskContext>,
-    ) -> Result<u64> {
-        FileSink::write_all(self, data, context).await
+        context: &'a Arc<TaskContext>,
+    ) -> BoxFuture<'a, Result<u64>> {
+        Box::pin(async move { FileSink::write_all(self, data, context).await })
     }
 
     #[cfg(feature = "proto")]

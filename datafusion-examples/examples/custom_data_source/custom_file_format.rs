@@ -17,6 +17,7 @@
 
 //! See `main.rs` for how to run it.
 
+use futures::future::BoxFuture;
 use std::sync::Arc;
 
 use arrow::{
@@ -102,7 +103,6 @@ impl TSVFileFormat {
     }
 }
 
-#[async_trait::async_trait]
 impl FileFormat for TSVFileFormat {
     fn get_ext(&self) -> String {
         "tsv".to_string()
@@ -120,47 +120,47 @@ impl FileFormat for TSVFileFormat {
         None
     }
 
-    async fn infer_schema(
-        &self,
-        state: &dyn Session,
-        store: &Arc<dyn ObjectStore>,
-        objects: &[ObjectMeta],
-    ) -> Result<SchemaRef> {
-        self.csv_file_format
-            .infer_schema(state, store, objects)
-            .await
+    fn infer_schema<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        store: &'a Arc<dyn ObjectStore>,
+        objects: &'a [ObjectMeta],
+    ) -> BoxFuture<'a, Result<SchemaRef>> {
+        self.csv_file_format.infer_schema(state, store, objects)
     }
 
-    async fn infer_stats(
-        &self,
-        state: &dyn Session,
-        store: &Arc<dyn ObjectStore>,
+    fn infer_stats<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        store: &'a Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
-        object: &ObjectMeta,
-    ) -> Result<Statistics> {
+        object: &'a ObjectMeta,
+    ) -> BoxFuture<'a, Result<Statistics>> {
         self.csv_file_format
             .infer_stats(state, store, table_schema, object)
-            .await
     }
 
-    async fn create_physical_plan(
-        &self,
-        state: &dyn Session,
+    fn create_physical_plan<'a>(
+        &'a self,
+        state: &'a dyn Session,
         conf: FileScanConfig,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.csv_file_format.create_physical_plan(state, conf).await
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        self.csv_file_format.create_physical_plan(state, conf)
     }
 
-    async fn create_writer_physical_plan(
-        &self,
+    fn create_writer_physical_plan<'a>(
+        &'a self,
         input: Arc<dyn ExecutionPlan>,
-        state: &dyn Session,
+        state: &'a dyn Session,
         conf: FileSinkConfig,
         order_requirements: Option<LexRequirement>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.csv_file_format
-            .create_writer_physical_plan(input, state, conf, order_requirements)
-            .await
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        self.csv_file_format.create_writer_physical_plan(
+            input,
+            state,
+            conf,
+            order_requirements,
+        )
     }
 
     fn file_source(&self, table_schema: TableSchema) -> Arc<dyn FileSource> {

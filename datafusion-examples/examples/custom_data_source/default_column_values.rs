@@ -17,12 +17,12 @@
 
 //! See `main.rs` for how to run it.
 
+use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use async_trait::async_trait;
 
 use datafusion::assert_batches_eq;
 use datafusion::catalog::memory::DataSourceExec;
@@ -197,8 +197,6 @@ impl DefaultValueTableProvider {
         Self { schema }
     }
 }
-
-#[async_trait]
 impl TableProvider for DefaultValueTableProvider {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
@@ -215,52 +213,57 @@ impl TableProvider for DefaultValueTableProvider {
         Ok(vec![TableProviderFilterPushDown::Inexact; filters.len()])
     }
 
-    async fn scan(
-        &self,
-        state: &dyn Session,
-        projection: Option<&[usize]>,
-        filters: &[Expr],
+    fn scan<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        filters: &'a [Expr],
         limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let schema = Arc::clone(&self.schema);
-        let df_schema = DFSchema::try_from(schema.clone())?;
-        let filter = state.create_physical_expr(
-            conjunction(filters.iter().cloned()).unwrap_or_else(|| lit(true)),
-            &df_schema,
-        )?;
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            let schema = Arc::clone(&self.schema);
+            let df_schema = DFSchema::try_from(schema.clone())?;
+            let filter = state.create_physical_expr(
+                conjunction(filters.iter().cloned()).unwrap_or_else(|| lit(true)),
+                &df_schema,
+            )?;
 
-        let parquet_source = ParquetSource::new(schema.clone())
-            .with_predicate(filter)
-            .with_pushdown_filters(true);
+            let parquet_source = ParquetSource::new(schema.clone())
+                .with_predicate(filter)
+                .with_pushdown_filters(true);
 
-        let object_store_url = ObjectStoreUrl::parse("memory://")?;
-        let store = state.runtime_env().object_store(object_store_url)?;
+            let object_store_url = ObjectStoreUrl::parse("memory://")?;
+            let store = state.runtime_env().object_store(object_store_url)?;
 
-        let mut files = vec![];
-        let mut listing = store.list(None);
-        while let Some(file) = listing.next().await {
-            if let Ok(file) = file {
-                files.push(file);
+            let mut files = vec![];
+            let mut listing = store.list(None);
+            while let Some(file) = listing.next().await {
+                if let Ok(file) = file {
+                    files.push(file);
+                }
             }
-        }
 
-        let file_group = files
-            .iter()
-            .map(|file| PartitionedFile::new(file.location.clone(), file.size))
-            .collect();
+            let file_group = files
+                .iter()
+                .map(|file| PartitionedFile::new(file.location.clone(), file.size))
+                .collect();
 
-        let file_scan_config = FileScanConfigBuilder::new(
-            ObjectStoreUrl::parse("memory://")?,
-            Arc::new(parquet_source),
-        )
-        .with_projection_indices(projection.map(|p| p.to_vec()))?
-        .with_limit(limit)
-        .with_file_group(file_group)
-        .with_expr_adapter(Some(Arc::new(DefaultValuePhysicalExprAdapterFactory) as _));
+            let file_scan_config = FileScanConfigBuilder::new(
+                ObjectStoreUrl::parse("memory://")?,
+                Arc::new(parquet_source),
+            )
+            .with_projection_indices(projection.map(|p| p.to_vec()))?
+            .with_limit(limit)
+            .with_file_group(file_group)
+            .with_expr_adapter(Some(Arc::new(
+                DefaultValuePhysicalExprAdapterFactory,
+            ) as _));
 
-        Ok(Arc::new(DataSourceExec::new(Arc::new(
-            file_scan_config.build(),
-        ))))
+            Ok(
+                Arc::new(DataSourceExec::new(Arc::new(file_scan_config.build())))
+                    as Arc<dyn ExecutionPlan>,
+            )
+        })
     }
 }
 

@@ -34,7 +34,6 @@ use datafusion_common::{
 };
 use datafusion_expr::CreateExternalTable;
 
-use async_trait::async_trait;
 use datafusion_catalog::Session;
 use futures::future::BoxFuture;
 
@@ -48,22 +47,12 @@ impl ListingTableFactory {
         Self::default()
     }
 }
-
-#[async_trait]
 impl TableProviderFactory for ListingTableFactory {
-    // Hand-written `#[async_trait]` expansion to reduce compile time. See
-    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
-    fn create<'life0, 'life1, 'life2, 'async_trait>(
-        &'life0 self,
-        state: &'life1 dyn Session,
-        cmd: &'life2 CreateExternalTable,
-    ) -> BoxFuture<'async_trait, Result<Arc<dyn TableProvider>>>
-    where
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        'life2: 'async_trait,
-        Self: 'async_trait,
-    {
+    fn create<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        cmd: &'a CreateExternalTable,
+    ) -> BoxFuture<'a, Result<Arc<dyn TableProvider>>> {
         self.create_boxed(state, cmd)
     }
 }
@@ -872,8 +861,6 @@ mod tests {
         // A mock Session that is NOT SessionState
         #[derive(Debug)]
         struct MockSession;
-
-        #[async_trait]
         impl Session for MockSession {
             fn session_id(&self) -> &str {
                 "mock_session"
@@ -884,12 +871,13 @@ mod tests {
             fn catalog_list(&self) -> Arc<dyn CatalogProviderList> {
                 Arc::new(EmptyCatalogProviderList)
             }
-            async fn create_physical_plan(
-                &self,
+            fn create_physical_plan<'a>(
+                &'a self,
                 _logical_plan: &datafusion_expr::LogicalPlan,
-            ) -> Result<Arc<dyn ExecutionPlan>> {
-                unimplemented!()
+            ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+                Box::pin(async move { unimplemented!() })
             }
+
             fn create_physical_expr(
                 &self,
                 _expr: datafusion_expr::Expr,

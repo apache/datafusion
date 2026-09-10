@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use futures::future::BoxFuture;
 use std::sync::{Arc, Weak};
 
 use crate::object_storage::{AwsOptions, GcpOptions, get_object_store};
@@ -28,7 +29,6 @@ use datafusion::error::Result;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::session_state::SessionStateBuilder;
 
-use async_trait::async_trait;
 use dirs::home_dir;
 use parking_lot::RwLock;
 
@@ -122,8 +122,6 @@ impl DynamicObjectStoreSchemaProvider {
         Self { inner, state }
     }
 }
-
-#[async_trait]
 impl SchemaProvider for DynamicObjectStoreSchemaProvider {
     fn table_names(&self) -> Vec<String> {
         self.inner.table_names()
@@ -137,63 +135,69 @@ impl SchemaProvider for DynamicObjectStoreSchemaProvider {
         self.inner.register_table(name, table)
     }
 
-    async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
-        let inner_table = self.inner.table(name).await;
-        if inner_table.is_ok()
-            && let Some(inner_table) = inner_table?
-        {
-            return Ok(Some(inner_table));
-        }
-
-        // if the inner schema provider didn't have a table by
-        // that name, try to treat it as a listing table
-        let mut state = self
-            .state
-            .upgrade()
-            .ok_or_else(|| plan_datafusion_err!("locking error"))?
-            .read()
-            .clone();
-        let mut builder = SessionStateBuilder::from(state.clone());
-        let optimized_name = substitute_tilde(name.to_owned());
-        let table_url = ListingTableUrl::parse(optimized_name.as_str())?;
-        let scheme = table_url.scheme();
-        let url = table_url.as_ref();
-
-        // If the store is already registered for this URL then `get_store`
-        // will return `Ok` which means we don't need to register it again. However,
-        // if `get_store` returns an `Err` then it means the corresponding store is
-        // not registered yet and we need to register it
-        match state.runtime_env().object_store_registry.get_store(url) {
-            Ok(_) => { /*Nothing to do here, store for this URL is already registered*/ }
-            Err(_) => {
-                // Register the store for this URL. Here we don't have access
-                // to any command options so the only choice is to use an empty collection
-                match scheme {
-                    "s3" | "oss" | "cos" => {
-                        if let Some(table_options) = builder.table_options() {
-                            table_options.extensions.insert(AwsOptions::default())
-                        }
-                    }
-                    "gs" | "gcs" => {
-                        if let Some(table_options) = builder.table_options() {
-                            table_options.extensions.insert(GcpOptions::default())
-                        }
-                    }
-                    _ => {}
-                }
-                state = builder.build();
-                let store = get_object_store(
-                    &state,
-                    table_url.scheme(),
-                    url,
-                    &state.default_table_options(),
-                    false,
-                )
-                .await?;
-                state.runtime_env().register_object_store(url, store);
+    fn table<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<Arc<dyn TableProvider>>>> {
+        Box::pin(async move {
+            let inner_table = self.inner.table(name).await;
+            if inner_table.is_ok()
+                && let Some(inner_table) = inner_table?
+            {
+                return Ok(Some(inner_table));
             }
-        }
-        self.inner.table(name).await
+
+            // if the inner schema provider didn't have a table by
+            // that name, try to treat it as a listing table
+            let mut state = self
+                .state
+                .upgrade()
+                .ok_or_else(|| plan_datafusion_err!("locking error"))?
+                .read()
+                .clone();
+            let mut builder = SessionStateBuilder::from(state.clone());
+            let optimized_name = substitute_tilde(name.to_owned());
+            let table_url = ListingTableUrl::parse(optimized_name.as_str())?;
+            let scheme = table_url.scheme();
+            let url = table_url.as_ref();
+
+            // If the store is already registered for this URL then `get_store`
+            // will return `Ok` which means we don't need to register it again. However,
+            // if `get_store` returns an `Err` then it means the corresponding store is
+            // not registered yet and we need to register it
+            match state.runtime_env().object_store_registry.get_store(url) {
+                Ok(_) => { /*Nothing to do here, store for this URL is already registered*/
+                }
+                Err(_) => {
+                    // Register the store for this URL. Here we don't have access
+                    // to any command options so the only choice is to use an empty collection
+                    match scheme {
+                        "s3" | "oss" | "cos" => {
+                            if let Some(table_options) = builder.table_options() {
+                                table_options.extensions.insert(AwsOptions::default())
+                            }
+                        }
+                        "gs" | "gcs" => {
+                            if let Some(table_options) = builder.table_options() {
+                                table_options.extensions.insert(GcpOptions::default())
+                            }
+                        }
+                        _ => {}
+                    }
+                    state = builder.build();
+                    let store = get_object_store(
+                        &state,
+                        table_url.scheme(),
+                        url,
+                        &state.default_table_options(),
+                        false,
+                    )
+                    .await?;
+                    state.runtime_env().register_object_store(url, store);
+                }
+            }
+            self.inner.table(name).await
+        })
     }
 
     fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {

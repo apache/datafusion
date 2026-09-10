@@ -509,7 +509,6 @@ fn split_glob_expression(path: &str) -> Option<(&str, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
     use bytes::Bytes;
     use datafusion_common::DFSchema;
     use datafusion_common::config::TableOptions;
@@ -530,7 +529,9 @@ mod tests {
     };
     use std::any::Any;
     use std::collections::HashMap;
+    use std::future::Future;
     use std::ops::Range;
+    use std::pin::Pin;
     use tempfile::tempdir;
 
     #[test]
@@ -1086,47 +1087,92 @@ mod tests {
             self.in_mem.fmt(f)
         }
     }
-
-    #[async_trait]
     impl ObjectStore for MockObjectStore {
-        async fn put_opts(
-            &self,
-            location: &Path,
+        fn put_opts<'life0, 'life1, 'async_trait>(
+            &'life0 self,
+            location: &'life1 Path,
             payload: PutPayload,
             opts: object_store::PutOptions,
-        ) -> object_store::Result<object_store::PutResult> {
-            self.in_mem.put_opts(location, payload, opts).await
+        ) -> Pin<
+            Box<
+                dyn Future<Output = object_store::Result<object_store::PutResult>>
+                    + Send
+                    + 'async_trait,
+            >,
+        >
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(async move { self.in_mem.put_opts(location, payload, opts).await })
         }
 
-        async fn put_multipart_opts(
-            &self,
-            location: &Path,
+        fn put_multipart_opts<'life0, 'life1, 'async_trait>(
+            &'life0 self,
+            location: &'life1 Path,
             opts: PutMultipartOptions,
-        ) -> object_store::Result<Box<dyn MultipartUpload>> {
-            self.in_mem.put_multipart_opts(location, opts).await
+        ) -> Pin<
+            Box<
+                dyn Future<Output = object_store::Result<Box<dyn MultipartUpload>>>
+                    + Send
+                    + 'async_trait,
+            >,
+        >
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(async move { self.in_mem.put_multipart_opts(location, opts).await })
         }
 
-        async fn get_opts(
-            &self,
-            location: &Path,
+        fn get_opts<'life0, 'life1, 'async_trait>(
+            &'life0 self,
+            location: &'life1 Path,
             options: GetOptions,
-        ) -> object_store::Result<GetResult> {
-            if options.head && self.forbidden_paths.contains(location) {
-                Err(object_store::Error::PermissionDenied {
-                    path: location.to_string(),
-                    source: "forbidden".into(),
-                })
-            } else {
-                self.in_mem.get_opts(location, options).await
-            }
+        ) -> Pin<
+            Box<
+                dyn Future<Output = object_store::Result<GetResult>>
+                    + Send
+                    + 'async_trait,
+            >,
+        >
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(async move {
+                if options.head && self.forbidden_paths.contains(location) {
+                    Err(object_store::Error::PermissionDenied {
+                        path: location.to_string(),
+                        source: "forbidden".into(),
+                    })
+                } else {
+                    self.in_mem.get_opts(location, options).await
+                }
+            })
         }
 
-        async fn get_ranges(
-            &self,
-            location: &Path,
-            ranges: &[Range<u64>],
-        ) -> object_store::Result<Vec<Bytes>> {
-            self.in_mem.get_ranges(location, ranges).await
+        fn get_ranges<'life0, 'life1, 'life2, 'async_trait>(
+            &'life0 self,
+            location: &'life1 Path,
+            ranges: &'life2 [Range<u64>],
+        ) -> Pin<
+            Box<
+                dyn Future<Output = object_store::Result<Vec<Bytes>>>
+                    + Send
+                    + 'async_trait,
+            >,
+        >
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            'life2: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(async move { self.in_mem.get_ranges(location, ranges).await })
         }
 
         fn delete_stream(
@@ -1143,20 +1189,37 @@ mod tests {
             self.in_mem.list(prefix)
         }
 
-        async fn list_with_delimiter(
-            &self,
-            prefix: Option<&Path>,
-        ) -> object_store::Result<ListResult> {
-            self.in_mem.list_with_delimiter(prefix).await
+        fn list_with_delimiter<'life0, 'life1, 'async_trait>(
+            &'life0 self,
+            prefix: Option<&'life1 Path>,
+        ) -> Pin<
+            Box<
+                dyn Future<Output = object_store::Result<ListResult>>
+                    + Send
+                    + 'async_trait,
+            >,
+        >
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(async move { self.in_mem.list_with_delimiter(prefix).await })
         }
 
-        async fn copy_opts(
-            &self,
-            from: &Path,
-            to: &Path,
+        fn copy_opts<'life0, 'life1, 'life2, 'async_trait>(
+            &'life0 self,
+            from: &'life1 Path,
+            to: &'life2 Path,
             options: CopyOptions,
-        ) -> object_store::Result<()> {
-            self.in_mem.copy_opts(from, to, options).await
+        ) -> Pin<Box<dyn Future<Output = object_store::Result<()>> + Send + 'async_trait>>
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            'life2: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(async move { self.in_mem.copy_opts(from, to, options).await })
         }
     }
 
@@ -1182,7 +1245,6 @@ mod tests {
         }
     }
 
-    #[async_trait::async_trait]
     impl Session for MockSession {
         fn session_id(&self) -> &str {
             unimplemented!()
@@ -1196,10 +1258,10 @@ mod tests {
             Arc::new(EmptyCatalogProviderList)
         }
 
-        async fn create_physical_plan(
-            &self,
-            _logical_plan: &LogicalPlan,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
+        fn create_physical_plan<'a>(
+            &'a self,
+            _logical_plan: &'a LogicalPlan,
+        ) -> futures::future::BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
             unimplemented!()
         }
 

@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use futures::future::BoxFuture;
 use std::ffi::c_void;
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use async_ffi::{FfiFuture, FutureExt};
-use async_trait::async_trait;
 use datafusion_catalog::{Session, TableProvider};
 use datafusion_common::Statistics;
 use datafusion_common::error::{DataFusionError, Result};
@@ -636,8 +636,6 @@ impl Clone for FFI_TableProvider {
         unsafe { (self.clone)(self) }
     }
 }
-
-#[async_trait]
 impl TableProvider for ForeignTableProvider {
     fn schema(&self) -> SchemaRef {
         let wrapped_schema = unsafe { (self.0.schema)(&self.0) };
@@ -663,36 +661,39 @@ impl TableProvider for ForeignTableProvider {
         }
     }
 
-    async fn scan(
-        &self,
-        session: &dyn Session,
-        projection: Option<&[usize]>,
-        filters: &[Expr],
+    fn scan<'a>(
+        &'a self,
+        session: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        filters: &'a [Expr],
         limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let session = FFI_SessionRef::new(session, None, self.0.logical_codec.clone());
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            let session =
+                FFI_SessionRef::new(session, None, self.0.logical_codec.clone());
 
-        let projections: FFI_Option<SVec<usize>> = projection
-            .map(|p| p.iter().map(|v| v.to_owned()).collect())
-            .into();
+            let projections: FFI_Option<SVec<usize>> = projection
+                .map(|p| p.iter().map(|v| v.to_owned()).collect())
+                .into();
 
-        let codec: Arc<dyn LogicalExtensionCodec> = (&self.0.logical_codec).into();
-        let filters_serialized = serialize_expr_list(filters.iter(), codec.as_ref())?;
+            let codec: Arc<dyn LogicalExtensionCodec> = (&self.0.logical_codec).into();
+            let filters_serialized = serialize_expr_list(filters.iter(), codec.as_ref())?;
 
-        let plan = unsafe {
-            let maybe_plan = (self.0.scan)(
-                &self.0,
-                session,
-                projections,
-                filters_serialized,
-                limit.into(),
-            )
-            .await;
+            let plan = unsafe {
+                let maybe_plan = (self.0.scan)(
+                    &self.0,
+                    session,
+                    projections,
+                    filters_serialized,
+                    limit.into(),
+                )
+                .await;
 
-            <Arc<dyn ExecutionPlan>>::try_from(&df_result!(maybe_plan)?)?
-        };
+                <Arc<dyn ExecutionPlan>>::try_from(&df_result!(maybe_plan)?)?
+            };
 
-        Ok(plan)
+            Ok(plan)
+        })
     }
 
     /// Tests whether the table provider can make use of a filter expression
@@ -723,92 +724,108 @@ impl TableProvider for ForeignTableProvider {
         }
     }
 
-    async fn insert_into(
-        &self,
-        session: &dyn Session,
+    fn insert_into<'a>(
+        &'a self,
+        session: &'a dyn Session,
         input: Arc<dyn ExecutionPlan>,
         insert_op: InsertOp,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let session = FFI_SessionRef::new(session, None, self.0.logical_codec.clone());
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            let session =
+                FFI_SessionRef::new(session, None, self.0.logical_codec.clone());
 
-        let rc = Handle::try_current().ok();
-        let input = FFI_ExecutionPlan::new(input, rc);
-        let insert_op: FFI_InsertOp = insert_op.into();
+            let rc = Handle::try_current().ok();
+            let input = FFI_ExecutionPlan::new(input, rc);
+            let insert_op: FFI_InsertOp = insert_op.into();
 
-        let plan = unsafe {
-            let maybe_plan =
-                (self.0.insert_into)(&self.0, session, &input, insert_op).await;
+            let plan = unsafe {
+                let maybe_plan =
+                    (self.0.insert_into)(&self.0, session, &input, insert_op).await;
 
-            <Arc<dyn ExecutionPlan>>::try_from(&df_result!(maybe_plan)?)?
-        };
+                <Arc<dyn ExecutionPlan>>::try_from(&df_result!(maybe_plan)?)?
+            };
 
-        Ok(plan)
+            Ok(plan)
+        })
     }
 
-    async fn delete_from(
-        &self,
-        session: &dyn Session,
+    fn delete_from<'a>(
+        &'a self,
+        session: &'a dyn Session,
         filters: Vec<Expr>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let session = FFI_SessionRef::new(session, None, self.0.logical_codec.clone());
-        let codec: Arc<dyn LogicalExtensionCodec> = (&self.0.logical_codec).into();
-        let filters_serialized = serialize_expr_list(filters.iter(), codec.as_ref())?;
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            let session =
+                FFI_SessionRef::new(session, None, self.0.logical_codec.clone());
+            let codec: Arc<dyn LogicalExtensionCodec> = (&self.0.logical_codec).into();
+            let filters_serialized = serialize_expr_list(filters.iter(), codec.as_ref())?;
 
-        let plan = unsafe {
-            let maybe_plan =
-                (self.0.delete_from)(&self.0, session, filters_serialized).await;
+            let plan = unsafe {
+                let maybe_plan =
+                    (self.0.delete_from)(&self.0, session, filters_serialized).await;
 
-            <Arc<dyn ExecutionPlan>>::try_from(&df_result!(maybe_plan)?)?
-        };
+                <Arc<dyn ExecutionPlan>>::try_from(&df_result!(maybe_plan)?)?
+            };
 
-        Ok(plan)
+            Ok(plan)
+        })
     }
 
-    async fn update(
-        &self,
-        session: &dyn Session,
+    fn update<'a>(
+        &'a self,
+        session: &'a dyn Session,
         assignments: Vec<(String, Expr)>,
         filters: Vec<Expr>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let session = FFI_SessionRef::new(session, None, self.0.logical_codec.clone());
-        let codec: Arc<dyn LogicalExtensionCodec> = (&self.0.logical_codec).into();
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            let session =
+                FFI_SessionRef::new(session, None, self.0.logical_codec.clone());
+            let codec: Arc<dyn LogicalExtensionCodec> = (&self.0.logical_codec).into();
 
-        let assignments: SVec<_> = assignments
-            .iter()
-            .map(|(column, expr)| {
-                Ok(FFI_TableProviderUpdateAssignment {
-                    column: SString::from(column.as_str()),
-                    expr_serialized: serialize_expr_list(
-                        std::iter::once(expr),
-                        codec.as_ref(),
-                    )?,
+            let assignments: SVec<_> = assignments
+                .iter()
+                .map(|(column, expr)| {
+                    Ok(FFI_TableProviderUpdateAssignment {
+                        column: SString::from(column.as_str()),
+                        expr_serialized: serialize_expr_list(
+                            std::iter::once(expr),
+                            codec.as_ref(),
+                        )?,
+                    })
                 })
-            })
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .collect();
-        let filters_serialized = serialize_expr_list(filters.iter(), codec.as_ref())?;
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .collect();
+            let filters_serialized = serialize_expr_list(filters.iter(), codec.as_ref())?;
 
-        let plan = unsafe {
-            let maybe_plan =
-                (self.0.update)(&self.0, session, assignments, filters_serialized).await;
+            let plan = unsafe {
+                let maybe_plan =
+                    (self.0.update)(&self.0, session, assignments, filters_serialized)
+                        .await;
 
-            <Arc<dyn ExecutionPlan>>::try_from(&df_result!(maybe_plan)?)?
-        };
+                <Arc<dyn ExecutionPlan>>::try_from(&df_result!(maybe_plan)?)?
+            };
 
-        Ok(plan)
+            Ok(plan)
+        })
     }
 
-    async fn truncate(&self, session: &dyn Session) -> Result<Arc<dyn ExecutionPlan>> {
-        let session = FFI_SessionRef::new(session, None, self.0.logical_codec.clone());
+    fn truncate<'a>(
+        &'a self,
+        session: &'a dyn Session,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            let session =
+                FFI_SessionRef::new(session, None, self.0.logical_codec.clone());
 
-        let plan = unsafe {
-            let maybe_plan = (self.0.truncate)(&self.0, session).await;
+            let plan = unsafe {
+                let maybe_plan = (self.0.truncate)(&self.0, session).await;
 
-            <Arc<dyn ExecutionPlan>>::try_from(&df_result!(maybe_plan)?)?
-        };
+                <Arc<dyn ExecutionPlan>>::try_from(&df_result!(maybe_plan)?)?
+            };
 
-        Ok(plan)
+            Ok(plan)
+        })
     }
 }
 
@@ -866,8 +883,6 @@ mod tests {
             }
         }
     }
-
-    #[async_trait]
     impl TableProvider for TableWithStats {
         fn schema(&self) -> SchemaRef {
             self.inner.schema()
@@ -881,69 +896,84 @@ mod tests {
             self.stats.clone()
         }
 
-        async fn scan(
-            &self,
-            session: &dyn Session,
-            projection: Option<&[usize]>,
-            filters: &[Expr],
+        fn scan<'a>(
+            &'a self,
+            session: &'a dyn Session,
+            projection: Option<&'a [usize]>,
+            filters: &'a [Expr],
             limit: Option<usize>,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            self.inner.scan(session, projection, filters, limit).await
+        ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+            Box::pin(
+                async move { self.inner.scan(session, projection, filters, limit).await },
+            )
         }
 
-        async fn delete_from(
-            &self,
-            _state: &dyn Session,
+        fn delete_from<'a>(
+            &'a self,
+            _state: &'a dyn Session,
             filters: Vec<Expr>,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            let call = self.delete_calls.fetch_add(1, Ordering::Relaxed);
-            let valid = match call {
-                0 => filters == vec![col("a").gt(lit(10_i64)), col("b").lt(lit(2.5_f64))],
-                1 => filters.is_empty(),
-                _ => false,
-            };
+        ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+            Box::pin(async move {
+                let call = self.delete_calls.fetch_add(1, Ordering::Relaxed);
+                let valid = match call {
+                    0 => {
+                        filters
+                            == vec![col("a").gt(lit(10_i64)), col("b").lt(lit(2.5_f64))]
+                    }
+                    1 => filters.is_empty(),
+                    _ => false,
+                };
 
-            if !valid {
-                return Err(DataFusionError::Internal(format!(
-                    "Unexpected DELETE filters for call {call}"
-                )));
-            }
-            Ok(dml_count_plan())
+                if !valid {
+                    return Err(DataFusionError::Internal(format!(
+                        "Unexpected DELETE filters for call {call}"
+                    )));
+                }
+                Ok(dml_count_plan())
+            })
         }
 
-        async fn update(
-            &self,
-            _state: &dyn Session,
+        fn update<'a>(
+            &'a self,
+            _state: &'a dyn Session,
             assignments: Vec<(String, Expr)>,
             filters: Vec<Expr>,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            if assignments
-                != vec![
-                    ("b".to_string(), lit(42_f64)),
-                    ("a".to_string(), lit(7_i64)),
-                ]
-            {
-                return Err(DataFusionError::Internal(
-                    "Unexpected UPDATE assignments".to_string(),
-                ));
-            }
-            let call = self.update_calls.fetch_add(1, Ordering::Relaxed);
-            let valid = match call {
-                0 => filters == vec![col("a").eq(lit(7_i64)), col("b").gt(lit(1.5_f64))],
-                1 => filters.is_empty(),
-                _ => false,
-            };
+        ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+            Box::pin(async move {
+                if assignments
+                    != vec![
+                        ("b".to_string(), lit(42_f64)),
+                        ("a".to_string(), lit(7_i64)),
+                    ]
+                {
+                    return Err(DataFusionError::Internal(
+                        "Unexpected UPDATE assignments".to_string(),
+                    ));
+                }
+                let call = self.update_calls.fetch_add(1, Ordering::Relaxed);
+                let valid = match call {
+                    0 => {
+                        filters
+                            == vec![col("a").eq(lit(7_i64)), col("b").gt(lit(1.5_f64))]
+                    }
+                    1 => filters.is_empty(),
+                    _ => false,
+                };
 
-            if !valid {
-                return Err(DataFusionError::Internal(format!(
-                    "Unexpected UPDATE filters for call {call}"
-                )));
-            }
-            Ok(dml_count_plan())
+                if !valid {
+                    return Err(DataFusionError::Internal(format!(
+                        "Unexpected UPDATE filters for call {call}"
+                    )));
+                }
+                Ok(dml_count_plan())
+            })
         }
 
-        async fn truncate(&self, _state: &dyn Session) -> Result<Arc<dyn ExecutionPlan>> {
-            Ok(dml_count_plan())
+        fn truncate<'a>(
+            &'a self,
+            _state: &'a dyn Session,
+        ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+            Box::pin(async move { Ok(dml_count_plan()) })
         }
     }
 

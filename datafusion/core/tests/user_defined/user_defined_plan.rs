@@ -57,6 +57,7 @@
 //! The same answer can be produced by simply keeping track of the top
 //! N elements, reducing the total amount of required buffer memory.
 
+use futures::future::BoxFuture;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::task::{Context, Poll};
@@ -101,7 +102,6 @@ use datafusion_optimizer::optimizer::ApplyOrder;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
 
-use async_trait::async_trait;
 use datafusion_common::cast::as_string_view_array;
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use futures::{Stream, StreamExt};
@@ -463,25 +463,25 @@ impl OptimizerRule for OptimizerMakeExtensionNodeInvalid {
 
 #[derive(Debug)]
 struct TopKQueryPlanner {}
-
-#[async_trait]
 impl QueryPlanner for TopKQueryPlanner {
     /// Given a `LogicalPlan` created from above, create an
     /// `ExecutionPlan` suitable for execution
-    async fn create_physical_plan(
-        &self,
-        logical_plan: &LogicalPlan,
-        session_state: &dyn Session,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Teach the default physical planner how to plan TopK nodes.
-        let physical_planner =
-            DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
-                TopKPlanner {},
-            )]);
-        // Delegate most work of physical planning to the default physical planner
-        physical_planner
-            .create_physical_plan(logical_plan, session_state)
-            .await
+    fn create_physical_plan<'a>(
+        &'a self,
+        logical_plan: &'a LogicalPlan,
+        session_state: &'a dyn Session,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            // Teach the default physical planner how to plan TopK nodes.
+            let physical_planner =
+                DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
+                    TopKPlanner {},
+                )]);
+            // Delegate most work of physical planning to the default physical planner
+            physical_planner
+                .create_physical_plan(logical_plan, session_state)
+                .await
+        })
     }
 }
 
@@ -624,32 +624,32 @@ impl UserDefinedLogicalNodeCore for TopKPlanNode {
 
 /// Physical planner for TopK nodes
 struct TopKPlanner {}
-
-#[async_trait]
 impl ExtensionPlanner for TopKPlanner {
     /// Create a physical plan for an extension node
-    async fn plan_extension(
-        &self,
-        _planner: &dyn PhysicalPlanner,
-        node: &dyn UserDefinedLogicalNode,
-        logical_inputs: &[&LogicalPlan],
-        physical_inputs: &[Arc<dyn ExecutionPlan>],
-        _session_state: &dyn Session,
-        _planning_ctx: &PhysicalPlanningContext,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        Ok(
-            if let Some(topk_node) = node.as_any().downcast_ref::<TopKPlanNode>() {
-                assert_eq!(logical_inputs.len(), 1, "Inconsistent number of inputs");
-                assert_eq!(physical_inputs.len(), 1, "Inconsistent number of inputs");
-                // figure out input name
-                Some(Arc::new(TopKExec::new(
-                    physical_inputs[0].clone(),
-                    topk_node.k,
-                )))
-            } else {
-                None
-            },
-        )
+    fn plan_extension<'a>(
+        &'a self,
+        _planner: &'a dyn PhysicalPlanner,
+        node: &'a dyn UserDefinedLogicalNode,
+        logical_inputs: &'a [&'a LogicalPlan],
+        physical_inputs: &'a [Arc<dyn ExecutionPlan>],
+        _session_state: &'a dyn Session,
+        _planning_ctx: &'a PhysicalPlanningContext,
+    ) -> BoxFuture<'a, Result<Option<Arc<dyn ExecutionPlan>>>> {
+        Box::pin(async move {
+            Ok(
+                if let Some(topk_node) = node.as_any().downcast_ref::<TopKPlanNode>() {
+                    assert_eq!(logical_inputs.len(), 1, "Inconsistent number of inputs");
+                    assert_eq!(physical_inputs.len(), 1, "Inconsistent number of inputs");
+                    // figure out input name
+                    Some(
+                        Arc::new(TopKExec::new(physical_inputs[0].clone(), topk_node.k))
+                            as Arc<dyn ExecutionPlan>,
+                    )
+                } else {
+                    None
+                },
+            )
+        })
     }
 }
 
@@ -702,8 +702,6 @@ impl DisplayAs for TopKExec {
         }
     }
 }
-
-#[async_trait]
 impl ExecutionPlan for TopKExec {
     fn name(&self) -> &'static str {
         Self::static_name()

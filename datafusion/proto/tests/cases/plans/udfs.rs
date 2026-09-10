@@ -547,13 +547,12 @@ async fn roundtrip_async_func_exec() -> Result<()> {
         }
     }
 
-    #[async_trait::async_trait]
     impl AsyncScalarUDFImpl for TestAsyncUDF {
-        async fn invoke_async_with_args(
+        fn invoke_async_with_args(
             &self,
             args: ScalarFunctionArgs,
-        ) -> Result<ColumnarValue> {
-            Ok(args.args[0].clone())
+        ) -> futures::future::BoxFuture<'_, Result<ColumnarValue>> {
+            Box::pin(async move { Ok(args.args[0].clone()) })
         }
     }
 

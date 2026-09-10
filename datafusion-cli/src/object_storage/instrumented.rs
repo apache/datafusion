@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::{
     cmp, fmt,
     ops::AddAssign,
@@ -28,7 +30,6 @@ use std::{
 
 use arrow::array::{ArrayRef, RecordBatch, StringArray};
 use arrow::util::pretty::pretty_format_batches;
-use async_trait::async_trait;
 use chrono::Utc;
 use datafusion::{
     common::{HashMap, instant::Instant},
@@ -75,12 +76,12 @@ where
     type Item = Result<ObjectMeta>;
 
     fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
         let start = *self.start.get_or_insert_with(Instant::now);
 
-        let poll_result = std::pin::Pin::new(&mut self.inner).poll_next(cx);
+        let poll_result = Pin::new(&mut self.inner).poll_next(cx);
 
         if !self.duration_recorded && poll_result.is_ready() {
             self.duration_recorded = true;
@@ -377,39 +378,65 @@ impl fmt::Display for InstrumentedObjectStore {
     }
 }
 
-#[async_trait]
 impl ObjectStore for InstrumentedObjectStore {
-    async fn put_opts(
-        &self,
-        location: &Path,
+    fn put_opts<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        location: &'life1 Path,
         payload: PutPayload,
         opts: PutOptions,
-    ) -> Result<PutResult> {
-        if self.enabled() {
-            return self.instrumented_put_opts(location, payload, opts).await;
-        }
+    ) -> Pin<Box<dyn Future<Output = Result<PutResult>> + Send + 'async_trait>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            if self.enabled() {
+                return self.instrumented_put_opts(location, payload, opts).await;
+            }
 
-        self.inner.put_opts(location, payload, opts).await
+            self.inner.put_opts(location, payload, opts).await
+        })
     }
 
-    async fn put_multipart_opts(
-        &self,
-        location: &Path,
+    fn put_multipart_opts<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        location: &'life1 Path,
         opts: PutMultipartOptions,
-    ) -> Result<Box<dyn MultipartUpload>> {
-        if self.enabled() {
-            return self.instrumented_put_multipart(location, opts).await;
-        }
+    ) -> Pin<
+        Box<dyn Future<Output = Result<Box<dyn MultipartUpload>>> + Send + 'async_trait>,
+    >
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            if self.enabled() {
+                return self.instrumented_put_multipart(location, opts).await;
+            }
 
-        self.inner.put_multipart_opts(location, opts).await
+            self.inner.put_multipart_opts(location, opts).await
+        })
     }
 
-    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
-        if self.enabled() {
-            return self.instrumented_get_opts(location, options).await;
-        }
+    fn get_opts<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        location: &'life1 Path,
+        options: GetOptions,
+    ) -> Pin<Box<dyn Future<Output = Result<GetResult>> + Send + 'async_trait>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            if self.enabled() {
+                return self.instrumented_get_opts(location, options).await;
+            }
 
-        self.inner.get_opts(location, options).await
+            self.inner.get_opts(location, options).await
+        })
     }
 
     fn delete_stream(
@@ -431,32 +458,50 @@ impl ObjectStore for InstrumentedObjectStore {
         self.inner.list(prefix)
     }
 
-    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-        if self.enabled() {
-            return self.instrumented_list_with_delimiter(prefix).await;
-        }
+    fn list_with_delimiter<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        prefix: Option<&'life1 Path>,
+    ) -> Pin<Box<dyn Future<Output = Result<ListResult>> + Send + 'async_trait>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            if self.enabled() {
+                return self.instrumented_list_with_delimiter(prefix).await;
+            }
 
-        self.inner.list_with_delimiter(prefix).await
+            self.inner.list_with_delimiter(prefix).await
+        })
     }
 
-    async fn copy_opts(
-        &self,
-        from: &Path,
-        to: &Path,
+    fn copy_opts<'life0, 'life1, 'life2, 'async_trait>(
+        &'life0 self,
+        from: &'life1 Path,
+        to: &'life2 Path,
         options: CopyOptions,
-    ) -> Result<()> {
-        if self.enabled() {
-            return match options.mode {
-                object_store::CopyMode::Create => {
-                    self.instrumented_copy_if_not_exists(from, to).await
-                }
-                object_store::CopyMode::Overwrite => {
-                    self.instrumented_copy(from, to).await
-                }
-            };
-        }
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'async_trait>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            if self.enabled() {
+                return match options.mode {
+                    object_store::CopyMode::Create => {
+                        self.instrumented_copy_if_not_exists(from, to).await
+                    }
+                    object_store::CopyMode::Overwrite => {
+                        self.instrumented_copy(from, to).await
+                    }
+                };
+            }
 
-        self.inner.copy_opts(from, to, options).await
+            self.inner.copy_opts(from, to, options).await
+        })
     }
 }
 

@@ -33,7 +33,6 @@
 /// [Hive]: https://hive.apache.org/
 use arrow::array::record_batch;
 use arrow::datatypes::{Field, Fields, Schema, SchemaRef};
-use async_trait::async_trait;
 use datafusion::catalog::TableProvider;
 use datafusion::catalog::{AsyncSchemaProvider, Session};
 use datafusion::common::Result;
@@ -45,6 +44,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::prelude::{DataFrame, SessionContext};
 use futures::TryStreamExt;
+use futures::future::BoxFuture;
 use std::sync::Arc;
 
 /// Interfacing with a remote catalog (e.g. over a network)
@@ -184,19 +184,22 @@ impl RemoteCatalogInterface {
 /// Implements an async version of the DataFusion SchemaProvider API for tables
 /// stored in a remote catalog.
 struct RemoteCatalogDatafusionAdapter(Arc<RemoteCatalogInterface>);
-
-#[async_trait]
 impl AsyncSchemaProvider for RemoteCatalogDatafusionAdapter {
-    async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
-        // Fetch information about the table from the remote catalog
-        //
-        // Note that a real remote catalog interface could return more
-        // information, but at the minimum, DataFusion requires the
-        // table's schema for planing.
-        Ok(self.0.table_info(name).await?.map(|schema| {
-            Arc::new(RemoteTable::new(Arc::clone(&self.0), name, schema))
-                as Arc<dyn TableProvider>
-        }))
+    fn table<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<Arc<dyn TableProvider>>>> {
+        Box::pin(async move {
+            // Fetch information about the table from the remote catalog
+            //
+            // Note that a real remote catalog interface could return more
+            // information, but at the minimum, DataFusion requires the
+            // table's schema for planing.
+            Ok(self.0.table_info(name).await?.map(|schema| {
+                Arc::new(RemoteTable::new(Arc::clone(&self.0), name, schema))
+                    as Arc<dyn TableProvider>
+            }))
+        })
     }
 }
 
@@ -224,7 +227,6 @@ impl RemoteTable {
 }
 
 /// Implement the DataFusion Catalog API for [`RemoteTable`]
-#[async_trait]
 impl TableProvider for RemoteTable {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
@@ -234,31 +236,33 @@ impl TableProvider for RemoteTable {
         TableType::Base
     }
 
-    async fn scan(
-        &self,
-        _state: &dyn Session,
-        projection: Option<&[usize]>,
-        _filters: &[Expr],
+    fn scan<'a>(
+        &'a self,
+        _state: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        _filters: &'a [Expr],
         _limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Note that `scan` is called once the plan begin execution, and thus is
-        // async. When interacting with remote data sources, this is the place
-        // to begin establishing the remote connections and interacting with the
-        // remote storage system.
-        //
-        // As this example is just modeling the catalog API interface, we buffer
-        // the results locally in memory for simplicity.
-        let batches = self
-            .remote_catalog_interface
-            .read_data(&self.name)
-            .await?
-            .try_collect()
-            .await?;
-        let exec = MemorySourceConfig::try_new_exec(
-            &[batches],
-            self.schema.clone(),
-            projection.map(|p| p.to_vec()),
-        )?;
-        Ok(exec)
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            // Note that `scan` is called once the plan begin execution, and thus is
+            // async. When interacting with remote data sources, this is the place
+            // to begin establishing the remote connections and interacting with the
+            // remote storage system.
+            //
+            // As this example is just modeling the catalog API interface, we buffer
+            // the results locally in memory for simplicity.
+            let batches = self
+                .remote_catalog_interface
+                .read_data(&self.name)
+                .await?
+                .try_collect()
+                .await?;
+            let exec = MemorySourceConfig::try_new_exec(
+                &[batches],
+                self.schema.clone(),
+                projection.map(|p| p.to_vec()),
+            )?;
+            Ok(exec as Arc<dyn ExecutionPlan>)
+        })
     }
 }

@@ -25,7 +25,6 @@
 //! [`ListingTable`]: datafusion::datasource::listing::ListingTable
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch};
-use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion::prelude::{
     CsvReadOptions, JsonReadOptions, ParquetReadOptions, SessionContext,
@@ -46,7 +45,9 @@ use object_store::{
 use parking_lot::Mutex;
 use std::fmt;
 use std::fmt::{Display, Formatter};
+use std::future::Future;
 use std::ops::Range;
+use std::pin::Pin;
 use std::sync::Arc;
 use url::Url;
 
@@ -1375,49 +1376,85 @@ impl RequestCountingObjectStore {
     }
 }
 
-#[async_trait]
 impl ObjectStore for RequestCountingObjectStore {
-    async fn put_opts(
-        &self,
-        _location: &Path,
+    fn put_opts<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        _location: &'life1 Path,
         _payload: PutPayload,
         _opts: PutOptions,
-    ) -> object_store::Result<PutResult> {
-        unimplemented!()
+    ) -> Pin<
+        Box<dyn Future<Output = object_store::Result<PutResult>> + Send + 'async_trait>,
+    >
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move { unimplemented!() })
     }
 
-    async fn put_multipart_opts(
-        &self,
-        _location: &Path,
+    fn put_multipart_opts<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        _location: &'life1 Path,
         _opts: PutMultipartOptions,
-    ) -> object_store::Result<Box<dyn MultipartUpload>> {
-        unimplemented!()
+    ) -> Pin<
+        Box<
+            dyn Future<Output = object_store::Result<Box<dyn MultipartUpload>>>
+                + Send
+                + 'async_trait,
+        >,
+    >
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move { unimplemented!() })
     }
 
-    async fn get_opts(
-        &self,
-        location: &Path,
+    fn get_opts<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        location: &'life1 Path,
         options: GetOptions,
-    ) -> object_store::Result<GetResult> {
-        let result = self.inner.get_opts(location, options.clone()).await?;
-        self.requests.lock().push(RequestDetails::GetOpts {
-            path: location.to_owned(),
-            get_options: options,
-        });
-        Ok(result)
+    ) -> Pin<
+        Box<dyn Future<Output = object_store::Result<GetResult>> + Send + 'async_trait>,
+    >
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            let result = self.inner.get_opts(location, options.clone()).await?;
+            self.requests.lock().push(RequestDetails::GetOpts {
+                path: location.to_owned(),
+                get_options: options,
+            });
+            Ok(result)
+        })
     }
 
-    async fn get_ranges(
-        &self,
-        location: &Path,
-        ranges: &[Range<u64>],
-    ) -> object_store::Result<Vec<Bytes>> {
-        let result = self.inner.get_ranges(location, ranges).await?;
-        self.requests.lock().push(RequestDetails::GetRanges {
-            path: location.to_owned(),
-            ranges: ranges.to_vec(),
-        });
-        Ok(result)
+    fn get_ranges<'life0, 'life1, 'life2, 'async_trait>(
+        &'life0 self,
+        location: &'life1 Path,
+        ranges: &'life2 [Range<u64>],
+    ) -> Pin<
+        Box<dyn Future<Output = object_store::Result<Vec<Bytes>>> + Send + 'async_trait>,
+    >
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            let result = self.inner.get_ranges(location, ranges).await?;
+            self.requests.lock().push(RequestDetails::GetRanges {
+                path: location.to_owned(),
+                ranges: ranges.to_vec(),
+            });
+            Ok(result)
+        })
     }
 
     fn list(
@@ -1443,16 +1480,25 @@ impl ObjectStore for RequestCountingObjectStore {
         self.inner.list_with_offset(prefix, offset)
     }
 
-    async fn list_with_delimiter(
-        &self,
-        prefix: Option<&Path>,
-    ) -> object_store::Result<ListResult> {
-        self.requests
-            .lock()
-            .push(RequestDetails::ListWithDelimiter {
-                prefix: prefix.map(|p| p.to_owned()),
-            });
-        self.inner.list_with_delimiter(prefix).await
+    fn list_with_delimiter<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        prefix: Option<&'life1 Path>,
+    ) -> Pin<
+        Box<dyn Future<Output = object_store::Result<ListResult>> + Send + 'async_trait>,
+    >
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            self.requests
+                .lock()
+                .push(RequestDetails::ListWithDelimiter {
+                    prefix: prefix.map(|p| p.to_owned()),
+                });
+            self.inner.list_with_delimiter(prefix).await
+        })
     }
 
     fn delete_stream(
@@ -1462,12 +1508,18 @@ impl ObjectStore for RequestCountingObjectStore {
         unimplemented!()
     }
 
-    async fn copy_opts(
-        &self,
-        _from: &Path,
-        _to: &Path,
+    fn copy_opts<'life0, 'life1, 'life2, 'async_trait>(
+        &'life0 self,
+        _from: &'life1 Path,
+        _to: &'life2 Path,
         _options: CopyOptions,
-    ) -> object_store::Result<()> {
-        unimplemented!()
+    ) -> Pin<Box<dyn Future<Output = object_store::Result<()>> + Send + 'async_trait>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move { unimplemented!() })
     }
 }

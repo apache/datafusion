@@ -29,7 +29,6 @@ use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 
-use async_trait::async_trait;
 use object_store::ObjectStore;
 
 #[cfg(feature = "proto")]
@@ -81,8 +80,9 @@ impl From<FileOutputMode> for Option<bool> {
     }
 }
 
+use futures::future::BoxFuture;
+
 /// General behaviors for files that do `DataSink` operations
-#[async_trait]
 pub trait FileSink: DataSink {
     /// Retrieves the file sink configuration.
     fn config(&self) -> &FileSinkConfig;
@@ -107,32 +107,34 @@ pub trait FileSink: DataSink {
     ///
     /// # Returns
     /// - `Result<u64>`: Returns the total number of rows written across all files.
-    async fn spawn_writer_tasks_and_join(
-        &self,
-        context: &Arc<TaskContext>,
+    fn spawn_writer_tasks_and_join<'a>(
+        &'a self,
+        context: &'a Arc<TaskContext>,
         demux_task: SpawnedTask<Result<()>>,
         file_stream_rx: DemuxedStreamReceiver,
         object_store: Arc<dyn ObjectStore>,
-    ) -> Result<u64>;
+    ) -> BoxFuture<'a, Result<u64>>;
 
     /// File sink implementation of the [`DataSink::write_all`] method.
-    async fn write_all(
-        &self,
+    fn write_all<'a>(
+        &'a self,
         data: SendableRecordBatchStream,
-        context: &Arc<TaskContext>,
-    ) -> Result<u64> {
-        let config = self.config();
-        let object_store = context
-            .runtime_env()
-            .object_store(&config.object_store_url)?;
-        let (demux_task, file_stream_rx) = start_demuxer_task(config, data, context);
-        self.spawn_writer_tasks_and_join(
-            context,
-            demux_task,
-            file_stream_rx,
-            object_store,
-        )
-        .await
+        context: &'a Arc<TaskContext>,
+    ) -> BoxFuture<'a, Result<u64>> {
+        Box::pin(async move {
+            let config = self.config();
+            let object_store = context
+                .runtime_env()
+                .object_store(&config.object_store_url)?;
+            let (demux_task, file_stream_rx) = start_demuxer_task(config, data, context);
+            self.spawn_writer_tasks_and_join(
+                context,
+                demux_task,
+                file_stream_rx,
+                object_store,
+            )
+            .await
+        })
     }
 }
 

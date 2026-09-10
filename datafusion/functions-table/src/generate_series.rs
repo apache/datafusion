@@ -23,7 +23,6 @@ use arrow::datatypes::{
     DataType, Field, IntervalMonthDayNano, Schema, SchemaRef, TimeUnit,
 };
 use arrow::record_batch::RecordBatch;
-use async_trait::async_trait;
 use datafusion_catalog::TableFunctionImpl;
 use datafusion_catalog::TableProvider;
 use datafusion_catalog::{Session, TableFunctionArgs};
@@ -33,6 +32,7 @@ use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::memory::{LazyBatchGenerator, LazyMemoryExec};
+use futures::future::BoxFuture;
 use parking_lot::RwLock;
 use std::any::Any;
 use std::fmt;
@@ -541,8 +541,6 @@ fn validate_interval_step(step: IntervalMonthDayNano) -> Result<()> {
 
     Ok(())
 }
-
-#[async_trait]
 impl TableProvider for GenerateSeriesTable {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
@@ -552,23 +550,25 @@ impl TableProvider for GenerateSeriesTable {
         TableType::Base
     }
 
-    async fn scan(
-        &self,
-        state: &dyn Session,
-        projection: Option<&[usize]>,
-        _filters: &[Expr],
+    fn scan<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        _filters: &'a [Expr],
         _limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let batch_size = state.config_options().execution.batch_size.get();
-        let generator = self.as_generator(batch_size)?;
-        let mut exec = LazyMemoryExec::try_new(self.schema(), vec![generator])?
-            .with_projection(projection.map(|p| p.to_vec()));
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            let batch_size = state.config_options().execution.batch_size.get();
+            let generator = self.as_generator(batch_size)?;
+            let mut exec = LazyMemoryExec::try_new(self.schema(), vec![generator])?
+                .with_projection(projection.map(|p| p.to_vec()));
 
-        if let Some(ordering) = self.output_ordering(exec.schema().as_ref()) {
-            exec.add_ordering([ordering]);
-        }
+            if let Some(ordering) = self.output_ordering(exec.schema().as_ref()) {
+                exec.add_ordering([ordering]);
+            }
 
-        Ok(Arc::new(exec))
+            Ok(Arc::new(exec) as Arc<dyn ExecutionPlan>)
+        })
     }
 }
 

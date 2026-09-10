@@ -51,6 +51,7 @@ use datafusion_expr::{
 use datafusion_expr_common::signature::Coercion;
 use datafusion_expr_common::signature::TypeSignature;
 use datafusion_functions_nested::range::range_udf;
+use futures::future::BoxFuture;
 use parking_lot::Mutex;
 use regex::Regex;
 use sqlparser::ast::Ident;
@@ -909,16 +910,17 @@ async fn verify_udf_return_type() -> Result<()> {
 #[derive(Debug, Default)]
 struct CustomFunctionFactory {}
 
-#[async_trait::async_trait]
 impl FunctionFactory for CustomFunctionFactory {
-    async fn create(
-        &self,
-        _state: &SessionState,
+    fn create<'a>(
+        &'a self,
+        _state: &'a SessionState,
         statement: CreateFunction,
-    ) -> Result<RegisterFunction> {
-        let f: ScalarFunctionWrapper = statement.try_into()?;
+    ) -> BoxFuture<'a, Result<RegisterFunction>> {
+        Box::pin(async move {
+            let f: ScalarFunctionWrapper = statement.try_into()?;
 
-        Ok(RegisterFunction::Scalar(Arc::new(ScalarUDF::from(f))))
+            Ok(RegisterFunction::Scalar(Arc::new(ScalarUDF::from(f))))
+        })
     }
 }
 // a wrapper type to be used to register
@@ -1314,17 +1316,18 @@ impl RecordingFunctionFactory {
     }
 }
 
-#[async_trait::async_trait]
 impl FunctionFactory for RecordingFunctionFactory {
-    async fn create(
-        &self,
-        _state: &SessionState,
+    fn create<'a>(
+        &'a self,
+        _state: &'a SessionState,
         statement: CreateFunction,
-    ) -> Result<RegisterFunction> {
-        self.calls.lock().push(statement);
+    ) -> BoxFuture<'a, Result<RegisterFunction>> {
+        Box::pin(async move {
+            self.calls.lock().push(statement);
 
-        let udf = range_udf();
-        Ok(RegisterFunction::Scalar(udf))
+            let udf = range_udf();
+            Ok(RegisterFunction::Scalar(udf))
+        })
     }
 }
 

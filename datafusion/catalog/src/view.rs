@@ -23,7 +23,6 @@ use crate::Session;
 use crate::TableProvider;
 
 use arrow::datatypes::SchemaRef;
-use async_trait::async_trait;
 use datafusion_common::Column;
 use datafusion_common::error::Result;
 use datafusion_expr::TableType;
@@ -70,8 +69,6 @@ impl ViewTable {
         &self.logical_plan
     }
 }
-
-#[async_trait]
 impl TableProvider for ViewTable {
     fn get_logical_plan(&'_ self) -> Option<Cow<'_, LogicalPlan>> {
         Some(Cow::Borrowed(&self.logical_plan))
@@ -96,22 +93,13 @@ impl TableProvider for ViewTable {
         Ok(vec![TableProviderFilterPushDown::Exact; filters.len()])
     }
 
-    // Hand-written `#[async_trait]` expansion to reduce compile time. See
-    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
-    fn scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(
-        &'life0 self,
-        state: &'life1 dyn Session,
-        projection: Option<&'life2 [usize]>,
-        filters: &'life3 [Expr],
+    fn scan<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        filters: &'a [Expr],
         limit: Option<usize>,
-    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
-    where
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        'life2: 'async_trait,
-        'life3: 'async_trait,
-        Self: 'async_trait,
-    {
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
         self.scan_boxed(state, projection, filters, limit)
     }
 }

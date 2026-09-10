@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use futures::future::BoxFuture;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use arrow::array::{RecordBatch, record_batch};
 use arrow_schema::{DataType, Field, Schema};
 use async_provider::create_async_table_provider;
-use async_trait::async_trait;
 use catalog::create_catalog_provider;
 use datafusion_catalog::MemTable;
 use datafusion_catalog::{Session, TableProvider};
@@ -282,8 +282,6 @@ struct TableWithStats {
     delete_calls: AtomicUsize,
     update_calls: AtomicUsize,
 }
-
-#[async_trait]
 impl TableProvider for TableWithStats {
     fn schema(&self) -> arrow_schema::SchemaRef {
         self.inner.schema()
@@ -297,64 +295,73 @@ impl TableProvider for TableWithStats {
         Some(self.stats.clone())
     }
 
-    async fn scan(
-        &self,
-        session: &dyn Session,
-        projection: Option<&[usize]>,
-        filters: &[Expr],
+    fn scan<'a>(
+        &'a self,
+        session: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        filters: &'a [Expr],
         limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.inner.scan(session, projection, filters, limit).await
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(
+            async move { self.inner.scan(session, projection, filters, limit).await },
+        )
     }
 
-    async fn delete_from(
-        &self,
-        _state: &dyn Session,
+    fn delete_from<'a>(
+        &'a self,
+        _state: &'a dyn Session,
         filters: Vec<Expr>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let call = self.delete_calls.fetch_add(1, Ordering::Relaxed);
-        let valid = match call {
-            0 => filters == vec![col("a").gt(lit(10_i32)), col("b").lt(lit(2.5_f64))],
-            1 => filters.is_empty(),
-            _ => false,
-        };
-        if !valid {
-            return exec_err!("Unexpected DELETE filters for call {call}");
-        }
-        Ok(dml_count_plan())
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            let call = self.delete_calls.fetch_add(1, Ordering::Relaxed);
+            let valid = match call {
+                0 => filters == vec![col("a").gt(lit(10_i32)), col("b").lt(lit(2.5_f64))],
+                1 => filters.is_empty(),
+                _ => false,
+            };
+            if !valid {
+                return exec_err!("Unexpected DELETE filters for call {call}");
+            }
+            Ok(dml_count_plan())
+        })
     }
 
-    async fn update(
-        &self,
-        _state: &dyn Session,
+    fn update<'a>(
+        &'a self,
+        _state: &'a dyn Session,
         assignments: Vec<(String, Expr)>,
         filters: Vec<Expr>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        if assignments
-            != vec![
-                ("b".to_string(), lit(42_f64)),
-                ("a".to_string(), lit(7_i32)),
-            ]
-        {
-            return exec_err!("Unexpected UPDATE assignments");
-        }
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            if assignments
+                != vec![
+                    ("b".to_string(), lit(42_f64)),
+                    ("a".to_string(), lit(7_i32)),
+                ]
+            {
+                return exec_err!("Unexpected UPDATE assignments");
+            }
 
-        let call = self.update_calls.fetch_add(1, Ordering::Relaxed);
-        let valid = match call {
-            0 => filters == vec![col("a").eq(lit(7_i32)), col("b").gt(lit(1.5_f64))],
-            1 => filters.is_empty(),
-            _ => false,
-        };
+            let call = self.update_calls.fetch_add(1, Ordering::Relaxed);
+            let valid = match call {
+                0 => filters == vec![col("a").eq(lit(7_i32)), col("b").gt(lit(1.5_f64))],
+                1 => filters.is_empty(),
+                _ => false,
+            };
 
-        if !valid {
-            return exec_err!("Unexpected UPDATE filters for call {call}");
-        }
+            if !valid {
+                return exec_err!("Unexpected UPDATE filters for call {call}");
+            }
 
-        Ok(dml_count_plan())
+            Ok(dml_count_plan())
+        })
     }
 
-    async fn truncate(&self, _state: &dyn Session) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(dml_count_plan())
+    fn truncate<'a>(
+        &'a self,
+        _state: &'a dyn Session,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move { Ok(dml_count_plan()) })
     }
 }
 

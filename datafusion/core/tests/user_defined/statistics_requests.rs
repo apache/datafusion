@@ -24,11 +24,11 @@
 //! plays both roles, demonstrating that the request-side hooks are
 //! sufficient to build the whole feature outside of DataFusion.
 
+use futures::future::BoxFuture;
 use std::sync::{Arc, Mutex};
 
 use arrow::array::{Int64Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use async_trait::async_trait;
 use datafusion::catalog::{ScanArgs, ScanResult, Session, TableProvider};
 use datafusion::common::tree_node::Transformed;
 use datafusion::common::{Column, Result};
@@ -99,8 +99,6 @@ struct RecordingTable {
     batch: RecordBatch,
     last_requests: Arc<Mutex<Vec<StatisticsRequest>>>,
 }
-
-#[async_trait]
 impl TableProvider for RecordingTable {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
@@ -110,36 +108,40 @@ impl TableProvider for RecordingTable {
         TableType::Base
     }
 
-    async fn scan(
-        &self,
-        _state: &dyn Session,
-        projection: Option<&[usize]>,
-        _filters: &[Expr],
+    fn scan<'a>(
+        &'a self,
+        _state: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        _filters: &'a [Expr],
         _limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(MemorySourceConfig::try_new_exec(
-            &[vec![self.batch.clone()]],
-            Arc::clone(&self.schema),
-            projection.map(|p| p.to_vec()),
-        )?)
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            Ok(MemorySourceConfig::try_new_exec(
+                &[vec![self.batch.clone()]],
+                Arc::clone(&self.schema),
+                projection.map(|p| p.to_vec()),
+            )? as Arc<dyn ExecutionPlan>)
+        })
     }
 
-    async fn scan_with_args<'a>(
-        &self,
-        state: &dyn Session,
+    fn scan_with_args<'a>(
+        &'a self,
+        state: &'a dyn Session,
         args: ScanArgs<'a>,
-    ) -> Result<ScanResult> {
-        // Record what reached us, then delegate to `scan`.
-        *self.last_requests.lock().unwrap() = args.statistics_requests().to_vec();
-        let plan = self
-            .scan(
-                state,
-                args.projection(),
-                args.filters().unwrap_or(&[]),
-                args.limit(),
-            )
-            .await?;
-        Ok(ScanResult::new(plan))
+    ) -> BoxFuture<'a, Result<ScanResult>> {
+        Box::pin(async move {
+            // Record what reached us, then delegate to `scan`.
+            *self.last_requests.lock().unwrap() = args.statistics_requests().to_vec();
+            let plan = self
+                .scan(
+                    state,
+                    args.projection(),
+                    args.filters().unwrap_or(&[]),
+                    args.limit(),
+                )
+                .await?;
+            Ok(ScanResult::new(plan))
+        })
     }
 }
 

@@ -44,7 +44,6 @@ use arrow::compute::{cast, is_not_null, kernels, sum};
 use arrow::datatypes::{DataType, Int64Type, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_ord::cmp::lt;
-use async_trait::async_trait;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Constraints, HashMap, HashSet, Result, UnnestOptions, exec_datafusion_err, exec_err,
@@ -605,8 +604,6 @@ impl RecordBatchStream for UnnestStream {
         Arc::clone(&self.schema)
     }
 }
-
-#[async_trait]
 impl Stream for UnnestStream {
     type Item = Result<RecordBatch>;
 

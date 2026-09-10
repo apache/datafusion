@@ -23,10 +23,11 @@
 //! - P99: ~150-200ms
 
 use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use object_store::path::Path;
@@ -89,37 +90,67 @@ impl<T: ObjectStore> fmt::Display for LatencyObjectStore<T> {
     }
 }
 
-#[async_trait]
 impl<T: ObjectStore> ObjectStore for LatencyObjectStore<T> {
-    async fn put_opts(
-        &self,
-        location: &Path,
+    fn put_opts<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        location: &'life1 Path,
         payload: PutPayload,
         opts: PutOptions,
-    ) -> Result<PutResult> {
-        self.inner.put_opts(location, payload, opts).await
+    ) -> Pin<Box<dyn Future<Output = Result<PutResult>> + Send + 'async_trait>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move { self.inner.put_opts(location, payload, opts).await })
     }
 
-    async fn put_multipart_opts(
-        &self,
-        location: &Path,
+    fn put_multipart_opts<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        location: &'life1 Path,
         opts: PutMultipartOptions,
-    ) -> Result<Box<dyn MultipartUpload>> {
-        self.inner.put_multipart_opts(location, opts).await
+    ) -> Pin<
+        Box<dyn Future<Output = Result<Box<dyn MultipartUpload>>> + Send + 'async_trait>,
+    >
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move { self.inner.put_multipart_opts(location, opts).await })
     }
 
-    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
-        tokio::time::sleep(self.next_get_latency()).await;
-        self.inner.get_opts(location, options).await
+    fn get_opts<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        location: &'life1 Path,
+        options: GetOptions,
+    ) -> Pin<Box<dyn Future<Output = Result<GetResult>> + Send + 'async_trait>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            tokio::time::sleep(self.next_get_latency()).await;
+            self.inner.get_opts(location, options).await
+        })
     }
 
-    async fn get_ranges(
-        &self,
-        location: &Path,
-        ranges: &[std::ops::Range<u64>],
-    ) -> Result<Vec<bytes::Bytes>> {
-        tokio::time::sleep(self.next_get_latency()).await;
-        self.inner.get_ranges(location, ranges).await
+    fn get_ranges<'life0, 'life1, 'life2, 'async_trait>(
+        &'life0 self,
+        location: &'life1 Path,
+        ranges: &'life2 [std::ops::Range<u64>],
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<bytes::Bytes>>> + Send + 'async_trait>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            tokio::time::sleep(self.next_get_latency()).await;
+            self.inner.get_ranges(location, ranges).await
+        })
     }
 
     fn delete_stream(
@@ -141,17 +172,33 @@ impl<T: ObjectStore> ObjectStore for LatencyObjectStore<T> {
         .boxed()
     }
 
-    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-        tokio::time::sleep(self.next_list_latency()).await;
-        self.inner.list_with_delimiter(prefix).await
+    fn list_with_delimiter<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        prefix: Option<&'life1 Path>,
+    ) -> Pin<Box<dyn Future<Output = Result<ListResult>> + Send + 'async_trait>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            tokio::time::sleep(self.next_list_latency()).await;
+            self.inner.list_with_delimiter(prefix).await
+        })
     }
 
-    async fn copy_opts(
-        &self,
-        from: &Path,
-        to: &Path,
+    fn copy_opts<'life0, 'life1, 'life2, 'async_trait>(
+        &'life0 self,
+        from: &'life1 Path,
+        to: &'life2 Path,
         options: CopyOptions,
-    ) -> Result<()> {
-        self.inner.copy_opts(from, to, options).await
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'async_trait>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move { self.inner.copy_opts(from, to, options).await })
     }
 }

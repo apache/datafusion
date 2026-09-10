@@ -19,6 +19,7 @@
 //!
 //! Works with files following the [Arrow IPC format](https://arrow.apache.org/docs/format/Columnar.html#ipc-file-format)
 
+use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::fmt::{self, Debug};
 use std::io::{Seek, SeekFrom};
@@ -50,7 +51,6 @@ use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
 use crate::source::ArrowSource;
-use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_format::{FileFormat, FileFormatFactory};
@@ -109,8 +109,6 @@ impl GetExt for ArrowFormatFactory {
 /// Arrow [`FileFormat`] implementation.
 #[derive(Default, Debug)]
 pub struct ArrowFormat;
-
-#[async_trait]
 impl FileFormat for ArrowFormat {
     fn get_ext(&self) -> String {
         ArrowFormatFactory::new().get_ext()
@@ -133,110 +131,124 @@ impl FileFormat for ArrowFormat {
         None
     }
 
-    async fn infer_schema(
-        &self,
-        _state: &dyn Session,
-        store: &Arc<dyn ObjectStore>,
-        objects: &[ObjectMeta],
-    ) -> Result<SchemaRef> {
-        let mut schemas = vec![];
-        for object in objects {
-            let r = store.as_ref().get(&object.location).await?;
-            let schema = match r.payload {
-                #[cfg(not(target_arch = "wasm32"))]
-                GetResultPayload::File(mut file, _) => {
-                    match FileReader::try_new(&mut file, None) {
-                        Ok(reader) => reader.schema(),
-                        Err(file_error) => {
-                            // not in the file format, but FileReader read some bytes
-                            // while trying to parse the file and so we need to rewind
-                            // it to the beginning of the file
-                            file.seek(SeekFrom::Start(0))?;
-                            match StreamReader::try_new(&mut file, None) {
-                                Ok(reader) => reader.schema(),
-                                Err(stream_error) => {
-                                    return Err(internal_datafusion_err!(
-                                        "Failed to parse Arrow file as either file format or stream format. File format error: {file_error}. Stream format error: {stream_error}"
-                                    ));
+    fn infer_schema<'a>(
+        &'a self,
+        _state: &'a dyn Session,
+        store: &'a Arc<dyn ObjectStore>,
+        objects: &'a [ObjectMeta],
+    ) -> BoxFuture<'a, Result<SchemaRef>> {
+        Box::pin(async move {
+            let mut schemas = vec![];
+            for object in objects {
+                let r = store.as_ref().get(&object.location).await?;
+                let schema = match r.payload {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    GetResultPayload::File(mut file, _) => {
+                        match FileReader::try_new(&mut file, None) {
+                            Ok(reader) => reader.schema(),
+                            Err(file_error) => {
+                                // not in the file format, but FileReader read some bytes
+                                // while trying to parse the file and so we need to rewind
+                                // it to the beginning of the file
+                                file.seek(SeekFrom::Start(0))?;
+                                match StreamReader::try_new(&mut file, None) {
+                                    Ok(reader) => reader.schema(),
+                                    Err(stream_error) => {
+                                        return Err(internal_datafusion_err!(
+                                            "Failed to parse Arrow file as either file format or stream format. File format error: {file_error}. Stream format error: {stream_error}"
+                                        ));
+                                    }
                                 }
                             }
                         }
                     }
-                }
-                GetResultPayload::Stream(stream) => infer_stream_schema(stream).await?,
-            };
-            schemas.push(Arc::unwrap_or_clone(schema));
-        }
-        let merged_schema = Schema::try_merge(schemas)?;
-        Ok(Arc::new(merged_schema))
+                    GetResultPayload::Stream(stream) => {
+                        infer_stream_schema(stream).await?
+                    }
+                };
+                schemas.push(Arc::unwrap_or_clone(schema));
+            }
+            let merged_schema = Schema::try_merge(schemas)?;
+            Ok(Arc::new(merged_schema))
+        })
     }
 
-    async fn infer_stats(
-        &self,
-        _state: &dyn Session,
-        _store: &Arc<dyn ObjectStore>,
+    fn infer_stats<'a>(
+        &'a self,
+        _state: &'a dyn Session,
+        _store: &'a Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
-        _object: &ObjectMeta,
-    ) -> Result<Statistics> {
-        Ok(Statistics::new_unknown(&table_schema))
+        _object: &'a ObjectMeta,
+    ) -> BoxFuture<'a, Result<Statistics>> {
+        Box::pin(async move { Ok(Statistics::new_unknown(&table_schema)) })
     }
 
-    async fn create_physical_plan(
-        &self,
-        state: &dyn Session,
+    fn create_physical_plan<'a>(
+        &'a self,
+        state: &'a dyn Session,
         conf: FileScanConfig,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let object_store = state.runtime_env().object_store(&conf.object_store_url)?;
-        let object_location = &conf
-            .file_groups
-            .first()
-            .ok_or_else(|| internal_datafusion_err!("No files found in file group"))?
-            .files()
-            .first()
-            .ok_or_else(|| internal_datafusion_err!("No files found in file group"))?
-            .object_meta
-            .location;
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            let object_store =
+                state.runtime_env().object_store(&conf.object_store_url)?;
+            let object_location = &conf
+                .file_groups
+                .first()
+                .ok_or_else(|| internal_datafusion_err!("No files found in file group"))?
+                .files()
+                .first()
+                .ok_or_else(|| internal_datafusion_err!("No files found in file group"))?
+                .object_meta
+                .location;
 
-        let table_schema = TableSchemaBuilder::from(conf.file_schema())
-            .with_table_partition_cols(conf.table_partition_cols().clone())
-            .build();
+            let table_schema = TableSchemaBuilder::from(conf.file_schema())
+                .with_table_partition_cols(conf.table_partition_cols().clone())
+                .build();
 
-        let mut source: Arc<dyn FileSource> =
-            match is_object_in_arrow_ipc_file_format(object_store, object_location).await
+            let mut source: Arc<dyn FileSource> =
+                match is_object_in_arrow_ipc_file_format(object_store, object_location)
+                    .await
+                {
+                    Ok(true) => Arc::new(ArrowSource::new_file_source(table_schema)),
+                    Ok(false) => {
+                        Arc::new(ArrowSource::new_stream_file_source(table_schema))
+                    }
+                    Err(e) => Err(e)?,
+                };
+
+            // Preserve projection from the original file source
+            if let Some(projection) = conf.file_source.projection()
+                && let Some(new_source) = source.try_pushdown_projection(projection)?
             {
-                Ok(true) => Arc::new(ArrowSource::new_file_source(table_schema)),
-                Ok(false) => Arc::new(ArrowSource::new_stream_file_source(table_schema)),
-                Err(e) => Err(e)?,
-            };
+                source = new_source;
+            }
 
-        // Preserve projection from the original file source
-        if let Some(projection) = conf.file_source.projection()
-            && let Some(new_source) = source.try_pushdown_projection(projection)?
-        {
-            source = new_source;
-        }
+            let config = FileScanConfigBuilder::from(conf)
+                .with_source(source)
+                .build();
 
-        let config = FileScanConfigBuilder::from(conf)
-            .with_source(source)
-            .build();
-
-        Ok(DataSourceExec::from_data_source(config))
+            Ok(DataSourceExec::from_data_source(config) as Arc<dyn ExecutionPlan>)
+        })
     }
 
-    async fn create_writer_physical_plan(
-        &self,
+    fn create_writer_physical_plan<'a>(
+        &'a self,
         input: Arc<dyn ExecutionPlan>,
-        _state: &dyn Session,
+        _state: &'a dyn Session,
         conf: FileSinkConfig,
         order_requirements: Option<LexRequirement>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        if conf.insert_op != InsertOp::Append {
-            return not_impl_err!("Overwrites are not implemented yet for Arrow format");
-        }
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            if conf.insert_op != InsertOp::Append {
+                return not_impl_err!(
+                    "Overwrites are not implemented yet for Arrow format"
+                );
+            }
 
-        let sink = Arc::new(ArrowFileSink::new(conf));
+            let sink = Arc::new(ArrowFileSink::new(conf));
 
-        Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
+            Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
+        })
     }
 
     fn file_source(&self, table_schema: TableSchema) -> Arc<dyn FileSource> {
@@ -254,89 +266,91 @@ impl ArrowFileSink {
         Self { config }
     }
 }
-
-#[async_trait]
 impl FileSink for ArrowFileSink {
     fn config(&self) -> &FileSinkConfig {
         &self.config
     }
 
-    async fn spawn_writer_tasks_and_join(
-        &self,
-        context: &Arc<TaskContext>,
+    fn spawn_writer_tasks_and_join<'a>(
+        &'a self,
+        context: &'a Arc<TaskContext>,
         demux_task: SpawnedTask<Result<()>>,
         mut file_stream_rx: DemuxedStreamReceiver,
         object_store: Arc<dyn ObjectStore>,
-    ) -> Result<u64> {
-        let mut file_write_tasks: JoinSet<std::result::Result<usize, DataFusionError>> =
-            JoinSet::new();
+    ) -> BoxFuture<'a, Result<u64>> {
+        Box::pin(async move {
+            let mut file_write_tasks: JoinSet<
+                std::result::Result<usize, DataFusionError>,
+            > = JoinSet::new();
 
-        let ipc_options =
-            IpcWriteOptions::try_new(64, false, arrow_ipc::MetadataVersion::V5)?
-                .try_with_compression(Some(CompressionType::LZ4_FRAME))?;
-        while let Some((path, mut rx)) = file_stream_rx.recv().await {
-            let shared_buffer = SharedBuffer::new(INITIAL_BUFFER_BYTES);
-            let mut arrow_writer = arrow_ipc::writer::FileWriter::try_new_with_options(
-                shared_buffer.clone(),
-                &get_writer_schema(&self.config),
-                ipc_options.clone(),
-            )?;
-            let mut object_store_writer = ObjectWriterBuilder::new(
-                FileCompressionType::UNCOMPRESSED,
-                &path,
-                Arc::clone(&object_store),
-            )
-            .with_buffer_size(Some(
-                context
-                    .session_config()
-                    .options()
-                    .execution
-                    .objectstore_writer_buffer_size,
-            ))
-            .build()?;
-            file_write_tasks.spawn(async move {
-                let mut row_count = 0;
-                while let Some(batch) = rx.recv().await {
-                    row_count += batch.num_rows();
-                    arrow_writer.write(&batch)?;
-                    let mut buff_to_flush = shared_buffer.buffer.try_lock().unwrap();
-                    if buff_to_flush.len() > BUFFER_FLUSH_BYTES {
-                        object_store_writer
-                            .write_all(buff_to_flush.as_slice())
-                            .await?;
-                        buff_to_flush.clear();
+            let ipc_options =
+                IpcWriteOptions::try_new(64, false, arrow_ipc::MetadataVersion::V5)?
+                    .try_with_compression(Some(CompressionType::LZ4_FRAME))?;
+            while let Some((path, mut rx)) = file_stream_rx.recv().await {
+                let shared_buffer = SharedBuffer::new(INITIAL_BUFFER_BYTES);
+                let mut arrow_writer =
+                    arrow_ipc::writer::FileWriter::try_new_with_options(
+                        shared_buffer.clone(),
+                        &get_writer_schema(&self.config),
+                        ipc_options.clone(),
+                    )?;
+                let mut object_store_writer = ObjectWriterBuilder::new(
+                    FileCompressionType::UNCOMPRESSED,
+                    &path,
+                    Arc::clone(&object_store),
+                )
+                .with_buffer_size(Some(
+                    context
+                        .session_config()
+                        .options()
+                        .execution
+                        .objectstore_writer_buffer_size,
+                ))
+                .build()?;
+                file_write_tasks.spawn(async move {
+                    let mut row_count = 0;
+                    while let Some(batch) = rx.recv().await {
+                        row_count += batch.num_rows();
+                        arrow_writer.write(&batch)?;
+                        let mut buff_to_flush = shared_buffer.buffer.try_lock().unwrap();
+                        if buff_to_flush.len() > BUFFER_FLUSH_BYTES {
+                            object_store_writer
+                                .write_all(buff_to_flush.as_slice())
+                                .await?;
+                            buff_to_flush.clear();
+                        }
                     }
-                }
-                arrow_writer.finish()?;
-                let final_buff = shared_buffer.buffer.try_lock().unwrap();
+                    arrow_writer.finish()?;
+                    let final_buff = shared_buffer.buffer.try_lock().unwrap();
 
-                object_store_writer.write_all(final_buff.as_slice()).await?;
-                object_store_writer.shutdown().await?;
-                Ok(row_count)
-            });
-        }
+                    object_store_writer.write_all(final_buff.as_slice()).await?;
+                    object_store_writer.shutdown().await?;
+                    Ok(row_count)
+                });
+            }
 
-        let mut row_count = 0;
-        while let Some(result) = file_write_tasks.join_next().await {
-            match result {
-                Ok(r) => {
-                    row_count += r?;
-                }
-                Err(e) => {
-                    if e.is_panic() {
-                        std::panic::resume_unwind(e.into_panic());
-                    } else {
-                        unreachable!();
+            let mut row_count = 0;
+            while let Some(result) = file_write_tasks.join_next().await {
+                match result {
+                    Ok(r) => {
+                        row_count += r?;
+                    }
+                    Err(e) => {
+                        if e.is_panic() {
+                            std::panic::resume_unwind(e.into_panic());
+                        } else {
+                            unreachable!();
+                        }
                     }
                 }
             }
-        }
 
-        demux_task
-            .join_unwind()
-            .await
-            .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
-        Ok(row_count as u64)
+            demux_task
+                .join_unwind()
+                .await
+                .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
+            Ok(row_count as u64)
+        })
     }
 }
 
@@ -361,19 +375,17 @@ impl DisplayAs for ArrowFileSink {
         }
     }
 }
-
-#[async_trait]
 impl DataSink for ArrowFileSink {
     fn schema(&self) -> &SchemaRef {
         self.config.output_schema()
     }
 
-    async fn write_all(
-        &self,
+    fn write_all<'a>(
+        &'a self,
         data: SendableRecordBatchStream,
-        context: &Arc<TaskContext>,
-    ) -> Result<u64> {
-        FileSink::write_all(self, data, context).await
+        context: &'a Arc<TaskContext>,
+    ) -> BoxFuture<'a, Result<u64>> {
+        Box::pin(async move { FileSink::write_all(self, data, context).await })
     }
 }
 
@@ -565,7 +577,6 @@ mod tests {
         }
     }
 
-    #[async_trait::async_trait]
     impl Session for MockSession {
         fn session_id(&self) -> &str {
             unimplemented!()
@@ -579,10 +590,10 @@ mod tests {
             Arc::new(EmptyCatalogProviderList)
         }
 
-        async fn create_physical_plan(
-            &self,
-            _logical_plan: &LogicalPlan,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
+        fn create_physical_plan<'a>(
+            &'a self,
+            _logical_plan: &'a LogicalPlan,
+        ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
             unimplemented!()
         }
 

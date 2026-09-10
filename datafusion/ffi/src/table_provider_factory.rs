@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use futures::future::BoxFuture;
 use std::{ffi::c_void, sync::Arc};
 
 use async_ffi::{FfiFuture, FutureExt};
-use async_trait::async_trait;
 use datafusion_catalog::{Session, TableProvider, TableProviderFactory};
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
@@ -287,25 +287,26 @@ impl ForeignTableProviderFactory {
 
 unsafe impl Send for ForeignTableProviderFactory {}
 unsafe impl Sync for ForeignTableProviderFactory {}
-
-#[async_trait]
 impl TableProviderFactory for ForeignTableProviderFactory {
-    async fn create(
-        &self,
-        session: &dyn Session,
-        cmd: &CreateExternalTable,
-    ) -> Result<Arc<dyn TableProvider>> {
-        let session = FFI_SessionRef::new(session, None, self.0.logical_codec.clone());
-        let cmd = self.serialize_cmd(cmd.clone())?;
+    fn create<'a>(
+        &'a self,
+        session: &'a dyn Session,
+        cmd: &'a CreateExternalTable,
+    ) -> BoxFuture<'a, Result<Arc<dyn TableProvider>>> {
+        Box::pin(async move {
+            let session =
+                FFI_SessionRef::new(session, None, self.0.logical_codec.clone());
+            let cmd = self.serialize_cmd(cmd.clone())?;
 
-        let provider = unsafe {
-            let maybe_provider = (self.0.create)(&self.0, session, cmd).await;
+            let provider = unsafe {
+                let maybe_provider = (self.0.create)(&self.0, session, cmd).await;
 
-            let ffi_provider = df_result!(maybe_provider)?;
-            ForeignTableProvider(ffi_provider)
-        };
+                let ffi_provider = df_result!(maybe_provider)?;
+                ForeignTableProvider(ffi_provider)
+            };
 
-        Ok(Arc::new(provider))
+            Ok(Arc::new(provider) as Arc<dyn TableProvider>)
+        })
     }
 }
 
@@ -321,36 +322,39 @@ mod tests {
 
     #[derive(Debug)]
     struct TestTableProviderFactory {}
-
-    #[async_trait]
     impl TableProviderFactory for TestTableProviderFactory {
-        async fn create(
-            &self,
-            _session: &dyn Session,
-            _cmd: &CreateExternalTable,
-        ) -> Result<Arc<dyn TableProvider>> {
-            use arrow::datatypes::Field;
-            use datafusion::arrow::array::Float32Array;
-            use datafusion::arrow::datatypes::DataType;
-            use datafusion::arrow::record_batch::RecordBatch;
-            use datafusion::datasource::MemTable;
+        fn create<'a>(
+            &'a self,
+            _session: &'a dyn Session,
+            _cmd: &'a CreateExternalTable,
+        ) -> BoxFuture<'a, Result<Arc<dyn TableProvider>>> {
+            Box::pin(async move {
+                use arrow::datatypes::Field;
+                use datafusion::arrow::array::Float32Array;
+                use datafusion::arrow::datatypes::DataType;
+                use datafusion::arrow::record_batch::RecordBatch;
+                use datafusion::datasource::MemTable;
 
-            let schema =
-                Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
+                let schema = Arc::new(Schema::new(vec![Field::new(
+                    "a",
+                    DataType::Float32,
+                    false,
+                )]));
 
-            let batch1 = RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![Arc::new(Float32Array::from(vec![2.0, 4.0, 8.0]))],
-            )?;
-            let batch2 = RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![Arc::new(Float32Array::from(vec![64.0]))],
-            )?;
+                let batch1 = RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(Float32Array::from(vec![2.0, 4.0, 8.0]))],
+                )?;
+                let batch2 = RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(Float32Array::from(vec![64.0]))],
+                )?;
 
-            Ok(Arc::new(MemTable::try_new(
-                schema,
-                vec![vec![batch1], vec![batch2]],
-            )?))
+                Ok(
+                    Arc::new(MemTable::try_new(schema, vec![vec![batch1], vec![batch2]])?)
+                        as Arc<dyn TableProvider>,
+                )
+            })
         }
     }
 

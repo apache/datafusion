@@ -17,10 +17,10 @@
 
 //! Tests for DELETE, UPDATE, and TRUNCATE planning to verify filter and assignment extraction.
 
+use futures::future::BoxFuture;
 use std::sync::{Arc, Mutex};
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use async_trait::async_trait;
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::error::Result;
 use datafusion::execution::context::{SessionConfig, SessionContext};
@@ -87,8 +87,6 @@ impl std::fmt::Debug for CaptureDeleteProvider {
             .finish()
     }
 }
-
-#[async_trait]
 impl TableProvider for CaptureDeleteProvider {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
@@ -98,25 +96,34 @@ impl TableProvider for CaptureDeleteProvider {
         TableType::Base
     }
 
-    async fn scan(
-        &self,
-        _state: &dyn Session,
-        _projection: Option<&[usize]>,
-        _filters: &[Expr],
+    fn scan<'a>(
+        &'a self,
+        _state: &'a dyn Session,
+        _projection: Option<&'a [usize]>,
+        _filters: &'a [Expr],
         _limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(EmptyExec::new(Arc::clone(&self.schema))))
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            Ok(Arc::new(EmptyExec::new(Arc::clone(&self.schema)))
+                as Arc<dyn ExecutionPlan>)
+        })
     }
 
-    async fn delete_from(
-        &self,
-        _state: &dyn Session,
+    fn delete_from<'a>(
+        &'a self,
+        _state: &'a dyn Session,
         filters: Vec<Expr>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        *self.received_filters.lock().unwrap() = Some(filters);
-        Ok(Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![
-            Field::new("count", DataType::UInt64, false),
-        ])))))
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            *self.received_filters.lock().unwrap() = Some(filters);
+            Ok(
+                Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![Field::new(
+                    "count",
+                    DataType::UInt64,
+                    false,
+                )])))) as Arc<dyn ExecutionPlan>,
+            )
+        })
     }
 
     fn supports_filters_pushdown(
@@ -183,8 +190,6 @@ impl std::fmt::Debug for CaptureUpdateProvider {
             .finish()
     }
 }
-
-#[async_trait]
 impl TableProvider for CaptureUpdateProvider {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
@@ -194,27 +199,36 @@ impl TableProvider for CaptureUpdateProvider {
         TableType::Base
     }
 
-    async fn scan(
-        &self,
-        _state: &dyn Session,
-        _projection: Option<&[usize]>,
-        _filters: &[Expr],
+    fn scan<'a>(
+        &'a self,
+        _state: &'a dyn Session,
+        _projection: Option<&'a [usize]>,
+        _filters: &'a [Expr],
         _limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(EmptyExec::new(Arc::clone(&self.schema))))
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            Ok(Arc::new(EmptyExec::new(Arc::clone(&self.schema)))
+                as Arc<dyn ExecutionPlan>)
+        })
     }
 
-    async fn update(
-        &self,
-        _state: &dyn Session,
+    fn update<'a>(
+        &'a self,
+        _state: &'a dyn Session,
         assignments: Vec<(String, Expr)>,
         filters: Vec<Expr>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        *self.received_filters.lock().unwrap() = Some(filters);
-        *self.received_assignments.lock().unwrap() = Some(assignments);
-        Ok(Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![
-            Field::new("count", DataType::UInt64, false),
-        ])))))
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            *self.received_filters.lock().unwrap() = Some(filters);
+            *self.received_assignments.lock().unwrap() = Some(assignments);
+            Ok(
+                Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![Field::new(
+                    "count",
+                    DataType::UInt64,
+                    false,
+                )])))) as Arc<dyn ExecutionPlan>,
+            )
+        })
     }
 
     fn supports_filters_pushdown(
@@ -257,8 +271,6 @@ impl std::fmt::Debug for CaptureTruncateProvider {
             .finish()
     }
 }
-
-#[async_trait]
 impl TableProvider for CaptureTruncateProvider {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
@@ -268,22 +280,34 @@ impl TableProvider for CaptureTruncateProvider {
         TableType::Base
     }
 
-    async fn scan(
-        &self,
-        _state: &dyn Session,
-        _projection: Option<&[usize]>,
-        _filters: &[Expr],
+    fn scan<'a>(
+        &'a self,
+        _state: &'a dyn Session,
+        _projection: Option<&'a [usize]>,
+        _filters: &'a [Expr],
         _limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(EmptyExec::new(Arc::clone(&self.schema))))
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            Ok(Arc::new(EmptyExec::new(Arc::clone(&self.schema)))
+                as Arc<dyn ExecutionPlan>)
+        })
     }
 
-    async fn truncate(&self, _state: &dyn Session) -> Result<Arc<dyn ExecutionPlan>> {
-        *self.truncate_called.lock().unwrap() = true;
+    fn truncate<'a>(
+        &'a self,
+        _state: &'a dyn Session,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            *self.truncate_called.lock().unwrap() = true;
 
-        Ok(Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![
-            Field::new("count", DataType::UInt64, false),
-        ])))))
+            Ok(
+                Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![Field::new(
+                    "count",
+                    DataType::UInt64,
+                    false,
+                )])))) as Arc<dyn ExecutionPlan>,
+            )
+        })
     }
 }
 

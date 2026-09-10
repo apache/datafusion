@@ -28,7 +28,6 @@ use arrow::{
     datatypes::{DataType, Field, FieldRef, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
-use async_trait::async_trait;
 use datafusion_common::DataFusionError;
 use datafusion_common::config::{ConfigEntry, ConfigOptions};
 use datafusion_common::error::Result;
@@ -43,6 +42,7 @@ use datafusion_expr::{TableType, Volatility};
 use datafusion_physical_plan::SendableRecordBatchStream;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::streaming::PartitionStream;
+use futures::future::BoxFuture;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -572,8 +572,6 @@ fn get_udwf_args_and_return_types(
 fn remove_native_type_prefix(native_type: &NativeType) -> String {
     format!("{native_type}")
 }
-
-#[async_trait]
 impl SchemaProvider for InformationSchemaProvider {
     fn table_names(&self) -> Vec<String> {
         INFORMATION_SCHEMA_TABLES
@@ -582,25 +580,28 @@ impl SchemaProvider for InformationSchemaProvider {
             .collect()
     }
 
-    async fn table(
-        &self,
-        name: &str,
-    ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError> {
-        let config = self.config.clone();
-        let table: Arc<dyn PartitionStream> = match name.to_ascii_lowercase().as_str() {
-            TABLES => Arc::new(InformationSchemaTables::new(config)),
-            COLUMNS => Arc::new(InformationSchemaColumns::new(config)),
-            VIEWS => Arc::new(InformationSchemaViews::new(config)),
-            DF_SETTINGS => Arc::new(InformationSchemaDfSettings::new(config)),
-            SCHEMATA => Arc::new(InformationSchemata::new(config)),
-            ROUTINES => Arc::new(InformationSchemaRoutines::new(config)),
-            PARAMETERS => Arc::new(InformationSchemaParameters::new(config)),
-            _ => return Ok(None),
-        };
+    fn table<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<Arc<dyn TableProvider>>, DataFusionError>> {
+        Box::pin(async move {
+            let config = self.config.clone();
+            let table: Arc<dyn PartitionStream> = match name.to_ascii_lowercase().as_str()
+            {
+                TABLES => Arc::new(InformationSchemaTables::new(config)),
+                COLUMNS => Arc::new(InformationSchemaColumns::new(config)),
+                VIEWS => Arc::new(InformationSchemaViews::new(config)),
+                DF_SETTINGS => Arc::new(InformationSchemaDfSettings::new(config)),
+                SCHEMATA => Arc::new(InformationSchemata::new(config)),
+                ROUTINES => Arc::new(InformationSchemaRoutines::new(config)),
+                PARAMETERS => Arc::new(InformationSchemaParameters::new(config)),
+                _ => return Ok(None),
+            };
 
-        Ok(Some(Arc::new(
-            StreamingTable::try_new(Arc::clone(table.schema()), vec![table]).unwrap(),
-        )))
+            Ok(Some(Arc::new(
+                StreamingTable::try_new(Arc::clone(table.schema()), vec![table]).unwrap(),
+            ) as Arc<dyn TableProvider>))
+        })
     }
 
     fn table_exist(&self, name: &str) -> bool {
@@ -1582,20 +1583,26 @@ mod tests {
 
     #[derive(Debug)]
     struct Fixture;
-
-    #[async_trait]
     impl SchemaProvider for Fixture {
         // InformationSchemaConfig::make_tables should use this.
-        async fn table_type(&self, _: &str) -> Result<Option<TableType>> {
-            Ok(Some(TableType::Base))
+        fn table_type<'a>(
+            &'a self,
+            _: &'a str,
+        ) -> BoxFuture<'a, Result<Option<TableType>>> {
+            Box::pin(async move { Ok(Some(TableType::Base)) })
         }
 
         // InformationSchemaConfig::make_tables used this before `table_type`
         // existed but should not, as it may be expensive.
-        async fn table(&self, _: &str) -> Result<Option<Arc<dyn TableProvider>>> {
-            panic!(
-                "InformationSchemaConfig::make_tables called SchemaProvider::table instead of table_type"
-            )
+        fn table<'a>(
+            &'a self,
+            _: &'a str,
+        ) -> BoxFuture<'a, Result<Option<Arc<dyn TableProvider>>>> {
+            Box::pin(async move {
+                panic!(
+                    "InformationSchemaConfig::make_tables called SchemaProvider::table instead of table_type"
+                )
+            })
         }
 
         fn table_names(&self) -> Vec<String> {

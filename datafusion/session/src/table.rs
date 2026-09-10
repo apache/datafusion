@@ -18,12 +18,10 @@
 use std::any::Any;
 use std::borrow::Cow;
 use std::fmt::Debug;
-use std::future::ready;
 use std::sync::Arc;
 
 use crate::session::Session;
 use arrow_schema::SchemaRef;
-use async_trait::async_trait;
 use datafusion_common::{Constraints, Statistics, not_impl_err};
 use datafusion_common::{DFSchemaRef, Result, internal_err};
 use datafusion_expr::Expr;
@@ -50,7 +48,6 @@ use datafusion_physical_plan::ExecutionPlan;
 ///
 /// [`RecordBatch`]: https://docs.rs/arrow/latest/arrow/record_batch/struct.RecordBatch.html
 /// [`CatalogProvider`]: super::CatalogProvider
-#[async_trait]
 pub trait TableProvider: Any + Debug + Sync + Send {
     /// Get a reference to the schema for this table
     fn schema(&self) -> SchemaRef;
@@ -59,6 +56,7 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     /// Returns:
     /// - `None` for tables that do not support constraints.
     /// - `Some(&Constraints)` for tables supporting constraints.
+    ///
     /// Therefore, a `Some(&Constraints::empty())` return value indicates that
     /// this table supports constraints, but there are no constraints.
     fn constraints(&self) -> Option<&Constraints> {
@@ -184,13 +182,13 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     ///
     /// As noted above, columns referenced only by pushed-down filters may be
     /// absent from `projection`.
-    async fn scan(
-        &self,
-        state: &dyn Session,
-        projection: Option<&[usize]>,
-        filters: &[Expr],
+    fn scan<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        filters: &'a [Expr],
         limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>>;
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>>;
 
     /// Create an [`ExecutionPlan`] for scanning the table using structured arguments.
     ///
@@ -209,26 +207,21 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     /// A [`ScanResult`] containing the [`ExecutionPlan`] for scanning the table
     ///
     /// See [`Self::scan`] for detailed documentation about projection, filters, and limits.
-    // Hand-written `#[async_trait]` expansion to reduce compile time. See
-    // <https://github.com/apache/datafusion/issues/13814>.
-    fn scan_with_args<'a, 'life0, 'life1, 'async_trait>(
-        &'life0 self,
-        state: &'life1 dyn Session,
+    fn scan_with_args<'a>(
+        &'a self,
+        state: &'a dyn Session,
         args: ScanArgs<'a>,
-    ) -> BoxFuture<'async_trait, Result<ScanResult>>
-    where
-        'a: 'async_trait,
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        Self: 'async_trait,
-    {
-        let plan = self.scan(
-            state,
-            args.projection(),
-            args.filters().unwrap_or(&[]),
-            args.limit(),
-        );
-        Box::pin(async move { Ok(plan.await?.into()) })
+    ) -> BoxFuture<'a, Result<ScanResult>> {
+        Box::pin(async move {
+            self.scan(
+                state,
+                args.projection(),
+                args.filters().unwrap_or(&[]),
+                args.limit(),
+            )
+            .await
+            .map(Into::into)
+        })
     }
 
     /// Specify if DataFusion should provide filter expressions to the
@@ -249,7 +242,7 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     ///
     /// Each element in the resulting `Vec` is one of the following:
     /// * [`Exact`] or [`Inexact`]: The TableProvider can apply the filter
-    /// during scan
+    ///   during scan
     /// * [`Unsupported`]: The TableProvider cannot apply the filter during scan
     ///
     /// By default, this function returns [`Unsupported`] for all filters,
@@ -264,7 +257,6 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     /// # use std::any::Any;
     /// # use std::sync::Arc;
     /// # use arrow_schema::SchemaRef;
-    /// # use async_trait::async_trait;
     /// # use datafusion_session::{TableProvider, Session};
     /// # use datafusion_common::Result;
     /// # use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
@@ -273,7 +265,6 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     /// #[derive(Debug)]
     /// struct TestDataSource {}
     ///
-    /// #[async_trait]
     /// impl TableProvider for TestDataSource {
     /// # fn schema(&self) -> SchemaRef { todo!() }
     /// # fn table_type(&self) -> TableType { todo!() }
@@ -348,66 +339,55 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     /// streams of `RecordBatch`es as files to an ObjectStore.
     ///
     /// [`DataSinkExec`]: https://docs.rs/datafusion-datasource/latest/datafusion_datasource/sink/struct.DataSinkExec.html
-    async fn insert_into(
-        &self,
-        _state: &dyn Session,
+    fn insert_into<'a>(
+        &'a self,
+        _state: &'a dyn Session,
         _input: Arc<dyn ExecutionPlan>,
         _insert_op: InsertOp,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        not_impl_err!("Insert into not implemented for this table")
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async { not_impl_err!("Insert into not implemented for this table") })
     }
 
     /// Delete rows matching the filter predicates.
     ///
     /// Returns an [`ExecutionPlan`] producing a single row with `count` (UInt64).
     /// Empty `filters` deletes all rows.
-    // Hand-written `#[async_trait]` expansion to reduce compile time. See
-    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
-    fn delete_from<'life0, 'life1, 'async_trait>(
-        &'life0 self,
-        _state: &'life1 dyn Session,
+    fn delete_from<'a>(
+        &'a self,
+        _state: &'a dyn Session,
         _filters: Vec<Expr>,
-    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
-    where
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        Self: 'async_trait,
-    {
-        Box::pin(ready(not_impl_err!(
-            "DELETE not supported for {} table",
-            self.table_type()
-        )))
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            not_impl_err!("DELETE not supported for {} table", self.table_type())
+        })
     }
 
     /// Update rows matching the filter predicates.
     ///
     /// Returns an [`ExecutionPlan`] producing a single row with `count` (UInt64).
     /// Empty `filters` updates all rows.
-    // Hand-written `#[async_trait]` expansion to reduce compile time. See
-    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
-    fn update<'life0, 'life1, 'async_trait>(
-        &'life0 self,
-        _state: &'life1 dyn Session,
+    fn update<'a>(
+        &'a self,
+        _state: &'a dyn Session,
         _assignments: Vec<(String, Expr)>,
         _filters: Vec<Expr>,
-    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
-    where
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        Self: 'async_trait,
-    {
-        Box::pin(ready(not_impl_err!(
-            "UPDATE not supported for {} table",
-            self.table_type()
-        )))
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            not_impl_err!("UPDATE not supported for {} table", self.table_type())
+        })
     }
 
     /// Remove all rows from the table.
     ///
     /// Should return an [ExecutionPlan] producing a single row with count (UInt64),
     /// representing the number of rows removed.
-    async fn truncate(&self, _state: &dyn Session) -> Result<Arc<dyn ExecutionPlan>> {
-        not_impl_err!("TRUNCATE not supported for {} table", self.table_type())
+    fn truncate<'a>(
+        &'a self,
+        _state: &'a dyn Session,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            not_impl_err!("TRUNCATE not supported for {} table", self.table_type())
+        })
     }
 
     /// Merge rows from a source into this table.
@@ -421,25 +401,17 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     /// The `clauses` describe the WHEN MATCHED / WHEN NOT MATCHED actions.
     ///
     /// Returns an [`ExecutionPlan`] producing a single row with `count` (UInt64).
-    // Hand-written `#[async_trait]` expansion to reduce compile time. See
-    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
-    fn merge_into<'life0, 'life1, 'async_trait>(
-        &'life0 self,
-        _state: &'life1 dyn Session,
+    fn merge_into<'a>(
+        &'a self,
+        _state: &'a dyn Session,
         _source: Arc<dyn ExecutionPlan>,
         _merge_schema: DFSchemaRef,
         _on: Expr,
         _clauses: Vec<MergeIntoClause>,
-    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
-    where
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        Self: 'async_trait,
-    {
-        Box::pin(ready(not_impl_err!(
-            "MERGE INTO not supported for {} table",
-            self.table_type()
-        )))
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            not_impl_err!("MERGE INTO not supported for {} table", self.table_type())
+        })
     }
 }
 
@@ -602,14 +574,13 @@ impl From<Arc<dyn ExecutionPlan>> for ScanResult {
 ///
 /// For example, this can be used to create a table "on the fly"
 /// from a directory of files only when that name is referenced.
-#[async_trait]
 pub trait TableProviderFactory: Debug + Sync + Send {
     /// Create a TableProvider with the given url
-    async fn create(
-        &self,
-        state: &dyn Session,
-        cmd: &CreateExternalTable,
-    ) -> Result<Arc<dyn TableProvider>>;
+    fn create<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        cmd: &'a CreateExternalTable,
+    ) -> BoxFuture<'a, Result<Arc<dyn TableProvider>>>;
 }
 
 /// Describes arguments provided to the table function call.

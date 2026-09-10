@@ -28,6 +28,8 @@ use crate::{
 };
 use futures::{FutureExt, stream::BoxStream};
 use object_store::{CopyOptions, ObjectStoreExt};
+use std::future::Future;
+use std::pin::Pin;
 use std::{
     fmt::{Debug, Display, Formatter},
     sync::Arc,
@@ -108,57 +110,84 @@ impl Display for BlockingObjectStore {
 
 /// All trait methods are forwarded to the inner object store, except for
 /// the `head` method which waits until the expected number of concurrent calls is reached.
-#[async_trait::async_trait]
 impl ObjectStore for BlockingObjectStore {
-    async fn put_opts(
-        &self,
-        location: &Path,
+    fn put_opts<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        location: &'life1 Path,
         payload: PutPayload,
         opts: PutOptions,
-    ) -> object_store::Result<PutResult> {
-        self.inner.put_opts(location, payload, opts).await
+    ) -> Pin<
+        Box<dyn Future<Output = object_store::Result<PutResult>> + Send + 'async_trait>,
+    >
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move { self.inner.put_opts(location, payload, opts).await })
     }
-    async fn put_multipart_opts(
-        &self,
-        location: &Path,
+    fn put_multipart_opts<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        location: &'life1 Path,
         opts: PutMultipartOptions,
-    ) -> object_store::Result<Box<dyn MultipartUpload>> {
-        self.inner.put_multipart_opts(location, opts).await
+    ) -> Pin<
+        Box<
+            dyn Future<Output = object_store::Result<Box<dyn MultipartUpload>>>
+                + Send
+                + 'async_trait,
+        >,
+    >
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move { self.inner.put_multipart_opts(location, opts).await })
     }
 
-    async fn get_opts(
-        &self,
-        location: &Path,
+    fn get_opts<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        location: &'life1 Path,
         options: GetOptions,
-    ) -> object_store::Result<GetResult> {
-        if options.head {
-            println!(
-                "{} received head call for {location}",
-                BlockingObjectStore::NAME
-            );
-            // Wait until the expected number of concurrent calls is reached, but timeout after 1 second to avoid hanging failing tests.
-            let wait_result = timeout(Duration::from_secs(1), self.barrier.wait()).await;
-            match wait_result {
-                Ok(_) => println!(
-                    "{} barrier reached for {location}",
+    ) -> Pin<
+        Box<dyn Future<Output = object_store::Result<GetResult>> + Send + 'async_trait>,
+    >
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            if options.head {
+                println!(
+                    "{} received head call for {location}",
                     BlockingObjectStore::NAME
-                ),
-                Err(_) => {
-                    let error_message = format!(
-                        "{} barrier wait timed out for {location}",
+                );
+                // Wait until the expected number of concurrent calls is reached, but timeout after 1 second to avoid hanging failing tests.
+                let wait_result =
+                    timeout(Duration::from_secs(1), self.barrier.wait()).await;
+                match wait_result {
+                    Ok(_) => println!(
+                        "{} barrier reached for {location}",
                         BlockingObjectStore::NAME
-                    );
-                    log::error!("{error_message}");
-                    return Err(Error::Generic {
-                        store: BlockingObjectStore::NAME,
-                        source: error_message.into(),
-                    });
+                    ),
+                    Err(_) => {
+                        let error_message = format!(
+                            "{} barrier wait timed out for {location}",
+                            BlockingObjectStore::NAME
+                        );
+                        log::error!("{error_message}");
+                        return Err(Error::Generic {
+                            store: BlockingObjectStore::NAME,
+                            source: error_message.into(),
+                        });
+                    }
                 }
             }
-        }
 
-        // Forward the call to the inner object store.
-        self.inner.get_opts(location, options).await
+            // Forward the call to the inner object store.
+            self.inner.get_opts(location, options).await
+        })
     }
     fn delete_stream(
         &self,
@@ -174,19 +203,32 @@ impl ObjectStore for BlockingObjectStore {
         self.inner.list(prefix)
     }
 
-    async fn list_with_delimiter(
-        &self,
-        prefix: Option<&Path>,
-    ) -> object_store::Result<ListResult> {
-        self.inner.list_with_delimiter(prefix).await
+    fn list_with_delimiter<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        prefix: Option<&'life1 Path>,
+    ) -> Pin<
+        Box<dyn Future<Output = object_store::Result<ListResult>> + Send + 'async_trait>,
+    >
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move { self.inner.list_with_delimiter(prefix).await })
     }
 
-    async fn copy_opts(
-        &self,
-        from: &Path,
-        to: &Path,
+    fn copy_opts<'life0, 'life1, 'life2, 'async_trait>(
+        &'life0 self,
+        from: &'life1 Path,
+        to: &'life2 Path,
         options: CopyOptions,
-    ) -> object_store::Result<()> {
-        self.inner.copy_opts(from, to, options).await
+    ) -> Pin<Box<dyn Future<Output = object_store::Result<()>> + Send + 'async_trait>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move { self.inner.copy_opts(from, to, options).await })
     }
 }

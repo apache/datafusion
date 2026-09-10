@@ -17,12 +17,12 @@
 
 //! See `main.rs` for how to run it.
 
+use futures::future::BoxFuture;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{self, Debug, Formatter};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use async_trait::async_trait;
 use datafusion::arrow::array::{UInt8Builder, UInt64Builder};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
@@ -186,8 +186,6 @@ impl Default for CustomDataSource {
         }
     }
 }
-
-#[async_trait]
 impl TableProvider for CustomDataSource {
     fn schema(&self) -> SchemaRef {
         SchemaRef::new(Schema::new(vec![
@@ -200,15 +198,15 @@ impl TableProvider for CustomDataSource {
         TableType::Base
     }
 
-    async fn scan(
-        &self,
-        _state: &dyn Session,
-        projection: Option<&[usize]>,
+    fn scan<'a>(
+        &'a self,
+        _state: &'a dyn Session,
+        projection: Option<&'a [usize]>,
         // filters and limit can be used here to inject some push-down operations if needed
-        _filters: &[Expr],
+        _filters: &'a [Expr],
         _limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.create_physical_plan(projection, self.schema())
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move { self.create_physical_plan(projection, self.schema()) })
     }
 }
 

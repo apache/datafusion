@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use futures::future::BoxFuture;
 use std::sync::Arc;
 
 use arrow::array::{Int32Array, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, FieldRef, Schema};
-use async_trait::async_trait;
 use datafusion::prelude::*;
 use datafusion_common::test_util::format_batches;
 use datafusion_common::{Result, assert_batches_eq};
@@ -158,14 +158,12 @@ async fn test_async_udf_preserves_result_field_metadata() -> Result<()> {
             panic!("Call invoke_async_with_args instead")
         }
     }
-
-    #[async_trait]
     impl AsyncScalarUDFImpl for AsyncExtensionUDF {
-        async fn invoke_async_with_args(
+        fn invoke_async_with_args(
             &self,
             args: ScalarFunctionArgs,
-        ) -> Result<ColumnarValue> {
-            Ok(args.args[0].clone())
+        ) -> BoxFuture<'_, Result<ColumnarValue>> {
+            Box::pin(async move { Ok(args.args[0].clone()) })
         }
     }
 
@@ -250,19 +248,19 @@ impl ScalarUDFImpl for TestAsyncUDFImpl {
         panic!("Call invoke_async_with_args instead")
     }
 }
-
-#[async_trait]
 impl AsyncScalarUDFImpl for TestAsyncUDFImpl {
     fn ideal_batch_size(&self) -> Option<usize> {
         Some(self.batch_size)
     }
-    async fn invoke_async_with_args(
+    fn invoke_async_with_args(
         &self,
         args: ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
-        let arg1 = &args.args[0];
-        let results = call_external_service(arg1.clone()).await?;
-        Ok(results)
+    ) -> BoxFuture<'_, Result<ColumnarValue>> {
+        Box::pin(async move {
+            let arg1 = &args.args[0];
+            let results = call_external_service(arg1.clone()).await?;
+            Ok(results)
+        })
     }
 }
 
