@@ -283,7 +283,7 @@ fn validate_local_datetime_range(
     }
 
     let Ok(tz) = timezone.parse::<Tz>() else {
-        // An unparseable time zone is reported by the cast below.
+        // An unparsable time zone is reported by the cast below.
         return Ok(());
     };
 
