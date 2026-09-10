@@ -197,3 +197,7 @@ name = "range_repartition"
 [[bench]]
 harness = false
 name = "unnest"
+
+[[bench]]
+harness = false
+name = "ordered_group_values"
