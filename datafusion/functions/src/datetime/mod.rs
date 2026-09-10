@@ -79,7 +79,7 @@ pub mod expr_fn {
         "returns current UTC time as a Time64 value",
     ),(
         from_unixtime,
-        "converts an integer to RFC3339 timestamp format string",
+        "converts an integer of epoch seconds to a second-precision timestamp",
         @config unixtime
     ),(
         date_bin,
