@@ -4931,6 +4931,64 @@ async fn fetched_coalesce_survives_distribution_rewrites() -> Result<()> {
     Ok(())
 }
 
+/// SQL planning must retain a fetched TopK below an unordered aggregate when
+/// a physical plan is optimized again.
+#[tokio::test]
+async fn sql_fetched_topk_survives_reoptimization_under_unordered_parent() -> Result<()> {
+    use datafusion::physical_planner::DefaultPhysicalPlanner;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Int32, false),
+    ]));
+    let partitions = [vec![(1, 10), (100, 99)], vec![(2, 20), (200, 98)]]
+        .into_iter()
+        .map(|rows| {
+            Ok(RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(
+                        rows.iter().map(|(a, _)| *a).collect::<Vec<_>>(),
+                    )),
+                    Arc::new(Int32Array::from(
+                        rows.iter().map(|(_, b)| *b).collect::<Vec<_>>(),
+                    )),
+                ],
+            )?)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let table = MemTable::try_new(
+        schema,
+        vec![vec![partitions[0].clone()], vec![partitions[1].clone()]],
+    )?;
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(2));
+    ctx.register_table("t", Arc::new(table))?;
+    let state = ctx.state();
+    let planner = DefaultPhysicalPlanner::default();
+
+    for (sql, unordered_parent) in [
+        ("SELECT b FROM t ORDER BY a LIMIT 2", false),
+        (
+            "SELECT b FROM (SELECT a, b FROM t ORDER BY a LIMIT 2) GROUP BY b",
+            true,
+        ),
+    ] {
+        let plan = ctx.sql(sql).await?.create_physical_plan().await?;
+        let mut sql_rows = collect_i32(Arc::clone(&plan), state.task_ctx()).await?;
+        let reoptimized = planner.optimize_physical_plan(plan, &state, |_, _| {})?;
+        let mut reoptimized_rows =
+            collect_i32(Arc::clone(&reoptimized), state.task_ctx()).await?;
+        if unordered_parent {
+            sql_rows.sort_unstable();
+            reoptimized_rows.sort_unstable();
+        }
+        assert_eq!(sql_rows, [10, 20], "SQL plan: {sql}");
+        assert_eq!(reoptimized_rows, [10, 20], "reoptimized plan: {sql}");
+    }
+    Ok(())
+}
+
 /// A fetched TopK must remain ordered even when its aggregate parent cannot use that ordering.
 #[tokio::test]
 async fn fetched_topk_preserves_selected_rows_under_unordered_parent() -> Result<()> {

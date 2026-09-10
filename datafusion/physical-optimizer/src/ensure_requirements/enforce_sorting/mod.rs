@@ -742,6 +742,10 @@ fn remove_corresponding_sort_from_sub_plan(
     mut node: PlanWithCorrespondingSort,
     requires_single_partition: bool,
 ) -> Result<PlanWithCorrespondingSort> {
+    if is_sort_preserving_merge(&node.plan) && node.plan.fetch().is_some() {
+        return Ok(node);
+    }
+
     // A `SortExec` is always at the bottom of the tree.
     if let Some(sort_exec) = node.plan.downcast_ref::<SortExec>() {
         // Do not remove sorts with fetch:
