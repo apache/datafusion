@@ -29,112 +29,104 @@
 //! A long input value cannot match an inline list value because its length is
 //! part of the view.
 
-use std::marker::PhantomData;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, BooleanArray, GenericByteViewArray, MAX_INLINE_VIEW_LEN,
-    PrimitiveArray,
+    Array, ArrayRef, AsArray, BooleanArray, MAX_INLINE_VIEW_LEN, PrimitiveArray,
 };
-use arrow::buffer::ScalarBuffer;
-use arrow::datatypes::{
-    BinaryViewType, ByteViewType, DataType, Decimal128Type, StringViewType,
-};
+use arrow::buffer::{NullBuffer, ScalarBuffer};
+use arrow::datatypes::{DataType, Decimal128Type};
 use arrow::util::bit_iterator::BitIndexIterator;
 use datafusion_common::{Result, exec_datafusion_err, internal_datafusion_err};
 
 use super::primitive_filter::instantiate_primitive_filter;
 use super::static_filter::{StaticFilter, StaticFilterRef};
 
-fn view_len(view: u128) -> u32 {
-    view as u32
+fn is_inline(view: u128) -> bool {
+    (view as u32) <= MAX_INLINE_VIEW_LEN
 }
 
-fn downcast_byte_view<T: ByteViewType>(
-    array: &dyn Array,
-) -> Result<&GenericByteViewArray<T>> {
-    array.as_byte_view_opt::<T>().ok_or_else(|| {
-        exec_datafusion_err!(
-            "Expected concrete {} array, got {}",
-            T::DATA_TYPE,
-            array.data_type()
-        )
-    })
-}
-
-fn all_inline<T: ByteViewType>(array: &GenericByteViewArray<T>) -> bool {
-    let is_inline = |idx: usize| view_len(array.views()[idx]) <= MAX_INLINE_VIEW_LEN;
-    match array.nulls() {
+fn all_inline(views: &ScalarBuffer<u128>, nulls: Option<&NullBuffer>) -> bool {
+    match nulls {
         Some(nulls) => {
             BitIndexIterator::new(nulls.validity(), nulls.offset(), nulls.len())
-                .all(is_inline)
+                .all(|idx| is_inline(views[idx]))
         }
-        None => (0..array.len()).all(is_inline),
+        None => views.iter().copied().all(is_inline),
     }
 }
 
-fn as_decimal128<T: ByteViewType>(
-    array: &GenericByteViewArray<T>,
+fn as_decimal128(
+    views: &ScalarBuffer<u128>,
+    nulls: Option<&NullBuffer>,
 ) -> PrimitiveArray<Decimal128Type> {
-    let views = array.views();
     // `views.inner()` is already sliced to the array's offset.
     let values = ScalarBuffer::<i128>::new(views.inner().clone(), 0, views.len());
-    PrimitiveArray::<Decimal128Type>::new(values, array.nulls().cloned())
+    PrimitiveArray::<Decimal128Type>::new(values, nulls.cloned())
 }
 
 /// Adapts the selected primitive filter to the original byte-view type.
 ///
 /// Arrow requires unused inline bytes to be zero, so equal values have equal
 /// `u128` views.
-struct ByteViewFilter<T: ByteViewType> {
+struct ByteViewFilter {
+    data_type: DataType,
     inner: StaticFilterRef,
-    _marker: PhantomData<T>,
 }
 
-impl<T: ByteViewType> StaticFilter for ByteViewFilter<T> {
+impl StaticFilter for ByteViewFilter {
     fn null_count(&self) -> usize {
         self.inner.null_count()
     }
 
     fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
-        let array = downcast_byte_view::<T>(v)?;
+        let (views, nulls) = match &self.data_type {
+            DataType::Utf8View => v.as_string_view_opt().map(|a| (a.views(), a.nulls())),
+            DataType::BinaryView => {
+                v.as_binary_view_opt().map(|a| (a.views(), a.nulls()))
+            }
+            _ => unreachable!(),
+        }
+        .ok_or_else(|| {
+            exec_datafusion_err!(
+                "Expected concrete {} array, got {}",
+                self.data_type,
+                v.data_type()
+            )
+        })?;
         // List values are all inline (len <= 12). Long input views cannot match
         // because their encoded length (> 12) is part of the 128-bit key, so
         // input lengths do not need to be checked.
-        self.inner.contains(&as_decimal128(array), negated)
+        let decimal = as_decimal128(views, nulls);
+        self.inner.contains(&decimal, negated)
     }
-}
-
-fn instantiate_typed_filter<T: ByteViewType>(
-    in_array: &ArrayRef,
-) -> Result<Option<StaticFilterRef>> {
-    let array = downcast_byte_view::<T>(in_array.as_ref())?;
-    if !all_inline(array) {
-        return Ok(None);
-    }
-
-    let primitive: ArrayRef = Arc::new(as_decimal128(array));
-    let inner = instantiate_primitive_filter(&primitive)?.ok_or_else(|| {
-        internal_datafusion_err!(
-            "Byte view filter: no primitive filter for {}",
-            primitive.data_type()
-        )
-    })?;
-    Ok(Some(Arc::new(ByteViewFilter::<T> {
-        inner,
-        _marker: PhantomData,
-    })))
 }
 
 /// Returns a filter when every non-null byte view is inline.
 pub(super) fn instantiate_byte_view_filter(
     in_array: &ArrayRef,
 ) -> Result<Option<StaticFilterRef>> {
-    match in_array.data_type() {
-        DataType::Utf8View => instantiate_typed_filter::<StringViewType>(in_array),
-        DataType::BinaryView => instantiate_typed_filter::<BinaryViewType>(in_array),
-        _ => Ok(None),
+    let views = match in_array.data_type() {
+        DataType::Utf8View => in_array.as_string_view().views(),
+        DataType::BinaryView => in_array.as_binary_view().views(),
+        _ => return Ok(None),
+    };
+
+    if !all_inline(views, in_array.nulls()) {
+        return Ok(None);
     }
+
+    let primitive: ArrayRef = Arc::new(as_decimal128(views, in_array.nulls()));
+    let inner = instantiate_primitive_filter(&primitive)?.ok_or_else(|| {
+        internal_datafusion_err!(
+            "Byte view filter: no primitive filter for {}",
+            primitive.data_type()
+        )
+    })?;
+    Ok(Some(Arc::new(ByteViewFilter {
+        data_type: in_array.data_type().clone(),
+        inner,
+    })))
 }
 
 #[cfg(test)]
@@ -221,6 +213,15 @@ mod tests {
         let filter = instantiate_byte_view_filter(&binary)?.unwrap();
         let needles = BinaryViewArray::from(vec![b"a".as_slice(), b"z".as_slice()]);
         assert_contains(&*filter, &needles, vec![Some(true), Some(false)])?;
+
+        let mismatch_err = filter
+            .contains(&StringViewArray::from(vec!["a"]), false)
+            .unwrap_err();
+        assert!(
+            mismatch_err
+                .to_string()
+                .contains("Expected concrete BinaryView array, got Utf8View")
+        );
         Ok(())
     }
 }
