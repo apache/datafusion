@@ -102,26 +102,18 @@ enum Order {
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Cardinality {
     VeryHigh,
-    High,
     Medium,
     Low,
     VeryLow,
 }
 
 impl Cardinality {
-    const ALL: [Self; 5] = [
-        Self::VeryHigh,
-        Self::High,
-        Self::Medium,
-        Self::Low,
-        Self::VeryLow,
-    ];
+    const ALL: [Self; 4] = [Self::VeryHigh, Self::Medium, Self::Low, Self::VeryLow];
 
     /// Number of distinct `(k1, k2)` groups.
     fn groups(self) -> usize {
         match self {
             Self::VeryHigh => ROWS,
-            Self::High => ROWS / 2,
             Self::Medium => ROWS / 32,
             Self::Low => 16,
             Self::VeryLow => 2,
