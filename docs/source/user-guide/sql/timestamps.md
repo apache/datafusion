@@ -19,49 +19,55 @@
 
 # Timestamps and Time Zones
 
-Almost every surprising result involving timestamps in DataFusion comes down to a
-single question: when a timestamp gains or loses a time zone, does the _instant_
-stay the same or does the _wall clock_ stay the same? This page answers that
-question once, and then applies the answer to casts, the session time zone, the
-date/time functions, daylight saving time, and a handful of recipes.
+One question controls almost all timestamp results in DataFusion. When
+DataFusion adds a time zone to a timestamp, or removes one, what stays the same?
+Is it the _instant_, or is it the _wall clock_?
 
-All output on this page was produced with `datafusion-cli` on DataFusion 55.0.0
-with default settings unless a `SET` statement says otherwise.
+This page gives the answer. Then it uses the answer for casts, the session time
+zone, the date and time functions, daylight saving time, and some examples.
+
+This page uses two names:
+
+- An **aware timestamp** has a time zone.
+- A **naive timestamp** has no time zone.
+
+`datafusion-cli` on DataFusion 55.0.0 made all the output on this page. The
+settings are the default settings, unless a `SET` statement shows a different
+setting.
 
 ## The data model
 
-DataFusion timestamps are Arrow timestamps. Arrow has exactly two timestamp
-shapes, and the difference between them is the whole story:
+DataFusion timestamps are Arrow timestamps. Arrow has two timestamp types. The
+difference between the two types controls all the behavior on this page.
 
-| Arrow type                  | Physical value            | Meaning                                                                                                   |
-| --------------------------- | ------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `Timestamp(unit, Some(tz))` | offset from the UTC epoch | An **instant**. `tz` is a display annotation: it says how to render the instant, not what the instant is. |
-| `Timestamp(unit, None)`     | a wall-clock reading      | A **wall clock** with no instant attached. There is no fact about which point in time it names.           |
+| Arrow type                  | Physical value            | Meaning                                                                                                 |
+| --------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `Timestamp(unit, Some(tz))` | offset from the UTC epoch | An **instant**. `tz` is a display annotation: it says how to show the instant, not what the instant is. |
+| `Timestamp(unit, None)`     | a wall-clock reading      | A **wall clock** with no instant attached. There is no fact about which point in time it names.         |
 
-Two consequences follow, and they explain most of the rest of this page.
+Two results follow. These two results explain most of this page.
 
-- A zone-aware timestamp's `tz` **is not data**. Two values with the same
-  integer and different `tz` annotations are the _same instant_; comparing,
-  sorting, grouping or joining them treats them as equal.
-- A zone-naive timestamp has **no instant**, so any operation that needs one has
-  to invent a zone. Which zone gets invented is the subject of
-  [The session time zone](#the-session-time-zone) below, and it is not always
-  the same zone.
+- The `tz` of an aware timestamp **is not data**. Two values with the same
+  integer and different `tz` annotations are the _same instant_. In a
+  comparison, a sort, a `GROUP BY` or a join, they are equal.
+- A naive timestamp has **no instant**. An operation that needs an instant must
+  select a time zone. [The session time zone](#the-session-time-zone) shows
+  which time zone DataFusion selects. The time zone is not always the same.
 
-### How SQL types map to Arrow types
+### How SQL types agree with Arrow types
 
 | SQL type                                                   | Arrow type                                                    |
 | ---------------------------------------------------------- | ------------------------------------------------------------- |
 | `TIMESTAMP`, `TIMESTAMP WITHOUT TIME ZONE`, `::timestamp`  | `Timestamp(Nanosecond, None)`                                 |
 | `TIMESTAMP WITH TIME ZONE`, `TIMESTAMPTZ`, `::timestamptz` | `Timestamp(Nanosecond, Some(datafusion.execution.time_zone))` |
 
-`TIMESTAMP(p)` with `p` of 0, 3, 6 or 9 selects second, millisecond,
-microsecond or nanosecond precision respectively.
+In `TIMESTAMP(p)`, a `p` of 0, 3, 6 or 9 selects second, millisecond,
+microsecond or nanosecond precision.
 
-The second row is the important one, and it is where DataFusion parts company
-with PostgreSQL. `TIMESTAMP WITH TIME ZONE` resolves to whatever
-`datafusion.execution.time_zone` is set to — and that setting **defaults to
-unset**. With it unset, `TIMESTAMP WITH TIME ZONE` is a zone-_naive_ type:
+The second row is important, because DataFusion and PostgreSQL do not agree
+here. `TIMESTAMP WITH TIME ZONE` uses the value of
+`datafusion.execution.time_zone`. The default value of that setting is **not
+set**. If you do not set it, `TIMESTAMP WITH TIME ZONE` is a naive type:
 
 ```sql
 SELECT arrow_typeof('2024-01-01T12:00:00Z'::timestamptz) AS type,
@@ -76,10 +82,10 @@ SELECT arrow_typeof('2024-01-01T12:00:00Z'::timestamptz) AS type,
 +---------------+---------------------+
 ```
 
-The `Z` was accepted and then discarded. PostgreSQL has no equivalent state: its
-`TimeZone` parameter is always set to something, so `timestamptz` is always a
-zone-aware type there. Set the session time zone and the same query behaves the
-way a PostgreSQL user expects:
+DataFusion accepted the `Z` and then removed it. PostgreSQL cannot be in this
+condition, because its `TimeZone` parameter always has a value. As a result,
+`timestamptz` in PostgreSQL is always an aware type. Set the session time zone.
+Then the same query gives an aware value, as in PostgreSQL:
 
 ```sql
 SET datafusion.execution.time_zone = 'America/Denver';
@@ -96,22 +102,38 @@ SELECT arrow_typeof('2024-01-01T12:00:00Z'::timestamptz) AS type,
 +---------------------------------+---------------------------+
 ```
 
+DuckDB and PostgreSQL agree with each other here. Each of the two systems
+always has a session time zone, and the default value is the local time zone of
+the machine. As a result, `TIMESTAMPTZ` in those systems is always an aware
+type:
+
+| System     | Default session time zone | `'2024-01-01T12:00:00Z'::timestamptz`       |
+| ---------- | ------------------------- | ------------------------------------------- |
+| DataFusion | not set                   | `Timestamp(ns)` — naive, the `Z` is removed |
+| PostgreSQL | the machine's time zone   | `timestamp with time zone` — aware          |
+| DuckDB     | the machine's time zone   | `TIMESTAMP WITH TIME ZONE` — aware          |
+
+There is also a difference in the data model. In DuckDB, `TIMESTAMP WITH TIME ZONE` is one type, and a value of that type has no time zone of its own. The
+session time zone controls the display of each value. In DataFusion, each value
+keeps its own time zone in its Arrow type. DataFusion can hold two values in
+two different time zones in the same query. DuckDB cannot do this.
+
 :::{note}
-If you are writing SQL that must behave predictably, set
-`datafusion.execution.time_zone` explicitly. `'UTC'` is a good default:
-it makes `timestamptz` a genuinely zone-aware type, makes `now()` zone-aware,
-and keeps every conversion on this page a no-op shift.
+Set `datafusion.execution.time_zone` if the time zone of your results is
+important. `'UTC'` is a good value. It makes `timestamptz` an aware type, it
+makes `now()` aware, and it gives each conversion on this page an offset of
+zero.
 :::
 
 ## The one rule
 
-Every conversion between the two shapes follows from one rule, applied in three
+One rule controls each conversion between the two types. The rule has three
 directions.
 
-### Zone-naive to zone-aware: a **shift**
+### From naive to aware: a **shift**
 
-The naive wall clock is read as a local time _in the target zone_. The wall
-clock is preserved; the instant changes.
+DataFusion reads the naive wall clock as a local time _in the target time zone_.
+The wall clock stays the same. The instant changes.
 
 ```sql
 SELECT
@@ -131,13 +153,13 @@ SELECT
 +---------------------+---------------------------+-------------+-------------+
 ```
 
-The wall clock is still `12:00:00`; the epoch moved by 25200 seconds, the
-`-07:00` offset. This is the direction that trips people up, because the
-underlying integer changed even though nothing about the printed value did.
+The wall clock stays `12:00:00`. But the epoch moved 25200 seconds, which is
+the `-07:00` offset. This direction causes many errors, because the integer
+changes although the printed value does not change.
 
-### Zone-aware to zone-aware: a **relabel**
+### From aware to aware: a **relabel**
 
-The instant is preserved; only the display annotation changes.
+The instant stays the same. Only the display annotation changes.
 
 ```sql
 CREATE OR REPLACE VIEW utc AS
@@ -159,11 +181,11 @@ FROM utc;
 +----------------------+---------------------------+------------+--------------+
 ```
 
-### Zone-aware to zone-naive: the **UTC** wall clock
+### From aware to naive: the **UTC** wall clock
 
-The zone annotation is dropped and the integer is kept, which means the
-resulting wall clock is the value's wall clock **in UTC** — regardless of what
-the source annotation was and regardless of the session time zone.
+DataFusion removes the `tz` annotation and keeps the integer. As a result, the
+new wall clock is the wall clock of the value **in UTC**. The source annotation
+and the session time zone do not change this result.
 
 ```sql
 SELECT arrow_cast(t, 'Timestamp(Second, None)') AS zoned_to_naive FROM utc;
@@ -186,30 +208,30 @@ SELECT arrow_cast(arrow_cast(t, 'Timestamp(Second, Some("America/Denver"))'),
 +---------------------+
 ```
 
-Both give `12:00:00`, the UTC wall clock, even though the second value displays
-as `05:00:00-07:00`. PostgreSQL instead converts to the _session_ time zone
-here; see [Differences from PostgreSQL](#differences-from-postgresql).
+The two results are `12:00:00`, which is the UTC wall clock. This is correct
+although the second value shows `05:00:00-07:00`. PostgreSQL is different: it
+converts to the _session_ time zone. Refer to
+[Differences from PostgreSQL](#differences-from-postgresql).
 
-To get a local wall clock instead, use
-[`to_local_time`](scalar_functions.md#to_local_time) — see
-[Recipes](#recipes).
+Use [`to_local_time`](scalar_functions.md#to_local_time) to get a local wall
+clock. Refer to [Examples](#examples).
 
 ### Summary
 
-| Conversion         | What is preserved | What changes               |
-| ------------------ | ----------------- | -------------------------- |
-| naive &rarr; zoned | wall clock        | the instant (shifted)      |
-| zoned &rarr; zoned | the instant       | the display annotation     |
-| zoned &rarr; naive | the instant       | becomes the UTC wall clock |
+| Conversion         | What stays the same | What changes                  |
+| ------------------ | ------------------- | ----------------------------- |
+| naive &rarr; aware | the wall clock      | the instant (it shifts)       |
+| aware &rarr; aware | the instant         | the display annotation        |
+| aware &rarr; naive | the instant         | it becomes the UTC wall clock |
 
 ### `AT TIME ZONE`
 
-`AT TIME ZONE` applies the same rule, chosen by the input's shape:
+`AT TIME ZONE` uses the same rule. The type of the input selects the direction:
 
-- On a zone-**naive** input it is the naive &rarr; zoned shift: the wall clock
-  is read as local time in the named zone.
-- On a zone-**aware** input it is the zoned &rarr; zoned relabel: the instant is
-  kept and the display annotation is replaced.
+- For a **naive** input, `AT TIME ZONE` does the naive-to-aware shift. It reads
+  the wall clock as a local time in the time zone that you give.
+- For an **aware** input, `AT TIME ZONE` does the aware-to-aware relabel. It
+  keeps the instant and replaces the display annotation.
 
 ```sql
 CREATE OR REPLACE VIEW utc AS
@@ -239,21 +261,23 @@ FROM utc;
 +---------------------------------+---------------------------+---------------------+
 ```
 
-The zone-naive case agrees with PostgreSQL: both name the instant
-`2024-01-01T19:00:00Z`, DataFusion displaying it in Denver and PostgreSQL in the
-session zone.
+For a naive input, DataFusion and PostgreSQL agree. The two systems give the
+instant `2024-01-01T19:00:00Z`. DataFusion shows it in Denver, and PostgreSQL
+shows it in the session time zone.
 
-The zone-aware case does not. PostgreSQL and DuckDB both return a zone-**naive**
-`2024-01-01 05:00:00` there, so `(t AT TIME ZONE 'America/Denver')::timestamp`
-gives `05:00:00` in those systems and `12:00:00` — the UTC wall clock — in
-DataFusion. See <https://github.com/apache/datafusion/issues/12218>; this is
-under active discussion and may change.
+For an aware input, the two systems do not agree. PostgreSQL and DuckDB give a
+**naive** `2024-01-01 05:00:00`. As a result,
+`(t AT TIME ZONE 'America/Denver')::timestamp` gives `05:00:00` in those
+systems. In DataFusion, it gives `12:00:00`, which is the UTC wall clock. Refer
+to <https://github.com/apache/datafusion/issues/12218>. This behavior can
+change.
 
-### Where the rule is not applied consistently
+### Places where DataFusion does not use the rule
 
-The rule above describes the cast kernel. Some parts of DataFusion take the
-other reading — that a naive value is "really" UTC and gaining a zone is a
-relabel — and that inconsistency is visible from SQL today. The clearest case:
+The rule above tells you how the cast kernel operates. But some parts of
+DataFusion use a different rule. In that different rule, a naive value is a UTC
+value, and a new time zone is only a relabel. You can see this difference from
+SQL today. This is the most clear example:
 
 ```sql
 CREATE OR REPLACE TABLE c AS SELECT TIMESTAMP '2024-01-01 12:00:00' AS ts;
@@ -289,37 +313,45 @@ SELECT ts = arrow_cast(1704135600, 'Timestamp(Second, Some("America/Denver"))') 
 +------------+
 ```
 
-The cast in the first query shifts. The comparison in the third query is
-rewritten by the `unwrap_cast_in_comparison` optimizer rule, which removes the
-cast and keeps the literal's integer unchanged — a relabel. Note that
-`datafusion.execution.time_zone` is not set here and plays no part: the two
-queries disagree purely because one path shifts and the other relabels. Until
-<https://github.com/apache/datafusion/issues/25095> is fixed, prefer to make the
-conversion explicit and to compare zone-aware values against zone-aware values.
+The cast in the first query shifts the value. The `unwrap_cast_in_comparison`
+optimizer rule changes the comparison in the third query. That rule removes the
+cast and keeps the integer of the literal, which is a relabel. Note that
+`datafusion.execution.time_zone` has no value here, and it has no effect in this
+example. The two queries disagree only because one path shifts and the other
+path relabels.
+
+Until there is a correction for
+<https://github.com/apache/datafusion/issues/25095>, obey these two rules:
+
+- Write each conversion in the SQL with `arrow_cast`.
+- Compare aware values only with other aware values.
 
 ## The session time zone
 
-`datafusion.execution.time_zone` (see [Configuration Settings](../configs.md))
-is the zone DataFusion uses when it has to invent one. It **defaults to unset**.
+`datafusion.execution.time_zone` is the time zone that DataFusion uses when it
+must select one. Refer to [Configuration Settings](../configs.md). The default
+value is **not set**.
 
-What it affects:
+This setting changes:
 
-- The Arrow type that `TIMESTAMP WITH TIME ZONE` / `::timestamptz` resolves to.
-- The type and value returned by `now()`, `current_timestamp`, `current_date`
-  and `current_time`.
-- The zone that `to_timestamp` and the `to_timestamp_*` family produce, and the
-  zone that a zone-less string argument to them is interpreted in.
+- The Arrow type of `TIMESTAMP WITH TIME ZONE` and `::timestamptz`.
+- The type and the value of `now()`, `current_timestamp`, `current_date` and
+  `current_time`.
+- The time zone that `to_timestamp` and the `to_timestamp_*` functions give.
+- The time zone that these functions use for a string argument that has no time
+  zone.
 
-What it does **not** affect:
+This setting does not change:
 
-- The meaning of a `Timestamp(unit, Some(tz))` value that already exists. A
-  column read from Parquet or created by `AT TIME ZONE` keeps its own zone.
-- `from_unixtime`, which always produces a zone-naive UTC wall clock
-  (<https://github.com/apache/datafusion/issues/12892>).
-- `date_part` / `EXTRACT` on a zone-naive value, which reports that value's
-  stored wall clock and never reinterprets it
-  (<https://github.com/apache/datafusion/issues/18228>).
-- Zone-aware &rarr; zone-naive casts, which always produce the UTC wall clock.
+- The meaning of a `Timestamp(unit, Some(tz))` value that is in memory. A
+  column from a Parquet file, or a column from `AT TIME ZONE`, keeps its own
+  time zone.
+- `from_unixtime`, which always gives the UTC wall clock as a naive value. Refer
+  to <https://github.com/apache/datafusion/issues/12892>.
+- `date_part` and `EXTRACT` on a naive value. These functions give the wall
+  clock that is in memory, and they never read it again in a different time
+  zone. Refer to <https://github.com/apache/datafusion/issues/18228>.
+- A cast from aware to naive, which always gives the UTC wall clock.
 
 ```sql
 SET datafusion.execution.time_zone = 'America/Denver';
@@ -347,17 +379,19 @@ SELECT to_timestamp('2024-01-01T12:00:00') AS to_timestamp_naive_string,
 +---------------------------+---------------------+
 ```
 
-Note that `to_timestamp` read the zone-less string `'2024-01-01T12:00:00'` as
-`12:00` _local_ Denver time, while `from_unixtime` returned a naive UTC wall
-clock for the same epoch.
+Note the difference. `to_timestamp` read the string `'2024-01-01T12:00:00'` as
+`12:00` _local_ Denver time. But `from_unixtime` gave the UTC wall clock as a
+naive value for the same epoch.
 
-### The default-unset footgun
+### The risk when the session time zone has no value
 
-With `datafusion.execution.time_zone` unset, `::timestamptz` **erases** an
-existing zone rather than converting to one, because the target type is
-`Timestamp(_, None)` and the conversion is the zone-aware &rarr; zone-naive
-rule: keep the integer, drop the annotation. Wrapping a correct expression in
-`::timestamptz` therefore silently changes its meaning to UTC:
+If `datafusion.execution.time_zone` has no value, `::timestamptz` **removes**
+the time zone of an aware value. It does not convert to a time zone. The cause
+is the target type, which is `Timestamp(_, None)`. DataFusion uses the
+aware-to-naive rule: it keeps the integer, and it removes the annotation.
+
+If you put `::timestamptz` around a correct expression, you change the meaning
+of that expression to UTC. There is no warning:
 
 ```sql
 CREATE OR REPLACE TABLE hits(t TIMESTAMP) AS VALUES
@@ -392,53 +426,54 @@ FROM hits_utc GROUP BY 1 ORDER BY 1;
 +---------------------+---+
 ```
 
-The second query groups by UTC day even though it names Brussels. See
-<https://github.com/apache/datafusion/issues/13962>.
+The second query groups by the UTC day, although the SQL gives the name of
+Brussels. Refer to <https://github.com/apache/datafusion/issues/13962>.
 
-### Combining values from different zones
+### How to combine values from different time zones
 
-When two timestamps of different types meet — in a comparison, a `UNION`, a
-`CASE`, a `coalesce` — DataFusion picks a common type:
+You can put two timestamps of different types together in a comparison, a
+`UNION`, a `CASE` or a `coalesce`. DataFusion then selects a common type:
 
 | Left        | Right         | Common type                                |
 | ----------- | ------------- | ------------------------------------------ |
 | `Some(tz)`  | the same `tz` | that `tz`                                  |
-| `Some(tz1)` | `Some(tz2)`   | `Some("UTC")` (both are relabelled)        |
+| `Some(tz1)` | `Some(tz2)`   | `Some("UTC")` (both are relabeled)         |
 | `None`      | `Some(tz)`    | `Some(tz)` — the naive side is **shifted** |
 
-Because the common type of two _different_ named zones is UTC and not the
-session zone, a `UNION` of Denver and Brussels data displays as UTC. Nothing is
-lost: all three cases preserve every instant.
+The common type of two _different_ time zones is UTC. It is not the session time
+zone. As a result, a `UNION` of Denver data and Brussels data shows UTC. There
+is no loss of data, because all three rows keep each instant.
 
-## Local time versus the instant
+## Local time and the instant
 
-Some functions work on the value's **local wall clock** — the reading you get
-after applying the value's own `tz` annotation. Others work on the **UTC
-instant** and ignore the annotation except for display. Which group a function
-falls into is rarely stated anywhere, and it is the difference between a correct
-and an incorrect query, so here it is explicitly.
+Some functions use the **local wall clock** of the value. The local wall clock
+is the reading of the instant in the `tz` of the value. Other functions use the
+**UTC instant**, and they use the annotation only for display.
 
-For a zone-aware value, "local" means the value's _own_ zone, not the session
-zone. For a zone-naive value there is no zone to apply: the local-wall-clock
-functions use the stored reading as-is, and the instant-based functions treat it
-as UTC.
+The group of a function is important. It makes the difference between a correct
+query and an incorrect query. This page gives the group of each function.
 
-| Function / operator                                                 | Operates on         | Notes                                                                              |
-| ------------------------------------------------------------------- | ------------------- | ---------------------------------------------------------------------------------- |
-| [`date_trunc`](scalar_functions.md#date_trunc), `datetrunc`         | local wall clock    | Truncates to local midnight, local hour, …                                         |
-| [`date_part`](scalar_functions.md#date_part), `datepart`, `EXTRACT` | local wall clock    |                                                                                    |
-| [`to_char`](scalar_functions.md#to_char), `date_format`             | local wall clock    |                                                                                    |
-| [`to_local_time`](scalar_functions.md#to_local_time)                | local wall clock    | Returns `Timestamp(unit, None)` holding the local reading                          |
-| `CAST(t AS DATE)`, `CAST(t AS TIME)`                                | local wall clock    |                                                                                    |
-| `timestamp + interval`, `timestamp - interval`                      | local wall clock    | Calendar units are DST-aware; see below                                            |
-| [`generate_series`](scalar_functions.md#generate_series) / `range`  | local wall clock    | Steps by calendar units in the value's own zone; accepts nanosecond precision only |
-| [`date_bin`](scalar_functions.md#date_bin)                          | **the UTC instant** | Bins are anchored at the UTC epoch, not at local midnight                          |
-| [`to_unixtime`](scalar_functions.md#to_unixtime)                    | **the UTC instant** |                                                                                    |
-| `AT TIME ZONE`, `CAST(t AS TIMESTAMPTZ)`                            | **the UTC instant** | For a zone-aware input; a zone-naive input is shifted, see above                   |
-| Comparison, `ORDER BY`, `GROUP BY`, joins, `min`/`max`              | **the UTC instant** | Annotations are ignored; equal instants are equal                                  |
+For an aware value, "local" is the _own_ time zone of the value. It is not the
+session time zone. A naive value has no time zone. For a naive value, the local
+wall clock is the reading that is in memory. The UTC instant is that same
+reading as UTC.
 
-The consequence worth memorising is that `date_trunc` and `date_bin` disagree on
-the same value:
+| Function / operator                                                 | Operates on         | Notes                                                                                |
+| ------------------------------------------------------------------- | ------------------- | ------------------------------------------------------------------------------------ |
+| [`date_trunc`](scalar_functions.md#date_trunc), `datetrunc`         | local wall clock    | Truncates to local midnight, local hour, …                                           |
+| [`date_part`](scalar_functions.md#date_part), `datepart`, `EXTRACT` | local wall clock    |                                                                                      |
+| [`to_char`](scalar_functions.md#to_char), `date_format`             | local wall clock    |                                                                                      |
+| [`to_local_time`](scalar_functions.md#to_local_time)                | local wall clock    | Returns `Timestamp(unit, None)` that holds the local reading                         |
+| `CAST(t AS DATE)`, `CAST(t AS TIME)`                                | local wall clock    |                                                                                      |
+| `timestamp + interval`, `timestamp - interval`                      | local wall clock    | Calendar units obey DST; refer to the section below                                  |
+| [`generate_series`](scalar_functions.md#generate_series) / `range`  | local wall clock    | Steps by calendar units in the own time zone of the value; nanosecond precision only |
+| [`date_bin`](scalar_functions.md#date_bin)                          | **the UTC instant** | The bin origin is the UTC epoch, not local midnight                                  |
+| [`to_unixtime`](scalar_functions.md#to_unixtime)                    | **the UTC instant** |                                                                                      |
+| `AT TIME ZONE`, `CAST(t AS TIMESTAMPTZ)`                            | **the UTC instant** | For an aware input; DataFusion shifts a naive input, see above                       |
+| Comparison, `ORDER BY`, `GROUP BY`, joins, `min`/`max`              | **the UTC instant** | The annotations have no effect; equal instants are equal                             |
+
+Remember this result: `date_trunc` and `date_bin` do not agree on the same
+value.
 
 ```sql
 CREATE OR REPLACE VIEW v AS
@@ -460,12 +495,14 @@ FROM v;
 ```
 
 `date_trunc` gave local midnight in Denver. `date_bin` gave the start of the UTC
-day, displayed in Denver (`2023-12-31T17:00:00-07:00` is `2024-01-01T00:00:00Z`).
-Each individually matches PostgreSQL; the pair is still surprising. Use
-`date_trunc` when you want local calendar boundaries, and see
-[Recipes](#recipes) for local-calendar binning with `date_bin`.
+day, and it shows that instant in Denver. The value `2023-12-31T17:00:00-07:00`
+is the same instant as `2024-01-01T00:00:00Z`.
 
-The other functions on a zone-aware value:
+Each function agrees with PostgreSQL. But the difference between the two
+functions is not easy to see. Use `date_trunc` for local calendar limits. For
+local calendar bins with `date_bin`, refer to [Examples](#examples).
+
+These are the other functions on an aware value:
 
 ```sql
 SELECT date_part('hour', t)  AS date_part_hour,
@@ -485,12 +522,15 @@ FROM v;
 
 ## Daylight saving time
 
-### `INTERVAL '1 day'` is not `INTERVAL '24 hours'`
+### `INTERVAL '1 day'` is different from `INTERVAL '24 hours'`
 
-This is the single most useful thing to know on this page. On a **zone-aware**
-timestamp, DataFusion adds calendar units (years, months, days) in the value's
-own local calendar and adds sub-day units (hours, minutes, seconds) as elapsed
-time. Across a DST transition the two differ:
+This is the most important rule on this page. For an **aware** timestamp,
+DataFusion adds calendar units in the local calendar of the value. Calendar
+units are years, months and days.
+
+DataFusion adds units that are less than one day as elapsed time. These units
+are hours, minutes and seconds. At a DST transition, the two types of unit give
+different results:
 
 ```sql
 CREATE OR REPLACE VIEW d AS
@@ -513,26 +553,30 @@ FROM d;
 +---------------------------+---------------------------+---------------------------+---------------+------------------+
 ```
 
-America/Denver springs forward on 2024-03-10, so that local day is 23 hours
-long. `INTERVAL '1 day'` lands on the same wall clock the next day (82800
-seconds later); `INTERVAL '24 hours'` lands 24 hours later, an hour further on
-the clock. In the autumn the same pair goes the other way: adding
-`INTERVAL '1 day'` to `2024-11-02 12:00:00-06:00` advances the instant by 90000
+The clocks in America/Denver move forward on 2024-03-10. As a result, that local
+day has 23 hours. `INTERVAL '1 day'` gives the same wall clock on the next day, which is
+82800 seconds later. `INTERVAL '24 hours'` gives an instant 24 hours later,
+which is one hour later on the clock.
+
+In the autumn, the same two units give the opposite result. If you add
+`INTERVAL '1 day'` to `2024-11-02 12:00:00-06:00`, the instant moves 90000
 seconds.
 
-This matches PostgreSQL exactly (verified against PostgreSQL 17). On a
-**zone-naive** timestamp there is no DST to apply, so `INTERVAL '1 day'` and
-`INTERVAL '24 hours'` always agree.
+This behavior agrees with PostgreSQL 17. A **naive** timestamp has no DST. For a
+naive timestamp, `INTERVAL '1 day'` and `INTERVAL '24 hours'` always give the
+same result.
 
-Use calendar units when you mean "the same time tomorrow" and sub-day units when
-you mean "24 hours of elapsed time". They are not interchangeable.
+Use calendar units for "the same time tomorrow". Use units of less than one day
+for "24 hours of elapsed time". The two types of unit are not the same.
 
-### Ambiguous and nonexistent local times
+### Local times that are ambiguous or do not exist
 
-Two local wall clocks per year are not well defined in a zone with DST: the hour
-skipped when the clocks go forward does not exist, and the hour repeated when
-they go back is ambiguous. DataFusion currently **errors** on both, in both the
-literal and the column path:
+In a time zone with DST, two local wall clocks each year do not identify one
+instant. The hour that the clocks skip in the spring does not exist. The hour
+that the clocks repeat in the autumn is ambiguous.
+
+DataFusion gives an **error** for the two hours. It gives an error for a literal
+and also for a column:
 
 ```sql
 SET datafusion.execution.time_zone = 'America/Denver';
@@ -555,21 +599,26 @@ caused by
 Arrow error: Parser error: Error parsing timestamp from '2024-03-10T02:30:00': error computing timezone offset
 ```
 
-The same happens for the ambiguous fall-back hour, `2024-11-03 01:30:00` in
-America/Denver. PostgreSQL resolves both instead of erroring (the gap moves
-forward, the ambiguous hour is read as standard time).
+The ambiguous hour in the autumn gives the same errors. In America/Denver, that
+hour is `2024-11-03 01:30:00`. PostgreSQL does not give an error. It gives a
+result for the two hours: it moves a time in the gap forward, and it reads the
+ambiguous hour as standard time.
 
-Fixed-offset zones such as `'+08:00'` never have transitions and are never
-affected. See <https://github.com/apache/datafusion/issues/25084> and the
-upstream fix <https://github.com/apache/arrow-rs/pull/11038>.
+A time zone with a fixed offset, such as `'+08:00'`, has no transitions. It
+cannot give these errors. Refer to
+<https://github.com/apache/datafusion/issues/25084> and to the correction in
+<https://github.com/apache/arrow-rs/pull/11038>.
 
-## Recipes
+## Examples
 
-### Aggregate UTC data by local calendar day in a named zone
+### How to group UTC data by the local calendar day
 
-`date_bin` bins on the UTC instant, so binning zone-aware data directly gives
-UTC days. Convert to the target zone, then flatten to a local wall clock with
-`to_local_time`, and bin that:
+`date_bin` uses the UTC instant. If you give aware data to `date_bin`, you get
+UTC days. Do these three steps:
+
+1. Convert the data to the target time zone.
+2. Make the result a local wall clock with `to_local_time`.
+3. Give that local wall clock to `date_bin`.
 
 ```sql
 CREATE OR REPLACE TABLE hits(t TIMESTAMP) AS VALUES
@@ -600,10 +649,11 @@ FROM hits_utc;
 +---------------------------+---------------------+
 ```
 
-`local_day` is a zone-naive value: it is a local calendar day label, not an
-instant, which is exactly what you want as a `GROUP BY` key. For whole calendar
-units, `date_trunc('day', t AT TIME ZONE 'Europe/Brussels')` gives the same
-grouping while keeping the result zone-aware:
+`local_day` is a naive value. It is a label for a local calendar day, and it is
+not an instant. This is the correct type for a `GROUP BY` key.
+
+For a whole calendar unit, `date_trunc('day', t AT TIME ZONE 'Europe/Brussels')`
+gives the same groups. It also keeps the result aware:
 
 ```sql
 SELECT date_trunc('day', t AT TIME ZONE 'Europe/Brussels') AS day, count(*) AS n
@@ -619,46 +669,48 @@ FROM hits_utc GROUP BY 1 ORDER BY 1;
 +---------------------------+---+
 ```
 
-Use the `to_local_time` form when the bin width is not a whole calendar unit
-(`INTERVAL '15 minutes'`, `INTERVAL '4 hours'`), which `date_trunc` cannot
-express.
+Use the `to_local_time` form if the width of the bin is not a whole calendar
+unit. `date_trunc` cannot give `INTERVAL '15 minutes'` or `INTERVAL '4 hours'`.
 
 :::{warning}
-Passing `date_bin` an origin in the target zone — for example
-`date_bin(INTERVAL '1 day', t, TIMESTAMP '2024-04-30 22:00:00' AT TIME ZONE 'UTC')`
-— appears to work but is only correct while the zone's offset does not change.
-It silently drifts by an hour across a DST transition. Prefer `to_local_time`.
+Do not give `date_bin` an origin in the target time zone. For example, do not
+use
+`date_bin(INTERVAL '1 day', t, TIMESTAMP '2024-04-30 22:00:00' AT TIME ZONE 'UTC')`.
+The result is correct only while the offset of the time zone stays the same. At
+a DST transition, the result moves one hour, and there is no warning. Use
+`to_local_time` instead.
 :::
 
-### Get a zone's local wall clock
+### How to find the local wall clock of a time zone
 
 ```sql
 SELECT to_local_time(t AT TIME ZONE 'Europe/Brussels') AS brussels_wall_clock
 FROM hits_utc LIMIT 1;
 ```
 
-`AT TIME ZONE` relabels the instant for display in Brussels; `to_local_time`
-then converts that display into an actual zone-naive value. Do **not** use
-`::timestamp` for this — that returns the UTC wall clock, not the local one.
+`AT TIME ZONE` relabels the instant for display in Brussels. Then
+`to_local_time` makes a naive value from that display. Do **not** use
+`::timestamp` for this task. `::timestamp` gives the UTC wall clock, not the
+local wall clock.
 
-### Round-trip safely
+### How to convert safely
 
-- Store instants as `Timestamp(unit, Some("UTC"))` and convert to a display zone
-  only at the edge of the query.
-- Set `datafusion.execution.time_zone = 'UTC'` so that `timestamptz`, `now()`
-  and `to_timestamp` are zone-aware and every conversion in this page is a
-  zero-offset shift.
-- Use `arrow_cast` with an explicit Arrow type when you want the exact
-  conversion; `::timestamptz` depends on session configuration.
-- Never round-trip a zone-aware value through `Timestamp(_, None)` unless you
-  intend to reduce it to a UTC wall clock.
+- Keep instants as `Timestamp(unit, Some("UTC"))`. Convert to a display time
+  zone only at the end of the query.
+- Set `datafusion.execution.time_zone = 'UTC'`. Then `timestamptz`, `now()` and
+  `to_timestamp` are aware, and each conversion on this page has an offset of
+  zero.
+- Use `arrow_cast` with an Arrow type if you want an exact conversion. The
+  result of `::timestamptz` changes with the session configuration.
+- Do not convert an aware value through `Timestamp(_, None)`, unless you want to
+  make it a UTC wall clock.
 
 ## Differences from PostgreSQL
 
-DataFusion aims to follow PostgreSQL, and does for most of the above. These are
-the known divergences today.
+DataFusion follows PostgreSQL for most of the behavior above. These are the
+known differences today.
 
-| Behaviour                                                | DataFusion                                                                                             | PostgreSQL                                                                   | Issue                                               |
+| Behavior                                                 | DataFusion                                                                                             | PostgreSQL                                                                   | Issue                                               |
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- | --------------------------------------------------- |
 | `TIMESTAMP WITH TIME ZONE` with no session zone set      | Zone-**naive** `Timestamp(_, None)`; the offset in a literal is discarded                              | Always zone-aware; `TimeZone` is always set                                  | —                                                   |
 | `AT TIME ZONE` applied to a zone-**aware** value         | Returns a zone-**aware** value in the named zone                                                       | Returns a zone-**naive** value                                               | <https://github.com/apache/datafusion/issues/12218> |
@@ -672,12 +724,13 @@ the known divergences today.
 | `to_timestamp_*` on an already zone-aware input          | Rewrites the zone to the session zone, dropping it entirely when unset                                 | n/a                                                                          | <https://github.com/apache/datafusion/issues/23841> |
 
 :::{note}
-The `AT TIME ZONE` row describes DataFusion's behaviour as of this writing. There
-is active discussion in <https://github.com/apache/datafusion/issues/12218>
-about aligning the zone-**aware**-input case with PostgreSQL and DuckDB, which
-would change the second and third rows above; DuckDB also returns a zone-naive
-value there. The zone-**naive** input case already agrees with PostgreSQL: both
-produce the same instant.
+The `AT TIME ZONE` row shows the behavior of DataFusion today. The DataFusion
+community discusses a change in
+<https://github.com/apache/datafusion/issues/12218>. If the community makes that
+change, the **aware** input will agree with PostgreSQL and DuckDB. The second
+row and the third row above will also change. DuckDB also gives a naive value
+there. The **naive** input agrees with PostgreSQL now, because the two systems
+give the same instant.
 :::
 
 ## See also
