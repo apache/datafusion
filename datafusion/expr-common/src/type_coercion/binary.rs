@@ -79,6 +79,7 @@ pub struct BinaryTypeCoercer<'a> {
     lhs: &'a DataType,
     op: &'a Operator,
     rhs: &'a DataType,
+    session_time_zone: Option<&'a str>,
 
     lhs_spans: Spans,
     op_spans: Spans,
@@ -93,10 +94,18 @@ impl<'a> BinaryTypeCoercer<'a> {
             lhs,
             op,
             rhs,
+            session_time_zone: None,
             lhs_spans: Spans::new(),
             op_spans: Spans::new(),
             rhs_spans: Spans::new(),
         }
+    }
+
+    /// Sets the session timezone used to coerce mixed timezone-aware and
+    /// timezone-naive timestamps for comparisons and subtraction.
+    pub fn with_session_time_zone(mut self, session_time_zone: Option<&'a str>) -> Self {
+        self.session_time_zone = session_time_zone;
+        self
     }
 
     /// Sets the spans information for the left side of the binary expression,
@@ -197,14 +206,24 @@ impl<'a> BinaryTypeCoercer<'a> {
         GtEq |
         IsDistinctFrom |
         IsNotDistinctFrom => {
-            comparison_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
-                plan_datafusion_err!(
-                    "Cannot infer common argument type for comparison operation {} {} {}",
-                    self.lhs,
-                    self.op,
-                    self.rhs
-                )
-            })
+            if let Some((lhs, rhs)) =
+                self.timestamp_types_with_session_timezone(lhs, rhs)
+            {
+                Ok(Signature {
+                    lhs,
+                    rhs,
+                    ret: Boolean,
+                })
+            } else {
+                comparison_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
+                    plan_datafusion_err!(
+                        "Cannot infer common argument type for comparison operation {} {} {}",
+                        self.lhs,
+                        self.op,
+                        self.rhs
+                    )
+                })
+            }
         }
         And | Or => if matches!((lhs, rhs), (Boolean | Null, Boolean | Null)) {
             // Logical binary boolean operators can only be evaluated for
@@ -285,6 +304,17 @@ impl<'a> BinaryTypeCoercer<'a> {
             return Ok(Signature { lhs, rhs, ret });
         }
         Plus | Minus | Multiply | Divide | Modulo  =>  {
+            if self.op == &Minus
+                && let Some((lhs, rhs)) =
+                    self.timestamp_types_with_session_timezone(lhs, rhs)
+            {
+                let ret = self.get_result(&lhs, &rhs).map_err(|e| {
+                    plan_datafusion_err!(
+                        "Cannot get result type for temporal operation {} {} {}: {e}", self.lhs, self.op, self.rhs
+                    )
+                })?;
+                return Ok(Signature { lhs, rhs, ret });
+            }
             if let Ok(ret) = self.get_result(lhs, rhs) {
 
                 // Temporal arithmetic, e.g. Date32 + Interval
@@ -355,6 +385,27 @@ impl<'a> BinaryTypeCoercer<'a> {
                     .with_note(format!("has type {}", self.rhs), self.rhs_spans.first());
             err.with_diagnostic(diagnostic)
         })
+    }
+
+    /// Coerces a mixed timezone-aware and timezone-naive timestamp pair to the
+    /// session timezone and widens both operands to the same precision.
+    fn timestamp_types_with_session_timezone(
+        &self,
+        lhs: &DataType,
+        rhs: &DataType,
+    ) -> Option<(DataType, DataType)> {
+        use DataType::Timestamp;
+
+        let session_time_zone = self.session_time_zone?;
+        let ((Timestamp(lhs_unit, Some(_)), Timestamp(rhs_unit, None))
+        | (Timestamp(lhs_unit, None), Timestamp(rhs_unit, Some(_)))) = (lhs, rhs)
+        else {
+            return None;
+        };
+        let unit = timeunit_coercion(lhs_unit, rhs_unit);
+        let data_type = Timestamp(unit, Some(Arc::from(session_time_zone)));
+
+        Some((data_type.clone(), data_type))
     }
 
     /// Returns the resulting type of a binary expression evaluating the `op` with the left and right hand types

@@ -2007,18 +2007,40 @@ SELECT (
 ----
 0 days 8 hours 0 mins 0.000000000 secs
 
-# The session timezone, not the aware operand's timezone, controls the cast.
-query ??
+# The session timezone, not the aware operand's timezone, controls coercion.
+query BBBBBB??
 WITH timestamps(ts_tz, ts) AS (
   VALUES (
     arrow_cast('2024-11-01T00:00:00-04:00', 'Timestamp(Nanosecond, Some("America/New_York"))'),
     '2024-11-01T00:00:00'::timestamp
   )
 )
-SELECT ts_tz - ts, ts - ts_tz
+SELECT
+  ts_tz = ts,
+  ts_tz > ts,
+  ts_tz IN (ts),
+  ts_tz BETWEEN ts AND ts,
+  ts_tz BETWEEN ts_tz AND ts,
+  CASE ts_tz WHEN ts THEN true ELSE false END,
+  ts_tz - ts,
+  ts - ts_tz
 FROM timestamps;
 ----
-0 days 12 hours 0 mins 0.000000000 secs 0 days -12 hours 0 mins 0.000000000 secs
+false true false false false false 0 days 12 hours 0 mins 0.000000000 secs 0 days -12 hours 0 mins 0.000000000 secs
+
+# IN subqueries use the same session-timezone comparison coercion.
+query I
+WITH timestamps(ts_tz, ts) AS (
+  VALUES (
+    arrow_cast('2024-11-01T00:00:00-04:00', 'Timestamp(Nanosecond, Some("America/New_York"))'),
+    '2024-11-01T00:00:00'::timestamp
+  )
+)
+SELECT count(*)
+FROM timestamps
+WHERE ts_tz IN (SELECT ts FROM timestamps);
+----
+0
 
 statement ok
 SET TIME ZONE = 'America/New_York'
@@ -2033,6 +2055,33 @@ SELECT
 
 statement ok
 RESET datafusion.execution.time_zone
+
+# With no session timezone, the naive operand is still read as UTC.
+statement ok
+CREATE TABLE no_session_tz AS SELECT
+  arrow_cast('2024-11-01T00:00:00-04:00', 'Timestamp(Nanosecond, Some("America/New_York"))') AS ts_tz,
+  '2024-11-01T00:00:00'::timestamp AS ts;
+
+query ??
+SELECT ts_tz - ts, ts - ts_tz FROM no_session_tz;
+----
+0 days 4 hours 0 mins 0.000000000 secs 0 days -4 hours 0 mins 0.000000000 secs
+
+statement ok
+SET datafusion.explain.logical_plan_only = true
+
+query TT
+EXPLAIN SELECT ts_tz - ts FROM no_session_tz;
+----
+logical_plan
+01)Projection: no_session_tz.ts_tz - no_session_tz.ts
+02)--TableScan: no_session_tz projection=[ts_tz, ts]
+
+statement ok
+SET datafusion.explain.logical_plan_only = false
+
+statement ok
+DROP TABLE no_session_tz
 
 # Interval - Timestamp => error
 query error Cannot coerce arithmetic expression Interval\(MonthDayNano\) - Timestamp\(ns\) to valid types

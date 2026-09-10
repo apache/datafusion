@@ -58,6 +58,27 @@ fn test_date_timestamp_arithmetic_error() -> Result<()> {
 }
 
 #[test]
+fn test_timestamp_session_timezone_coercion() -> Result<()> {
+    let aware = DataType::Timestamp(Millisecond, Some("America/New_York".into()));
+    let naive = DataType::Timestamp(Nanosecond, None);
+    let expected = DataType::Timestamp(Nanosecond, Some("+08:00".into()));
+
+    for op in [Operator::Minus, Operator::Eq, Operator::Gt] {
+        let (lhs, rhs) = BinaryTypeCoercer::new(&aware, &op, &naive)
+            .with_session_time_zone(Some("+08:00"))
+            .get_input_types()?;
+        assert_eq!((lhs, rhs), (expected.clone(), expected.clone()));
+
+        let (lhs, rhs) = BinaryTypeCoercer::new(&naive, &op, &aware)
+            .with_session_time_zone(Some("+08:00"))
+            .get_input_types()?;
+        assert_eq!((lhs, rhs), (expected.clone(), expected.clone()));
+    }
+
+    Ok(())
+}
+
+#[test]
 fn test_decimal_mathematics_op_type() {
     // Decimal32
     assert_eq!(
