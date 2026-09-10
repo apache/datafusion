@@ -260,22 +260,25 @@ fn scalar_max(v1: &ScalarValue, v2: &ScalarValue) -> Result<ScalarValue> {
 
 /// Short-circuits `scalar_min` / `scalar_max` when either side is null.
 ///
-/// Both the untyped [`ScalarValue::Null`] and typed nulls such as
-/// `ScalarValue::Int64(None)` are treated as "no bound yet". Typed nulls show
-/// up when a partition has no value for the aggregated column, for example a
-/// schema-evolved Parquet file that lacks the column entirely. They must never
-/// reach `partial_cmp`, where `None` orders before `Some(_)` and would replace a
-/// valid shared minimum.
+/// Returns the non-null side, or a null when both sides are null. Returns
+/// `None` when neither side is null so the caller falls through to a real
+/// comparison.
+///
+/// A null bound means "no value seen yet", regardless of whether it is the
+/// untyped [`ScalarValue::Null`] or a typed null such as
+/// `ScalarValue::Int64(None)`. A typed null is what a partition produces when
+/// none of its rows carry the aggregated column, for example a Parquet file
+/// written before the column was added. Nulls must be handled here rather
+/// than in `partial_cmp`, where `None` orders before `Some(_)` and would win a
+/// `MIN` comparison against a real value.
 fn scalar_cmp_null_short_circuit(
     v1: &ScalarValue,
     v2: &ScalarValue,
 ) -> Option<ScalarValue> {
-    if v1.is_null() {
-        Some(v2.clone())
-    } else if v2.is_null() {
-        Some(v1.clone())
-    } else {
-        None
+    match (v1.is_null(), v2.is_null()) {
+        (true, _) => Some(v2.clone()),
+        (_, true) => Some(v1.clone()),
+        _ => None,
     }
 }
 
@@ -716,13 +719,11 @@ mod tests {
         Ok(())
     }
 
-    /// Regression test for <https://github.com/apache/datafusion/issues/25147>.
-    ///
-    /// A partition whose input lacks the aggregated column (e.g. a
-    /// schema-evolved Parquet file) yields a *typed* null bound such as
-    /// `Int64(None)`. Merging it into the shared bound must not replace a
-    /// valid value, otherwise the dynamic filter loses its lower/upper bound
-    /// and can prune files containing the true MIN/MAX.
+    /// A partition whose input lacks the aggregated column (for example a
+    /// Parquet file written before the column was added) yields a typed null
+    /// bound such as `Int64(None)`. Merging it into the shared bound must not
+    /// replace a valid value, otherwise the dynamic filter loses its bound and
+    /// can prune files containing the true MIN/MAX.
     #[test]
     fn scalar_min_max_ignore_typed_nulls() -> Result<()> {
         let value = ScalarValue::Int64(Some(100));
