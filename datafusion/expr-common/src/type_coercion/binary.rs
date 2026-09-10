@@ -1124,8 +1124,7 @@ fn get_wider_decimal_type_cross_variant(
 
     // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
     let s = s1.max(s2);
-    let range = (p1 as i8 - s1).max(p2 as i8 - s2);
-    let required_precision = (range + s) as u8;
+    let required_precision = required_decimal_precision(p1, s1, p2, s2);
 
     // Choose the larger variant between the two input types, while making sure we don't overflow the precision.
     match (lhs_type, rhs_type) {
@@ -1193,31 +1192,50 @@ fn get_wider_decimal_type(
 ) -> Option<DataType> {
     match (lhs_decimal_type, rhs_type) {
         (DataType::Decimal32(p1, s1), DataType::Decimal32(p2, s2)) => {
-            // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
             let s = *s1.max(s2);
-            let range = (*p1 as i8 - s1).max(*p2 as i8 - s2);
-            Some(create_decimal32_type((range + s) as u8, s))
+            Some(create_decimal32_type(
+                required_decimal_precision(*p1, *s1, *p2, *s2),
+                s,
+            ))
         }
         (DataType::Decimal64(p1, s1), DataType::Decimal64(p2, s2)) => {
-            // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
             let s = *s1.max(s2);
-            let range = (*p1 as i8 - s1).max(*p2 as i8 - s2);
-            Some(create_decimal64_type((range + s) as u8, s))
+            Some(create_decimal64_type(
+                required_decimal_precision(*p1, *s1, *p2, *s2),
+                s,
+            ))
         }
         (DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)) => {
-            // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
             let s = *s1.max(s2);
-            let range = (*p1 as i8 - s1).max(*p2 as i8 - s2);
-            Some(create_decimal128_type((range + s) as u8, s))
+            Some(create_decimal128_type(
+                required_decimal_precision(*p1, *s1, *p2, *s2),
+                s,
+            ))
         }
         (DataType::Decimal256(p1, s1), DataType::Decimal256(p2, s2)) => {
-            // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
             let s = *s1.max(s2);
-            let range = (*p1 as i8 - s1).max(*p2 as i8 - s2);
-            Some(create_decimal256_type((range + s) as u8, s))
+            Some(create_decimal256_type(
+                required_decimal_precision(*p1, *s1, *p2, *s2),
+                s,
+            ))
         }
         (_, _) => None,
     }
+}
+
+/// Computes `max(s1, s2) + max(p1 - s1, p2 - s2)`: the precision needed to hold
+/// any value of either decimal type.
+///
+/// The intermediate values do not fit in `i8` (the type of a decimal scale):
+/// `Decimal256` allows a precision and a scale of up to 76, so `p1 - s1` can
+/// reach 152 and the sum can reach 228. Computing this in `i8` panics with
+/// "attempt to add with overflow" in debug builds, so widen to `i32` and
+/// saturate into `u8` instead. Callers then either clamp the result to the
+/// variant's maximum precision (`create_decimal*_type`) or reject it.
+fn required_decimal_precision(p1: u8, s1: i8, p2: u8, s2: i8) -> u8 {
+    let s = s1.max(s2) as i32;
+    let range = (p1 as i32 - s1 as i32).max(p2 as i32 - s2 as i32);
+    (range + s).clamp(0, u8::MAX as i32) as u8
 }
 
 /// Convert the numeric data type to the decimal data type.
