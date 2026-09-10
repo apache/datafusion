@@ -323,6 +323,11 @@ unexpected_cfgs = { level = "warn", check-cfg = [
     'cfg(datafusion_coop, values("tokio", "tokio_fallback", "per_stream"))',
     "cfg(coverage)",
     "cfg(coverage_nightly)",
+    # Enables the loom model-checked concurrency tests; see
+    # datafusion/physical-plan/src/joins/hash_join/probe_completion.rs.
+    # Namespaced rather than a bare `loom`, which tokio also reads and which
+    # would switch tokio itself into its loom build.
+    "cfg(datafusion_loom)",
 ] }
 unused_qualifications = "deny"
 

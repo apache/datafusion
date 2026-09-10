@@ -216,7 +216,15 @@ mod tests {
 /// [module docs](self)) and let loom enumerate the interleavings and store
 /// visibility the memory model allows. They fail if the decrement in
 /// `report_completed` is weakened to `Relaxed`.
-#[cfg(test)]
+///
+/// Compiled only under `--cfg datafusion_loom`, which is also what pulls the `loom`
+/// dev-dependency into the build (see `datafusion-physical-plan`'s
+/// `Cargo.toml` for why it is kept out of the ordinary one). Run them with:
+///
+/// ```text
+/// RUSTFLAGS="--cfg datafusion_loom" cargo test -p datafusion-physical-plan --lib loom_tests
+/// ```
+#[cfg(all(test, datafusion_loom))]
 mod loom_tests {
     use super::ProbeSideSummary;
     use loom::sync::Arc;

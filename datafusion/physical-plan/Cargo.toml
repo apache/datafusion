@@ -96,10 +96,6 @@ criterion = { workspace = true, features = ["async_futures"] }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-window = { workspace = true }
 insta = { workspace = true }
-# Model checker for the hash join probe-completion protocol; see
-# joins/hash_join/probe_completion.rs. Test-only, so it stays out of the
-# dependency tree of anything that links DataFusion.
-loom = { workspace = true }
 rand = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = "0.7.0"
@@ -108,6 +104,25 @@ tokio = { workspace = true, features = [
     "fs",
     "parking_lot",
 ] }
+
+# Model checker for the hash join probe-completion protocol; see
+# joins/hash_join/probe_completion.rs.
+#
+# Gated on `--cfg datafusion_loom` rather than declared a plain dev-dependency: loom pulls
+# in tracing-subscriber, which turns on `regex-automata`'s DFA features for
+# every crate in the workspace build. That is not inert. It changes which
+# engine the shared `regex` picks and costs enough extra stack to overflow
+# unrelated deep-recursion tests (`sql::unparser::test_tpch_unparser_roundtrip`
+# aborts in CI). Keeping loom behind its own cfg leaves the ordinary build
+# untouched.
+#
+# Run the model checks with:
+#   RUSTFLAGS="--cfg datafusion_loom" cargo test -p datafusion-physical-plan --lib loom_tests
+#
+# The cfg is namespaced because a bare `loom` is also read by tokio, which
+# would switch tokio into its own loom build and drop `tokio::fs`.
+[target.'cfg(datafusion_loom)'.dev-dependencies]
+loom = { workspace = true }
 
 [[bench]]
 harness = false
