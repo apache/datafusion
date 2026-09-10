@@ -1859,3 +1859,167 @@ logical_plan
 physical_plan
 01)FilterExec: c@0 >= 2024-01-01 AND c@0 < 2025-01-01
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+##########
+## `timezone`, `timezone_hour` and `timezone_minute`
+##
+## These report the UTC offset that applies to a timezone-aware timestamp at
+## that instant, so they follow daylight saving time. Expected values were
+## cross-checked against PostgreSQL 17 for the corresponding instants.
+##########
+
+# Fixed offsets carried by the Arrow type
+query III
+SELECT
+  date_part('timezone', arrow_cast(TIMESTAMP '2024-07-01T12:00:00', 'Timestamp(Nanosecond, Some("+05:30"))')),
+  date_part('timezone_hour', arrow_cast(TIMESTAMP '2024-07-01T12:00:00', 'Timestamp(Nanosecond, Some("+05:30"))')),
+  date_part('timezone_minute', arrow_cast(TIMESTAMP '2024-07-01T12:00:00', 'Timestamp(Nanosecond, Some("+05:30"))'))
+----
+19800 5 30
+
+# Negative fixed offset: the sign is carried by both the hour and the minute
+query III
+SELECT
+  date_part('timezone', arrow_cast(TIMESTAMP '2024-07-01T12:00:00', 'Timestamp(Nanosecond, Some("-03:30"))')),
+  date_part('timezone_hour', arrow_cast(TIMESTAMP '2024-07-01T12:00:00', 'Timestamp(Nanosecond, Some("-03:30"))')),
+  date_part('timezone_minute', arrow_cast(TIMESTAMP '2024-07-01T12:00:00', 'Timestamp(Nanosecond, Some("-03:30"))'))
+----
+-12600 -3 -30
+
+# The exact query from https://github.com/apache/datafusion/issues/10368
+query I
+SELECT date_part('timezone', '2024-07-01T12:00:00Z'::timestamptz AT TIME ZONE 'Europe/Brussels')
+----
+7200
+
+# Named timezone: standard time in January, daylight saving time in July
+query III
+SELECT
+  date_part('timezone', '2024-01-01T12:00:00Z'::timestamptz AT TIME ZONE 'Europe/Brussels'),
+  date_part('timezone_hour', '2024-01-01T12:00:00Z'::timestamptz AT TIME ZONE 'Europe/Brussels'),
+  date_part('timezone_minute', '2024-01-01T12:00:00Z'::timestamptz AT TIME ZONE 'Europe/Brussels')
+----
+3600 1 0
+
+query III
+SELECT
+  date_part('timezone', '2024-01-01T12:00:00Z'::timestamptz AT TIME ZONE 'America/Denver'),
+  date_part('timezone', '2024-07-01T12:00:00Z'::timestamptz AT TIME ZONE 'America/Denver'),
+  date_part('timezone_hour', '2024-07-01T12:00:00Z'::timestamptz AT TIME ZONE 'America/Denver')
+----
+-25200 -21600 -6
+
+# 45 minute offsets. Chatham is in the southern hemisphere, so January is DST
+query III
+SELECT
+  date_part('timezone', '2024-01-01T12:00:00Z'::timestamptz AT TIME ZONE 'Pacific/Chatham'),
+  date_part('timezone_hour', '2024-01-01T12:00:00Z'::timestamptz AT TIME ZONE 'Pacific/Chatham'),
+  date_part('timezone_minute', '2024-01-01T12:00:00Z'::timestamptz AT TIME ZONE 'Pacific/Chatham')
+----
+49500 13 45
+
+query III
+SELECT
+  date_part('timezone', '2024-07-01T12:00:00Z'::timestamptz AT TIME ZONE 'Pacific/Chatham'),
+  date_part('timezone_hour', '2024-07-01T12:00:00Z'::timestamptz AT TIME ZONE 'Pacific/Chatham'),
+  date_part('timezone_minute', '2024-07-01T12:00:00Z'::timestamptz AT TIME ZONE 'Pacific/Chatham')
+----
+45900 12 45
+
+# Negative non-whole-hour offset, standard time and daylight saving time
+query III
+SELECT
+  date_part('timezone', '2024-01-01T12:00:00Z'::timestamptz AT TIME ZONE 'America/St_Johns'),
+  date_part('timezone_hour', '2024-01-01T12:00:00Z'::timestamptz AT TIME ZONE 'America/St_Johns'),
+  date_part('timezone_minute', '2024-01-01T12:00:00Z'::timestamptz AT TIME ZONE 'America/St_Johns')
+----
+-12600 -3 -30
+
+query III
+SELECT
+  date_part('timezone', '2024-07-01T12:00:00Z'::timestamptz AT TIME ZONE 'America/St_Johns'),
+  date_part('timezone_hour', '2024-07-01T12:00:00Z'::timestamptz AT TIME ZONE 'America/St_Johns'),
+  date_part('timezone_minute', '2024-07-01T12:00:00Z'::timestamptz AT TIME ZONE 'America/St_Johns')
+----
+-9000 -2 -30
+
+# `EXTRACT(field FROM source)` is the alternative syntax for the same function
+query III
+SELECT
+  EXTRACT(TIMEZONE FROM '2024-07-01T12:00:00Z'::timestamptz AT TIME ZONE 'Asia/Kolkata'),
+  EXTRACT(TIMEZONE_HOUR FROM '2024-07-01T12:00:00Z'::timestamptz AT TIME ZONE 'Asia/Kolkata'),
+  EXTRACT(TIMEZONE_MINUTE FROM '2024-07-01T12:00:00Z'::timestamptz AT TIME ZONE 'Asia/Kolkata')
+----
+19800 5 30
+
+# The part name is case insensitive
+query II
+SELECT
+  date_part('TIMEZONE', '2024-07-01T12:00:00Z'::timestamptz AT TIME ZONE 'Asia/Kathmandu'),
+  date_part('Timezone_Minute', '2024-07-01T12:00:00Z'::timestamptz AT TIME ZONE 'Asia/Kathmandu')
+----
+20700 45
+
+# Like every other date_part field except `epoch`, these return Int32
+query TTT
+SELECT
+  arrow_typeof(date_part('timezone', '2024-07-01T12:00:00Z'::timestamptz AT TIME ZONE 'UTC')),
+  arrow_typeof(date_part('timezone_hour', '2024-07-01T12:00:00Z'::timestamptz AT TIME ZONE 'UTC')),
+  arrow_typeof(date_part('timezone_minute', '2024-07-01T12:00:00Z'::timestamptz AT TIME ZONE 'UTC'))
+----
+Int32 Int32 Int32
+
+# NULL in, NULL out
+query III
+SELECT
+  date_part('timezone', arrow_cast(NULL, 'Timestamp(Nanosecond, Some("Europe/Brussels"))')),
+  date_part('timezone_hour', arrow_cast(NULL, 'Timestamp(Nanosecond, Some("Europe/Brussels"))')),
+  date_part('timezone_minute', arrow_cast(NULL, 'Timestamp(Nanosecond, Some("Europe/Brussels"))'))
+----
+NULL NULL NULL
+
+# Column input, straddling the exact daylight saving time transition, with a
+# NULL row. Casting a naive timestamp to a timezone-aware one reads it as a
+# local wall clock time, and Brussels springs forward from 02:00 to 03:00 local
+# on 2024-03-31, so 01:59:59 local is still CET and 03:00:00 local is CEST.
+statement ok
+CREATE TABLE tz_offsets AS
+SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("Europe/Brussels"))') AS ts
+FROM (VALUES
+  (TIMESTAMP '2024-01-15T00:00:00'),
+  (TIMESTAMP '2024-03-31T01:59:59'),
+  (TIMESTAMP '2024-03-31T03:00:00'),
+  (TIMESTAMP '2024-07-15T00:00:00'),
+  (TIMESTAMP '2024-11-15T00:00:00'),
+  (CAST(NULL AS TIMESTAMP))
+);
+
+query III
+SELECT
+  date_part('timezone', ts),
+  date_part('timezone_hour', ts),
+  date_part('timezone_minute', ts)
+FROM tz_offsets
+----
+3600 1 0
+3600 1 0
+7200 2 0
+7200 2 0
+3600 1 0
+NULL NULL NULL
+
+statement ok
+DROP TABLE tz_offsets;
+
+# These parts are only defined for timestamps that carry a timezone
+query error DataFusion error: Execution error: Date part 'timezone' is not supported for timezone\-naive timestamps, got Timestamp\(ns\)
+SELECT date_part('timezone', TIMESTAMP '2024-07-01T12:00:00')
+
+query error DataFusion error: Execution error: Date part 'timezone_hour' is not supported for timezone\-naive timestamps, got Timestamp\(ns\)
+SELECT EXTRACT(TIMEZONE_HOUR FROM TIMESTAMP '2024-07-01T12:00:00')
+
+query error DataFusion error: Execution error: Date part 'timezone' is only supported for timestamps with a timezone, got Date32
+SELECT date_part('timezone', DATE '2024-07-01')
+
+query error DataFusion error: Execution error: Date part 'timezone_minute' is only supported for timestamps with a timezone, got Interval\(MonthDayNano\)
+SELECT date_part('timezone_minute', INTERVAL '1' DAY)

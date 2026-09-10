@@ -2563,6 +2563,11 @@ date_part(part, expression)
   - doy (day of the year)
   - epoch (seconds since Unix epoch for timestamps/dates, total seconds for intervals)
   - isodow (ISO 8601 day of the week where Monday is 1 and Sunday is 7)
+  - timezone (UTC offset in seconds)
+  - timezone_hour (whole hours of the UTC offset)
+  - timezone_minute (whole minutes of the UTC offset, excluding the hours)
+
+  The `timezone`, `timezone_hour` and `timezone_minute` parts are only defined for timestamps that carry a timezone; extracting them from a timezone-naive timestamp, a date, a time or an interval is an error. They report the offset that applies at that instant, so they follow daylight saving time: `Europe/Brussels` yields `3600` in January and `7200` in July. For a negative offset both parts carry the sign, so `America/St_Johns` in January yields `-3` hours and `-30` minutes.
 
 - **expression**: Time expression to operate on. Can be a constant, column, or function.
 
@@ -2581,6 +2586,12 @@ date_part(part, expression)
 +----------------------------------------------------+
 | 1                                                  |
 +----------------------------------------------------+
+> SELECT date_part('timezone', TIMESTAMP '2024-07-01T12:00:00' AT TIME ZONE 'Europe/Brussels') AS utc_offset_seconds;
++--------------------+
+| utc_offset_seconds |
++--------------------+
+| 7200               |
++--------------------+
 ```
 
 #### Alternative Syntax
