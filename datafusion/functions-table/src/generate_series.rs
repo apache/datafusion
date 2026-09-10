@@ -534,6 +534,68 @@ fn reach_end_int64(val: i64, end: i64, step: i64, include_end: bool) -> bool {
     }
 }
 
+/// `i64::MIN` nanoseconds since the Unix epoch, rendered as a timestamp.
+const NANOS_RANGE_MIN: &str = "1677-09-21T00:12:43.145224192";
+/// `i64::MAX` nanoseconds since the Unix epoch, rendered as a timestamp.
+const NANOS_RANGE_MAX: &str = "2262-04-11T23:47:16.854775807";
+
+/// Read one timestamp argument of `generate_series`/`range`, normalized to
+/// nanoseconds since the Unix epoch, along with its timezone.
+///
+/// All four Arrow [`TimeUnit`]s are accepted. The series is always produced as
+/// `Timestamp(Nanosecond, _)`, so coarser units are widened here rather than
+/// rejected.
+///
+/// `Second`, `Millisecond` and `Microsecond` cover a far wider span than an
+/// `i64` of nanoseconds (roughly 1677 to 2262), so the widening is a checked
+/// multiplication: an input outside the nanosecond window is a planning error
+/// naming the offending value, never a panic in debug builds or a silent wrap
+/// in release builds.
+///
+/// A NULL argument yields `Ok((None, tz))`; the caller turns that into an
+/// empty series.
+fn timestamp_arg_to_nanos(
+    expr: &Expr,
+    arg_desc: &str,
+    name: &str,
+) -> Result<(Option<i64>, Option<Arc<str>>)> {
+    let Expr::Literal(scalar, _) = expr else {
+        return plan_err!(
+            "{arg_desc} for {name} must be a literal TIMESTAMP or NULL, got {expr}"
+        );
+    };
+
+    // Nanoseconds per unit of the argument's `TimeUnit`.
+    let (value, nanos_per_unit, tz) = match scalar {
+        // An untyped NULL carries no timezone, and the series is empty anyway.
+        ScalarValue::Null => return Ok((None, None)),
+        ScalarValue::TimestampSecond(v, tz) => (v, 1_000_000_000i64, tz),
+        ScalarValue::TimestampMillisecond(v, tz) => (v, 1_000_000, tz),
+        ScalarValue::TimestampMicrosecond(v, tz) => (v, 1_000, tz),
+        ScalarValue::TimestampNanosecond(v, tz) => (v, 1, tz),
+        other => {
+            return plan_err!(
+                "{arg_desc} for {name} must be a TIMESTAMP or NULL, got {:?}",
+                other.data_type()
+            );
+        }
+    };
+
+    let Some(value) = value else {
+        return Ok((None, tz.clone()));
+    };
+
+    let nanos = value.checked_mul(nanos_per_unit).ok_or_else(|| {
+        plan_datafusion_err!(
+            "{arg_desc} for {name} is out of range of nanosecond timestamps: \
+             {value} ({:?}) is outside {NANOS_RANGE_MIN} to {NANOS_RANGE_MAX}",
+            scalar.data_type()
+        )
+    })?;
+
+    Ok((Some(nanos), tz.clone()))
+}
+
 fn validate_interval_step(step: IntervalMonthDayNano) -> Result<()> {
     if step.months == 0 && step.days == 0 && step.nanoseconds == 0 {
         return plan_err!("Step interval cannot be zero");
@@ -673,38 +735,42 @@ impl GenerateSeriesFuncImpl {
             );
         }
 
-        // Parse start timestamp
-        let (start_ts, tz) = match &exprs[0] {
-            Expr::Literal(ScalarValue::TimestampNanosecond(ts, tz), _) => {
-                (*ts, tz.clone())
-            }
-            other => {
-                return plan_err!(
-                    "First argument must be a timestamp or NULL, got {:?}",
-                    other
-                );
-            }
-        };
+        // Parse the start and end timestamps.
+        //
+        // Both are widened to nanoseconds, so the two arguments do not have to
+        // agree on a `TimeUnit`: an Arrow timestamp denotes an instant
+        // regardless of the unit it happens to be stored in, and the output is
+        // nanoseconds either way (see the schema below).
+        let (start_ts, tz) =
+            timestamp_arg_to_nanos(&exprs[0], "First argument", self.name)?;
+        let (end_ts, _end_tz) =
+            timestamp_arg_to_nanos(&exprs[1], "Second argument", self.name)?;
 
-        // Parse end timestamp
-        let end_ts = match &exprs[1] {
-            Expr::Literal(ScalarValue::Null, _) => None,
-            Expr::Literal(ScalarValue::TimestampNanosecond(ts, _), _) => *ts,
-            other => {
-                return plan_err!(
-                    "Second argument must be a timestamp or NULL, got {:?}",
-                    other
-                );
-            }
-        };
+        // `_end_tz` is deliberately discarded: the output timezone comes from
+        // the start argument alone. A timezone on an Arrow timestamp does not
+        // change which instant it denotes, only how that instant is rendered,
+        // so a start and end carrying different timezones are still directly
+        // comparable once both are nanoseconds since the epoch -- there is
+        // nothing to reject. The start's zone is the one that is kept because
+        // it also anchors the calendar arithmetic that advances the series:
+        // month and day components of the step are applied in local time, so
+        // they follow that zone's DST rules.
 
         // Parse step interval
         let step_interval = match &exprs[2] {
             Expr::Literal(ScalarValue::Null, _) => None,
             Expr::Literal(ScalarValue::IntervalMonthDayNano(interval), _) => *interval,
+            Expr::Literal(scalar, _) => {
+                return plan_err!(
+                    "Third argument for {} must be an INTERVAL or NULL, got {:?}",
+                    self.name,
+                    scalar.data_type()
+                );
+            }
             other => {
                 return plan_err!(
-                    "Third argument must be an interval or NULL, got {:?}",
+                    "Third argument for {} must be a literal INTERVAL or NULL, got {}",
+                    self.name,
                     other
                 );
             }
@@ -765,9 +831,17 @@ impl GenerateSeriesFuncImpl {
                     args: GenSeriesArgs::ContainsNull { name: self.name },
                 }));
             }
+            Expr::Literal(scalar, _) => {
+                return plan_err!(
+                    "First argument for {} must be a DATE or NULL, got {:?}",
+                    self.name,
+                    scalar.data_type()
+                );
+            }
             other => {
                 return plan_err!(
-                    "First argument must be a date or NULL, got {:?}",
+                    "First argument for {} must be a literal DATE or NULL, got {}",
+                    self.name,
                     other
                 );
             }
@@ -783,9 +857,17 @@ impl GenerateSeriesFuncImpl {
                     args: GenSeriesArgs::ContainsNull { name: self.name },
                 }));
             }
+            Expr::Literal(scalar, _) => {
+                return plan_err!(
+                    "Second argument for {} must be a DATE or NULL, got {:?}",
+                    self.name,
+                    scalar.data_type()
+                );
+            }
             other => {
                 return plan_err!(
-                    "Second argument must be a date or NULL, got {:?}",
+                    "Second argument for {} must be a literal DATE or NULL, got {}",
+                    self.name,
                     other
                 );
             }
@@ -803,9 +885,17 @@ impl GenerateSeriesFuncImpl {
                     args: GenSeriesArgs::ContainsNull { name: self.name },
                 }));
             }
+            Expr::Literal(scalar, _) => {
+                return plan_err!(
+                    "Third argument for {} must be an INTERVAL or NULL, got {:?}",
+                    self.name,
+                    scalar.data_type()
+                );
+            }
             other => {
                 return plan_err!(
-                    "Third argument must be an interval or NULL, got {:?}",
+                    "Third argument for {} must be a literal INTERVAL or NULL, got {}",
+                    self.name,
                     other
                 );
             }
@@ -874,15 +964,346 @@ impl TableFunctionImpl for RangeFunc {
 
 #[cfg(test)]
 mod generate_series_tests {
+    use std::any::Any;
     use std::sync::Arc;
 
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::Result;
+    use arrow::datatypes::{
+        DataType, Field, IntervalMonthDayNano, Schema, SchemaRef, TimeUnit,
+    };
+    use datafusion_catalog::TableProvider;
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::Expr;
     use datafusion_physical_plan::memory::LazyBatchGenerator;
 
     use crate::generate_series::{
-        GenSeriesArgs, GenerateSeriesTable, GenericSeriesState,
+        GenSeriesArgs, GenerateSeriesFuncImpl, GenerateSeriesTable, GenericSeriesState,
+        timestamp_arg_to_nanos,
     };
+
+    /// Nanoseconds in a day, for readable expectations below.
+    const DAY_NANOS: i64 = 24 * 60 * 60 * 1_000_000_000;
+
+    fn lit(scalar: ScalarValue) -> Expr {
+        Expr::Literal(scalar, None)
+    }
+
+    /// `2024-01-01T00:00:00Z` in seconds since the epoch.
+    const JAN_1_2024_SECS: i64 = 1_704_067_200;
+
+    fn tz(s: &str) -> Option<Arc<str>> {
+        Some(Arc::from(s))
+    }
+
+    fn generate_series_impl() -> GenerateSeriesFuncImpl {
+        GenerateSeriesFuncImpl {
+            name: "generate_series",
+            include_end: true,
+        }
+    }
+
+    fn range_impl() -> GenerateSeriesFuncImpl {
+        GenerateSeriesFuncImpl {
+            name: "range",
+            include_end: false,
+        }
+    }
+
+    /// Run `call_timestamp` and return the resulting table's schema and args.
+    fn call_timestamp(
+        func: &GenerateSeriesFuncImpl,
+        start: ScalarValue,
+        end: ScalarValue,
+        step_days: i32,
+    ) -> Result<(SchemaRef, GenSeriesArgs)> {
+        let exprs = vec![
+            lit(start),
+            lit(end),
+            lit(ScalarValue::IntervalMonthDayNano(Some(
+                IntervalMonthDayNano::new(0, step_days, 0),
+            ))),
+        ];
+        let provider = func.call_timestamp(&exprs)?;
+        let table = (provider.as_ref() as &dyn Any)
+            .downcast_ref::<GenerateSeriesTable>()
+            .expect("call_timestamp returns a GenerateSeriesTable");
+        Ok((table.schema(), table.args.clone()))
+    }
+
+    fn timestamp_args(args: &GenSeriesArgs) -> (i64, i64, Option<Arc<str>>) {
+        match args {
+            GenSeriesArgs::TimestampArgs { start, end, tz, .. } => {
+                (*start, *end, tz.clone())
+            }
+            other => panic!("expected TimestampArgs, got {other:?}"),
+        }
+    }
+
+    /// Every `TimeUnit` is accepted and widened to nanoseconds, keeping its
+    /// timezone. Regression test for
+    /// <https://github.com/apache/datafusion/issues/25169>.
+    #[test]
+    fn timestamp_arg_accepts_all_time_units() -> Result<()> {
+        let cases = [
+            ScalarValue::TimestampSecond(Some(JAN_1_2024_SECS), tz("+02:00")),
+            ScalarValue::TimestampMillisecond(
+                Some(JAN_1_2024_SECS * 1_000),
+                tz("+02:00"),
+            ),
+            ScalarValue::TimestampMicrosecond(
+                Some(JAN_1_2024_SECS * 1_000_000),
+                tz("+02:00"),
+            ),
+            ScalarValue::TimestampNanosecond(
+                Some(JAN_1_2024_SECS * 1_000_000_000),
+                tz("+02:00"),
+            ),
+        ];
+
+        for scalar in cases {
+            let described = format!("{:?}", scalar.data_type());
+            let (value, zone) = timestamp_arg_to_nanos(
+                &lit(scalar),
+                "First argument",
+                "generate_series",
+            )?;
+            assert_eq!(
+                value,
+                Some(JAN_1_2024_SECS * 1_000_000_000),
+                "unexpected value for {described}"
+            );
+            assert_eq!(zone, tz("+02:00"), "unexpected timezone for {described}");
+        }
+
+        Ok(())
+    }
+
+    /// Naive (timezone-less) timestamps stay naive.
+    #[test]
+    fn timestamp_arg_keeps_naive_timestamps_naive() -> Result<()> {
+        let (value, zone) = timestamp_arg_to_nanos(
+            &lit(ScalarValue::TimestampSecond(Some(JAN_1_2024_SECS), None)),
+            "First argument",
+            "generate_series",
+        )?;
+        assert_eq!(value, Some(JAN_1_2024_SECS * 1_000_000_000));
+        assert_eq!(zone, None);
+        Ok(())
+    }
+
+    /// A NULL of any precision yields no value, but still carries its
+    /// timezone so the output schema keeps it. An untyped NULL has none.
+    #[test]
+    fn timestamp_arg_handles_nulls() -> Result<()> {
+        for scalar in [
+            ScalarValue::TimestampSecond(None, tz("UTC")),
+            ScalarValue::TimestampMillisecond(None, tz("UTC")),
+            ScalarValue::TimestampMicrosecond(None, tz("UTC")),
+            ScalarValue::TimestampNanosecond(None, tz("UTC")),
+        ] {
+            let (value, zone) =
+                timestamp_arg_to_nanos(&lit(scalar), "First argument", "range")?;
+            assert_eq!(value, None);
+            assert_eq!(zone, tz("UTC"));
+        }
+
+        let (value, zone) =
+            timestamp_arg_to_nanos(&lit(ScalarValue::Null), "Second argument", "range")?;
+        assert_eq!(value, None);
+        assert_eq!(zone, None);
+
+        Ok(())
+    }
+
+    /// Coarse units span far more than an `i64` of nanoseconds, so the
+    /// widening is checked in both directions rather than wrapping.
+    #[test]
+    fn timestamp_arg_overflow_boundary() -> Result<()> {
+        // Largest/smallest second, millisecond and microsecond values that
+        // still fit in an i64 of nanoseconds, and the first ones that do not.
+        type TimestampCtor = fn(Option<i64>, Option<Arc<str>>) -> ScalarValue;
+        let cases: [(TimestampCtor, i64); 3] = [
+            (ScalarValue::TimestampSecond, 1_000_000_000),
+            (ScalarValue::TimestampMillisecond, 1_000_000),
+            (ScalarValue::TimestampMicrosecond, 1_000),
+        ];
+
+        for (ctor, nanos_per_unit) in cases {
+            let max_ok = i64::MAX / nanos_per_unit;
+            let min_ok = i64::MIN / nanos_per_unit;
+
+            for value in [max_ok, min_ok] {
+                let (nanos, _) = timestamp_arg_to_nanos(
+                    &lit(ctor(Some(value), None)),
+                    "First argument",
+                    "generate_series",
+                )?;
+                assert_eq!(nanos, Some(value * nanos_per_unit));
+            }
+
+            for (value, direction) in [(max_ok + 1, "above"), (min_ok - 1, "below")] {
+                let err = timestamp_arg_to_nanos(
+                    &lit(ctor(Some(value), None)),
+                    "First argument",
+                    "generate_series",
+                )
+                .expect_err(&format!("{value} is {direction} the nanosecond range"))
+                .to_string();
+                assert!(
+                    err.contains(
+                        "First argument for generate_series is out of range of \
+                         nanosecond timestamps"
+                    ) && err.contains(&value.to_string())
+                        && err.contains("1677-09-21T00:12:43.145224192"),
+                    "unexpected error: {err}"
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// The start and end arguments are read independently, so they may use
+    /// different precisions; both are widened to the same nanosecond scale.
+    #[test]
+    fn call_timestamp_accepts_mixed_precisions() -> Result<()> {
+        let (schema, args) = call_timestamp(
+            &generate_series_impl(),
+            ScalarValue::TimestampSecond(Some(JAN_1_2024_SECS), None),
+            ScalarValue::TimestampMicrosecond(
+                Some((JAN_1_2024_SECS + 2 * 86_400) * 1_000_000),
+                None,
+            ),
+            1,
+        )?;
+
+        let (start, end, zone) = timestamp_args(&args);
+        assert_eq!(start, JAN_1_2024_SECS * 1_000_000_000);
+        assert_eq!(end, start + 2 * DAY_NANOS);
+        assert_eq!(zone, None);
+        assert_eq!(
+            schema.field(0).data_type(),
+            &DataType::Timestamp(TimeUnit::Nanosecond, None)
+        );
+
+        Ok(())
+    }
+
+    /// `range` (exclusive end) shares the same code path.
+    #[test]
+    fn call_timestamp_range_accepts_non_nanosecond_precision() -> Result<()> {
+        let (_, args) = call_timestamp(
+            &range_impl(),
+            ScalarValue::TimestampMillisecond(Some(JAN_1_2024_SECS * 1_000), None),
+            ScalarValue::TimestampMillisecond(
+                Some((JAN_1_2024_SECS + 86_400) * 1_000),
+                None,
+            ),
+            1,
+        )?;
+
+        match args {
+            GenSeriesArgs::TimestampArgs {
+                include_end, name, ..
+            } => {
+                assert!(!include_end);
+                assert_eq!(name, "range");
+            }
+            other => panic!("expected TimestampArgs, got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    /// Both bounds denote instants, so differing timezones are not an error.
+    /// The output keeps the start's zone.
+    #[test]
+    fn call_timestamp_takes_timezone_from_start() -> Result<()> {
+        let (schema, args) = call_timestamp(
+            &generate_series_impl(),
+            ScalarValue::TimestampSecond(Some(JAN_1_2024_SECS), tz("+05:00")),
+            ScalarValue::TimestampSecond(
+                Some(JAN_1_2024_SECS + 86_400),
+                tz("America/New_York"),
+            ),
+            1,
+        )?;
+
+        let (start, end, zone) = timestamp_args(&args);
+        assert_eq!(zone, tz("+05:00"));
+        assert_eq!(end - start, DAY_NANOS);
+        assert_eq!(
+            schema.field(0).data_type(),
+            &DataType::Timestamp(TimeUnit::Nanosecond, tz("+05:00"))
+        );
+
+        Ok(())
+    }
+
+    /// A NULL bound of any precision produces an empty series, keeping the
+    /// start's timezone in the output schema.
+    #[test]
+    fn call_timestamp_null_bound_is_empty_series() -> Result<()> {
+        let (schema, args) = call_timestamp(
+            &generate_series_impl(),
+            ScalarValue::TimestampSecond(Some(JAN_1_2024_SECS), tz("UTC")),
+            ScalarValue::TimestampMicrosecond(None, None),
+            1,
+        )?;
+
+        assert!(matches!(args, GenSeriesArgs::ContainsNull { .. }));
+        assert_eq!(
+            schema.field(0).data_type(),
+            &DataType::Timestamp(TimeUnit::Nanosecond, tz("UTC"))
+        );
+
+        Ok(())
+    }
+
+    /// An out-of-range bound is a planning error naming the argument, the
+    /// offending value and the representable range -- not a panic or a wrap.
+    #[test]
+    fn call_timestamp_reports_out_of_range_bound() {
+        let err = call_timestamp(
+            &generate_series_impl(),
+            ScalarValue::TimestampSecond(Some(JAN_1_2024_SECS), None),
+            ScalarValue::TimestampSecond(Some(i64::MAX), None),
+            1,
+        )
+        .expect_err("i64::MAX seconds is not a nanosecond timestamp")
+        .to_string();
+
+        assert!(
+            err.contains(
+                "Second argument for generate_series is out of range of nanosecond \
+                 timestamps"
+            ) && err.contains("9223372036854775807")
+                && err.contains("Timestamp(Second, None)")
+                && err.contains("2262-04-11T23:47:16.854775807"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// The rejection message names the offending type instead of dumping the
+    /// whole expression.
+    #[test]
+    fn call_timestamp_rejects_non_timestamp_bound() {
+        let err = call_timestamp(
+            &generate_series_impl(),
+            ScalarValue::TimestampSecond(Some(JAN_1_2024_SECS), None),
+            ScalarValue::Int64(Some(5)),
+            1,
+        )
+        .expect_err("an integer is not a timestamp bound")
+        .to_string();
+
+        assert!(
+            err.contains(
+                "Second argument for generate_series must be a TIMESTAMP or NULL, \
+                 got Int64"
+            ),
+            "unexpected error: {err}"
+        );
+    }
 
     #[test]
     fn generate_series_rejects_zero_batch_size() {
