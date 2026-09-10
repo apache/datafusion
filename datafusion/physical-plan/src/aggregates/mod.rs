@@ -1424,6 +1424,12 @@ impl AggregateExec {
             .equivalence_properties()
             .project(group_expr_mapping, schema);
 
+        // An aggregation that does not maintain its input order must not
+        // propegrate the input's ordering either, match `maintains_input_order` value
+        if *input_order_mode == InputOrderMode::Linear {
+            eq_properties.clear_orderings();
+        }
+
         // True no-group aggregates produce only one row in each output
         // partition, so aggregate outputs are constants within the partition.
         // Grouping sets with empty grouping expressions are not covered here:
@@ -4675,6 +4681,49 @@ mod tests {
         let finite_memory_task_ctx = new_finite_memory_migrated_hash_ctx(2, 1024 * 1024)?;
         let stream = aggregate.execute_typed(0, &finite_memory_task_ctx)?;
         assert!(matches!(stream, StreamType::OrderedSingleAggregate(_)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn partial_reduce_does_not_advertise_input_ordering() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::Float64, false),
+        ]));
+        let ordering = LexOrdering::new([PhysicalSortExpr::new_default(Arc::new(
+            Column::new("a", 0),
+        ))])
+        .unwrap();
+        let input = TestMemoryExec::try_new(&[vec![]], Arc::clone(&schema), None)?
+            .try_with_sort_information(vec![ordering])?;
+        let input = Arc::new(TestMemoryExec::update_cache(&Arc::new(input)));
+        assert!(
+            input.properties().output_ordering().is_some(),
+            "test setup: the input is ordered by the group key"
+        );
+
+        let partial_reduce = AggregateExec::try_new(
+            AggregateMode::PartialReduce,
+            PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]),
+            vec![Arc::new(
+                AggregateExprBuilder::new(sum_udaf(), vec![col("b", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("SUM(b)")
+                    .build()?,
+            )],
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?;
+
+        assert_eq!(partial_reduce.input_order_mode(), &InputOrderMode::Linear);
+        assert_eq!(partial_reduce.maintains_input_order(), vec![false]);
+        assert!(
+            partial_reduce.properties().output_ordering().is_none(),
+            "partial reduce advertised an ordering it does not maintain: {:?}",
+            partial_reduce.properties().output_ordering()
+        );
 
         Ok(())
     }
