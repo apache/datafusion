@@ -218,6 +218,26 @@ pub trait ExprPlanner: Debug + Send + Sync {
         Ok(PlannerResult::Original(args))
     }
 
+    /// Plan `<expr> AT TIME ZONE '<tz>'` when `<expr>` is **already
+    /// timezone-aware**.
+    ///
+    /// Following PostgreSQL, `<tz-aware timestamp> AT TIME ZONE zone` returns
+    /// the wall clock the instant has in `zone`, as a timezone-*naive*
+    /// timestamp. (The timezone-*naive* case is the plain
+    /// `CAST(<expr> AS Timestamp(unit, Some(tz)))` that the SQL planner
+    /// handles on its own and never reaches this method.)
+    ///
+    /// `args` holds a single expression: the input already cast to
+    /// `Timestamp(unit, Some(tz))`. That cast preserves the instant and only
+    /// relabels the timezone, so all an implementation has to do is drop the
+    /// timezone while keeping the displayed value — exactly what
+    /// `to_local_time` does.
+    ///
+    /// Returns original expression arguments if not possible
+    fn plan_at_time_zone(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
+        Ok(PlannerResult::Original(args))
+    }
+
     /// Plans a struct literal, such as  `{'field1' : expr1, 'field2' : expr2, ...}`
     ///
     /// This function takes a vector of expressions and a boolean flag
