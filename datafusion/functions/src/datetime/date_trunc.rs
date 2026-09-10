@@ -778,15 +778,31 @@ fn general_date_trunc_array_fine_granularity<T: ArrowTimestampType>(
 
     if let Some(unit) = unit {
         let unit = unit.get();
-        let array: PrimitiveArray<T> = array
-            .try_unary(|value| {
+        // Truncation can only underflow within one `unit` of `i64::MIN`.
+        // Track that possibility while computing the common case so the loop
+        // remains infallible and can be vectorized.
+        let underflow_bound = i64::MIN + unit;
+        let mut maybe_underflow = false;
+        let values: Vec<i64> = array
+            .values()
+            .iter()
+            .map(|value| {
+                maybe_underflow |= *value < underflow_bound;
+                value.wrapping_sub(value.rem_euclid(unit))
+            })
+            .collect();
+        let array: PrimitiveArray<T> = if maybe_underflow {
+            array.try_unary(|value| {
                 value.checked_sub(value.rem_euclid(unit)).ok_or_else(|| {
                     exec_datafusion_err!(
                         "Timestamp {value} out of range after truncating to {granularity}"
                     )
                 })
             })?
-            .with_timezone_opt(tz_opt);
+        } else {
+            PrimitiveArray::new(values.into(), array.nulls().cloned())
+        }
+        .with_timezone_opt(tz_opt);
         Ok(Arc::new(array))
     } else {
         // truncate to the same or smaller unit
@@ -857,12 +873,17 @@ mod tests {
     use std::sync::Arc;
 
     use crate::datetime::date_trunc::{
-        DateTruncFunc, date_trunc_coarse, parse_granularity,
+        DateTruncFunc, NANOS_PER_MICROSECOND, date_trunc_coarse,
+        general_date_trunc_array_fine_granularity, parse_granularity,
     };
 
     use arrow::array::cast::as_primitive_array;
-    use arrow::array::types::TimestampNanosecondType;
-    use arrow::array::{Array, TimestampNanosecondArray};
+    use arrow::array::types::{ArrowTimestampType, TimestampNanosecondType};
+    use arrow::array::{
+        Array, PrimitiveArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+        TimestampNanosecondArray, TimestampSecondArray,
+    };
+    use arrow::buffer::NullBuffer;
     use arrow::compute::DatePart;
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::datatypes::{DataType, Field, TimeUnit};
@@ -1372,6 +1393,101 @@ mod tests {
             error.strip_backtrace(),
             "Execution error: Timestamp -9223372036854775808 out of range after truncating to Microsecond"
         );
+    }
+
+    fn assert_fine_granularity_underflow<T: ArrowTimestampType>(
+        array: PrimitiveArray<T>,
+        granularity: DatePart,
+    ) {
+        let error =
+            general_date_trunc_array_fine_granularity(T::UNIT, &array, granularity, None)
+                .unwrap_err();
+        assert!(
+            error
+                .strip_backtrace()
+                .contains("Timestamp -9223372036854775808 out of range"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn test_date_trunc_fine_granularity_underflow_for_each_timestamp_unit() {
+        assert_fine_granularity_underflow(
+            TimestampSecondArray::from(vec![i64::MIN]),
+            DatePart::Minute,
+        );
+        assert_fine_granularity_underflow(
+            TimestampMillisecondArray::from(vec![i64::MIN]),
+            DatePart::Second,
+        );
+        assert_fine_granularity_underflow(
+            TimestampMicrosecondArray::from(vec![i64::MIN]),
+            DatePart::Millisecond,
+        );
+        assert_fine_granularity_underflow(
+            TimestampNanosecondArray::from(vec![i64::MIN]),
+            DatePart::Microsecond,
+        );
+    }
+
+    #[test]
+    fn test_date_trunc_fine_granularity_minimum_safe_input() {
+        // The boundary below i64::MIN is unrepresentable. Inputs become safe
+        // at the next microsecond boundary.
+        let distance_to_next_boundary =
+            NANOS_PER_MICROSECOND - i64::MIN.rem_euclid(NANOS_PER_MICROSECOND);
+        let minimum_safe_input = i64::MIN + distance_to_next_boundary;
+        let unsafe_input = TimestampNanosecondArray::from(vec![minimum_safe_input - 1]);
+        assert!(
+            general_date_trunc_array_fine_granularity(
+                TimeUnit::Nanosecond,
+                &unsafe_input,
+                DatePart::Microsecond,
+                None,
+            )
+            .is_err()
+        );
+
+        let input = TimestampNanosecondArray::from(vec![
+            Some(minimum_safe_input),
+            Some(minimum_safe_input + 1),
+            None,
+        ]);
+        let result = general_date_trunc_array_fine_granularity(
+            TimeUnit::Nanosecond,
+            &input,
+            DatePart::Microsecond,
+            None,
+        )
+        .unwrap();
+        let result = as_primitive_array::<TimestampNanosecondType>(&result);
+        let expected = TimestampNanosecondArray::from(vec![
+            Some(minimum_safe_input),
+            Some(minimum_safe_input),
+            None,
+        ]);
+        assert_eq!(result, &expected);
+    }
+
+    #[test]
+    fn test_date_trunc_fine_granularity_ignores_null_slot_values() {
+        // Physical values behind null slots are arbitrary. An unsafe value in
+        // a null slot may trigger the checked fallback, but must not cause an
+        // error or alter the null bitmap.
+        let input = TimestampNanosecondArray::new(
+            vec![i64::MIN, 1].into(),
+            Some(NullBuffer::from(vec![false, true])),
+        );
+        let result = general_date_trunc_array_fine_granularity(
+            TimeUnit::Nanosecond,
+            &input,
+            DatePart::Microsecond,
+            None,
+        )
+        .unwrap();
+        let result = as_primitive_array::<TimestampNanosecondType>(&result);
+        let expected = TimestampNanosecondArray::from(vec![None, Some(0)]);
+        assert_eq!(result, &expected);
     }
 
     #[test]
