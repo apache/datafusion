@@ -24,6 +24,7 @@
 //! [`Memory`] budget and whether the skip-partial probe may fire. Only the
 //! combinations that cannot be planned are left out, see [`all_shapes`].
 
+use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
@@ -72,7 +73,10 @@ use Operator::*;
 // Case space
 // ---------------------------------------------------------------------------
 
-const ROWS: usize = 64 * 1024;
+/// About 2 MB per cardinality, half of `LIMITED_POOL_BYTES`. The
+/// order-preserving repartition holds a sorted low-cardinality input almost
+/// whole in its merges, which cannot spill, so the input has to fit.
+const ROWS: usize = 32 * 1024;
 const PARTITIONS: usize = 4;
 const BATCH_SIZE: usize = 64;
 /// The fair pool caps every spillable consumer at `pool / consumers`, and a
@@ -84,7 +88,7 @@ const BATCH_SIZE: usize = 64;
 const LIMITED_POOL_BYTES: usize = 4 * 1024 * 1024;
 
 /// How the source data is ordered relative to the group keys.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Order {
     /// Not ordered. Aggregates see `InputOrderMode::Linear`.
     Unordered,
@@ -152,7 +156,7 @@ enum Operator {
 
 /// The `GROUP BY` keys. Every key type has its own `GroupValues`
 /// implementation, so each is a value of this axis.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Keys {
     /// No `GROUP BY`.
     None,
@@ -1128,28 +1132,51 @@ struct Outcome {
     spilled: Vec<String>,
 }
 
+/// Arranged source partitions by `(keys, order, partition count)`, the only
+/// case dimensions the arrangement depends on. Arranging costs about a third
+/// of a case, so it is shared across chains, memory budgets and skip-partial
+/// settings.
+type Inputs = HashMap<(Keys, Order, usize), Arc<Vec<Vec<RecordBatch>>>>;
+
+fn input_key(case: &Case) -> (Keys, Order, usize) {
+    (
+        case.shape.query.keys,
+        case.params.order,
+        case.shape.chain.source_partitions,
+    )
+}
+
+fn arrange_all<'a>(rows: &RecordBatch, cases: impl Iterator<Item = &'a Case>) -> Inputs {
+    let mut inputs = Inputs::new();
+    for case in cases {
+        inputs.entry(input_key(case)).or_insert_with(|| {
+            Arc::new(arrange(
+                rows,
+                case.shape.query.keys,
+                case.params.order,
+                case.shape.chain.source_partitions,
+            ))
+        });
+    }
+    inputs
+}
+
 /// Runs one case, checks plan shape and metrics, and returns its outcome.
 ///
 /// Running out of memory is never accepted: every stream either spills, emits
 /// early, or is bounded, so an error there is a bug in a stream's memory
 /// handling or in how the stages share the pool.
-async fn run_case(case: Case, rows: Arc<RecordBatch>) -> Outcome {
+async fn run_case(case: Case, inputs: Arc<Inputs>) -> Outcome {
     log::debug!("start {case:?}");
-    let outcome = run_case_inner(&case, rows).await;
+    let outcome = run_case_inner(&case, &inputs[&input_key(&case)]).await;
     log::debug!("done  {case:?}");
     outcome
 }
 
-async fn run_case_inner(case: &Case, rows: Arc<RecordBatch>) -> Outcome {
-    let partitions = arrange(
-        &rows,
-        case.shape.query.keys,
-        case.params.order,
-        case.shape.chain.source_partitions,
-    );
+async fn run_case_inner(case: &Case, partitions: &[Vec<RecordBatch>]) -> Outcome {
     let plan = build_plan(
         &case.shape,
-        source(&partitions, case.shape.query.keys, case.params.order),
+        source(partitions, case.shape.query.keys, case.params.order),
     );
     check_plan_shape(case, &plan);
 
@@ -1179,31 +1206,21 @@ async fn run_case_inner(case: &Case, rows: Arc<RecordBatch>) -> Outcome {
     }
 }
 
-/// Reference result: `query` computed by the `single` chain, one partition,
-/// unordered input, unlimited memory.
-async fn reference(
-    query: Query,
-    rows: Arc<RecordBatch>,
-    cardinality: Cardinality,
-) -> String {
-    let shape = Shape {
-        chain: chain_by_name("single"),
-        query,
-    };
-    let outcome = run_case(
-        Case {
-            shape,
-            params: CaseParams {
-                order: Order::Unordered,
-                cardinality,
-                memory: Memory::Unlimited,
-                skip_partial_enabled: true,
-            },
+/// The case whose output is the reference for `query`: the `single` chain,
+/// one partition, unordered input, unlimited memory.
+fn reference_case(query: Query, cardinality: Cardinality) -> Case {
+    Case {
+        shape: Shape {
+            chain: chain_by_name("single"),
+            query,
         },
-        rows,
-    )
-    .await;
-    outcome.output
+        params: CaseParams {
+            order: Order::Unordered,
+            cardinality,
+            memory: Memory::Unlimited,
+            skip_partial_enabled: true,
+        },
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1218,26 +1235,31 @@ async fn aggregate_chain_fuzz() {
     let max_concurrent_cases = get_available_parallelism();
 
     for cardinality in Cardinality::ALL {
-        let rows = Arc::new(generate_rows(cardinality, seed));
-        let mut expected_by_query: Vec<(Query, String)> = Vec::new();
-        for shape in all_shapes() {
-            if expected_by_query
-                .iter()
-                .any(|(query, _)| *query == shape.query)
-            {
-                continue;
+        let rows = generate_rows(cardinality, seed);
+        let cases: Vec<Case> = all_cases()
+            .into_iter()
+            .filter(|case| case.params.cardinality == cardinality)
+            .collect();
+        let mut reference_cases: Vec<Case> = vec![];
+        for case in &cases {
+            let query = case.shape.query;
+            if !reference_cases.iter().any(|case| case.shape.query == query) {
+                reference_cases.push(reference_case(query, cardinality));
             }
-            let expected = reference(shape.query, Arc::clone(&rows), cardinality).await;
-            expected_by_query.push((shape.query, expected));
+        }
+        let inputs = Arc::new(arrange_all(&rows, cases.iter().chain(&reference_cases)));
+
+        let mut expected_by_query: Vec<(Query, String)> = Vec::new();
+        for case in reference_cases {
+            let query = case.shape.query;
+            let outcome = run_case(case, Arc::clone(&inputs)).await;
+            expected_by_query.push((query, outcome.output));
         }
 
         let mut join_set = JoinSet::new();
         let (mut spilled, mut finished) = (vec![], vec![]);
-        for case in all_cases()
-            .into_iter()
-            .filter(|case| case.params.cardinality == cardinality)
-        {
-            let rows = Arc::clone(&rows);
+        for case in cases {
+            let inputs = Arc::clone(&inputs);
             let expected = expected_by_query
                 .iter()
                 .find(|(query, _)| *query == case.shape.query)
@@ -1253,7 +1275,7 @@ async fn aggregate_chain_fuzz() {
                 .await;
             }
             join_set.spawn(async move {
-                let outcome = run_case(case.clone(), rows).await;
+                let outcome = run_case(case.clone(), inputs).await;
                 assert_eq!(outcome.output, expected, "{case:?} (seed {seed})");
                 (case, outcome.spilled)
             });
@@ -1352,21 +1374,20 @@ async fn run_single_case(
         chain: chain_by_name(chain_name),
         query: Query { keys, aggregates },
     };
-    let rows = Arc::new(generate_rows(cardinality, seed));
-    let expected = reference(shape.query, Arc::clone(&rows), cardinality).await;
-    let actual = run_case(
-        Case {
-            shape,
-            params: CaseParams {
-                order,
-                cardinality,
-                memory,
-                skip_partial_enabled: true,
-            },
+    let rows = generate_rows(cardinality, seed);
+    let reference = reference_case(shape.query, cardinality);
+    let case = Case {
+        shape,
+        params: CaseParams {
+            order,
+            cardinality,
+            memory,
+            skip_partial_enabled: true,
         },
-        rows,
-    )
-    .await;
-    assert_eq!(actual.output, expected);
+    };
+    let inputs = Arc::new(arrange_all(&rows, [&case, &reference].into_iter()));
+    let expected = run_case(reference, Arc::clone(&inputs)).await;
+    let actual = run_case(case, inputs).await;
+    assert_eq!(actual.output, expected.output);
     Ok(())
 }
