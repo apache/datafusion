@@ -610,7 +610,10 @@ impl PartialHashAggregateStream {
                 // Try resize without holding the state batch, if it fails there is nothing we can do
                 self.reservation.try_resize(hash_table_mem_size)?;
 
-                emitter.emit(remaining_groups).await;
+                self.reduction_factor.add_part(remaining_groups.num_rows());
+                emitter
+                    .emit(remaining_groups.record_output(&self.baseline_metrics))
+                    .await;
 
                 return Ok(());
             }
@@ -1278,24 +1281,27 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_partial_hash_stream_accounts_held_batch_on_memory_pressure_while_slicing()
-    -> Result<()> {
-        // When memory pressure triggers early emission, the materialized state
-        // batch is held in `EmittingOnMemoryPressure::remaining_groups` while it
-        // is sliced into `batch_size` outputs. The stream must keep that held
-        // batch accounted for in its memory reservation until the last slice is
-        // emitted; before the fix the reservation was resized down to just the
-        // (emptied) hash table size, leaving the held batch unaccounted.
-
+    /// Builds a partial hash aggregate stream over a single input batch of
+    /// `num_groups` distinct groups, running under `memory_limit` bytes.
+    ///
+    /// The input does not signal end-of-stream until `wait_finish` is called
+    /// on the returned [`BarrierExec`], so any output produced before that can
+    /// only come from the memory pressure emission path (normal output waits
+    /// for all input). Skip partial aggregation is disabled for the same reason.
+    fn partial_stream_under_memory_limit(
+        memory_limit: usize,
+        batch_size: usize,
+        num_groups: usize,
+    ) -> Result<(
+        SendableRecordBatchStream,
+        Arc<BarrierExec>,
+        Arc<datafusion_execution::runtime_env::RuntimeEnv>,
+    )> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("group_col", DataType::Int32, false),
             Field::new("value_col", DataType::Int64, false),
         ]));
 
-        let batch_size = 1024;
-        // One row per group so the state batch is emitted in 4 slices
-        let num_groups = 4 * batch_size;
         let group_ids: Vec<i32> = (0..num_groups as i32).collect();
         let values: Vec<i64> = vec![1; num_groups];
 
@@ -1308,9 +1314,6 @@ mod tests {
         )?;
         let input_partitions = vec![vec![batch]];
 
-        // Smaller than the building hash table (so pressure triggers) but large
-        // enough to hold the materialized state batch (so emission can proceed)
-        let memory_limit = 100 * 1024;
         let runtime = RuntimeEnvBuilder::default()
             .with_memory_limit(memory_limit, 1.0)
             .build_arc()?;
@@ -1323,9 +1326,6 @@ mod tests {
                 "datafusion.execution.batch_size",
                 &datafusion_common::ScalarValue::UInt64(Some(batch_size as u64)),
             )
-            // Disabling skip partial aggregation so we are sure that the early emit are due to an OOM
-            // and not due to the skip partial
-            //
             .set(
                 "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
                 &datafusion_common::ScalarValue::Float64(Some(1.0)),
@@ -1342,9 +1342,6 @@ mod tests {
                 .build()?,
         )];
 
-        // The input does not signal end-of-stream until `wait_finish` is
-        // called, so any output produced before that can only come from the
-        // memory pressure emission path (normal output waits for all input)
         let input = Arc::new(
             BarrierExec::new(input_partitions, Arc::clone(&schema))
                 .without_start_barrier()
@@ -1361,8 +1358,31 @@ mod tests {
             Arc::clone(&schema),
         )?;
 
-        let mut stream =
+        let stream =
             PartialHashAggregateStream::new(&aggregate_exec, &task_ctx, 0)?.into_stream();
+
+        Ok((stream, input, runtime))
+    }
+
+    #[tokio::test]
+    async fn test_partial_hash_stream_accounts_held_batch_on_memory_pressure_while_slicing()
+    -> Result<()> {
+        // When memory pressure triggers early emission, the materialized state
+        // batch is held while it is sliced into `batch_size` outputs. The
+        // stream must keep that held batch accounted for in its memory
+        // reservation until the last slice is emitted; before the fix the
+        // reservation was resized down to just the (emptied) hash table size,
+        // leaving the held batch unaccounted.
+
+        let batch_size = 1024;
+        // One row per group so the state batch is emitted in 4 slices
+        let num_groups = 4 * batch_size;
+
+        // Smaller than the building hash table (so pressure triggers) but large
+        // enough to hold the materialized state batch (so slicing can proceed)
+        let memory_limit = 100 * 1024;
+        let (mut stream, input, runtime) =
+            partial_stream_under_memory_limit(memory_limit, batch_size, num_groups)?;
 
         // The first output batch must be a pressure-emitted slice, with the rest
         // of the materialized state batch still held by the stream
@@ -1387,14 +1407,13 @@ mod tests {
 
         let second = stream.next().await.expect("stream ended early")?;
         assert_eq!(second.num_rows(), batch_size);
-        
-        
+
         // Make sure the state batch is really being sliced (and not emitted whole by the fallback path):
         // the second output must share the same underlying buffer as the first
-        // 
+        //
         // If you changed the code and this fail because
         // - you now deep copy `batch_size` from the full state batch, please update this assertion to something else
-        // - you only take batch size from the hash table, you can remove the test 
+        // - you only take batch size from the hash table, you can remove the test
         assert_eq!(
             first
                 .column(0)
@@ -1414,6 +1433,62 @@ mod tests {
         // Let the input finish and drain the stream: no groups lost
         input.wait_finish().await;
         let mut total_rows = first.num_rows() + second.num_rows();
+        while let Some(batch) = stream.next().await {
+            total_rows += batch?.num_rows();
+        }
+        assert_eq!(total_rows, num_groups);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_partial_hash_stream_emits_whole_batch_when_held_batch_does_not_fit()
+    -> Result<()> {
+        // When memory pressure triggers early emission but the materialized
+        // state batch itself does not fit in the reservation, the stream must
+        // not fail with a resources exhausted error. Instead it gives up on
+        // slicing and emits the whole state batch at once.
+
+        let batch_size = 1024;
+        let num_groups = 4 * batch_size;
+
+        // Smaller than the materialized state batch (4096 rows of Int32 group
+        // keys plus Int64 counts is at least 48 KiB), so the reservation for
+        // hash table  held batch fails. The emptied hash table itself is tiny
+        // and still fits.
+        let memory_limit = 32 * 1024;
+        let (mut stream, input, runtime) =
+            partial_stream_under_memory_limit(memory_limit, batch_size, num_groups)?;
+
+        let first = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .expect(
+                "no output before the input finished: the test setup no longer \
+                 triggers early emission under memory pressure",
+            )
+            .expect("stream ended early")?;
+
+        // The whole state batch is emitted at once instead of `batch_size` slices
+        assert_eq!(first.num_rows(), num_groups);
+        assert!(
+            first.get_array_memory_size() > memory_limit,
+            "test setup is wrong: the state batch fits within the memory limit, \
+             so the slicing path would have been taken"
+        );
+
+        // Unlike the slicing path, the stream does not hold on to the emitted
+        // batch, so it must not be accounted for in the reservation. Only the
+        // (emptied) hash table remains reserved
+        let emitted_size = first.get_array_memory_size();
+        let reserved = runtime.memory_pool.reserved();
+        assert!(
+            reserved < emitted_size,
+            "memory pool has {reserved} bytes reserved but the stream no longer \
+             holds the emitted state batch of {emitted_size} bytes"
+        );
+
+        input.wait_finish().await;
+        let mut total_rows = first.num_rows();
         while let Some(batch) = stream.next().await {
             total_rows += batch?.num_rows();
         }
