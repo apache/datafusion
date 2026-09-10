@@ -5908,3 +5908,43 @@ impl HigherOrderUDFImpl for MockArrayReduce {
         unreachable!()
     }
 }
+
+#[test]
+fn test_reserved_column_name() {
+    let sql = "SELECT 1 AS __common_expr_1";
+    let err = logical_plan(sql).unwrap_err().strip_backtrace();
+    assert_eq!(
+        err,
+        "Error during planning: __common_expr_1 is a reserved DataFusion column name, please use another name"
+    );
+}
+
+#[test]
+fn test_reserved_column_name_copy() {
+    let sql = "COPY (SELECT 1 AS __common_expr_1) TO 'output.csv' STORED AS CSV";
+    let err = logical_plan(sql).unwrap_err().strip_backtrace();
+    assert_eq!(
+        err,
+        "Error during planning: __common_expr_1 is a reserved DataFusion column name, please use another name"
+    );
+}
+
+#[test]
+fn test_reserved_column_name_boundary() {
+    let sql = "SELECT 1 AS user__common_expr_1";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(
+        format!("{plan}"),
+        "Projection: Int64(1) AS user__common_expr_1\n  EmptyRelation: rows=1"
+    );
+}
+
+#[test]
+fn test_reserved_column_name_explain_copy() {
+    let sql = "EXPLAIN COPY (SELECT 1 AS __common_expr_1) TO 'output.csv' STORED AS CSV";
+    let err = logical_plan(sql).unwrap_err().strip_backtrace();
+    assert_eq!(
+        err,
+        "Error during planning: __common_expr_1 is a reserved DataFusion column name, please use another name"
+    );
+}
