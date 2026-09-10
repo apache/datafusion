@@ -248,6 +248,7 @@ impl SymmetricHashJoinExec {
             *join_type,
             &on,
             filter.is_some(),
+            null_equality,
         )?;
         Ok(SymmetricHashJoinExec {
             left,
@@ -274,6 +275,7 @@ impl SymmetricHashJoinExec {
         join_type: JoinType,
         join_on: JoinOnRef,
         has_filter: bool,
+        null_equality: NullEquality,
     ) -> Result<PlanProperties> {
         // Calculate equivalence properties:
         let eq_properties = join_equivalence_properties(
@@ -286,6 +288,7 @@ impl SymmetricHashJoinExec {
             None,
             join_on,
             has_filter,
+            null_equality,
         )?;
 
         let output_partitioning =

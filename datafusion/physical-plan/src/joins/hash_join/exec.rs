@@ -418,6 +418,7 @@ impl HashJoinExecBuilder {
     /// Set null equality property.
     pub fn with_null_equality(mut self, null_equality: NullEquality) -> Self {
         self.exec.null_equality = null_equality;
+        self.preserve_properties = false;
         self
     }
 
@@ -564,6 +565,7 @@ impl HashJoinExecBuilder {
             mode,
             projection.as_deref(),
             filter.is_some(),
+            null_equality,
         )?;
 
         Ok(HashJoinExec {
@@ -1170,6 +1172,7 @@ impl HashJoinExec {
         mode: PartitionMode,
         projection: Option<&[usize]>,
         has_filter: bool,
+        null_equality: NullEquality,
     ) -> Result<PlanProperties> {
         // Calculate equivalence properties:
         let mut eq_properties = join_equivalence_properties(
@@ -1181,6 +1184,7 @@ impl HashJoinExec {
             Some(Self::probe_side()),
             on,
             has_filter,
+            null_equality,
         )?;
 
         let mut output_partitioning = match mode {

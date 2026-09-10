@@ -373,6 +373,7 @@ impl NestedLoopJoinExec {
             // No on columns in nested loop join
             &[],
             has_filter,
+            NullEquality::NullEqualsNothing,
         )?;
 
         let mut output_partitioning =

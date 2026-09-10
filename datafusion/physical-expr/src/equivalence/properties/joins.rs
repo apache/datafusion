@@ -19,10 +19,11 @@ use std::sync::Arc;
 
 use super::EquivalenceProperties;
 use crate::expressions::Column;
-use crate::{PhysicalExprRef, equivalence::OrderingEquivalenceClass};
+use crate::{ConstExpr, PhysicalExprRef, equivalence::OrderingEquivalenceClass};
 
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{Constraint, JoinSide, JoinType, Result};
+use datafusion_common::{Constraint, JoinSide, JoinType, NullEquality, Result};
+use datafusion_physical_expr_common::physical_expr::is_volatile;
 
 /// Calculate ordering equivalence properties for the given join operation.
 #[expect(clippy::too_many_arguments)]
@@ -35,6 +36,7 @@ pub fn join_equivalence_properties(
     probe_side: Option<JoinSide>,
     on: &[(PhysicalExprRef, PhysicalExprRef)],
     has_filter: bool,
+    null_equality: NullEquality,
 ) -> Result<EquivalenceProperties> {
     let left_size = left.schema.fields.len();
     let mut result = EquivalenceProperties::new(join_schema);
@@ -59,6 +61,7 @@ pub fn join_equivalence_properties(
                     on,
                     JoinSide::Left,
                     *join_type != JoinType::Inner,
+                    null_equality,
                 )?);
             }
             result.add_orderings(left.oeq_class);
@@ -74,6 +77,7 @@ pub fn join_equivalence_properties(
                     on,
                     JoinSide::Right,
                     *join_type != JoinType::Inner,
+                    null_equality,
                 )?);
             }
             let mut right_oeq_class = right.oeq_class;
@@ -102,6 +106,7 @@ fn unique_build_join_orderings(
     on: &[(PhysicalExprRef, PhysicalExprRef)],
     probe_side: JoinSide,
     preserves_unmatched_probe: bool,
+    null_equality: NullEquality,
 ) -> Result<OrderingEquivalenceClass> {
     if build.constraints().is_empty() || build.oeq_class().is_empty() {
         return Ok(OrderingEquivalenceClass::default());
@@ -122,20 +127,31 @@ fn unique_build_join_orderings(
         .collect::<Vec<_>>();
     let mut valid_orderings = Vec::new();
     for ordering in probe.oeq_class().iter() {
-        let probe_exprs = ordering
-            .iter()
-            .map(|sort| probe.eq_group().normalize_expr(Arc::clone(&sort.expr)))
-            .collect::<Vec<_>>();
+        // Within a group of equal ordering values, these expressions are
+        // constant. Keep this assumption local to the ordering proof.
+        let mut group = probe.eq_group().clone();
+        for sort in ordering {
+            let expr = probe.eq_group().normalize_expr(Arc::clone(&sort.expr));
+            group.add_constant(ConstExpr::from(expr));
+        }
+        let probe_key_is_fixed = |key: &PhysicalExprRef| {
+            !is_volatile(key) && group.is_expr_constant(key).is_some()
+        };
 
         // Outer joins must have the same match status throughout the group.
         if preserves_unmatched_probe
             && !on
                 .iter()
-                .all(|(probe_key, _)| probe_exprs.contains(probe_key))
+                .all(|(probe_key, _)| probe_key_is_fixed(probe_key))
         {
             continue;
         }
-        if !ordering_covers_unique_build_key(build, &on, &probe_exprs) {
+        if !ordering_covers_unique_build_key(
+            build,
+            &on,
+            probe_key_is_fixed,
+            null_equality,
+        ) {
             continue;
         }
         valid_orderings.push(ordering.clone());
@@ -154,11 +170,12 @@ fn unique_build_join_orderings(
 }
 
 /// Check whether the probe ordering determines a unique build key.
-/// Join keys and probe ordering expressions must already be normalized.
+/// Join keys must already be normalized against their input equivalence groups.
 fn ordering_covers_unique_build_key(
     build: &EquivalenceProperties,
     on: &[(PhysicalExprRef, PhysicalExprRef)],
-    probe_exprs: &[PhysicalExprRef],
+    probe_key_is_fixed: impl Fn(&PhysicalExprRef) -> bool,
+    null_equality: NullEquality,
 ) -> bool {
     build.constraints().iter().any(|constraint| {
         let (Constraint::PrimaryKey(indices) | Constraint::Unique(indices)) = constraint;
@@ -167,15 +184,18 @@ fn ordering_covers_unique_build_key(
                 let Some(field) = build.schema.fields().get(index) else {
                     return false;
                 };
-                // UNIQUE can contain repeated NULLs. Without null-equality
-                // information, only non-null UNIQUE columns prove uniqueness.
-                if matches!(constraint, Constraint::Unique(_)) && field.is_nullable() {
+                // UNIQUE permits repeated NULLs, which only invalidate the
+                // uniqueness proof when NULL join keys can match each other.
+                if matches!(constraint, Constraint::Unique(_))
+                    && field.is_nullable()
+                    && null_equality == NullEquality::NullEqualsNull
+                {
                     return false;
                 }
                 let column: PhysicalExprRef = Arc::new(Column::new(field.name(), index));
                 let column = build.eq_group().normalize_expr(column);
                 on.iter().any(|(probe_key, build_key)| {
-                    build_key.eq(&column) && probe_exprs.contains(probe_key)
+                    build_key.eq(&column) && probe_key_is_fixed(probe_key)
                 })
             })
     })
@@ -209,9 +229,10 @@ mod tests {
     use super::*;
     use crate::equivalence::convert_to_orderings;
     use crate::equivalence::tests::create_test_schema;
-    use crate::expressions::{Column, col};
+    use crate::expressions::{BinaryExpr, Column, col, lit};
     use crate::{LexOrdering, PhysicalSortExpr};
     use datafusion_common::{Constraint, Constraints};
+    use datafusion_expr::Operator;
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Fields, Schema};
@@ -273,6 +294,7 @@ mod tests {
                 Some(JoinSide::Left),
                 &[],
                 false,
+                NullEquality::NullEqualsNothing,
             )?;
             let err_msg =
                 format!("expected: {:?}, actual:{:?}", expected, join_eq.oeq_class);
@@ -326,6 +348,7 @@ mod tests {
                 Some(JoinSide::Left),
                 on,
                 false,
+                NullEquality::NullEqualsNothing,
             )
         };
         let required = |prefix| {
@@ -348,7 +371,34 @@ mod tests {
         let inner = join_properties(JoinType::Inner, &on)?;
         let outer = join_properties(JoinType::Left, &on)?;
         assert!(inner.ordering_satisfy(required(Arc::clone(&a)))?);
-        assert!(!outer.ordering_satisfy(required(a))?);
+        assert!(!outer.ordering_satisfy(required(Arc::clone(&a)))?);
+
+        let plus_one = |expr| -> PhysicalExprRef {
+            Arc::new(BinaryExpr::new(expr, Operator::Plus, lit(1_i32)))
+        };
+        let a_plus_one = plus_one(Arc::clone(&a));
+        let b_plus_one = plus_one(Arc::clone(&b));
+        // Record the ordering before adding equivalence, so the proof must
+        // normalize both the ordering expression and the join key consistently.
+        let mut probe = EquivalenceProperties::new_with_orderings(
+            Arc::clone(&schema),
+            [ordering(Arc::clone(&b_plus_one))],
+        );
+        probe.add_equal_conditions(Arc::clone(&a), b)?;
+        for join_type in [JoinType::Inner, JoinType::Left] {
+            let output = join_equivalence_properties(
+                probe.clone(),
+                build.clone(),
+                &join_type,
+                Arc::clone(&output_schema),
+                &[true, false],
+                Some(JoinSide::Left),
+                &[(Arc::clone(&a_plus_one), Arc::clone(&a))],
+                false,
+                NullEquality::NullEqualsNothing,
+            )?;
+            assert!(output.ordering_satisfy(required(Arc::clone(&b_plus_one)))?);
+        }
         Ok(())
     }
 

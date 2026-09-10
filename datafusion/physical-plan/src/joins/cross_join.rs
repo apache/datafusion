@@ -45,7 +45,8 @@ use arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
-    DataFusionError, JoinType, Result, ScalarValue, assert_eq_or_internal_err,
+    DataFusionError, JoinType, NullEquality, Result, ScalarValue,
+    assert_eq_or_internal_err,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
@@ -161,6 +162,7 @@ impl CrossJoinExec {
             None,
             &[],
             false,
+            NullEquality::NullEqualsNothing,
         )?;
 
         // Get output partitioning:
