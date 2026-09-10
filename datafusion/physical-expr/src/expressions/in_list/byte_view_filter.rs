@@ -98,6 +98,9 @@ impl<T: ByteViewType> StaticFilter for ByteViewFilter<T> {
 
     fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
         let array = downcast_byte_view::<T>(v)?;
+        // List values are all inline (len <= 12). Long input views cannot match
+        // because their encoded length (> 12) is part of the 128-bit key, so
+        // input lengths do not need to be checked.
         self.inner.contains(&as_decimal128(array), negated)
     }
 }
