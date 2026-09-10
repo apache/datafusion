@@ -754,10 +754,11 @@ impl From<StreamType> for SendableRecordBatchStream {
 ///
 /// ## Enable Condition
 /// - No grouping (no `GROUP BY` clause in the sql, only a single global group to aggregate)
-/// - The aggregate expression must be `min`/`max`, and evaluate directly on columns.
-///   Note multiple aggregate expressions that satisfy this requirement are allowed,
-///   and a dynamic filter will be constructed combining all applicable expr's
-///   states. See more in the following example with dynamic filter on multiple columns.
+/// - Every aggregate expression must be `min`/`max`, and evaluate directly on a
+///   column. If any aggregate expression is unsupported, dynamic filtering is
+///   disabled for the entire [`AggregateExec`]. Multiple supported aggregate
+///   expressions are combined into one dynamic filter. See the following example
+///   with a dynamic filter on multiple columns.
 ///
 /// ## Filter Construction
 /// The filter is kept in the `DataSourceExec`, and it will gets update during execution,
@@ -777,11 +778,11 @@ struct AggrDynFilter {
     /// The current bounds for the dynamic filter, updates during the execution to
     /// tighten the bound for more effective pruning.
     ///
-    /// Each vector element is for the accumulators that support dynamic filter.
-    /// e.g. This `AggregateExec` has accumulator:
-    /// min(a), avg(a), max(b)
-    /// And this field stores [PerAccumulatorDynFilter(min(a)), PerAccumulatorDynFilter(min(b))]
-    supported_accumulators_info: Vec<PerAccumulatorDynFilter>,
+    /// Each vector element corresponds to one aggregate expression. Dynamic filtering
+    /// is enabled only when every aggregate expression is supported, so this vector
+    /// contains an entry for every accumulator. For example, `min(a), max(b)` produces
+    /// entries for `min(a)` and `max(b)`.
+    accumulator_dyn_filter_info: Vec<PerAccumulatorDynFilter>,
 }
 
 // ---- Aggregate Dynamic Filter Utility Structs ----
@@ -1169,7 +1170,7 @@ impl AggregateExec {
         };
 
         // Validate that the filter is compatible with the aggregation columns.
-        let cols = self.cols_for_dynamic_filter(&dyn_filter.supported_accumulators_info);
+        let cols = self.cols_for_dynamic_filter(&dyn_filter.accumulator_dyn_filter_info);
         if cols.len() != filter.children().len() {
             return internal_err!(
                 "Dynamic filter expression is incompatible with aggregate due to mismatched number of columns"
@@ -1186,7 +1187,7 @@ impl AggregateExec {
         // Overwrite our filter
         self.dynamic_filter = Some(Arc::new(AggrDynFilter {
             filter,
-            supported_accumulators_info: dyn_filter.supported_accumulators_info.clone(),
+            accumulator_dyn_filter_info: dyn_filter.accumulator_dyn_filter_info.clone(),
         }));
         Ok(self)
     }
@@ -1424,14 +1425,7 @@ impl AggregateExec {
             .project(group_expr_mapping, schema);
 
         // An aggregation that does not maintain its input order must not
-        // advertise the input's ordering either. `maintains_input_order`
-        // reports `false` for `InputOrderMode::Linear`, and a hash aggregation
-        // emits its groups in hash table order. `PartialReduce` is forced to
-        // `Linear` in `try_new` for exactly this reason, but the projection
-        // above still carries the input orderings over, so drop them here.
-        // Otherwise a consumer may take the early emit path on an ordering the
-        // aggregation does not keep, and flush a group before all of its rows
-        // have arrived.
+        // propegrate the input's ordering either, match `maintains_input_order` value
         if *input_order_mode == InputOrderMode::Linear {
             eq_properties.clear_orderings();
         }
@@ -1840,7 +1834,7 @@ impl AggregateExec {
             return;
         }
 
-        // Collect supported accumulators
+        // Collect dynamic filter metadata for every accumulator
         // It is assumed the order of aggregate expressions are not changed from `AggregateExec`
         // to `AggregateStream`
         let mut aggr_dyn_filters = Vec::new();
@@ -1871,23 +1865,28 @@ impl AggregateExec {
                     aggr_index: i,
                     shared_bound: Arc::new(Mutex::new(ScalarValue::Null)),
                 });
+            } else {
+                // An incomplete filter could prune rows that still improve an
+                // unsupported aggregate, so every aggregate must be represented.
+                // TODO: Derive safe predicates for expressions such as `min(col + literal)`.
+                return;
             }
         }
 
         if !aggr_dyn_filters.is_empty() {
             self.dynamic_filter = Some(Arc::new(AggrDynFilter {
                 filter: Arc::new(DynamicFilterPhysicalExpr::new(all_cols, lit(true))),
-                supported_accumulators_info: aggr_dyn_filters,
+                accumulator_dyn_filter_info: aggr_dyn_filters,
             }))
         }
     }
 
-    // Collect column references for the dynamic filter expression from the supported accumulators.
+    // Collect column references for the dynamic filter expression from the accumulators.
     fn cols_for_dynamic_filter(
         &self,
-        supported_accumulators_info: &[PerAccumulatorDynFilter],
+        accumulator_dyn_filter_info: &[PerAccumulatorDynFilter],
     ) -> Vec<Arc<dyn PhysicalExpr>> {
-        let all_cols: Vec<Arc<dyn PhysicalExpr>> = supported_accumulators_info
+        let all_cols: Vec<Arc<dyn PhysicalExpr>> = accumulator_dyn_filter_info
             .iter()
             .filter_map(|info| {
                 // This should always be true due to how the supported accumulators
@@ -1900,7 +1899,7 @@ impl AggregateExec {
                 None
             })
             .collect();
-        debug_assert_eq!(all_cols.len(), supported_accumulators_info.len());
+        debug_assert_eq!(all_cols.len(), accumulator_dyn_filter_info.len());
         all_cols
     }
 
@@ -4359,6 +4358,72 @@ mod tests {
         Ok(())
     }
 
+    /// Single and Final hash aggregation share the same terminal drain helper. Single
+    /// exercises it directly from raw input without coupling this test to partial state.
+    #[tokio::test]
+    async fn single_grouped_aggregate_avoids_destructive_terminal_drain() -> Result<()> {
+        const BATCH_SIZE: usize = 2;
+        const NUM_GROUPS: usize = 3;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("value", DataType::Int32, false),
+        ]));
+        let input_batches = vec![RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 1, 2, 3])),
+                Arc::new(Int32Array::from(vec![10, 20, 30, 40, 50, 60])),
+            ],
+        )?];
+        let input =
+            TestMemoryExec::try_new_exec(&[input_batches], Arc::clone(&schema), None)?;
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
+        let udaf = Arc::new(AggregateUDF::from(NoFirstEmitUdaf::new()));
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
+            AggregateExprBuilder::new(udaf, vec![col("value", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("no_first_emit(value)")
+                .build()?,
+        )];
+        let aggregate = Arc::new(AggregateExec::try_new(
+            AggregateMode::Single,
+            group_by,
+            aggregates,
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?);
+        let task_ctx = new_migrated_hash_ctx(BATCH_SIZE);
+
+        let stream = aggregate.execute_typed(0, &task_ctx)?;
+        assert!(matches!(stream, StreamType::SingleHash(_)));
+
+        let stream: SendableRecordBatchStream = stream.into();
+        let batches = collect(stream).await?;
+        assert!(batches.len() > 1, "expected terminal output to be chunked");
+        assert!(
+            batches.iter().all(|batch| batch.num_rows() <= BATCH_SIZE),
+            "terminal output exceeded the configured batch size"
+        );
+        assert_eq!(
+            batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            NUM_GROUPS
+        );
+        assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +-----+----------------------+
+        | key | no_first_emit(value) |
+        +-----+----------------------+
+        | 1   | 2                    |
+        | 2   | 2                    |
+        | 3   | 2                    |
+        +-----+----------------------+
+        ");
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn limited_distinct_aggregate_uses_migrated_hash_streams() -> Result<()> {
         let schema =
@@ -4620,11 +4685,6 @@ mod tests {
         Ok(())
     }
 
-    /// A `PartialReduce` aggregation emits its groups in hash table order, and
-    /// `try_new` forces its [`InputOrderMode`] to `Linear` to say so. It must
-    /// not advertise its input's ordering as its own output ordering either:
-    /// a consumer that believed it could take the early emit path and flush a
-    /// group before all of its rows had arrived.
     #[test]
     fn partial_reduce_does_not_advertise_input_ordering() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
@@ -8333,7 +8393,7 @@ mod tests {
                     Ok(Arc::new(Int64Array::from(counts)))
                 }
                 EmitTo::First(_) => internal_err!(
-                    "partial grouped aggregate output must materialize with EmitTo::All before slicing"
+                    "grouped aggregate terminal output must not use EmitTo::First"
                 ),
             }
         }
