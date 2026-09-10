@@ -470,13 +470,7 @@ impl PartialHashAggregateStream {
                         break;
                     }
                     HandleInputResult::OOM => {
-                        let state_batch_result = hash_table.take_state_batch();
-
-                        // Emitting clears the aggregate table and releases its
-                        // accumulated memory. Update the reservation accordingly.
-                        self.reservation.try_resize(hash_table.memory_size())?;
-
-                        let materialized_group_states = state_batch_result?.ok_or_else(|| {
+                        let materialized_group_states = hash_table.take_state_batch()?.ok_or_else(|| {
                             internal_datafusion_err!(
                                 "Partial hash aggregate ran out of memory with no aggregated groups"
                             )
@@ -486,6 +480,7 @@ impl PartialHashAggregateStream {
                         self.emit_on_memory_pressure(
                             materialized_group_states,
                             &mut emitter,
+                            hash_table.memory_size(),
                         )
                         .await?;
                     }
@@ -594,7 +589,31 @@ impl PartialHashAggregateStream {
         // with batch slicing.
         mut remaining_groups: RecordBatch,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
+        hash_table_mem_size: usize
     ) -> Result<()> {
+        let remaining_groups_memory = remaining_groups.get_array_memory_size();
+        
+        // Emitting clears the aggregate table and releases its
+        // accumulated memory. Update the reservation accordingly.
+        // We account here for the remaining groups memory to see if we can return batch size states
+        // if there is not enough memory, fallback to emit large batch
+        match self.reservation.try_resize(hash_table_mem_size + remaining_groups_memory) {
+            Ok(_) => {
+                // Continue with slicing
+            }
+            Err(DataFusionError::ResourcesExhausted(_)) => {
+                // Fail to reserve memory for the hash table + state batch while slicing so emit a huge batch
+                
+                // Try resize without holding the state batch, if it fails there is nothing we can do
+                self.reservation.try_resize(hash_table_mem_size)?;
+                
+                emitter.emit(remaining_groups).await;
+                
+                return Ok(());
+            }
+            Err(e) => return Err(e)
+        };
+        
         while remaining_groups.num_rows() > self.batch_size {
             // More batch to output, continue in the current state.
             let output = remaining_groups.slice(0, self.batch_size);
@@ -614,6 +633,10 @@ impl PartialHashAggregateStream {
 
         self.reduction_factor.add_part(remaining_groups.num_rows());
         debug_assert!(remaining_groups.num_rows() > 0);
+        
+        // We are no longer holding on the batch while slicing, so release the memory.
+        // The memory will now equal to the hash table size
+        self.reservation.try_shrink(remaining_groups_memory)?;
 
         emitter
             .emit(remaining_groups.record_output(&self.baseline_metrics))
@@ -987,8 +1010,8 @@ mod tests {
     use crate::execution_plan::ExecutionPlan;
     use crate::test::TestMemoryExec;
 
-    use arrow::array::{Int32Array, Int64Array};
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::array::{AsArray, Int32Array, Int64Array};
+    use arrow::datatypes::{DataType, Field, Int32Type, Schema};
     use datafusion_common::Result;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_functions_aggregate::count::count_udaf;
@@ -1251,7 +1274,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_partial_hash_stream_accounts_held_batch_on_memory_pressure()
+    async fn test_partial_hash_stream_accounts_held_batch_on_memory_pressure_while_slicing()
     -> Result<()> {
         // When memory pressure triggers early emission, the materialized state
         // batch is held in `EmittingOnMemoryPressure::remaining_groups` while it
@@ -1322,14 +1345,6 @@ mod tests {
         // of the materialized state batch still held by the stream
         let first = stream.next().await.expect("stream ended early")?;
         assert_eq!(first.num_rows(), batch_size);
-        // assert!(
-        //     matches!(
-        //         stream.state,
-        //         Some(PartialHashAggregateState::EmittingOnMemoryPressure { .. })
-        //     ),
-        //     "expected the stream to still be emitting under memory pressure \
-        //      (if this fails the test setup no longer triggers early emission)"
-        // );
 
         // The emitted slice shares buffers with the held state batch, so its
         // array memory size reflects the full held allocation
@@ -1340,9 +1355,18 @@ mod tests {
             "memory pool has {reserved} bytes reserved but the stream is \
              holding a materialized state batch of {held_size} bytes"
         );
+        
+        let second = stream.next().await.expect("stream ended early")?;
+        assert_eq!(second.num_rows(), batch_size);
+        
+        let first_batch_first_col = first.column(0).as_primitive::<Int32Type>();
+        let second_batch_first_col = second.column(0).as_primitive::<Int32Type>();
+        
+        // Make sure that the slice had happened - that is coming from emitting memory pressure
+        assert_eq!(first_batch_first_col.values().inner().data_ptr(), second_batch_first_col.values().inner().data_ptr(), "both columns should come from sliced big batch");
 
         // Drain the stream: no groups lost and the reservation is released
-        let mut total_rows = first.num_rows();
+        let mut total_rows = first.num_rows() + second.num_rows();
         while let Some(batch) = stream.next().await {
             total_rows += batch?.num_rows();
         }
