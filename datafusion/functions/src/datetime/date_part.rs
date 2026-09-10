@@ -88,7 +88,7 @@ use datafusion_macros::user_doc;
     - timezone_hour (whole hours of the UTC offset)
     - timezone_minute (whole minutes of the UTC offset, excluding the hours)
 
-    The `timezone`, `timezone_hour` and `timezone_minute` parts are only defined for timestamps that carry a timezone; extracting them from a timezone-naive timestamp, a date, a time or an interval is an error. They report the offset that applies at that instant, so they follow daylight saving time: `Europe/Brussels` yields `3600` in January and `7200` in July. For a negative offset both parts carry the sign, so `America/St_Johns` in January yields `-3` hours and `-30` minutes.
+    The `timezone`, `timezone_hour` and `timezone_minute` parts are only defined for timestamps that carry a timezone; extracting them from a timezone-naive timestamp, a date, a time or an interval is an error. They report the offset that applies at that instant, so they follow daylight saving time: `Europe/Brussels` yields `3600` in January and `7200` in July. For a negative offset each non-zero part carries the sign, so `America/St_Johns` in January yields `-3` hours and `-30` minutes. An offset smaller than one hour has a zero hour part, which cannot show a sign: `Africa/Monrovia` before 1972 yields `0` hours and `-43` minutes.
 "#
     ),
     argument(
@@ -762,6 +762,10 @@ mod tests {
                 -30,
             ),
             ("Asia/Kolkata", "2024-07-01T12:00:00Z", 19_800, 5, 30),
+            // A sub-hour offset: the hour part is zero and so cannot show the
+            // sign, while the minute part still carries it. PostgreSQL 17
+            // gives -2588 / 0 / -43 for this instant.
+            ("Africa/Monrovia", "1900-01-01T12:00:00Z", -2_588, 0, -43),
             ("Asia/Kathmandu", "2024-07-01T12:00:00Z", 20_700, 5, 45),
         ];
 
