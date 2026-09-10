@@ -87,7 +87,7 @@ where
         length
     }));
 
-    let length = *offsets.last().unwrap() as usize;
+    let length = offsets.last() as usize;
 
     let values = create_primitive_array::<T>(length, 0.0);
 

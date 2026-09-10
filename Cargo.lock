@@ -33,15 +33,15 @@ dependencies = [
 
 [[package]]
 name = "alloc-no-stdlib"
-version = "2.0.4"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc7bb162ec39d46ab1ca8c77bf72e890535becd1751bb45f64c597edb4c8c6b3"
+checksum = "c2fb6cfd47bf496ff64095c20eaba0c201404ee38714d4142fcfa1dc334fcc7a"
 
 [[package]]
 name = "alloc-stdlib"
-version = "0.2.2"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94fb8275041c72129eb51b7d0322c29b8387a0386127718b096429201a5d6ece"
+checksum = "0b5c1865780388bfa186411ab5f247819487fc4864c6e9c3106611fa347586e1"
 dependencies = [
  "alloc-no-stdlib",
 ]
@@ -164,8 +164,8 @@ checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 
 [[package]]
 name = "arrow"
-version = "59.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=e1e71ea89b211758e20254296008f96e744ed138#e1e71ea89b211758e20254296008f96e744ed138"
+version = "60.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?rev=3e30695f3cb72fd105b62688fee41d9cb3593082#3e30695f3cb72fd105b62688fee41d9cb3593082"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -186,8 +186,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-arith"
-version = "59.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=e1e71ea89b211758e20254296008f96e744ed138#e1e71ea89b211758e20254296008f96e744ed138"
+version = "60.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?rev=3e30695f3cb72fd105b62688fee41d9cb3593082#3e30695f3cb72fd105b62688fee41d9cb3593082"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -199,8 +199,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-array"
-version = "59.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=e1e71ea89b211758e20254296008f96e744ed138#e1e71ea89b211758e20254296008f96e744ed138"
+version = "60.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?rev=3e30695f3cb72fd105b62688fee41d9cb3593082#3e30695f3cb72fd105b62688fee41d9cb3593082"
 dependencies = [
  "ahash",
  "arrow-buffer",
@@ -218,8 +218,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-avro"
-version = "59.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=e1e71ea89b211758e20254296008f96e744ed138#e1e71ea89b211758e20254296008f96e744ed138"
+version = "60.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?rev=3e30695f3cb72fd105b62688fee41d9cb3593082#3e30695f3cb72fd105b62688fee41d9cb3593082"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -236,13 +236,13 @@ dependencies = [
  "snap",
  "strum_macros",
  "uuid",
- "zstd",
+ "zstd 0.14.0",
 ]
 
 [[package]]
 name = "arrow-buffer"
-version = "59.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=e1e71ea89b211758e20254296008f96e744ed138#e1e71ea89b211758e20254296008f96e744ed138"
+version = "60.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?rev=3e30695f3cb72fd105b62688fee41d9cb3593082#3e30695f3cb72fd105b62688fee41d9cb3593082"
 dependencies = [
  "bytes",
  "half",
@@ -252,8 +252,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-cast"
-version = "59.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=e1e71ea89b211758e20254296008f96e744ed138#e1e71ea89b211758e20254296008f96e744ed138"
+version = "60.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?rev=3e30695f3cb72fd105b62688fee41d9cb3593082#3e30695f3cb72fd105b62688fee41d9cb3593082"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -273,8 +273,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-cmp"
-version = "59.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=e1e71ea89b211758e20254296008f96e744ed138#e1e71ea89b211758e20254296008f96e744ed138"
+version = "60.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?rev=3e30695f3cb72fd105b62688fee41d9cb3593082#3e30695f3cb72fd105b62688fee41d9cb3593082"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -283,8 +283,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-csv"
-version = "59.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=e1e71ea89b211758e20254296008f96e744ed138#e1e71ea89b211758e20254296008f96e744ed138"
+version = "60.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?rev=3e30695f3cb72fd105b62688fee41d9cb3593082#3e30695f3cb72fd105b62688fee41d9cb3593082"
 dependencies = [
  "arrow-array",
  "arrow-cast",
@@ -297,8 +297,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-data"
-version = "59.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=e1e71ea89b211758e20254296008f96e744ed138#e1e71ea89b211758e20254296008f96e744ed138"
+version = "60.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?rev=3e30695f3cb72fd105b62688fee41d9cb3593082#3e30695f3cb72fd105b62688fee41d9cb3593082"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -309,8 +309,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-flight"
-version = "59.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=e1e71ea89b211758e20254296008f96e744ed138#e1e71ea89b211758e20254296008f96e744ed138"
+version = "60.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?rev=3e30695f3cb72fd105b62688fee41d9cb3593082#3e30695f3cb72fd105b62688fee41d9cb3593082"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -335,8 +335,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-ipc"
-version = "59.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=e1e71ea89b211758e20254296008f96e744ed138#e1e71ea89b211758e20254296008f96e744ed138"
+version = "60.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?rev=3e30695f3cb72fd105b62688fee41d9cb3593082#3e30695f3cb72fd105b62688fee41d9cb3593082"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -345,13 +345,13 @@ dependencies = [
  "arrow-select",
  "flatbuffers",
  "lz4_flex",
- "zstd",
+ "zstd 0.14.0",
 ]
 
 [[package]]
 name = "arrow-json"
-version = "59.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=e1e71ea89b211758e20254296008f96e744ed138#e1e71ea89b211758e20254296008f96e744ed138"
+version = "60.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?rev=3e30695f3cb72fd105b62688fee41d9cb3593082#3e30695f3cb72fd105b62688fee41d9cb3593082"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -374,8 +374,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-ord"
-version = "59.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=e1e71ea89b211758e20254296008f96e744ed138#e1e71ea89b211758e20254296008f96e744ed138"
+version = "60.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?rev=3e30695f3cb72fd105b62688fee41d9cb3593082#3e30695f3cb72fd105b62688fee41d9cb3593082"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -387,8 +387,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-row"
-version = "59.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=e1e71ea89b211758e20254296008f96e744ed138#e1e71ea89b211758e20254296008f96e744ed138"
+version = "60.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?rev=3e30695f3cb72fd105b62688fee41d9cb3593082#3e30695f3cb72fd105b62688fee41d9cb3593082"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -399,8 +399,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-schema"
-version = "59.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=e1e71ea89b211758e20254296008f96e744ed138#e1e71ea89b211758e20254296008f96e744ed138"
+version = "60.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?rev=3e30695f3cb72fd105b62688fee41d9cb3593082#3e30695f3cb72fd105b62688fee41d9cb3593082"
 dependencies = [
  "bitflags",
  "serde",
@@ -410,8 +410,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-select"
-version = "59.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=e1e71ea89b211758e20254296008f96e744ed138#e1e71ea89b211758e20254296008f96e744ed138"
+version = "60.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?rev=3e30695f3cb72fd105b62688fee41d9cb3593082#3e30695f3cb72fd105b62688fee41d9cb3593082"
 dependencies = [
  "ahash",
  "arrow-array",
@@ -424,8 +424,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-string"
-version = "59.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=e1e71ea89b211758e20254296008f96e744ed138#e1e71ea89b211758e20254296008f96e744ed138"
+version = "60.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?rev=3e30695f3cb72fd105b62688fee41d9cb3593082#3e30695f3cb72fd105b62688fee41d9cb3593082"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -1140,9 +1140,9 @@ dependencies = [
 
 [[package]]
 name = "brotli"
-version = "8.0.2"
+version = "9.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4bd8b9603c7aa97359dbd97ecf258968c95f3adddd6db2f7e7a5bef101c84560"
+checksum = "f8b851b75c23ca7873623d612fe49bd1989aeb03d08fb9432187eb253d3d4c6b"
 dependencies = [
  "alloc-no-stdlib",
  "alloc-stdlib",
@@ -1151,9 +1151,9 @@ dependencies = [
 
 [[package]]
 name = "brotli-decompressor"
-version = "5.0.0"
+version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "874bb8112abecc98cbd6d81ea4fa7e94fb9449648c93cc89aa40c81c24d7de03"
+checksum = "46087801e40b785410c352bee60e9b6226312709cf52d5fff92776cdf5cf6490"
 dependencies = [
  "alloc-no-stdlib",
  "alloc-stdlib",
@@ -1389,9 +1389,9 @@ dependencies = [
 
 [[package]]
 name = "comfy-table"
-version = "7.2.2"
+version = "8.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "958c5d6ecf1f214b4c2bbbbf6ab9523a864bd136dcf71a7e8904799acfe1ad47"
+checksum = "136c8c4c3823846e8ba6d4bda011b4e5d5827b8bb0ac26c31f9ab31abe9f54f2"
 dependencies = [
  "unicode-segmentation",
  "unicode-width 0.2.2",
@@ -1408,8 +1408,8 @@ dependencies = [
  "flate2",
  "liblzma",
  "memchr",
- "zstd",
- "zstd-safe",
+ "zstd 0.13.3",
+ "zstd-safe 7.2.4",
 ]
 
 [[package]]
@@ -1792,7 +1792,7 @@ dependencies = [
  "tokio",
  "url",
  "uuid",
- "zstd",
+ "zstd 0.13.3",
 ]
 
 [[package]]
@@ -1980,7 +1980,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "url",
- "zstd",
+ "zstd 0.13.3",
 ]
 
 [[package]]
@@ -4573,8 +4573,8 @@ dependencies = [
 
 [[package]]
 name = "parquet"
-version = "59.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=e1e71ea89b211758e20254296008f96e744ed138#e1e71ea89b211758e20254296008f96e744ed138"
+version = "60.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?rev=3e30695f3cb72fd105b62688fee41d9cb3593082#3e30695f3cb72fd105b62688fee41d9cb3593082"
 dependencies = [
  "ahash",
  "arrow-array",
@@ -4602,7 +4602,7 @@ dependencies = [
  "snap",
  "tokio",
  "twox-hash",
- "zstd",
+ "zstd 0.14.0",
 ]
 
 [[package]]
@@ -5506,7 +5506,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7719,7 +7719,16 @@ version = "0.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e91ee311a569c327171651566e07972200e76fcfe2242a4fa446149a3881c08a"
 dependencies = [
- "zstd-safe",
+ "zstd-safe 7.2.4",
+]
+
+[[package]]
+name = "zstd"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf06bd8162af0734b344780deb55b42a2429ae430870d13fcc12f238e880fe6e"
+dependencies = [
+ "zstd-safe 8.0.0",
 ]
 
 [[package]]
@@ -7732,10 +7741,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "zstd-sys"
-version = "2.0.16+zstd.1.5.7"
+name = "zstd-safe"
+version = "8.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91e19ebc2adc8f83e43039e79776e3fda8ca919132d68a1fed6a5faca2683748"
+checksum = "ae42c0555055784c70058d19ba8e275528e8a99a706684868ace5da4e716a4ab"
+dependencies = [
+ "zstd-sys",
+]
+
+[[package]]
+name = "zstd-sys"
+version = "2.1.0+zstd.1.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ef0a8027ec3ee71300ab3bcbcd0393f434aa72b91ca6d635a39941deae8eea0"
 dependencies = [
  "cc",
  "pkg-config",

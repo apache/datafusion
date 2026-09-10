@@ -1218,13 +1218,11 @@ fn sliced_list_values<O: OffsetSizeTrait>(list: &GenericListArray<O>) -> ArrayRe
     let values = list.values();
     let offsets = list.offsets();
 
-    if let (Some(first), Some(last)) = (offsets.first(), offsets.last()) {
-        let first = first.as_usize();
-        let last = last.as_usize();
+    let first = offsets.first().as_usize();
+    let last = offsets.last().as_usize();
 
-        if first != 0 || last != values.len() {
-            return values.slice(first, last - first);
-        }
+    if first != 0 || last != values.len() {
+        return values.slice(first, last - first);
     }
 
     Arc::clone(values)

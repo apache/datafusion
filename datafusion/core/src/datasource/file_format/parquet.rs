@@ -165,9 +165,8 @@ mod tests {
     };
     use parquet::arrow::ParquetRecordBatchStreamBuilder;
     use parquet::arrow::arrow_reader::ArrowReaderOptions;
-    use parquet::file::metadata::{
-        KeyValue, PageIndex, PageIndexPolicy, ParquetMetaData,
-    };
+    use parquet::file::metadata::page_index::PageIndexProvider;
+    use parquet::file::metadata::{KeyValue, PageIndexPolicy, ParquetMetaData};
     use parquet::file::page_index::column_index::ColumnIndexMetaData;
     use tokio::fs::File;
 
@@ -1129,19 +1128,19 @@ mod tests {
         Ok(())
     }
 
-    fn check_page_index_validation(page_index: Option<&PageIndex>) {
+    fn check_page_index_validation(page_index: Option<&Arc<dyn PageIndexProvider>>) {
         let page_index = page_index.unwrap();
         assert!(page_index.is_complete());
 
-        // there is only one row group in one file.
-        let column_indexes = page_index.column_indexes_for_rowgroup(0).unwrap();
-        let offset_indexes = page_index.offset_indexes_for_rowgroup(0).unwrap();
-        assert!(page_index.column_indexes_for_rowgroup(1).is_none());
-        assert!(page_index.offset_indexes_for_rowgroup(1).is_none());
-
-        // 13 col in one row group
-        assert_eq!(column_indexes.len(), 13);
-        assert_eq!(offset_indexes.len(), 13);
+        // there is only one row group in one file, with 13 columns.
+        // All columns have an offset index; all except column 10 also have a
+        // column index.
+        for col in 0..13 {
+            assert_eq!(page_index.column_index(0, col).is_some(), col != 10);
+            assert!(page_index.offset_index(0, col).is_some());
+        }
+        assert!(page_index.column_index(1, 0).is_none());
+        assert!(page_index.offset_index(1, 0).is_none());
 
         // test result in int_col
         let int_col_index = page_index.column_index(0, 4).unwrap();

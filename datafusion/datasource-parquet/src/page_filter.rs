@@ -36,7 +36,7 @@ use datafusion_pruning::{PruningPredicate, PruningPredicateBuilder};
 
 use log::{debug, trace};
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
-use parquet::file::metadata::PageIndex;
+use parquet::file::metadata::page_index::PageIndexProvider;
 use parquet::file::page_index::offset_index::PageLocation;
 use parquet::schema::types::SchemaDescriptor;
 use parquet::{
@@ -46,8 +46,8 @@ use parquet::{
 
 /// Filters a [`ParquetAccessPlan`] based on the [Parquet PageIndex], if present
 ///
-/// It does so by evaluating statistics from the [`PageIndex`] (column and
-/// offset indexes) and converting them to [`RowSelection`].
+/// It does so by evaluating statistics from the [`PageIndexProvider`] (column
+/// and offset indexes) and converting them to [`RowSelection`].
 ///
 /// [Parquet PageIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 ///
@@ -484,13 +484,13 @@ fn prune_pages_in_one_row_group(
     Some((RowSelection::from(vec), values))
 }
 
-/// Implement [`PruningStatistics`] for one column's [`PageIndex`]
+/// Implement [`PruningStatistics`] for one column's [`PageIndexProvider`]
 #[derive(Debug)]
 struct PagesPruningStatistics<'a> {
     row_group_index: usize,
     row_group_metadatas: &'a [RowGroupMetaData],
     converter: StatisticsConverter<'a>,
-    page_index: &'a PageIndex,
+    page_index: &'a dyn PageIndexProvider,
     page_offsets: &'a Vec<PageLocation>,
     trusted_min_max: bool,
 }
@@ -514,7 +514,7 @@ impl<'a> PagesPruningStatistics<'a> {
             return None;
         };
 
-        let page_index = parquet_metadata.page_index()?;
+        let page_index: &dyn PageIndexProvider = parquet_metadata.page_index()?.as_ref();
         if !page_index.is_complete() {
             return None;
         }
