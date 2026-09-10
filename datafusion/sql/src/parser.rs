@@ -708,7 +708,7 @@ impl<'a> DFParser<'a> {
                     Keyword::DROP
                         if self
                             .parser
-                            .parse_keywords(&vec![Keyword::DROP, Keyword::CATALOG]) =>
+                            .parse_keywords(&[Keyword::DROP, Keyword::CATALOG]) =>
                     {
                         self.parse_drop_catalog()
                     }

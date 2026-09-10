@@ -189,7 +189,7 @@ async fn create_external_catalog_if_not_exists() -> Result<()> {
 }
 
 #[tokio::test]
-async fn create_drop_external_catalog() -> Result<()> {
+async fn create_drop_catalog() -> Result<()> {
     let mut state = SessionStateBuilder::new().with_default_features().build();
     state
         .catalog_factories_mut()
@@ -200,18 +200,18 @@ async fn create_drop_external_catalog() -> Result<()> {
     ctx.sql(sql).await?;
     assert!(ctx.catalog("cat").is_some());
 
-    ctx.sql("DROP EXTERNAL CATALOG cat").await?;
+    ctx.sql("DROP CATALOG cat").await?;
     assert!(
         ctx.catalog("cat").is_none(),
         "Catalog should have been dropped!"
     );
 
     // dropping again should fail without IF EXISTS
-    let err = ctx.sql("DROP EXTERNAL CATALOG cat").await.unwrap_err();
+    let err = ctx.sql("DROP CATALOG cat").await.unwrap_err();
     assert_contains!(err.to_string(), "doesn't exist");
 
     // ... but should succeed with IF EXISTS
-    ctx.sql("DROP EXTERNAL CATALOG IF EXISTS cat").await?;
+    ctx.sql("DROP CATALOG IF EXISTS cat").await?;
 
     Ok(())
 }
