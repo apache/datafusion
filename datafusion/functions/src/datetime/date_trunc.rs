@@ -1361,40 +1361,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_date_trunc_fine_granularity_underflow() {
-        let input = TimestampNanosecondArray::from(vec![i64::MIN]);
-        let args = ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Scalar(ScalarValue::from("microsecond")),
-                ColumnarValue::Array(Arc::new(input)),
-            ],
-            arg_fields: vec![
-                Field::new("granularity", DataType::Utf8, false).into(),
-                Field::new(
-                    "timestamp",
-                    DataType::Timestamp(TimeUnit::Nanosecond, None),
-                    false,
-                )
-                .into(),
-            ],
-            number_rows: 1,
-            return_field: Field::new(
-                "f",
-                DataType::Timestamp(TimeUnit::Nanosecond, None),
-                true,
-            )
-            .into(),
-            config_options: Arc::new(ConfigOptions::default()),
-        };
-
-        let error = DateTruncFunc::new().invoke_with_args(args).unwrap_err();
-        assert_eq!(
-            error.strip_backtrace(),
-            "Execution error: Timestamp -9223372036854775808 out of range after truncating to Microsecond"
-        );
-    }
-
     fn assert_fine_granularity_underflow<T: ArrowTimestampType>(
         array: PrimitiveArray<T>,
         granularity: DatePart,
