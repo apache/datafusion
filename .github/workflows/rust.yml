@@ -395,6 +395,21 @@ jobs:
         with:
           save-if: false # set in linux-test
           shared-key: "amd-ci"
+      # The storage integration tests start MinIO containers. Pulling the image
+      # once up front keeps the pull off the critical path of the tests, which
+      # would otherwise pull it several times concurrently and occasionally fail
+      # with transient Docker transport errors. The tests retry the pull
+      # themselves, so a failure here is only a warning.
+      #
+      # MINIO_IMAGE must match the image used by the `minio` module of the
+      # `testcontainers-modules` crate. The `minio_image_matches_ci_prepull`
+      # test in `datafusion-cli/tests/cli_integration.rs` fails if it drifts.
+      - name: Pre-pull MinIO image
+        env:
+          MINIO_IMAGE: minio/minio:RELEASE.2025-02-28T09-55-16Z
+        run: |
+          ci/scripts/retry timeout 120 docker pull "$MINIO_IMAGE" \
+            || echo "::warning::Could not pre-pull $MINIO_IMAGE, the tests will pull it themselves"
       - name: Run tests (excluding doctests)
         env:
           RUST_BACKTRACE: 1
