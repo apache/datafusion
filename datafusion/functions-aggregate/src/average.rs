@@ -1666,7 +1666,7 @@ mod tests {
     fn avg_groups_size_uses_sum_native_type() -> Result<()> {
         let input_type = DataType::Decimal128(26, 0);
         let sum_type = avg_sum_data_type(&input_type);
-        let return_type = Avg::new().return_type(&[input_type.clone()])?;
+        let return_type = Avg::new().return_type(std::slice::from_ref(&input_type))?;
         assert_eq!(sum_type, DataType::Decimal256(76, 0));
         assert_eq!(return_type, DataType::Decimal128(30, 4));
         let mut accumulator = AvgGroupsAccumulator::<
