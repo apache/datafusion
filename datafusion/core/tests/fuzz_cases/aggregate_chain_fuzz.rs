@@ -17,6 +17,12 @@
 
 //! Fuzz test that runs every valid `AggregateExec` chain over the same data
 //! and asserts identical results.
+//!
+//! The case space is the cross product of independent axes: the operator
+//! [`Chain`], the group [`Keys`] (one per `GroupValues` implementation), the
+//! [`Aggregates`], the source [`Order`], the group [`Cardinality`], the
+//! [`Memory`] budget and whether the skip-partial probe may fire. Only the
+//! combinations that cannot be planned are left out, see [`all_shapes`].
 
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -77,14 +83,15 @@ const BATCH_SIZE: usize = 64;
 /// very high cardinality must still exceed it.
 const LIMITED_POOL_BYTES: usize = 4 * 1024 * 1024;
 
-/// How the source data is ordered relative to the group keys `(k1, k2)`.
+/// How the source data is ordered relative to the group keys.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Order {
     /// Not ordered. Aggregates see `InputOrderMode::Linear`.
     Unordered,
-    /// Sorted by `k1` only. Aggregates see `InputOrderMode::PartiallySorted([0])`.
+    /// Sorted by the first key only. Aggregates see
+    /// `InputOrderMode::PartiallySorted([0])`.
     SortedByFirstKey,
-    /// Sorted by `k1, k2`. Aggregates see `InputOrderMode::Sorted`.
+    /// Sorted by all keys. Aggregates see `InputOrderMode::Sorted`.
     SortedByAllKeys,
 }
 
@@ -143,61 +150,101 @@ enum Operator {
     SortPreservingMerge,
 }
 
-/// The logical query a chain computes.
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Query {
-    /// `GROUP BY k1, k2` with count, count distinct, sum, avg, min, max.
-    /// Two primitive keys, handled by `GroupValuesColumn`.
-    Grouped,
-    /// The same aggregates without `GROUP BY`.
-    NoGrouping,
-    /// `GROUP BY k1, k2` with no aggregate expressions, as `SELECT DISTINCT`
-    /// plans: the accumulator-free path of every stream.
-    Distinct,
-    /// `GROUP BY k1` with `max(v)` only, the shape the TopK stream supports.
-    /// Chains using `Operator::TopK` set a limit larger than any possible
-    /// group count, so the result must still be the complete aggregate.
-    TopK,
-    /// `GROUP BY b` (Boolean), handled by `GroupValuesBoolean`.
-    BooleanKey,
-    /// `GROUP BY s` (Utf8), handled by `GroupValuesBytes`.
-    BytesKey,
-    /// `GROUP BY sv` (Utf8View), handled by `GroupValuesBytesView`.
-    BytesViewKey,
-    /// `GROUP BY p` (Int64 with as many distinct values as groups), handled
-    /// by `GroupValuesPrimitive`.
-    PrimitiveKey,
-    /// `GROUP BY b, s, sv, p`, handled by `GroupValuesColumn` with mixed
-    /// column types.
-    MixedKeys,
-    /// `GROUP BY st` (Struct of a List<Int64> and an Int64), which no
-    /// specialized implementation supports, so it falls back to the row format
+/// The `GROUP BY` keys. Every key type has its own `GroupValues`
+/// implementation, so each is a value of this axis.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Keys {
+    /// No `GROUP BY`.
+    None,
+    /// `k1, k2` (two Int64), handled by `GroupValuesColumn`.
+    TwoInts,
+    /// `b` (Boolean), handled by `GroupValuesBoolean`.
+    Boolean,
+    /// `s` (Utf8), handled by `GroupValuesBytes`.
+    Bytes,
+    /// `sv` (Utf8View), handled by `GroupValuesBytesView`.
+    BytesView,
+    /// `p` (Int64 with as many distinct values as groups), handled by
+    /// `GroupValuesPrimitive`.
+    Primitive,
+    /// `b, s, sv, p`, handled by `GroupValuesColumn` with mixed column types.
+    Mixed,
+    /// `st` (Struct of a List<Int64> and an Int64), which no specialized
+    /// implementation supports, so it falls back to the row format
     /// `GroupValuesRows`.
-    StructKey,
+    Struct,
 }
 
-impl Query {
-    /// Group key columns, in `GROUP BY` order.
-    fn keys(self) -> &'static [&'static str] {
+impl Keys {
+    const ALL: [Self; 8] = [
+        Self::None,
+        Self::TwoInts,
+        Self::Boolean,
+        Self::Bytes,
+        Self::BytesView,
+        Self::Primitive,
+        Self::Mixed,
+        Self::Struct,
+    ];
+
+    /// Key columns, in `GROUP BY` order.
+    fn columns(self) -> &'static [&'static str] {
         match self {
-            Query::Grouped => &["k1", "k2"],
-            Query::NoGrouping => &[],
-            Query::Distinct => &["k1", "k2"],
-            Query::TopK => &["k1"],
-            Query::BooleanKey => &["b"],
-            Query::BytesKey => &["s"],
-            Query::BytesViewKey => &["sv"],
-            Query::PrimitiveKey => &["p"],
-            Query::MixedKeys => &["b", "s", "sv", "p"],
-            Query::StructKey => &["st"],
+            Keys::None => &[],
+            Keys::TwoInts => &["k1", "k2"],
+            Keys::Boolean => &["b"],
+            Keys::Bytes => &["s"],
+            Keys::BytesView => &["sv"],
+            Keys::Primitive => &["p"],
+            Keys::Mixed => &["b", "s", "sv", "p"],
+            Keys::Struct => &["st"],
         }
     }
 
     /// Whether the source can be sorted by the keys. Struct columns cannot be
-    /// sorted by the arrow sort kernels, so that query only runs unordered.
+    /// sorted by the arrow sort kernels, so those keys only run unordered.
     fn sortable(self) -> bool {
-        self != Query::StructKey
+        self != Keys::Struct
     }
+
+    /// Whether the number of groups is `Cardinality::groups()`. Every key
+    /// column has one distinct value per group except the Boolean one.
+    fn tracks_cardinality(self) -> bool {
+        !matches!(self, Keys::None | Keys::Boolean)
+    }
+
+    /// Whether `GroupedTopKAggregateStream` supports these keys: exactly one
+    /// primitive or string column.
+    fn top_k_supported(self) -> bool {
+        matches!(self, Keys::Bytes | Keys::BytesView | Keys::Primitive)
+    }
+}
+
+/// The aggregate expressions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Aggregates {
+    /// count, count distinct, sum, avg, min, max: non-trivial partial state so
+    /// the Partial, PartialReduce and Final stages are actually exercised.
+    /// `avg` (two-field state) and `count distinct` (set state) matter most.
+    All,
+    /// No aggregate expressions, as `SELECT DISTINCT` plans: the
+    /// accumulator-free path of every stream.
+    None,
+    /// `max(v)` only, the one aggregate the TopK stream supports. Chains using
+    /// `Operator::TopK` set a limit larger than any possible group count, so
+    /// the result must still be the complete aggregate.
+    Max,
+}
+
+impl Aggregates {
+    const ALL: [Self; 3] = [Self::All, Self::None, Self::Max];
+}
+
+/// The logical query a chain computes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Query {
+    keys: Keys,
+    aggregates: Aggregates,
 }
 
 /// Larger than any possible number of groups, so TopK keeps every group.
@@ -215,46 +262,42 @@ struct CaseParams {
     skip_partial_enabled: bool,
 }
 
-/// A plan shape.
+/// An operator chain, independent of the query it computes.
 #[derive(Debug)]
-struct Shape {
+struct Chain {
     name: &'static str,
     operators: &'static [Operator],
     /// Source partition count.
     source_partitions: usize,
-    query: Query,
 }
 
-const fn shape(
+const fn chain(
     name: &'static str,
     operators: &'static [Operator],
     source_partitions: usize,
-    query: Query,
-) -> Shape {
-    Shape {
+) -> Chain {
+    Chain {
         name,
         operators,
         source_partitions,
-        query,
     }
 }
 
-// Test cases
-const SHAPES: &[Shape] = &[
-    shape("single", &[Aggregate(Single)], 1, Query::Grouped),
-    shape(
+/// Every chain the planner can produce. Each runs over every query it can be
+/// planned for, see [`all_shapes`].
+const CHAINS: &[Chain] = &[
+    chain("single", &[Aggregate(Single)], 1),
+    chain(
         "single_partitioned",
         &[HashRepartition, Aggregate(SinglePartitioned)],
         PARTITIONS,
-        Query::Grouped,
     ),
-    shape(
+    chain(
         "single_partitioned_order_preserving",
         &[OrderPreservingHashRepartition, Aggregate(SinglePartitioned)],
         PARTITIONS,
-        Query::Grouped,
     ),
-    shape(
+    chain(
         "partial_repartition_final",
         &[
             Aggregate(Partial),
@@ -262,15 +305,13 @@ const SHAPES: &[Shape] = &[
             Aggregate(FinalPartitioned),
         ],
         PARTITIONS,
-        Query::Grouped,
     ),
-    shape(
+    chain(
         "partial_coalesce_final",
         &[Aggregate(Partial), CoalescePartitions, Aggregate(Final)],
         PARTITIONS,
-        Query::Grouped,
     ),
-    shape(
+    chain(
         "partial_order_preserving_repartition_final",
         &[
             Aggregate(Partial),
@@ -278,21 +319,18 @@ const SHAPES: &[Shape] = &[
             Aggregate(FinalPartitioned),
         ],
         PARTITIONS,
-        Query::Grouped,
     ),
-    shape(
+    chain(
         "partial_sort_preserving_merge_final",
         &[Aggregate(Partial), SortPreservingMerge, Aggregate(Final)],
         PARTITIONS,
-        Query::Grouped,
     ),
-    shape(
+    chain(
         "partial_final_single_partition",
         &[Aggregate(Partial), Aggregate(Final)],
         1,
-        Query::Grouped,
     ),
-    shape(
+    chain(
         "partial_repartition_reduce_repartition_final",
         &[
             Aggregate(Partial),
@@ -302,9 +340,8 @@ const SHAPES: &[Shape] = &[
             Aggregate(FinalPartitioned),
         ],
         PARTITIONS,
-        Query::Grouped,
     ),
-    shape(
+    chain(
         "partial_repartition_reduce_coalesce_final",
         &[
             Aggregate(Partial),
@@ -314,9 +351,19 @@ const SHAPES: &[Shape] = &[
             Aggregate(Final),
         ],
         PARTITIONS,
-        Query::Grouped,
     ),
-    shape(
+    chain(
+        "partial_coalesce_reduce_coalesce_final",
+        &[
+            Aggregate(Partial),
+            CoalescePartitions,
+            Aggregate(PartialReduce),
+            CoalescePartitions,
+            Aggregate(Final),
+        ],
+        PARTITIONS,
+    ),
+    chain(
         "partial_local_reduce_repartition_final",
         &[
             Aggregate(Partial),
@@ -325,10 +372,9 @@ const SHAPES: &[Shape] = &[
             Aggregate(FinalPartitioned),
         ],
         PARTITIONS,
-        Query::Grouped,
     ),
     // ordered PartialReduce has no dedicated stream, lands on the fallback
-    shape(
+    chain(
         "partial_reduce_final_order_preserving",
         &[
             Aggregate(Partial),
@@ -338,208 +384,82 @@ const SHAPES: &[Shape] = &[
             Aggregate(FinalPartitioned),
         ],
         PARTITIONS,
-        Query::Grouped,
     ),
-    shape(
-        "no_grouping_single",
-        &[Aggregate(Single)],
-        1,
-        Query::NoGrouping,
-    ),
-    shape("distinct_single", &[Aggregate(Single)], 1, Query::Distinct),
-    shape(
-        "distinct_partial_repartition_final",
-        &[
-            Aggregate(Partial),
-            HashRepartition,
-            Aggregate(FinalPartitioned),
-        ],
-        PARTITIONS,
-        Query::Distinct,
-    ),
-    shape(
-        "distinct_partial_repartition_reduce_repartition_final",
-        &[
-            Aggregate(Partial),
-            HashRepartition,
-            Aggregate(PartialReduce),
-            HashRepartition,
-            Aggregate(FinalPartitioned),
-        ],
-        PARTITIONS,
-        Query::Distinct,
-    ),
-    // TopK: same query without a limit is the reference for the TopK chains
-    shape("top_k_query_single", &[Aggregate(Single)], 1, Query::TopK),
-    shape("top_k_single", &[TopK(Single)], 1, Query::TopK),
+    chain("top_k_single", &[TopK(Single)], 1),
     // planner shape: the limit lands on the aggregate under the sort
-    shape(
+    chain(
         "top_k_partial_repartition_final",
         &[Aggregate(Partial), HashRepartition, TopK(FinalPartitioned)],
         PARTITIONS,
-        Query::TopK,
     ),
-    shape(
+    chain(
         "top_k_partial_coalesce_final",
         &[Aggregate(Partial), CoalescePartitions, TopK(Final)],
         PARTITIONS,
-        Query::TopK,
     ),
-    shape(
+    chain(
         "top_k_both_stages",
         &[TopK(Partial), HashRepartition, TopK(FinalPartitioned)],
         PARTITIONS,
-        Query::TopK,
-    ),
-    // group key types: single stage and the default two-stage planner shape
-    shape(
-        "boolean_key_single",
-        &[Aggregate(Single)],
-        1,
-        Query::BooleanKey,
-    ),
-    shape(
-        "boolean_key_partial_repartition_final",
-        &[
-            Aggregate(Partial),
-            HashRepartition,
-            Aggregate(FinalPartitioned),
-        ],
-        PARTITIONS,
-        Query::BooleanKey,
-    ),
-    shape("bytes_key_single", &[Aggregate(Single)], 1, Query::BytesKey),
-    shape(
-        "bytes_key_partial_repartition_final",
-        &[
-            Aggregate(Partial),
-            HashRepartition,
-            Aggregate(FinalPartitioned),
-        ],
-        PARTITIONS,
-        Query::BytesKey,
-    ),
-    shape(
-        "bytes_view_key_single",
-        &[Aggregate(Single)],
-        1,
-        Query::BytesViewKey,
-    ),
-    shape(
-        "bytes_view_key_partial_repartition_final",
-        &[
-            Aggregate(Partial),
-            HashRepartition,
-            Aggregate(FinalPartitioned),
-        ],
-        PARTITIONS,
-        Query::BytesViewKey,
-    ),
-    shape(
-        "primitive_key_single",
-        &[Aggregate(Single)],
-        1,
-        Query::PrimitiveKey,
-    ),
-    shape(
-        "primitive_key_partial_repartition_final",
-        &[
-            Aggregate(Partial),
-            HashRepartition,
-            Aggregate(FinalPartitioned),
-        ],
-        PARTITIONS,
-        Query::PrimitiveKey,
-    ),
-    shape(
-        "mixed_keys_single",
-        &[Aggregate(Single)],
-        1,
-        Query::MixedKeys,
-    ),
-    shape(
-        "mixed_keys_partial_repartition_final",
-        &[
-            Aggregate(Partial),
-            HashRepartition,
-            Aggregate(FinalPartitioned),
-        ],
-        PARTITIONS,
-        Query::MixedKeys,
-    ),
-    // ordered multi-column group values
-    shape(
-        "mixed_keys_partial_order_preserving_repartition_final",
-        &[
-            Aggregate(Partial),
-            OrderPreservingHashRepartition,
-            Aggregate(FinalPartitioned),
-        ],
-        PARTITIONS,
-        Query::MixedKeys,
-    ),
-    shape(
-        "struct_key_single",
-        &[Aggregate(Single)],
-        1,
-        Query::StructKey,
-    ),
-    shape(
-        "struct_key_partial_repartition_final",
-        &[
-            Aggregate(Partial),
-            HashRepartition,
-            Aggregate(FinalPartitioned),
-        ],
-        PARTITIONS,
-        Query::StructKey,
-    ),
-    shape(
-        "no_grouping_partial_coalesce_final",
-        &[Aggregate(Partial), CoalescePartitions, Aggregate(Final)],
-        PARTITIONS,
-        Query::NoGrouping,
-    ),
-    shape(
-        "no_grouping_partial_reduce_final",
-        &[
-            Aggregate(Partial),
-            CoalescePartitions,
-            Aggregate(PartialReduce),
-            CoalescePartitions,
-            Aggregate(Final),
-        ],
-        PARTITIONS,
-        Query::NoGrouping,
-    ),
-    shape(
-        "no_grouping_partial_final_single_partition",
-        &[Aggregate(Partial), Aggregate(Final)],
-        1,
-        Query::NoGrouping,
     ),
 ];
 
-fn shape_by_name(name: &str) -> &'static Shape {
-    SHAPES.iter().find(|shape| shape.name == name).unwrap()
+fn chain_by_name(name: &str) -> &'static Chain {
+    CHAINS.iter().find(|chain| chain.name == name).unwrap()
+}
+
+impl Chain {
+    /// Whether the chain hashes or sorts on the group keys, so it cannot run
+    /// without any.
+    fn needs_keys(&self) -> bool {
+        self.operators.iter().any(|operator| {
+            matches!(
+                operator,
+                HashRepartition
+                    | OrderPreservingHashRepartition
+                    | SortPreservingMerge
+                    | TopK(_)
+            )
+        })
+    }
+
+    fn is_top_k(&self) -> bool {
+        self.operators
+            .iter()
+            .any(|operator| matches!(operator, TopK(_)))
+    }
+}
+
+/// A plan shape: a chain computing a query.
+#[derive(Clone, Copy, Debug)]
+struct Shape {
+    chain: &'static Chain,
+    query: Query,
 }
 
 impl Shape {
+    fn name(&self) -> String {
+        format!(
+            "{} {:?} {:?}",
+            self.chain.name, self.query.keys, self.query.aggregates
+        )
+    }
+
     /// Source orders that make sense for this shape. Order-preserving shuffles
     /// need an ordering to preserve; no-grouping chains ignore ordering.
     fn orders(&self) -> Vec<Order> {
-        let needs_ordered_input = self.operators.iter().any(|operator| {
+        let needs_ordered_input = self.chain.operators.iter().any(|operator| {
             matches!(
                 operator,
                 OrderPreservingHashRepartition | SortPreservingMerge
             )
         });
-        let keys = self.query.keys();
+        let keys = self.query.keys.columns();
         let mut orders = vec![];
         if !needs_ordered_input {
             orders.push(Order::Unordered);
         }
-        if self.query.sortable() && !keys.is_empty() {
+        if self.query.keys.sortable() && !keys.is_empty() {
             // With a single key, sorting by the first key is already sorting
             // by all keys.
             if keys.len() > 1 {
@@ -549,23 +469,15 @@ impl Shape {
         }
         orders
     }
-}
 
-#[derive(Clone, Debug)]
-struct Case {
-    shape: &'static Shape,
-    params: CaseParams,
-}
-
-impl Shape {
     /// Whether some `Partial` stage of this shape runs the skip-partial probe
     /// for the given source order: grouped, not TopK, and Linear input.
     fn has_skip_partial_candidate(&self, order: Order) -> bool {
-        if self.query == Query::NoGrouping {
+        if self.query.keys == Keys::None {
             return false;
         }
         let mut current = order;
-        for operator in self.operators {
+        for operator in self.chain.operators {
             match operator {
                 HashRepartition | CoalescePartitions => current = Order::Unordered,
                 Aggregate(Partial) if current == Order::Unordered => return true,
@@ -576,6 +488,44 @@ impl Shape {
     }
 }
 
+/// Every chain over every query it can be planned for.
+///
+/// - Without keys a chain can neither hash nor sort, and `max` alone is a
+///   subset of the full aggregate list, so only that list runs.
+/// - The TopK stream needs one primitive or string key with either a single
+///   `max` or no aggregates at all (the `DISTINCT ... LIMIT` form).
+/// - Every other chain runs the full aggregate list and the accumulator-free
+///   form; `max` alone adds nothing there.
+fn all_shapes() -> Vec<Shape> {
+    let mut shapes = vec![];
+    for chain in CHAINS {
+        for keys in Keys::ALL {
+            for aggregates in Aggregates::ALL {
+                let valid = if keys == Keys::None {
+                    !chain.needs_keys() && aggregates == Aggregates::All
+                } else if chain.is_top_k() {
+                    keys.top_k_supported() && aggregates != Aggregates::All
+                } else {
+                    aggregates != Aggregates::Max
+                };
+                if valid {
+                    shapes.push(Shape {
+                        chain,
+                        query: Query { keys, aggregates },
+                    });
+                }
+            }
+        }
+    }
+    shapes
+}
+
+#[derive(Clone, Debug)]
+struct Case {
+    shape: Shape,
+    params: CaseParams,
+}
+
 fn all_cases() -> Vec<Case> {
     // `AGGREGATE_CHAIN_SHAPES=a,b` restricts the run to shapes whose name
     // contains one of the given substrings, to reproduce or bisect quickly.
@@ -583,11 +533,11 @@ fn all_cases() -> Vec<Case> {
         .map(|value| value.split(',').map(str::to_string).collect())
         .unwrap_or_default();
     let mut cases = vec![];
-    for shape in SHAPES.iter().filter(|shape| {
+    for shape in all_shapes().into_iter().filter(|shape| {
         shape_filter.is_empty()
             || shape_filter
                 .iter()
-                .any(|needle| shape.name.contains(needle))
+                .any(|needle| shape.name().contains(needle))
     }) {
         for order in shape.orders() {
             let skip_partial_variants: &[bool] =
@@ -735,12 +685,12 @@ fn generate_rows(cardinality: Cardinality, seed: u64) -> RecordBatch {
 /// Every partition individually satisfies the ordering.
 fn arrange(
     rows: &RecordBatch,
-    query: Query,
+    keys: Keys,
     order: Order,
     partitions: usize,
 ) -> Vec<Vec<RecordBatch>> {
     let schema = rows.schema();
-    let per_partition: Vec<RecordBatch> = match source_ordering(&schema, query, order) {
+    let per_partition: Vec<RecordBatch> = match source_ordering(&schema, keys, order) {
         None => {
             let mut permutation: Vec<u32> = (0..rows.num_rows() as u32).collect();
             permutation.shuffle(&mut StdRng::seed_from_u64(0));
@@ -821,8 +771,8 @@ fn sort_expr(schema: &Schema, column: &str) -> PhysicalSortExpr {
 }
 
 /// The ordering the source declares for `order`.
-fn source_ordering(schema: &Schema, query: Query, order: Order) -> Option<LexOrdering> {
-    let keys = query.keys();
+fn source_ordering(schema: &Schema, keys: Keys, order: Order) -> Option<LexOrdering> {
+    let keys = keys.columns();
     let sort_columns: &[&str] = match order {
         Order::Unordered => return None,
         Order::SortedByFirstKey => &keys[..1],
@@ -833,13 +783,13 @@ fn source_ordering(schema: &Schema, query: Query, order: Order) -> Option<LexOrd
 
 fn source(
     partitions: &[Vec<RecordBatch>],
-    query: Query,
+    keys: Keys,
     order: Order,
 ) -> Arc<dyn ExecutionPlan> {
     let schema = schema();
     let mut memory_source =
         MemorySourceConfig::try_new(partitions, Arc::clone(&schema), None).unwrap();
-    if let Some(ordering) = source_ordering(&schema, query, order) {
+    if let Some(ordering) = source_ordering(&schema, keys, order) {
         memory_source = memory_source
             .try_with_sort_information(vec![ordering])
             .unwrap();
@@ -847,19 +797,15 @@ fn source(
     DataSourceExec::from_data_source(memory_source)
 }
 
-fn group_by(schema: &Schema, query: Query) -> PhysicalGroupBy {
+fn group_by(schema: &Schema, keys: Keys) -> PhysicalGroupBy {
     PhysicalGroupBy::new_single(
-        query
-            .keys()
+        keys.columns()
             .iter()
             .map(|key| (col(key, schema).unwrap(), key.to_string()))
             .collect(),
     )
 }
 
-/// Aggregates with non-trivial partial state so the Partial, PartialReduce and
-/// Final stages are actually exercised. `avg` (two-field state) and
-/// `count distinct` (set state) matter most.
 fn aggregates(schema: &SchemaRef, query: Query) -> Vec<Arc<AggregateFunctionExpr>> {
     let value_column = || vec![col("v", schema).unwrap()];
     let build = |builder: AggregateExprBuilder, alias: &str| {
@@ -871,10 +817,10 @@ fn aggregates(schema: &SchemaRef, query: Query) -> Vec<Arc<AggregateFunctionExpr
                 .unwrap(),
         )
     };
-    if query == Query::Distinct {
+    if query.aggregates == Aggregates::None {
         return vec![];
     }
-    if query == Query::TopK {
+    if query.aggregates == Aggregates::Max {
         // TopK supports exactly one min/max aggregate over a non-nullable input
         return vec![build(
             AggregateExprBuilder::new(max_udaf(), value_column()),
@@ -911,11 +857,11 @@ fn aggregates(schema: &SchemaRef, query: Query) -> Vec<Arc<AggregateFunctionExpr
 fn build_plan(shape: &Shape, input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
     let input_schema = schema();
     let mut plan = input;
-    let mut group_by = group_by(&input_schema, shape.query);
+    let mut group_by = group_by(&input_schema, shape.query.keys);
     let mut aggregates = aggregates(&input_schema, shape.query);
     let mut hash_keys: Vec<Arc<dyn PhysicalExpr>> = group_by.input_exprs();
 
-    for operator in shape.operators {
+    for operator in shape.chain.operators {
         plan = match operator {
             Aggregate(mode) | TopK(mode) => {
                 let limit_options = matches!(operator, TopK(_))
@@ -1043,7 +989,7 @@ fn as_aggregate(node: &Arc<dyn ExecutionPlan>) -> &AggregateExec {
 fn expected_orders(shape: &Shape, source_order: Order) -> Vec<Order> {
     let mut current = source_order;
     let mut expected = vec![];
-    for operator in shape.operators {
+    for operator in shape.chain.operators {
         match operator {
             HashRepartition | CoalescePartitions => current = Order::Unordered,
             // `AggregateExec::try_new` forces `InputOrderMode::Linear` for
@@ -1064,7 +1010,7 @@ fn expected_orders(shape: &Shape, source_order: Order) -> Vec<Order> {
 fn order_matches(query: Query, expected: Order, actual: &InputOrderMode) -> bool {
     // With a single group key, sorting by the first key already covers every
     // group key.
-    let single_key = query.keys().len() == 1;
+    let single_key = query.keys.columns().len() == 1;
     match (expected, actual) {
         (Order::Unordered, InputOrderMode::Linear) => true,
         (Order::SortedByFirstKey, InputOrderMode::PartiallySorted(indices)) => {
@@ -1100,11 +1046,11 @@ fn runs_skip_partial_probe(aggregate: &AggregateExec) -> bool {
 }
 
 fn check_plan_shape(case: &Case, plan: &Arc<dyn ExecutionPlan>) {
-    if case.shape.query == Query::NoGrouping {
+    if case.shape.query.keys == Keys::None {
         return;
     }
     let nodes = aggregate_nodes(plan);
-    let expected = expected_orders(case.shape, case.params.order);
+    let expected = expected_orders(&case.shape, case.params.order);
     assert_eq!(nodes.len(), expected.len(), "{case:?}");
     for (node, expected_order) in nodes.iter().zip(expected) {
         let aggregate = as_aggregate(node);
@@ -1152,11 +1098,11 @@ fn check_metrics(case: &Case, plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
             }
         }
 
-        // Only the two-key query has as many groups as `cardinality` says;
-        // the TopK query groups by `k1` alone and stays far below the ratio.
+        // Boolean keys have two groups whatever `cardinality` says, far
+        // below the ratio.
         if case.params.memory == Memory::Unlimited
             && case.params.cardinality == Cardinality::VeryHigh
-            && case.shape.query == Query::Grouped
+            && case.shape.query.keys.tracks_cardinality()
             && case.params.skip_partial_enabled
             && runs_skip_partial_probe(aggregate)
         {
@@ -1197,13 +1143,13 @@ async fn run_case(case: Case, rows: Arc<RecordBatch>) -> Outcome {
 async fn run_case_inner(case: &Case, rows: Arc<RecordBatch>) -> Outcome {
     let partitions = arrange(
         &rows,
-        case.shape.query,
+        case.shape.query.keys,
         case.params.order,
-        case.shape.source_partitions,
+        case.shape.chain.source_partitions,
     );
     let plan = build_plan(
-        case.shape,
-        source(&partitions, case.shape.query, case.params.order),
+        &case.shape,
+        source(&partitions, case.shape.query.keys, case.params.order),
     );
     check_plan_shape(case, &plan);
 
@@ -1233,19 +1179,17 @@ async fn run_case_inner(case: &Case, rows: Arc<RecordBatch>) -> Outcome {
     }
 }
 
-/// Reference result: the single-stage shape of `query` without a limit, one
-/// partition, unordered input, unlimited memory.
+/// Reference result: `query` computed by the `single` chain, one partition,
+/// unordered input, unlimited memory.
 async fn reference(
     query: Query,
     rows: Arc<RecordBatch>,
     cardinality: Cardinality,
 ) -> String {
-    let shape = SHAPES
-        .iter()
-        .find(|shape| {
-            shape.query == query && matches!(shape.operators, [Aggregate(Single)])
-        })
-        .unwrap();
+    let shape = Shape {
+        chain: chain_by_name("single"),
+        query,
+    };
     let outcome = run_case(
         Case {
             shape,
@@ -1276,7 +1220,7 @@ async fn aggregate_chain_fuzz() {
     for cardinality in Cardinality::ALL {
         let rows = Arc::new(generate_rows(cardinality, seed));
         let mut expected_by_query: Vec<(Query, String)> = Vec::new();
-        for shape in SHAPES {
+        for shape in all_shapes() {
             if expected_by_query
                 .iter()
                 .any(|(query, _)| *query == shape.query)
@@ -1379,7 +1323,7 @@ fn print_cases(cardinality: Cardinality, outcome: &str, cases: &[(Case, Vec<Stri
             };
             format!(
                 "  {:<45} {:<17} memory={:<9}{skip_partial}{spilled}",
-                case.shape.name,
+                case.shape.name(),
                 format!("{:?}", case.params.order),
                 format!("{:?}", case.params.memory),
             )
@@ -1396,13 +1340,18 @@ fn print_cases(cardinality: Cardinality, outcome: &str, cases: &[(Case, Vec<Stri
 /// Reproduces one failing cell from its seed.
 #[expect(dead_code)]
 async fn run_single_case(
-    shape_name: &str,
+    chain_name: &str,
+    keys: Keys,
+    aggregates: Aggregates,
     order: Order,
     cardinality: Cardinality,
     memory: Memory,
     seed: u64,
 ) -> Result<()> {
-    let shape = shape_by_name(shape_name);
+    let shape = Shape {
+        chain: chain_by_name(chain_name),
+        query: Query { keys, aggregates },
+    };
     let rows = Arc::new(generate_rows(cardinality, seed));
     let expected = reference(shape.query, Arc::clone(&rows), cardinality).await;
     let actual = run_case(
