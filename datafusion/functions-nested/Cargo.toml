@@ -76,6 +76,10 @@ name = "array_concat"
 
 [[bench]]
 harness = false
+name = "array_length"
+
+[[bench]]
+harness = false
 name = "array_min_max"
 
 [[bench]]

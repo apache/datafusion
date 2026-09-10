@@ -964,13 +964,13 @@ config_namespace! {
         /// the new schema verification step.
         pub skip_physical_aggregate_schema_check: bool, default = false
 
-        /// Temporary switch for aggregate stream implementations that are being
-        /// migrated from `GroupedHashAggregateStream`.
+        /// Whether aggregation uses the implementation from the major refactor
+        /// completed in the 56.0.0 release. When set to `false`, aggregation
+        /// falls back to the implementation used before 55.0.0.
         ///
-        /// When set to true, DataFusion tries the migrated implementations when
-        /// their preconditions are satisfied. When set to false, grouped
-        /// aggregation falls back to `GroupedHashAggregateStream`. This option
-        /// will be removed after the migration is finished.
+        /// The fallback exists only as a workaround for bugs in the new
+        /// implementation and will be removed, together with this option, after
+        /// the 56.0.0 release.
         ///
         /// See <https://github.com/apache/datafusion/issues/22710> for details.
         pub enable_migration_aggregate: bool, default = true
@@ -1392,12 +1392,14 @@ config_namespace! {
         /// rewrite; other predicates and Bloom-filter pruning remain available.
         ///
         /// Within the cap, nonempty lists of at most 20 values use the existing
-        /// per-value rewrite. Larger literal string lists on a string column use
-        /// a compact representation, for both `IN` and `NOT IN`, including lists
-        /// with NULL members. `NOT IN` with NULL and all-NULL `IN` lists cannot
-        /// match any rows. Other lists retain the existing per-value rewrite, so
-        /// raising the cap can make those predicates expensive to build and
-        /// evaluate.
+        /// per-value rewrite. Larger literal lists use a compact representation
+        /// when the column type is string, variable-length binary, integer,
+        /// decimal, date, time, timestamp, or duration. This applies to both `IN`
+        /// and `NOT IN`, including lists with NULL members. `NOT IN` with NULL and
+        /// all-NULL `IN` lists cannot match any rows. Compact lists containing NULL
+        /// do not use the fully-matched-row-group optimization. Floating-point and
+        /// other lists retain the existing per-value rewrite, so raising the cap
+        /// can make those predicates expensive to build and evaluate.
         ///
         /// Defaults to 20.
         pub max_in_list_size: usize, default = 20

@@ -1787,7 +1787,7 @@ impl LogicalPlan {
     /// updated according to the new parameters.
     ///
     /// Unlike `recompute_schema()`, this method rebuilds VALUES plans entirely to properly infer
-    /// types types from literal values after placeholder substitution.
+    /// types from literal values after placeholder substitution.
     fn update_schema_data_type(self) -> Result<LogicalPlan> {
         match self {
             // Build `LogicalPlan::Values` from the values for type inference.
@@ -4462,6 +4462,25 @@ impl AsOfMatch {
     }
 }
 
+impl TryFrom<Expr> for AsOfMatch {
+    type Error = DataFusionError;
+
+    fn try_from(condition: Expr) -> Result<Self> {
+        let Expr::BinaryExpr(BinaryExpr { left, op, right }) = condition else {
+            return plan_err!("ASOF MATCH_CONDITION must be a single comparison");
+        };
+        if !matches!(
+            op,
+            Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq
+        ) {
+            return plan_err!(
+                "ASOF MATCH_CONDITION requires <, <=, >, or >=, found {op}"
+            );
+        }
+        Ok(Self::new(*left, op, *right))
+    }
+}
+
 impl Display for AsOfMatch {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{} {} {}", self.left, self.op, self.right)
@@ -6179,10 +6198,10 @@ mod tests {
         assert_eq!(cross_join.min_rows(), 2);
 
         let asof_join = LogicalPlanBuilder::from(two_rows.clone())
-            .asof_join(
+            .asof_join_on(
                 one_row.clone(),
-                vec![],
-                AsOfMatch::new(col("l.column1"), Operator::GtEq, col("r.column1")),
+                None,
+                col("l.column1").gt_eq(col("r.column1")),
             )?
             .build()?;
         assert_eq!(asof_join.min_rows(), 2);

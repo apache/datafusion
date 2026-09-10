@@ -16,11 +16,6 @@
 // under the License.
 
 //! Single-stage hash aggregation stream implementation.
-//!
-//! This stream is part of the incremental migration from
-//! [`crate::aggregates::grouped_hash_stream::GroupedHashAggregateStream`].
-//!
-//! See issue for details: <https://github.com/apache/datafusion/issues/22710>
 
 use std::ops::ControlFlow;
 use std::sync::Arc;
