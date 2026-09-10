@@ -25,7 +25,6 @@ pub mod prim_op;
 
 use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
-use std::time::Instant;
 
 use arrow::array::new_empty_array;
 use arrow::{
@@ -34,7 +33,7 @@ use arrow::{
     compute::take_arrays,
     datatypes::UInt32Type,
 };
-use datafusion_common::{Result, ScalarValue, arrow_datafusion_err};
+use datafusion_common::{Result, ScalarValue, arrow_datafusion_err, instant::Instant};
 use datafusion_expr_common::accumulator::{Accumulator, AggregateMetric};
 use datafusion_expr_common::groups_accumulator::{
     EmitTo, GroupSelection, GroupsAccumulator,
@@ -256,7 +255,7 @@ impl GroupsAccumulatorAdapter {
         let iter = groups_with_rows.iter().zip(offsets.windows(2));
 
         let grouped_update_metric = time_grouped_update
-            .then(|| self.grouped_update_metric.as_ref().cloned())
+            .then(|| self.grouped_update_metric.clone())
             .flatten();
         let start = grouped_update_metric.as_ref().map(|_| Instant::now());
 
