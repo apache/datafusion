@@ -3132,6 +3132,50 @@ mod tests {
     }
 
     #[test]
+    fn plan_builder_filter_rejects_window_functions() -> Result<()> {
+        // https://github.com/apache/datafusion/issues/4610
+        let sum_over = |arg| {
+            Expr::from(expr::WindowFunction::new(
+                crate::WindowFunctionDefinition::AggregateUDF(
+                    crate::test::function_stub::sum_udaf(),
+                ),
+                vec![arg],
+            ))
+        };
+        let scan = || table_scan(Some("employee_csv"), &employee_schema(), Some(vec![4]));
+
+        let err = scan()?
+            .filter(sum_over(col("salary")).gt(lit(10)))
+            .expect_err("window functions in a filter should be rejected");
+        assert_snapshot!(
+            err.strip_backtrace(),
+            @"Error during planning: Window function calls are not allowed in filter predicates: 'sum(employee_csv.salary) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+        );
+
+        let err = scan()?
+            .having(sum_over(col("salary")).gt(lit(10)))
+            .expect_err("window functions in a having should be rejected");
+        assert_snapshot!(
+            err.strip_backtrace(),
+            @"Error during planning: Window function calls are not allowed in filter predicates: 'sum(employee_csv.salary) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+        );
+
+        // computing the window function first and filtering on its result is
+        // the supported form
+        let plan = scan()?
+            .window(vec![sum_over(col("salary")).alias("total")])?
+            .filter(col("total").gt(lit(10)))?
+            .build()?;
+        assert_snapshot!(plan, @r"
+        Filter: total > Int32(10)
+          WindowAggr: windowExpr=[[sum(employee_csv.salary) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS total]]
+            TableScan: employee_csv projection=[salary]
+        ");
+
+        Ok(())
+    }
+
+    #[test]
     fn test_join_metadata() -> Result<()> {
         let left_schema = DFSchema::new_with_metadata(
             vec![(None, Arc::new(Field::new("a", DataType::Int32, false)))],
