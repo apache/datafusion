@@ -24,7 +24,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, internal_err};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
-use datafusion_expr::{EmitTo, GroupsAccumulator};
+use datafusion_expr::{AggregateMetrics, EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 
 use crate::PhysicalExpr;
@@ -89,7 +89,7 @@ pub(in crate::aggregates) struct AggregateHashTable<AggrMode> {
     pub(super) aggregate_accumulator_metrics: Arc<AggregateAccumulatorMetrics>,
 
     /// Optional internal metrics owned by each aggregate expression.
-    pub(super) aggregate_submetrics: Vec<Arc<dyn datafusion_expr::AggregateMetrics>>,
+    pub(super) aggregate_submetrics: Vec<Arc<dyn AggregateMetrics>>,
 
     /// Raw input schema, used to evaluate expressions and synthesize empty
     /// grouping-set rows.
@@ -510,7 +510,7 @@ pub(super) struct HashAggregateAccumulator {
     accumulator: Box<dyn GroupsAccumulator>,
 
     /// Optional internal metrics owned by this aggregate expression.
-    submetrics: Arc<dyn datafusion_expr::AggregateMetrics>,
+    submetrics: Arc<dyn AggregateMetrics>,
 }
 
 pub(super) type AggregateAccumulator = HashAggregateAccumulator;
@@ -648,7 +648,7 @@ impl HashAggregateAccumulator {
         arguments: Vec<Arc<dyn PhysicalExpr>>,
         filter: Option<Arc<dyn PhysicalExpr>>,
         accumulator: Box<dyn GroupsAccumulator>,
-        submetrics: Arc<dyn datafusion_expr::AggregateMetrics>,
+        submetrics: Arc<dyn AggregateMetrics>,
     ) -> Self {
         Self {
             aggregate_expr,

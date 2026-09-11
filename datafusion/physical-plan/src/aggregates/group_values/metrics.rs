@@ -57,6 +57,16 @@ impl AggregateSubMetrics {
             additional_subphase_metrics: Mutex::new(HashMap::new()),
         }
     }
+
+    fn new_metric(&self, subphase: &'static str) -> Arc<dyn AggregateMetric> {
+        let time = MetricBuilder::new(&self.metrics)
+            .with_new_label("aggregate", self.aggregate_label.clone())
+            .subset_time(
+                format!("agg_expr_{}_internal_{}_time", self.index, subphase),
+                self.partition,
+            );
+        Arc::new(AggregateSubMetric { time })
+    }
 }
 
 #[derive(Debug)]
@@ -67,18 +77,6 @@ struct AggregateSubMetric {
 impl AggregateMetric for AggregateSubMetric {
     fn add_duration(&self, duration: Duration) {
         self.time.add_duration_exact(duration);
-    }
-}
-
-impl AggregateSubMetrics {
-    fn new_metric(&self, subphase: &'static str) -> Arc<dyn AggregateMetric> {
-        let time = MetricBuilder::new(&self.metrics)
-            .with_new_label("aggregate", self.aggregate_label.clone())
-            .subset_time(
-                format!("agg_expr_{}_internal_{}_time", self.index, subphase),
-                self.partition,
-            );
-        Arc::new(AggregateSubMetric { time })
     }
 }
 

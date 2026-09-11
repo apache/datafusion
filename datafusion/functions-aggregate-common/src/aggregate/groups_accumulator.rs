@@ -272,9 +272,11 @@ impl GroupsAccumulatorAdapter {
         let values = take_arrays(values, &batch_indices, None)?;
         let opt_filter = get_filter_at_indices(opt_filter, &batch_indices)?;
 
-        let grouped_update_metric = time_grouped_update
-            .then(|| self.grouped_update_metric.get().and_then(Clone::clone))
-            .flatten();
+        let grouped_update_metric = if time_grouped_update {
+            self.grouped_update_metric.get().and_then(Clone::clone)
+        } else {
+            None
+        };
 
         let mut sizes_pre = 0;
         let mut sizes_post = 0;
