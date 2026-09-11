@@ -1,0 +1,183 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# End-to-end coverage for the grouped first_value/last_value pre-ordered fast
+# path (issue #24771): when `OptimizeAggregateOrder` proves the input ordering
+# satisfies the group-by prefix followed by the aggregate's ordering
+# requirement, the grouped accumulator skips its per-row tournament. These
+# queries exercise the whole chain — the requirement being proven through
+# declared orderings, through projection-alias equivalences, and through
+# filter-induced constants — and pin the results.
+
+statement ok
+CREATE EXTERNAL TABLE multiple_ordered_table (
+  a0 INTEGER,
+  a INTEGER,
+  b INTEGER,
+  c INTEGER,
+  d INTEGER
+)
+STORED AS CSV
+WITH ORDER (a ASC, b ASC)
+WITH ORDER (c ASC)
+LOCATION '../core/tests/data/window_2.csv'
+OPTIONS ('format.has_header' 'true');
+
+# Direct match: requirement (a) ++ (c ASC) is satisfied by the declared
+# orderings, so the fast path runs.
+query III
+SELECT a, FIRST_VALUE(c ORDER BY c), LAST_VALUE(c ORDER BY c)
+FROM multiple_ordered_table GROUP BY a ORDER BY a;
+----
+0 0 49
+1 50 99
+
+# The winner's non-key column rides along (argmax semantics).
+query III
+SELECT a, FIRST_VALUE(d ORDER BY c), LAST_VALUE(d ORDER BY c)
+FROM multiple_ordered_table GROUP BY a ORDER BY a;
+----
+0 0 3
+1 0 3
+
+# Requirement proven through a projection-alias equivalence class: the input
+# is ordered by (a, b) / (c), the query groups by an alias of `a`, and the
+# aggregate orders by an alias of `c`.
+query II
+SELECT a2, LAST_VALUE(d2 ORDER BY c2)
+FROM (SELECT a AS a2, c AS c2, d AS d2 FROM multiple_ordered_table)
+GROUP BY a2 ORDER BY a2;
+----
+0 3
+1 3
+
+# Requirement proven with the help of a filter-induced constant: `a` is
+# constant under `a = 1`, so the (b) prefix comes from the (a, b) ordering and
+# `c` stays ordered inside every b-segment.
+query III
+SELECT b, FIRST_VALUE(c ORDER BY c), LAST_VALUE(c ORDER BY c)
+FROM multiple_ordered_table WHERE a = 1 GROUP BY b ORDER BY b;
+----
+2 50 74
+3 75 99
+
+# FILTER clause interacts with the fast path.
+query II
+SELECT a, LAST_VALUE(c ORDER BY c) FILTER (WHERE c % 2 = 0)
+FROM multiple_ordered_table GROUP BY a ORDER BY a;
+----
+0 48
+1 98
+
+# A DESC requirement over an ASC input takes the reverse branch: the rule
+# swaps FIRST_VALUE for LAST_VALUE before setting the flag, and the result is
+# unchanged.
+query II
+SELECT a, FIRST_VALUE(c ORDER BY c DESC)
+FROM multiple_ordered_table GROUP BY a ORDER BY a;
+----
+0 49
+1 99
+
+statement ok
+DROP TABLE multiple_ordered_table;
+
+# With grouping sets the same rows are fed once per grouping set, and within a
+# coarser set's group the rows are ordered by the full group-by prefix rather
+# than the aggregate's ORDER BY. The rule must not mark first/last aggregates
+# pre-ordered there (github.com/apache/datafusion/pull/25050 review): input
+# below is ordered on (a, b, c) but within the ROLLUP's (a) set, group a=1
+# arrives ordered by (b, c), so FIRST/LAST over `ORDER BY c` need comparisons.
+
+statement ok
+COPY (VALUES
+    (1, 1, 5, 100, false), (1, 1, 6, 101, true),
+    (1, 2, 1, 200, true), (1, 2, 2, 201, false))
+TO 'test_files/scratch/first_last_ordered/rollup.csv'
+OPTIONS ('format.has_header' 'false');
+
+statement ok
+CREATE EXTERNAL TABLE rollup_source (a INT, b INT, c INT, d INT, e BOOLEAN)
+STORED AS CSV
+LOCATION 'test_files/scratch/first_last_ordered/rollup.csv'
+WITH ORDER (a ASC, b ASC, c ASC)
+OPTIONS ('format.has_header' 'false');
+
+query IIII
+SELECT a, b, FIRST_VALUE(d ORDER BY c), LAST_VALUE(d ORDER BY c)
+FROM rollup_source GROUP BY ROLLUP(a, b) ORDER BY a NULLS FIRST, b NULLS FIRST;
+----
+NULL NULL 200 101
+1 NULL 200 101
+1 1 100 101
+1 2 200 201
+
+# An aggregate ORDER BY that is satisfied without any group-by prefix stays on
+# the fast path even under ROLLUP: `a` leads the input ordering, so it is
+# ordered inside every group of every grouping set.
+query III
+SELECT a, b, LAST_VALUE(d ORDER BY a)
+FROM rollup_source GROUP BY ROLLUP(a, b) ORDER BY a NULLS FIRST, b NULLS FIRST;
+----
+NULL NULL 201
+1 NULL 201
+1 1 101
+1 2 201
+
+# Boolean is outside groups_accumulator_supported, so these run through
+# GroupsAccumulatorAdapter and the single-group accumulators, which consumed
+# the pre-ordered flag on main already: this covers the latent wrong-results
+# path that existed before this PR, not just the new grouped fast path.
+query IIBB
+SELECT a, b, FIRST_VALUE(e ORDER BY c), LAST_VALUE(e ORDER BY c)
+FROM rollup_source GROUP BY ROLLUP(a, b) ORDER BY a NULLS FIRST, b NULLS FIRST;
+----
+NULL NULL true true
+1 NULL true true
+1 1 false true
+1 2 true false
+
+statement ok
+DROP TABLE rollup_source;
+
+# Tie handling is a user-visible behavior change: among rows whose ordering
+# keys compare equal, the pre-ordered fast path picks the physically last
+# qualifying row for LAST_VALUE (first for FIRST_VALUE), while the tournament
+# path keeps the first-seen row of a tie. Both are valid answers -- which row
+# of a tie wins is unspecified -- but declaring WITH ORDER on a table can
+# change which one a query returns. This pins the fast path's choice.
+statement ok
+COPY (VALUES (1, 1, 10), (1, 1, 11), (2, 1, 20), (2, 1, 21))
+TO 'test_files/scratch/first_last_ordered/ties.csv'
+OPTIONS ('format.has_header' 'false');
+
+statement ok
+CREATE EXTERNAL TABLE tie_source (g INT, ts INT, px INT)
+STORED AS CSV
+LOCATION 'test_files/scratch/first_last_ordered/ties.csv'
+WITH ORDER (g ASC, ts ASC)
+OPTIONS ('format.has_header' 'false');
+
+query III
+SELECT g, FIRST_VALUE(px ORDER BY ts), LAST_VALUE(px ORDER BY ts)
+FROM tie_source GROUP BY g ORDER BY g;
+----
+1 10 11
+2 20 21
+
+statement ok
+DROP TABLE tie_source;

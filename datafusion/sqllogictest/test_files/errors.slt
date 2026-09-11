@@ -5,16 +5,15 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-
 
 # create aggregate_test_100 table
 statement ok
@@ -42,7 +41,7 @@ statement error
 SELECT sin(c1) FROM aggregate_test_100
 
 # cast_expressions_error
-statement error DataFusion error: Arrow error: Cast error: Cannot cast string 'c' to value of Int32 type
+statement error DataFusion error: Failed to cast field 'c1' from Utf8View to Int32\ncaused by\nArrow error: Cast error: Cannot cast string 'c' to value of Int32 type
 SELECT CAST(c1 AS INT) FROM aggregate_test_100
 
 # aggregation_with_bad_arguments
