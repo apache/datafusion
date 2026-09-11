@@ -55,6 +55,13 @@ SELECT arrow_typeof(from_unixtime(1704110400)), from_unixtime(1704110400);
 ----
 Timestamp(s, "America/Denver") 2024-01-01T05:00:00-07:00
 
+# January alone (`-07:00`) cannot tell a DST-aware zone from a fixed `-07:00`
+# offset. A July instant must render `-06:00`, which only a DST-aware zone does.
+query TP
+SELECT arrow_typeof(from_unixtime(1719835200)), from_unixtime(1719835200);
+----
+Timestamp(s, "America/Denver") 2024-07-01T06:00:00-06:00
+
 ## Test 4: an explicit timezone argument wins over the session time zone
 query TP
 SELECT
