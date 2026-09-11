@@ -70,7 +70,7 @@ use datafusion_physical_plan::{
         ChildrenPropertiesMode, ReplaceChildrenOptions, plan_contains_expression_id,
     },
     filter::{FilterExec, FilterExecBuilder},
-    joins::{HashJoinExec, PartitionMode},
+    joins::{HashJoinExec, NestedLoopJoinExec, PartitionMode},
     projection::ProjectionExec,
     repartition::RepartitionExec,
     sorts::sort::SortExec,
@@ -3056,6 +3056,92 @@ fn test_hashjoin_dynamic_filter_requires_probe_consumer() {
                 "probe subtree should contain the dynamic filter it accepted"
             );
         }
+    }
+}
+
+#[tokio::test]
+async fn test_nlj_dynamic_filter_pushdown_from_hashjoin() {
+    for filtered_side in [0, 1] {
+        let mut results = Vec::new();
+        for enabled in [false, true] {
+            let probe_batch = record_batch!(("key", Int32, [1, 2, 3])).unwrap();
+            let schema = probe_batch.schema();
+            let scan = || {
+                TestScanBuilder::new(Arc::clone(&schema))
+                    .with_support(true)
+                    .with_batches(vec![probe_batch.clone()])
+                    .build()
+            };
+            // The identical names and reversed output order ensure the filter
+            // reaches the intended input by position, not by name.
+            let probe = Arc::new(
+                NestedLoopJoinExec::try_new(
+                    scan(),
+                    scan(),
+                    None,
+                    &JoinType::Inner,
+                    Some(vec![1, 0]),
+                )
+                .unwrap(),
+            );
+            let build = TestScanBuilder::new(schema)
+                .with_support(true)
+                .with_batches(vec![record_batch!(("key", Int32, [2])).unwrap()])
+                .build();
+            let plan = Arc::new(
+                HashJoinExec::try_new(
+                    build,
+                    probe,
+                    vec![(
+                        Arc::new(Column::new("key", 0)),
+                        Arc::new(Column::new("key", 1 - filtered_side)),
+                    )],
+                    None,
+                    &JoinType::Inner,
+                    None,
+                    PartitionMode::CollectLeft,
+                    datafusion_common::NullEquality::NullEqualsNothing,
+                    false,
+                )
+                .unwrap(),
+            ) as Arc<dyn ExecutionPlan>;
+            let mut config = ConfigOptions::default();
+            config.execution.parquet.pushdown_filters = true;
+            config.optimizer.enable_join_dynamic_filter_pushdown = enabled;
+            let plan = FilterPushdown::new_post_optimization()
+                .optimize(plan, &config)
+                .unwrap();
+            assert_eq!(
+                plan.dynamic_expressions_produced().len(),
+                usize::from(enabled)
+            );
+            let join = plan.downcast_ref::<HashJoinExec>().unwrap();
+            let nlj = join.right().downcast_ref::<NestedLoopJoinExec>().unwrap();
+            if enabled {
+                let id = plan.dynamic_expressions_produced()[0]
+                    .expression_id()
+                    .unwrap();
+                for (side, child) in nlj.children().iter().enumerate() {
+                    assert_eq!(
+                        plan_contains_expression_id(child, id).unwrap(),
+                        side == filtered_side
+                    );
+                }
+            }
+            let ctx = SessionContext::new_with_config(SessionConfig::from(config));
+            ctx.register_object_store(
+                ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+                Arc::new(InMemory::new()),
+            );
+            let batches = collect(Arc::clone(&plan), ctx.task_ctx()).await.unwrap();
+            assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 3);
+            if enabled {
+                let dynamic = plan.dynamic_expressions_produced().remove(0);
+                assert_ne!(dynamic.snapshot().unwrap().unwrap().to_string(), "true");
+            }
+            results.push(pretty_format_batches(&batches).unwrap().to_string());
+        }
+        assert_eq!(results[0], results[1]);
     }
 }
 

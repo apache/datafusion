@@ -29,6 +29,9 @@ use super::utils::{
 };
 use crate::common::can_project;
 use crate::execution_plan::{EmissionType, boundedness_from_children};
+use crate::filter_pushdown::{
+    ChildFilterDescription, FilterDescription, FilterPushdownPhase, PushedDownPredicate,
+};
 use crate::joins::SharedBitmapBuilder;
 use crate::joins::utils::{
     BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceAsync, OnceFut,
@@ -62,6 +65,7 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::DataType;
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     JoinSide, NullEquality, Result, ScalarValue, Statistics, arrow_err,
@@ -71,9 +75,11 @@ use datafusion_common::{
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::{SpillFile, TaskContext};
 use datafusion_expr::JoinType;
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::equivalence::{
     ProjectionMapping, join_equivalence_properties,
 };
+use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
 
 use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use futures::future::BoxFuture;
@@ -576,7 +582,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&Arc<dyn crate::PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         // Apply to join filter expressions if present
         crate::apply_expression_roots(
@@ -830,6 +836,76 @@ impl ExecutionPlan for NestedLoopJoinExec {
         )?;
 
         Ok(Arc::new(stats.project(self.projection.as_ref())))
+    }
+
+    fn gather_filters_for_pushdown(
+        &self,
+        phase: FilterPushdownPhase,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        config: &ConfigOptions,
+    ) -> Result<FilterDescription> {
+        if phase != FilterPushdownPhase::Post
+            || !config.optimizer.enable_join_dynamic_filter_pushdown
+        {
+            return Ok(FilterDescription::new()
+                .with_child(ChildFilterDescription::all_unsupported(&parent_filters))
+                .with_child(ChildFilterDescription::all_unsupported(&parent_filters)));
+        }
+
+        // Removing rows from the non-preserved side of an outer or anti join
+        // can create new unmatched rows. Only route filters to output-preserving
+        // inputs; unlike a hash join, an NLJ has no equijoin keys to translate
+        // filters onto the other input of a semi join.
+        let (left_preserved, right_preserved) = match self.join_type {
+            JoinType::Inner => (true, true),
+            JoinType::Left
+            | JoinType::LeftSemi
+            | JoinType::LeftAnti
+            | JoinType::LeftMark => (true, false),
+            JoinType::Right
+            | JoinType::RightSemi
+            | JoinType::RightAnti
+            | JoinType::RightMark => (false, true),
+            JoinType::Full => (false, false),
+        };
+        let output_indices: Vec<_> = match &self.projection {
+            Some(projection) => projection.to_vec(),
+            None => (0..self.column_indices.len()).collect(),
+        };
+        let mut description = FilterDescription::new();
+        for (side, preserved, child) in [
+            (JoinSide::Left, left_preserved, self.left()),
+            (JoinSide::Right, right_preserved, self.right()),
+        ] {
+            // Check output positions before remapping names, so equal names on
+            // different join inputs cannot send a filter to the wrong side.
+            let allowed = output_indices
+                .iter()
+                .enumerate()
+                .filter_map(|(output, input)| {
+                    (self.column_indices[*input].side == side).then_some(output)
+                })
+                .collect();
+            let mut child_description = if preserved {
+                ChildFilterDescription::from_child_with_allowed_indices(
+                    &parent_filters,
+                    allowed,
+                    child,
+                )?
+            } else {
+                ChildFilterDescription::all_unsupported(&parent_filters)
+            };
+            for (filter, pushed) in parent_filters
+                .iter()
+                .zip(&mut child_description.parent_filters)
+            {
+                if !filter.is::<DynamicFilterPhysicalExpr>() {
+                    *pushed = PushedDownPredicate::unsupported(Arc::clone(filter));
+                }
+            }
+            description = description.with_child(child_description);
+        }
+        Ok(description)
     }
 
     /// Tries to push `projection` down through `nested_loop_join`. If possible, performs the
@@ -4218,6 +4294,141 @@ pub(crate) mod tests {
     use insta::allow_duplicates;
     use insta::assert_snapshot;
     use rstest::rstest;
+
+    #[test]
+    fn test_nlj_dynamic_filter_pushdown() -> Result<()> {
+        use crate::filter_pushdown::PushedDown;
+        use arrow::array::record_batch;
+        use datafusion_physical_expr::expressions::lit;
+
+        // Identical names on both sides must not affect routing. Reordered
+        // outputs exercise the mapping through the NLJ's embedded projection.
+        let batch = record_batch!(("key", Int32, [1, 2]))?;
+        let input: Arc<dyn ExecutionPlan> =
+            TestMemoryExec::try_new_exec(&[vec![batch.clone()]], batch.schema(), None)?;
+        for join_type in [
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::Full,
+            JoinType::LeftSemi,
+            JoinType::RightSemi,
+            JoinType::LeftAnti,
+            JoinType::RightAnti,
+            JoinType::LeftMark,
+            JoinType::RightMark,
+        ] {
+            let join = NestedLoopJoinExec::try_new(
+                Arc::clone(&input),
+                Arc::clone(&input),
+                None,
+                &join_type,
+                None,
+            )?;
+            for reorder in [false, true] {
+                let projection =
+                    reorder.then(|| (0..join.schema().fields().len()).rev().collect());
+                let join = join.with_projection(projection)?;
+                for output in 0..join.schema().fields().len() {
+                    let column: Arc<dyn PhysicalExpr> =
+                        Arc::new(Column::new(join.schema().field(output).name(), output));
+                    let source = Arc::new(DynamicFilterPhysicalExpr::new(
+                        vec![Arc::clone(&column)],
+                        lit(true),
+                    ));
+                    let filters = join
+                        .gather_filters_for_pushdown(
+                            FilterPushdownPhase::Post,
+                            vec![Arc::clone(&source) as _],
+                            &ConfigOptions::default(),
+                        )?
+                        .parent_filters();
+                    let unprojected =
+                        join.projection.as_ref().map_or(output, |p| p[output]);
+                    let side = join.column_indices[unprojected].side;
+                    let expected = match join_type {
+                        JoinType::Inner => {
+                            [side == JoinSide::Left, side == JoinSide::Right]
+                        }
+                        JoinType::Left
+                        | JoinType::LeftSemi
+                        | JoinType::LeftAnti
+                        | JoinType::LeftMark => [side == JoinSide::Left, false],
+                        JoinType::Right
+                        | JoinType::RightSemi
+                        | JoinType::RightAnti
+                        | JoinType::RightMark => [false, side == JoinSide::Right],
+                        JoinType::Full => [false, false],
+                    };
+                    // Update after routing to prove the remapped consumer stays live.
+                    source.update(Arc::new(BinaryExpr::new(
+                        column,
+                        Operator::Eq,
+                        lit(2i32),
+                    )))?;
+                    for (child, accepted) in filters.iter().zip(expected) {
+                        assert_eq!(
+                            matches!(child[0].discriminant, PushedDown::Yes),
+                            accepted,
+                            "{join_type:?}, reorder={reorder}, output={output}"
+                        );
+                        if accepted {
+                            assert_eq!(
+                                child[0].predicate.expression_id(),
+                                source.expression_id()
+                            );
+                            let values = child[0]
+                                .predicate
+                                .evaluate(&batch)?
+                                .into_array(batch.num_rows())?;
+                            assert_eq!(
+                                as_boolean_array(&values)?.iter().collect::<Vec<_>>(),
+                                vec![Some(false), Some(true)]
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        let join = NestedLoopJoinExec::try_new(
+            Arc::clone(&input),
+            input,
+            None,
+            &JoinType::Inner,
+            None,
+        )?;
+        let left: Arc<dyn PhysicalExpr> = Arc::new(Column::new("key", 0));
+        let right: Arc<dyn PhysicalExpr> = Arc::new(Column::new("key", 1));
+        let whole: Arc<dyn PhysicalExpr> = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::clone(&left)],
+            lit(true),
+        ));
+        let mixed: Arc<dyn PhysicalExpr> = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::clone(&left), right],
+            lit(true),
+        ));
+        let static_filter: Arc<dyn PhysicalExpr> =
+            Arc::new(BinaryExpr::new(left, Operator::Eq, lit(2i32)));
+        for (phase, enabled, filters) in [
+            (FilterPushdownPhase::Pre, true, vec![Arc::clone(&whole)]),
+            (FilterPushdownPhase::Post, false, vec![whole]),
+            (FilterPushdownPhase::Post, true, vec![mixed, static_filter]),
+        ] {
+            let mut config = ConfigOptions::default();
+            config.optimizer.enable_join_dynamic_filter_pushdown = enabled;
+            let description =
+                join.gather_filters_for_pushdown(phase, filters, &config)?;
+            assert!(
+                description
+                    .parent_filters()
+                    .iter()
+                    .flatten()
+                    .all(|f| matches!(f.discriminant, PushedDown::No))
+            );
+        }
+        Ok(())
+    }
 
     fn delayed_stream(batch: RecordBatch, delay: Duration) -> SendableRecordBatchStream {
         let schema = batch.schema();
