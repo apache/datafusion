@@ -31,6 +31,7 @@ use arrow::compute::kernels::boolean::{not, or_kleene};
 use arrow::compute::kernels::cmp::eq as arrow_eq;
 use arrow::datatypes::*;
 
+use datafusion_common::utils::{normalize_float_zero, normalize_float_zero_scalar};
 use datafusion_common::{
     DFSchema, Result, ScalarValue, assert_or_internal_err, exec_err,
 };
@@ -79,6 +80,27 @@ fn supports_arrow_eq(dt: &DataType) -> bool {
         Dictionary(_, v) => supports_arrow_eq(v.as_ref()),
         _ => dt.is_primitive() || dt.is_null() || dt.is_string(),
     }
+}
+
+fn normalize_in_list_float_zero_value(value: ColumnarValue) -> ColumnarValue {
+    match value {
+        ColumnarValue::Array(array)
+            if is_float_or_dictionary_float(array.data_type()) =>
+        {
+            ColumnarValue::Array(normalize_float_zero(&array))
+        }
+        ColumnarValue::Scalar(scalar) => {
+            ColumnarValue::Scalar(normalize_float_zero_scalar(scalar))
+        }
+        value => value,
+    }
+}
+
+fn is_float_or_dictionary_float(mut data_type: &DataType) -> bool {
+    while let DataType::Dictionary(_, value_type) = data_type {
+        data_type = value_type;
+    }
+    data_type.is_floating()
 }
 
 /// Evaluates the list of expressions into an array, flattening any dictionaries
@@ -369,12 +391,15 @@ impl PhysicalExpr for InListExpr {
                 // Use Arrow's vectorized eq kernel for types it supports (primitive,
                 // boolean, string, binary, dictionary), falling back to row-by-row
                 // comparator for unsupported types (nested, RunEndEncoded, etc.).
-                let value = value.into_array(num_rows)?;
+                // Normalize the left side once for the whole list. Doing this
+                // outside `compare_one` avoids rescanning it for every item.
+                let value =
+                    normalize_in_list_float_zero_value(value).into_array(num_rows)?;
                 let lhs_supports_arrow_eq = supports_arrow_eq(value.data_type());
 
                 // Helper: compare value against a single list expression
                 let compare_one = |expr: &Arc<dyn PhysicalExpr>| -> Result<BooleanArray> {
-                    match expr.evaluate(batch)? {
+                    match normalize_in_list_float_zero_value(expr.evaluate(batch)?) {
                         ColumnarValue::Array(array) => {
                             if lhs_supports_arrow_eq
                                 && supports_arrow_eq(array.data_type())
@@ -3363,6 +3388,111 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_in_list_with_columns_float_signed_zero() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Float64, false),
+            Field::new("b", DataType::Float64, false),
+        ]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![
+                Arc::new(Float64Array::from(vec![0.0, -0.0, 1.0])),
+                Arc::new(Float64Array::from(vec![-0.0, 0.0, 2.0])),
+            ],
+        )?;
+
+        let expr = make_in_list_with_columns(
+            col("a", &schema)?,
+            vec![col("b", &schema)?],
+            false,
+        );
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        assert_eq!(
+            as_boolean_array(&result),
+            &BooleanArray::from(vec![true, true, false])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_list_with_columns_float_scalar_signed_zero() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Float32, false)]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(Float32Array::from(vec![0.0, -0.0, 1.0]))],
+        )?;
+        let list = vec![lit(ScalarValue::Float32(Some(-0.0)))];
+
+        for (negated, expected) in [
+            (false, BooleanArray::from(vec![true, true, false])),
+            (true, BooleanArray::from(vec![false, false, true])),
+        ] {
+            let expr =
+                make_in_list_with_columns(col("a", &schema)?, list.clone(), negated);
+            let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+            assert_eq!(as_boolean_array(&result), &expected);
+        }
+
+        // A scalar left-hand side is normalized before it is broadcast.
+        let expr = make_in_list_with_columns(
+            lit(ScalarValue::Float32(Some(-0.0))),
+            vec![col("a", &schema)?],
+            false,
+        );
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        assert_eq!(
+            as_boolean_array(&result),
+            &BooleanArray::from(vec![true, true, false])
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_list_with_columns_dictionary_float_signed_zero() -> Result<()> {
+        let left: ArrayRef = Arc::new(DictionaryArray::try_new(
+            Int8Array::from(vec![0, 1, 2]),
+            Arc::new(Float64Array::from(vec![0.0, -0.0, 1.0])),
+        )?);
+        let right: ArrayRef = Arc::new(DictionaryArray::try_new(
+            Int8Array::from(vec![0, 1, 2]),
+            Arc::new(Float64Array::from(vec![-0.0, 0.0, 2.0])),
+        )?);
+        let data_type = left.data_type().clone();
+        let schema = Schema::new(vec![
+            Field::new("a", data_type.clone(), false),
+            Field::new("b", data_type, false),
+        ]);
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![left, right])?;
+
+        for (negated, expected) in [
+            (false, BooleanArray::from(vec![true, true, false])),
+            (true, BooleanArray::from(vec![false, false, true])),
+        ] {
+            let expr = make_in_list_with_columns(
+                col("a", &schema)?,
+                vec![col("b", &schema)?],
+                negated,
+            );
+            let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+            assert_eq!(as_boolean_array(&result), &expected);
+        }
+
+        let scalar = lit(ScalarValue::Dictionary(
+            Box::new(DataType::Int8),
+            Box::new(ScalarValue::Float64(Some(-0.0))),
+        ));
+        let expr = make_in_list_with_columns(col("a", &schema)?, vec![scalar], false);
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        assert_eq!(
+            as_boolean_array(&result),
+            &BooleanArray::from(vec![true, true, false])
+        );
+
+        Ok(())
+    }
+
     /// Tests that short-circuit evaluation produces correct results.
     /// When all rows match after the first list item, remaining items
     /// should be skipped without affecting correctness.
@@ -3866,6 +3996,29 @@ mod tests {
         assert_eq!(
             result,
             &BooleanArray::from(vec![Some(true), Some(false), Some(true)])
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_try_new_from_array_dict_haystack_float64_signed_zero() -> Result<()> {
+        // One value beyond the branchless limit selects the hash-set strategy.
+        let list_len =
+            <Float64Type as branchless_filter::BranchlessFilterType>::MAX_LIST_LEN + 1;
+        let mut list_values = vec![Some(-0.0)];
+        list_values.extend((1..list_len).map(|value| Some(value as f64)));
+        let haystack = make_f64_dict_array(list_values);
+        let needles: ArrayRef = Arc::new(Float64Array::from(vec![0.0, -0.0, -1.0]));
+        let expected = BooleanArray::from(vec![true, true, false]);
+
+        assert_eq!(
+            eval_in_list_from_array(Arc::clone(&needles), Arc::clone(&haystack))?,
+            expected
+        );
+        assert_eq!(
+            eval_in_list_from_array(wrap_in_dict(needles), haystack)?,
+            expected
         );
 
         Ok(())
