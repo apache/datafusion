@@ -1498,6 +1498,44 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn size_retains_vectorized_and_emit_scratch_capacity() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "group",
+            DataType::Int32,
+            false,
+        )]));
+        let mut group_values = GroupValuesColumn::<false>::try_new(schema)?;
+        let baseline = group_values.size();
+
+        let scratch_size = {
+            let buffers = &mut group_values.vectorized_operation_buffers;
+            buffers.append_row_indices.push(0);
+            buffers.equal_to_row_indices.push(0);
+            buffers.equal_to_group_indices.push(0);
+            buffers.equal_to_results.append(true);
+            buffers.remaining_row_indices.push(0);
+            group_values.emit_group_index_list_buffer.push(0);
+
+            buffers.append_row_indices.allocated_size()
+                + buffers.equal_to_row_indices.allocated_size()
+                + buffers.equal_to_group_indices.allocated_size()
+                + buffers.equal_to_results.capacity() / 8
+                + buffers.remaining_row_indices.allocated_size()
+                + group_values.emit_group_index_list_buffer.allocated_size()
+        };
+        assert_eq!(group_values.size(), baseline + scratch_size);
+
+        group_values.vectorized_operation_buffers.clear();
+        group_values
+            .vectorized_operation_buffers
+            .equal_to_results
+            .truncate(0);
+        group_values.emit_group_index_list_buffer.clear();
+        assert_eq!(group_values.size(), baseline + scratch_size);
+        Ok(())
+    }
+
     /// A mixed group-by key of several native columns plus one nested column
     /// that has no type-specialized `GroupColumn`.
     ///
