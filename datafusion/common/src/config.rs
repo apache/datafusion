@@ -1182,6 +1182,17 @@ config_namespace! {
         ///
         /// Disabled by default, set to a number greater than 0 for enabling it.
         pub hash_join_buffering_capacity: usize, default = 0
+
+        /// Sets the threshold for scans that should be buffered.
+        ///
+        /// If the statistics suggest that a scan requires reading fewer bytes than this threshold,
+        /// DataFusion may eagerly evaluate the scan to cut down latency. This approach is not
+        /// applied to large scans (> `small_scan_buffering_threshold`) as eagerly evaluated scans
+        /// do not have access to the final dynamic filters, which may significantly reduce the
+        /// number of bytes scanned.
+        ///
+        /// Disabled by default, set to a number greater than 0 for enabling it.
+        pub small_scan_buffering_threshold: usize, default = 0
     }
 }
 
