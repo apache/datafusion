@@ -2028,6 +2028,22 @@ FROM timestamps;
 ----
 false true false false false false 0 days 12 hours 0 mins 0.000000000 secs 0 days -12 hours 0 mins 0.000000000 secs
 
+# Session-timezone coercion also applies through encoded and nested types.
+query BBB
+WITH timestamps(ts_tz, ts) AS (
+  VALUES (
+    arrow_cast('2024-11-01T00:00:00-04:00', 'Timestamp(Nanosecond, Some("America/New_York"))'),
+    '2024-11-01T00:00:00'::timestamp
+  )
+)
+SELECT
+  arrow_cast(ts_tz, 'Dictionary(Int32, Timestamp(Nanosecond, Some("America/New_York")))') = ts,
+  arrow_cast(ts_tz, 'RunEndEncoded("run_ends": non-null Int32, "values": Timestamp(Nanosecond, Some("America/New_York")))') = ts,
+  make_array(ts_tz) = make_array(ts)
+FROM timestamps;
+----
+false false false
+
 # IN subqueries use the same session-timezone comparison coercion.
 query I
 WITH timestamps(ts_tz, ts) AS (

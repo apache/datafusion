@@ -243,6 +243,11 @@ fn evaluate_expr_with_null_column<'a>(
     .evaluate(&input_batch)
 }
 
+/// No session timezone is threaded in here on purpose. This runs over a plan the
+/// `TypeCoercion` analyzer has already coerced, so every binary operand pair
+/// already shares a type; the only type this helper introduces is the `Null` of
+/// the dummy column in `evaluate_expr_with_null_column`, and `Null` against a
+/// timestamp is short-circuited by `null_coercion` before the aware/naive rule.
 fn coerce(expr: Expr, schema: &DFSchema) -> Result<Expr> {
     let mut expr_rewrite = TypeCoercionRewriter::new(schema);
     expr.rewrite(&mut expr_rewrite).data()

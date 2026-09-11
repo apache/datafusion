@@ -79,6 +79,51 @@ fn test_timestamp_session_timezone_coercion() -> Result<()> {
 }
 
 #[test]
+fn test_timestamp_without_session_timezone_coercion() -> Result<()> {
+    let aware_ms = DataType::Timestamp(Millisecond, Some("America/New_York".into()));
+    let aware_ns = DataType::Timestamp(Nanosecond, Some("America/New_York".into()));
+    let naive = DataType::Timestamp(Nanosecond, None);
+
+    // Comparisons fall back to reading the naive side in the aware side's
+    // timezone, in either operand order.
+    for op in [Operator::Eq, Operator::Gt] {
+        for (lhs, rhs) in [(&aware_ms, &naive), (&naive, &aware_ms)] {
+            let (lhs, rhs) = BinaryTypeCoercer::new(lhs, &op, rhs)
+                .with_session_time_zone(None)
+                .get_input_types()?;
+            assert_eq!((lhs, rhs), (aware_ns.clone(), aware_ns.clone()));
+        }
+    }
+
+    // `Minus` only agrees with that when the units differ and force a coercion.
+    // At a shared unit the operands are left alone and Arrow subtracts their
+    // raw values, which is the behavior this PR exists to correct.
+    let (lhs, rhs) = BinaryTypeCoercer::new(&aware_ms, &Operator::Minus, &naive)
+        .with_session_time_zone(None)
+        .get_input_types()?;
+    assert_eq!((lhs, rhs), (aware_ns.clone(), aware_ns.clone()));
+
+    let (lhs, rhs) = BinaryTypeCoercer::new(&aware_ns, &Operator::Minus, &naive)
+        .with_session_time_zone(None)
+        .get_input_types()?;
+    assert_eq!((lhs, rhs), (aware_ns.clone(), naive.clone()));
+
+    // A session timezone doesn't disturb pairs that are both aware or both
+    // naive: those already denote the same kind of value.
+    let (lhs, rhs) = BinaryTypeCoercer::new(&aware_ms, &Operator::Minus, &aware_ms)
+        .with_session_time_zone(Some("+08:00"))
+        .get_input_types()?;
+    assert_eq!((lhs, rhs), (aware_ms.clone(), aware_ms));
+
+    let (lhs, rhs) = BinaryTypeCoercer::new(&naive, &Operator::Minus, &naive)
+        .with_session_time_zone(Some("+08:00"))
+        .get_input_types()?;
+    assert_eq!((lhs, rhs), (naive.clone(), naive));
+
+    Ok(())
+}
+
+#[test]
 fn test_decimal_mathematics_op_type() {
     // Decimal32
     assert_eq!(

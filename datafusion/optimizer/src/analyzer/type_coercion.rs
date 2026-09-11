@@ -43,7 +43,8 @@ use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::expr_schema::cast_subquery;
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
-    like_coercion, regex_coercion, type_union_coercion,
+    comparison_coercion_with_session_timezone, like_coercion, regex_coercion,
+    type_union_coercion,
 };
 use datafusion_expr::type_coercion::functions::{
     UDFCoercionExt, fields_with_udf, value_fields_with_higher_order_udf_and_lambdas,
@@ -827,7 +828,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 )
                     .ok_or_else(|| {
                         internal_datafusion_err!(
-                            "Failed to coerce types {expr_type} and {high_type} in BETWEEN expression"
+                            "Failed to coerce types {expr_type}, {low_type} and {high_type} in BETWEEN expression"
                         )
                     })?;
                 Ok(Transformed::yes(Expr::Between(Between::new(
@@ -1300,21 +1301,6 @@ fn coerce_scalar_function_argument(
     // same error as before. Since it is no longer a literal at the coerced type,
     // it is reported as `None` in `ReturnFieldArgs::scalar_arguments`.
     Expr::Literal(value, metadata).cast_to(data_type, schema)
-}
-
-/// Returns the common type for non-binary comparison expressions using the
-/// same coercion rules as binary equality.
-fn comparison_coercion_with_session_timezone(
-    lhs_type: &DataType,
-    rhs_type: &DataType,
-    session_time_zone: Option<&str>,
-) -> Option<DataType> {
-    let (lhs_type, rhs_type) = BinaryTypeCoercer::new(lhs_type, &Operator::Eq, rhs_type)
-        .with_session_time_zone(session_time_zone)
-        .get_input_types()
-        .ok()?;
-
-    (lhs_type == rhs_type).then_some(lhs_type)
 }
 
 fn coerce_case_expression(
