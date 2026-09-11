@@ -188,3 +188,8 @@ name = "window_filter"
 [[bench]]
 harness = false
 name = "range_repartition"
+
+[[bench]]
+harness = false
+name = "repartition"
+required-features = ["test_utils"]
