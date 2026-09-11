@@ -53,6 +53,7 @@ pub fn apply_file_schema_type_coercions(
 ) -> Option<Schema> {
     let mut needs_view_transform = false;
     let mut needs_string_transform = false;
+    let mut needs_nested_transform = false;
 
     // Create a mapping of table field names to their data types for fast lookup
     // and simultaneously check if we need any transformations
@@ -72,13 +73,26 @@ pub fn apply_file_schema_type_coercions(
             ) {
                 needs_string_transform = true;
             }
+            // Nested fields can need transformations even when their parent does not.
+            if matches!(
+                dt,
+                DataType::Struct(_)
+                    | DataType::List(_)
+                    | DataType::LargeList(_)
+                    | DataType::ListView(_)
+                    | DataType::LargeListView(_)
+                    | DataType::FixedSizeList(_, _)
+                    | DataType::Map(_, _)
+            ) {
+                needs_nested_transform = true;
+            }
 
             (f.name(), dt)
         })
         .collect();
 
     // Early return if no transformation needed
-    if !needs_view_transform && !needs_string_transform {
+    if !needs_view_transform && !needs_string_transform && !needs_nested_transform {
         return None;
     }
 
@@ -120,6 +134,42 @@ pub fn apply_file_schema_type_coercions(
                     (&DataType::BinaryView, DataType::Binary | DataType::LargeBinary) => {
                         return field_with_new_type(field, DataType::BinaryView);
                     }
+                    // Apply the same coercions to matching fields inside structs.
+                    (DataType::Struct(table_fields), DataType::Struct(file_fields)) => {
+                        if let Some(schema) = apply_file_schema_type_coercions(
+                            &Schema::new(table_fields.clone()),
+                            &Schema::new(file_fields.clone()),
+                        ) {
+                            return field_with_new_type(field, DataType::Struct(schema.fields));
+                        }
+                    }
+                    // Container children match by position, regardless of their names.
+                    (DataType::List(table_child), DataType::List(file_child))
+                    | (DataType::LargeList(table_child), DataType::LargeList(file_child))
+                    | (DataType::ListView(table_child), DataType::ListView(file_child))
+                    | (DataType::LargeListView(table_child), DataType::LargeListView(file_child))
+                    | (DataType::FixedSizeList(table_child, _), DataType::FixedSizeList(file_child, _))
+                    | (DataType::Map(table_child, _), DataType::Map(file_child, _)) => {
+                        if let Some(schema) = apply_file_schema_type_coercions(
+                            &Schema::new(vec![field_with_new_type(
+                                file_child,
+                                table_child.data_type().clone(),
+                            )]),
+                            &Schema::new(vec![Arc::clone(file_child)]),
+                        ) {
+                            let child = Arc::clone(&schema.fields()[0]);
+                            let new_type = match field_type {
+                                DataType::List(_) => DataType::List(child),
+                                DataType::LargeList(_) => DataType::LargeList(child),
+                                DataType::ListView(_) => DataType::ListView(child),
+                                DataType::LargeListView(_) => DataType::LargeListView(child),
+                                DataType::FixedSizeList(_, size) => DataType::FixedSizeList(child, *size),
+                                DataType::Map(_, sorted) => DataType::Map(child, *sorted),
+                                _ => return Arc::clone(field),
+                            };
+                            return field_with_new_type(field, new_type);
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -128,6 +178,10 @@ pub fn apply_file_schema_type_coercions(
             Arc::clone(field)
         })
         .collect();
+
+    if transformed_fields.iter().eq(file_schema.fields().iter()) {
+        return None;
+    }
 
     Some(Schema::new_with_metadata(
         transformed_fields,
@@ -469,6 +523,242 @@ mod tests {
     use super::*;
 
     use parquet::schema::parser::parse_message_type;
+
+    #[test]
+    fn nested_coercion_preserves_file_schema() {
+        let field_metadata = HashMap::from([("source".into(), "file".into())]);
+        let identifiers = Field::new_struct(
+            "identifiers",
+            vec![Field::new("cid", DataType::Utf8, true)],
+            true,
+        )
+        .with_metadata(field_metadata.clone());
+        let struct_field = Field::new_struct(
+            "_struct",
+            vec![
+                Field::new("file_only", DataType::Binary, true),
+                identifiers.clone(),
+            ],
+            true,
+        )
+        .with_metadata(field_metadata.clone());
+        let file_schema = Schema::new_with_metadata(
+            vec![Field::new("id", DataType::Int64, false), struct_field.clone()],
+            field_metadata.clone(),
+        );
+        let table_schema = Schema::new(vec![
+            Field::new_struct(
+                "_struct",
+                vec![
+                    Field::new_struct(
+                        "identifiers",
+                        vec![Field::new("cid", DataType::Utf8View, false)],
+                        false,
+                    ),
+                    Field::new("schemaEvolutionOnly", DataType::Utf8View, true),
+                ],
+                false,
+            ),
+            Field::new("missing", DataType::Utf8View, true),
+            Field::new("id", DataType::Int64, true),
+        ]);
+        let expected = Schema::new_with_metadata(
+            vec![
+                Field::new("id", DataType::Int64, false),
+                struct_field.with_data_type(DataType::Struct(
+                    vec![
+                        Field::new("file_only", DataType::Binary, true),
+                        identifiers.with_data_type(DataType::Struct(
+                            vec![Field::new("cid", DataType::Utf8View, true)].into(),
+                        )),
+                    ]
+                    .into(),
+                )),
+            ],
+            field_metadata,
+        );
+
+        let result = apply_file_schema_type_coercions(&table_schema, &file_schema);
+        assert_eq!(result, Some(expected.clone()));
+        assert_eq!(
+            apply_file_schema_type_coercions(&table_schema, &expected),
+            None
+        );
+    }
+
+    #[test]
+    fn nested_coercion_preserves_list_containers() {
+        let wrap: [fn(FieldRef) -> DataType; 6] = [
+            DataType::List,
+            DataType::LargeList,
+            DataType::ListView,
+            DataType::LargeListView,
+            |field| DataType::FixedSizeList(field, 3),
+            |field| DataType::Map(field, false),
+        ];
+        for wrap in wrap {
+            let file_element = Arc::new(Field::new_struct(
+                "entries",
+                vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", DataType::Binary, true),
+                ],
+                false,
+            ));
+            let table_element = Arc::new(Field::new_struct(
+                "entries",
+                vec![
+                    Field::new("value", DataType::Utf8View, true),
+                    Field::new("key", DataType::Utf8View, false),
+                ],
+                false,
+            ));
+            let expected_element = Arc::new(Field::new_struct(
+                "entries",
+                vec![
+                    Field::new("key", DataType::Utf8View, false),
+                    Field::new("value", DataType::Utf8View, true),
+                ],
+                false,
+            ));
+            let file_schema =
+                Schema::new(vec![Field::new("data", wrap(file_element), true)]);
+            let table_schema =
+                Schema::new(vec![Field::new("data", wrap(table_element), true)]);
+            let expected =
+                Schema::new(vec![Field::new("data", wrap(expected_element), true)]);
+            assert_eq!(
+                apply_file_schema_type_coercions(&table_schema, &file_schema),
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn nested_coercion_preserves_leaf_conversion_rules() {
+        for (table_type, file_types) in [
+            (
+                DataType::Utf8,
+                vec![
+                    DataType::Binary,
+                    DataType::LargeBinary,
+                    DataType::BinaryView,
+                ],
+            ),
+            (
+                DataType::LargeUtf8,
+                vec![
+                    DataType::Binary,
+                    DataType::LargeBinary,
+                    DataType::BinaryView,
+                ],
+            ),
+            (
+                DataType::Utf8View,
+                vec![
+                    DataType::Binary,
+                    DataType::LargeBinary,
+                    DataType::BinaryView,
+                    DataType::Utf8,
+                    DataType::LargeUtf8,
+                ],
+            ),
+            (
+                DataType::BinaryView,
+                vec![DataType::Binary, DataType::LargeBinary],
+            ),
+        ] {
+            for file_type in file_types {
+                let file_schema = Schema::new(vec![Field::new("value", file_type, true)]);
+                let table_schema =
+                    Schema::new(vec![Field::new("value", table_type.clone(), true)]);
+                assert_eq!(
+                    apply_file_schema_type_coercions(&table_schema, &file_schema),
+                    Some(table_schema)
+                );
+            }
+        }
+        let file_schema = Schema::new(vec![Field::new("value", DataType::Int32, true)]);
+        let table_schema = Schema::new(vec![Field::new("value", DataType::Int64, true)]);
+        assert_eq!(
+            apply_file_schema_type_coercions(&table_schema, &file_schema),
+            None
+        );
+    }
+
+    #[test]
+    fn nested_coercion_reader_produces_string_views() {
+        use arrow::array::{Array, ArrayRef, StringArray, StringViewArray, StructArray};
+        use arrow::record_batch::RecordBatch;
+        use bytes::Bytes;
+        use parquet::arrow::ArrowWriter;
+        use parquet::arrow::arrow_reader::{
+            ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
+        };
+
+        let identifiers = StructArray::from(vec![(
+            Arc::new(Field::new("cid", DataType::Utf8, true)),
+            Arc::new(StringArray::from(vec![Some("customer-03"), None])) as ArrayRef,
+        )]);
+        let struct_field = StructArray::from(vec![(
+            Arc::new(Field::new(
+                "identifiers",
+                identifiers.data_type().clone(),
+                true,
+            )),
+            Arc::new(identifiers) as ArrayRef,
+        )]);
+        let batch = RecordBatch::try_from_iter([("_struct", Arc::new(struct_field) as ArrayRef)])
+            .unwrap();
+        let table_schema = Schema::new(vec![Field::new_struct(
+            "_struct",
+            vec![
+                Field::new_struct(
+                    "identifiers",
+                    vec![Field::new("cid", DataType::Utf8View, true)],
+                    true,
+                ),
+                Field::new("schemaEvolutionOnly", DataType::Utf8View, true),
+            ],
+            true,
+        )]);
+        let reader_schema = Arc::new(
+            apply_file_schema_type_coercions(&table_schema, &batch.schema())
+                .unwrap(),
+        );
+        let mut bytes = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut bytes, batch.schema(), None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let mut reader = ParquetRecordBatchReaderBuilder::try_new_with_options(
+            Bytes::from(bytes),
+            ArrowReaderOptions::new().with_schema(reader_schema),
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+        let decoded = reader.next().unwrap().unwrap();
+        let struct_field = decoded
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let identifiers = struct_field
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let cust_id = identifiers
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .unwrap();
+        assert_eq!(cust_id.value(0), "customer-03");
+        assert!(cust_id.is_null(1));
+        assert_eq!(struct_field.num_columns(), 1);
+        assert!(reader.next().is_none());
+    }
+
 
     #[test]
     fn coerce_int96_to_resolution_with_mixed_timestamps() {
