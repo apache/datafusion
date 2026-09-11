@@ -1270,16 +1270,20 @@ impl DefaultPhysicalPlanner {
             LogicalPlan::SubqueryAlias(_) => children.one()?,
             LogicalPlan::Limit(limit) => {
                 let input = children.one()?;
+                // `get_skip_type` / `get_fetch_type` only return a non literal
+                // type for an expression that is present
                 let SkipType::Literal(skip) = limit.get_skip_type()? else {
+                    let skip = limit.skip.as_deref().map(ToString::to_string);
                     return not_impl_err!(
-                        "Unsupported OFFSET expression: {:?}",
-                        limit.skip
+                        "Unsupported OFFSET expression: {}",
+                        skip.unwrap_or_default()
                     );
                 };
                 let FetchType::Literal(fetch) = limit.get_fetch_type()? else {
+                    let fetch = limit.fetch.as_deref().map(ToString::to_string);
                     return not_impl_err!(
-                        "Unsupported LIMIT expression: {:?}",
-                        limit.fetch
+                        "Unsupported LIMIT expression: {}",
+                        fetch.unwrap_or_default()
                     );
                 };
 

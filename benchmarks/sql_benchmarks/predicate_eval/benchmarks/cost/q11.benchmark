@@ -1,7 +1,6 @@
 subgroup cost
 
 template sql_benchmarks/predicate_eval/predicate_eval.benchmark.template
-SUBGROUP=cost
-QPAD=11
+QUERY=cost/q11
 DATASET=mixed
 NAME=cost_q11_cheap_first
