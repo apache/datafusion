@@ -21,16 +21,20 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use crate::PhysicalExpr;
+use crate::expressions::{Column, Literal};
+use crate::utils::collect_columns;
 
 use arrow::array::BooleanArray;
 use arrow::array::{Array, ArrayRef, new_empty_array};
 use arrow::compute::SortOptions;
 use arrow::compute::filter as arrow_filter;
+use arrow::compute::filter_record_batch;
 use arrow::compute::kernels::sort::SortColumn;
 use arrow::datatypes::FieldRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::hash_utils::RandomState;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::utils::compare_rows;
 use datafusion_common::{
     Result, ScalarValue, arrow_datafusion_err, exec_datafusion_err, exec_err,
@@ -182,6 +186,76 @@ pub struct WindowPhysicalExpressions {
     pub order_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
 }
 
+#[inline]
+fn can_evaluate_window_arg_unfiltered(expr: &dyn PhysicalExpr) -> bool {
+    expr.is::<Column>() || expr.is::<Literal>()
+}
+
+/// Evaluates safe arguments on the original batch and all other arguments
+/// using `selection`.
+fn evaluate_window_arg(
+    expr: &dyn PhysicalExpr,
+    record_batch: &RecordBatch,
+    selection: &BooleanArray,
+) -> Result<ArrayRef> {
+    let value = if can_evaluate_window_arg_unfiltered(expr) {
+        expr.evaluate(record_batch)?
+    } else {
+        expr.evaluate_selection(record_batch, selection)?
+    };
+    value.into_array_of_size(record_batch.num_rows())
+}
+
+/// Projects the input to the columns referenced by `expressions` and rewrites
+/// their column indices to match the projected batch.
+fn project_window_args(
+    expressions: &[Arc<dyn PhysicalExpr>],
+    record_batch: &RecordBatch,
+) -> Result<(Vec<Arc<dyn PhysicalExpr>>, RecordBatch)> {
+    let mut projection = expressions
+        .iter()
+        .flat_map(collect_columns)
+        .map(|column| column.index())
+        .collect::<Vec<_>>();
+    projection.sort_unstable();
+    projection.dedup();
+
+    if projection.is_empty()
+        || projection.iter().copied().eq(0..record_batch.num_columns())
+    {
+        return Ok((expressions.to_vec(), record_batch.clone()));
+    }
+
+    let projected_batch = record_batch
+        .project(&projection)
+        .map_err(|e| arrow_datafusion_err!(e))?;
+
+    let projected_expressions = expressions
+        .iter()
+        .map(|expr| {
+            Arc::clone(expr)
+                .transform_down(|expr| {
+                    let Some(column) = expr.downcast_ref::<Column>() else {
+                        return Ok(Transformed::no(expr));
+                    };
+                    let Ok(projected) = projection.binary_search(&column.index()) else {
+                        return internal_err!(
+                            "Window argument column index {} is missing from its projection",
+                            column.index()
+                        );
+                    };
+                    Ok(Transformed::yes(Arc::new(Column::new(
+                        column.name(),
+                        projected,
+                    ))))
+                })
+                .data()
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok((projected_expressions, projected_batch))
+}
+
 /// Extension trait that adds common functionality to [`AggregateWindowExpr`]s
 pub trait AggregateWindowExpr: WindowExpr {
     /// Get the accumulator for the window expression. Note that distinct
@@ -313,8 +387,6 @@ pub trait AggregateWindowExpr: WindowExpr {
         mut idx: usize,
         not_end: bool,
     ) -> Result<ArrayRef> {
-        let values = self.evaluate_args(record_batch)?;
-
         // Evaluate filter mask once per record batch if present
         let filter_mask_arr: Option<ArrayRef> = match self.filter_expr() {
             Some(expr) => {
@@ -330,22 +402,54 @@ pub trait AggregateWindowExpr: WindowExpr {
             None => None,
         };
 
+        // Whole-partition aggregates update once, so their arguments do not need
+        // to preserve the input row alignment.
         if self.is_constant_in_partition() {
             if not_end {
                 let field = self.field()?;
                 let out_type = field.data_type();
                 return Ok(new_empty_array(out_type));
             }
-            let values = if let Some(mask) = filter_mask {
-                // Apply mask to all argument arrays before a single update
-                filter_arrays(&values, mask)?
-            } else {
-                values
+            let values = match filter_mask {
+                Some(mask) => {
+                    let expressions = self.expressions();
+                    let requires_selection = expressions
+                        .iter()
+                        .any(|expr| !can_evaluate_window_arg_unfiltered(expr.as_ref()));
+                    if requires_selection && mask.has_true() {
+                        let (expressions, projected_batch) =
+                            project_window_args(&expressions, record_batch)?;
+                        let filtered_batch = filter_record_batch(&projected_batch, mask)?;
+                        evaluate_expressions_to_arrays(&expressions, &filtered_batch)?
+                    } else {
+                        let values = expressions
+                            .iter()
+                            .map(|expr| {
+                                evaluate_window_arg(expr.as_ref(), record_batch, mask)
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+                        filter_arrays(&values, mask)?
+                    }
+                }
+                None => self.evaluate_args(record_batch)?,
             };
             accumulator.update_batch(&values)?;
             let value = accumulator.evaluate()?;
             return value.to_array_of_size(record_batch.num_rows());
         }
+
+        // Columns and literals keep their original alignment. Other arguments are
+        // evaluated only on selected rows and scattered back to the row indices used
+        // by window frames.
+        let values = match filter_mask {
+            Some(mask) => self
+                .expressions()
+                .iter()
+                .map(|expr| evaluate_window_arg(expr.as_ref(), record_batch, mask))
+                .collect::<Result<Vec<_>>>()?,
+            None => self.evaluate_args(record_batch)?,
+        };
+
         let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
 
         // We iterate on each row to perform a running calculation.
@@ -712,11 +816,15 @@ pub type PartitionBatches = IndexMap<PartitionKey, PartitionBatchState, RandomSt
 mod tests {
     use std::sync::Arc;
 
+    use crate::PhysicalExpr;
+    use crate::expressions::Column;
+    use crate::window::window_expr::project_window_args;
     use crate::window::window_expr::{WindowFn, WindowState, is_row_ahead};
 
-    use arrow::array::{ArrayRef, Float64Array};
+    use arrow::array::{ArrayRef, Float64Array, Int32Array};
     use arrow::compute::SortOptions;
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{Accumulator, window_state::WindowAggState};
 
@@ -746,6 +854,44 @@ mod tests {
         fn merge_batch(&mut self, _states: &[ArrayRef]) -> Result<()> {
             Ok(())
         }
+    }
+
+    #[test]
+    fn project_window_args_rewrites_columns_by_index() -> Result<()> {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("unused", DataType::Int32, false),
+                Field::new("c", DataType::Int32, false),
+            ])),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])),
+                Arc::new(Int32Array::from(vec![3, 4])),
+                Arc::new(Int32Array::from(vec![5, 6])),
+            ],
+        )?;
+        let expressions: Vec<Arc<dyn PhysicalExpr>> = vec![
+            Arc::new(Column::new("renamed_c", 2)),
+            Arc::new(Column::new("renamed_a", 0)),
+            Arc::new(Column::new("another_name_for_c", 2)),
+        ];
+
+        let (expressions, batch) = project_window_args(&expressions, &batch)?;
+
+        assert_eq!(batch.num_columns(), 2);
+        assert_eq!(batch.schema().field(0).name(), "a");
+        assert_eq!(batch.schema().field(1).name(), "c");
+        let columns = expressions
+            .iter()
+            .map(|expr| expr.downcast_ref::<Column>().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!((columns[0].name(), columns[0].index()), ("renamed_c", 1));
+        assert_eq!((columns[1].name(), columns[1].index()), ("renamed_a", 0));
+        assert_eq!(
+            (columns[2].name(), columns[2].index()),
+            ("another_name_for_c", 1)
+        );
+        Ok(())
     }
 
     #[test]
