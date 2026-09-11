@@ -848,17 +848,16 @@ impl PhysicalExpr for RangeExpr {
         &self,
         ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
     ) -> Result<Option<protobuf::PhysicalExprNode>> {
+        let Self { on_columns, router } = self;
         // Encode the raw ordered children: rebuilding a `LexOrdering` would
         // deduplicate equivalent children after dynamic-filter remapping.
-        let sort_exprs = self
-            .on_columns
+        let sort_exprs = on_columns
             .iter()
-            .zip(self.router.sort_options())
+            .zip(router.sort_options())
             .map(|(expr, options)| PhysicalSortExpr::new(Arc::clone(expr), *options))
             .collect::<Vec<_>>();
         let sort_expr = sort_exprs_try_to_proto(&sort_exprs, ctx)?;
-        let split_point = self
-            .router
+        let split_point = router
             .split_points()
             .iter()
             .map(|split_point| {
@@ -889,24 +888,31 @@ impl RangeExpr {
         node: &protobuf::PhysicalExprNode,
         ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
     ) -> Result<PhysicalExprRef> {
+        let protobuf::PhysicalExprNode {
+            expr_id: _,
+            expr_type,
+        } = node;
         // Decode the raw ordered children for the same reason as `try_to_proto`.
         let Some(protobuf::physical_expr_node::ExprType::RangeExpr(range_expr)) =
-            &node.expr_type
+            expr_type
         else {
             return internal_err!("PhysicalExprNode is not a RangeExpr");
         };
-        let sort_exprs = sort_exprs_try_from_proto(&range_expr.sort_expr, ctx)?;
+        let protobuf::PhysicalRangeExprNode {
+            sort_expr,
+            split_point,
+        } = range_expr;
+        let sort_exprs = sort_exprs_try_from_proto(sort_expr, ctx)?;
         let (on_columns, sort_options): (Vec<PhysicalExprRef>, Vec<SortOptions>) =
             sort_exprs
                 .into_iter()
                 .map(|sort_expr| (sort_expr.expr, sort_expr.options))
                 .unzip();
-        let split_points = range_expr
-            .split_point
+        let split_points = split_point
             .iter()
             .map(|split_point| {
-                let values = split_point
-                    .value
+                let protobuf::PhysicalRangeSplitPoint { value } = split_point;
+                let values = value
                     .iter()
                     .map(|value| ScalarValue::try_from(value).map_err(Into::into))
                     .collect::<Result<Vec<_>>>()?;
@@ -2058,9 +2064,6 @@ impl ExecutionPlan for RepartitionExec {
         &self,
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<protobuf::PhysicalPlanNode>> {
-        // Destructure exhaustively (no `..`) so that adding a field to
-        // `RepartitionExec` is a compile error here until it is either
-        // serialized or explicitly documented as not needing to be.
         let Self {
             input,
             // Execution-time channel state, created on `execute()`.
@@ -2104,9 +2107,6 @@ impl RepartitionExec {
             protobuf::physical_plan_node::PhysicalPlanType::Repartition,
             "RepartitionExec",
         );
-        // Destructure exhaustively so that a new field on
-        // `RepartitionExecNode` is a compile error here rather than a silently
-        // dropped field.
         let protobuf::RepartitionExecNode {
             input,
             partitioning,
@@ -5030,6 +5030,83 @@ mod test {
              actual rows collected ({total_rows}), not double-count"
         );
 
+        Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "proto"))]
+mod range_expr_proto_tests {
+    use std::sync::Arc;
+
+    use arrow::compute::SortOptions;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::{Result, ScalarValue, SplitPoint};
+    use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+
+    use super::*;
+    use crate::proto::{ExecutionPlanDecodeCtx, ExecutionPlanEncodeCtx};
+    use crate::proto_test_util::{StubPlanDecoder, StubPlanEncoder};
+
+    fn schema() -> Schema {
+        Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ])
+    }
+
+    fn split_points() -> Vec<SplitPoint> {
+        vec![SplitPoint::new(vec![
+            ScalarValue::Int32(Some(10)),
+            ScalarValue::Int32(Some(20)),
+        ])]
+    }
+
+    fn sort_options() -> [SortOptions; 2] {
+        [
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+            SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+        ]
+    }
+
+    #[test]
+    fn range_expr_round_trip_preserves_sort_options_and_split_points() -> Result<()> {
+        let schema = schema();
+        let sort_opts = sort_options();
+        let split_pts = split_points();
+        let on_columns = vec![col("a", &schema)?, col("b", &schema)?];
+        let range_partitioning = RangePartitioning::try_new(
+            [
+                PhysicalSortExpr::new(Arc::clone(&on_columns[0]), sort_opts[0]),
+                PhysicalSortExpr::new(Arc::clone(&on_columns[1]), sort_opts[1]),
+            ]
+            .into(),
+            split_pts.clone(),
+        )?;
+        let expr =
+            RangeExpr::try_new_with_schema(on_columns, &range_partitioning, &schema)?;
+
+        let encoder = StubPlanEncoder::ok();
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        let node = PhysicalExpr::try_to_proto(&expr, &encode_ctx.expr_ctx())
+            .unwrap()
+            .expect("RangeExpr should encode to Some(node)");
+
+        let decoder = StubPlanDecoder::ok();
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        let decoded = RangeExpr::try_from_proto(&node, &decode_ctx.expr_ctx(&schema))?;
+        let decoded = decoded
+            .downcast_ref::<RangeExpr>()
+            .expect("decoded expression should be a RangeExpr");
+
+        assert_eq!(decoded.sort_options(), sort_opts);
+        assert_eq!(decoded.split_points(), split_pts);
         Ok(())
     }
 }
