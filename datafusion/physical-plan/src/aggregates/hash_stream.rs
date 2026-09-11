@@ -163,6 +163,9 @@ pub(crate) struct PartialHashAggregateStream {
     /// Tracks partial aggregation row reduction, matching `GroupedHashAggregateStream`.
     reduction_factor: metrics::RatioMetrics,
 
+    /// Number of times accumulated states were emitted due to memory pressure.
+    early_emit_count: metrics::Count,
+
     /// Tracks whether partial aggregation should switch to direct state conversion.
     skip_aggregation_probe: Option<SkipAggregationProbe>,
 
@@ -389,6 +392,8 @@ impl PartialHashAggregateStream {
         let reduction_factor = MetricBuilder::new(&agg.metrics)
             .with_type(metrics::MetricType::Summary)
             .ratio_metrics("reduction_factor", partition);
+        let early_emit_count =
+            MetricBuilder::new(&agg.metrics).counter("early_emit_count", partition);
 
         let hash_table = AggregateHashTable::<PartialMarker>::new(
             agg,
@@ -433,6 +438,7 @@ impl PartialHashAggregateStream {
             baseline_metrics,
             reservation,
             reduction_factor,
+            early_emit_count,
             skip_aggregation_probe,
             group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
             hash_table: Some(hash_table),
@@ -476,6 +482,7 @@ impl PartialHashAggregateStream {
                             )
                         })?;
 
+                        self.early_emit_count.add(1);
                         timer.done();
                         self.emit_on_memory_pressure(
                             materialized_group_states,
@@ -1128,6 +1135,45 @@ mod tests {
         assert_eq!(
             total_output_groups, num_groups,
             "Unexpected number of groups",
+        );
+        assert_eq!(
+            aggregate_exec
+                .metrics()
+                .unwrap()
+                .sum_by_name("early_emit_count")
+                .unwrap()
+                .as_usize(),
+            0
+        );
+
+        // Disable skip aggregation so the same input is emitted on memory pressure.
+        let runtime = RuntimeEnvBuilder::default()
+            .with_memory_limit(1024, 1.0)
+            .build_arc()?;
+        let session_config = task_ctx.session_config().clone().set(
+            "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
+            &datafusion_common::ScalarValue::Float64(Some(2.0)),
+        );
+        let no_skip_task_ctx = Arc::new(
+            TaskContext::default()
+                .with_runtime(runtime)
+                .with_session_config(session_config),
+        );
+        let mut stream =
+            PartialHashAggregateStream::new(&aggregate_exec, &no_skip_task_ctx, 0)?
+                .into_stream();
+        while let Some(result) = stream.next().await {
+            result?;
+        }
+
+        assert_eq!(
+            aggregate_exec
+                .metrics()
+                .unwrap()
+                .sum_by_name("early_emit_count")
+                .unwrap()
+                .as_usize(),
+            1
         );
 
         Ok(())
