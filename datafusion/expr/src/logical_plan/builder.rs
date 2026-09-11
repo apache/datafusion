@@ -26,7 +26,7 @@ use std::sync::Arc;
 use crate::dml::CopyTo;
 use crate::expr::{Alias, PlannedReplaceSelectItem, Sort as SortExpr};
 use crate::expr_rewriter::{
-    coerce_plan_expr_for_schema, normalize_col,
+    ColumnNormalizer, coerce_plan_expr_for_schema, normalize_col,
     normalize_col_with_schemas_and_ambiguity_check, normalize_cols, normalize_sorts,
     rewrite_sort_cols_by_aggs,
 };
@@ -1132,18 +1132,7 @@ impl LogicalPlanBuilder {
     }
 
     pub(crate) fn normalize(plan: &LogicalPlan, column: Column) -> Result<Column> {
-        if column.relation.is_some() {
-            // column is already normalized
-            return Ok(column);
-        }
-
-        let schema = plan.schema();
-        let fallback_schemas = plan.fallback_normalize_schemas();
-        let using_columns = plan.using_columns()?;
-        column.normalize_with_schemas_and_ambiguity_check(
-            &[&[schema], &fallback_schemas],
-            &using_columns,
-        )
+        ColumnNormalizer::new(plan).normalize_column(column)
     }
 
     /// Apply a join with on constraint and specified null equality.
@@ -2086,6 +2075,7 @@ fn project_with_validation(
 ) -> Result<LogicalPlan> {
     let mut projected_expr = vec![];
     let mut has_wildcard = false;
+    let mut normalizer = ColumnNormalizer::new(&plan);
     for (e, validate) in expr {
         let e = e.into();
         match e {
@@ -2104,7 +2094,7 @@ fn project_with_validation(
                 for e in expanded {
                     if validate {
                         projected_expr
-                            .push(columnize_expr(normalize_col(e, &plan)?, &plan)?)
+                            .push(columnize_expr(normalizer.normalize(e)?, &plan)?)
                     } else {
                         projected_expr.push(e)
                     }
@@ -2126,7 +2116,7 @@ fn project_with_validation(
                 for e in expanded {
                     if validate {
                         projected_expr
-                            .push(columnize_expr(normalize_col(e, &plan)?, &plan)?)
+                            .push(columnize_expr(normalizer.normalize(e)?, &plan)?)
                     } else {
                         projected_expr.push(e)
                     }
@@ -2134,7 +2124,7 @@ fn project_with_validation(
             }
             SelectExpr::Expression(e) => {
                 if validate {
-                    projected_expr.push(columnize_expr(normalize_col(e, &plan)?, &plan)?)
+                    projected_expr.push(columnize_expr(normalizer.normalize(e)?, &plan)?)
                 } else {
                     projected_expr.push(e)
                 }
