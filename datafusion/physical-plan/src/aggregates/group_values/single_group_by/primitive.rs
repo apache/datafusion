@@ -287,16 +287,6 @@ mod tests {
     use datafusion_expr::EmitTo;
     use std::sync::Arc;
 
-    /// Mirror of the `EmitTo::take_needed` regression test, applied to the
-    /// concrete `GroupValuesPrimitive` accumulator.
-    ///
-    /// When `n` is small, the old `split_off(n) + swap` pattern used inside
-    /// `emit(EmitTo::First(n))` left `self.values` with a small fresh allocation
-    /// and returned the emitted prefix carrying the original large backing.
-    ///
-    /// With `split_vec_min_alloc` and `n * 2 <= len`, the drain branch is taken:
-    /// the emitted prefix gets a compact allocation and `self.values` retains the
-    /// original large one.
     #[test]
     fn size_includes_owner_and_retained_allocations() -> Result<()> {
         let mut gv = GroupValuesPrimitive::<Int32Type>::new(DataType::Int32);
@@ -314,6 +304,16 @@ mod tests {
         Ok(())
     }
 
+    /// Mirror of the `EmitTo::take_needed` regression test, applied to the
+    /// concrete `GroupValuesPrimitive` accumulator.
+    ///
+    /// When `n` is small, the old `split_off(n) + swap` pattern used inside
+    /// `emit(EmitTo::First(n))` left `self.values` with a small fresh allocation
+    /// and returned the emitted prefix carrying the original large backing.
+    ///
+    /// With `split_vec_min_alloc` and `n * 2 <= len`, the drain branch is taken:
+    /// the emitted prefix gets a compact allocation and `self.values` retains the
+    /// original large one.
     #[test]
     fn emit_first_small_n_allocates_minimally() -> Result<()> {
         let mut gv = GroupValuesPrimitive::<Int32Type>::new(DataType::Int32);
