@@ -55,3 +55,28 @@ FROM outer_values o;
 2 false
 3 NULL
 4 false
+
+# Correlated NOT IN exercises the projection-specific negation path for a
+# match, miss, inner NULL, empty result, and NULL outer value.
+query IB rowsort
+WITH
+outer_values AS (
+    SELECT * FROM (VALUES (1, 1), (2, 2), (3, 3), (4, 4), (5, NULL)) AS t(group_id, probe)
+),
+inner_values AS (
+    SELECT * FROM (VALUES (1, 1), (2, 9), (3, NULL), (5, 9)) AS t(group_id, value)
+)
+SELECT
+    o.group_id,
+    o.probe NOT IN (
+        SELECT i.value
+        FROM inner_values i
+        WHERE i.group_id = o.group_id
+    )
+FROM outer_values o;
+----
+1 false
+2 true
+3 NULL
+4 true
+5 NULL
