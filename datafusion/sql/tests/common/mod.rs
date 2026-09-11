@@ -25,7 +25,9 @@ use arrow::datatypes::*;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::file_options::file_type::FileType;
-use datafusion_common::{DFSchema, GetExt, Result, TableReference, plan_err};
+use datafusion_common::{
+    Constraint, Constraints, DFSchema, GetExt, Result, TableReference, plan_err,
+};
 use datafusion_expr::planner::{ExprPlanner, PlannerResult, TypePlanner};
 use datafusion_expr::{
     AggregateUDF, Expr, HigherOrderUDF, ScalarUDF, TableSource, WindowUDF,
@@ -278,6 +280,27 @@ impl ContextProvider for MockContextProvider {
                 DataType::UInt32,
                 false,
             )])),
+            "table_with_pk" => {
+                let schema = Arc::new(Schema::new(vec![
+                    Field::new("id", DataType::Int32, false),
+                    Field::new("name", DataType::Utf8, false),
+                ]));
+                let constraints =
+                    Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]);
+                return Ok(Arc::new(EmptyTable::with_constraints(schema, constraints)));
+            }
+            "table_with_multi_constraints" => {
+                let schema = Arc::new(Schema::new(vec![
+                    Field::new("id", DataType::Int32, false),
+                    Field::new("email", DataType::Utf8, false),
+                    Field::new("name", DataType::Utf8, false),
+                ]));
+                let constraints = Constraints::new_unverified(vec![
+                    Constraint::PrimaryKey(vec![0]),
+                    Constraint::Unique(vec![1]),
+                ]);
+                return Ok(Arc::new(EmptyTable::with_constraints(schema, constraints)));
+            }
             _ => plan_err!("No table named: {} found", name.table()),
         };
 
@@ -357,17 +380,32 @@ impl ContextProvider for MockContextProvider {
 
 struct EmptyTable {
     table_schema: SchemaRef,
+    constraints: Option<Constraints>,
 }
 
 impl EmptyTable {
     fn new(table_schema: SchemaRef) -> Self {
-        Self { table_schema }
+        Self {
+            table_schema,
+            constraints: None,
+        }
+    }
+
+    fn with_constraints(table_schema: SchemaRef, constraints: Constraints) -> Self {
+        Self {
+            table_schema,
+            constraints: Some(constraints),
+        }
     }
 }
 
 impl TableSource for EmptyTable {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.table_schema)
+    }
+
+    fn constraints(&self) -> Option<&Constraints> {
+        self.constraints.as_ref()
     }
 }
 

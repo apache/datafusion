@@ -65,11 +65,11 @@ use sqlparser::ast::{
     UniqueConstraint, Update, UpdateTableFromKind, ValueWithSpan,
 };
 use sqlparser::ast::{
-    Assignment, AssignmentTarget, ColumnDef, CreateIndex, CreateTable,
+    Assignment, AssignmentTarget, ColumnDef, ConflictTarget, CreateIndex, CreateTable,
     CreateTableOptions, Delete, DescribeAlias, Expr as SQLExpr, FromTable, Ident, Insert,
-    ObjectName, ObjectType, Query, SchemaName, SetExpr, ShowCreateObject,
-    ShowStatementFilter, Statement, TableConstraint, TableFactor, TableWithJoins,
-    TransactionMode, UnaryOperator, Value,
+    ObjectName, ObjectType, OnConflictAction, OnInsert, Query, SchemaName, SetExpr,
+    ShowCreateObject, ShowStatementFilter, Statement, TableConstraint, TableFactor,
+    TableWithJoins, TransactionMode, UnaryOperator, Value,
 };
 use sqlparser::parser::ParserError::ParserError;
 
@@ -1075,9 +1075,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if !after_columns.is_empty() {
                     plan_err!("After-columns clause not supported")?;
                 }
-                if on.is_some() {
-                    plan_err!("Insert-on clause not supported")?;
-                }
+
                 if returning.is_some() {
                     plan_err!("Insert-returning clause not supported")?;
                 }
@@ -1125,7 +1123,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // optional keywords don't change behavior
                 let _ = into;
                 let _ = has_table_keyword;
-                self.insert_to_plan(table_name, columns, source, overwrite, replace_into)
+                self.insert_to_plan(
+                    table_name,
+                    columns,
+                    source,
+                    overwrite,
+                    replace_into,
+                    on,
+                )
             }
             Statement::Update(Update {
                 table,
@@ -2821,6 +2826,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         source: Box<Query>,
         overwrite: bool,
         replace_into: bool,
+        on: Option<OnInsert>,
     ) -> Result<LogicalPlan> {
         // Do a table lookup to verify the table exists
         let table_name = self.object_name_to_table_reference(table_name)?;
@@ -2957,6 +2963,271 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             })
             .collect::<Result<Vec<Expr>>>()?;
         let source = project(source, exprs)?;
+
+        if let Some(on_insert) = on {
+            if overwrite {
+                return plan_err!(
+                    "INSERT OVERWRITE cannot be combined with ON CONFLICT clause"
+                );
+            }
+            if replace_into {
+                return plan_err!(
+                    "REPLACE INTO cannot be combined with ON CONFLICT clause"
+                );
+            }
+
+            let on_conflict = match on_insert {
+                OnInsert::OnConflict(on_conflict) => on_conflict,
+                OnInsert::DuplicateKeyUpdate(_) => {
+                    return not_impl_err!("ON DUPLICATE KEY UPDATE is not supported");
+                }
+                _ => return not_impl_err!("Unsupported ON clause"),
+            };
+
+            // Target table cannot be named or aliased as 'excluded'
+            if table_name.table().eq_ignore_ascii_case("excluded") {
+                return plan_err!(
+                    "Target table cannot be named or aliased as 'excluded' when using ON CONFLICT"
+                );
+            }
+
+            // Extract and validate conflict target columns
+            let target_col_names: Vec<String> = match on_conflict.conflict_target {
+                Some(ConflictTarget::Columns(cols)) => {
+                    if cols.is_empty() {
+                        return plan_err!(
+                            "ON CONFLICT target column list cannot be empty"
+                        );
+                    }
+                    cols.into_iter()
+                        .map(|c| self.ident_normalizer.normalize(c))
+                        .collect()
+                }
+                Some(ConflictTarget::OnConstraint(_)) => {
+                    return not_impl_err!(
+                        "ON CONFLICT ON CONSTRAINT is not supported because table constraints do not store constraint names"
+                    );
+                }
+                None => {
+                    // In PostgreSQL, ON CONFLICT without target is only allowed with DO NOTHING.
+                    if matches!(on_conflict.action, OnConflictAction::DoUpdate(_)) {
+                        return plan_err!(
+                            "ON CONFLICT DO UPDATE requires a conflict target specification"
+                        );
+                    }
+                    // For DO NOTHING without target:
+                    // Infer conflict target from the first declared Unique or PrimaryKey constraint.
+                    // Note: In PostgreSQL, an unqualified ON CONFLICT DO NOTHING (with no conflict target)
+                    // suppresses violations against *any* unique or exclusion constraint on the table.
+                    // In DataFusion, the operation is desugared into MERGE INTO, which joins on a single
+                    // conjunction of equi-join keys. Inferring the target from the first matching constraint
+                    // is a deliberate simplification for tables with unique/PK constraints; on tables with
+                    // multiple disjoint constraints, conflicts against constraints other than the first will
+                    // not be matched by this equi-join and may be rejected downstream by the table provider.
+                    // If no constraints exist on the table, no conflict can occur -> normal insert.
+                    let inferred_target =
+                        table_source.constraints().and_then(|constraints| {
+                            constraints.iter().find_map(|c| match c {
+                                Constraint::PrimaryKey(indices)
+                                | Constraint::Unique(indices)
+                                    if !indices.is_empty() =>
+                                {
+                                    Some(
+                                        indices
+                                            .iter()
+                                            .map(|&i| {
+                                                table_schema.field(i).name().clone()
+                                            })
+                                            .collect::<Vec<_>>(),
+                                    )
+                                }
+                                _ => None,
+                            })
+                        });
+
+                    match inferred_target {
+                        Some(cols) => cols,
+                        None => {
+                            // No constraints to conflict on: DO NOTHING is equivalent to a regular insert.
+                            return Ok(LogicalPlan::Dml(DmlStatement::new(
+                                table_name,
+                                Arc::clone(&table_source),
+                                WriteOp::Insert(InsertOp::Append),
+                                Arc::new(source),
+                            )));
+                        }
+                    }
+                }
+            };
+
+            // Validate that target columns exist in the table schema
+            let mut target_indices = Vec::with_capacity(target_col_names.len());
+            for col_name in &target_col_names {
+                let idx = table_schema
+                    .index_of_column_by_name(None, col_name)
+                    .ok_or_else(|| {
+                        unqualified_field_not_found(col_name, &table_schema)
+                    })?;
+                target_indices.push(idx);
+            }
+
+            // If table provider provides non-empty constraints, validate against them
+            if let Some(constraints) =
+                table_source.constraints().filter(|c| !c.is_empty())
+            {
+                let mut sorted_target_indices = target_indices.clone();
+                sorted_target_indices.sort_unstable();
+
+                let matches_constraint = constraints.iter().any(|c| {
+                    let mut c_indices = match c {
+                        Constraint::PrimaryKey(indices) | Constraint::Unique(indices) => {
+                            indices.clone()
+                        }
+                    };
+                    c_indices.sort_unstable();
+                    c_indices == sorted_target_indices
+                });
+
+                if !matches_constraint {
+                    return plan_err!(
+                        "There is no unique or exclusion constraint matching the ON CONFLICT specification"
+                    );
+                }
+            }
+
+            // Wrap source in SubqueryAlias with qualifier "excluded"
+            let excluded_qualifier = TableReference::bare("excluded");
+            let source_aliased =
+                LogicalPlan::SubqueryAlias(datafusion_expr::SubqueryAlias::try_new(
+                    Arc::new(source),
+                    excluded_qualifier.clone(),
+                )?);
+
+            // Construct ON condition: target.col = excluded.col AND ...
+            let mut on_expr: Option<Expr> = None;
+            for col_name in &target_col_names {
+                let target_col =
+                    Expr::Column(Column::new(Some(table_name.clone()), col_name.clone()));
+                let excluded_col = Expr::Column(Column::new(
+                    Some(excluded_qualifier.clone()),
+                    col_name.clone(),
+                ));
+                let eq_expr = target_col.eq(excluded_col);
+                on_expr = match on_expr {
+                    Some(prev) => Some(prev.and(eq_expr)),
+                    None => Some(eq_expr),
+                };
+            }
+            let on_expr = on_expr.ok_or_else(|| {
+                plan_datafusion_err!("Expected at least one conflict column")
+            })?;
+
+            // Columns for the WHEN NOT MATCHED THEN INSERT clause: all table columns from excluded
+            let insert_columns: Vec<String> = table_schema
+                .fields()
+                .iter()
+                .map(|f| f.name().clone())
+                .collect();
+            let insert_values: Vec<Expr> = table_schema
+                .fields()
+                .iter()
+                .map(|f| {
+                    Expr::Column(Column::new(
+                        Some(excluded_qualifier.clone()),
+                        f.name().clone(),
+                    ))
+                })
+                .collect();
+
+            let target_schema_qualified = Arc::new(DFSchema::try_from_qualified_schema(
+                table_name.clone(),
+                &table_source.schema(),
+            )?);
+            let combined_schema = Arc::new(
+                target_schema_qualified
+                    .as_ref()
+                    .join(source_aliased.schema())?,
+            );
+
+            let clauses = match on_conflict.action {
+                OnConflictAction::DoNothing => {
+                    vec![MergeIntoClause {
+                        kind: MergeIntoClauseKind::NotMatched,
+                        predicate: None,
+                        action: MergeIntoAction::Insert {
+                            columns: insert_columns,
+                            values: insert_values,
+                        },
+                    }]
+                }
+                OnConflictAction::DoUpdate(do_update) => {
+                    let predicate = do_update
+                        .selection
+                        .map(|p| {
+                            self.sql_to_expr(p, &combined_schema, &mut planner_context)
+                        })
+                        .transpose()?;
+
+                    let assignments = do_update
+                        .assignments
+                        .into_iter()
+                        .map(|assign| {
+                            let col_name = match &assign.target {
+                                AssignmentTarget::ColumnName(cols) => {
+                                    self.merge_target_column_name(cols, &table_name)?
+                                }
+                                _ => plan_err!("Tuples are not supported")?,
+                            };
+                            target_schema_qualified
+                                .field_with_unqualified_name(&col_name)?;
+                            let value = self.sql_to_expr(
+                                assign.value,
+                                &combined_schema,
+                                &mut planner_context,
+                            )?;
+                            Ok((col_name, value))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+
+                    let mut seen = HashSet::new();
+                    for (col, _) in &assignments {
+                        if !seen.insert(col.as_str()) {
+                            return plan_err!(
+                                "Duplicate column '{col}' in ON CONFLICT DO UPDATE"
+                            );
+                        }
+                    }
+
+                    vec![
+                        MergeIntoClause {
+                            kind: MergeIntoClauseKind::Matched,
+                            predicate,
+                            action: MergeIntoAction::Update(assignments),
+                        },
+                        MergeIntoClause {
+                            kind: MergeIntoClauseKind::NotMatched,
+                            predicate: None,
+                            action: MergeIntoAction::Insert {
+                                columns: insert_columns,
+                                values: insert_values,
+                            },
+                        },
+                    ]
+                }
+            };
+
+            let merge_op = MergeIntoOp {
+                on: on_expr,
+                clauses,
+            };
+
+            return Ok(LogicalPlan::Dml(DmlStatement::new(
+                table_name,
+                Arc::clone(&table_source),
+                WriteOp::MergeInto(Box::new(merge_op)),
+                Arc::new(source_aliased),
+            )));
+        }
 
         let insert_op = match (overwrite, replace_into) {
             (false, false) => InsertOp::Append,
