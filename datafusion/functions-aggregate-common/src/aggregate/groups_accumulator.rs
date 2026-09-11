@@ -510,36 +510,54 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         // Each row has its respective group
         let mut results = vec![];
         let mut grouped_update_metric = None;
-        let mut start = None;
-        for row_idx in 0..num_rows {
-            // Create the empty accumulator for converting
-            let mut converted_accumulator = (self.factory)()?;
-            if row_idx == 0 {
-                let metric = self
-                    .grouped_update_metric
-                    .get_or_init(|| converted_accumulator.grouped_update_batch_metric());
-                grouped_update_metric.clone_from(metric);
-                start = grouped_update_metric.as_ref().map(|_| Instant::now());
+        let mut aggregate_duration = Duration::ZERO;
+        for chunk_start in (0..num_rows).step_by(GROUPED_METRIC_PREPARATION_CHUNK_SIZE) {
+            let chunk_end =
+                (chunk_start + GROUPED_METRIC_PREPARATION_CHUNK_SIZE).min(num_rows);
+            let mut prepared = Vec::with_capacity(chunk_end - chunk_start);
+
+            for row_idx in chunk_start..chunk_end {
+                // Create the empty accumulator and prepare adapter-owned input
+                // outside the aggregate submetric.
+                let accumulator = (self.factory)()?;
+                if row_idx == 0 {
+                    let metric = self
+                        .grouped_update_metric
+                        .get_or_init(|| accumulator.grouped_update_batch_metric());
+                    grouped_update_metric.clone_from(metric);
+                }
+                let values_to_accumulate =
+                    slice_and_maybe_filter(values, opt_filter, &[row_idx, row_idx + 1])?;
+                prepared.push((accumulator, values_to_accumulate));
             }
 
-            // Convert row to states. Use the grouped variant because the
-            // conversion-wide timer above accounts for the complete loop.
-            let values_to_accumulate =
-                slice_and_maybe_filter(values, opt_filter, &[row_idx, row_idx + 1])?;
-            converted_accumulator.update_batch_grouped(&values_to_accumulate)?;
-            let states = converted_accumulator.state()?;
+            // Time only aggregate-owned deduplication, once per bounded chunk.
+            let start = grouped_update_metric.as_ref().map(|_| Instant::now());
+            let update_result: Result<()> = prepared.iter_mut().try_for_each(
+                |(accumulator, values_to_accumulate)| {
+                    accumulator.update_batch_grouped(values_to_accumulate)
+                },
+            );
+            if let Some(start) = start {
+                aggregate_duration += start.elapsed();
+            }
+            update_result?;
 
-            // Resize results to have enough columns according to the converted states
-            results.resize_with(states.len(), || Vec::with_capacity(num_rows));
+            for (mut accumulator, _) in prepared {
+                let states = accumulator.state()?;
 
-            // Add the states to results
-            for (idx, state_val) in states.into_iter().enumerate() {
-                results[idx].push(state_val);
+                // Resize results to have enough columns according to the converted states
+                results.resize_with(states.len(), || Vec::with_capacity(num_rows));
+
+                // Add the states to results
+                for (idx, state_val) in states.into_iter().enumerate() {
+                    results[idx].push(state_val);
+                }
             }
         }
 
-        if let (Some(metric), Some(start)) = (grouped_update_metric, start) {
-            metric.add_duration(start.elapsed());
+        if let Some(metric) = grouped_update_metric {
+            metric.add_duration(aggregate_duration);
         }
 
         let arrays = results
@@ -611,7 +629,7 @@ pub(crate) fn slice_and_maybe_filter(
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::time::Duration;
 
     use super::*;
@@ -625,6 +643,16 @@ mod tests {
     impl AggregateMetric for CountingMetric {
         fn add_duration(&self, _duration: Duration) {
             self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[derive(Debug)]
+    struct DurationMetric(Arc<AtomicU64>);
+
+    impl AggregateMetric for DurationMetric {
+        fn add_duration(&self, duration: Duration) {
+            self.0
+                .fetch_add(duration.as_nanos() as u64, Ordering::Relaxed);
         }
     }
 
@@ -700,6 +728,63 @@ mod tests {
         accumulator.convert_to_state(&[values], None)?;
 
         assert_eq!(metric_updates.load(Ordering::Relaxed), 1);
+        Ok(())
+    }
+
+    #[derive(Debug)]
+    struct SlowStateAccumulator {
+        metric: Arc<dyn AggregateMetric>,
+    }
+
+    impl Accumulator for SlowStateAccumulator {
+        fn update_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
+            Ok(())
+        }
+
+        fn grouped_update_batch_metric(&self) -> Option<Arc<dyn AggregateMetric>> {
+            Some(Arc::clone(&self.metric))
+        }
+
+        fn evaluate(&mut self) -> Result<ScalarValue> {
+            Ok(ScalarValue::Int64(None))
+        }
+
+        fn size(&self) -> usize {
+            size_of_val(self)
+        }
+
+        fn state(&mut self) -> Result<Vec<ScalarValue>> {
+            std::thread::sleep(Duration::from_millis(50));
+            Ok(vec![ScalarValue::Int64(None)])
+        }
+
+        fn merge_batch(&mut self, _states: &[ArrayRef]) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn adapter_convert_to_state_excludes_state_materialization_from_metric() -> Result<()>
+    {
+        let recorded_nanos = Arc::new(AtomicU64::new(0));
+        let accumulator = GroupsAccumulatorAdapter::new({
+            let recorded_nanos = Arc::clone(&recorded_nanos);
+            move || {
+                Ok(Box::new(SlowStateAccumulator {
+                    metric: Arc::new(DurationMetric(Arc::clone(&recorded_nanos))),
+                }) as Box<dyn Accumulator>)
+            }
+        });
+
+        let values: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
+        let filter = BooleanArray::from(vec![true, false]);
+        accumulator.convert_to_state(&[values], Some(&filter))?;
+
+        assert!(
+            recorded_nanos.load(Ordering::Relaxed)
+                < Duration::from_millis(25).as_nanos() as u64,
+            "internal metric must exclude state materialization"
+        );
         Ok(())
     }
 
