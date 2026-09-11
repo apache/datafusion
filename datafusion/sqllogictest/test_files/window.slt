@@ -7124,8 +7124,9 @@ statement error Error during planning: RANGE window frames are not supported for
 select count(*) over (order by x) from (values (map(['a'], [1])), (map(['a'], [2]))) t(x)
 
 # every ORDER BY expression takes part in the peer comparison, so a map after
-# a duration is rejected as well, while two durations are fine
-statement error Error during planning: RANGE window frames are not supported for ORDER BY type Duration
+# a duration is rejected as well, while two durations are fine; the error names
+# the offending type, not the first ORDER BY type
+statement error Error during planning: RANGE window frames are not supported for ORDER BY type Map
 select count(*) over (order by d, m) from (values (arrow_cast(1, 'Duration(Second)'), map(['a'], [1])), (arrow_cast(1, 'Duration(Second)'), map(['a'], [2]))) t(d, m)
 
 query ??I

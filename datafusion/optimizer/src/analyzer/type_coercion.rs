@@ -1099,7 +1099,9 @@ fn coerce_frame_bound(
     }
 }
 
-fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
+/// The type that RANGE frame offsets are coerced to for an ORDER BY column of
+/// `col_type`, or `None` if the type does not support RANGE frames.
+fn extract_window_frame_target_type(col_type: &DataType) -> Option<DataType> {
     if col_type.is_numeric()
         || col_type.is_string()
         || col_type.is_binary()
@@ -1114,15 +1116,15 @@ fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
                 | DataType::Time64(_)
         )
     {
-        Ok(col_type.clone())
+        Some(col_type.clone())
     } else if is_datetime(col_type) {
-        Ok(DataType::Interval(IntervalUnit::MonthDayNano))
+        Some(DataType::Interval(IntervalUnit::MonthDayNano))
     } else if let DataType::Dictionary(_, value_type) = col_type {
         extract_window_frame_target_type(value_type)
     } else if let DataType::RunEndEncoded(_, value_type) = col_type {
         extract_window_frame_target_type(value_type.data_type())
     } else {
-        plan_err!("RANGE window frames are not supported for ORDER BY type {col_type}")
+        None
     }
 }
 
@@ -1146,6 +1148,24 @@ fn supports_free_range_frame(col_type: &DataType) -> bool {
     }
 }
 
+/// Errors if any ORDER BY expression has a type not supported in a free RANGE frame.
+fn check_free_range_order_by_types(
+    expressions: &[Sort],
+    schema: &DFSchema,
+) -> Result<()> {
+    for sort in expressions {
+        let t = sort.expr.get_type(schema)?;
+        if extract_window_frame_target_type(&t).is_none()
+            && !supports_free_range_frame(&t)
+        {
+            return plan_err!(
+                "RANGE window frames are not supported for ORDER BY type {t}"
+            );
+        }
+    }
+    Ok(())
+}
+
 // Coerces the given `window_frame` to use appropriate natural types.
 // For example, ROWS and GROUPS frames use `UInt64` during calculations.
 fn coerce_window_frame(
@@ -1162,25 +1182,19 @@ fn coerce_window_frame(
                 .transpose()?;
             if let Some(col_type) = current_types {
                 let target_type = match extract_window_frame_target_type(&col_type) {
-                    Ok(target_type) => target_type,
+                    Some(target_type) => target_type,
                     // A free range frame has no offsets to coerce, so ORDER BY
                     // types without arithmetic are fine as long as their peer
                     // comparison is sound (see `supports_free_range_frame`).
-                    // Every ORDER BY expression takes part in that comparison,
-                    // so all of them have to qualify, not just the first.
-                    Err(_)
-                        if window_frame.free_range()
-                            && expressions.iter().try_fold(true, |ok, s| {
-                                let t = s.expr.get_type(schema)?;
-                                Ok::<_, DataFusionError>(
-                                    ok && (extract_window_frame_target_type(&t).is_ok()
-                                        || supports_free_range_frame(&t)),
-                                )
-                            })? =>
-                    {
+                    None if window_frame.free_range() => {
+                        check_free_range_order_by_types(expressions, schema)?;
                         return Ok(window_frame);
                     }
-                    Err(e) => return Err(e),
+                    None => {
+                        return plan_err!(
+                            "RANGE window frames are not supported for ORDER BY type {col_type}"
+                        );
+                    }
                 };
                 // A finite offset bound (e.g. `5 PRECEDING`) is computed as
                 // `current_value ± offset`, so it is only meaningful for target
