@@ -169,6 +169,24 @@ mod test {
                         )?),
                     })
                 }
+                Expr::Literal(ScalarValue::Int32(Some(700)), _) => {
+                    Ok(PreimageResult::Range {
+                        expr,
+                        interval: Box::new(Interval::try_new(
+                            ScalarValue::Int32(Some(500)),
+                            ScalarValue::Int32(Some(600)),
+                        )?),
+                    })
+                }
+                Expr::Literal(ScalarValue::Int32(Some(800)), _) => {
+                    Ok(PreimageResult::Range {
+                        expr,
+                        interval: Box::new(Interval::try_new(
+                            ScalarValue::Int32(Some(700)),
+                            ScalarValue::Int32(Some(800)),
+                        )?),
+                    })
+                }
                 _ => Ok(PreimageResult::None),
             }
         }
@@ -321,10 +339,13 @@ mod test {
     #[test]
     fn test_preimage_in_list_rewrite() {
         let schema = test_schema();
-        let expr = preimage_udf_expr().in_list(vec![lit(500), lit(600)], false);
+        let expr = preimage_udf_expr().in_list(vec![lit(500), lit(600), lit(700)], false);
         let expected = or(
-            and(col("x").gt_eq(lit(100)), col("x").lt(lit(200))),
-            and(col("x").gt_eq(lit(300)), col("x").lt(lit(400))),
+            or(
+                and(col("x").gt_eq(lit(100)), col("x").lt(lit(200))),
+                and(col("x").gt_eq(lit(300)), col("x").lt(lit(400))),
+            ),
+            and(col("x").gt_eq(lit(500)), col("x").lt(lit(600))),
         );
 
         assert_eq!(optimize_test(expr, &schema), expected);
@@ -343,9 +364,10 @@ mod test {
     }
 
     #[test]
-    fn test_preimage_in_list_long_list_no_rewrite() {
+    fn test_preimage_in_list_above_limit_no_rewrite() {
         let schema = test_schema();
-        let expr = preimage_udf_expr().in_list((1..100).map(lit).collect(), false);
+        let expr = preimage_udf_expr()
+            .in_list(vec![lit(500), lit(600), lit(700), lit(800)], false);
 
         assert_eq!(optimize_test(expr.clone(), &schema), expr);
     }
