@@ -27,6 +27,7 @@ use arrow::array::{Array, ArrayRef, AsArray, BooleanArray};
 use arrow::datatypes::*;
 use arrow::util::bit_iterator::BitIndexIterator;
 use datafusion_common::{HashSet, Result, exec_datafusion_err};
+use half::f16;
 
 use super::branchless_filter::{BranchlessFilter, BranchlessFilterType};
 use super::result::build_in_list_result;
@@ -199,6 +200,12 @@ trait BitmapFilterType: ArrowPrimitiveType + Send + Sync + 'static {
 
     /// Returns the index in the bitmap to check for this value.
     fn index(value: Self::Native) -> usize;
+
+    /// Adds one value to the bitmap.
+    #[inline]
+    fn insert(bitmap: &mut Self::Storage, value: Self::Native) {
+        bitmap.set_bit(Self::index(value));
+    }
 }
 
 /// `Int8` has 256 possible bit patterns, so four `u64` words cover the full domain.
@@ -254,6 +261,17 @@ impl BitmapFilterType for Float16Type {
     fn index(value: Self::Native) -> usize {
         value.to_bits() as usize
     }
+
+    fn insert(bitmap: &mut Self::Storage, value: Self::Native) {
+        if value == f16::ZERO {
+            // Keep lookup branch-free by materializing both SQL-equivalent
+            // signed-zero encodings when either appears in the list.
+            bitmap.set_bit(f16::ZERO.to_bits() as usize);
+            bitmap.set_bit(f16::NEG_ZERO.to_bits() as usize);
+        } else {
+            bitmap.set_bit(Self::index(value));
+        }
+    }
 }
 
 /// `IN` filter backed by one bit per possible value.
@@ -280,14 +298,14 @@ where
         match prim_array.nulls() {
             None => {
                 for &v in values {
-                    bits.set_bit(T::index(v));
+                    T::insert(&mut bits, v);
                 }
             }
             Some(nulls) => {
                 for i in
                     BitIndexIterator::new(nulls.validity(), nulls.offset(), nulls.len())
                 {
-                    bits.set_bit(T::index(values[i]));
+                    T::insert(&mut bits, values[i]);
                 }
             }
         }
@@ -332,6 +350,16 @@ where
     }
 }
 
+/// Converts native values to hash keys and inserts any additional physical
+/// encodings that belong to the same SQL equality class.
+trait HashSetKey<V>: From<V> + Eq + Hash + Sized {
+    fn insert(values: &mut HashSet<Self>, value: V) {
+        values.insert(Self::from(value));
+    }
+}
+
+impl<T> HashSetKey<T> for T where T: Copy + Eq + Hash {}
+
 /// Wrapper for f32 that implements Hash and Eq using bit comparison.
 /// This treats NaN values as equal to each other when they have the same bit pattern.
 #[derive(Clone, Copy)]
@@ -354,6 +382,19 @@ impl Eq for OrderedFloat32 {}
 impl From<f32> for OrderedFloat32 {
     fn from(v: f32) -> Self {
         Self(v)
+    }
+}
+
+impl HashSetKey<f32> for OrderedFloat32 {
+    fn insert(values: &mut HashSet<Self>, value: f32) {
+        if value == 0.0 {
+            // Keep lookup branch-free by materializing both SQL-equivalent
+            // signed-zero encodings when either appears in the list.
+            values.insert(Self(0.0));
+            values.insert(Self(-0.0));
+        } else {
+            values.insert(Self(value));
+        }
     }
 }
 
@@ -382,6 +423,19 @@ impl From<f64> for OrderedFloat64 {
     }
 }
 
+impl HashSetKey<f64> for OrderedFloat64 {
+    fn insert(values: &mut HashSet<Self>, value: f64) {
+        if value == 0.0 {
+            // Keep lookup branch-free by materializing both SQL-equivalent
+            // signed-zero encodings when either appears in the list.
+            values.insert(Self(0.0));
+            values.insert(Self(-0.0));
+        } else {
+            values.insert(Self(value));
+        }
+    }
+}
+
 /// Hash-set membership for primitive types.
 ///
 /// `K` defaults to the Arrow type's native value. Floats use an ordered wrapper
@@ -399,7 +453,7 @@ impl<T, K> PrimitiveHashSetFilter<T, K>
 where
     T: ArrowPrimitiveType,
     T::Native: Copy,
-    K: From<T::Native> + Eq + Hash,
+    K: HashSetKey<T::Native>,
 {
     fn try_new(in_array: &ArrayRef) -> Result<Self> {
         let in_array = in_array.as_primitive_opt::<T>().ok_or_else(|| {
@@ -410,7 +464,7 @@ where
         })?;
         let mut values = HashSet::with_capacity(in_array.len() - in_array.null_count());
         for value in in_array.iter().flatten() {
-            values.insert(K::from(value));
+            K::insert(&mut values, value);
         }
 
         Ok(Self {
@@ -425,7 +479,7 @@ impl<T, K> StaticFilter for PrimitiveHashSetFilter<T, K>
 where
     T: ArrowPrimitiveType + Send + Sync + 'static,
     T::Native: Copy + Send + Sync,
-    K: From<T::Native> + Eq + Hash + Send + Sync + 'static,
+    K: HashSetKey<T::Native> + Send + Sync + 'static,
 {
     fn null_count(&self) -> usize {
         self.null_count
@@ -461,7 +515,6 @@ mod tests {
         DictionaryArray, Float16Array, Float32Array, Float64Array, Int8Array, Int16Array,
         UInt8Array, UInt16Array, UInt32Array,
     };
-    use half::f16;
 
     use super::super::dictionary_filter::DictionaryFilter;
 
@@ -508,6 +561,45 @@ mod tests {
     }
 
     #[test]
+    fn branchless_float_zero_expansion_handles_max_list_len() -> Result<()> {
+        fn assert_routed_filter(haystack: ArrayRef, needles: &dyn Array) -> Result<()> {
+            let filter = instantiate_primitive_filter(&haystack)?
+                .expect("top-level float arrays always use a primitive filter");
+            assert_contains(
+                filter.as_ref(),
+                needles,
+                vec![Some(true), Some(true), Some(false)],
+            )
+        }
+
+        // Adding the mirror zero to a full logical list exercises the extra
+        // generated comparison length for each branchless size class.
+        let len = <Float16Type as BranchlessFilterType>::MAX_LIST_LEN;
+        let mut values = vec![f16::NEG_ZERO];
+        values.extend((1..len).map(|value| f16::from_f32(value as f32)));
+        let haystack: ArrayRef = Arc::new(Float16Array::from(values));
+        let needles =
+            Float16Array::from(vec![f16::ZERO, f16::NEG_ZERO, f16::from_f32(100.0)]);
+        assert_routed_filter(haystack, &needles)?;
+
+        let len = <Float32Type as BranchlessFilterType>::MAX_LIST_LEN;
+        let mut values = vec![-0.0_f32];
+        values.extend((1..len).map(|value| value as f32));
+        let haystack: ArrayRef = Arc::new(Float32Array::from(values));
+        let needles = Float32Array::from(vec![0.0, -0.0, 100.0]);
+        assert_routed_filter(haystack, &needles)?;
+
+        let len = <Float64Type as BranchlessFilterType>::MAX_LIST_LEN;
+        let mut values = vec![-0.0_f64];
+        values.extend((1..len).map(|value| value as f64));
+        let haystack: ArrayRef = Arc::new(Float64Array::from(values));
+        let needles = Float64Array::from(vec![0.0, -0.0, 100.0]);
+        assert_routed_filter(haystack, &needles)?;
+
+        Ok(())
+    }
+
+    #[test]
     fn primitive_hash_filter_handles_float_keys() -> Result<()> {
         let nan32 = f32::NAN;
         let other_nan32 = f32::from_bits(nan32.to_bits() + 1);
@@ -524,14 +616,14 @@ mod tests {
         assert_contains(
             &filter,
             &needles,
-            vec![Some(true), Some(false), Some(true), Some(false), None],
+            vec![Some(true), Some(true), Some(true), Some(false), None],
         )?;
 
         let nan64 = f64::NAN;
-        let haystack: ArrayRef = Arc::new(Float64Array::from(vec![1.0, nan64]));
+        let haystack: ArrayRef = Arc::new(Float64Array::from(vec![-0.0, nan64]));
         let filter =
             PrimitiveHashSetFilter::<Float64Type, OrderedFloat64>::try_new(&haystack)?;
-        let needles = Float64Array::from(vec![Some(1.0), Some(nan64), Some(2.0)]);
+        let needles = Float64Array::from(vec![Some(0.0), Some(nan64), Some(2.0)]);
         assert_contains(&filter, &needles, vec![Some(true), Some(true), Some(false)])
     }
 
@@ -660,21 +752,22 @@ mod tests {
         );
         let filter = BitmapFilter::<Float16Type>::try_new(&haystack)?;
         let needles = Float16Array::from(vec![
+            Some(f16::from_f32(9.0)),
             Some(f16::from_f32(0.0)),
             Some(f16::from_f32(-0.0)),
             Some(nan_a),
             Some(nan_b),
             None,
         ])
-        .slice(1, 4);
+        .slice(1, 5);
 
         assert_eq!(
             filter.contains(&needles, false)?,
-            BooleanArray::from(vec![Some(true), Some(true), None, None])
+            BooleanArray::from(vec![Some(true), Some(true), Some(true), None, None])
         );
         assert_eq!(
             filter.contains(&needles, true)?,
-            BooleanArray::from(vec![Some(false), Some(false), None, None])
+            BooleanArray::from(vec![Some(false), Some(false), Some(false), None, None])
         );
 
         Ok(())
