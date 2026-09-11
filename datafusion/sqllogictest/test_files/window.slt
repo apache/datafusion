@@ -7093,3 +7093,114 @@ SELECT last_value() OVER () FROM (VALUES (1), (2), (3)) t(x)
 
 statement error DataFusion error: Error during planning: 'nth_value' does not support zero arguments
 SELECT nth_value() OVER () FROM (VALUES (1), (2), (3)) t(x)
+
+# Window functions are not allowed in WHERE or HAVING: both are evaluated before
+# window functions are computed, so they are rejected during planning
+# issue: https://github.com/apache/datafusion/issues/4610
+statement ok
+CREATE TABLE window_in_filter_t(a INT, b INT) AS VALUES (1, 1), (2, 2);
+
+statement error DataFusion error: Error during planning: Window function calls are not allowed in HAVING: 'sum\(count\(Int64\(1\)\) AS count\(\*\)\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+SELECT a, count(*) AS cnt, sum(count(*)) OVER () AS total
+FROM window_in_filter_t
+GROUP BY a
+HAVING sum(count(*)) OVER () >= 10;
+
+# ... also through an alias of the window function
+statement error DataFusion error: Error during planning: Window function calls are not allowed in HAVING: 'sum\(count\(Int64\(1\)\) AS count\(\*\)\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+SELECT a, count(*) AS cnt, sum(count(*)) OVER () AS total
+FROM window_in_filter_t
+GROUP BY a
+HAVING total >= 10;
+
+statement error DataFusion error: Error during planning: Window function calls are not allowed in HAVING: 'row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+SELECT a FROM window_in_filter_t GROUP BY a HAVING row_number() OVER () = 1;
+
+statement error DataFusion error: Error during planning: Window function calls are not allowed in WHERE: 'row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+SELECT a FROM window_in_filter_t WHERE row_number() OVER () = 1;
+
+# The same window function is legal in the SELECT list ...
+query III
+SELECT a, count(*) AS cnt, sum(count(*)) OVER () AS total
+FROM window_in_filter_t
+GROUP BY a
+ORDER BY a;
+----
+1 1 2
+2 1 2
+
+# ... in QUALIFY, which is the clause for filtering on a window function ...
+query III
+SELECT a, count(*) AS cnt, sum(count(*)) OVER () AS total
+FROM window_in_filter_t
+GROUP BY a
+QUALIFY sum(count(*)) OVER () >= 2
+ORDER BY a;
+----
+1 1 2
+2 1 2
+
+# ... in the WHERE of an outer query ...
+query III
+SELECT * FROM (
+  SELECT a, count(*) AS cnt, sum(count(*)) OVER () AS total
+  FROM window_in_filter_t
+  GROUP BY a
+) s
+WHERE total >= 2
+ORDER BY a;
+----
+1 1 2
+2 1 2
+
+# ... and inside a subquery of a WHERE predicate
+query I
+SELECT a FROM window_in_filter_t
+WHERE a IN (SELECT a FROM window_in_filter_t QUALIFY row_number() OVER (ORDER BY a) = 1);
+----
+1
+
+# Window functions are rejected during planning in JOIN ON, GROUP BY and VALUES
+# as well
+statement error DataFusion error: Error during planning: Window function calls are not allowed in JOIN ON: 'row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+SELECT * FROM window_in_filter_t x JOIN window_in_filter_t y ON x.a = y.a AND row_number() OVER () = 1;
+
+statement error DataFusion error: Error during planning: Window function calls are not allowed in GROUP BY: 'row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+SELECT count(*) FROM window_in_filter_t GROUP BY row_number() OVER ();
+
+# ... also through an alias or the position of a select expression
+statement error DataFusion error: Error during planning: Window function calls are not allowed in GROUP BY: 'row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+SELECT row_number() OVER () AS rn, count(*) FROM window_in_filter_t GROUP BY rn;
+
+statement error DataFusion error: Error during planning: Window function calls are not allowed in GROUP BY: 'row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+SELECT row_number() OVER (), count(*) FROM window_in_filter_t GROUP BY 1;
+
+statement error DataFusion error: Error during planning: Window function calls are not allowed in VALUES: 'row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+VALUES (row_number() OVER ());
+
+statement error DataFusion error: Error during planning: Window function calls are not allowed in VALUES: 'row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+INSERT INTO window_in_filter_t VALUES (row_number() OVER (), 1);
+
+# A window function in a joined subquery is legal
+query II
+SELECT x.a, y.total FROM window_in_filter_t x
+JOIN (SELECT a, sum(b) OVER () AS total FROM window_in_filter_t) y ON x.a = y.a
+ORDER BY x.a;
+----
+1 3
+2 3
+
+# Positions with no dedicated check are reported by the physical planner, which
+# names the function instead of dumping its internal representation
+statement error DataFusion error: This feature is not implemented: Unsupported LIMIT expression: CAST\(row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS Int64\)
+SELECT a FROM window_in_filter_t LIMIT row_number() OVER ();
+
+statement error DataFusion error: This feature is not implemented: Unsupported OFFSET expression: CAST\(row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS Int64\)
+SELECT a FROM window_in_filter_t OFFSET row_number() OVER ();
+
+# ... and the same for an aggregate function
+statement error DataFusion error: This feature is not implemented: Unsupported LIMIT expression: count\(Int64\(1\)\) AS count\(\*\)
+SELECT a FROM window_in_filter_t LIMIT count(*);
+
+statement ok
+DROP TABLE window_in_filter_t;

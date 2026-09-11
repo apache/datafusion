@@ -22,9 +22,9 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, assert_eq_or_internal_err};
 
-use crate::aggregates::AggregateExec;
 use crate::aggregates::group_values::{AccumulatorPhase, new_group_values};
 use crate::aggregates::order::GroupOrdering;
+use crate::aggregates::{AggregateExec, evaluate_group_by};
 
 use super::common::{
     AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState,
@@ -131,31 +131,29 @@ impl AggregateHashTable<PartialSkipMarker> {
         &mut self,
         batch: &RecordBatch,
     ) -> Result<RecordBatch> {
-        let evaluated_batch = self.evaluate_batch(batch)?;
+        let state = self.state.building();
+        let grouping_set_args = self
+            .group_by_metrics
+            .time_group_key_preparation(|| evaluate_group_by(&state.group_by, batch))?;
 
         assert_eq_or_internal_err!(
-            evaluated_batch.grouping_set_args.len(),
+            grouping_set_args.len(),
             1,
             "group_values expected to have single element"
         );
-        let mut output = evaluated_batch
-            .grouping_set_args
-            .into_iter()
-            .next()
-            .unwrap_or_default();
+        let mut output = grouping_set_args.into_iter().next().unwrap_or_default();
 
         let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
-        let state = self.state.building_mut();
-        for (idx, (acc, values)) in state
-            .accumulators
-            .iter_mut()
-            .zip(evaluated_batch.accumulator_args.iter())
-            .enumerate()
-        {
+        for (idx, acc) in state.accumulators.iter().enumerate() {
+            let values = self.group_by_metrics.time_aggregate_arguments(|| {
+                self.aggregate_argument_metrics
+                    .time(idx, || acc.evaluate_row_aligned_args(batch))
+            })?;
+
             output.extend(accumulator_metrics.time(
                 idx,
                 AccumulatorPhase::ConvertToState,
-                || acc.convert_to_state(values),
+                || acc.convert_to_state(&values),
             )?);
         }
 

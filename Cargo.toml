@@ -175,6 +175,7 @@ itertools = "0.15"
 itoa = "1.0"
 liblzma = { version = "0.4.6", features = ["static"] }
 log = "^0.4"
+loom = "0.7"
 memchr = "2.8.1"
 num-traits = { version = "0.2" }
 object_store = { version = "0.13.2", default-features = false }
@@ -208,7 +209,7 @@ tokio-stream = "0.1"
 tokio-util = "0.7"
 url = "2.5.7"
 uuid = "1.23"
-zstd = { version = "0.13", default-features = false }
+zstd = { version = "0.14", default-features = false }
 
 # Keep this list sorted alphabetically.
 # See https://github.com/apache/datafusion/issues/18467 for the ongoing effort of
@@ -322,6 +323,11 @@ unexpected_cfgs = { level = "warn", check-cfg = [
     'cfg(datafusion_coop, values("tokio", "tokio_fallback", "per_stream"))',
     "cfg(coverage)",
     "cfg(coverage_nightly)",
+    # Enables the loom model-checked concurrency tests; see
+    # datafusion/physical-plan/src/joins/hash_join/probe_completion.rs.
+    # Namespaced rather than a bare `loom`, which tokio also reads and which
+    # would switch tokio itself into its loom build.
+    "cfg(datafusion_loom)",
 ] }
 unused_qualifications = "deny"
 
