@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -110,7 +110,14 @@ SELECT '2024-01-15 12:00:00-07:00'::timestamptz = '2024-01-15 19:00:00Z'::timest
 true
 
 # Winter and summer readings of the same wall clock in a DST zone are a
-# different number of hours from UTC
+# different number of hours from UTC.
+#
+# Both sides are cast to `timestamp` before the subtraction, so the interval
+# arithmetic runs on plain wall clocks. The casts are required. Without them the
+# engines disagree about which zone `- INTERVAL '168 days'` uses: DataFusion
+# applies calendar units in the value's own zone (America/Denver) and returns
+# true, but PostgreSQL applies them in the session zone and returns false
+# whenever that zone is not America/Denver.
 query B
 SELECT (TIMESTAMP '2024-01-15 12:00:00' AT TIME ZONE 'America/Denver')::timestamp
      = (TIMESTAMP '2024-07-01 12:00:00' AT TIME ZONE 'America/Denver')::timestamp - INTERVAL '168 days'
@@ -449,8 +456,9 @@ SELECT date_part('epoch', ts)::bigint FROM tstz_den ORDER BY 1
 1719856800
 1730570400
 
-# The offset differs between January (MST) and July (MDT), so the same UTC
-# instant reads as a different local hour.
+# The offset differs between January (MST, -07:00) and July (MDT, -06:00). So
+# two instants with different UTC hours (19:00Z for id 3, 18:00Z for id 4) read
+# as the same local hour, 12.
 query I
 SELECT date_part('hour', ts)::bigint FROM tstz_den WHERE id = 3
 UNION ALL
