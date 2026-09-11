@@ -40,6 +40,7 @@ use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_common::{Result, internal_datafusion_err};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::GroupSelection;
+use std::mem::size_of;
 use std::sync::Arc;
 
 /// A [`GroupColumn`] for `List<T>` (`O = i32`) and `LargeList<T>` (`O = i64`).
@@ -184,7 +185,8 @@ impl<O: OffsetSizeTrait> GroupColumn for ListGroupValueBuilder<O> {
     }
 
     fn size(&self) -> usize {
-        self.offsets.allocated_size()
+        size_of::<Self>()
+            + self.offsets.allocated_size()
             + self.outer_nulls.allocated_size()
             + self.child.size()
     }

@@ -54,6 +54,7 @@ use arrow::datatypes::DataType;
 use arrow::row::{RowConverter, Rows, SortField};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::GroupSelection;
+use std::mem::size_of;
 
 /// A [`GroupColumn`] that stores group values for a single column in the arrow
 /// [row format], backed by a single-field [`RowConverter`].
@@ -288,7 +289,9 @@ impl GroupColumn for RowsGroupColumn {
     }
 
     fn size(&self) -> usize {
-        self.row_converter.size() + self.group_values.size()
+        size_of::<Self>() + self.row_converter.size() - size_of::<RowConverter>()
+            + self.group_values.size()
+            - size_of::<Rows>()
     }
 
     fn build(self: Box<Self>) -> ArrayRef {
@@ -363,6 +366,18 @@ mod tests {
             Arc::new(child),
             Some(outer_nulls),
         ))
+    }
+
+    #[test]
+    fn size_includes_boxed_owner_descriptor() {
+        let column = RowsGroupColumn::try_new(DataType::Int32).unwrap();
+        assert_eq!(
+            column.size(),
+            size_of::<RowsGroupColumn>() + column.row_converter.size()
+                - size_of::<RowConverter>()
+                + column.group_values.size()
+                - size_of::<Rows>()
+        );
     }
 
     /// The generic column must agree with a per-row reference for equality,

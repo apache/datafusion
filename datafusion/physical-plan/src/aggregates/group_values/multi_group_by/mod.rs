@@ -105,7 +105,7 @@ pub trait GroupColumn: Send + Sync {
         self.len() == 0
     }
 
-    /// Returns the number of bytes used by this [`GroupColumn`]
+    /// Returns this column's concrete owner descriptor and retained allocations.
     fn size(&self) -> usize;
 
     /// Builds a new array from all of the stored rows
@@ -1447,6 +1447,34 @@ mod tests {
             + buffers.equal_to_group_indices.allocated_size()
             + buffers.equal_to_results.capacity() / 8
             + buffers.remaining_row_indices.allocated_size()
+    }
+
+    #[test]
+    fn size_includes_boxed_primitive_and_row_backed_owners() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("primitive", DataType::Int32, false),
+            Field::new(
+                "nested",
+                DataType::Struct(
+                    vec![Arc::new(Field::new("child", DataType::Int32, false))].into(),
+                ),
+                false,
+            ),
+        ]));
+        let group_values = GroupValuesColumn::<false>::try_new(schema)?;
+
+        // This schema builds a primitive column and a `RowsGroupColumn`.
+        assert_eq!(
+            group_values.size(),
+            size_of::<GroupValuesColumn<false>>()
+                + group_values.group_values.allocated_size()
+                + group_values
+                    .group_values
+                    .iter()
+                    .map(|value| value.size())
+                    .sum::<usize>()
+        );
+        Ok(())
     }
 
     #[test]
