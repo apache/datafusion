@@ -39,6 +39,8 @@ Options:
           Execute commands from file(s), then exit
   -r, --rc [<RC>...]
           Run the provided files on startup instead of ~/.datafusionrc
+      --history-file <HISTORY_FILE>
+          Path to the file used to persist interactive shell history. Overrides DATAFUSION_HISTORY_FILE if set, default to .history
       --format <FORMAT>
           [default: automatic] [possible values: csv, tsv, table, json, nd-json, automatic]
   -q, --quiet

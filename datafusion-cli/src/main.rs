@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 use std::env;
 use std::num::NonZeroUsize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::{Arc, LazyLock};
 
@@ -44,6 +44,7 @@ use datafusion_cli::{
     pool_type::PoolType,
     print_format::PrintFormat,
     print_options::{MaxRows, PrintOptions},
+    repl_options::ReplOptions,
 };
 
 use clap::Parser;
@@ -111,6 +112,13 @@ struct Args {
         conflicts_with = "file"
     )]
     rc: Option<Vec<String>>,
+
+    #[clap(
+        long,
+        help = "Path to the file used to persist interactive shell history. Overrides DATAFUSION_HISTORY_FILE if set, default to .history",
+        value_parser(parse_valid_history_file)
+    )]
+    history_file: Option<String>,
 
     #[clap(long, value_enum, default_value_t = PrintFormat::Automatic)]
     format: PrintFormat,
@@ -324,8 +332,10 @@ async fn main_inner() -> Result<()> {
         if !rc.is_empty() {
             exec::exec_from_files(&ctx, rc, &print_options).await?;
         }
+        let repl_options = get_repl_options(&args.history_file);
+
         // TODO maybe we can have thiserror for cli but for now let's keep it simple
-        return exec::exec_from_repl(&ctx, &mut print_options)
+        return exec::exec_from_repl(&ctx, &mut print_options, &repl_options)
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)));
     }
@@ -399,6 +409,25 @@ fn parse_valid_data_dir(dir: &str) -> Result<String, String> {
     }
 }
 
+fn parse_valid_history_file(path: &str) -> Result<String, String> {
+    let path = Path::new(path);
+    if path.is_dir() {
+        return Err(format!(
+            "Invalid history file '{}': is a directory",
+            path.display()
+        ));
+    }
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() && !parent.is_dir() => {
+            Err(format!(
+                "Invalid history file '{}': parent directory does not exist",
+                path.display()
+            ))
+        }
+        _ => Ok(path.to_string_lossy().into_owned()),
+    }
+}
+
 fn parse_batch_size(size: &str) -> Result<usize, String> {
     match size.parse::<usize>() {
         Ok(size) if size > 0 => Ok(size),
@@ -411,6 +440,16 @@ fn parse_command(command: &str) -> Result<String, String> {
         Ok(command.to_string())
     } else {
         Err("-c flag expects only non empty commands".to_string())
+    }
+}
+
+fn get_repl_options(history_file: &Option<String>) -> ReplOptions {
+    if let Some(history_file) = history_file {
+        ReplOptions {
+            history_file: PathBuf::from(history_file),
+        }
+    } else {
+        Default::default()
     }
 }
 
