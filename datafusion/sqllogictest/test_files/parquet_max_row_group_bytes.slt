@@ -90,13 +90,10 @@ OPTIONS ('format.max_row_group_bytes' 0);
 # changes how the writer splits row groups, and that combining it with
 # `max_row_group_size` flushes on whichever limit is reached first.
 #
-# NOTE: byte-based flushing is currently honored only by the single-threaded
-# Parquet writer (`AsyncArrowWriter`/`ArrowWriter`), which encodes inline and
-# can therefore observe the in-progress row group's encoded size. The
-# multi-threaded (parallel) writer decides row-group boundaries by row count
-# only and ignores `max_row_group_bytes`, so these cases force the
-# single-threaded path with `allow_single_file_parallelism = false`. Extending
-# the parallel writer to honor the byte limit is a follow-up change.
+# Both Parquet writers honor `max_row_group_bytes`: the single-threaded writer
+# (`AsyncArrowWriter`/`ArrowWriter`) and the multi-threaded parallel writer. The
+# cases below run under both paths (forcing `allow_single_file_parallelism` to
+# `false`, then `true`) and produce the same row-group counts.
 # -----------------------------------------------------------------------------
 
 statement ok
@@ -108,6 +105,7 @@ set datafusion.execution.minimum_parallel_output_files = 1;
 statement ok
 set datafusion.execution.batch_size = 1024;
 
+# Single-threaded writer.
 statement ok
 set datafusion.execution.parquet.allow_single_file_parallelism = false;
 
@@ -168,6 +166,68 @@ LOCATION 'test_files/scratch/parquet_max_row_group_bytes/rg_count_bytes_only/';
 
 query TT
 EXPLAIN ANALYZE SELECT * FROM rg_count_bytes_only WHERE id >= 0;
+----
+Plan with Metrics
+01)FilterExec: id@0 >= 0<slt:ignore>
+02)--DataSourceExec: <slt:ignore>row_groups_pruned_statistics=4 total<slt:ignore>
+
+# Parallel writer: the same assertions exercising the multi-threaded path. The
+# row-group counts match the single-threaded writer's above.
+statement ok
+set datafusion.execution.parquet.allow_single_file_parallelism = true;
+
+# Row-count limit only -> 5 row groups (parallel).
+statement ok
+COPY (SELECT value AS id FROM range(0, 4096))
+TO 'test_files/scratch/parquet_max_row_group_bytes/rg_count_size_only_parallel/'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' 1000);
+
+statement ok
+CREATE EXTERNAL TABLE rg_count_size_only_parallel
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_max_row_group_bytes/rg_count_size_only_parallel/';
+
+query TT
+EXPLAIN ANALYZE SELECT * FROM rg_count_size_only_parallel WHERE id >= 0;
+----
+Plan with Metrics
+01)FilterExec: id@0 >= 0<slt:ignore>
+02)--DataSourceExec: <slt:ignore>row_groups_pruned_statistics=5 total<slt:ignore>
+
+# Both limits set, whichever first -> 8 row groups (parallel).
+statement ok
+COPY (SELECT value AS id FROM range(0, 4096))
+TO 'test_files/scratch/parquet_max_row_group_bytes/rg_count_size_and_bytes_parallel/'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' 1000, 'format.max_row_group_bytes' 1);
+
+statement ok
+CREATE EXTERNAL TABLE rg_count_size_and_bytes_parallel
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_max_row_group_bytes/rg_count_size_and_bytes_parallel/';
+
+query TT
+EXPLAIN ANALYZE SELECT * FROM rg_count_size_and_bytes_parallel WHERE id >= 0;
+----
+Plan with Metrics
+01)FilterExec: id@0 >= 0<slt:ignore>
+02)--DataSourceExec: <slt:ignore>row_groups_pruned_statistics=8 total<slt:ignore>
+
+# Byte limit drives alone -> 4 row groups (parallel).
+statement ok
+COPY (SELECT value AS id FROM range(0, 4096))
+TO 'test_files/scratch/parquet_max_row_group_bytes/rg_count_bytes_only_parallel/'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' 100000, 'format.max_row_group_bytes' 1);
+
+statement ok
+CREATE EXTERNAL TABLE rg_count_bytes_only_parallel
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_max_row_group_bytes/rg_count_bytes_only_parallel/';
+
+query TT
+EXPLAIN ANALYZE SELECT * FROM rg_count_bytes_only_parallel WHERE id >= 0;
 ----
 Plan with Metrics
 01)FilterExec: id@0 >= 0<slt:ignore>
