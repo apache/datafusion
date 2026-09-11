@@ -185,12 +185,17 @@ impl GroupValues for GroupValuesRows {
     }
 
     fn size(&self) -> usize {
-        let group_values_size = self.group_values.as_ref().map(|v| v.size()).unwrap_or(0);
-        size_of::<Self>()
-            + self.row_converter.size()
+        let group_values_size = self
+            .group_values
+            .as_ref()
+            .map(|values| values.size() - size_of::<Rows>())
+            .unwrap_or_default();
+        // `size_of::<Self>()` already accounts for these inline descriptors.
+        size_of::<Self>() + self.row_converter.size() - size_of::<RowConverter>()
             + group_values_size
             + self.map_size
             + self.rows_buffer.size()
+            - size_of::<Rows>()
             + self.hashes_buffer.allocated_size()
     }
 
@@ -456,15 +461,16 @@ mod tests {
         )]));
         let mut group_values = GroupValuesRows::try_new(schema)?;
         let expected_size = |group_values: &GroupValuesRows| {
-            size_of::<GroupValuesRows>()
-                + group_values.row_converter.size()
+            size_of::<GroupValuesRows>() + group_values.row_converter.size()
+                - size_of::<RowConverter>()
                 + group_values
                     .group_values
                     .as_ref()
-                    .map(|values| values.size())
+                    .map(|values| values.size() - size_of::<Rows>())
                     .unwrap_or_default()
                 + group_values.map_size
                 + group_values.rows_buffer.size()
+                - size_of::<Rows>()
                 + group_values.hashes_buffer.allocated_size()
         };
 
