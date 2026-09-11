@@ -30,7 +30,8 @@ mod tests {
     use std::{fs, sync::Arc};
     use substrait::proto::expression::field_reference::{ReferenceType, RootType};
     use substrait::proto::expression::reference_segment;
-    use substrait::proto::expression::{ReferenceSegment, RexType};
+    use substrait::proto::expression::{IfThen, ReferenceSegment, RexType};
+    use substrait::proto::extensions::simple_extension_declaration::MappingType;
     use substrait::proto::function_argument::ArgType;
     use substrait::proto::plan_rel::RelType;
     use substrait::proto::rel_common::{Emit, EmitKind};
@@ -317,6 +318,75 @@ mod tests {
                 (0, 1),
             ]
         );
+
+        Ok(())
+    }
+
+    /// Substrait's `IfThen` has no base expression: every `IfClause` is a
+    /// standalone boolean condition and `then` is the value that clause yields.
+    /// A `CASE <base> WHEN <value> ...` must therefore be emitted as conditions
+    /// over `<base> = <value>`. A round trip cannot catch a regression here,
+    /// because the consumer reads back whatever the producer writes.
+    #[tokio::test]
+    async fn case_with_base_expression_emits_equality_conditions() -> Result<()> {
+        let ctx = create_context().await?;
+        let sql = "SELECT CASE a WHEN 1 THEN 'x' WHEN 2 THEN 'y' ELSE 'z' END FROM data";
+
+        let plan = ctx.sql(sql).await?.into_optimized_plan()?;
+        let proto = to_substrait_plan(&plan, &ctx.state())?;
+
+        let equal_anchors: Vec<u32> = proto
+            .extensions
+            .iter()
+            .filter_map(|e| match e.mapping_type.as_ref().unwrap() {
+                MappingType::ExtensionFunction(f) if f.name == "equal" => {
+                    Some(f.function_anchor)
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(!equal_anchors.is_empty(), "no `equal` function registered");
+
+        let root = match proto.relations.first().unwrap().rel_type.as_ref() {
+            Some(RelType::Root(root)) => root.input.as_ref().unwrap(),
+            _ => panic!("expected Root"),
+        };
+        let Some(rel::RelType::Project(project)) = root.rel_type.as_ref() else {
+            panic!("expected Project")
+        };
+
+        let if_thens: Vec<&IfThen> = project
+            .expressions
+            .iter()
+            .filter_map(|expr| match expr.rex_type.as_ref() {
+                Some(RexType::IfThen(if_then)) => Some(if_then.as_ref()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(if_thens.len(), 1, "expected one IfThen for `{sql}`");
+        let if_then = if_thens[0];
+
+        // One clause per WHEN, with no extra clause carrying the base expression.
+        assert_eq!(if_then.ifs.len(), 2);
+        assert!(if_then.r#else.is_some());
+
+        for (i, clause) in if_then.ifs.iter().enumerate() {
+            let condition = clause
+                .r#if
+                .as_ref()
+                .unwrap_or_else(|| panic!("clause {i} has no condition"));
+            assert!(clause.then.is_some(), "clause {i} has no `then`");
+
+            match condition.rex_type.as_ref().unwrap() {
+                RexType::ScalarFunction(f) => assert!(
+                    equal_anchors.contains(&f.function_reference),
+                    "clause {i} condition is not an `equal` call"
+                ),
+                other => {
+                    panic!("clause {i} condition is not a scalar function: {other:?}")
+                }
+            }
+        }
 
         Ok(())
     }
