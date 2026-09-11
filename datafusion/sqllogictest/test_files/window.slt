@@ -5340,7 +5340,7 @@ logical_plan
 01)Sort: t1.c1 ASC NULLS LAST, t1.c2 ASC NULLS LAST, rank ASC NULLS LAST
 02)--Projection: t1.c1, t1.c2, rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rank
 03)----WindowAggr: windowExpr=[[rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-04)------Filter: t1.c1 = Int32(2) OR t1.c1 = Int32(3)
+04)------Filter: t1.c1 IN ([Int32(2), Int32(3)])
 05)--------TableScan: t1 projection=[c1, c2]
 physical_plan
 01)SortPreservingMergeExec: [c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST, rank@2 ASC NULLS LAST]
@@ -5348,7 +5348,7 @@ physical_plan
 03)----BoundedWindowAggExec: wdw=[rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 04)------SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST], preserve_partitioning=[true]
 05)--------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
-06)----------FilterExec: c1@0 = 2 OR c1@0 = 3
+06)----------FilterExec: c1@0 IN (SET) ([2, 3])
 07)------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
 

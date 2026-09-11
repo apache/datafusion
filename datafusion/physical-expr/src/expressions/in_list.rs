@@ -38,6 +38,7 @@ use datafusion_expr::{ColumnarValue, expr_vec_fmt};
 
 mod array_static_filter;
 mod branchless_filter;
+mod byte_view_filter;
 mod dictionary_filter;
 mod fixed_size_binary_filter;
 mod primitive_filter;
@@ -3646,6 +3647,23 @@ mod tests {
                 wrap_in_dict(Arc::clone(&utf8_needle)),
                 wrap_in_dict(Arc::clone(&utf8_in)),
             )?
+        );
+
+        // Utf8View in_array, Utf8View and Dict(Utf8View) needles
+        let utf8view_in =
+            Arc::new(StringViewArray::from(vec!["a", "b", "c", "d", "e"])) as ArrayRef;
+        let utf8view_needle =
+            Arc::new(StringViewArray::from(vec!["a", "missing", "b"])) as ArrayRef;
+        assert_eq!(
+            expected,
+            eval_in_list_from_array(
+                Arc::clone(&utf8view_needle),
+                Arc::clone(&utf8view_in),
+            )?
+        );
+        assert_eq!(
+            expected,
+            eval_in_list_from_array(wrap_in_dict(utf8view_needle), utf8view_in)?
         );
 
         // Struct in_array, Struct needle: multi-column join
