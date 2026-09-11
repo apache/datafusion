@@ -1316,28 +1316,21 @@ SELECT '2024-11-03 01:30:00'::timestamp
 statement ok
 CREATE TABLE dst_ambiguous AS VALUES ('2024-11-03 01:30:00'::timestamp)
 
-query error DataFusion error: Arrow error: Cast error: Cannot cast timezone to different timezone
+# These expectations match only the stable `Arrow error: ...` tail. The wrapper
+# chain above it (optimizer rule, field context) is not what these cases pin,
+# and it changed in https://github.com/apache/datafusion/pull/24920.
+query error Arrow error: Cast error: Cannot cast timezone to different timezone
 SELECT column1 AT TIME ZONE 'America/Denver' FROM dst_ambiguous
 
-query error DataFusion error: Arrow error: Cast error: Cannot cast timezone to different timezone
+query error Arrow error: Cast error: Cannot cast timezone to different timezone
 SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("America/Denver"))') FROM dst_ambiguous
 
 # The same wall clock arriving as a string literal instead of a column
-query error
+query error Arrow\ error:\ Parser\ error:\ Error\ parsing\ timestamp\ from\ '2024\-11\-03T01:30:00':\ error\ computing\ timezone\ offset
 SELECT arrow_cast('2024-11-03T01:30:00', 'Timestamp(Nanosecond, Some("America/Denver"))')
-----
-DataFusion error: Optimizer rule 'simplify_expressions' failed
-caused by
-Arrow error: Parser error: Error parsing timestamp from '2024-11-03T01:30:00': error computing timezone offset
 
-
-query error
+query error Arrow\ error:\ Cast\ error:\ Cannot\ cast\ timezone\ to\ different\ timezone
 SELECT TIMESTAMP '2024-11-03 01:30:00' AT TIME ZONE 'America/Denver'
-----
-DataFusion error: Optimizer rule 'simplify_expressions' failed
-caused by
-Arrow error: Cast error: Cannot cast timezone to different timezone
-
 
 # Both instants are representable when the offset is spelled out explicitly --
 # it is only the *resolution* of a bare wall clock that fails. Note the two
@@ -1353,46 +1346,26 @@ SELECT arrow_cast('2024-11-03T07:30:00Z', 'Timestamp(Nanosecond, Some("America/D
 statement ok
 CREATE TABLE dst_nonexistent AS VALUES ('2024-03-10 02:30:00'::timestamp)
 
-query error DataFusion error: Arrow error: Cast error: Cannot cast timezone to different timezone
+query error Arrow error: Cast error: Cannot cast timezone to different timezone
 SELECT column1 AT TIME ZONE 'America/Denver' FROM dst_nonexistent
 
-query error DataFusion error: Arrow error: Cast error: Cannot cast timezone to different timezone
+query error Arrow error: Cast error: Cannot cast timezone to different timezone
 SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("America/Denver"))') FROM dst_nonexistent
 
-query error
+query error Arrow\ error:\ Parser\ error:\ Error\ parsing\ timestamp\ from\ '2024\-03\-10T02:30:00':\ error\ computing\ timezone\ offset
 SELECT arrow_cast('2024-03-10T02:30:00', 'Timestamp(Nanosecond, Some("America/Denver"))')
-----
-DataFusion error: Optimizer rule 'simplify_expressions' failed
-caused by
-Arrow error: Parser error: Error parsing timestamp from '2024-03-10T02:30:00': error computing timezone offset
 
-
-query error
+query error Arrow\ error:\ Cast\ error:\ Cannot\ cast\ timezone\ to\ different\ timezone
 SELECT TIMESTAMP '2024-03-10 02:30:00' AT TIME ZONE 'America/Denver'
-----
-DataFusion error: Optimizer rule 'simplify_expressions' failed
-caused by
-Arrow error: Cast error: Cannot cast timezone to different timezone
-
 
 statement ok
 SET datafusion.execution.time_zone = 'America/Denver'
 
-query error
+query error Arrow\ error:\ Parser\ error:\ Error\ parsing\ timestamp\ from\ '2024\-03\-10\ 02:30:00':\ error\ computing\ timezone\ offset
 SELECT '2024-03-10 02:30:00'::timestamptz
-----
-DataFusion error: Optimizer rule 'simplify_expressions' failed
-caused by
-Arrow error: Parser error: Error parsing timestamp from '2024-03-10 02:30:00': error computing timezone offset
 
-
-query error
+query error Arrow\ error:\ Parser\ error:\ Error\ parsing\ timestamp\ from\ '2024\-11\-03\ 01:30:00':\ error\ computing\ timezone\ offset
 SELECT '2024-11-03 01:30:00'::timestamptz
-----
-DataFusion error: Optimizer rule 'simplify_expressions' failed
-caused by
-Arrow error: Parser error: Error parsing timestamp from '2024-11-03 01:30:00': error computing timezone offset
-
 
 statement ok
 RESET datafusion.execution.time_zone
@@ -1402,46 +1375,26 @@ RESET datafusion.execution.time_zone
 statement ok
 CREATE TABLE dst_eu AS VALUES ('2024-10-27 02:30:00'::timestamp), ('2024-03-31 02:30:00'::timestamp)
 
-query error DataFusion error: Arrow error: Cast error: Cannot cast timezone to different timezone
+query error Arrow error: Cast error: Cannot cast timezone to different timezone
 SELECT column1 AT TIME ZONE 'Europe/Brussels' FROM dst_eu
 
-query error DataFusion error: Arrow error: Cast error: Cannot cast timezone to different timezone
+query error Arrow error: Cast error: Cannot cast timezone to different timezone
 SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("Europe/Brussels"))') FROM dst_eu
 
-query error
+query error Arrow\ error:\ Parser\ error:\ Error\ parsing\ timestamp\ from\ '2024\-10\-27T02:30:00':\ error\ computing\ timezone\ offset
 SELECT arrow_cast('2024-10-27T02:30:00', 'Timestamp(Nanosecond, Some("Europe/Brussels"))')
-----
-DataFusion error: Optimizer rule 'simplify_expressions' failed
-caused by
-Arrow error: Parser error: Error parsing timestamp from '2024-10-27T02:30:00': error computing timezone offset
 
-
-query error
+query error Arrow\ error:\ Parser\ error:\ Error\ parsing\ timestamp\ from\ '2024\-03\-31T02:30:00':\ error\ computing\ timezone\ offset
 SELECT arrow_cast('2024-03-31T02:30:00', 'Timestamp(Nanosecond, Some("Europe/Brussels"))')
-----
-DataFusion error: Optimizer rule 'simplify_expressions' failed
-caused by
-Arrow error: Parser error: Error parsing timestamp from '2024-03-31T02:30:00': error computing timezone offset
-
 
 statement ok
 SET datafusion.execution.time_zone = 'Europe/Brussels'
 
-query error
+query error Arrow\ error:\ Parser\ error:\ Error\ parsing\ timestamp\ from\ '2024\-10\-27\ 02:30:00':\ error\ computing\ timezone\ offset
 SELECT '2024-10-27 02:30:00'::timestamptz
-----
-DataFusion error: Optimizer rule 'simplify_expressions' failed
-caused by
-Arrow error: Parser error: Error parsing timestamp from '2024-10-27 02:30:00': error computing timezone offset
 
-
-query error
+query error Arrow\ error:\ Parser\ error:\ Error\ parsing\ timestamp\ from\ '2024\-03\-31\ 02:30:00':\ error\ computing\ timezone\ offset
 SELECT '2024-03-31 02:30:00'::timestamptz
-----
-DataFusion error: Optimizer rule 'simplify_expressions' failed
-caused by
-Arrow error: Parser error: Error parsing timestamp from '2024-03-31 02:30:00': error computing timezone offset
-
 
 statement ok
 RESET datafusion.execution.time_zone
