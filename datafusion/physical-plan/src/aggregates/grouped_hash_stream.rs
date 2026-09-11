@@ -17,7 +17,7 @@
 
 //! Hash aggregation
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 use std::vec;
 
@@ -661,11 +661,25 @@ pub(crate) fn create_group_accumulator(
             "Creating GroupsAccumulatorAdapter for {}: {agg_expr:?}",
             agg_expr.name()
         );
+        let grouped_update_metric = Arc::new(OnceLock::new());
+        let factory_metric = Arc::clone(&grouped_update_metric);
         let agg_expr_captured = Arc::clone(agg_expr);
         let factory = move || {
-            agg_expr_captured.create_accumulator_with_metrics(Arc::clone(&metrics))
+            let mut accumulator = agg_expr_captured.create_accumulator()?;
+            if factory_metric.get().is_none() {
+                accumulator.set_metrics(Arc::clone(&metrics));
+                // This factory is called serially by one adapter, so the first
+                // accumulator is the only one that resolves the metric handle.
+                let _ = factory_metric.set(accumulator.grouped_update_batch_metric());
+            }
+            Ok(accumulator)
         };
-        Ok(Box::new(GroupsAccumulatorAdapter::new(factory)))
+        Ok(Box::new(
+            GroupsAccumulatorAdapter::new_with_grouped_update_metric_cache(
+                factory,
+                grouped_update_metric,
+            ),
+        ))
     }
 }
 
@@ -1501,9 +1515,103 @@ mod tests {
     use arrow::array::{Int32Array, Int64Array, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    use datafusion_expr::AggregateMetric;
     use datafusion_functions_aggregate::{array_agg::array_agg_udaf, count::count_udaf};
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::col;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    #[derive(Debug)]
+    struct CountingMetric(Arc<AtomicUsize>);
+
+    impl AggregateMetric for CountingMetric {
+        fn add_duration(&self, _duration: Duration) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[derive(Debug)]
+    struct CountingMetrics {
+        resolutions: Arc<AtomicUsize>,
+        durations: Arc<AtomicUsize>,
+    }
+
+    impl AggregateMetrics for CountingMetrics {
+        fn metric(&self, _subphase: &'static str) -> Arc<dyn AggregateMetric> {
+            self.resolutions.fetch_add(1, Ordering::Relaxed);
+            Arc::new(CountingMetric(Arc::clone(&self.durations)))
+        }
+    }
+
+    #[test]
+    fn legacy_grouped_distinct_resolves_metric_once_for_conversion_and_update()
+    -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::UInt32,
+            false,
+        )]));
+        let aggregate_expr = Arc::new(
+            AggregateExprBuilder::new(array_agg_udaf(), vec![col("value", &schema)?])
+                .schema(Arc::clone(&schema))
+                .distinct()
+                .alias("distinct_values")
+                .build()?,
+        );
+        let metric_resolutions = Arc::new(AtomicUsize::new(0));
+        let metric_durations = Arc::new(AtomicUsize::new(0));
+        let mut accumulator = create_group_accumulator(
+            &aggregate_expr,
+            Arc::new(CountingMetrics {
+                resolutions: Arc::clone(&metric_resolutions),
+                durations: Arc::clone(&metric_durations),
+            }),
+        )?;
+        let values: ArrayRef = Arc::new(UInt32Array::from(vec![1, 2, 3]));
+
+        accumulator.convert_to_state(&[Arc::clone(&values)], None)?;
+        accumulator.update_batch(&[values], &[0, 1, 2], None, 3)?;
+
+        assert_eq!(metric_resolutions.load(Ordering::Relaxed), 1);
+        assert_eq!(metric_durations.load(Ordering::Relaxed), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_grouped_distinct_merge_records_metric_once() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::UInt32,
+            false,
+        )]));
+        let aggregate_expr = Arc::new(
+            AggregateExprBuilder::new(array_agg_udaf(), vec![col("value", &schema)?])
+                .schema(Arc::clone(&schema))
+                .distinct()
+                .alias("distinct_values")
+                .build()?,
+        );
+        let metric_resolutions = Arc::new(AtomicUsize::new(0));
+        let metric_durations = Arc::new(AtomicUsize::new(0));
+        let mut accumulator = create_group_accumulator(
+            &aggregate_expr,
+            Arc::new(CountingMetrics {
+                resolutions: Arc::clone(&metric_resolutions),
+                durations: Arc::clone(&metric_durations),
+            }),
+        )?;
+
+        let mut state = ListBuilder::new(UInt32Builder::new());
+        for value in [1, 2, 3] {
+            state.append_value([Some(value)]);
+        }
+        accumulator.merge_batch(&[Arc::new(state.finish())], &[1, 2, 3], 4)?;
+
+        assert_eq!(metric_resolutions.load(Ordering::Relaxed), 1);
+        assert_eq!(metric_durations.load(Ordering::Relaxed), 1);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn grouped_hash_stream_reports_distinct_array_agg_submetric() -> Result<()> {

@@ -24,7 +24,7 @@ pub mod nulls;
 pub mod prim_op;
 
 use std::mem::{size_of, size_of_val};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::new_empty_array;
 use arrow::{
@@ -105,7 +105,11 @@ pub struct GroupsAccumulatorAdapter {
     allocation_bytes: usize,
 
     /// Optional aggregate-owned metric timed once for a grouped update batch.
-    grouped_update_metric: Option<Arc<dyn AggregateMetric>>,
+    ///
+    /// The cache is shared with factories that install metrics on only the
+    /// first accumulator. This avoids resolving the same expression metric for
+    /// every group while allowing `convert_to_state(&self)` to use it.
+    grouped_update_metric: Arc<OnceLock<Option<Arc<dyn AggregateMetric>>>>,
 }
 
 struct AccumulatorState {
@@ -139,11 +143,26 @@ impl GroupsAccumulatorAdapter {
     where
         F: Fn() -> Result<Box<dyn Accumulator>> + Send + 'static,
     {
+        Self::new_with_grouped_update_metric_cache(factory, Arc::new(OnceLock::new()))
+    }
+
+    /// Creates an adapter with a metric cache shared by its accumulator factory.
+    ///
+    /// The factory must initialize the cache before returning its first
+    /// metric-enabled accumulator. Later accumulators may be created without
+    /// metrics because this adapter records the grouped batch timing.
+    pub fn new_with_grouped_update_metric_cache<F>(
+        factory: F,
+        grouped_update_metric: Arc<OnceLock<Option<Arc<dyn AggregateMetric>>>>,
+    ) -> Self
+    where
+        F: Fn() -> Result<Box<dyn Accumulator>> + Send + 'static,
+    {
         Self {
             factory: Box::new(factory),
             states: vec![],
             allocation_bytes: 0,
-            grouped_update_metric: None,
+            grouped_update_metric,
         }
     }
 
@@ -157,9 +176,8 @@ impl GroupsAccumulatorAdapter {
         let new_accumulators = total_num_groups - self.states.len();
         for _ in 0..new_accumulators {
             let accumulator = (self.factory)()?;
-            if self.grouped_update_metric.is_none() {
-                self.grouped_update_metric = accumulator.grouped_update_batch_metric();
-            }
+            self.grouped_update_metric
+                .get_or_init(|| accumulator.grouped_update_batch_metric());
             let state = AccumulatorState::new(accumulator);
             self.add_allocation(state.size());
             self.states.push(state);
@@ -255,7 +273,7 @@ impl GroupsAccumulatorAdapter {
         let iter = groups_with_rows.iter().zip(offsets.windows(2));
 
         let grouped_update_metric = time_grouped_update
-            .then(|| self.grouped_update_metric.clone())
+            .then(|| self.grouped_update_metric.get().and_then(Clone::clone))
             .flatten();
         let start = grouped_update_metric.as_ref().map(|_| Instant::now());
 
@@ -434,10 +452,9 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
             group_indices,
             None,
             total_num_groups,
-            false,
+            true,
             |accumulator, values_to_accumulate| {
-                accumulator.merge_batch(values_to_accumulate)?;
-                Ok(())
+                accumulator.merge_batch_grouped(values_to_accumulate)
             },
         )?;
         Ok(())
@@ -474,8 +491,10 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
             // Create the empty accumulator for converting
             let mut converted_accumulator = (self.factory)()?;
             if row_idx == 0 {
-                grouped_update_metric =
-                    converted_accumulator.grouped_update_batch_metric();
+                let metric = self
+                    .grouped_update_metric
+                    .get_or_init(|| converted_accumulator.grouped_update_batch_metric());
+                grouped_update_metric.clone_from(metric);
                 start = grouped_update_metric.as_ref().map(|_| Instant::now());
             }
 

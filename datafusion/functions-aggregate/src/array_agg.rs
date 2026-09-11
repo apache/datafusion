@@ -1008,6 +1008,39 @@ impl DistinctArrayAggAccumulator {
     }
 }
 
+impl DistinctArrayAggAccumulator {
+    fn merge_batch_impl(
+        &mut self,
+        states: &[ArrayRef],
+        record_metric: bool,
+    ) -> Result<()> {
+        if states.is_empty() {
+            return Ok(());
+        }
+
+        assert_eq_or_internal_err!(states.len(), 1, "expects single state");
+
+        let distinct_metric = record_metric
+            .then(|| self.distinct_metric.clone())
+            .flatten();
+        let distinct_start = distinct_metric.as_ref().map(|_| Instant::now());
+
+        // The DISTINCT state is `List<value>`. This calls the update
+        // implementation once per state row, so record the submetric once for
+        // the entire merge rather than once per row.
+        let result = states[0]
+            .as_list::<i32>()
+            .iter()
+            .flatten()
+            .try_for_each(|val| self.update_batch_impl(&[val], false));
+
+        if let (Some(metric), Some(start)) = (distinct_metric, distinct_start) {
+            metric.add_duration(start.elapsed());
+        }
+        result
+    }
+}
+
 impl Accumulator for DistinctArrayAggAccumulator {
     fn set_metrics(&mut self, metrics: Arc<dyn AggregateMetrics>) {
         self.distinct_metric = Some(metrics.metric("distinct"));
@@ -1030,28 +1063,11 @@ impl Accumulator for DistinctArrayAggAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        if states.is_empty() {
-            return Ok(());
-        }
+        self.merge_batch_impl(states, true)
+    }
 
-        assert_eq_or_internal_err!(states.len(), 1, "expects single state");
-
-        let distinct_metric = self.distinct_metric.clone();
-        let distinct_start = distinct_metric.as_ref().map(|_| Instant::now());
-
-        // The DISTINCT state is `List<value>`. This calls the update
-        // implementation once per state row, so record the submetric once for
-        // the entire merge rather than once per row.
-        let result = states[0]
-            .as_list::<i32>()
-            .iter()
-            .flatten()
-            .try_for_each(|val| self.update_batch_impl(&[val], false));
-
-        if let (Some(metric), Some(start)) = (distinct_metric, distinct_start) {
-            metric.add_duration(start.elapsed());
-        }
-        result
+    fn merge_batch_grouped(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.merge_batch_impl(states, false)
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
