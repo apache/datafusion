@@ -21,31 +21,18 @@ concurrency:
   group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
   cancel-in-progress: true
 
-# https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/events-that-trigger-workflows#running-your-pull_request-workflow-when-a-pull-request-merges
-#
-# These jobs are not run as part of PR checks as they are time-consuming
-# and should not fail often.
-#
-# We still run them as they provide important coverage to ensure correctness
-# in the (very rare) event of a hash failure or sqlite library query failure.
+# Run these required checks in the merge queue before merging into main.
+# On PR updates, skip the jobs so their required checks allow queue entry
+# without running the expensive suites. Do not add pull_request path filters:
+# a skipped workflow would leave required checks pending.
 on:
+  pull_request:
+  merge_group:
   push:
     branches:
-      - main
-      # support extended test suite for release candidate branches,
-      # it is not expected to have many changes in these branches,
-      # so running extended tests is not a burden
+      # Release branches retain post-push coverage. main is covered by the
+      # merge queue, so do not repeat the tests after merging.
       - 'branch-*'
-  # Also run for changes to some critical areas that are most likely
-  # to trigger errors in extended tests
-  pull_request:
-    branches: [ '**' ]
-    paths:
-      - 'datafusion/physical*/**/*.rs'
-      - 'datafusion/expr*/**/*.rs'
-      - 'datafusion/optimizer/**/*.rs'
-      - 'datafusion/sql/**/*.rs'
-      - 'datafusion-testing'
   workflow_dispatch:
     inputs:
       pr_head_sha:
@@ -60,13 +47,14 @@ jobs:
   # Run extended tests (with feature 'extended_tests')
   linux-test-extended:
     name: cargo test 'extended_tests' (amd64)
+    if: github.event_name != 'pull_request'
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=32,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     # note: do not use amd/rust container to preserve disk space
     steps:
       - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
+          ref: ${{ github.event.inputs.pr_head_sha }} # otherwise use the event's commit, including the merge group
           submodules: true
           fetch-depth: 1
       - name: Free Disk Space (Ubuntu)
@@ -111,6 +99,7 @@ jobs:
   # Check answers are correct when hash values collide
   hash-collisions:
     name: cargo test hash collisions (amd64)
+    if: github.event_name != 'pull_request'
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -118,7 +107,7 @@ jobs:
       - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
+          ref: ${{ github.event.inputs.pr_head_sha }} # otherwise use the event's commit, including the merge group
           submodules: true
           fetch-depth: 1
       - name: Setup Rust toolchain
@@ -133,6 +122,7 @@ jobs:
 
   sqllogictest-sqlite:
     name: "Run sqllogictests with the sqlite test suite"
+    if: github.event_name != 'pull_request'
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=32,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -141,7 +131,7 @@ jobs:
       - parallel:
           - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
             with:
-              ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
+              ref: ${{ github.event.inputs.pr_head_sha }} # otherwise use the event's commit, including the merge group
               submodules: true
               fetch-depth: 1
           # Don't use setup-builder to avoid configuring RUST_BACKTRACE which is expensive

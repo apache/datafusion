@@ -111,7 +111,7 @@ cargo test --profile=ci --test sqllogictests -- --complete
 
 Like similar systems such as [DuckDB](https://duckdb.org/dev/testing), DataFusion has chosen to trade off a slightly higher barrier to contribution for longer term maintainability.
 
-DataFusion has integrated [sqlite's test suite](https://sqlite.org/sqllogictest/doc/trunk/about.wiki) as a supplemental test suite that is run whenever a PR is merged into DataFusion. To run it manually please refer to the [README](https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md#running-tests-sqlite) file for instructions.
+DataFusion runs [sqlite's test suite](https://sqlite.org/sqllogictest/doc/trunk/about.wiki) in the merge queue before merging PRs into `main`. For local instructions, see [Running Tests: sqlite](https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md#running-tests-sqlite).
 
 ## Snapshot testing (`cargo insta`)
 
@@ -127,13 +127,16 @@ cargo insta review
 
 ## Extended Tests
 
-In addition to the standard CI test suite that is run on all PRs prior to merge,
-DataFusion has "extended" tests (defined in [extended.yml]) that are run on each
-commit to `main`. These tests rarely fail but take significantly longer to run
-than the standard test suite and add important test coverage such as ensuring
-correctness when there are hash collisions and running the relevant portions of
-the entire [sqlite test suite]. You can run the extended tests
-locally by following the [instructions in the documentation].
+DataFusion runs the extended tests in [extended.yml] in the merge queue before
+merging into `main`. All three jobs must pass: Rust tests with `extended_tests`,
+forced hash-collision tests, and the [sqlite test suite].
+
+On ordinary PR updates, GitHub reports these jobs as skipped to conserve CI
+resources. These skipped checks allow the PR to enter the merge queue, where the
+jobs run against the combined merge-group commit. The workflow also runs on
+pushes to release branches (`branch-*`) and through manual dispatch.
+
+For local SQLite test instructions, see the [instructions in the documentation].
 
 [sqlite test suite]: https://www.sqlite.org/sqllogictest/dir?ci=tip
 [instructions in the documentation]: https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest#running-tests-sqlite
