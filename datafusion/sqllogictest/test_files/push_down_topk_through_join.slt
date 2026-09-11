@@ -693,8 +693,12 @@ NULL 6 600
 ### CROSS JOIN
 ###
 
-# Each left row appears |t2| times, so the top-N by left columns must come
-# from the top-N left rows.
+# CROSS JOIN is never pushed through, even when the sort key comes
+# entirely from one side: a pushed Sort would evaluate its expression
+# eagerly on that side regardless of whether the *other* side is empty, and
+# this rule has no way to prove the other side is non-empty at
+# logical-plan time. See the fallible-expression regression further below
+# for why this matters, not just for performance.
 query TT
 EXPLAIN SELECT t1.a, t1.b, t2.x
 FROM t1 CROSS JOIN t2
@@ -703,9 +707,8 @@ ORDER BY t1.b ASC LIMIT 3;
 logical_plan
 01)Sort: t1.b ASC NULLS LAST, fetch=3
 02)--Cross Join:
-03)----Sort: t1.b ASC NULLS LAST, fetch=3
-04)------TableScan: t1 projection=[a, b]
-05)----TableScan: t2 projection=[x]
+03)----TableScan: t1 projection=[a, b]
+04)----TableScan: t2 projection=[x]
 
 query III
 SELECT t1.a, t1.b, t2.x
@@ -726,8 +729,7 @@ logical_plan
 01)Sort: t2.y ASC NULLS LAST, fetch=3
 02)--Cross Join:
 03)----TableScan: t1 projection=[a]
-04)----Sort: t2.y ASC NULLS LAST, fetch=3
-05)------TableScan: t2 projection=[x, y]
+04)----TableScan: t2 projection=[x, y]
 
 query III
 SELECT t1.a, t2.x, t2.y
@@ -749,6 +751,43 @@ logical_plan
 02)--Cross Join:
 03)----TableScan: t1 projection=[a, b]
 04)----TableScan: t2 projection=[y]
+
+# Regression: a CROSS JOIN with a fallible sort expression (division) on
+# one side and an empty *other* side must not error. Before this rule
+# excluded CROSS JOIN, pushing `Sort(10 / l.x, fetch=1)` onto `l` would
+# evaluate the division eagerly (l.x = 0 divides by zero) even though the
+# join's actual output is empty (r has no rows), which previously returned
+# cleanly without ever evaluating the sort expression.
+statement ok
+CREATE TABLE cj_l (x INT) AS VALUES (0), (1);
+
+statement ok
+CREATE TABLE cj_r (y INT);
+
+query TT
+EXPLAIN SELECT cj_l.x
+FROM cj_l CROSS JOIN cj_r
+ORDER BY 10 / cj_l.x
+LIMIT 1;
+----
+logical_plan
+01)Sort: Int64(10) / CAST(cj_l.x AS Int64) ASC NULLS LAST, fetch=1
+02)--Cross Join:
+03)----TableScan: cj_l projection=[x]
+04)----TableScan: cj_r projection=[]
+
+query I
+SELECT cj_l.x
+FROM cj_l CROSS JOIN cj_r
+ORDER BY 10 / cj_l.x
+LIMIT 1;
+----
+
+statement ok
+DROP TABLE cj_l;
+
+statement ok
+DROP TABLE cj_r;
 
 # INNER JOIN with only a non-equi filter: the filter can drop rows from either
 # side, so a pushed fetch could select rows that get filtered out.

@@ -18,11 +18,23 @@
 //! Sort(fetch) → Join pushdown — a sub-module of `push_down_limit`.
 //!
 //! When a `Sort` with a fetch limit (TopK) sits above a join whose
-//! preserved side is known (LEFT / RIGHT / LeftMark / RightMark / CROSS)
-//! and all sort expressions come from the preserved side, we insert a
-//! copy of the `Sort(fetch)` onto that input to reduce rows entering
-//! the join. The outer `Sort` is kept because a 1-to-many join can
-//! produce more than N output rows from N preserved-side rows.
+//! preserved side is known (LEFT / RIGHT / LeftMark / RightMark) and all
+//! sort expressions come from the preserved side, we insert a copy of the
+//! `Sort(fetch)` onto that input to reduce rows entering the join. The
+//! outer `Sort` is kept because a 1-to-many join can produce more than N
+//! output rows from N preserved-side rows.
+//!
+//! CROSS JOIN is deliberately excluded, even though every row from both
+//! sides appears in its output when *both* sides are non-empty: if the
+//! *other* side turns out to be empty, the join output is empty and the
+//! original (unpushed) Sort never evaluates its expression, whereas a
+//! pushed Sort would evaluate it eagerly regardless — which can surface an
+//! error from a fallible sort expression that a correct, unoptimized
+//! execution would never have hit. Proving the other side non-empty at
+//! logical-plan time isn't something this optimizer (or DataFusion's
+//! optimizer generally) has machinery for, so this rule stays conservative
+//! and skips CROSS JOIN entirely rather than risk changing whether a query
+//! errors.
 //!
 //! Dispatched from `PushDownLimit::rewrite` when the plan node is
 //! `LogicalPlan::Sort` with `fetch.is_some()`.
@@ -110,26 +122,21 @@ pub(super) fn push_topk_through_join(sort: SortPlan) -> Result<Transformed<Logic
         }
     };
 
-    // Determine which side(s) of the join are preserved.
+    // Determine which side of the join is preserved.
     //
     // - LEFT / LeftMark: only left preserved.
     // - RIGHT / RightMark: symmetric.
-    // - CROSS JOIN (Inner with no `on` keys and no filter):
-    //   every row from both sides appears in the output (Cartesian
-    //   product), so we can push to whichever side has all the sort
-    //   columns.
     //
-    // For LEFT/RIGHT, non-equijoin filters in the ON clause are safe:
-    // outer joins guarantee all preserved-side rows appear in the
-    // output regardless of the filter. For Inner joins (cross-join
-    // detection), the filter check is strict (`filter.is_none()`) —
-    // any filter on Inner can drop rows from either side.
-    let preserved_candidates: &[Side] = match join.join_type {
-        JoinType::Left | JoinType::LeftMark => &[Side::Left],
-        JoinType::Right | JoinType::RightMark => &[Side::Right],
-        JoinType::Inner if join.on.is_empty() && join.filter.is_none() => {
-            &[Side::Left, Side::Right]
-        }
+    // Non-equijoin filters in the ON clause are safe: outer joins guarantee
+    // all preserved-side rows appear in the output regardless of the
+    // filter.
+    //
+    // CROSS JOIN and other Inner joins are deliberately excluded — see the
+    // module doc comment for why CROSS JOIN specifically isn't safe to
+    // push through here despite superficially preserving every row.
+    let preserved_side = match join.join_type {
+        JoinType::Left | JoinType::LeftMark => Side::Left,
+        JoinType::Right | JoinType::RightMark => Side::Right,
         _ => return Ok(Transformed::no(LogicalPlan::Sort(sort))),
     };
 
@@ -155,33 +162,32 @@ pub(super) fn push_topk_through_join(sort: SortPlan) -> Result<Transformed<Logic
         return Ok(Transformed::no(LogicalPlan::Sort(sort)));
     }
 
-    // Pick the first preserved-side candidate whose schema contains all
-    // referenced sort columns. For LEFT/RIGHT this is the fixed side;
-    // for CROSS we try both.
+    // Confirm the preserved side's schema contains all referenced sort
+    // columns.
     //
     // Caveat: `schema_columns` adds an unqualified entry for every field
-    // alongside its qualified one, so an unqualified sort column matches
-    // whichever side has a same-named field first — even if an
-    // identically-named field also exists on the other side, in which case
-    // an unqualified reference is genuinely ambiguous between them. SQL can
-    // never produce this: the planner always qualifies column references
-    // (or rejects the query as ambiguous) before this rule runs. Only a
-    // hand-built `LogicalPlan` with a deliberately unqualified `Column` can
-    // hit this. `push_down_filter` has the exact same caveat, for the same
-    // reason (it also calls `schema_columns` to accept unqualified filter
-    // columns).
-    let Some(preserved_side) = preserved_candidates.iter().copied().find(|&side| {
-        let schema = match side {
-            Side::Left => join.left.schema(),
-            Side::Right => join.right.schema(),
-        };
-        let cols = schema_columns(schema);
-        resolved_sort_exprs
-            .iter()
-            .all(|se| has_all_column_refs(&se.expr, &cols))
-    }) else {
-        return Ok(Transformed::no(LogicalPlan::Sort(sort)));
+    // alongside its qualified one, so an unqualified sort column matches as
+    // long as the preserved side has a same-named field — even if an
+    // identically-named field also exists on the *other* side, in which
+    // case an unqualified reference is genuinely ambiguous and this could
+    // wrongly treat a reference to the other side's column as if it were
+    // the preserved side's. SQL can never produce this: the planner always
+    // qualifies column references (or rejects the query as ambiguous)
+    // before this rule runs. Only a hand-built `LogicalPlan` with a
+    // deliberately unqualified `Column` can hit this. `push_down_filter`
+    // has the exact same caveat, for the same reason (it also calls
+    // `schema_columns` to accept unqualified filter columns).
+    let schema = match preserved_side {
+        Side::Left => join.left.schema(),
+        Side::Right => join.right.schema(),
     };
+    let cols = schema_columns(schema);
+    if !resolved_sort_exprs
+        .iter()
+        .all(|se| has_all_column_refs(&se.expr, &cols))
+    {
+        return Ok(Transformed::no(LogicalPlan::Sort(sort)));
+    }
 
     let preserved_child = match preserved_side {
         Side::Left => &join.left,
@@ -558,9 +564,13 @@ mod test {
         )
     }
 
-    /// CROSS JOIN sorted by left-side columns → pushed to left child.
+    /// CROSS JOIN is never pushed through, even when the sort key comes
+    /// entirely from one side: see the module doc comment for why (a
+    /// pushed Sort would evaluate eagerly on a side whose relevance
+    /// depends on the *other* side being non-empty, which this rule has no
+    /// way to prove at logical-plan time).
     #[test]
-    fn topk_pushed_to_left_of_cross_join() -> Result<()> {
+    fn topk_not_pushed_for_cross_join_left_side_sort() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
         let t2 = test_table_scan_with_name("t2")?;
 
@@ -574,16 +584,15 @@ mod test {
             @r"
         Sort: t1.b ASC NULLS LAST, fetch=3
           Cross Join:
-            Sort: t1.b ASC NULLS LAST, fetch=3
-              TableScan: t1
+            TableScan: t1
             TableScan: t2
         "
         )
     }
 
-    /// CROSS JOIN sorted by right-side columns → pushed to right child.
+    /// Symmetric to the left-side case above.
     #[test]
-    fn topk_pushed_to_right_of_cross_join() -> Result<()> {
+    fn topk_not_pushed_for_cross_join_right_side_sort() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
         let t2 = test_table_scan_with_name("t2")?;
 
@@ -598,13 +607,13 @@ mod test {
         Sort: t2.b ASC NULLS LAST, fetch=3
           Cross Join:
             TableScan: t1
-            Sort: t2.b ASC NULLS LAST, fetch=3
-              TableScan: t2
+            TableScan: t2
         "
         )
     }
 
-    /// CROSS JOIN sorted by columns from both sides → no pushdown.
+    /// CROSS JOIN sorted by columns from both sides → no pushdown (would
+    /// still be excluded even if CROSS JOIN were otherwise supported).
     #[test]
     fn topk_not_pushed_for_cross_join_mixed_side_sort() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
@@ -1308,16 +1317,14 @@ mod test {
         )
     }
 
-    /// CROSS JOIN pushdown evaluates the sort expression on the preserved
-    /// side eagerly, even though the join's output would be empty (and the
-    /// expression never evaluated) if the *other* side turned out to be
-    /// empty. This mirrors `push_down_filter`'s existing behavior of pushing
-    /// predicates into both sides of an Inner/Cross join, so it is not a
-    /// new class of risk; this test just pins down that pushdown still
-    /// happens for a division (a fallible expression) rather than being
-    /// silently skipped.
+    /// Plan-level regression for the CROSS JOIN empty-side hazard: a
+    /// division (fallible) sort key over a CROSS JOIN must never be pushed
+    /// down, since doing so would evaluate it eagerly on rows that a
+    /// correct, unoptimized execution would never reach if the other side
+    /// turned out to be empty (see `topk_pushed_for_cross_join_with_empty_other_side_does_not_error`
+    /// in the SLT suite for the corresponding end-to-end execution case).
     #[test]
-    fn topk_pushed_for_cross_join_with_fallible_sort_expr() -> Result<()> {
+    fn topk_not_pushed_for_cross_join_with_fallible_sort_expr() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
         let t2 = test_table_scan_with_name("t2")?;
 
@@ -1334,8 +1341,7 @@ mod test {
             @r"
         Sort: t1.a / t1.b ASC NULLS LAST, fetch=3
           Cross Join:
-            Sort: t1.a / t1.b ASC NULLS LAST, fetch=3
-              TableScan: t1
+            TableScan: t1
             TableScan: t2
         "
         )
