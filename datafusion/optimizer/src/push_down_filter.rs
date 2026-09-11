@@ -1477,10 +1477,10 @@ mod tests {
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
-        AsOfMatch, ColumnarValue, ExprFunctionExt, Extension, LogicalPlanBuilder,
-        Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TableScan,
-        TableSource, TableType, UserDefinedLogicalNodeCore, Volatility,
-        WindowFunctionDefinition, col, in_list, in_subquery, lit,
+        ColumnarValue, ExprFunctionExt, Extension, LogicalPlanBuilder, Operator,
+        ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TableScan, TableSource,
+        TableType, UserDefinedLogicalNodeCore, Volatility, WindowFunctionDefinition, col,
+        in_list, in_subquery, lit,
     };
 
     use crate::OptimizerContext;
@@ -2528,10 +2528,10 @@ mod tests {
         let left = test_table_scan_with_name("test1")?;
         let right = test_table_scan_with_name("test2")?;
         let plan = LogicalPlanBuilder::from(left)
-            .asof_join(
+            .asof_join_on(
                 right,
-                vec![(col("test1.a"), col("test2.a"))],
-                AsOfMatch::new(col("test1.b"), Operator::GtEq, col("test2.b")),
+                Some(col("test1.a").eq(col("test2.a"))),
+                col("test1.b").gt_eq(col("test2.b")),
             )?
             .filter(
                 col("test1.a")
@@ -2565,10 +2565,10 @@ mod tests {
         ))
         .gt(lit(0));
         let plan = LogicalPlanBuilder::from(left)
-            .asof_join(
+            .asof_join_on(
                 right,
-                vec![(col("test1.a"), col("test2.a"))],
-                AsOfMatch::new(col("test1.b"), Operator::GtEq, col("test2.b")),
+                Some(col("test1.a").eq(col("test2.a"))),
+                col("test1.b").gt_eq(col("test2.b")),
             )?
             .filter(predicate)?
             .build()?;
