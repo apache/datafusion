@@ -79,8 +79,10 @@ Notes:
 | Ruihang Xia               | wayne            | [waynexia](https://github.com/waynexia)                 | Greptime       | PMC       |
 | Wes McKinney              | wesm             | [wesm](https://github.com/wesm)                         | Posit          | PMC       |
 | Will Jones                | wjones127        | [wjones127](https://github.com/wjones127)               | LanceDB        | PMC       |
-| Xudong Wang               | xudong963        | [xudong963](https://github.com/xudong963)               | Polygon.io     | PMC       |
+| Xudong Wang               | xudong963        | [xudong963](https://github.com/xudong963)               | Massive        | PMC       |
 | Yongting You              | ytyou            | [2010YOUY01](https://github.com/2010YOUY01)             | Independent    | PMC       |
+| Qi Zhu                    | zhuqi            | [zhuqi-lucas](https://github.com/zhuqi-lucas)           | Massive        | PMC       |
+| Adam Gutglick             | adamgs           | [AdamGS](https://github.com/AdamGS)                     |                | Committer |
 | Brent Gardner             | avantgardner     | [avantgardnerio](https://github.com/avantgardnerio)     | Coralogix      | Committer |
 | Bhargava Vadlamani        | bhargava         | [coderfender](https://github.com/coderfender)           |                | Committer |
 | Dmitrii Blaginin          | blaginin         | [blaginin](https://github.com/blaginin)                 | SpiralDB       | Committer |
@@ -96,6 +98,7 @@ Notes:
 | Siew Kam Onn              | kosiew           | [kosiew](https://github.com/kosiew)                     |                | Committer |
 | Kumar Ujjawal             | kumarujjawal     | [kumarUjjawal](https://github.com/kumarUjjawal)         |                | Committer |
 | Lewis Zhang               | linwei           | [lewiszlw](https://github.com/lewiszlw)                 | diit.cn        | Committer |
+| Manu Zhang                | mauzhang         | [manuzhang](https://github.com/manuzhang)               |                | Committer |
 | Metehan Yildirim          | mete             | [metegenez](https://github.com/metegenez)               |                | Committer |
 | Martin Tzvetanov Grigorov | mgrigorov        | [martin-g](https://github.com/martin-g)                 |                | Committer |
 | Wang Mingming             | mingmwang        | [mingmwang](https://github.com/mingmwang)               |                | Committer |
@@ -116,7 +119,6 @@ Notes:
 | Yang Jiang                | yangjiang        | [Ted-jiang](https://github.com/Ted-jiang)               | Ebay           | Committer |
 | Yoav Cohen                | ycohen           | [yoavcloud](https://github.com/yoavcloud)               |                | Committer |
 | Yijie Shen                | yjshen           | [yjshen](https://github.com/yjshen)                     | DataPelago     | Committer |
-| Qi Zhu                    | zhuqi            | [zhuqi-lucas](https://github.com/zhuqi-lucas)           | Polygon.io     | Committer |
 
 <!-- End Auto-Generated Committer List -->
 

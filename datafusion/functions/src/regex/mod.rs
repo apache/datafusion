@@ -17,7 +17,10 @@
 
 //! "regex" DataFusion functions
 
+use arrow::array::ArrayRef;
+use arrow::compute::kernels::{cmp::eq, nullif::nullif};
 use arrow::error::ArrowError;
+use datafusion_common::{Result, ScalarValue};
 use regex::Regex;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -27,6 +30,14 @@ pub mod regexpinstr;
 pub mod regexplike;
 pub mod regexpmatch;
 pub mod regexpreplace;
+
+/// Arrow's regex kernels treat null flags as no flags, but reject empty flags.
+/// Normalize empty strings without copying the string buffers.
+fn normalize_empty_flags(flags: &ArrayRef) -> Result<ArrayRef> {
+    let empty =
+        ScalarValue::try_from_string(String::new(), flags.data_type())?.to_scalar()?;
+    Ok(nullif(flags, &eq(flags, &empty)?)?)
+}
 
 // create UDFs
 make_udf_function!(regexpcount::RegexpCountFunc, regexp_count);
@@ -48,11 +59,11 @@ pub mod expr_fn {
         let mut args = vec![values, regex];
         if let Some(start) = start {
             args.push(start);
-        };
+        }
 
         if let Some(flags) = flags {
             args.push(flags);
-        };
+        }
         super::regexp_count().call(args)
     }
 
@@ -61,7 +72,7 @@ pub mod expr_fn {
         let mut args = vec![values, regex];
         if let Some(flags) = flags {
             args.push(flags);
-        };
+        }
         super::regexp_match().call(args)
     }
 
@@ -78,19 +89,19 @@ pub mod expr_fn {
         let mut args = vec![values, regex];
         if let Some(start) = start {
             args.push(start);
-        };
+        }
         if let Some(n) = n {
             args.push(n);
-        };
+        }
         if let Some(endoption) = endoption {
             args.push(endoption);
-        };
+        }
         if let Some(flags) = flags {
             args.push(flags);
-        };
+        }
         if let Some(subexpr) = subexpr {
             args.push(subexpr);
-        };
+        }
         super::regexp_instr().call(args)
     }
     /// Returns true if a regex has at least one match in a string, false otherwise.
@@ -98,7 +109,7 @@ pub mod expr_fn {
         let mut args = vec![values, regex];
         if let Some(flags) = flags {
             args.push(flags);
-        };
+        }
         super::regexp_like().call(args)
     }
 
@@ -112,7 +123,7 @@ pub mod expr_fn {
         let mut args = vec![string, pattern, replacement];
         if let Some(flags) = flags {
             args.push(flags);
-        };
+        }
         super::regexp_replace().call(args)
     }
 }
@@ -166,7 +177,7 @@ pub fn compile_regex(regex: &str, flags: Option<&str>) -> Result<Regex, ArrowErr
     let pattern = match flags {
         None | Some("") => regex.to_string(),
         Some(flags) => {
-            if flags.contains("g") {
+            if flags.contains('g') {
                 return Err(ArrowError::ComputeError(
                     "regexp_count()/regexp_instr() does not support the global flag"
                         .to_string(),
@@ -184,6 +195,108 @@ pub fn compile_regex(regex: &str, flags: Option<&str>) -> Result<Regex, ArrowErr
 #[cfg(test)]
 mod tests {
     use super::start_to_byte_offset;
+
+    #[test]
+    fn empty_flags_match_omitted_flags() {
+        use arrow::array::StringArray;
+        use arrow::compute::cast;
+        use arrow::datatypes::{DataType, Field};
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
+
+        use super::*;
+
+        for udf in [regexp_like(), regexp_match()] {
+            for data_type in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+                // Exercise every scalar/array combination, bypassing simplification.
+                for shape in 0..8 {
+                    for pattern in ["b..", "B..", "", "(b)(..)"] {
+                        let args = ["foobarbaz", pattern, ""]
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, value)| {
+                                let scalar = ScalarValue::try_from_string(
+                                    value.to_string(),
+                                    &data_type,
+                                )
+                                .unwrap();
+                                if shape & (1 << i) == 0 {
+                                    ColumnarValue::Scalar(scalar)
+                                } else {
+                                    ColumnarValue::Array(
+                                        scalar.to_array_of_size(3).unwrap(),
+                                    )
+                                }
+                            })
+                            .collect::<Vec<_>>();
+                        let invoke = |args: Vec<ColumnarValue>| {
+                            let types = args
+                                .iter()
+                                .map(ColumnarValue::data_type)
+                                .collect::<Vec<_>>();
+                            let return_type = udf.return_type(&types).unwrap();
+                            udf.invoke_with_args(ScalarFunctionArgs {
+                                arg_fields: types
+                                    .into_iter()
+                                    .map(|t| Arc::new(Field::new("arg", t, true)))
+                                    .collect(),
+                                args,
+                                number_rows: 3,
+                                return_field: Arc::new(Field::new(
+                                    "result",
+                                    return_type,
+                                    true,
+                                )),
+                                config_options: Arc::new(ConfigOptions::default()),
+                            })
+                            .unwrap()
+                            .to_array(3)
+                            .unwrap()
+                        };
+                        assert_eq!(
+                            &invoke(args.clone()),
+                            &invoke(args[..2].to_vec()),
+                            "{} {data_type:?} shape={shape} pattern={pattern:?}",
+                            udf.name()
+                        );
+                    }
+                }
+
+                // Empty and null flags both mean no flags; preserve nonempty flags
+                // and null values/patterns in the same batch.
+                let arrays = [
+                    vec![
+                        Some("abc"),
+                        Some("ABC"),
+                        Some("ABC"),
+                        None,
+                        Some("abc"),
+                        Some("abc"),
+                    ],
+                    vec![Some("a"), Some("a"), Some("a"), Some("a"), None, Some("a")],
+                    vec![Some(""), Some("i"), Some(""), Some(""), Some(""), None],
+                ]
+                .map(|values| cast(&StringArray::from(values), &data_type).unwrap());
+                let expected_flags = cast(
+                    &StringArray::from(vec![None, Some("i"), None, None, None, None]),
+                    &data_type,
+                )
+                .unwrap();
+                let kernel = if udf.name() == "regexp_like" {
+                    regexplike::regexp_like
+                } else {
+                    regexpmatch::regexp_match
+                };
+                let expected = kernel(&[
+                    Arc::clone(&arrays[0]),
+                    Arc::clone(&arrays[1]),
+                    expected_flags,
+                ])
+                .unwrap();
+                assert_eq!(&kernel(&arrays).unwrap(), &expected);
+            }
+        }
+    }
 
     #[test]
     fn start_to_byte_offset_ascii() {

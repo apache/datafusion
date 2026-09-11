@@ -168,10 +168,11 @@ impl LambdaExpr {
             protobuf::physical_expr_node::ExprType::Lambda,
             "LambdaExpr",
         );
+        let protobuf::PhysicalLambdaExprNode { params, body } = &**lambda;
 
         Ok(Arc::new(LambdaExpr::try_new(
-            lambda.params.clone(),
-            ctx.decode_required_expression(lambda.body.as_deref(), "LambdaExpr", "body")?,
+            params.clone(),
+            ctx.decode_required_expression(body.as_deref(), "LambdaExpr", "body")?,
         )?))
     }
 
@@ -303,12 +304,24 @@ impl PhysicalExpr for LambdaExpr {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_proto_models::protobuf;
 
+        // Exhaustive destructure: adding a field to `LambdaExpr` without
+        // deciding how it is serialized is a compile error, not a silent
+        // round-trip gap.
+        let Self {
+            params,
+            body,
+            // Derived from `params` and `body` by `try_new` on decode.
+            projected_body: _,
+            projection: _,
+            used_param_indices: _,
+        } = self;
+
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::Lambda(Box::new(
                 protobuf::PhysicalLambdaExprNode {
-                    params: self.params().to_vec(),
-                    body: Some(Box::new(ctx.encode_child(self.body())?)),
+                    params: params.clone(),
+                    body: Some(Box::new(ctx.encode_child(body)?)),
                 },
             ))),
         }))
@@ -494,5 +507,150 @@ mod tests {
             "only outer's `v` (index 1) should be reported as used; `k` (index 0) is \
              shadowed inside the nested lambda"
         );
+    }
+}
+
+/// Tests for the `try_to_proto` / `try_from_proto` hooks.
+#[cfg(all(test, feature = "proto"))]
+mod proto_tests {
+    use super::*;
+    use crate::proto_test_util::{
+        StubDecoder, StubEncoder, UnreachableDecoder, column_node,
+    };
+    use arrow::datatypes::Field;
+    use datafusion_common::DataFusionError;
+    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+    use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
+    use datafusion_proto_models::protobuf::{self, PhysicalExprNode};
+
+    /// A one-parameter lambda whose body references that parameter.
+    fn proto_lambda_fixture() -> LambdaExpr {
+        let v_field = Arc::new(Field::new("v", DataType::Int32, true));
+        LambdaExpr::try_new(
+            vec!["v".to_string()],
+            Arc::new(LambdaVariable::new(0, v_field)),
+        )
+        .unwrap()
+    }
+
+    fn proto_lambda_node(
+        params: Vec<String>,
+        body: Option<Box<PhysicalExprNode>>,
+    ) -> PhysicalExprNode {
+        PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::Lambda(Box::new(
+                protobuf::PhysicalLambdaExprNode { params, body },
+            ))),
+        }
+    }
+
+    #[test]
+    fn try_to_proto_encodes_lambda() {
+        let lambda = proto_lambda_fixture();
+        let encoder = StubEncoder::ok();
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+        let node = lambda
+            .try_to_proto(&ctx)
+            .unwrap()
+            .expect("LambdaExpr should encode to Some(node)");
+
+        assert!(node.expr_id.is_none());
+        let lambda_node = match node.expr_type {
+            Some(protobuf::physical_expr_node::ExprType::Lambda(boxed)) => *boxed,
+            other => panic!("expected a LambdaExpr node, got {other:?}"),
+        };
+        assert_eq!(lambda_node.params, vec!["v".to_string()]);
+        assert!(lambda_node.body.is_some());
+    }
+
+    #[test]
+    fn try_to_proto_propagates_body_encode_error() {
+        let lambda = proto_lambda_fixture();
+        let encoder = StubEncoder::failing_on(1);
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+        let err = lambda.try_to_proto(&ctx).unwrap_err();
+        assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 1")));
+    }
+
+    /// Decoding goes through `try_new`, which recomputes `projection`,
+    /// `projected_body`, and `used_param_indices` from the decoded body, so
+    /// they need no wire representation.
+    #[test]
+    fn try_from_proto_recomputes_derived_state() {
+        let node =
+            proto_lambda_node(vec!["v".to_string()], Some(Box::new(column_node("body"))));
+        let schema = Schema::empty();
+        let decoder = StubDecoder::ok();
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let decoded = LambdaExpr::try_from_proto(&node, &ctx).unwrap();
+        let lambda = decoded
+            .downcast_ref::<LambdaExpr>()
+            .expect("decoded expr should be a LambdaExpr");
+
+        assert_eq!(lambda.params(), &["v".to_string()]);
+        // The stub decodes the body to a `Column` at index 0: the projection
+        // covers exactly that index, no declared param is referenced, and an
+        // identity projection leaves the body untouched.
+        assert_eq!(lambda.projection(), &[0]);
+        assert!(lambda.used_param_indices().is_empty());
+        assert!(lambda.projected_body().eq(lambda.body()));
+    }
+
+    #[test]
+    fn try_from_proto_rejects_non_lambda_node() {
+        let node = column_node("a");
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let err = LambdaExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(
+            matches!(err, DataFusionError::Internal(msg) if msg.contains("PhysicalExprNode is not a LambdaExpr"))
+        );
+    }
+
+    #[test]
+    fn try_from_proto_rejects_missing_body() {
+        let node = proto_lambda_node(vec!["v".to_string()], None);
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let err = LambdaExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(
+            matches!(err, DataFusionError::Internal(msg) if msg.contains("LambdaExpr is missing required field 'body'"))
+        );
+    }
+
+    #[test]
+    fn try_from_proto_rejects_duplicate_params() {
+        let node = proto_lambda_node(
+            vec!["v".to_string(), "v".to_string()],
+            Some(Box::new(column_node("body"))),
+        );
+        let schema = Schema::empty();
+        let decoder = StubDecoder::ok();
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let err = LambdaExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(
+            matches!(err, DataFusionError::Plan(msg) if msg.contains("lambda params must be unique"))
+        );
+    }
+
+    #[test]
+    fn try_from_proto_propagates_body_decode_error() {
+        let node =
+            proto_lambda_node(vec!["v".to_string()], Some(Box::new(column_node("body"))));
+        let schema = Schema::empty();
+        let decoder = StubDecoder::failing_on(1);
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let err = LambdaExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 1")));
     }
 }

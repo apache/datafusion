@@ -42,7 +42,7 @@ statement error
 SELECT sin(c1) FROM aggregate_test_100
 
 # cast_expressions_error
-statement error DataFusion error: Arrow error: Cast error: Cannot cast string 'c' to value of Int32 type
+statement error DataFusion error: Failed to cast field 'c1' from Utf8View to Int32\ncaused by\nArrow error: Cast error: Cannot cast string 'c' to value of Int32 type
 SELECT CAST(c1 AS INT) FROM aggregate_test_100
 
 # aggregation_with_bad_arguments
@@ -191,3 +191,12 @@ select ammp from a;
 
 statement ok
 drop table a;
+
+
+# Test valid fields in a nested query when providing an invalid column name
+# (https://github.com/apache/datafusion/issues/24773)
+query error DataFusion error: Schema error: No field named y\.\nValid fields are t\.x\.$
+select * from (select 1 as x) t order by y;
+
+query error DataFusion error: Schema error: No field named t\.y\. Did you mean 't\.x'\?\nValid fields are t\.x\.$
+select * from (select 1 as x) t order by t.y;

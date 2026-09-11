@@ -253,8 +253,8 @@ fn assert_dynamic_filter_update_is_visible(
 
     // Ensure both filters have the updated expr.
     let expected_current = r#"Literal { value: Int64(123), field: Field { name: "lit", data_type: Int64 } }"#;
-    assert_eq!(expected_current, format!("{:?}", left_filter.current()?),);
-    assert_eq!(expected_current, format!("{:?}", right_filter.current()?),);
+    assert_eq!(expected_current, format!("{:?}", left_filter.current()?));
+    assert_eq!(expected_current, format!("{:?}", right_filter.current()?));
 
     Ok(())
 }

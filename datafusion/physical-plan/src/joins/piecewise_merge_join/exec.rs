@@ -17,9 +17,8 @@
 
 use arrow::array::Array;
 use arrow::{
-    array::{ArrayRef, BooleanBufferBuilder, RecordBatch},
+    array::{ArrayRef, RecordBatch},
     compute::concat_batches,
-    util::bit_util,
 };
 use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::not_impl_err;
@@ -37,7 +36,6 @@ use datafusion_physical_expr::{
 };
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::TryStreamExt;
-use parking_lot::Mutex;
 use std::fmt::Formatter;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -49,8 +47,7 @@ use crate::joins::piecewise_merge_join::classic_join::{
 };
 use crate::joins::piecewise_merge_join::existence_join::ExistencePWMJStream;
 use crate::joins::piecewise_merge_join::utils::{
-    build_visited_indices_map, is_existence_join, is_right_existence_join,
-    is_supported_existence_join,
+    is_existence_join, is_right_existence_join, is_supported_existence_join,
 };
 use crate::joins::utils::asymmetric_join_output_partitioning;
 use crate::metrics::MetricsSet;
@@ -60,10 +57,7 @@ use crate::{
 };
 use crate::{
     ExecutionPlan, PlanProperties,
-    joins::{
-        SharedBitmapBuilder,
-        utils::{BuildProbeJoinMetrics, OnceAsync, OnceFut, build_join_schema},
-    },
+    joins::utils::{BuildProbeJoinMetrics, OnceAsync, OnceFut, build_join_schema},
     metrics::ExecutionPlanMetricsSet,
     spill::get_record_batch_memory_size,
 };
@@ -631,7 +625,6 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
                 Arc::clone(&on_buffered),
                 metrics.clone(),
                 reservation,
-                build_visited_indices_map(self.join_type),
                 streamed_partitions,
             ))
         })?;
@@ -860,22 +853,19 @@ async fn build_buffered_data(
     on_buffered: PhysicalExprRef,
     metrics: BuildProbeJoinMetrics,
     reservation: MemoryReservation,
-    build_map: bool,
     remaining_partitions: usize,
 ) -> Result<BufferedSideData> {
     let schema = buffered.schema();
 
     // Combine batches and record number of rows
-    let initial = (Vec::new(), 0, metrics, reservation);
-    let (batches, num_rows, metrics, reservation) = buffered
+    let initial = (Vec::new(), metrics, reservation);
+    let (batches, metrics, reservation) = buffered
         .try_fold(initial, |mut acc, batch| async {
             let batch_size = get_record_batch_memory_size(&batch);
-            acc.3.try_grow(batch_size)?;
-            acc.2.build_mem_used.add(batch_size);
-            acc.2.build_input_batches.add(1);
-            acc.2.build_input_rows.add(batch.num_rows());
-            // Update row count
-            acc.1 += batch.num_rows();
+            acc.2.try_grow(batch_size)?;
+            acc.1.build_mem_used.add(batch_size);
+            acc.1.build_input_batches.add(1);
+            acc.1.build_input_rows.add(batch.num_rows());
             // Push batch to output
             acc.0.push(batch);
             Ok(acc)
@@ -896,23 +886,9 @@ async fn build_buffered_data(
     reservation.try_grow(size_estimation)?;
     metrics.build_mem_used.add(size_estimation);
 
-    // Created visited indices bitmap only if the join type requires it
-    let visited_indices_bitmap = if build_map {
-        let bitmap_size = bit_util::ceil(single_batch.num_rows(), 8);
-        reservation.try_grow(bitmap_size)?;
-        metrics.build_mem_used.add(bitmap_size);
-
-        let mut bitmap_buffer = BooleanBufferBuilder::new(single_batch.num_rows());
-        bitmap_buffer.append_n(num_rows, false);
-        bitmap_buffer
-    } else {
-        BooleanBufferBuilder::new(0)
-    };
-
     let buffered_data = BufferedSideData::new(
         single_batch,
         buffered_values,
-        Mutex::new(visited_indices_bitmap),
         remaining_partitions,
         reservation,
     );
@@ -923,13 +899,20 @@ async fn build_buffered_data(
 pub(super) struct BufferedSideData {
     pub(super) batch: RecordBatch,
     values: ArrayRef,
-    pub(super) visited_indices_bitmap: SharedBitmapBuilder,
     pub(super) remaining_partitions: AtomicUsize,
-    /// Existence joins only: the start of the matched suffix of the buffered side, or
-    /// `usize::MAX` before the first match. `[existence_min_marked, len)` *is* the matched
-    /// set -- no bitmap is allocated. Shared so each partition benefits from what the
-    /// others have marked; it only ever decreases, so a stale read is safe.
-    pub(super) existence_min_marked: AtomicUsize,
+    /// The start of the matched suffix of the buffered side, or `usize::MAX` before the
+    /// first match. `[min_marked, len)` *is* the matched set and `[0, min_marked)` the
+    /// unmatched one -- no bitmap is allocated.
+    ///
+    /// Both stream kinds only ever mark a suffix, which is what makes one index enough:
+    ///  - `ExistencePWMJStream` marks `[k, len)` for the first buffered row `k` matching
+    ///    a streamed batch's extreme key.
+    ///  - `ClassicPWMJStream` emits `buffered[k..] x streamed_row` on each match, so the
+    ///    rows it marks are exactly that same suffix.
+    ///
+    /// Shared so each partition benefits from what the others have marked; it only ever
+    /// decreases, so a stale read is safe.
+    pub(super) min_marked: AtomicUsize,
     _reservation: MemoryReservation,
 }
 
@@ -937,16 +920,14 @@ impl BufferedSideData {
     pub(super) fn new(
         batch: RecordBatch,
         values: ArrayRef,
-        visited_indices_bitmap: SharedBitmapBuilder,
         remaining_partitions: usize,
         reservation: MemoryReservation,
     ) -> Self {
         Self {
             batch,
             values,
-            visited_indices_bitmap,
             remaining_partitions: AtomicUsize::new(remaining_partitions),
-            existence_min_marked: AtomicUsize::new(usize::MAX),
+            min_marked: AtomicUsize::new(usize::MAX),
             _reservation: reservation,
         }
     }

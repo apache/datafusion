@@ -35,9 +35,9 @@ use datafusion_common::{
     stats::Precision, utils::expr::COUNT_STAR_EXPANSION,
 };
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr, GroupsAccumulator,
-    ReversedUDAF, SetMonotonicity, Signature, StatisticsArgs, TypeSignature, Volatility,
-    WindowFunctionDefinition,
+    Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr, GroupSelection,
+    GroupsAccumulator, ReversedUDAF, SetMonotonicity, Signature, StatisticsArgs,
+    TypeSignature, Volatility, WindowFunctionDefinition,
     expr::WindowFunction,
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::format_state_name,
@@ -346,14 +346,31 @@ impl AggregateUDFImpl for Count {
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
-        if args.exprs.len() != 1 {
-            return false;
+        // The answer depends on nothing but the argument types and `DISTINCT`,
+        // so defer to the logical form and keep one list of supported types.
+        let arg_types = args
+            .expr_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        self.groups_accumulator_supported_for_types(&arg_types, args.is_distinct)
+            .unwrap_or(false)
+    }
+
+    fn groups_accumulator_supported_for_types(
+        &self,
+        arg_types: &[DataType],
+        is_distinct: bool,
+    ) -> Option<bool> {
+        if arg_types.len() != 1 {
+            return Some(false);
         }
-        if !args.is_distinct {
-            return true;
+        if !is_distinct {
+            return Some(true);
         }
-        matches!(
-            args.expr_fields[0].data_type(),
+        // Keep in step with `create_distinct_count_groups_accumulator`.
+        Some(matches!(
+            arg_types[0],
             DataType::Int8
                 | DataType::Int16
                 | DataType::Int32
@@ -362,7 +379,7 @@ impl AggregateUDFImpl for Count {
                 | DataType::UInt16
                 | DataType::UInt32
                 | DataType::UInt64
-        )
+        ))
     }
 
     fn create_groups_accumulator(
@@ -707,11 +724,35 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         Ok(Arc::new(array))
     }
 
+    fn evaluate_preserving(&mut self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
+        selection.validate_num_groups(self.counts.len())?;
+        let counts = selection
+            .iter()
+            .map(|index| self.counts[index])
+            .collect::<Vec<_>>();
+        Ok(Arc::new(Int64Array::from(counts)))
+    }
+
+    fn supports_evaluate_preserving(&self) -> bool {
+        true
+    }
+
     // return arrays for counts
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let counts = emit_to.take_needed(&mut self.counts);
         let counts: PrimitiveArray<Int64Type> = Int64Array::from(counts); // zero copy, no nulls
         Ok(vec![Arc::new(counts) as ArrayRef])
+    }
+
+    fn state_preserving(
+        &mut self,
+        selection: GroupSelection<'_>,
+    ) -> Result<Vec<ArrayRef>> {
+        self.evaluate_preserving(selection).map(|array| vec![array])
+    }
+
+    fn supports_state_preserving(&self) -> bool {
+        true
     }
 
     /// Converts an input batch directly to a state batch
@@ -913,7 +954,7 @@ mod tests {
 
     use super::*;
     use arrow::{
-        array::{DictionaryArray, Int32Array, NullArray, StringArray},
+        array::{DictionaryArray, Int32Array, Int64Array, NullArray, StringArray},
         datatypes::{DataType, Field, Int32Type, Schema},
     };
     use datafusion_expr::function::AccumulatorArgs;
@@ -922,7 +963,7 @@ mod tests {
     /// Helper function to create a dictionary array with non-null keys but some null values
     /// Returns a dictionary array where:
     /// - keys are [0, 1, 2, 0, 1] (all non-null)
-    /// - values are ["a", null, "c"]
+    /// - values are `["a", null, "c"]`
     /// - so the keys reference: "a", null, "c", "a", null
     fn create_dictionary_with_null_values() -> Result<DictionaryArray<Int32Type>> {
         let values = StringArray::from(vec![Some("a"), None, Some("c")]);
@@ -955,6 +996,39 @@ mod tests {
         let mut accumulator = CountAccumulator::new();
         accumulator.update_batch(&[Arc::new(NullArray::new(10))])?;
         assert_eq!(accumulator.evaluate()?, ScalarValue::Int64(Some(0)));
+        Ok(())
+    }
+
+    #[test]
+    fn count_groups_preserving_reads() -> Result<()> {
+        let mut accumulator = CountGroupsAccumulator::new();
+        let values = Arc::new(Int32Array::from(vec![Some(1), None, Some(2), Some(3)]));
+        accumulator.update_batch(&[values], &[0, 1, 0, 2], None, 4)?;
+
+        let selection = GroupSelection::try_from_indices(&[2, 0, 3, 2], 4)?;
+        let expected = Int64Array::from(vec![1, 2, 0, 1]);
+        assert_eq!(
+            accumulator
+                .evaluate_preserving(selection)?
+                .as_primitive::<Int64Type>(),
+            &expected
+        );
+        assert_eq!(
+            accumulator.state_preserving(selection)?[0].as_primitive::<Int64Type>(),
+            &expected
+        );
+
+        let values = Arc::new(Int32Array::from(vec![4]));
+        accumulator.update_batch(&[values], &[3], None, 4)?;
+        let expected = Int64Array::from(vec![2, 0, 1, 1]);
+        assert_eq!(
+            accumulator
+                .evaluate_preserving(
+                    GroupSelection::try_from_indices(&[0, 1, 2, 3], 4,)?
+                )?
+                .as_primitive::<Int64Type>(),
+            &expected
+        );
         Ok(())
     }
 

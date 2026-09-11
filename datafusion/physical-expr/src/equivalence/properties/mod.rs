@@ -640,8 +640,13 @@ impl EquivalenceProperties {
             return Ok(true);
         }
         let schema = self.schema();
-        let mut eq_properties = self.clone();
-        for element in normal_reqs {
+        // Registering satisfied keys as constants mutates the state, so it
+        // needs an owned copy -- but only from the second requirement onwards.
+        // Single-element requirements (the common case) never pay for the clone.
+        let last_idx = normal_reqs.len() - 1;
+        let mut owned = None::<Self>;
+        for (idx, element) in normal_reqs.into_iter().enumerate() {
+            let eq_properties = owned.as_ref().unwrap_or(self);
             // Check whether given requirement is satisfied:
             let ExprProperties {
                 sort_properties, ..
@@ -658,10 +663,16 @@ impl EquivalenceProperties {
             if !satisfy {
                 return Ok(false);
             }
+            if idx == last_idx {
+                // Nothing left to check, so no need to update the state:
+                break;
+            }
             // Treat satisfied keys (and the sub-expressions they pin down) as
             // constants in subsequent iterations. See
             // [`Self::add_satisfied_key_constants`] for the rationale.
-            eq_properties.add_satisfied_key_constants(element.expr)?;
+            owned
+                .get_or_insert_with(|| self.clone())
+                .add_satisfied_key_constants(element.expr)?;
         }
         Ok(true)
     }
@@ -718,8 +729,12 @@ impl EquivalenceProperties {
             return Ok(full_length);
         }
         let schema = self.schema();
-        let mut eq_properties = self.clone();
+        // Registering satisfied keys as constants mutates the state, so it
+        // needs an owned copy -- but only from the second sort expression
+        // onwards. Single-element orderings never pay for the clone.
+        let mut owned = None::<Self>;
         for (idx, element) in normal_ordering.into_iter().enumerate() {
+            let eq_properties = owned.as_ref().unwrap_or(self);
             // Check whether given ordering is satisfied:
             let ExprProperties {
                 sort_properties, ..
@@ -739,10 +754,16 @@ impl EquivalenceProperties {
                 // many we've satisfied so far:
                 return Ok(idx);
             }
+            if idx + 1 == full_length {
+                // Nothing left to check, so no need to update the state:
+                break;
+            }
             // Treat satisfied keys (and the sub-expressions they pin down) as
             // constants in subsequent iterations. See
             // [`Self::add_satisfied_key_constants`] for the rationale.
-            eq_properties.add_satisfied_key_constants(Arc::clone(&element.expr))?;
+            owned
+                .get_or_insert_with(|| self.clone())
+                .add_satisfied_key_constants(Arc::clone(&element.expr))?;
         }
         // All sort expressions are satisfied, return full length:
         Ok(full_length)

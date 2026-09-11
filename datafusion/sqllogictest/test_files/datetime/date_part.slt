@@ -288,6 +288,15 @@ SELECT date_part('QUARTER', CAST('2000-01-01' AS DATE))
 ----
 1
 
+query IIII
+SELECT
+  date_part('QUARTERS', CAST('2000-01-01' AS DATE)),
+  date_part('ISOWEEK', CAST('2000-01-01' AS DATE)),
+  date_part('DAYOFYEAR', CAST('2000-01-01' AS DATE)),
+  date_part('DAYOFWEEK', CAST('2000-01-01' AS DATE))
+----
+1 52 1 6
+
 query I
 SELECT EXTRACT(quarter FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 ----

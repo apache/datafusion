@@ -1290,6 +1290,9 @@ message FileScanExecConf {
   // Compression used by formats such as CSV and JSON. Absent means uncompressed
   // for compatibility with payloads written before this field existed.
   optional datafusion_common.CompressionTypeVariant file_compression_type = 16;
+  // Whether file processing order must be preserved. Absent payloads retain the
+  // legacy behavior of deriving this from output_ordering.
+  optional bool preserve_order = 17;
 }
 
 message ParquetScanExecNode {
@@ -1301,6 +1304,10 @@ message ParquetScanExecNode {
   PhysicalExprNode predicate = 3;
 
   datafusion_common.TableParquetOptions parquet_options = 4;
+
+  PhysicalSortExprNodeCollection sort_order_for_reorder = 5;
+
+  bool reverse_row_groups = 6;
 }
 
 message CsvScanExecNode {
@@ -1426,6 +1433,10 @@ message AnalyzeExecNode {
   bool has_metric_categories = 5;
   repeated string metric_categories = 6;
   datafusion_common.ExplainFormat format = 7;
+  // Whether metric_types is present. False means use SUMMARY and DEV.
+  bool has_metric_types = 8;
+  // Types of metrics to display.
+  repeated datafusion_common.MetricType metric_types = 9;
 }
 
 message CrossJoinExecNode {
@@ -1765,4 +1776,6 @@ message PhysicalScalarSubqueryExprNode {
   datafusion_common.ArrowType data_type = 1;
   bool nullable = 2;
   uint32 index = 3;
+  // Serialized separately from data_type to keep older wire formats valid.
+  map<string, string> metadata = 4;
 }

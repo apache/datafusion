@@ -105,9 +105,32 @@ tokio = { workspace = true, features = [
     "parking_lot",
 ] }
 
+# Model checker for the hash join probe-completion protocol; see
+# joins/hash_join/probe_completion.rs.
+#
+# Gated on `--cfg datafusion_loom` rather than declared a plain dev-dependency: loom pulls
+# in tracing-subscriber, which turns on `regex-automata`'s DFA features for
+# every crate in the workspace build. That is not inert. It changes which
+# engine the shared `regex` picks and costs enough extra stack to overflow
+# unrelated deep-recursion tests (`sql::unparser::test_tpch_unparser_roundtrip`
+# aborts in CI). Keeping loom behind its own cfg leaves the ordinary build
+# untouched.
+#
+# Run the model checks with:
+#   RUSTFLAGS="--cfg datafusion_loom" cargo test -p datafusion-physical-plan --lib loom_tests
+#
+# The cfg is namespaced because a bare `loom` is also read by tokio, which
+# would switch tokio into its own loom build and drop `tokio::fs`.
+[target.'cfg(datafusion_loom)'.dev-dependencies]
+loom = { workspace = true }
+
 [[bench]]
 harness = false
 name = "partial_ordering"
+
+[[bench]]
+harness = false
+name = "invariant_check"
 
 [[bench]]
 harness = false
@@ -133,6 +156,11 @@ required-features = ["test_utils"]
 
 [[bench]]
 harness = false
+name = "aggregate_filter"
+required-features = ["test_utils"]
+
+[[bench]]
+harness = false
 name = "compute_statistics"
 
 [[bench]]
@@ -152,3 +180,11 @@ required-features = ["test_utils"]
 [[bench]]
 harness = false
 name = "bounded_window"
+
+[[bench]]
+harness = false
+name = "window_filter"
+
+[[bench]]
+harness = false
+name = "range_repartition"

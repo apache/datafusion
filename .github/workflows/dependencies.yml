@@ -63,7 +63,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Install cargo-machete
-        uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518  # v2.86.5
+        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c  # v2.87.6
         with:
           tool: cargo-machete@0.9
       - name: Detect unused dependencies

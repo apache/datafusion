@@ -41,9 +41,10 @@ use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement, WriteOp};
 use crate::utils::{
-    check_aggregate_and_window_nesting, enumerate_grouping_sets, expr_to_columns,
-    exprlist_to_fields, find_out_reference_exprs, grouping_set_expr_count,
-    grouping_set_to_exprlist, merge_schema, split_conjunction,
+    check_aggregate_and_window_nesting, check_no_window_functions,
+    enumerate_grouping_sets, expr_to_columns, exprlist_to_fields,
+    find_out_reference_exprs, grouping_set_expr_count, grouping_set_to_exprlist,
+    merge_schema, split_conjunction,
 };
 use crate::{
     BinaryExpr, CreateMemoryTable, CreateView, Execute, Expr, ExprSchemable, GroupingSet,
@@ -1787,7 +1788,7 @@ impl LogicalPlan {
     /// updated according to the new parameters.
     ///
     /// Unlike `recompute_schema()`, this method rebuilds VALUES plans entirely to properly infer
-    /// types types from literal values after placeholder substitution.
+    /// types from literal values after placeholder substitution.
     fn update_schema_data_type(self) -> Result<LogicalPlan> {
         match self {
             // Build `LogicalPlan::Values` from the values for type inference.
@@ -2152,7 +2153,7 @@ impl LogicalPlan {
                                     ", full_filters=[{}]",
                                     expr_vec_fmt!(full_filter)
                                 )?;
-                            };
+                            }
                             if !partial_filter.is_empty() {
                                 write!(
                                     f,
@@ -2270,7 +2271,7 @@ impl LogicalPlan {
                         };
                         match join_constraint {
                             JoinConstraint::On => {
-                                write!(f, "{join_type} Join:",)?;
+                                write!(f, "{join_type} Join:")?;
                                 if !join_expr.is_empty() || !filter_expr.is_empty() {
                                     write!(
                                         f,
@@ -2360,7 +2361,7 @@ impl LogicalPlan {
                                 .as_ref()
                                 .map_or_else(|| "None".to_string(), |x| x.to_string()),
                         };
-                        write!(f, "Limit: skip={skip_str}, fetch={fetch_str}",)
+                        write!(f, "Limit: skip={skip_str}, fetch={fetch_str}")
                     }
                     LogicalPlan::Subquery(Subquery { .. }) => {
                         write!(f, "Subquery:")
@@ -2822,18 +2823,23 @@ pub struct Filter {
 impl Filter {
     /// Create a new filter operator.
     ///
-    /// Skips the type-checking and dealiasing done in [Self::try_new].
-    /// For internal use in DataFusion only.
+    /// Skips the type-checking, window function check and dealiasing done in
+    /// [Self::try_new]. For internal use in DataFusion only.
     ///
     /// **Preconditions:**
     /// - the `predicate` expression returns a boolean value
     /// - the `predicate` expression is not aliased
+    /// - the `predicate` expression contains no window function calls
     #[doc(hidden)]
     pub fn new(predicate: Expr, input: Arc<LogicalPlan>) -> Self {
         Self { predicate, input }
     }
 
     /// Create a new filter operator.
+    ///
+    /// Returns an error if the predicate is not boolean or contains a window
+    /// function call, which cannot be evaluated by a filter (see
+    /// [`check_no_window_functions`]).
     ///
     /// Notes: as Aliases have no effect on the output of a filter operator,
     /// they are removed from the predicate expression.
@@ -2853,6 +2859,11 @@ impl Filter {
     }
 
     fn try_new_internal(predicate: Expr, input: Arc<LogicalPlan>) -> Result<Self> {
+        // Filters are evaluated before window functions are computed, so a
+        // window call in the predicate has no physical equivalent. Reject it
+        // here rather than failing during physical planning.
+        check_no_window_functions(&predicate, "filter predicates")?;
+
         // Filter predicates must return a boolean value so we try and validate that here.
         // Note that it is not always possible to resolve the predicate expression during plan
         // construction (such as with correlated subqueries) so we make a best effort here and
@@ -4433,13 +4444,13 @@ pub struct Join {
     pub schema: DFSchemaRef,
     /// Defines the null equality for the join.
     pub null_equality: NullEquality,
-    /// Whether this is a null-aware anti join (for NOT IN semantics).
+    /// Whether this join needs null-aware NOT IN semantics.
     ///
-    /// Only applies to LeftAnti joins. When true, implements SQL NOT IN semantics where:
-    /// - If the right side (subquery) contains any NULL in join keys, no rows are output
-    /// - Left side rows with NULL in join keys are not output
+    /// For `LeftAnti`, if the right side contains any NULL in join keys, no rows are output and
+    /// left rows with NULL join keys are also excluded.
     ///
-    /// This is required for correct NOT IN subquery behavior with three-valued logic.
+    /// For `LeftMark`, the generated `mark` column becomes nullable so unmatched rows can produce
+    /// `NULL` rather than `false` when SQL three-valued logic requires it.
     pub null_aware: bool,
 }
 
@@ -4459,6 +4470,25 @@ impl AsOfMatch {
     /// Creates an ordered ASOF match condition.
     pub fn new(left: Expr, op: Operator, right: Expr) -> Self {
         Self { left, op, right }
+    }
+}
+
+impl TryFrom<Expr> for AsOfMatch {
+    type Error = DataFusionError;
+
+    fn try_from(condition: Expr) -> Result<Self> {
+        let Expr::BinaryExpr(BinaryExpr { left, op, right }) = condition else {
+            return plan_err!("ASOF MATCH_CONDITION must be a single comparison");
+        };
+        if !matches!(
+            op,
+            Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq
+        ) {
+            return plan_err!(
+                "ASOF MATCH_CONDITION requires <, <=, >, or >=, found {op}"
+            );
+        }
+        Ok(Self::new(*left, op, *right))
     }
 }
 
@@ -4621,7 +4651,7 @@ impl Join {
     /// * `join_type` - Type of join (Inner, Left, Right, etc.)
     /// * `join_constraint` - Join constraint (On, Using)
     /// * `null_equality` - How to handle nulls in join comparisons
-    /// * `null_aware` - Whether this is a null-aware anti join (for NOT IN semantics)
+    /// * `null_aware` - Whether this join needs null-aware NOT IN semantics
     ///
     /// # Returns
     ///
@@ -5128,7 +5158,7 @@ impl Unnest {
                                     ));
                                 }
                                 _ => {}
-                            };
+                            }
                         }
 
                         // new columns dependent on the same original index
@@ -5219,7 +5249,7 @@ fn get_unnested_columns(
         _ => {
             return internal_err!("trying to unnest on invalid data type {data_type}");
         }
-    };
+    }
     Ok(qualified_columns)
 }
 
@@ -5241,7 +5271,7 @@ fn get_unnested_list_datatype_recursive(
             return get_unnested_list_datatype_recursive(field.data_type(), depth - 1);
         }
         _ => {}
-    };
+    }
 
     internal_err!("trying to unnest on invalid data type {data_type}")
 }
@@ -6179,10 +6209,10 @@ mod tests {
         assert_eq!(cross_join.min_rows(), 2);
 
         let asof_join = LogicalPlanBuilder::from(two_rows.clone())
-            .asof_join(
+            .asof_join_on(
                 one_row.clone(),
-                vec![],
-                AsOfMatch::new(col("l.column1"), Operator::GtEq, col("r.column1")),
+                None,
+                col("l.column1").gt_eq(col("r.column1")),
             )?
             .build()?;
         assert_eq!(asof_join.min_rows(), 2);
@@ -6909,7 +6939,9 @@ mod tests {
 
                     assert!(!fields[0].is_nullable());
                     assert!(!fields[1].is_nullable());
-                    assert!(!fields[2].is_nullable());
+                    // The mark column is always nullable: null-aware `LeftMark`
+                    // joins use NULL to represent SQL UNKNOWN for `NOT IN`.
+                    assert!(fields[2].is_nullable());
                 }
                 _ => {
                     assert_eq!(join.schema.fields().len(), 4);

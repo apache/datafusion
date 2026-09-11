@@ -37,12 +37,16 @@ use datafusion_physical_expr::expressions::{BinaryExpr, Column, NegativeExpr};
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+use datafusion_physical_optimizer::PhysicalOptimizerContext;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::joins::utils::ColumnIndex;
 use datafusion_physical_plan::joins::utils::JoinFilter;
 use datafusion_physical_plan::joins::{HashJoinExec, NestedLoopJoinExec, PartitionMode};
+use datafusion_physical_plan::operator_statistics::{
+    ClosureStatisticsProvider, StatisticsRegistry, StatisticsResult,
+};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{
@@ -636,6 +640,72 @@ async fn test_null_aware_left_anti_with_filter_does_not_swap() -> Result<()> {
     assert!(unswapped_join.filter().is_some());
     assert_eq!(unswapped_join.left().schema().field(0).name(), "big_col");
     assert_eq!(unswapped_join.right().schema().field(0).name(), "small_col");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_join_swap_uses_context_statistics_registry() -> Result<()> {
+    let left: Arc<dyn ExecutionPlan> = Arc::new(StatisticsExec::new(
+        big_statistics(),
+        Schema::new(vec![Field::new("left_col", DataType::Int32, false)]),
+    ));
+    let right: Arc<dyn ExecutionPlan> = Arc::new(StatisticsExec::new(
+        big_statistics(),
+        Schema::new(vec![Field::new("right_col", DataType::Int32, false)]),
+    ));
+    let join = HashJoinExec::try_new(
+        Arc::clone(&left),
+        Arc::clone(&right),
+        vec![(
+            Arc::new(Column::new_with_schema("left_col", &left.schema())?),
+            Arc::new(Column::new_with_schema("right_col", &right.schema())?),
+        )],
+        None,
+        &JoinType::LeftAnti,
+        None,
+        PartitionMode::Auto,
+        NullEquality::NullEqualsNothing,
+        false,
+    )?;
+
+    // Reports `right` as much smaller than its real stats: the swap below only
+    // happens if `context`'s registry is actually threaded through.
+    let mut registry = StatisticsRegistry::new();
+    registry.register(Arc::new(ClosureStatisticsProvider::with_matches(
+        |plan| plan.schema().field(0).name() == "right_col",
+        |_plan, _child_stats| Ok(StatisticsResult::Computed(small_statistics().into())),
+    )));
+
+    struct ContextWithRegistry {
+        config: ConfigOptions,
+        registry: StatisticsRegistry,
+    }
+
+    impl PhysicalOptimizerContext for ContextWithRegistry {
+        fn config_options(&self) -> &ConfigOptions {
+            &self.config
+        }
+
+        fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
+            Some(&self.registry)
+        }
+    }
+
+    let context = ContextWithRegistry {
+        config: ConfigOptions::new(),
+        registry,
+    };
+
+    let optimized_join =
+        JoinSelection::new().optimize_with_context(Arc::new(join), &context)?;
+    let swapped_join = optimized_join
+        .downcast_ref::<HashJoinExec>()
+        .expect("optimize_with_context should return a HashJoinExec");
+
+    assert_eq!(*swapped_join.join_type(), JoinType::RightAnti);
+    assert_eq!(swapped_join.left().schema().field(0).name(), "right_col");
+    assert_eq!(swapped_join.right().schema().field(0).name(), "left_col");
 
     Ok(())
 }
@@ -1896,6 +1966,6 @@ fn test_join_with_maybe_swap_unbounded_case(t: TestCase) -> Result<()> {
                 t.expecting_swap
             )
         );
-    };
+    }
     Ok(())
 }
