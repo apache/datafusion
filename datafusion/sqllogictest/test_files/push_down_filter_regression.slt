@@ -236,7 +236,7 @@ Plan with Metrics
 01)AggregateExec: mode=Final, gby=[], aggr=[max(agg_dyn_e2e.column1)], metrics=[]
 02)--CoalescePartitionsExec, metrics=[]
 03)----AggregateExec: mode=Partial, gby=[], aggr=[max(agg_dyn_e2e.column1)], metrics=[]
-04)------DataSourceExec: file_groups=<slt:ignore> projection=[column1], file_type=parquet, predicate=column1@0 > 1 AND DynamicFilter [ column1@0 > <slt:ignore> ], dynamic_rg_pruning=eligible, pruning_predicate=column1_null_count@1 != row_count@2 AND column1_max@0 > 1 AND column1_null_count@1 != row_count@2 AND column1_max@0 > <slt:ignore>, required_guarantees=[], metrics=[]
+04)------DataSourceExec: file_groups=<slt:ignore> projection=[column1], file_type=parquet, predicate=column1@0 > 1 AND DynamicFilter [ column1@0 > <slt:ignore> ], dynamic_rg_pruning=eligible, pruning_predicate=column1_null_count@1 != row_count@2 AND column1_max@0 > 1 AND column1_max@0 > <slt:ignore>, required_guarantees=[], metrics=[]
 
 statement ok
 reset datafusion.explain.analyze_categories;
@@ -343,7 +343,7 @@ Plan with Metrics
 01)AggregateExec: mode=Final, gby=[], aggr=[min(agg_dyn_single.a), max(agg_dyn_single.a)], metrics=[]
 02)--CoalescePartitionsExec, metrics=[]
 03)----AggregateExec: mode=Partial, gby=[], aggr=[min(agg_dyn_single.a), max(agg_dyn_single.a)], metrics=[]
-04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn_single/file_0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn_single/file_1.parquet]]}, projection=[a], file_type=parquet, predicate=DynamicFilter [ a@0 < 1 OR a@0 > 8 ], dynamic_rg_pruning=eligible, pruning_predicate=a_null_count@1 != row_count@2 AND a_min@0 < 1 OR a_null_count@1 != row_count@2 AND a_max@3 > 8, required_guarantees=[], metrics=[]
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn_single/file_0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn_single/file_1.parquet]]}, projection=[a], file_type=parquet, predicate=DynamicFilter [ a@0 < 1 OR a@0 > 8 ], dynamic_rg_pruning=eligible, pruning_predicate=a_null_count@1 != row_count@2 AND (a_min@0 < 1 OR a_max@3 > 8), required_guarantees=[], metrics=[]
 
 # MIN(a+1) -> no dynamic filter (expression input is not a plain column)
 query TT
