@@ -319,24 +319,30 @@ impl GroupsAccumulatorAdapter {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                let start = grouped_update_metric.as_ref().map(|_| Instant::now());
-                let chunk_result: Result<()> = (|| {
-                    for (group_idx, values) in values_to_accumulate {
-                        let state = &mut self.states[group_idx];
-                        sizes_pre += state.size();
-                        f(state.accumulator.as_mut(), &values)?;
+                // Size accounting is adapter work: keep it out of the timer.
+                for (group_idx, _) in &values_to_accumulate {
+                    sizes_pre += self.states[*group_idx].size();
+                }
 
-                        // clear out the state so they are empty for next
-                        // iteration
-                        state.indices.clear();
-                        sizes_post += state.size();
+                let start = grouped_update_metric.as_ref().map(|_| Instant::now());
+                let mut chunk_result = Ok(());
+                for (group_idx, values) in &values_to_accumulate {
+                    chunk_result =
+                        f(self.states[*group_idx].accumulator.as_mut(), values);
+                    if chunk_result.is_err() {
+                        break;
                     }
-                    Ok(())
-                })();
+                }
                 if let Some(start) = start {
                     aggregate_duration += start.elapsed();
                 }
                 chunk_result?;
+                for (group_idx, _) in &values_to_accumulate {
+                    let state = &mut self.states[*group_idx];
+                    // clear out the state so they are empty for next iteration
+                    state.indices.clear();
+                    sizes_post += state.size();
+                }
             }
             Ok(())
         })();
