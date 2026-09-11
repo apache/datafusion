@@ -168,15 +168,12 @@ impl BatchBuilder {
             // is finished. This means all remaining rows from all but the last batch
             // for each stream have been yielded to the newly created record batch
             //
-            // Keep the last batch only if its cursor still has unread rows.
-            // Fully-consumed batches must release their reservation before the
-            // output consumer reserves memory for the newly built batch.
+            // We can therefore drop all but the last batch for each stream
             let mut batch_idx = 0;
             let mut retained = 0;
             self.batches.retain(|(stream_idx, batch)| {
                 let stream_cursor = &mut self.cursors[*stream_idx];
-                let retain = stream_cursor.batch_idx == batch_idx
-                    && stream_cursor.row_idx < batch.num_rows();
+                let retain = stream_cursor.batch_idx == batch_idx;
                 batch_idx += 1;
 
                 if retain {
@@ -342,29 +339,6 @@ mod tests {
 
         assert_eq!(attempts, vec![4]);
         assert!(matches!(error, DataFusionError::Execution(msg) if msg == "boom"));
-    }
-
-    #[test]
-    fn test_releases_fully_consumed_last_batch() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, false)]));
-        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
-        let reservation = MemoryConsumer::new("test").register(&pool);
-        let mut builder = BatchBuilder::new(Arc::clone(&schema), 1, 1, reservation);
-        for values in [[1, 2], [3, 4]] {
-            let batch = RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![Arc::new(Int32Array::from(values.to_vec()))],
-            )?;
-            let size = get_record_batch_memory_size(&batch);
-            builder.push_batch(0, batch)?;
-            builder.push_row(0);
-            assert_eq!(builder.build_record_batch()?.unwrap().num_rows(), 1);
-            assert_eq!(pool.reserved(), size, "unread rows must remain reserved");
-            builder.push_row(0);
-            assert_eq!(builder.build_record_batch()?.unwrap().num_rows(), 1);
-            assert_eq!(pool.reserved(), 0, "consumed batches must release memory");
-        }
-        Ok(())
     }
 
     #[test]

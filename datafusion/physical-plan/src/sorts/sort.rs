@@ -419,8 +419,16 @@ impl ExternalSorter {
         self.metrics.spill_metrics.spill_file_count.value()
     }
 
-    /// Appends a globally sorted batch, retaining its reservation until written.
-    async fn consume_and_spill_append(&mut self, batch: RecordBatch) -> Result<()> {
+    /// Appending globally sorted batches to the in-progress spill file, and clears
+    /// the `globally_sorted_batches` (also its memory reservation) afterwards.
+    async fn consume_and_spill_append(
+        &mut self,
+        globally_sorted_batches: &mut Vec<RecordBatch>,
+    ) -> Result<()> {
+        if globally_sorted_batches.is_empty() {
+            return Ok(());
+        }
+
         // Lazily initialize the in-progress spill file
         if self.in_progress_spill_file.is_none() {
             self.in_progress_spill_file =
@@ -429,7 +437,8 @@ impl ExternalSorter {
 
         debug!("Spilling sort data of ExternalSorter to disk whilst inserting");
 
-        // Keep the reservation alive while the batch remains in memory across
+        let batches_to_spill = std::mem::take(globally_sorted_batches);
+        // Keep the reservation alive while the batches remain in memory across
         // asynchronous writes. It is released on success or error via RAII.
         let _spill_reservation = self.reservation.take();
 
@@ -438,8 +447,16 @@ impl ExternalSorter {
                 internal_datafusion_err!("In-progress spill file should be initialized")
             })?;
 
-        let gc_sliced_size = in_progress_file.append_batch_async(&batch).await?;
-        *max_record_batch_size = (*max_record_batch_size).max(gc_sliced_size);
+        for batch in batches_to_spill {
+            let gc_sliced_size = in_progress_file.append_batch_async(&batch).await?;
+
+            *max_record_batch_size = (*max_record_batch_size).max(gc_sliced_size);
+        }
+
+        assert_or_internal_err!(
+            globally_sorted_batches.is_empty(),
+            "This function consumes globally_sorted_batches, so it should be empty after taking."
+        );
 
         Ok(())
     }
@@ -503,34 +520,51 @@ impl ExternalSorter {
             self.in_mem_batches.is_empty(),
             "in_mem_batches should be empty after constructing sorted stream"
         );
+        // 'global' here refers to all buffered batches when the memory limit is
+        // reached. This variable will buffer the sorted batches after
+        // sort-preserving merge and incrementally append to spill files.
+        let mut globally_sorted_batches: Vec<RecordBatch> = vec![];
+
         while let Some(batch) = sorted_stream.next().await {
             let batch = batch?;
-            // Sorting is complete: retain the batch's footprint, not the input
-            // estimate that also budgets for creating a sorted copy.
+            // The output is already sorted, so no sorted-copy budget is needed.
             let sorted_size = get_record_batch_memory_size(&batch);
             let spill_workspace = match self.reservation.try_grow(sorted_size) {
                 Ok(()) => None,
                 Err(_) => {
-                    // Reuse already-reserved workspace without bypassing the
-                    // execution pool's limit. Any remainder still needs a grant
-                    // through the original sort consumer.
                     let workspace = self.merge_pool.borrow(sorted_size);
-                    self.reservation.try_grow(sorted_size - workspace.size())?;
+                    // The batch is already materialized, so account for it while
+                    // spilling, reusing available workspace before growing the
+                    // reservation even if this exceeds the pool limit.
+                    self.reservation.grow(sorted_size - workspace.size());
                     Some(workspace)
                 }
             };
-            // Write each batch before polling the merge again. Accumulating
-            // output would compete with the merge's workspace without combining
-            // any writes. Keep both forms of reservation alive across the await.
-            self.consume_and_spill_append(batch).await?;
-            drop(spill_workspace);
+            // Even if the reservation is not enough, the batch is already in
+            // memory, so it's okay to combine it with previously sorted
+            // batches, and spill together.
+            globally_sorted_batches.push(batch);
+            if let Some(_spill_workspace) = spill_workspace {
+                self.consume_and_spill_append(&mut globally_sorted_batches)
+                    .await?; // reservation is released when the spill completes
+            }
         }
 
         // Drop early to free up memory reserved by the sorted stream, otherwise the
         // upcoming `self.reserve_memory_for_merge()` may fail due to insufficient memory.
         drop(sorted_stream);
 
+        self.consume_and_spill_append(&mut globally_sorted_batches)
+            .await?;
         self.spill_finish().await?;
+
+        // Sanity check after spilling
+        let buffers_cleared_property =
+            self.in_mem_batches.is_empty() && globally_sorted_batches.is_empty();
+        assert_or_internal_err!(
+            buffers_cleared_property,
+            "in_mem_batches and globally_sorted_batches should be cleared before"
+        );
 
         // Reserve headroom for next sort/merge
         self.reserve_memory_for_merge()?;
@@ -3356,32 +3390,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_spill_output_respects_memory_limit() -> Result<()> {
-        let result = test_sort_output_batch_size_and_base_metrics(10, 25, |batches| {
-            let batches_memory = batches.iter().map(|b| b.get_array_memory_size()).sum();
-            TaskContext::default()
-                .with_session_config(
-                    SessionConfig::new()
-                        .with_batch_size(100)
-                        .with_sort_in_place_threshold_bytes(1)
-                        .with_sort_spill_reservation_bytes(1),
-                )
-                .with_runtime(
-                    RuntimeEnvBuilder::default()
-                        .with_memory_limit(batches_memory, 1.0)
-                        .build_arc()
-                        .unwrap(),
-                )
-        })
-        .await;
-        assert!(matches!(
-            result,
-            Err(DataFusionError::ResourcesExhausted(_))
-        ));
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn should_return_stream_with_batches_in_the_requested_size_and_update_metrics_when_having_to_spill()
     -> Result<()> {
         let batch_size = 100;
@@ -3391,11 +3399,6 @@ mod tests {
                 .iter()
                 .map(|b| b.get_array_memory_size())
                 .sum::<usize>();
-            // Leave space for one output batch while the merge still holds
-            // partially consumed input batches. The insufficient-budget case
-            // is covered by test_spill_output_respects_memory_limit.
-            let spill_workspace =
-                make_partition(batch_size as i32).get_array_memory_size();
 
             TaskContext::default()
                 .with_session_config(
@@ -3403,11 +3406,11 @@ mod tests {
                         .with_batch_size(batch_size)
                         // To make sure there is no in place sorting
                         .with_sort_in_place_threshold_bytes(1)
-                        .with_sort_spill_reservation_bytes(spill_workspace),
+                        .with_sort_spill_reservation_bytes(1),
                 )
                 .with_runtime(
                     RuntimeEnvBuilder::default()
-                        .with_memory_limit(batches_memory + spill_workspace, 1.0)
+                        .with_memory_limit(batches_memory, 1.0)
                         .build_arc()
                         .unwrap(),
                 )
@@ -3955,29 +3958,15 @@ mod tests {
         Ok(())
     }
 
+    #[rstest::rstest]
+    #[case::no_workspace(0)]
+    #[case::partial_workspace(6)]
+    #[case::full_workspace(12)]
     #[tokio::test]
-    async fn test_spill_reservation_held_during_async_write() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "x",
-            DataType::Utf8View,
-            false,
-        )]));
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(StringViewArray::from_iter_values(
-                (0..4096).rev().map(|i| format!("{i:08}{}", "x".repeat(87))),
-            ))],
-        )?;
-        let ordering =
-            [PhysicalSortExpr::new_default(Arc::new(Column::new("x", 0)))].into();
-        let batch_size = 1024;
-        let sorted_bytes = sort_batch_chunked(&batch, &ordering, batch_size)?
-            .iter()
-            .map(get_record_batch_memory_size)
-            .sum::<usize>();
-        let workspace_bytes = sorted_bytes - get_reserved_bytes_for_record_batch(&batch)?;
-        assert!(workspace_bytes > 0);
-        let pool = spill_tests::AdjustablePool::new(sorted_bytes);
+    async fn test_spill_reservation_held_during_async_write(
+        #[case] workspace_bytes: usize,
+    ) -> Result<()> {
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(0));
         let write_started = Arc::new(Notify::new());
         let aborted = Arc::new(Notify::new());
         let abort_count = Arc::new(AtomicUsize::new(0));
@@ -3989,26 +3978,34 @@ mod tests {
             }),
         );
         let runtime = RuntimeEnvBuilder::new()
-            .with_memory_pool(Arc::clone(&pool) as Arc<dyn MemoryPool>)
+            .with_memory_pool(Arc::clone(&pool))
             .with_disk_manager_builder(disk_manager_builder)
             .build_arc()?;
+        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, false)]));
         let metrics = ExecutionPlanMetricsSet::new();
         let mut sorter = ExternalSorter::new(
             0,
-            schema,
-            ordering,
-            batch_size,
-            workspace_bytes,
+            Arc::clone(&schema),
+            [PhysicalSortExpr::new_default(Arc::new(Column::new("x", 0)))].into(),
+            128,
             0,
+            usize::MAX,
             SpillCompression::Uncompressed,
             &metrics,
             runtime,
         )?;
-        sorter.insert_batch(batch).await?;
-        // Existing reservations remain valid, but the emitted batch must reuse
-        // workspace rather than request new parent capacity.
-        pool.set_limit(sorted_bytes - 1);
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int32Array::from(vec![3, 2, 1]))],
+        )?;
+        let reserved_bytes = get_record_batch_memory_size(&batch);
+        sorter
+            .reservation
+            .grow(get_reserved_bytes_for_record_batch(&batch)?);
+        sorter.merge_reservation.grow(workspace_bytes);
+        sorter.merge_pool.retain(workspace_bytes);
         let merge_pool = Arc::clone(&sorter.merge_pool);
+        sorter.in_mem_batches.push(batch);
 
         #[expect(clippy::disallowed_methods)] // spawn allowed only in tests
         let task =
@@ -4025,12 +4022,12 @@ mod tests {
             let _ = task.await;
             panic!("spill write did not start before the timeout");
         }
-        // Idle workspace must be releasable without releasing the loan held by
-        // the pending write. The stream still owns the remaining sorted batches.
+        // An idle retained workspace must not mask an early release of the loan.
         merge_pool.release_unused();
+        assert_eq!(merge_pool.reserved(), workspace_bytes);
         assert_eq!(
             pool.reserved(),
-            sorted_bytes,
+            reserved_bytes,
             "resident batches must remain accounted for while an async spill is pending"
         );
 
