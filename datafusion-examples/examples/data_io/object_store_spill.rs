@@ -50,8 +50,10 @@ pub async fn object_store_spill() -> Result<()> {
     // remote spills. This example uses a local-file-backed ObjectStore for
     // simplicity.
     let tmp_dir = tempdir()?;
-    let store: Arc<dyn ObjectStore> =
-        Arc::new(LocalFileSystem::new_with_prefix(tmp_dir.path())?);
+    let store: Arc<dyn ObjectStore> = Arc::new(
+        LocalFileSystem::new_with_prefix(tmp_dir.path())
+            .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?,
+    );
 
     // Create the custom TempFileFactory that creates spill files in the ObjectStore.
     let temp_file_factory = Arc::new(ObjectStoreTempFileFactory::new(store));
@@ -188,7 +190,7 @@ impl SpillFile for ObjectStoreSpillFile {
             async move { store.get(&location).await.map(|r| r.into_stream()) };
         let stream = stream::once(result_stream)
             .try_flatten()
-            .map_err(Into::into);
+            .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)));
 
         Ok(Box::pin(stream))
     }
@@ -252,7 +254,8 @@ impl SpillWriter for ObjectStoreSpillWriter {
         block_on_object_store(async move {
             store
                 .put(&location, PutPayload::from_bytes(data.into()))
-                .await?;
+                .await
+                .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
             Ok(())
         })?;
 

@@ -52,6 +52,52 @@ datafusion = { git = "https://github.com/apache/datafusion", branch = "main", de
 
 More on [Cargo dependencies](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#specifying-dependencies)
 
+## Building without object_store
+
+The default-enabled `object_store` feature selects the ObjectStore adapter and
+local file access installed during session construction. File formats, listing
+tables, SQL `COPY TO`, and `INSERT` depend on backend-independent storage traits.
+To use OpenDAL with the same APIs:
+
+```toml
+datafusion = { version = "55.0.0", default-features = false, features = ["sql", "parquet", "avro", "opendal"] }
+```
+
+Register `OpendalStorage::new(operator)` once with
+`SessionContext::register_storage`, then use the ordinary `read_parquet`,
+`read_csv`, `read_json`, `read_arrow`, and `read_avro` APIs. Applications configure
+OpenDAL services and layers through their own dependency. Custom `FileAccess`
+implementations need neither SDK; manifest-driven input can omit discovery.
+The `parquet_encryption` feature does not require ObjectStore.
+
+SQL planning, custom table providers, in-memory tables, execution, memory
+management, and local disk spilling also work without either storage adapter.
+Without a backend feature, register an implementation explicitly for file access.
+
+Cargo unifies features across dependencies: any dependency that enables
+`object_store` brings the adapter back into the graph. Check normal dependencies
+with `cargo tree --edges normal`; a lockfile entry alone does not mean the
+optional dependency is enabled. SDK-based test fixtures may add development
+dependencies independently of the production graph.
+
+### Migrating existing builds
+
+Replace `register_object_store(url, store)` with
+`register_storage(url, ObjectStoreStorage::new(store))`. The wrapper is re-exported
+under `datafusion::storage` with the `object_store` feature. There is one storage
+registry; runtime and session initialization do not maintain parallel registrations.
+
+Shared file types now belong to `datafusion-storage`: `PartitionedFile` contains
+`FileInfo`, file and cache paths use `datafusion_storage::path::Path`, and scan
+configuration uses `StorageUrl`. SDK adapters provide explicit conversions for
+ObjectStore metadata and paths. Custom cache and encryption factory
+implementations must update their signatures to the independent types.
+
+The Storage registry is shared by sessions using the same runtime. It is
+independent of the legacy ObjectStore registry; registrations are not mirrored.
+See the [storage prototype scope](https://github.com/apache/datafusion/blob/main/datafusion/storage/README.md)
+for supported discovery behavior and remaining migration work.
+
 ## Optimizing Builds
 
 Here are several suggestions to get the Rust compiler to produce faster code when

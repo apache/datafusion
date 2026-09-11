@@ -29,6 +29,7 @@ mod bloom_filter;
 mod decoder_projection;
 pub mod file_format;
 pub mod metadata;
+mod metadata_io;
 mod metrics;
 mod nested_schema_pruning;
 mod opener;
@@ -44,6 +45,7 @@ mod sort;
 pub mod source;
 #[cfg(test)]
 mod statistics_order_tests;
+pub mod storage;
 mod supported_predicates;
 #[cfg(test)]
 mod test_util;

@@ -29,18 +29,18 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::physical_plan::{ExecutionPlan, collect, displayable};
 use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
+use datafusion::storage::StorageUrl;
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{ScalarValue, assert_batches_eq};
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_physical_expr::expressions::{col, in_list, lit};
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::metrics::{MetricValue, MetricsSet};
-use object_store::path::Path;
+use datafusion_storage::path::Path;
 use parquet::arrow::ArrowWriter;
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
@@ -340,7 +340,7 @@ async fn scan_ordered(
         location.to_string(),
         file.as_file().metadata().unwrap().len(),
     );
-    let config = FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+    let config = FileScanConfigBuilder::new(StorageUrl::local_filesystem(), source)
         .with_file(partitioned_file)
         .build();
     let scan: Arc<dyn ExecutionPlan> = Arc::new(DataSourceExec::new(Arc::new(config)));
@@ -709,7 +709,7 @@ async fn check_in_list_with_null_preserves_filter_semantics(
                     .with_bloom_filter_on_read(false),
             );
             let config =
-                FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+                FileScanConfigBuilder::new(StorageUrl::local_filesystem(), source)
                     .with_file(partitioned_file.clone())
                     .with_limit(Some(1))
                     .build();

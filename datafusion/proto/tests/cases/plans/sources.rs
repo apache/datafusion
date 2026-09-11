@@ -31,7 +31,6 @@ use datafusion::datasource::file_format::json::JsonFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl, PartitionedFile,
 };
-use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
     ArrowSource, CsvSource, FileGroup, FileScanConfig, FileScanConfigBuilder, JsonSource,
     ParquetSource, wrap_partition_type_in_dict, wrap_partition_value_in_dict,
@@ -50,6 +49,7 @@ use datafusion::physical_plan::{
 };
 use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
+use datafusion::storage::StorageUrl;
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::{DataFusionError, Result, internal_datafusion_err, internal_err};
@@ -95,7 +95,7 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
     );
 
     let scan_config =
-        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+        FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
             .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
                 "/path/to/file.parquet".to_string(),
                 1024,
@@ -142,7 +142,7 @@ async fn roundtrip_parquet_exec_with_sort_pushdown() -> Result<()> {
 fn file_scan_rejects_zero_batch_size() -> Result<()> {
     let schema = Arc::new(Schema::empty());
     let scan_config = FileScanConfigBuilder::new(
-        ObjectStoreUrl::local_filesystem(),
+        StorageUrl::local_filesystem(),
         Arc::new(ParquetSource::new(schema)),
     )
     .build();
@@ -174,12 +174,12 @@ fn file_scan_rejects_zero_batch_size() -> Result<()> {
 }
 
 #[test]
-fn roundtrip_parquet_exec_attaches_cached_reader_factory_after_roundtrip() -> Result<()> {
+fn roundtrip_parquet_exec_binds_storage_before_execution() -> Result<()> {
     let file_schema =
         Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
     let file_source = Arc::new(ParquetSource::new(Arc::clone(&file_schema)));
     let scan_config =
-        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+        FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
             .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
                 "/path/to/file.parquet".to_string(),
                 1024,
@@ -216,10 +216,15 @@ fn roundtrip_parquet_exec_attaches_cached_reader_factory_after_roundtrip() -> Re
             internal_datafusion_err!("Expected ParquetSource after roundtrip")
         })?;
 
-    assert!(
-        parquet_source.parquet_file_reader_factory().is_some(),
-        "Parquet reader factory should be attached after decoding from protobuf"
-    );
+    assert!(parquet_source.parquet_file_reader_factory().is_none());
+    let binding = file_scan
+        .storage
+        .as_ref()
+        .expect("decoded scan has a storage binding");
+    assert!(Arc::ptr_eq(
+        binding,
+        &ctx.runtime_env().storage(StorageUrl::local_filesystem())?
+    ));
     Ok(())
 }
 
@@ -248,7 +253,7 @@ fn roundtrip_arrow_scan() -> Result<()> {
     let file_source = Arc::new(ArrowSource::new_file_source(table_schema));
 
     let scan_config =
-        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+        FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
             .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
                 "/path/to/file.arrow".to_string(),
                 1024,
@@ -278,7 +283,7 @@ fn roundtrip_arrow_stream_scan() -> Result<()> {
         &file_schema,
     )));
     let scan_config =
-        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+        FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
             .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
                 "/path/to/file.arrows".to_string(),
                 1024,
@@ -305,7 +310,7 @@ fn arrow_scan_without_format_field_decodes_as_file_format() -> Result<()> {
         &file_schema,
     )));
     let scan_config =
-        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+        FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
             .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
                 "/path/to/file.arrow".to_string(),
                 1024,
@@ -349,7 +354,7 @@ fn roundtrip_json_scan_preserves_format_options() -> Result<()> {
         JsonSource::new(TableSchema::from(&file_schema)).with_newline_delimited(false),
     );
     let scan_config =
-        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+        FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
             .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
                 "/path/to/file.json.gz".to_string(),
                 1024,
@@ -466,7 +471,7 @@ fn roundtrip_avro_scan() -> Result<()> {
         Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
     let file_source = Arc::new(AvroSource::new(TableSchema::from(&file_schema)));
     let scan_config =
-        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+        FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
             .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
                 "/path/to/file.avro".to_string(),
                 1024,
@@ -496,7 +501,7 @@ fn roundtrip_csv_scan_preserves_format_options() -> Result<()> {
         }));
 
     let scan_config =
-        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+        FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
             .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
                 "/path/to/file.csv.gz".to_string(),
                 1024,
@@ -573,7 +578,7 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
 
     let file_source = Arc::new(ParquetSource::new(table_schema.clone()));
     let scan_config =
-        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+        FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
             .with_projection_indices(Some(vec![0, 1]))?
             .with_file_group(FileGroup::new(vec![file_group]))
             .build();
@@ -596,7 +601,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
     );
 
     let scan_config =
-        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+        FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
             .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
                 "/path/to/file.parquet".to_string(),
                 1024,
@@ -821,7 +826,7 @@ async fn roundtrip_projection_source() -> Result<()> {
 
     let file_source = Arc::new(ParquetSource::new(Arc::clone(&schema)));
     let scan_config =
-        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+        FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
             .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
                 "/path/to/file.parquet".to_string(),
                 1024,
@@ -1025,7 +1030,7 @@ fn roundtrip_parquet_exec_output_partitioning() -> Result<()> {
     let output_partitioning =
         Partitioning::Hash(vec![Arc::new(Column::new("col", 0))], 1);
     let scan_config =
-        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+        FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
             .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
                 "/path/to/file.parquet".to_string(),
                 1024,
@@ -1054,7 +1059,7 @@ fn roundtrip_parquet_exec_range_output_partitioning() -> Result<()> {
         vec![SplitPoint::new(vec![ScalarValue::Int32(Some(10))])],
     ));
     let scan_config =
-        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+        FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
             .with_file_groups(vec![
                 FileGroup::new(vec![PartitionedFile::new(
                     "/path/to/file-1.parquet".to_string(),

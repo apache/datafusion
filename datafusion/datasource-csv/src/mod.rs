@@ -29,7 +29,7 @@ use datafusion_common::Result;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::{file::FileSource, file_scan_config::FileScanConfig};
-use datafusion_execution::object_store::ObjectStoreUrl;
+use datafusion_storage::StorageUrl;
 pub use file_format::*;
 
 /// Returns a [`FileScanConfig`] for given `file_groups`
@@ -38,8 +38,10 @@ pub fn partitioned_csv_config(
     file_source: Arc<dyn FileSource>,
 ) -> Result<FileScanConfig> {
     Ok(
-        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+        FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
             .with_file_groups(file_groups)
             .build(),
     )
 }
+
+mod delimiter;

@@ -26,9 +26,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
+use datafusion_storage::FileReader;
+use futures::StreamExt;
 use futures::stream::{BoxStream, Stream};
-use futures::{StreamExt, TryFutureExt};
-use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore};
 
 /// How far past `raw_end` the initial bounded fetch covers. If the terminating
 /// newline is not found within this window, `ScanningLastTerminator` issues
@@ -62,7 +62,7 @@ enum Phase {
 /// `get_opts` calls (`END_SCAN_LOOKAHEAD` bytes each) until the newline is
 /// found or EOF is reached.
 pub struct AlignedBoundaryStream {
-    inner: BoxStream<'static, object_store::Result<Bytes>>,
+    inner: BoxStream<'static, datafusion_storage::Result<Bytes>>,
     terminator: u8,
     /// Effective end boundary. Set to `u64::MAX` when `end >= file_size`
     /// (last partition), so `FetchingChunks` never transitions to
@@ -77,66 +77,9 @@ pub struct AlignedBoundaryStream {
     /// end-boundary processing. Consumed by `FetchingChunks` before polling
     /// `inner`.
     pending: Option<Bytes>,
-    store: Arc<dyn ObjectStore>,
-    location: object_store::path::Path,
+    reader: Arc<dyn FileReader>,
     /// Total file size; overflow stops when `abs_pos() >= file_size`.
     file_size: u64,
-}
-
-/// Fetch a bounded byte range from `store` and return it as a stream
-async fn get_stream(
-    store: Arc<dyn ObjectStore>,
-    location: object_store::path::Path,
-    range: std::ops::Range<u64>,
-) -> object_store::Result<BoxStream<'static, object_store::Result<Bytes>>> {
-    let opts = GetOptions {
-        range: Some(GetRange::Bounded(range.clone())),
-        ..Default::default()
-    };
-    let result = store.get_opts(&location, opts).await?;
-
-    #[cfg(not(target_arch = "wasm32"))]
-    if let GetResultPayload::File(mut file, _path) = result.payload {
-        use std::io::{Read, Seek, SeekFrom};
-        const CHUNK_SIZE: u64 = 8 * 1024;
-
-        file.seek(SeekFrom::Start(range.start)).map_err(|e| {
-            object_store::Error::Generic {
-                store: "local",
-                source: Box::new(e),
-            }
-        })?;
-
-        return Ok(futures::stream::try_unfold(
-            (file, range.end - range.start),
-            move |(mut file, remaining)| async move {
-                if remaining == 0 {
-                    return Ok(None);
-                }
-                let to_read = remaining.min(CHUNK_SIZE);
-                let cap = usize::try_from(to_read).map_err(|e| {
-                    object_store::Error::Generic {
-                        store: "local",
-                        source: Box::new(e),
-                    }
-                })?;
-
-                let mut buf = Vec::with_capacity(cap);
-                let read =
-                    (&mut file)
-                        .take(to_read)
-                        .read_to_end(&mut buf)
-                        .map_err(|e| object_store::Error::Generic {
-                            store: "local",
-                            source: Box::new(e),
-                        })?;
-                Ok(Some((Bytes::from(buf), (file, remaining - read as u64))))
-            },
-        )
-        .boxed());
-    }
-
-    Ok(result.into_stream())
 }
 
 impl AlignedBoundaryStream {
@@ -148,16 +91,15 @@ impl AlignedBoundaryStream {
     /// newline is not found within that window, `ScanningLastTerminator`
     /// automatically issues additional `END_SCAN_LOOKAHEAD`-sized GETs
     /// via `store` until the newline is found or EOF is reached.
-    pub async fn new(
-        store: Arc<dyn ObjectStore>,
-        location: object_store::path::Path,
+    pub fn new(
+        reader: Arc<dyn FileReader>,
         raw_start: u64,
         raw_end: u64,
         file_size: u64,
         terminator: u8,
-    ) -> object_store::Result<Self> {
+    ) -> Self {
         if raw_start >= raw_end || raw_start >= file_size {
-            return Ok(Self {
+            return Self {
                 inner: futures::stream::empty().boxed(),
                 terminator,
                 end: 0,
@@ -165,10 +107,9 @@ impl AlignedBoundaryStream {
                 fetch_start: 0,
                 phase: Phase::Done,
                 pending: None,
-                store,
-                location,
+                reader,
                 file_size,
-            });
+            };
         }
 
         let (fetch_start, phase) = if raw_start == 0 {
@@ -179,12 +120,8 @@ impl AlignedBoundaryStream {
 
         let initial_fetch_end = raw_end.saturating_add(END_SCAN_LOOKAHEAD).min(file_size);
 
-        let inner = get_stream(
-            Arc::clone(&store),
-            location.clone(),
-            fetch_start..initial_fetch_end,
-        )
-        .await?;
+        let inner =
+            Arc::clone(&reader).stream(Some((fetch_start..initial_fetch_end).into()));
 
         // Last partition reads until EOF is reached — no end-boundary scanning needed.
         let end = if raw_end >= file_size {
@@ -193,7 +130,7 @@ impl AlignedBoundaryStream {
             raw_end
         };
 
-        Ok(Self {
+        Self {
             inner,
             terminator,
             end,
@@ -201,10 +138,9 @@ impl AlignedBoundaryStream {
             fetch_start,
             phase,
             pending: None,
-            store,
-            location,
+            reader,
             file_size,
-        })
+        }
     }
 
     /// Current absolute position in the file.
@@ -214,7 +150,7 @@ impl AlignedBoundaryStream {
 }
 
 impl Stream for AlignedBoundaryStream {
-    type Item = object_store::Result<Bytes>;
+    type Item = datafusion_storage::Result<Bytes>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
@@ -361,11 +297,8 @@ impl Stream for AlignedBoundaryStream {
                                 let fetch_end = pos
                                     .saturating_add(END_SCAN_LOOKAHEAD)
                                     .min(this.file_size);
-                                let store = Arc::clone(&this.store);
-                                let location = this.location.clone();
-                                this.inner = get_stream(store, location, pos..fetch_end)
-                                    .try_flatten_stream()
-                                    .boxed();
+                                this.inner = Arc::clone(&this.reader)
+                                    .stream(Some((pos..fetch_end).into()));
                                 continue;
                             }
                             this.phase = Phase::Done;
@@ -396,7 +329,7 @@ impl Stream for AlignedBoundaryStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::{CHUNK_SIZES, make_chunked_store};
+    use crate::test_util::{CHUNK_SIZES, make_chunked_reader};
     use futures::TryStreamExt;
 
     async fn collect_stream(stream: AlignedBoundaryStream) -> Vec<u8> {
@@ -408,10 +341,8 @@ mod tests {
         // start=0, end >= file_size → pass through everything
         static DATA: &[u8] = b"line1\nline2\nline3\n";
         for &cs in CHUNK_SIZES {
-            let (store, path) = make_chunked_store(DATA, cs).await;
-            let s = AlignedBoundaryStream::new(store, path, 0, 100, 18, b'\n')
-                .await
-                .unwrap();
+            let reader = make_chunked_reader(DATA, cs);
+            let s = AlignedBoundaryStream::new(reader, 0, 100, 18, b'\n');
             assert_eq!(collect_stream(s).await, DATA, "chunk_size={cs}");
         }
     }
@@ -424,10 +355,8 @@ mod tests {
         // Should skip the leading '\n' and yield "line2\nline3\n".
         static DATA: &[u8] = b"line1\nline2\nline3\n";
         for &cs in CHUNK_SIZES {
-            let (store, path) = make_chunked_store(DATA, cs).await;
-            let s = AlignedBoundaryStream::new(store, path, 6, 100, 18, b'\n')
-                .await
-                .unwrap();
+            let reader = make_chunked_reader(DATA, cs);
+            let s = AlignedBoundaryStream::new(reader, 6, 100, 18, b'\n');
             assert_eq!(
                 collect_stream(s).await,
                 b"line2\nline3\n",
@@ -442,10 +371,8 @@ mod tests {
         // Should skip "ne1\n" and yield "line2\nline3\n".
         static DATA: &[u8] = b"line1\nline2\nline3\n";
         for &cs in CHUNK_SIZES {
-            let (store, path) = make_chunked_store(DATA, cs).await;
-            let s = AlignedBoundaryStream::new(store, path, 3, 100, 18, b'\n')
-                .await
-                .unwrap();
+            let reader = make_chunked_reader(DATA, cs);
+            let s = AlignedBoundaryStream::new(reader, 3, 100, 18, b'\n');
             assert_eq!(
                 collect_stream(s).await,
                 b"line2\nline3\n",
@@ -462,10 +389,8 @@ mod tests {
         // Should yield "line1\nline2\n" (continue past end to find newline).
         static DATA: &[u8] = b"line1\nline2\nline3\n";
         for &cs in CHUNK_SIZES {
-            let (store, path) = make_chunked_store(DATA, cs).await;
-            let s = AlignedBoundaryStream::new(store, path, 0, 8, 18, b'\n')
-                .await
-                .unwrap();
+            let reader = make_chunked_reader(DATA, cs);
+            let s = AlignedBoundaryStream::new(reader, 0, 8, 18, b'\n');
             assert_eq!(
                 collect_stream(s).await,
                 b"line1\nline2\n",
@@ -479,10 +404,8 @@ mod tests {
         // end >= file_size → no end scanning, pass through everything.
         static DATA: &[u8] = b"line1\nline2\n";
         for &cs in CHUNK_SIZES {
-            let (store, path) = make_chunked_store(DATA, cs).await;
-            let s = AlignedBoundaryStream::new(store, path, 0, 12, 12, b'\n')
-                .await
-                .unwrap();
+            let reader = make_chunked_reader(DATA, cs);
+            let s = AlignedBoundaryStream::new(reader, 0, 12, 12, b'\n');
             assert_eq!(collect_stream(s).await, DATA, "chunk_size={cs}");
         }
     }
@@ -493,10 +416,8 @@ mod tests {
         // No complete line → empty output.
         static DATA: &[u8] = b"abcdef";
         for &cs in CHUNK_SIZES {
-            let (store, path) = make_chunked_store(DATA, cs).await;
-            let s = AlignedBoundaryStream::new(store, path, 2, 6, 6, b'\n')
-                .await
-                .unwrap();
+            let reader = make_chunked_reader(DATA, cs);
+            let s = AlignedBoundaryStream::new(reader, 2, 6, 6, b'\n');
             assert!(collect_stream(s).await.is_empty(), "chunk_size={cs}");
         }
     }
@@ -511,10 +432,8 @@ mod tests {
         // Expected: "line2\nline3\n"
         static DATA: &[u8] = b"line1\nline2\nline3\nline4\n";
         for &cs in CHUNK_SIZES {
-            let (store, path) = make_chunked_store(DATA, cs).await;
-            let s = AlignedBoundaryStream::new(store, path, 3, 14, 24, b'\n')
-                .await
-                .unwrap();
+            let reader = make_chunked_reader(DATA, cs);
+            let s = AlignedBoundaryStream::new(reader, 3, 14, 24, b'\n');
             assert_eq!(
                 collect_stream(s).await,
                 b"line2\nline3\n",
@@ -531,10 +450,8 @@ mod tests {
         // start=0, end=7 (mid "line2"), file_size=18 → "line1\nline2\n"
         static DATA: &[u8] = b"line1\nline2\nline3\n";
         for &cs in CHUNK_SIZES {
-            let (store, path) = make_chunked_store(DATA, cs).await;
-            let s = AlignedBoundaryStream::new(store, path, 0, 7, 18, b'\n')
-                .await
-                .unwrap();
+            let reader = make_chunked_reader(DATA, cs);
+            let s = AlignedBoundaryStream::new(reader, 0, 7, 18, b'\n');
             assert_eq!(
                 collect_stream(s).await,
                 b"line1\nline2\n",
@@ -548,51 +465,24 @@ mod tests {
         // start >= end — no complete line can exist, regardless of data.
         static DATA: &[u8] = b"line1\nline2\n";
         for &cs in CHUNK_SIZES {
-            let (store, path) = make_chunked_store(DATA, cs).await;
+            let reader = make_chunked_reader(DATA, cs);
 
             // start > end (non-zero start)
-            let s = AlignedBoundaryStream::new(
-                Arc::clone(&store),
-                path.clone(),
-                10,
-                5,
-                20,
-                b'\n',
-            )
-            .await
-            .unwrap();
+            let s = AlignedBoundaryStream::new(Arc::clone(&reader), 10, 5, 20, b'\n');
             assert!(
                 collect_stream(s).await.is_empty(),
                 "start>end chunk_size={cs}"
             );
 
             // start == end == 0 (zero start, previously unguarded)
-            let s = AlignedBoundaryStream::new(
-                Arc::clone(&store),
-                path.clone(),
-                0,
-                0,
-                12,
-                b'\n',
-            )
-            .await
-            .unwrap();
+            let s = AlignedBoundaryStream::new(Arc::clone(&reader), 0, 0, 12, b'\n');
             assert!(
                 collect_stream(s).await.is_empty(),
                 "start==end==0 chunk_size={cs}"
             );
 
             // start == end (non-zero)
-            let s = AlignedBoundaryStream::new(
-                Arc::clone(&store),
-                path.clone(),
-                6,
-                6,
-                12,
-                b'\n',
-            )
-            .await
-            .unwrap();
+            let s = AlignedBoundaryStream::new(Arc::clone(&reader), 6, 6, 12, b'\n');
             assert!(
                 collect_stream(s).await.is_empty(),
                 "start==end==6 chunk_size={cs}"
@@ -607,10 +497,8 @@ mod tests {
         // Start aligns past "abcdef\n", yielding "line2\n".
         static DATA: &[u8] = b"abcdef\nline2\n";
         for &cs in CHUNK_SIZES {
-            let (store, path) = make_chunked_store(DATA, cs).await;
-            let s = AlignedBoundaryStream::new(store, path, 1, 100, 13, b'\n')
-                .await
-                .unwrap();
+            let reader = make_chunked_reader(DATA, cs);
+            let s = AlignedBoundaryStream::new(reader, 1, 100, 13, b'\n');
             assert_eq!(collect_stream(s).await, b"line2\n", "chunk_size={cs}");
         }
     }
@@ -623,10 +511,8 @@ mod tests {
         // start=0, end=6 → byte 5 is '\n' → yield only "line1\n".
         static DATA: &[u8] = b"line1\nline2\nline3\n";
         for &cs in CHUNK_SIZES {
-            let (store, path) = make_chunked_store(DATA, cs).await;
-            let s = AlignedBoundaryStream::new(store, path, 0, 6, 18, b'\n')
-                .await
-                .unwrap();
+            let reader = make_chunked_reader(DATA, cs);
+            let s = AlignedBoundaryStream::new(reader, 0, 6, 18, b'\n');
             assert_eq!(collect_stream(s).await, b"line1\n", "chunk_size={cs}");
         }
     }
@@ -640,45 +526,30 @@ mod tests {
         static DATA: &[u8] = b"line1\nline2\nline3\n"; // 18 bytes
 
         for &cs in CHUNK_SIZES {
-            let (store, path) = make_chunked_store(DATA, cs).await;
-            let r1 = collect_stream(
-                AlignedBoundaryStream::new(
-                    Arc::clone(&store),
-                    path.clone(),
-                    0,
-                    6,
-                    18,
-                    b'\n',
-                )
-                .await
-                .unwrap(),
-            )
+            let reader = make_chunked_reader(DATA, cs);
+            let r1 = collect_stream(AlignedBoundaryStream::new(
+                Arc::clone(&reader),
+                0,
+                6,
+                18,
+                b'\n',
+            ))
             .await;
-            let r2 = collect_stream(
-                AlignedBoundaryStream::new(
-                    Arc::clone(&store),
-                    path.clone(),
-                    6,
-                    12,
-                    18,
-                    b'\n',
-                )
-                .await
-                .unwrap(),
-            )
+            let r2 = collect_stream(AlignedBoundaryStream::new(
+                Arc::clone(&reader),
+                6,
+                12,
+                18,
+                b'\n',
+            ))
             .await;
-            let r3 = collect_stream(
-                AlignedBoundaryStream::new(
-                    Arc::clone(&store),
-                    path.clone(),
-                    12,
-                    18,
-                    18,
-                    b'\n',
-                )
-                .await
-                .unwrap(),
-            )
+            let r3 = collect_stream(AlignedBoundaryStream::new(
+                Arc::clone(&reader),
+                12,
+                18,
+                18,
+                b'\n',
+            ))
             .await;
 
             assert_eq!(r1, b"line1\n", "p1 chunk_size={cs}");
@@ -702,10 +573,8 @@ mod tests {
         // aligned start = 11, which is >= end = 6 → empty.
         static DATA: &[u8] = b"abcdefghij\nkl\n";
         for &cs in CHUNK_SIZES {
-            let (store, path) = make_chunked_store(DATA, cs).await;
-            let s = AlignedBoundaryStream::new(store, path, 3, 6, 14, b'\n')
-                .await
-                .unwrap();
+            let reader = make_chunked_reader(DATA, cs);
+            let s = AlignedBoundaryStream::new(reader, 3, 6, 14, b'\n');
             assert!(collect_stream(s).await.is_empty(), "chunk_size={cs}");
         }
     }
@@ -719,55 +588,40 @@ mod tests {
         static DATA: &[u8] = b"aaa\nbbb\nccc\n"; // 12 bytes
 
         for &cs in CHUNK_SIZES {
-            let (store, path) = make_chunked_store(DATA, cs).await;
+            let reader = make_chunked_reader(DATA, cs);
 
             // [0, 5): no start alignment; end=5 mid "bbb", scans to '\n' at 7.
-            let r1 = collect_stream(
-                AlignedBoundaryStream::new(
-                    Arc::clone(&store),
-                    path.clone(),
-                    0,
-                    5,
-                    12,
-                    b'\n',
-                )
-                .await
-                .unwrap(),
-            )
+            let r1 = collect_stream(AlignedBoundaryStream::new(
+                Arc::clone(&reader),
+                0,
+                5,
+                12,
+                b'\n',
+            ))
             .await;
 
             // [5, 10): fetch_start=4, bytes from offset 4: "bbb\nccc\n".
             // '\n' at pos 3 → aligned start=8 ("ccc\n"). End=10 mid "ccc",
             // scans to '\n' at 11 → yields "ccc\n".
-            let r2 = collect_stream(
-                AlignedBoundaryStream::new(
-                    Arc::clone(&store),
-                    path.clone(),
-                    5,
-                    10,
-                    12,
-                    b'\n',
-                )
-                .await
-                .unwrap(),
-            )
+            let r2 = collect_stream(AlignedBoundaryStream::new(
+                Arc::clone(&reader),
+                5,
+                10,
+                12,
+                b'\n',
+            ))
             .await;
 
             // [10, 12): fetch_start=9, bytes from offset 9: "cc\n".
             // '\n' at pos 2 → aligned start=12. end=12==file_size → end=MAX.
             // Remainder after '\n' is empty; Passthrough polls inner → Done.
-            let r3 = collect_stream(
-                AlignedBoundaryStream::new(
-                    Arc::clone(&store),
-                    path.clone(),
-                    10,
-                    12,
-                    12,
-                    b'\n',
-                )
-                .await
-                .unwrap(),
-            )
+            let r3 = collect_stream(AlignedBoundaryStream::new(
+                Arc::clone(&reader),
+                10,
+                12,
+                12,
+                b'\n',
+            ))
             .await;
 
             assert_eq!(r1, b"aaa\nbbb\n", "p1 chunk_size={cs}");
@@ -788,34 +642,16 @@ mod tests {
         // until EOF is reached and yields the final incomplete line as-is.
         static DATA: &[u8] = b"line1\nline2"; // 11 bytes, no trailing '\n'
         for &cs in CHUNK_SIZES {
-            let (store, path) = make_chunked_store(DATA, cs).await;
+            let reader = make_chunked_reader(DATA, cs);
 
             // Single partition covering the whole file.
-            let s = AlignedBoundaryStream::new(
-                Arc::clone(&store),
-                path.clone(),
-                0,
-                11,
-                11,
-                b'\n',
-            )
-            .await
-            .unwrap();
+            let s = AlignedBoundaryStream::new(Arc::clone(&reader), 0, 11, 11, b'\n');
             assert_eq!(collect_stream(s).await, DATA, "chunk_size={cs}");
 
             // Last partition starting mid-file (start=6, fetch_start=5).
             // Bytes from offset 5: "\nline2".
             // StartAlign consumes '\n', remainder "line2" is yielded as-is.
-            let s = AlignedBoundaryStream::new(
-                Arc::clone(&store),
-                path.clone(),
-                6,
-                11,
-                11,
-                b'\n',
-            )
-            .await
-            .unwrap();
+            let s = AlignedBoundaryStream::new(Arc::clone(&reader), 6, 11, 11, b'\n');
             assert_eq!(collect_stream(s).await, b"line2", "tail chunk_size={cs}");
         }
     }
@@ -841,34 +677,24 @@ mod tests {
         let file_size = data.len() as u64;
 
         for &cs in CHUNK_SIZES {
-            let (store, path) = make_chunked_store(&data, cs).await;
+            let reader = make_chunked_reader(&data, cs);
 
-            let r1 = collect_stream(
-                AlignedBoundaryStream::new(
-                    Arc::clone(&store),
-                    path.clone(),
-                    0,
-                    1,
-                    file_size,
-                    b'\n',
-                )
-                .await
-                .unwrap(),
-            )
+            let r1 = collect_stream(AlignedBoundaryStream::new(
+                Arc::clone(&reader),
+                0,
+                1,
+                file_size,
+                b'\n',
+            ))
             .await;
 
-            let r2 = collect_stream(
-                AlignedBoundaryStream::new(
-                    Arc::clone(&store),
-                    path.clone(),
-                    1,
-                    file_size,
-                    file_size,
-                    b'\n',
-                )
-                .await
-                .unwrap(),
-            )
+            let r2 = collect_stream(AlignedBoundaryStream::new(
+                Arc::clone(&reader),
+                1,
+                file_size,
+                file_size,
+                b'\n',
+            ))
             .await;
 
             assert_eq!(r1, long_line, "p1 chunk_size={cs}");

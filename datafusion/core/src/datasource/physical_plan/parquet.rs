@@ -59,7 +59,6 @@ mod tests {
     use datafusion_datasource_parquet::{
         DefaultParquetFileReaderFactory, ParquetFileReaderFactory, ParquetFormat,
     };
-    use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_expr::{Expr, col, lit, when};
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::analyze::AnalyzeExecBuilder;
@@ -68,15 +67,16 @@ mod tests {
         ExecutionPlanMetricsSet, MetricValue, MetricsSet,
     };
     use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+    use datafusion_storage::StorageUrl;
 
     use chrono::{TimeZone, Utc};
     use datafusion_datasource::file_groups::FileGroup;
     use futures::StreamExt;
     use insta;
     use insta::assert_snapshot;
+    use object_store::ObjectStore;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
-    use object_store::{ObjectMeta, ObjectStore};
     use parquet::arrow::ArrowWriter;
     use parquet::file::properties::WriterProperties;
     use tempfile::TempDir;
@@ -195,7 +195,7 @@ mod tests {
             source: Arc<dyn FileSource>,
         ) -> Arc<DataSourceExec> {
             let base_config =
-                FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+                FileScanConfigBuilder::new(StorageUrl::local_filesystem(), source)
                     .with_file_group(file_group)
                     .with_projection_indices(self.projection.clone())
                     .unwrap()
@@ -1535,7 +1535,11 @@ mod tests {
 
     #[tokio::test]
     async fn parquet_exec_with_range() -> Result<()> {
-        fn file_range(meta: &ObjectMeta, start: i64, end: i64) -> PartitionedFile {
+        fn file_range(
+            meta: &datafusion_storage::FileInfo,
+            start: i64,
+            end: i64,
+        ) -> PartitionedFile {
             PartitionedFile::new_from_meta(meta.clone()).with_range(start, end)
         }
 
@@ -1546,7 +1550,7 @@ mod tests {
             file_schema: SchemaRef,
         ) -> Result<()> {
             let config = FileScanConfigBuilder::new(
-                ObjectStoreUrl::local_filesystem(),
+                StorageUrl::local_filesystem(),
                 Arc::new(ParquetSource::new(file_schema)),
             )
             .with_file_groups(file_groups)
@@ -1580,7 +1584,7 @@ mod tests {
 
         let meta = local_unpartitioned_file(filename);
 
-        let store = Arc::new(LocalFileSystem::new()) as _;
+        let store = test_utils::storage::local();
         let file_schema = ParquetFormat::default()
             .infer_schema(&state, &store, std::slice::from_ref(&meta))
             .await?;
@@ -1605,8 +1609,8 @@ mod tests {
         let state = session_ctx.state();
         let task_ctx = session_ctx.task_ctx();
 
-        let object_store_url = ObjectStoreUrl::local_filesystem();
-        let store = state.runtime_env().object_store(&object_store_url).unwrap();
+        let object_store_url = StorageUrl::local_filesystem();
+        let store = state.runtime_env().storage(&object_store_url).unwrap();
 
         let testdata = datafusion_common::test_util::parquet_test_data();
         let filename = format!("{testdata}/alltypes_plain.parquet");
@@ -1706,17 +1710,18 @@ mod tests {
             .unwrap()
             .join("invalid.parquet");
 
-        let partitioned_file = PartitionedFile::new_from_meta(ObjectMeta {
-            location,
-            last_modified: Utc.timestamp_nanos(0),
-            size: 1337,
-            e_tag: None,
-            version: None,
-        });
+        let partitioned_file =
+            PartitionedFile::new_from_meta(datafusion_storage::FileInfo {
+                location: datafusion_storage::path::Path::from(location.as_ref()),
+                last_modified: Utc.timestamp_nanos(0),
+                size: 1337,
+                e_tag: None,
+                version: None,
+            });
 
         let file_schema = Arc::new(Schema::empty());
         let config = FileScanConfigBuilder::new(
-            ObjectStoreUrl::local_filesystem(),
+            StorageUrl::local_filesystem(),
             Arc::new(ParquetSource::new(file_schema)),
         )
         .with_file(partitioned_file)
@@ -1727,7 +1732,9 @@ mod tests {
         let mut results = parquet_exec.execute(0, state.task_ctx())?;
         let batch = results.next().await.unwrap();
         // invalid file should produce an error to that effect
-        assert_contains!(batch.unwrap_err().to_string(), "invalid.parquet not found");
+        let error = batch.unwrap_err().to_string();
+        assert_contains!(&error, "File not found:");
+        assert_contains!(error, "invalid.parquet");
         assert!(results.next().await.is_none());
 
         Ok(())
@@ -2207,9 +2214,15 @@ mod tests {
         .await?;
 
         // register a local file system object store for /tmp directory
-        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir).unwrap());
         let local_url = Url::parse("file://local").unwrap();
-        ctx.register_object_store(&local_url, local);
+        ctx.register_storage(
+            &local_url,
+            Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+                local,
+            )),
+        )
+        .unwrap();
 
         // Configure listing options
         let file_format = ParquetFormat::default().with_enable_pruning(true);
@@ -2441,7 +2454,9 @@ mod tests {
     impl TrackingParquetFileReaderFactory {
         fn new(store: Arc<dyn ObjectStore>) -> Self {
             Self {
-                inner: Arc::new(DefaultParquetFileReaderFactory::new(store)) as _,
+                inner: Arc::new(DefaultParquetFileReaderFactory::new(
+                    test_utils::storage::object_store(store),
+                )) as _,
                 metadata_size_hint_calls: Arc::new(Mutex::new(vec![])),
             }
         }
@@ -2474,10 +2489,16 @@ mod tests {
     async fn test_metadata_size_hint() {
         let store =
             Arc::new(object_store::memory::InMemory::new()) as Arc<dyn ObjectStore>;
-        let store_url = ObjectStoreUrl::parse("memory://test").unwrap();
+        let store_url = StorageUrl::parse("memory://test").unwrap();
 
         let ctx = SessionContext::new();
-        ctx.register_object_store(store_url.as_ref(), store.clone());
+        ctx.register_storage(
+            store_url.as_ref(),
+            Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+                store.clone(),
+            )),
+        )
+        .unwrap();
 
         // write some data out, it doesn't matter what it is
         let c1: ArrayRef = Arc::new(Int32Array::from(vec![Some(1)]));
@@ -2500,8 +2521,8 @@ mod tests {
         );
         let config = FileScanConfigBuilder::new(store_url, source)
             .with_file(
-                PartitionedFile::new_from_meta(ObjectMeta {
-                    location: Path::from(name_1),
+                PartitionedFile::new_from_meta(datafusion_storage::FileInfo {
+                    location: datafusion_storage::path::Path::from(name_1),
                     last_modified: Utc::now(),
                     size: total_size_1,
                     e_tag: None,
@@ -2509,13 +2530,15 @@ mod tests {
                 })
                 .with_metadata_size_hint(123),
             )
-            .with_file(PartitionedFile::new_from_meta(ObjectMeta {
-                location: Path::from(name_2),
-                last_modified: Utc::now(),
-                size: total_size_2,
-                e_tag: None,
-                version: None,
-            }))
+            .with_file(PartitionedFile::new_from_meta(
+                datafusion_storage::FileInfo {
+                    location: datafusion_storage::path::Path::from(name_2),
+                    last_modified: Utc::now(),
+                    size: total_size_2,
+                    e_tag: None,
+                    version: None,
+                },
+            ))
             .build();
 
         let exec = DataSourceExec::from_data_source(config);

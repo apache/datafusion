@@ -21,8 +21,8 @@ use datafusion_common::HashMap;
 use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use datafusion_common::{Result, Statistics};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use object_store::ObjectMeta;
-use object_store::path::Path;
+use datafusion_storage::FileInfo;
+use datafusion_storage::path::Path;
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
@@ -57,7 +57,7 @@ pub const DEFAULT_METADATA_CACHE_LIMIT: usize = 50 * 1024 * 1024; // 50M
 /// See [`crate::runtime_env::RuntimeEnv`] for more details
 pub type FileStatisticsCache = dyn Cache<TableScopedPath, CachedFileMetadata>;
 
-/// A cache for storing the [`ObjectMeta`]s that result from listing a path.
+/// A cache for storing the [`FileInfo`]s that result from listing a path.
 ///
 /// Listing a path means doing an object store "list" operation or `ls`
 /// command on the local filesystem. This operation can be expensive,
@@ -74,7 +74,7 @@ pub type ListFilesCache = dyn Cache<TableScopedPath, CachedFileList>;
 /// A cache for storing file-embedded metadata.
 ///
 /// This cache stores per-file metadata in the form of [`CachedFileMetadataEntry`],
-/// which includes the [`ObjectMeta`] for validation.
+/// which includes the [`FileInfo`] for validation.
 ///
 /// For example, the built in [`ListingTable`] uses this cache to avoid parsing
 /// Parquet footers multiple times for the same file.
@@ -87,16 +87,17 @@ pub type ListFilesCache = dyn Cache<TableScopedPath, CachedFileList>;
 /// See [`crate::runtime_env::RuntimeEnv`] for more details.
 ///
 /// [`ListingTable`]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
-pub type FileMetadataCache = dyn Cache<Path, CachedFileMetadataEntry>;
+pub type FileMetadataCache =
+    dyn Cache<crate::cache::FileCacheKey, CachedFileMetadataEntry>;
 
 /// Cached metadata for a file, including statistics and ordering.
 ///
-/// This struct embeds the [`ObjectMeta`] used for cache validation,
+/// This struct embeds the [`FileInfo`] used for cache validation,
 /// the `file_schema` fingerprint, cached statistics, and ordering information.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CachedFileMetadata {
     /// File metadata used for cache validation (size, last_modified).
-    pub meta: ObjectMeta,
+    pub meta: FileInfo,
     /// Fingerprint of the `file_schema` used to compute `statistics`.
     pub schema_fingerprint: Arc<SchemaFingerprint>,
     /// Cached statistics for the file, if available.
@@ -108,7 +109,7 @@ pub struct CachedFileMetadata {
 impl CachedFileMetadata {
     /// Create a new cached file metadata entry.
     pub fn new(
-        meta: ObjectMeta,
+        meta: FileInfo,
         schema_fingerprint: Arc<SchemaFingerprint>,
         statistics: Arc<Statistics>,
         ordering: Option<LexOrdering>,
@@ -126,7 +127,7 @@ impl CachedFileMetadata {
     /// Returns true if the file size, last modified time, and schema match.
     pub fn is_valid_for(
         &self,
-        current_meta: &ObjectMeta,
+        current_meta: &FileInfo,
         current_schema_fingerprint: &Arc<SchemaFingerprint>,
     ) -> bool {
         self.meta.size == current_meta.size
@@ -163,19 +164,19 @@ impl DFHeapSize for CachedFileMetadata {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CachedFileList {
     /// The cached file list.
-    pub files: Arc<Vec<ObjectMeta>>,
+    pub files: Arc<Vec<FileInfo>>,
 }
 
 impl CachedFileList {
     /// Create a new cached file list.
-    pub fn new(files: Vec<ObjectMeta>) -> Self {
+    pub fn new(files: Vec<FileInfo>) -> Self {
         Self {
             files: Arc::new(files),
         }
     }
 
     /// Filter the files by prefix.
-    fn filter_by_prefix(&self, prefix: Option<&Path>) -> Vec<ObjectMeta> {
+    fn filter_by_prefix(&self, prefix: Option<&Path>) -> Vec<FileInfo> {
         match prefix {
             Some(prefix) => self
                 .files
@@ -190,8 +191,8 @@ impl CachedFileList {
     /// Returns files matching the given prefix.
     ///
     /// When prefix is `None`, returns a clone of the `Arc` (no data copy).
-    /// When filtering is needed, returns a new `Arc` with filtered results (clones each matching [`ObjectMeta`]).
-    pub fn files_matching_prefix(&self, prefix: &Option<Path>) -> Arc<Vec<ObjectMeta>> {
+    /// When filtering is needed, returns a new `Arc` with filtered results (clones each matching [`FileInfo`]).
+    pub fn files_matching_prefix(&self, prefix: &Option<Path>) -> Arc<Vec<FileInfo>> {
         match prefix {
             None => Arc::clone(&self.files),
             Some(p) => Arc::new(self.filter_by_prefix(Some(p))),
@@ -201,7 +202,7 @@ impl CachedFileList {
 
 impl CacheValue for CachedFileList {
     fn size(&self) -> usize {
-        self.files.capacity() * size_of::<ObjectMeta>()
+        self.files.capacity() * size_of::<FileInfo>()
             + self
                 .files
                 .iter()
@@ -211,8 +212,8 @@ impl CacheValue for CachedFileList {
     }
 }
 
-/// Calculates the number of bytes an [`ObjectMeta`] occupies in the heap.
-pub fn meta_heap_bytes(object_meta: &ObjectMeta) -> usize {
+/// Calculates the number of bytes an [`FileInfo`] occupies in the heap.
+pub fn meta_heap_bytes(object_meta: &FileInfo) -> usize {
     let mut size = object_meta.location.as_ref().len();
 
     if let Some(e) = &object_meta.e_tag {
@@ -226,14 +227,14 @@ pub fn meta_heap_bytes(object_meta: &ObjectMeta) -> usize {
 }
 
 impl Deref for CachedFileList {
-    type Target = Arc<Vec<ObjectMeta>>;
+    type Target = Arc<Vec<FileInfo>>;
     fn deref(&self) -> &Self::Target {
         &self.files
     }
 }
 
-impl From<Vec<ObjectMeta>> for CachedFileList {
-    fn from(files: Vec<ObjectMeta>) -> Self {
+impl From<Vec<FileInfo>> for CachedFileList {
+    fn from(files: Vec<FileInfo>) -> Self {
         Self::new(files)
     }
 }
@@ -260,7 +261,7 @@ pub trait FileMetadata: Any + Send + Sync {
 #[derive(Clone)]
 pub struct CachedFileMetadataEntry {
     /// File metadata used for cache validation (size, last_modified).
-    pub meta: ObjectMeta,
+    pub meta: FileInfo,
     /// The cached file metadata.
     pub file_metadata: Arc<dyn FileMetadata>,
 }
@@ -273,7 +274,7 @@ impl CacheValue for CachedFileMetadataEntry {
 
 impl CachedFileMetadataEntry {
     /// Create a new cached file metadata entry.
-    pub fn new(meta: ObjectMeta, file_metadata: Arc<dyn FileMetadata>) -> Self {
+    pub fn new(meta: FileInfo, file_metadata: Arc<dyn FileMetadata>) -> Self {
         Self {
             meta,
             file_metadata,
@@ -281,7 +282,7 @@ impl CachedFileMetadataEntry {
     }
 
     /// Check if this cached entry is still valid for the given metadata.
-    pub fn is_valid_for(&self, current_meta: &ObjectMeta) -> bool {
+    pub fn is_valid_for(&self, current_meta: &FileInfo) -> bool {
         self.meta.size == current_meta.size
             && self.meta.last_modified == current_meta.last_modified
     }
@@ -381,7 +382,7 @@ impl CacheManager {
             .map_or(0, |c| c.cache_limit())
     }
 
-    /// Get the cache for storing the result of listing [`ObjectMeta`]s under the same path.
+    /// Get the cache for storing the result of listing [`FileInfo`]s under the same path.
     pub fn get_list_files_cache(&self) -> Option<Arc<ListFilesCache>> {
         self.list_files_cache.clone()
     }

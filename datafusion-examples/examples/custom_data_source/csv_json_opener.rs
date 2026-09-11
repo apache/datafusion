@@ -21,12 +21,14 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::common::config::CsvOptions;
+use datafusion::storage::{
+    FileAccessContext, ObjectStoreStorage, StorageBinding, StorageUrl,
+};
 use datafusion::{
     assert_batches_eq,
     datasource::{
         file_format::file_compression_type::FileCompressionType,
         listing::PartitionedFile,
-        object_store::ObjectStoreUrl,
         physical_plan::{
             CsvSource, FileSource, FileStreamBuilder, JsonOpener, JsonSource,
         },
@@ -51,7 +53,10 @@ pub async fn csv_json_opener() -> Result<()> {
 }
 
 async fn csv_opener() -> Result<()> {
-    let object_store = Arc::new(LocalFileSystem::new());
+    let storage = Arc::new(StorageBinding::new(
+        StorageUrl::local_filesystem(),
+        Arc::new(ObjectStoreStorage::new(Arc::new(LocalFileSystem::new()))),
+    ));
 
     let dataset = ExampleDataset::Cars;
     let csv_path = dataset.path();
@@ -69,17 +74,21 @@ async fn csv_opener() -> Result<()> {
         .with_comment(Some(b'#'))
         .with_batch_size(8192);
 
-    let scan_config =
-        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
-            .with_projection_indices(Some(vec![0, 1]))?
-            .with_limit(Some(5))
-            .with_file(PartitionedFile::new(csv_path.display().to_string(), 10))
-            .build();
+    let scan_config = FileScanConfigBuilder::new(StorageUrl::local_filesystem(), source)
+        .with_projection_indices(Some(vec![0, 1]))?
+        .with_limit(Some(5))
+        .with_file(PartitionedFile::new(
+            csv_path.display().to_string(),
+            std::fs::metadata(&csv_path)?.len(),
+        ))
+        .build();
 
-    let opener =
-        scan_config
-            .file_source()
-            .create_file_opener(object_store, &scan_config, 0)?;
+    let opener = scan_config.file_source().create_file_opener(
+        storage,
+        &scan_config,
+        0,
+        FileAccessContext::default(),
+    )?;
 
     let mut result = vec![];
     let metrics = ExecutionPlanMetricsSet::new();
@@ -117,7 +126,11 @@ async fn json_opener() -> Result<()> {
         {"num":4,"str":"foo"}"#,
     );
 
-    object_store.put(&path, data.into()).await?;
+    let file_size = data.len() as u64;
+    object_store
+        .put(&path, data.into())
+        .await
+        .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
 
     let schema = Arc::new(Schema::new(vec![
         Field::new("num", DataType::Int64, false),
@@ -130,17 +143,20 @@ async fn json_opener() -> Result<()> {
         8192,
         projected,
         FileCompressionType::UNCOMPRESSED,
-        Arc::new(object_store),
+        Arc::new(StorageBinding::new(
+            StorageUrl::local_filesystem(),
+            Arc::new(ObjectStoreStorage::new(Arc::new(object_store))),
+        )),
         true,
     );
 
     let scan_config = FileScanConfigBuilder::new(
-        ObjectStoreUrl::local_filesystem(),
+        StorageUrl::local_filesystem(),
         Arc::new(JsonSource::new(schema)),
     )
     .with_projection_indices(Some(vec![1, 0]))?
     .with_limit(Some(5))
-    .with_file(PartitionedFile::new(path.to_string(), 10))
+    .with_file(PartitionedFile::new(path.to_string(), file_size))
     .build();
 
     let metrics = ExecutionPlanMetricsSet::new();

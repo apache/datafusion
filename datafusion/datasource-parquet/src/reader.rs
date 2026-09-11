@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`ParquetFileReaderFactory`] and [`DefaultParquetFileReaderFactory`] for
-//! low level control of parquet file readers
+//! [`ParquetFileReaderFactory`] for low level control of Parquet file readers.
 
 use crate::ParquetFileMetrics;
 use crate::metadata::DFParquetMetadata;
@@ -26,10 +25,9 @@ use datafusion_datasource::PartitionedFile;
 use datafusion_execution::cache::cache_manager::FileMetadata;
 use datafusion_execution::cache::cache_manager::FileMetadataCache;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+use datafusion_storage::{FileAccessContext, FileReader, StorageBinding};
 use futures::FutureExt;
-use futures::TryFutureExt;
 use futures::future::BoxFuture;
-use object_store::{ObjectStore, ObjectStoreExt};
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::errors::ParquetError;
@@ -38,6 +36,7 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
+use tokio::sync::OnceCell;
 
 /// Interface for reading Apache Parquet files.
 ///
@@ -45,7 +44,7 @@ use std::sync::Arc;
 /// [`AsyncFileReader`] can be used to provide custom data access operations
 /// such as pre-cached metadata, I/O coalescing, etc.
 ///
-/// See [`DefaultParquetFileReaderFactory`] for a simple implementation.
+/// See [`DefaultParquetFileReaderFactory`] for the built-in implementation.
 pub trait ParquetFileReaderFactory: Debug + Send + Sync + 'static {
     /// Provides an `AsyncFileReader` for reading data from a parquet file specified
     ///
@@ -73,18 +72,27 @@ pub trait ParquetFileReaderFactory: Debug + Send + Sync + 'static {
 /// Default implementation of [`ParquetFileReaderFactory`]
 ///
 /// This implementation:
-/// 1. Reads parquet directly from an underlying [`ObjectStore`] instance.
+/// 1. Reads parquet directly from an underlying [`StorageBinding`] instance.
 /// 2. Reads the footer and page metadata on demand.
 /// 3. Does not cache metadata or coalesce I/O operations.
 #[derive(Debug)]
 pub struct DefaultParquetFileReaderFactory {
-    store: Arc<dyn ObjectStore>,
+    store: Arc<StorageBinding>,
+    context: FileAccessContext,
 }
 
 impl DefaultParquetFileReaderFactory {
+    pub fn with_context(mut self, context: FileAccessContext) -> Self {
+        self.context = context;
+        self
+    }
+
     /// Create a new `DefaultParquetFileReaderFactory`.
-    pub fn new(store: Arc<dyn ObjectStore>) -> Self {
-        Self { store }
+    pub fn new(store: Arc<StorageBinding>) -> Self {
+        Self {
+            store,
+            context: FileAccessContext::new("parquet"),
+        }
     }
 }
 
@@ -107,6 +115,7 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
             Arc::clone(&self.store),
             partitioned_file,
         )
+        .with_context(self.context.clone())
         .with_metadata_hint(metadata_size_hint);
         Ok(Box::new(reader))
     }
@@ -120,17 +129,24 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
 /// parquet opener can skip page-index I/O during the initial metadata load.
 #[derive(Debug)]
 pub struct CachedParquetFileReaderFactory {
-    store: Arc<dyn ObjectStore>,
+    store: Arc<StorageBinding>,
+    context: FileAccessContext,
     metadata_cache: Arc<FileMetadataCache>,
 }
 
 impl CachedParquetFileReaderFactory {
+    pub fn with_context(mut self, context: FileAccessContext) -> Self {
+        self.context = context;
+        self
+    }
+
     pub fn new(
-        store: Arc<dyn ObjectStore>,
+        store: Arc<StorageBinding>,
         metadata_cache: Arc<FileMetadataCache>,
     ) -> Self {
         Self {
             store,
+            context: FileAccessContext::new("parquet"),
             metadata_cache,
         }
     }
@@ -155,6 +171,7 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
             Arc::clone(&self.store),
             partitioned_file,
         )
+        .with_context(self.context.clone())
         .with_metadata_hint(metadata_size_hint)
         .with_metadata_cache(Some(Arc::clone(&self.metadata_cache)));
 
@@ -164,7 +181,7 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
 
 /// Implements [`AsyncFileReader`] for a parquet file in object storage.
 ///
-/// This implementation reads data directly from the underlying [`ObjectStore`]
+/// This implementation reads data directly from the underlying [`StorageBinding`]
 /// on demand, as required, tracking the number of bytes read.
 ///
 /// When configured via [`Self::with_metadata_cache`], [`Self::get_metadata`]
@@ -174,17 +191,33 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
 /// # Notes
 ///
 /// This implementation does not coalesce I/O operations or cache bytes. Such
-/// optimizations can be done either at the object store level or by providing
+/// optimizations can be done either at the storage backend level or by providing
 /// a custom implementation of [`ParquetFileReaderFactory`].
 pub struct ParquetFileReader {
+    reader: OnceCell<Arc<dyn FileReader>>,
     file_metrics: ParquetFileMetrics,
-    store: Arc<dyn ObjectStore>,
+    store: Arc<StorageBinding>,
+    context: FileAccessContext,
     partitioned_file: PartitionedFile,
     metadata_cache: Option<Arc<FileMetadataCache>>,
     metadata_size_hint: Option<usize>,
 }
 
 impl ParquetFileReader {
+    fn with_context(mut self, context: FileAccessContext) -> Self {
+        self.context = context;
+        self
+    }
+    async fn reader(&self) -> parquet::errors::Result<&Arc<dyn FileReader>> {
+        self.reader
+            .get_or_try_init(|| {
+                self.store
+                    .open(&self.partitioned_file.object_meta, self.context.clone())
+            })
+            .await
+            .map_err(|e| ParquetError::External(Box::new(e)))
+    }
+
     /// Create a new `ParquetFileReader`.
     ///
     /// By default the reader has no [`FileMetadataCache`] and no metadata
@@ -195,12 +228,14 @@ impl ParquetFileReader {
     /// [`Self::with_metadata_hint`] to set the size hint.
     pub(crate) fn new(
         file_metrics: ParquetFileMetrics,
-        store: Arc<dyn ObjectStore>,
+        store: Arc<StorageBinding>,
         partitioned_file: PartitionedFile,
     ) -> Self {
         Self {
+            reader: OnceCell::new(),
             file_metrics,
             store,
+            context: FileAccessContext::new("parquet"),
             partitioned_file,
             metadata_cache: None,
             metadata_size_hint: None,
@@ -242,10 +277,14 @@ impl AsyncFileReader for ParquetFileReader {
     ) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
         let bytes_scanned = range.end - range.start;
         self.file_metrics.bytes_scanned.add(bytes_scanned as usize);
-        self.store
-            .get_range(&self.partitioned_file.object_meta.location, range)
-            .map_err(|e| ParquetError::External(Box::new(e)))
-            .boxed()
+        async move {
+            self.reader()
+                .await?
+                .read_range(range.into())
+                .await
+                .map_err(|e| ParquetError::External(Box::new(e)))
+        }
+        .boxed()
     }
 
     fn get_byte_ranges(
@@ -258,8 +297,9 @@ impl AsyncFileReader for ParquetFileReader {
         let total: u64 = ranges.iter().map(|r| r.end - r.start).sum();
         self.file_metrics.bytes_scanned.add(total as usize);
         async move {
-            self.store
-                .get_ranges(&self.partitioned_file.object_meta.location, &ranges)
+            self.reader()
+                .await?
+                .read_ranges(ranges)
                 .await
                 .map_err(|e| ParquetError::External(Box::new(e)))
         }
@@ -284,9 +324,9 @@ impl AsyncFileReader for ParquetFileReader {
 
             let page_index_policy = options.map(|o| o.column_index_policy());
 
-            DFParquetMetadata::new(&self.store, &object_meta)
+            DFParquetMetadata::new(self.reader().await?.as_ref(), &object_meta)
                 .with_decryption_properties(file_decryption_properties)
-                .with_file_metadata_cache(metadata_cache)
+                .with_file_metadata_cache(metadata_cache, self.store.id())
                 .with_metadata_size_hint(self.metadata_size_hint)
                 .with_page_index_policy(page_index_policy)
                 .fetch_metadata()

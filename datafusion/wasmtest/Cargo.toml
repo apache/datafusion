@@ -60,6 +60,7 @@ getrandom = { version = "0.3", features = ["wasm_js"] }
 wasm-bindgen = "0.2.99"
 
 [dev-dependencies]
+datafusion-storage-object-store = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
 object_store = { workspace = true }

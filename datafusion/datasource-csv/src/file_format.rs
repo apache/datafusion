@@ -55,14 +55,13 @@ use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
 
+use crate::delimiter::newline_delimited_stream;
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use datafusion_datasource::source::DataSourceExec;
+use datafusion_storage::{FileInfo, StorageBinding};
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt, TryStreamExt, pin_mut};
-use object_store::{
-    ObjectMeta, ObjectStore, ObjectStoreExt, delimited::newline_delimited_stream,
-};
 use regex::Regex;
 
 #[derive(Default)]
@@ -143,20 +142,20 @@ impl CsvFormat {
     /// Each returned `Bytes` has a whole number of newline delimited rows
     async fn read_to_delimited_chunks<'a>(
         &self,
-        store: &Arc<dyn ObjectStore>,
-        object: &ObjectMeta,
+        store: &Arc<StorageBinding>,
+        object: &FileInfo,
     ) -> BoxStream<'a, Result<Bytes>> {
         // stream to only read as many rows as needed into memory
         let stream = store
-            .get(&object.location)
+            .open(object, datafusion_storage::FileAccessContext::new("schema"))
             .await
-            .map_err(|e| DataFusionError::ObjectStore(Box::new(e)));
+            .map_err(|e| DataFusionError::Storage(Box::new(e)));
         let stream = match stream {
             Ok(stream) => self
                 .read_to_delimited_chunks_from_stream(
                     stream
-                        .into_stream()
-                        .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))
+                        .stream(None)
+                        .map_err(|e| DataFusionError::Storage(Box::new(e)))
                         .boxed(),
                 )
                 .map_err(DataFusionError::from)
@@ -177,17 +176,7 @@ impl CsvFormat {
         let file_compression_type: FileCompressionType = self.options.compression.into();
         let decoder = file_compression_type.convert_stream(stream);
         let stream = match decoder {
-            Ok(decoded_stream) => {
-                newline_delimited_stream(decoded_stream.map_err(|e| match e {
-                    DataFusionError::ObjectStore(e) => *e,
-                    err => object_store::Error::Generic {
-                        store: "read to delimited chunks failed",
-                        source: Box::new(err),
-                    },
-                }))
-                .map_err(DataFusionError::from)
-                .left_stream()
-            }
+            Ok(decoded_stream) => newline_delimited_stream(decoded_stream).left_stream(),
             Err(e) => {
                 futures::stream::once(futures::future::ready(Err(e))).right_stream()
             }
@@ -376,8 +365,8 @@ impl FileFormat for CsvFormat {
     async fn infer_schema(
         &self,
         state: &dyn Session,
-        store: &Arc<dyn ObjectStore>,
-        objects: &[ObjectMeta],
+        store: &Arc<StorageBinding>,
+        objects: &[FileInfo],
     ) -> Result<SchemaRef> {
         let mut schemas = vec![];
 
@@ -423,9 +412,9 @@ impl FileFormat for CsvFormat {
     async fn infer_stats(
         &self,
         _state: &dyn Session,
-        _store: &Arc<dyn ObjectStore>,
+        _store: &Arc<StorageBinding>,
         table_schema: SchemaRef,
-        _object: &ObjectMeta,
+        _object: &FileInfo,
     ) -> Result<Statistics> {
         Ok(Statistics::new_unknown(&table_schema))
     }
@@ -803,7 +792,7 @@ impl FileSink for CsvSink {
         context: &Arc<TaskContext>,
         demux_task: SpawnedTask<Result<()>>,
         file_stream_rx: DemuxedStreamReceiver,
-        object_store: Arc<dyn ObjectStore>,
+        object_store: Arc<StorageBinding>,
     ) -> Result<u64> {
         let builder = self.writer_options.writer_options.clone();
         let header = builder.header();
@@ -924,7 +913,12 @@ impl CsvSink {
                 "CsvSinkExecNode is missing required field 'sink'"
             )
         })?;
-        let data_sink = CsvSink::try_from(proto_sink)?;
+        let mut data_sink = CsvSink::try_from(proto_sink)?;
+        data_sink.config.storage = Some(
+            ctx.task_ctx()
+                .runtime_env()
+                .storage(&data_sink.config.object_store_url)?,
+        );
         let sort_order = DataSinkExec::decode_sort_order(
             sink_node.sort_order.as_ref(),
             ctx,

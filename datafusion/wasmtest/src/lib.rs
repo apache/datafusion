@@ -269,7 +269,14 @@ mod test {
         store.put(&path, buffer.into()).await.unwrap();
 
         let url = Url::parse("memory://").unwrap();
-        session_ctx.register_object_store(&url, Arc::new(store));
+        session_ctx
+            .register_storage(
+                &url,
+                Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+                    Arc::new(store),
+                )),
+            )
+            .unwrap();
         session_ctx
             .register_parquet("a", "memory:///a.parquet", Default::default())
             .await
@@ -312,7 +319,13 @@ mod test {
 
         let url = Url::parse("memory://").unwrap();
         let ctx = SessionContext::new();
-        ctx.register_object_store(&url, Arc::new(store));
+        ctx.register_storage(
+            &url,
+            Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+                Arc::new(store),
+            )),
+        )
+        .unwrap();
 
         let csv_options = CsvReadOptions::new()
             .has_header(true)

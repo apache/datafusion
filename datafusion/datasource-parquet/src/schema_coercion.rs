@@ -429,7 +429,7 @@ fn field_with_new_type(field: &FieldRef, new_type: DataType) -> FieldRef {
 
 /// Transform a schema to use view types for Utf8 and Binary
 ///
-/// See [`ParquetFormat::force_view_types`](crate::file_format::ParquetFormat::force_view_types) for details
+/// See [`schema_force_view_types`](datafusion_common::config::ParquetOptions::schema_force_view_types) for details.
 pub fn transform_schema_to_view(schema: &Schema) -> Schema {
     let transformed_fields: Vec<Arc<Field>> = schema
         .fields

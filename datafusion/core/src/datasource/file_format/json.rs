@@ -52,7 +52,6 @@ mod tests {
     use datafusion_datasource::file_compression_type::FileCompressionType;
     use futures::StreamExt;
     use insta::assert_snapshot;
-    use object_store::local::LocalFileSystem;
     use regex::Regex;
     use rstest::rstest;
     // ==================== Test Helpers ====================
@@ -72,7 +71,7 @@ mod tests {
         let (_tmp_dir, path) = create_temp_json(content);
         let session = SessionContext::new();
         let ctx = session.state();
-        let store = Arc::new(LocalFileSystem::new()) as _;
+        let store = test_utils::storage::local();
         let format = JsonFormat::default().with_newline_delimited(false);
         format
             .infer_schema(&ctx, &store, &[local_unpartitioned_file(&path)])
@@ -209,7 +208,7 @@ mod tests {
     async fn infer_schema_with_limit() {
         let session = SessionContext::new();
         let ctx = session.state();
-        let store = Arc::new(LocalFileSystem::new()) as _;
+        let store = test_utils::storage::local();
         let filename = "tests/data/schema_infer_limit.json";
         let format = JsonFormat::default().with_schema_infer_max_rec(3);
 

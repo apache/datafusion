@@ -21,13 +21,13 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
     FileGroup, FileScanConfigBuilder, ParquetSource,
 };
 use datafusion::error::Result;
 use datafusion::physical_plan::{ExecutionPlan, displayable};
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
+use datafusion::storage::StorageUrl;
 use datafusion_substrait::physical_plan::{consumer, producer};
 
 use datafusion::datasource::memory::DataSourceExec;
@@ -38,19 +38,18 @@ async fn parquet_exec() -> Result<()> {
     let schema = Arc::new(Schema::empty());
     let source = Arc::new(ParquetSource::new(schema.clone()));
 
-    let scan_config =
-        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
-            .with_file_groups(vec![
-                FileGroup::new(vec![PartitionedFile::new(
-                    "file://foo/part-0.parquet".to_string(),
-                    123,
-                )]),
-                FileGroup::new(vec![PartitionedFile::new(
-                    "file://foo/part-1.parquet".to_string(),
-                    123,
-                )]),
-            ])
-            .build();
+    let scan_config = FileScanConfigBuilder::new(StorageUrl::local_filesystem(), source)
+        .with_file_groups(vec![
+            FileGroup::new(vec![PartitionedFile::new(
+                "file://foo/part-0.parquet".to_string(),
+                123,
+            )]),
+            FileGroup::new(vec![PartitionedFile::new(
+                "file://foo/part-1.parquet".to_string(),
+                123,
+            )]),
+        ])
+        .build();
     let parquet_exec: Arc<dyn ExecutionPlan> =
         DataSourceExec::from_data_source(scan_config);
 

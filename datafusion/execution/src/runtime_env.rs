@@ -24,20 +24,19 @@ use crate::{
     memory_pool::{
         GreedyMemoryPool, MemoryPool, TrackConsumersPool, UnboundedMemoryPool,
     },
-    object_store::{DefaultObjectStoreRegistry, ObjectStoreRegistry},
 };
 
 use crate::cache::cache_manager::{CacheManager, CacheManagerConfig};
 #[cfg(feature = "parquet_encryption")]
 use crate::parquet_encryption::{EncryptionFactory, EncryptionFactoryRegistry};
 use datafusion_common::{Result, config::ConfigEntry};
-use object_store::ObjectStore;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use std::{
     fmt::{Debug, Formatter},
     num::NonZeroUsize,
 };
-use std::{path::PathBuf, time::Duration};
 use url::Url;
 
 #[derive(Clone)]
@@ -50,7 +49,7 @@ use url::Url;
 /// * [`MemoryPool`]: Manage memory
 /// * [`DiskManager`]: Manage temporary files on local disk
 /// * [`CacheManager`]: Manage temporary cache data during the session lifetime
-/// * [`ObjectStoreRegistry`]: Manage mapping URLs to object store instances
+/// * [`StorageRegistry`](datafusion_storage::StorageRegistry): Manage storage bindings
 ///
 /// # Example: Create default `RuntimeEnv`
 /// ```
@@ -71,14 +70,14 @@ use url::Url;
 ///     .unwrap();
 /// ```
 pub struct RuntimeEnv {
+    /// Complete storage bindings shared by sessions using this runtime.
+    pub storage_registry: Arc<datafusion_storage::StorageRegistry>,
     /// Runtime memory management
     pub memory_pool: Arc<dyn MemoryPool>,
     /// Manage temporary files during query execution
     pub disk_manager: Arc<DiskManager>,
     /// Manage temporary cache during query execution
     pub cache_manager: Arc<CacheManager>,
-    /// Object Store Registry
-    pub object_store_registry: Arc<dyn ObjectStoreRegistry>,
     /// Parquet encryption factory registry
     #[cfg(feature = "parquet_encryption")]
     pub parquet_encryption_factory_registry: Arc<EncryptionFactoryRegistry>,
@@ -164,64 +163,31 @@ impl RuntimeConfigValues {
 }
 
 impl RuntimeEnv {
-    /// Registers a custom `ObjectStore` to be used with a specific url.
-    /// This allows DataFusion to create external tables from urls that do not have
-    /// built in support such as `hdfs://namenode:port/...`.
-    ///
-    /// Returns the [`ObjectStore`] previously registered for this
-    /// scheme, if any.
-    ///
-    /// See [`ObjectStoreRegistry`] for more details
-    ///
-    /// # Example: Register local file system object store
-    /// ```
-    /// # use std::sync::Arc;
-    /// # use url::Url;
-    /// # use datafusion_execution::runtime_env::RuntimeEnv;
-    /// # let runtime_env = RuntimeEnv::default();
-    /// let url = Url::try_from("file://").unwrap();
-    /// let object_store = object_store::local::LocalFileSystem::new();
-    /// // register the object store with the runtime environment
-    /// runtime_env.register_object_store(&url, Arc::new(object_store));
-    /// ```
-    ///
-    /// # Example: Register remote URL object store like [Github](https://github.com)
-    /// ```
-    /// # use std::sync::Arc;
-    /// # use url::Url;
-    /// # use datafusion_execution::runtime_env::RuntimeEnv;
-    /// # let runtime_env = RuntimeEnv::default();
-    /// # // use local store for example as http feature is not enabled
-    /// # let http_store = object_store::local::LocalFileSystem::new();
-    /// // create a new object store via object_store::http::HttpBuilder;
-    /// let base_url = Url::parse("https://github.com").unwrap();
-    /// // (note this example can't depend on the http feature)
-    /// // let http_store = HttpBuilder::new()
-    /// //    .with_url(base_url.clone())
-    /// //    .build()
-    /// //    .unwrap();
-    /// // register the object store with the runtime environment
-    /// runtime_env.register_object_store(&base_url, Arc::new(http_store));
-    /// ```
-    pub fn register_object_store(
+    /// Atomically register or replace all capabilities of a storage backend.
+    pub fn register_storage(
         &self,
         url: &Url,
-        object_store: Arc<dyn ObjectStore>,
-    ) -> Option<Arc<dyn ObjectStore>> {
-        self.object_store_registry.register_store(url, object_store)
+        storage: Arc<dyn datafusion_storage::Storage>,
+    ) -> Result<Option<Arc<datafusion_storage::StorageBinding>>> {
+        self.storage_registry
+            .register(url, storage)
+            .map_err(Into::into)
     }
 
-    /// Deregisters a custom `ObjectStore` previously registered for a specific url.
-    /// See [`ObjectStoreRegistry::deregister_store`] for more details.
-    pub fn deregister_object_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
-        self.object_store_registry.deregister_store(url)
+    /// Remove a binding. Plans already holding the binding remain valid.
+    pub fn deregister_storage(
+        &self,
+        url: &Url,
+    ) -> Result<Arc<datafusion_storage::StorageBinding>> {
+        self.storage_registry.deregister(url).map_err(Into::into)
     }
 
-    /// Retrieves a `ObjectStore` instance for a url by consulting the
-    /// registry. See [`ObjectStoreRegistry::get_store`] for more
-    /// details.
-    pub fn object_store(&self, url: impl AsRef<Url>) -> Result<Arc<dyn ObjectStore>> {
-        self.object_store_registry.get_store(url.as_ref())
+    /// Resolve the immutable storage binding for a namespace.
+    pub fn storage(
+        &self,
+        url: impl AsRef<Url>,
+    ) -> Result<Arc<datafusion_storage::StorageBinding>> {
+        Ok(self.storage_registry.get(url.as_ref())?)
     }
 
     /// Returns the current spilling progress
@@ -304,42 +270,56 @@ impl RuntimeEnv {
             )
         };
 
-        let metadata_cache_limit = self.cache_manager.get_metadata_cache_limit();
-        let metadata_cache_value = format_byte_size(
-            metadata_cache_limit
-                .try_into()
-                .expect("Metadata cache size conversion failed"),
-        );
+        let (
+            metadata_cache_value,
+            list_files_cache_value,
+            list_files_cache_ttl,
+            file_statistics_cache_value,
+        ) = {
+            let metadata_cache_limit = self.cache_manager.get_metadata_cache_limit();
+            let metadata_cache_value = format_byte_size(
+                metadata_cache_limit
+                    .try_into()
+                    .expect("Metadata cache size conversion failed"),
+            );
 
-        let list_files_cache_limit = self.cache_manager.get_list_files_cache_limit();
-        let list_files_cache_value = format_byte_size(
-            list_files_cache_limit
-                .try_into()
-                .expect("List files cache size conversion failed"),
-        );
+            let list_files_cache_limit = self.cache_manager.get_list_files_cache_limit();
+            let list_files_cache_value = format_byte_size(
+                list_files_cache_limit
+                    .try_into()
+                    .expect("List files cache size conversion failed"),
+            );
 
-        let list_files_cache_ttl = self
-            .cache_manager
-            .get_list_files_cache_ttl()
-            .map(format_duration);
+            let list_files_cache_ttl = self
+                .cache_manager
+                .get_list_files_cache_ttl()
+                .map(format_duration);
 
-        let file_statistics_cache_limit =
-            self.cache_manager.get_file_statistic_cache_limit();
-        let file_statistics_cache_value = format_byte_size(
-            file_statistics_cache_limit
-                .try_into()
-                .expect("File statistics cache size conversion failed"),
-        );
+            let file_statistics_cache_limit =
+                self.cache_manager.get_file_statistic_cache_limit();
+            let file_statistics_cache_value = format_byte_size(
+                file_statistics_cache_limit
+                    .try_into()
+                    .expect("File statistics cache size conversion failed"),
+            );
+
+            (
+                Some(metadata_cache_value),
+                Some(list_files_cache_value),
+                list_files_cache_ttl,
+                Some(file_statistics_cache_value),
+            )
+        };
 
         RuntimeConfigValues {
             memory_limit: memory_limit_value,
             max_temp_directory_size: Some(max_temp_dir_value),
             max_spill_merge_fan_in: Some(max_spill_merge_fan_in),
             temp_directory: temp_dir_value,
-            metadata_cache_limit: Some(metadata_cache_value),
-            list_files_cache_limit: Some(list_files_cache_value),
+            metadata_cache_limit: metadata_cache_value,
+            list_files_cache_limit: list_files_cache_value,
             list_files_cache_ttl,
-            file_statistics_cache_limit: Some(file_statistics_cache_value),
+            file_statistics_cache_limit: file_statistics_cache_value,
         }
         .into_config_entries()
     }
@@ -356,6 +336,8 @@ impl Default for RuntimeEnv {
 /// See example on [`RuntimeEnv`]
 #[derive(Clone)]
 pub struct RuntimeEnvBuilder {
+    /// Complete storage bindings shared by sessions using this runtime.
+    pub storage_registry: Arc<datafusion_storage::StorageRegistry>,
     /// DiskManager to manage temporary disk file usage
     pub disk_manager: Option<Arc<DiskManager>>,
     /// DiskManager builder to manager temporary disk file usage
@@ -366,8 +348,6 @@ pub struct RuntimeEnvBuilder {
     pub memory_pool: Option<Arc<dyn MemoryPool>>,
     /// CacheManager to manage cache data
     pub cache_manager: CacheManagerConfig,
-    /// ObjectStoreRegistry to get object store based on url
-    pub object_store_registry: Arc<dyn ObjectStoreRegistry>,
     /// Parquet encryption factory registry
     #[cfg(feature = "parquet_encryption")]
     pub parquet_encryption_factory_registry: Arc<EncryptionFactoryRegistry>,
@@ -383,11 +363,11 @@ impl RuntimeEnvBuilder {
     /// New with default values
     pub fn new() -> Self {
         Self {
+            storage_registry: Arc::new(datafusion_storage::StorageRegistry::default()),
             disk_manager: Default::default(),
             disk_manager_builder: Default::default(),
             memory_pool: Default::default(),
             cache_manager: Default::default(),
-            object_store_registry: Arc::new(DefaultObjectStoreRegistry::default()),
             #[cfg(feature = "parquet_encryption")]
             parquet_encryption_factory_registry: Default::default(),
         }
@@ -411,12 +391,12 @@ impl RuntimeEnvBuilder {
         self
     }
 
-    /// Customize object store registry
-    pub fn with_object_store_registry(
+    /// Share an existing storage registry across runtime environments.
+    pub fn with_storage_registry(
         mut self,
-        object_store_registry: Arc<dyn ObjectStoreRegistry>,
+        registry: Arc<datafusion_storage::StorageRegistry>,
     ) -> Self {
-        self.object_store_registry = object_store_registry;
+        self.storage_registry = registry;
         self
     }
 
@@ -483,11 +463,11 @@ impl RuntimeEnvBuilder {
     /// Build a RuntimeEnv
     pub fn build(self) -> Result<RuntimeEnv> {
         let Self {
+            storage_registry,
             disk_manager,
             disk_manager_builder,
             memory_pool,
             cache_manager,
-            object_store_registry,
             #[cfg(feature = "parquet_encryption")]
             parquet_encryption_factory_registry,
         } = self;
@@ -501,10 +481,10 @@ impl RuntimeEnvBuilder {
         };
 
         Ok(RuntimeEnv {
+            storage_registry,
             memory_pool,
             disk_manager,
             cache_manager: CacheManager::try_new(&cache_manager)?,
-            object_store_registry,
             #[cfg(feature = "parquet_encryption")]
             parquet_encryption_factory_registry,
         })
@@ -534,11 +514,11 @@ impl RuntimeEnvBuilder {
         };
 
         Self {
+            storage_registry: Arc::clone(&runtime_env.storage_registry),
             disk_manager: Some(Arc::clone(&runtime_env.disk_manager)),
             disk_manager_builder: None,
             memory_pool: Some(Arc::clone(&runtime_env.memory_pool)),
             cache_manager: cache_config,
-            object_store_registry: Arc::clone(&runtime_env.object_store_registry),
             #[cfg(feature = "parquet_encryption")]
             parquet_encryption_factory_registry: Arc::clone(
                 &runtime_env.parquet_encryption_factory_registry,

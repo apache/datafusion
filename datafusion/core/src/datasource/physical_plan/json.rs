@@ -41,8 +41,8 @@ mod tests {
     use datafusion_datasource::file_format::FileFormat;
     use datafusion_datasource_json::JsonFormat;
     use datafusion_execution::config::SessionConfig;
-    use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_physical_plan::ExecutionPlan;
+    use datafusion_storage::StorageUrl;
 
     use arrow::array::Array;
     use arrow::datatypes::SchemaRef;
@@ -64,9 +64,9 @@ mod tests {
         state: &SessionState,
         file_compression_type: FileCompressionType,
         work_dir: &Path,
-    ) -> (ObjectStoreUrl, Vec<FileGroup>, SchemaRef) {
-        let store_url = ObjectStoreUrl::local_filesystem();
-        let store = state.runtime_env().object_store(&store_url).unwrap();
+    ) -> (StorageUrl, Vec<FileGroup>, SchemaRef) {
+        let store_url = StorageUrl::local_filesystem();
+        let store = state.runtime_env().storage(&store_url).unwrap();
 
         let filename = "1.json";
         let json_format: Arc<dyn FileFormat> = Arc::new(JsonFormat::default());
@@ -103,7 +103,13 @@ mod tests {
     ) -> Result<()> {
         let ctx = SessionContext::new();
         let url = Url::parse("file://").unwrap();
-        ctx.register_object_store(&url, store.clone());
+        ctx.register_storage(
+            &url,
+            Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+                store.clone(),
+            )),
+        )
+        .unwrap();
         let filename = "1.json";
         let tmp_dir = TempDir::new()?;
         let json_format: Arc<dyn FileFormat> = Arc::new(JsonFormat::default());
@@ -127,7 +133,7 @@ mod tests {
             .location
             .as_ref();
 
-        let store_url = ObjectStoreUrl::local_filesystem();
+        let store_url = StorageUrl::local_filesystem();
         let url: &Url = store_url.as_ref();
         let path_buf = Path::new(url.path()).join(path);
         let path = path_buf.to_str().unwrap();
@@ -394,9 +400,15 @@ mod tests {
 
         // register a local file system object store for /tmp directory
         let tmp_dir = TempDir::new()?;
-        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir).unwrap());
         let local_url = Url::parse("file://local").unwrap();
-        ctx.register_object_store(&local_url, local);
+        ctx.register_storage(
+            &local_url,
+            Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+                local,
+            )),
+        )
+        .unwrap();
 
         // execute a simple query and write the results to CSV
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out/";
@@ -488,9 +500,15 @@ mod tests {
         let ctx = SessionContext::new();
         // register a local file system object store for /tmp directory
         let tmp_dir = TempDir::new()?;
-        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir).unwrap());
         let local_url = Url::parse("file://local").unwrap();
-        ctx.register_object_store(&local_url, local);
+        ctx.register_storage(
+            &local_url,
+            Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+                local,
+            )),
+        )
+        .unwrap();
         let options = CsvReadOptions::default()
             .schema_infer_max_records(2)
             .has_header(true);

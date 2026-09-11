@@ -20,17 +20,17 @@ use std::sync::Arc;
 use datafusion_common::{DataFusionError, Result, TableReference};
 use datafusion_execution::cache::cache_manager::CachedFileList;
 use datafusion_execution::cache::cache_manager::TableScopedPath;
-use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_session::Session;
+use datafusion_storage::StorageUrl;
 
+use datafusion_storage::path::DELIMITER;
+use datafusion_storage::path::Path;
+use datafusion_storage::{FileAccessContext, FileInfo, StorageBinding};
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use glob::Pattern;
 use itertools::Itertools;
 use log::debug;
-use object_store::path::DELIMITER;
-use object_store::path::Path;
-use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use url::Url;
 
 /// A parsed URL identifying files for a listing table, see [`ListingTableUrl::parse`]
@@ -247,10 +247,10 @@ impl ListingTableUrl {
     pub async fn list_prefixed_files<'a>(
         &'a self,
         ctx: &'a dyn Session,
-        store: &'a dyn ObjectStore,
+        store: &'a StorageBinding,
         prefix: Option<Path>,
         file_extension: &'a str,
-    ) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
+    ) -> Result<BoxStream<'a, Result<FileInfo>>> {
         let exec_options = &ctx.config_options().execution;
         let ignore_subdirectory = exec_options.listing_table_ignore_subdirectory;
 
@@ -263,7 +263,7 @@ impl ListingTableUrl {
             self.prefix.clone()
         };
 
-        let list: BoxStream<'a, Result<ObjectMeta>> = if self.is_collection() {
+        let list: BoxStream<'a, Result<FileInfo>> = if self.is_collection() {
             list_with_cache(
                 ctx,
                 store,
@@ -273,13 +273,16 @@ impl ListingTableUrl {
             )
             .await?
         } else {
-            match store.head(&full_prefix).await {
+            match store
+                .stat(&full_prefix, &FileAccessContext::new("listing"))
+                .await
+            {
                 Ok(meta) => futures::stream::once(async { Ok(meta) })
-                    .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))
+                    .map_err(|e| DataFusionError::Storage(Box::new(e)))
                     .boxed(),
                 // If the head command fails, it is likely that object doesn't exist.
                 // Retry as though it were a prefix (aka a collection)
-                Err(object_store::Error::NotFound { .. }) => {
+                Err(datafusion_storage::Error::NotFound(_)) => {
                     list_with_cache(
                         ctx,
                         store,
@@ -307,9 +310,9 @@ impl ListingTableUrl {
     pub async fn list_all_files<'a>(
         &'a self,
         ctx: &'a dyn Session,
-        store: &'a dyn ObjectStore,
+        store: &'a StorageBinding,
         file_extension: &'a str,
-    ) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
+    ) -> Result<BoxStream<'a, Result<FileInfo>>> {
         self.list_prefixed_files(ctx, store, None, file_extension)
             .await
     }
@@ -319,10 +322,10 @@ impl ListingTableUrl {
         self.as_ref()
     }
 
-    /// Return the [`ObjectStoreUrl`] for this [`ListingTableUrl`]
-    pub fn object_store(&self) -> ObjectStoreUrl {
+    /// Return the [`StorageUrl`] for this [`ListingTableUrl`]
+    pub fn storage_url(&self) -> StorageUrl {
         let url = &self.url[url::Position::BeforeScheme..url::Position::BeforePath];
-        ObjectStoreUrl::parse(url).unwrap()
+        StorageUrl::parse(url).unwrap()
     }
 
     /// Returns true if the [`ListingTableUrl`] points to the folder
@@ -378,11 +381,11 @@ impl ListingTableUrl {
 /// subsequent prefix queries can be served from cache.
 async fn list_with_cache<'b>(
     ctx: &'b dyn Session,
-    store: &'b dyn ObjectStore,
+    store: &'b StorageBinding,
     table_ref: Option<&TableReference>,
     table_base_path: &Path,
     prefix: Option<&Path>,
-) -> Result<BoxStream<'b, Result<ObjectMeta>>> {
+) -> Result<BoxStream<'b, Result<FileInfo>>> {
     // Build the full listing path (table_base + prefix)
     let full_prefix = match prefix {
         Some(p) => {
@@ -395,14 +398,15 @@ async fn list_with_cache<'b>(
 
     match ctx.runtime_env().cache_manager.get_list_files_cache() {
         None => Ok(store
-            .list(Some(&full_prefix))
-            .map(|res| res.map_err(|e| DataFusionError::ObjectStore(Box::new(e))))
+            .list(&full_prefix, FileAccessContext::new("listing"))
+            .map(|res| res.map_err(|e| DataFusionError::Storage(Box::new(e))))
             .boxed()),
         Some(cache) => {
             // Build the filter prefix (only Some if prefix was requested)
             let filter_prefix = prefix.is_some().then(|| full_prefix.clone());
 
             let table_scoped_base_path = TableScopedPath {
+                storage_id: store.id(),
                 table: table_ref.cloned(),
                 path: table_base_path.clone(),
             };
@@ -415,11 +419,11 @@ async fn list_with_cache<'b>(
                 // Cache miss - always list and cache the full table
                 // This ensures we have complete data for future prefix queries
                 let mut vec = store
-                    .list(Some(table_base_path))
-                    .try_collect::<Vec<ObjectMeta>>()
+                    .list(table_base_path, FileAccessContext::new("listing"))
+                    .try_collect::<Vec<FileInfo>>()
                     .await?;
                 vec.shrink_to_fit(); // Right-size before caching
-                let cached: CachedFileList = vec.into();
+                let cached = CachedFileList::new(vec);
                 let result = cached.files_matching_prefix(&filter_prefix);
                 cache.put(&table_scoped_base_path, cached);
                 result
@@ -510,7 +514,6 @@ fn split_glob_expression(path: &str) -> Option<(&str, &str)> {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use bytes::Bytes;
     use datafusion_common::DFSchema;
     use datafusion_common::config::TableOptions;
     use datafusion_execution::TaskContext;
@@ -524,13 +527,8 @@ mod tests {
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_plan::ExecutionPlan;
     use datafusion_session::{CatalogProviderList, EmptyCatalogProviderList};
-    use object_store::{
-        CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload,
-        PutMultipartOptions, PutPayload,
-    };
     use std::any::Any;
     use std::collections::HashMap;
-    use std::ops::Range;
     use tempfile::tempdir;
 
     #[test]
@@ -747,10 +745,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_files() -> Result<()> {
-        let store = MockObjectStore {
-            in_mem: object_store::memory::InMemory::new(),
-            forbidden_paths: vec!["forbidden/e.parquet".into()],
-        };
+        let store = mock_storage(vec!["forbidden/e.parquet".into()]);
 
         // Create some files:
         create_file(&store, "a.parquet").await;
@@ -797,13 +792,13 @@ mod tests {
         );
 
         // Including forbidden.parquet generates an error.
-        let Err(DataFusionError::ObjectStore(err)) =
+        let Err(DataFusionError::Storage(err)) =
             list_all_files("/forbidden/e.parquet", &store, "parquet").await
         else {
             panic!("Expected ObjectStore error");
         };
 
-        let object_store::Error::PermissionDenied { .. } = &*err else {
+        let datafusion_storage::Error::Backend { .. } = &*err else {
             panic!("Expected PermissionDenied error");
         };
 
@@ -848,10 +843,7 @@ mod tests {
     async fn test_cache_path_equivalence() -> Result<()> {
         use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 
-        let store = MockObjectStore {
-            in_mem: object_store::memory::InMemory::new(),
-            forbidden_paths: vec![],
-        };
+        let store = mock_storage(vec![]);
 
         // Create test files with partition-style paths
         create_file(&store, "/table/year=2023/data1.parquet").await;
@@ -954,10 +946,7 @@ mod tests {
     async fn test_cache_serves_partition_from_full_listing() -> Result<()> {
         use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 
-        let store = MockObjectStore {
-            in_mem: object_store::memory::InMemory::new(),
-            forbidden_paths: vec![],
-        };
+        let store = mock_storage(vec![]);
 
         // Create test files
         create_file(&store, "/sales/region=US/q1.parquet").await;
@@ -1025,11 +1014,18 @@ mod tests {
     }
 
     /// Creates a file with "hello world" content at the specified path
-    async fn create_file(object_store: &dyn ObjectStore, path: &str) {
-        object_store
-            .put(&Path::from(path), PutPayload::from_static(b"hello world"))
+    async fn create_file(object_store: &StorageBinding, path: &str) {
+        use tokio::io::AsyncWriteExt;
+        let mut writer = object_store
+            .writer(
+                &Path::from(path),
+                datafusion_storage::WriterOptions::default(),
+                FileAccessContext::default(),
+            )
             .await
-            .expect("failed to create test file");
+            .unwrap();
+        writer.write_all(b"hello world").await.unwrap();
+        writer.shutdown().await.unwrap();
     }
 
     /// Runs "list_prefixed_files"  with no prefix to list all files and returns their paths
@@ -1037,7 +1033,7 @@ mod tests {
     /// Panic's on error
     async fn list_all_files(
         url: &str,
-        store: &dyn ObjectStore,
+        store: &StorageBinding,
         file_extension: &str,
     ) -> Result<Vec<String>> {
         try_list_prefixed_files(url, store, None, file_extension).await
@@ -1048,7 +1044,7 @@ mod tests {
     /// Panic's on error
     async fn list_prefixed_files(
         url: &str,
-        store: &dyn ObjectStore,
+        store: &StorageBinding,
         prefix: Option<Path>,
         file_extension: &str,
     ) -> Result<Vec<String>> {
@@ -1058,7 +1054,7 @@ mod tests {
     /// Runs "list_prefixed_files" and returns their paths
     async fn try_list_prefixed_files(
         url: &str,
-        store: &dyn ObjectStore,
+        store: &StorageBinding,
         prefix: Option<Path>,
         file_extension: &str,
     ) -> Result<Vec<String>> {
@@ -1075,89 +1071,64 @@ mod tests {
         Ok(files)
     }
 
-    #[derive(Debug)]
-    struct MockObjectStore {
-        in_mem: object_store::memory::InMemory,
-        forbidden_paths: Vec<Path>,
-    }
-
-    impl std::fmt::Display for MockObjectStore {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            self.in_mem.fmt(f)
+    fn mock_storage(forbidden_paths: Vec<Path>) -> Arc<StorageBinding> {
+        #[derive(Debug)]
+        struct Backend {
+            inner: Arc<StorageBinding>,
+            forbidden_paths: Vec<Path>,
         }
-    }
+        #[async_trait]
+        impl datafusion_storage::Storage for Backend {
+            async fn open(
+                &self,
+                file: &Path,
+                context: FileAccessContext,
+            ) -> datafusion_storage::Result<Arc<dyn datafusion_storage::FileReader>>
+            {
+                self.inner.storage().open(file, context).await
+            }
 
-    #[async_trait]
-    impl ObjectStore for MockObjectStore {
-        async fn put_opts(
-            &self,
-            location: &Path,
-            payload: PutPayload,
-            opts: object_store::PutOptions,
-        ) -> object_store::Result<object_store::PutResult> {
-            self.in_mem.put_opts(location, payload, opts).await
-        }
+            async fn stat(
+                &self,
+                file: &Path,
+                context: &FileAccessContext,
+            ) -> datafusion_storage::Result<FileInfo> {
+                if self.forbidden_paths.contains(file) {
+                    return Err(datafusion_storage::Error::Backend {
+                        backend: "test",
+                        source: Box::new(std::io::Error::new(
+                            std::io::ErrorKind::PermissionDenied,
+                            "forbidden",
+                        )),
+                    });
+                }
+                self.inner.storage().stat(file, context).await
+            }
+            fn list(
+                &self,
+                prefix: &Path,
+                context: FileAccessContext,
+            ) -> BoxStream<'_, datafusion_storage::Result<FileInfo>> {
+                self.inner.storage().list(prefix, context)
+            }
 
-        async fn put_multipart_opts(
-            &self,
-            location: &Path,
-            opts: PutMultipartOptions,
-        ) -> object_store::Result<Box<dyn MultipartUpload>> {
-            self.in_mem.put_multipart_opts(location, opts).await
-        }
-
-        async fn get_opts(
-            &self,
-            location: &Path,
-            options: GetOptions,
-        ) -> object_store::Result<GetResult> {
-            if options.head && self.forbidden_paths.contains(location) {
-                Err(object_store::Error::PermissionDenied {
-                    path: location.to_string(),
-                    source: "forbidden".into(),
-                })
-            } else {
-                self.in_mem.get_opts(location, options).await
+            async fn writer(
+                &self,
+                file: &Path,
+                options: datafusion_storage::WriterOptions,
+                context: FileAccessContext,
+            ) -> datafusion_storage::Result<datafusion_storage::FileOutput> {
+                self.inner.storage().writer(file, options, context).await
             }
         }
-
-        async fn get_ranges(
-            &self,
-            location: &Path,
-            ranges: &[Range<u64>],
-        ) -> object_store::Result<Vec<Bytes>> {
-            self.in_mem.get_ranges(location, ranges).await
-        }
-
-        fn delete_stream(
-            &self,
-            locations: BoxStream<'static, object_store::Result<Path>>,
-        ) -> BoxStream<'static, object_store::Result<Path>> {
-            self.in_mem.delete_stream(locations)
-        }
-
-        fn list(
-            &self,
-            prefix: Option<&Path>,
-        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
-            self.in_mem.list(prefix)
-        }
-
-        async fn list_with_delimiter(
-            &self,
-            prefix: Option<&Path>,
-        ) -> object_store::Result<ListResult> {
-            self.in_mem.list_with_delimiter(prefix).await
-        }
-
-        async fn copy_opts(
-            &self,
-            from: &Path,
-            to: &Path,
-            options: CopyOptions,
-        ) -> object_store::Result<()> {
-            self.in_mem.copy_opts(from, to, options).await
-        }
+        let inner = test_utils::storage::object_store(Arc::new(
+            object_store::memory::InMemory::new(),
+        ));
+        let backend = Arc::new(Backend {
+            inner,
+            forbidden_paths,
+        });
+        Arc::new(StorageBinding::new(StorageUrl::local_filesystem(), backend))
     }
 
     struct MockSession {

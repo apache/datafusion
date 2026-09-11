@@ -26,7 +26,6 @@ use datafusion::datasource::file_format::csv::CsvSink;
 use datafusion::datasource::file_format::json::JsonSink;
 use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
-use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
     FileGroup, FileOutputMode, FileSink, FileSinkConfig,
 };
@@ -40,6 +39,7 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
 };
 use datafusion::prelude::SessionContext;
+use datafusion::storage::StorageUrl;
 use datafusion_common::Result;
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
@@ -150,8 +150,9 @@ fn file_sink_config_roundtrip_preserves_fields() -> Result<()> {
         false,
     )]));
     let config = FileSinkConfig {
+        storage: None,
         original_url: "file:///tmp/output".to_string(),
-        object_store_url: ObjectStoreUrl::local_filesystem(),
+        object_store_url: StorageUrl::local_filesystem(),
         file_group: FileGroup::new(vec![PartitionedFile::new("/tmp/output", 1)]),
         table_paths: vec![ListingTableUrl::parse("file:///tmp/output")?],
         output_schema: schema,
@@ -207,8 +208,9 @@ fn roundtrip_json_sink() -> Result<()> {
     let input = Arc::new(PlaceholderRowExec::new(schema.clone()));
 
     let file_sink_config = FileSinkConfig {
+        storage: None,
         original_url: String::default(),
-        object_store_url: ObjectStoreUrl::local_filesystem(),
+        object_store_url: StorageUrl::local_filesystem(),
         file_group: FileGroup::new(vec![PartitionedFile::new("/tmp".to_string(), 1)]),
         table_paths: vec![ListingTableUrl::parse("file:///")?],
         output_schema: schema.clone(),
@@ -280,8 +282,9 @@ fn roundtrip_csv_sink() -> Result<()> {
     let input = Arc::new(PlaceholderRowExec::new(schema.clone()));
 
     let file_sink_config = FileSinkConfig {
+        storage: None,
         original_url: String::default(),
-        object_store_url: ObjectStoreUrl::local_filesystem(),
+        object_store_url: StorageUrl::local_filesystem(),
         file_group: FileGroup::new(vec![PartitionedFile::new("/tmp".to_string(), 1)]),
         table_paths: vec![ListingTableUrl::parse("file:///")?],
         output_schema: schema.clone(),
@@ -333,8 +336,9 @@ fn roundtrip_parquet_sink() -> Result<()> {
     let input = Arc::new(PlaceholderRowExec::new(schema.clone()));
 
     let file_sink_config = FileSinkConfig {
+        storage: None,
         original_url: String::default(),
-        object_store_url: ObjectStoreUrl::local_filesystem(),
+        object_store_url: StorageUrl::local_filesystem(),
         file_group: FileGroup::new(vec![PartitionedFile::new("/tmp".to_string(), 1)]),
         table_paths: vec![ListingTableUrl::parse("file:///")?],
         output_schema: schema.clone(),

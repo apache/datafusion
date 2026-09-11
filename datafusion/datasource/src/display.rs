@@ -135,7 +135,7 @@ mod tests {
     use super::*;
 
     use datafusion_physical_plan::{DefaultDisplay, VerboseDisplay};
-    use object_store::{ObjectMeta, path::Path};
+    use datafusion_storage::{FileInfo as ObjectMeta, path::Path};
 
     use crate::PartitionedFile;
     use chrono::Utc;

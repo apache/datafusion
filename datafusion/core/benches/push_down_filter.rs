@@ -21,10 +21,10 @@ use bytes::{BufMut, BytesMut};
 use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion::config::ConfigOptions;
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
-use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_storage::StorageUrl;
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt};
@@ -53,10 +53,13 @@ async fn create_plan() -> Arc<dyn ExecutionPlan> {
         .put(&Path::from("test.parquet"), data.into())
         .await
         .unwrap();
-    ctx.register_object_store(
-        ObjectStoreUrl::parse("memory://").unwrap().as_ref(),
-        store,
-    );
+    ctx.register_storage(
+        StorageUrl::parse("memory://").unwrap().as_ref(),
+        Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+            store,
+        )),
+    )
+    .unwrap();
 
     ctx.register_parquet("t", "memory:///", ParquetReadOptions::default())
         .await

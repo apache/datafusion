@@ -39,7 +39,8 @@ use datafusion_physical_plan::ExecutionPlan;
 use datafusion_session::Session;
 
 use async_trait::async_trait;
-use object_store::{GetResultPayload, ObjectMeta, ObjectStore, ObjectStoreExt};
+
+use datafusion_storage::{FileInfo, StorageBinding};
 
 #[derive(Default)]
 /// Factory struct used to create [`AvroFormat`]
@@ -107,21 +108,18 @@ impl FileFormat for AvroFormat {
     async fn infer_schema(
         &self,
         _state: &dyn Session,
-        store: &Arc<dyn ObjectStore>,
-        objects: &[ObjectMeta],
+        store: &Arc<StorageBinding>,
+        objects: &[FileInfo],
     ) -> Result<SchemaRef> {
         let mut schemas = vec![];
         for object in objects {
-            let r = store.as_ref().get(&object.location).await?;
-            let schema = match r.payload {
-                GetResultPayload::File(mut file, _) => {
-                    read_avro_schema_from_reader(&mut file)?
-                }
-                GetResultPayload::Stream(_) => {
-                    // TODO: Fetching entire file to get schema is potentially wasteful
-                    let data = r.bytes().await?;
-                    read_avro_schema_from_reader(&mut data.as_ref())?
-                }
+            let reader = store
+                .open(object, datafusion_storage::FileAccessContext::new("schema"))
+                .await?;
+            let schema = {
+                // TODO: Fetching entire file to get schema is potentially wasteful
+                let data = datafusion_storage::collect_bytes(reader.stream(None)).await?;
+                read_avro_schema_from_reader(&mut data.as_ref())?
             };
             schemas.push(schema);
         }
@@ -132,9 +130,9 @@ impl FileFormat for AvroFormat {
     async fn infer_stats(
         &self,
         _state: &dyn Session,
-        _store: &Arc<dyn ObjectStore>,
+        _store: &Arc<StorageBinding>,
         table_schema: SchemaRef,
-        _object: &ObjectMeta,
+        _object: &FileInfo,
     ) -> Result<Statistics> {
         Ok(Statistics::new_unknown(&table_schema))
     }

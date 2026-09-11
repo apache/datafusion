@@ -27,9 +27,9 @@ use datafusion::{
 use datafusion_common::DFSchema;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
-use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::{ExecutionPlan, collect, filter::FilterExec};
+use datafusion_storage::StorageUrl;
 use itertools::Itertools;
 use object_store::{
     ObjectStore, ObjectStoreExt, PutPayload, memory::InMemory, path::Path,
@@ -171,7 +171,13 @@ impl Utf8Test {
         }
 
         let store = Self::memory_store();
-        ctx.register_object_store(&Url::parse("memory://").unwrap(), Arc::clone(store));
+        ctx.register_storage(
+            &Url::parse("memory://").unwrap(),
+            Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+                Arc::clone(store),
+            )),
+        )
+        .unwrap();
 
         let files = Self::test_files().await;
         let schema = Self::schema();
@@ -278,7 +284,7 @@ async fn execute_with_predicate(
         ParquetSource::new(schema.clone())
     };
     let config = FileScanConfigBuilder::new(
-        ObjectStoreUrl::parse("memory://").unwrap(),
+        StorageUrl::parse("memory://").unwrap(),
         Arc::new(parquet_source),
     )
     .with_file_group(

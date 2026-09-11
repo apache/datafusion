@@ -65,8 +65,8 @@ use datafusion_common::stats::{Precision, is_known_empty};
 use datafusion_common::{ColumnStatistics, Result, TableReference};
 use datafusion_common::{ScalarValue, Statistics};
 use datafusion_physical_expr::LexOrdering;
+use datafusion_storage::{FileInfo, path::Path};
 use futures::Stream;
-use object_store::{ObjectMeta, path::Path};
 pub use statistics::compute_all_files_statistics;
 use std::any::Any;
 use std::pin::Pin;
@@ -124,7 +124,7 @@ impl FileRange {
 /// This enables query optimizers to use partition column bounds for pruning and planning.
 pub struct PartitionedFile {
     /// Path for the file (e.g. URL, filesystem path, etc)
-    pub object_meta: ObjectMeta,
+    pub object_meta: FileInfo,
     /// Values of partition columns to be appended to each row.
     ///
     /// These MUST have the same count, order, and type than the [`table_partition_cols`].
@@ -181,7 +181,7 @@ impl PartitionedFile {
     pub fn new(path: impl Into<String>, size: u64) -> Self {
         Self {
             arrow_schema: None,
-            object_meta: ObjectMeta {
+            object_meta: FileInfo {
                 location: Path::from(path.into()),
                 last_modified: chrono::Utc.timestamp_nanos(0),
                 size,
@@ -198,8 +198,9 @@ impl PartitionedFile {
         }
     }
 
-    /// Create a file from a known ObjectMeta without partition
-    pub fn new_from_meta(object_meta: ObjectMeta) -> Self {
+    /// Create a file from a known FileInfo without partition
+    pub fn new_from_meta(object_meta: impl Into<FileInfo>) -> Self {
+        let object_meta = object_meta.into();
         Self {
             arrow_schema: None,
             object_meta,
@@ -217,7 +218,7 @@ impl PartitionedFile {
     pub fn new_with_range(path: String, size: u64, start: i64, end: i64) -> Self {
         Self {
             arrow_schema: None,
-            object_meta: ObjectMeta {
+            object_meta: FileInfo {
                 location: Path::from(path),
                 last_modified: chrono::Utc.timestamp_nanos(0),
                 size,
@@ -395,8 +396,8 @@ impl PartitionedFile {
     }
 }
 
-impl From<ObjectMeta> for PartitionedFile {
-    fn from(object_meta: ObjectMeta) -> Self {
+impl From<FileInfo> for PartitionedFile {
+    fn from(object_meta: FileInfo) -> Self {
         PartitionedFile {
             object_meta,
             arrow_schema: None,
@@ -468,7 +469,7 @@ pub fn generate_test_files(num_files: usize, overlap_factor: f64) -> Vec<FileGro
 
         let file = PartitionedFile {
             arrow_schema: None,
-            object_meta: ObjectMeta {
+            object_meta: FileInfo {
                 location: Path::from(format!("file_{i}.parquet")),
                 last_modified: chrono::Utc::now(),
                 size: 1000,
@@ -536,10 +537,7 @@ mod tests {
         array::{ArrayRef, Int32Array, RecordBatch},
         datatypes::{DataType, Field, Schema, SchemaRef},
     };
-    use datafusion_execution::object_store::{
-        DefaultObjectStoreRegistry, ObjectStoreRegistry,
-    };
-    use object_store::{local::LocalFileSystem, path::Path};
+    use datafusion_storage::{StorageRegistry, path::Path};
     use std::{collections::HashMap, ops::Not, sync::Arc};
     use url::Url;
 
@@ -580,44 +578,50 @@ mod tests {
     #[test]
     fn test_object_store_listing_url() {
         let listing = ListingTableUrl::parse("file:///").unwrap();
-        let store = listing.object_store();
+        let store = listing.storage_url();
         assert_eq!(store.as_str(), "file:///");
 
         let listing = ListingTableUrl::parse("s3://bucket/").unwrap();
-        let store = listing.object_store();
+        let store = listing.storage_url();
         assert_eq!(store.as_str(), "s3://bucket/");
     }
 
     #[test]
     fn test_get_store_hdfs() {
-        let sut = DefaultObjectStoreRegistry::default();
+        let sut = StorageRegistry::default();
         let url = Url::parse("hdfs://localhost:8020").unwrap();
-        sut.register_store(&url, Arc::new(LocalFileSystem::new()));
+        sut.register(&url, test_utils::storage::local().storage().clone())
+            .unwrap();
         let url = ListingTableUrl::parse("hdfs://localhost:8020/key").unwrap();
-        sut.get_store(url.as_ref()).unwrap();
+        sut.get(url.as_ref()).unwrap();
     }
 
     #[test]
     fn test_get_store_s3() {
-        let sut = DefaultObjectStoreRegistry::default();
+        let sut = StorageRegistry::default();
         let url = Url::parse("s3://bucket/key").unwrap();
-        sut.register_store(&url, Arc::new(LocalFileSystem::new()));
+        sut.register(&url, test_utils::storage::local().storage().clone())
+            .unwrap();
         let url = ListingTableUrl::parse("s3://bucket/key").unwrap();
-        sut.get_store(url.as_ref()).unwrap();
+        sut.get(url.as_ref()).unwrap();
     }
 
     #[test]
     fn test_get_store_file() {
-        let sut = DefaultObjectStoreRegistry::default();
+        let sut = StorageRegistry::default();
         let url = ListingTableUrl::parse("file:///bucket/key").unwrap();
-        sut.get_store(url.as_ref()).unwrap();
+        sut.register(url.as_ref(), test_utils::storage::local().storage().clone())
+            .unwrap();
+        sut.get(url.as_ref()).unwrap();
     }
 
     #[test]
     fn test_get_store_local() {
-        let sut = DefaultObjectStoreRegistry::default();
+        let sut = StorageRegistry::default();
         let url = ListingTableUrl::parse("../").unwrap();
-        sut.get_store(url.as_ref()).unwrap();
+        sut.register(url.as_ref(), test_utils::storage::local().storage().clone())
+            .unwrap();
+        sut.get(url.as_ref()).unwrap();
     }
 
     #[test]

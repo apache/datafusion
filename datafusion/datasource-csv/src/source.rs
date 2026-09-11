@@ -21,7 +21,6 @@ use datafusion_datasource::boundary_stream::AlignedBoundaryStream;
 use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
 use datafusion_physical_plan::projection::ProjectionExprs;
 use std::fmt;
-use std::io::Read;
 use std::sync::Arc;
 
 use datafusion_datasource::decoder::{DecoderDeserializer, deserialize_stream};
@@ -39,15 +38,16 @@ use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_execution::TaskContext;
-use datafusion_physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
+use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::{
     DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
 };
 
 use crate::file_format::CsvDecoder;
+use datafusion_storage::FileAccessContext;
+use datafusion_storage::StorageBinding;
+use datafusion_storage::WriterOptions;
 use futures::{StreamExt, TryStreamExt};
-use object_store::buffered::BufWriter;
-use object_store::{GetOptions, GetResultPayload, ObjectStore};
 use tokio::io::AsyncWriteExt;
 
 /// A Config for [`CsvOpener`]
@@ -59,11 +59,11 @@ use tokio::io::AsyncWriteExt;
 /// # use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 /// # use datafusion_datasource::PartitionedFile;
 /// # use datafusion_datasource_csv::source::CsvSource;
-/// # use datafusion_execution::object_store::ObjectStoreUrl;
+/// # use datafusion_storage::StorageUrl;
 /// # use datafusion_datasource::source::DataSourceExec;
 /// # use datafusion_common::config::CsvOptions;
 ///
-/// # let object_store_url = ObjectStoreUrl::local_filesystem();
+/// # let object_store_url = StorageUrl::local_filesystem();
 /// # let file_schema = Arc::new(Schema::empty());
 ///
 /// let options = CsvOptions {
@@ -180,10 +180,6 @@ impl CsvSource {
 }
 
 impl CsvSource {
-    fn open<R: Read>(&self, reader: R) -> Result<csv::Reader<R>> {
-        Ok(self.builder().build(reader)?)
-    }
-
     fn builder(&self) -> csv::ReaderBuilder {
         let mut builder =
             csv::ReaderBuilder::new(Arc::clone(self.table_schema.file_schema()))
@@ -214,8 +210,8 @@ impl CsvSource {
 pub struct CsvOpener {
     config: Arc<CsvSource>,
     file_compression_type: FileCompressionType,
-    object_store: Arc<dyn ObjectStore>,
-    partition_index: usize,
+    object_store: Arc<StorageBinding>,
+    access_context: FileAccessContext,
 }
 
 impl CsvOpener {
@@ -223,13 +219,13 @@ impl CsvOpener {
     pub fn new(
         config: Arc<CsvSource>,
         file_compression_type: FileCompressionType,
-        object_store: Arc<dyn ObjectStore>,
+        object_store: Arc<StorageBinding>,
     ) -> Self {
         Self {
             config,
             file_compression_type,
             object_store,
-            partition_index: 0,
+            access_context: FileAccessContext::new("scan"),
         }
     }
 }
@@ -243,15 +239,16 @@ impl From<CsvSource> for Arc<dyn FileSource> {
 impl FileSource for CsvSource {
     fn create_file_opener(
         &self,
-        object_store: Arc<dyn ObjectStore>,
+        object_store: Arc<StorageBinding>,
         base_config: &FileScanConfig,
-        partition_index: usize,
+        _partition_index: usize,
+        access_context: FileAccessContext,
     ) -> Result<Arc<dyn FileOpener>> {
         let mut opener = Arc::new(CsvOpener {
             config: Arc::new(self.clone()),
             file_compression_type: base_config.file_compression_type,
             object_store,
-            partition_index,
+            access_context,
         }) as Arc<dyn FileOpener>;
         opener = ProjectionOpener::try_new(
             self.projection.clone(),
@@ -413,15 +410,15 @@ impl FileOpener for CsvOpener {
         }
 
         let store = Arc::clone(&self.object_store);
+        let access_context = self.access_context.clone();
         let terminator = self.config.terminator();
-
-        let baseline_metrics =
-            BaselineMetrics::new(&self.config.metrics, self.partition_index);
 
         Ok(Box::pin(async move {
             // Current partition contains bytes [start_byte, end_byte) (might contain incomplete lines at boundaries)
             let file_size = partitioned_file.object_meta.size;
-            let location = partitioned_file.object_meta.location;
+            let reader = store
+                .open(&partitioned_file.object_meta, access_context)
+                .await?;
 
             if let Some(file_range) = partitioned_file.range.as_ref() {
                 let raw_start: u64 = file_range.start.try_into().map_err(|_| {
@@ -438,14 +435,12 @@ impl FileOpener for CsvOpener {
                 })?;
 
                 let aligned_stream = AlignedBoundaryStream::new(
-                    Arc::clone(&store),
-                    location.clone(),
+                    Arc::clone(&reader),
                     raw_start,
                     raw_end,
                     file_size,
                     terminator.unwrap_or(b'\n'),
                 )
-                .await?
                 .map_err(DataFusionError::from);
 
                 let decoder = config.builder().build_decoder();
@@ -459,39 +454,18 @@ impl FileOpener for CsvOpener {
                 return Ok(stream.map_err(Into::into).boxed());
             }
 
-            // No range specified — read the entire file
-            let options = GetOptions::default();
-            let result = store.get_opts(&location, options).await?;
+            let s = reader.stream(None);
 
-            match result.payload {
-                #[cfg(not(target_arch = "wasm32"))]
-                GetResultPayload::File(file, _) => {
-                    let decoder = file_compression_type.convert_read(file)?;
-                    let mut reader = config.open(decoder)?;
+            {
+                let decoder = config.builder().build_decoder();
+                let s = s.map_err(DataFusionError::from);
+                let input = file_compression_type.convert_stream(s.boxed())?.fuse();
 
-                    // Use std::iter::from_fn to wrap execution of iterator's next() method.
-                    let iterator = std::iter::from_fn(move || {
-                        let mut timer = baseline_metrics.elapsed_compute().timer();
-                        let result = reader.next();
-                        timer.stop();
-                        result
-                    });
-
-                    Ok(futures::stream::iter(iterator)
-                        .map(|r| r.map_err(Into::into))
-                        .boxed())
-                }
-                GetResultPayload::Stream(s) => {
-                    let decoder = config.builder().build_decoder();
-                    let s = s.map_err(DataFusionError::from);
-                    let input = file_compression_type.convert_stream(s.boxed())?.fuse();
-
-                    let stream = deserialize_stream(
-                        input,
-                        DecoderDeserializer::new(CsvDecoder::new(decoder)),
-                    );
-                    Ok(stream.map_err(Into::into).boxed())
-                }
+                let stream = deserialize_stream(
+                    input,
+                    DecoderDeserializer::new(CsvDecoder::new(decoder)),
+                );
+                Ok(stream.map_err(Into::into).boxed())
             }
         }))
     }
@@ -504,8 +478,8 @@ pub async fn plan_to_csv(
 ) -> Result<()> {
     let path = path.as_ref();
     let parsed = ListingTableUrl::parse(path)?;
-    let object_store_url = parsed.object_store();
-    let store = task_ctx.runtime_env().object_store(&object_store_url)?;
+    let object_store_url = parsed.storage_url();
+    let store = task_ctx.runtime_env().storage(&object_store_url)?;
     let writer_buffer_size = task_ctx
         .session_config()
         .options()
@@ -516,12 +490,19 @@ pub async fn plan_to_csv(
         let storeref = Arc::clone(&store);
         let plan: Arc<dyn ExecutionPlan> = Arc::clone(&plan);
         let filename = format!("{}/part-{i}.csv", parsed.prefix());
-        let file = object_store::path::Path::parse(filename)?;
+        let file = datafusion_storage::path::Path::parse(filename)?;
 
         let mut stream = plan.execute(i, Arc::clone(&task_ctx))?;
         join_set.spawn(async move {
-            let mut buf_writer =
-                BufWriter::with_capacity(storeref, file.clone(), writer_buffer_size);
+            let mut buf_writer = storeref
+                .writer(
+                    &file,
+                    WriterOptions {
+                        buffer_size: Some(writer_buffer_size),
+                    },
+                    FileAccessContext::new("write"),
+                )
+                .await?;
             let mut buffer = Vec::with_capacity(1024);
             //only write headers on first iteration
             let mut write_headers = true;

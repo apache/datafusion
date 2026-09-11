@@ -33,8 +33,8 @@ use datafusion::parquet::encryption::{
     decrypt::FileDecryptionProperties, encrypt::FileEncryptionProperties,
 };
 use datafusion::prelude::SessionContext;
+use datafusion::storage::path::Path;
 use futures::StreamExt;
-use object_store::path::Path;
 use rand::rand_core::{OsRng, TryRngCore};
 use std::collections::HashSet;
 use std::sync::Arc;

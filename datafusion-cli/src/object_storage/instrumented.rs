@@ -33,7 +33,6 @@ use chrono::Utc;
 use datafusion::{
     common::{HashMap, instant::Instant},
     error::DataFusionError,
-    execution::object_store::{DefaultObjectStoreRegistry, ObjectStoreRegistry},
 };
 use futures::stream::{BoxStream, Stream};
 use futures::{StreamExt, TryStreamExt};
@@ -43,7 +42,6 @@ use object_store::{
     PutResult, Result, path::Path,
 };
 use parking_lot::{Mutex, RwLock};
-use url::Url;
 
 /// A stream wrapper that measures the time until the first response(item or end of stream) is yielded.
 ///
@@ -754,24 +752,21 @@ impl Default for Stats<usize> {
 
 /// Provides access to [`InstrumentedObjectStore`] instances that record requests for reporting
 #[derive(Debug)]
-pub struct InstrumentedObjectStoreRegistry {
-    inner: Arc<dyn ObjectStoreRegistry>,
+pub struct ObjectStoreProfiler {
     instrument_mode: AtomicU8,
     stores: RwLock<Vec<Arc<InstrumentedObjectStore>>>,
 }
 
-impl Default for InstrumentedObjectStoreRegistry {
+impl Default for ObjectStoreProfiler {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl InstrumentedObjectStoreRegistry {
-    /// Returns a new [`InstrumentedObjectStoreRegistry`] that wraps the provided
-    /// [`ObjectStoreRegistry`]
+impl ObjectStoreProfiler {
+    /// Returns an empty collection of profiled object stores.
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(DefaultObjectStoreRegistry::new()),
             instrument_mode: AtomicU8::new(InstrumentedObjectStoreMode::default() as u8),
             stores: RwLock::new(Vec::new()),
         }
@@ -783,18 +778,18 @@ impl InstrumentedObjectStoreRegistry {
     }
 
     /// Provides access to all of the [`InstrumentedObjectStore`]s managed by this
-    /// [`InstrumentedObjectStoreRegistry`]
+    /// [`ObjectStoreProfiler`]
     pub fn stores(&self) -> Vec<Arc<InstrumentedObjectStore>> {
         self.stores.read().clone()
     }
 
     /// Returns the current [`InstrumentedObjectStoreMode`] for this
-    /// [`InstrumentedObjectStoreRegistry`]
+    /// [`ObjectStoreProfiler`]
     pub fn instrument_mode(&self) -> InstrumentedObjectStoreMode {
         self.instrument_mode.load(Ordering::Relaxed).into()
     }
 
-    /// Sets the [`InstrumentedObjectStoreMode`] for this [`InstrumentedObjectStoreRegistry`]
+    /// Sets the [`InstrumentedObjectStoreMode`] for this [`ObjectStoreProfiler`]
     pub fn set_instrument_mode(&self, mode: InstrumentedObjectStoreMode) {
         self.instrument_mode.store(mode as u8, Ordering::Relaxed);
         for s in self.stores.read().iter() {
@@ -803,28 +798,14 @@ impl InstrumentedObjectStoreRegistry {
     }
 }
 
-impl ObjectStoreRegistry for InstrumentedObjectStoreRegistry {
-    fn register_store(
-        &self,
-        url: &Url,
-        store: Arc<dyn ObjectStore>,
-    ) -> Option<Arc<dyn ObjectStore>> {
+impl ObjectStoreProfiler {
+    /// Wrap a backend and retain its request statistics for CLI reporting.
+    pub fn instrument(&self, store: Arc<dyn ObjectStore>) -> Arc<dyn ObjectStore> {
         let mode = self.instrument_mode.load(Ordering::Relaxed);
         let instrumented =
             Arc::new(InstrumentedObjectStore::new(store, AtomicU8::new(mode)));
         self.stores.write().push(Arc::clone(&instrumented));
-        self.inner.register_store(url, instrumented)
-    }
-
-    fn deregister_store(
-        &self,
-        url: &Url,
-    ) -> datafusion::common::Result<Arc<dyn ObjectStore>> {
-        self.inner.deregister_store(url)
-    }
-
-    fn get_store(&self, url: &Url) -> datafusion::common::Result<Arc<dyn ObjectStore>> {
-        self.inner.get_store(url)
+        instrumented
     }
 }
 
@@ -868,8 +849,8 @@ mod tests {
     }
 
     #[test]
-    fn instrumented_registry() {
-        let mut reg = InstrumentedObjectStoreRegistry::new();
+    fn object_store_profiler() {
+        let mut reg = ObjectStoreProfiler::new();
         assert!(reg.stores().is_empty());
         assert_eq!(
             reg.instrument_mode(),
@@ -880,12 +861,7 @@ mod tests {
         assert_eq!(reg.instrument_mode(), InstrumentedObjectStoreMode::Trace);
 
         let store = object_store::memory::InMemory::new();
-        let url = "mem://test".parse().unwrap();
-        let registered = reg.register_store(&url, Arc::new(store));
-        assert!(registered.is_none());
-
-        let fetched = reg.get_store(&url);
-        assert!(fetched.is_ok());
+        let _instrumented = reg.instrument(Arc::new(store));
         assert_eq!(reg.stores().len(), 1);
     }
 

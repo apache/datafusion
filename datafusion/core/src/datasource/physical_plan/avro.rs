@@ -37,8 +37,8 @@ mod tests {
     use datafusion_datasource::{PartitionedFile, TableSchemaBuilder};
     use datafusion_datasource_avro::AvroFormat;
     use datafusion_datasource_avro::source::AvroSource;
-    use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_physical_plan::ExecutionPlan;
+    use datafusion_storage::StorageUrl;
 
     use datafusion_datasource::source::DataSourceExec;
     use futures::StreamExt;
@@ -71,18 +71,29 @@ mod tests {
         let state = session_ctx.state();
 
         let url = Url::parse("file://").unwrap();
-        session_ctx.register_object_store(&url, store.clone());
+        session_ctx
+            .register_storage(
+                &url,
+                Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+                    store.clone(),
+                )),
+            )
+            .unwrap();
 
         let testdata = test_util::arrow_test_data();
         let filename = format!("{testdata}/avro/alltypes_plain.avro");
         let meta = local_unpartitioned_file(filename);
 
         let file_schema = AvroFormat {}
-            .infer_schema(&state, &store, std::slice::from_ref(&meta))
+            .infer_schema(
+                &state,
+                &test_utils::storage::object_store(store),
+                std::slice::from_ref(&meta),
+            )
             .await?;
 
         let source = Arc::new(AvroSource::new(Arc::clone(&file_schema)));
-        let conf = FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+        let conf = FileScanConfigBuilder::new(StorageUrl::local_filesystem(), source)
             .with_file(meta.into())
             .with_projection_indices(Some(vec![0, 1, 2]))?
             .build();
@@ -139,8 +150,8 @@ mod tests {
 
         let testdata = test_util::arrow_test_data();
         let filename = format!("{testdata}/avro/alltypes_plain.avro");
-        let object_store = Arc::new(LocalFileSystem::new()) as _;
-        let object_store_url = ObjectStoreUrl::local_filesystem();
+        let object_store = test_utils::storage::local();
+        let object_store_url = StorageUrl::local_filesystem();
         let meta = local_unpartitioned_file(filename);
         let actual_schema = AvroFormat {}
             .infer_schema(&state, &object_store, std::slice::from_ref(&meta))
@@ -212,8 +223,8 @@ mod tests {
 
         let testdata = test_util::arrow_test_data();
         let filename = format!("{testdata}/avro/alltypes_plain.avro");
-        let object_store = Arc::new(LocalFileSystem::new()) as _;
-        let object_store_url = ObjectStoreUrl::local_filesystem();
+        let object_store = test_utils::storage::local();
+        let object_store_url = StorageUrl::local_filesystem();
         let meta = local_unpartitioned_file(filename);
         let file_schema = AvroFormat {}
             .infer_schema(&state, &object_store, std::slice::from_ref(&meta))

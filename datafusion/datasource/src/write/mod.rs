@@ -28,16 +28,16 @@ use datafusion_common::error::Result;
 use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
 use bytes::Bytes;
-use object_store::ObjectStore;
-use object_store::buffered::BufWriter;
-use object_store::path::Path;
+use datafusion_storage::StorageBinding;
+use datafusion_storage::path::Path;
+use datafusion_storage::{FileAccessContext, WriterOptions};
 use tokio::io::AsyncWrite;
 
 pub mod demux;
 pub mod orchestration;
 
 /// A buffer with interior mutability shared by the SerializedFileWriter and
-/// ObjectStore writer
+/// storage writer
 #[derive(Clone)]
 pub struct SharedBuffer {
     /// The inner buffer for reading and writing
@@ -101,30 +101,30 @@ pub fn get_writer_schema(config: &FileSinkConfig) -> Arc<Schema> {
 ///
 /// This can be used to specify file compression on the writer. The writer
 /// will have a default buffer size unless altered. The specific default size
-/// is chosen by [`BufWriter::new`].
+/// is chosen by the storage backend.
 ///
-/// We drop the `AbortableWrite` struct and the writer will not try to cleanup on failure.
-/// Users can configure automatic cleanup with their cloud provider.
+/// Shutdown commits the output. Dropping it cancels pending I/O without committing;
+/// remote cleanup follows the backend's policy.
 #[derive(Debug)]
-pub struct ObjectWriterBuilder {
+pub struct FileWriterBuilder {
     /// Compression type for object writer.
     file_compression_type: FileCompressionType,
     /// Output path
     location: Path,
     /// The related store that handles the given path
-    object_store: Arc<dyn ObjectStore>,
+    object_store: Arc<StorageBinding>,
     /// The size of the buffer for the object writer.
     buffer_size: Option<usize>,
     /// The compression level for the object writer.
     compression_level: Option<u32>,
 }
 
-impl ObjectWriterBuilder {
-    /// Create a new [`ObjectWriterBuilder`] for the specified path and compression type.
+impl FileWriterBuilder {
+    /// Create a new [`FileWriterBuilder`] for the specified path and compression type.
     pub fn new(
         file_compression_type: FileCompressionType,
         location: &Path,
-        object_store: Arc<dyn ObjectStore>,
+        object_store: Arc<StorageBinding>,
     ) -> Self {
         Self {
             file_compression_type,
@@ -140,14 +140,14 @@ impl ObjectWriterBuilder {
     /// # Example
     /// ```
     /// # use datafusion_datasource::file_compression_type::FileCompressionType;
-    /// # use datafusion_datasource::write::ObjectWriterBuilder;
+    /// # use datafusion_datasource::write::FileWriterBuilder;
     /// # use object_store::memory::InMemory;
-    /// # use object_store::path::Path;
+    /// # use datafusion_storage::path::Path;
     /// # use std::sync::Arc;
     /// # let compression_type = FileCompressionType::UNCOMPRESSED;
     /// # let location = Path::from("/foo/bar");
-    /// # let object_store = Arc::new(InMemory::new());
-    /// let mut builder = ObjectWriterBuilder::new(compression_type, &location, object_store);
+    /// # let object_store = test_utils::storage::object_store(Arc::new(InMemory::new()));
+    /// let mut builder = FileWriterBuilder::new(compression_type, &location, object_store);
     /// builder.set_buffer_size(Some(20 * 1024 * 1024)); //20 MiB
     /// assert_eq!(
     ///     builder.get_buffer_size(),
@@ -164,14 +164,14 @@ impl ObjectWriterBuilder {
     /// # Example
     /// ```
     /// # use datafusion_datasource::file_compression_type::FileCompressionType;
-    /// # use datafusion_datasource::write::ObjectWriterBuilder;
+    /// # use datafusion_datasource::write::FileWriterBuilder;
     /// # use object_store::memory::InMemory;
-    /// # use object_store::path::Path;
+    /// # use datafusion_storage::path::Path;
     /// # use std::sync::Arc;
     /// # let compression_type = FileCompressionType::UNCOMPRESSED;
     /// # let location = Path::from("/foo/bar");
-    /// # let object_store = Arc::new(InMemory::new());
-    /// let builder = ObjectWriterBuilder::new(compression_type, &location, object_store)
+    /// # let object_store = test_utils::storage::object_store(Arc::new(InMemory::new()));
+    /// let builder = FileWriterBuilder::new(compression_type, &location, object_store)
     ///     .with_buffer_size(Some(20 * 1024 * 1024)); //20 MiB
     /// assert_eq!(
     ///     builder.get_buffer_size(),
@@ -212,7 +212,7 @@ impl ObjectWriterBuilder {
     ///
     /// # Errors
     /// If there is an error applying the compression type.
-    pub fn build(self) -> Result<Box<dyn AsyncWrite + Send + Unpin>> {
+    pub async fn build(self) -> Result<Box<dyn AsyncWrite + Send + Unpin>> {
         let Self {
             file_compression_type,
             location,
@@ -221,12 +221,14 @@ impl ObjectWriterBuilder {
             compression_level,
         } = self;
 
-        let buf_writer = match buffer_size {
-            Some(size) => BufWriter::with_capacity(object_store, location, size),
-            None => BufWriter::new(object_store, location),
-        };
+        let writer = object_store
+            .writer(
+                &location,
+                WriterOptions { buffer_size },
+                FileAccessContext::new("write"),
+            )
+            .await?;
 
-        file_compression_type
-            .convert_async_writer_with_level(buf_writer, compression_level)
+        file_compression_type.convert_async_writer_with_level(writer, compression_level)
     }
 }

@@ -47,11 +47,11 @@ use datafusion::datasource::physical_plan::{FileScanConfig, FileScanConfigBuilde
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::TaskContext;
 use datafusion::execution::context::SessionContext;
-use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionConfig;
+use datafusion::storage::StorageUrl;
 use datafusion_physical_expr_adapter::{
     DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
 };
@@ -99,10 +99,12 @@ pub async fn adapter_serialization() -> Result<()> {
     let mut cfg = SessionConfig::new();
     cfg.options_mut().execution.parquet.pushdown_filters = true;
     let ctx = SessionContext::new_with_config(cfg);
-    ctx.runtime_env().register_object_store(
-        ObjectStoreUrl::parse("memory://")?.as_ref(),
-        Arc::clone(&store),
-    );
+    ctx.runtime_env().register_storage(
+        StorageUrl::parse("memory://")?.as_ref(),
+        Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+            store.clone(),
+        )),
+    )?;
 
     // Create a table with our custom MetadataAdapterFactory
     let adapter_factory = Arc::new(MetadataAdapterFactory::new("v1"));
@@ -450,7 +452,10 @@ async fn write_parquet(
     writer.close()?;
 
     let payload = PutPayload::from_bytes(buf.into());
-    store.put(path, payload).await?;
+    store
+        .put(path, payload)
+        .await
+        .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
     Ok(())
 }
 

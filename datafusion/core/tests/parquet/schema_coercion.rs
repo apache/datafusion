@@ -28,12 +28,12 @@ use datafusion::prelude::SessionContext;
 use datafusion::test::object_store::local_unpartitioned_file;
 use datafusion_common::Result;
 use datafusion_common::test_util::batches_to_sort_string;
-use datafusion_execution::object_store::ObjectStoreUrl;
+use datafusion_storage::StorageUrl;
 
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
+use datafusion_storage::FileInfo;
 use insta::assert_snapshot;
-use object_store::ObjectMeta;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 use tempfile::NamedTempFile;
@@ -63,7 +63,7 @@ async fn multi_parquet_coercion() {
         Field::new("c3", DataType::Float64, true),
     ]));
     let source = Arc::new(ParquetSource::new(file_schema.clone()));
-    let conf = FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+    let conf = FileScanConfigBuilder::new(StorageUrl::local_filesystem(), source)
         .with_file_group(file_group)
         .build();
 
@@ -117,7 +117,7 @@ async fn multi_parquet_coercion_projection() {
         Field::new("c3", DataType::Float64, true),
     ]));
     let config = FileScanConfigBuilder::new(
-        ObjectStoreUrl::local_filesystem(),
+        StorageUrl::local_filesystem(),
         Arc::new(ParquetSource::new(file_schema)),
     )
     .with_file_group(file_group)
@@ -148,7 +148,7 @@ async fn multi_parquet_coercion_projection() {
 /// Writes `batches` to a temporary parquet file
 pub fn store_parquet(
     batches: Vec<RecordBatch>,
-) -> Result<(Vec<ObjectMeta>, Vec<NamedTempFile>)> {
+) -> Result<(Vec<FileInfo>, Vec<NamedTempFile>)> {
     // Each batch writes to their own file
     let files: Vec<_> = batches
         .into_iter()

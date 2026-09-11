@@ -39,6 +39,10 @@ all-features = true
 workspace = true
 
 [features]
+# Default local storage and re-exports for the ObjectStore adapter.
+object_store = ["dep:datafusion-storage-object-store"]
+# Direct OpenDAL storage adapter; provider services are selected by the embedding application.
+opendal = ["dep:datafusion-storage-opendal"]
 # Enables the `print_config_docs`, `print_runtime_config_docs` and
 # `print_functions_docs` binaries, which regenerate the docs under
 # `docs/source/user-guide`. Off by default: they are only run by
@@ -63,6 +67,8 @@ compression = [
 crypto_expressions = ["datafusion-functions/crypto_expressions"]
 datetime_expressions = ["datafusion-functions/datetime_expressions"]
 default = [
+    "object_store",
+
     "nested_expressions",
     "crypto_expressions",
     "datetime_expressions",
@@ -118,6 +124,10 @@ unicode_expressions = [
 extended_tests = []
 
 [dependencies]
+bytes = { workspace = true }
+datafusion-storage-object-store = { workspace = true, optional = true }
+datafusion-storage-opendal = { workspace = true, optional = true }
+datafusion-storage = { workspace = true }
 arrow = { workspace = true }
 arrow-schema = { workspace = true, features = ["canonical_extension_types"] }
 async-trait = { workspace = true }
@@ -125,7 +135,7 @@ bzip2 = { workspace = true, optional = true }
 chrono = { workspace = true }
 datafusion-catalog = { workspace = true }
 datafusion-catalog-listing = { workspace = true }
-datafusion-common = { workspace = true, features = ["object_store"] }
+datafusion-common = { workspace = true }
 datafusion-common-runtime = { workspace = true }
 datafusion-datasource = { workspace = true }
 datafusion-datasource-arrow = { workspace = true }
@@ -155,7 +165,6 @@ indexmap = { workspace = true }
 itertools = { workspace = true }
 liblzma = { workspace = true, optional = true }
 log = { workspace = true }
-object_store = { workspace = true }
 parking_lot = { workspace = true }
 parquet = { workspace = true, optional = true, default-features = true }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
@@ -167,6 +176,8 @@ uuid = { workspace = true, features = ["v4", "js"] }
 zstd = { workspace = true, optional = true }
 
 [dev-dependencies]
+object_store = { workspace = true }
+opendal = { workspace = true, features = ["services-memory"] }
 async-trait = { workspace = true }
 criterion = { workspace = true, features = ["async_tokio", "async_futures"] }
 ctor = { workspace = true }
@@ -176,7 +187,6 @@ datafusion-functions-window-common = { workspace = true }
 datafusion-macros = { workspace = true }
 datafusion-physical-optimizer = { workspace = true }
 doc-comment = { workspace = true }
-bytes = { workspace = true }
 env_logger = { workspace = true }
 glob = { workspace = true }
 insta = { workspace = true }

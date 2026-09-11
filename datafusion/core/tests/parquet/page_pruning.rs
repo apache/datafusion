@@ -25,13 +25,13 @@ use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::context::SessionState;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion::storage::StorageUrl;
 use datafusion_common::{ScalarValue, ToDFSchema};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{Expr, col, lit};
@@ -39,9 +39,9 @@ use datafusion_physical_expr::create_physical_expr;
 
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
+use datafusion_storage::FileInfo;
+use datafusion_storage::path::Path;
 use futures::StreamExt;
-use object_store::ObjectMeta;
-use object_store::path::Path;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 
@@ -50,15 +50,15 @@ async fn get_parquet_exec(
     filter: Expr,
     pushdown_filters: bool,
 ) -> DataSourceExec {
-    let object_store_url = ObjectStoreUrl::local_filesystem();
-    let store = state.runtime_env().object_store(&object_store_url).unwrap();
+    let object_store_url = StorageUrl::local_filesystem();
+    let store = state.runtime_env().storage(&object_store_url).unwrap();
 
     let testdata = datafusion::test_util::parquet_test_data();
     let filename = format!("{testdata}/alltypes_tiny_pages.parquet");
 
     let location = Path::from_filesystem_path(filename.as_str()).unwrap();
     let metadata = std::fs::metadata(filename).expect("Local file metadata");
-    let meta = ObjectMeta {
+    let meta = FileInfo {
         location,
         last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
         size: metadata.len(),

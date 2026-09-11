@@ -23,7 +23,7 @@ pub use datafusion_datasource_parquet::file_format::*;
 pub(crate) mod test_util {
     use arrow::array::RecordBatch;
     use datafusion_common::Result;
-    use object_store::ObjectMeta;
+    use datafusion_storage::FileInfo;
 
     use crate::test::object_store::local_unpartitioned_file;
 
@@ -38,7 +38,7 @@ pub(crate) mod test_util {
     pub async fn store_parquet(
         batches: Vec<RecordBatch>,
         multi_page: bool,
-    ) -> Result<(Vec<ObjectMeta>, Vec<tempfile::NamedTempFile>)> {
+    ) -> Result<(Vec<FileInfo>, Vec<tempfile::NamedTempFile>)> {
         /// How many rows per page should be written
         const ROWS_PER_PAGE: usize = 2;
         /// write batches chunk_size rows at a time
@@ -138,12 +138,12 @@ mod tests {
         ParquetFormat, ParquetFormatFactory, ParquetSink,
     };
     use datafusion_execution::TaskContext;
-    use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_expr::dml::InsertOp;
     use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
     use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
     use datafusion_physical_plan::{ExecutionPlan, collect};
+    use datafusion_storage::StorageUrl;
 
     use crate::test_util::bounded_stream;
     use arrow::array::{
@@ -186,7 +186,7 @@ mod tests {
         let batch1 = RecordBatch::try_from_iter(vec![("c1", c1.clone())])?;
         let batch2 = RecordBatch::try_from_iter(vec![("c2", c2)])?;
 
-        let store = Arc::new(LocalFileSystem::new()) as _;
+        let store = test_utils::storage::local();
         let (meta, _files) = store_parquet(vec![batch1, batch2], false).await?;
 
         let session = SessionContext::new();
@@ -200,8 +200,12 @@ mod tests {
 
         let file_metadata_cache =
             ctx.runtime_env().cache_manager.get_file_metadata_cache();
-        let stats = DFParquetMetadata::new(&store, &meta[0])
-            .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
+        let file_info = meta[0].clone();
+        let reader = store
+            .open(&file_info, datafusion_storage::FileAccessContext::default())
+            .await?;
+        let stats = DFParquetMetadata::new(reader.as_ref(), &file_info)
+            .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)), store.id())
             .fetch_statistics(&schema)
             .await?;
 
@@ -211,8 +215,12 @@ mod tests {
         assert_eq!(c1_stats.null_count, Precision::Exact(1));
         assert_eq!(c2_stats.null_count, Precision::Exact(3));
 
-        let stats = DFParquetMetadata::new(&store, &meta[1])
-            .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
+        let file_info = meta[1].clone();
+        let reader = store
+            .open(&file_info, datafusion_storage::FileAccessContext::default())
+            .await?;
+        let stats = DFParquetMetadata::new(reader.as_ref(), &file_info)
+            .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)), store.id())
             .fetch_statistics(&schema)
             .await?;
 
@@ -253,7 +261,7 @@ mod tests {
         let batch2 =
             RecordBatch::try_from_iter(vec![("c", c2.clone()), ("d", c2.clone())])?;
 
-        let store = Arc::new(LocalFileSystem::new()) as _;
+        let store = test_utils::storage::local();
         let (meta, _files) = store_parquet(vec![batch1, batch2], false).await?;
 
         let session = SessionContext::new();
@@ -375,6 +383,7 @@ mod tests {
         let store = Arc::new(RequestCountingObjectStore::new(Arc::new(
             LocalFileSystem::new(),
         )));
+        let binding = test_utils::storage::object_store(store.upcast());
         let (meta, _files) = store_parquet(vec![batch1, batch2], false).await?;
 
         let session = SessionContext::new();
@@ -384,13 +393,19 @@ mod tests {
         // for the remaining metadata
         let file_metadata_cache =
             ctx.runtime_env().cache_manager.get_file_metadata_cache();
-        let df_meta = DFParquetMetadata::new(store.as_ref(), &meta[0])
+        let file_info = meta[0].clone();
+        let reader = binding
+            .open(&file_info, datafusion_storage::FileAccessContext::default())
+            .await?;
+        let df_meta = DFParquetMetadata::new(reader.as_ref(), &file_info)
             .with_metadata_size_hint(Some(9));
         df_meta.fetch_metadata().await?;
         assert_eq!(store.request_count(), 2);
 
-        let df_meta =
-            df_meta.with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)));
+        let df_meta = df_meta.with_file_metadata_cache(
+            Some(Arc::clone(&file_metadata_cache)),
+            binding.id(),
+        );
 
         // Increases by 3 because cache has no entries yet
         df_meta.fetch_metadata().await?;
@@ -401,7 +416,7 @@ mod tests {
         assert_eq!(store.request_count(), 5);
 
         // Increase by 2  because `get_file_metadata_cache()` is None
-        let df_meta = df_meta.with_file_metadata_cache(None);
+        let df_meta = df_meta.with_file_metadata_cache(None, binding.id());
         df_meta.fetch_metadata().await?;
         assert_eq!(store.request_count(), 7);
 
@@ -413,15 +428,17 @@ mod tests {
             .with_metadata_size_hint(Some(9))
             .with_force_view_types(force_views);
         // Increase by 3, partial cache being used.
-        let _schema = format.infer_schema(&ctx, &store.upcast(), &meta).await?;
+        let _schema = format.infer_schema(&ctx, &binding, &meta).await?;
         assert_eq!(store.request_count(), 10);
         // No increase, full cache being used.
-        let schema = format.infer_schema(&ctx, &store.upcast(), &meta).await?;
+        let schema = format.infer_schema(&ctx, &binding, &meta).await?;
         assert_eq!(store.request_count(), 10);
 
         // No increase, cache being used
-        let df_meta =
-            df_meta.with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)));
+        let df_meta = df_meta.with_file_metadata_cache(
+            Some(Arc::clone(&file_metadata_cache)),
+            binding.id(),
+        );
         let stats = df_meta.fetch_statistics(&schema).await?;
         assert_eq!(store.request_count(), 10);
 
@@ -434,10 +451,15 @@ mod tests {
         let store = Arc::new(RequestCountingObjectStore::new(Arc::new(
             LocalFileSystem::new(),
         )));
+        let binding = test_utils::storage::object_store(store.upcast());
 
         // Use the file size as the hint so we can get the full metadata from the first fetch
         let size_hint = meta[0].size as usize;
-        let df_meta = DFParquetMetadata::new(store.as_ref(), &meta[0])
+        let file_info = meta[0].clone();
+        let reader = binding
+            .open(&file_info, datafusion_storage::FileAccessContext::default())
+            .await?;
+        let df_meta = DFParquetMetadata::new(reader.as_ref(), &file_info)
             .with_metadata_size_hint(Some(size_hint));
 
         df_meta.fetch_metadata().await?;
@@ -448,8 +470,10 @@ mod tests {
         let ctx = session.state();
         let file_metadata_cache =
             ctx.runtime_env().cache_manager.get_file_metadata_cache();
-        let df_meta =
-            df_meta.with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)));
+        let df_meta = df_meta.with_file_metadata_cache(
+            Some(Arc::clone(&file_metadata_cache)),
+            binding.id(),
+        );
         // Increases by 1 because cache has no entries yet and new session context
         df_meta.fetch_metadata().await?;
         assert_eq!(store.request_count(), 2);
@@ -459,7 +483,7 @@ mod tests {
         assert_eq!(store.request_count(), 2);
 
         // Increase by 1  because `get_file_metadata_cache` is None
-        let df_meta = df_meta.with_file_metadata_cache(None);
+        let df_meta = df_meta.with_file_metadata_cache(None, binding.id());
         df_meta.fetch_metadata().await?;
         assert_eq!(store.request_count(), 3);
 
@@ -467,14 +491,16 @@ mod tests {
             .with_metadata_size_hint(Some(size_hint))
             .with_force_view_types(force_views);
         // Increase by 1, partial cache being used.
-        let _schema = format.infer_schema(&ctx, &store.upcast(), &meta).await?;
+        let _schema = format.infer_schema(&ctx, &binding, &meta).await?;
         assert_eq!(store.request_count(), 4);
         // No increase, full cache being used.
-        let schema = format.infer_schema(&ctx, &store.upcast(), &meta).await?;
+        let schema = format.infer_schema(&ctx, &binding, &meta).await?;
         assert_eq!(store.request_count(), 4);
         // No increase, cache being used
-        let df_meta =
-            df_meta.with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)));
+        let df_meta = df_meta.with_file_metadata_cache(
+            Some(Arc::clone(&file_metadata_cache)),
+            binding.id(),
+        );
         let stats = df_meta.fetch_statistics(&schema).await?;
         assert_eq!(store.request_count(), 4);
 
@@ -487,20 +513,27 @@ mod tests {
         let store = Arc::new(RequestCountingObjectStore::new(Arc::new(
             LocalFileSystem::new(),
         )));
+        let binding = test_utils::storage::object_store(store.upcast());
 
         // Use a size hint larger than the file size to make sure we don't panic
         let size_hint = (meta[0].size + 100) as usize;
-        let df_meta = DFParquetMetadata::new(store.as_ref(), &meta[0])
+        let file_info = meta[0].clone();
+        let reader = binding
+            .open(&file_info, datafusion_storage::FileAccessContext::default())
+            .await?;
+        let df_meta = DFParquetMetadata::new(reader.as_ref(), &file_info)
             .with_metadata_size_hint(Some(size_hint));
 
         df_meta.fetch_metadata().await?;
         assert_eq!(store.request_count(), 1);
 
-        // No increase because cache has an entry
-        let df_meta =
-            df_meta.with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)));
+        // A new binding must not reuse entries from the previous registration.
+        let df_meta = df_meta.with_file_metadata_cache(
+            Some(Arc::clone(&file_metadata_cache)),
+            binding.id(),
+        );
         df_meta.fetch_metadata().await?;
-        assert_eq!(store.request_count(), 1);
+        assert_eq!(store.request_count(), 2);
 
         Ok(())
     }
@@ -541,22 +574,30 @@ mod tests {
         let store = Arc::new(RequestCountingObjectStore::new(Arc::new(
             LocalFileSystem::new(),
         )));
+        let binding = test_utils::storage::object_store(store.upcast());
         let (files, _file_names) = store_parquet(vec![batch1], false).await?;
 
         let state = SessionContext::new().state();
         // Make metadata size hint None to keep original behavior
         let format = ParquetFormat::default().with_metadata_size_hint(None);
-        let _schema = format.infer_schema(&state, &store.upcast(), &files).await?;
+        let _schema = format.infer_schema(&state, &binding, &files).await?;
         assert_eq!(store.request_count(), 3);
         // No increase, cache being used.
-        let schema = format.infer_schema(&state, &store.upcast(), &files).await?;
+        let schema = format.infer_schema(&state, &binding, &files).await?;
         assert_eq!(store.request_count(), 3);
 
         // No increase in request count because cache is not empty
         let file_metadata_cache =
             state.runtime_env().cache_manager.get_file_metadata_cache();
-        let stats = DFParquetMetadata::new(store.as_ref(), &files[0])
-            .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
+        let file_info = files[0].clone();
+        let reader = binding
+            .open(&file_info, datafusion_storage::FileAccessContext::default())
+            .await?;
+        let stats = DFParquetMetadata::new(reader.as_ref(), &file_info)
+            .with_file_metadata_cache(
+                Some(Arc::clone(&file_metadata_cache)),
+                binding.id(),
+            )
             .fetch_statistics(&schema)
             .await?;
         assert_eq!(stats.num_rows, Precision::Exact(4));
@@ -610,6 +651,7 @@ mod tests {
         let store = Arc::new(RequestCountingObjectStore::new(Arc::new(
             LocalFileSystem::new(),
         )));
+        let binding = test_utils::storage::object_store(store.upcast());
         let (files, _file_names) = store_parquet(vec![batch1, batch2], false).await?;
 
         let force_views = match force_views {
@@ -622,7 +664,7 @@ mod tests {
         let format = ParquetFormat::default()
             .with_force_view_types(force_views)
             .with_metadata_size_hint(None);
-        let schema = format.infer_schema(&state, &store.upcast(), &files).await?;
+        let schema = format.infer_schema(&state, &binding, &files).await?;
         assert_eq!(store.request_count(), 6);
 
         let null_i64 = ScalarValue::Int64(None);
@@ -635,8 +677,15 @@ mod tests {
         // No increase in request count because cache is not empty
         let file_metadata_cache =
             state.runtime_env().cache_manager.get_file_metadata_cache();
-        let stats = DFParquetMetadata::new(store.as_ref(), &files[0])
-            .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
+        let file_info = files[0].clone();
+        let reader = binding
+            .open(&file_info, datafusion_storage::FileAccessContext::default())
+            .await?;
+        let stats = DFParquetMetadata::new(reader.as_ref(), &file_info)
+            .with_file_metadata_cache(
+                Some(Arc::clone(&file_metadata_cache)),
+                binding.id(),
+            )
             .fetch_statistics(&schema)
             .await?;
         assert_eq!(store.request_count(), 6);
@@ -664,8 +713,12 @@ mod tests {
         assert_eq!(c2_stats.min_value, Precision::Exact(null_i64.clone()));
 
         // No increase in request count because cache is not empty
-        let stats = DFParquetMetadata::new(store.as_ref(), &files[1])
-            .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
+        let file_info = files[1].clone();
+        let stats = DFParquetMetadata::new(reader.as_ref(), &file_info)
+            .with_file_metadata_cache(
+                Some(Arc::clone(&file_metadata_cache)),
+                binding.id(),
+            )
             .fetch_statistics(&schema)
             .await?;
         assert_eq!(store.request_count(), 6);
@@ -1267,8 +1320,13 @@ mod tests {
 
         let runtime = RuntimeEnv::default();
         runtime
-            .object_store_registry
-            .register_store(store_url, local);
+            .register_storage(
+                store_url,
+                Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+                    local,
+                )),
+            )
+            .unwrap();
 
         Arc::new(
             TaskContext::default()
@@ -1542,9 +1600,10 @@ mod tests {
         let field_a = Field::new("a", DataType::Utf8, false);
         let field_b = Field::new("b", DataType::Utf8, false);
         let schema = Arc::new(Schema::new(vec![field_a, field_b]));
-        let object_store_url = ObjectStoreUrl::local_filesystem();
+        let object_store_url = StorageUrl::local_filesystem();
 
         let file_sink_config = FileSinkConfig {
+            storage: None,
             original_url: String::default(),
             object_store_url: object_store_url.clone(),
             file_group: FileGroup::new(vec![PartitionedFile::new("/tmp".to_string(), 1)]),
@@ -1598,7 +1657,7 @@ mod tests {
         );
 
         let (path, parquet_meta_data) = written.take(1).next().unwrap();
-        Ok((path, parquet_meta_data))
+        Ok((Path::from(path.as_ref()), parquet_meta_data))
     }
 
     fn assert_file_metadata(
@@ -1633,10 +1692,11 @@ mod tests {
         let field_a = Field::new("a", DataType::Utf8, false);
         let field_b = Field::new("b", DataType::Utf8, false);
         let schema = Arc::new(Schema::new(vec![field_a, field_b]));
-        let object_store_url = ObjectStoreUrl::local_filesystem();
+        let object_store_url = StorageUrl::local_filesystem();
 
         // set file config to include partitioning on field_a
         let file_sink_config = FileSinkConfig {
+            storage: None,
             original_url: String::default(),
             object_store_url: object_store_url.clone(),
             file_group: FileGroup::new(vec![PartitionedFile::new("/tmp".to_string(), 1)]),
@@ -1722,9 +1782,10 @@ mod tests {
             let field_a = Field::new("a", DataType::Utf8, false);
             let field_b = Field::new("b", DataType::Utf8, false);
             let schema = Arc::new(Schema::new(vec![field_a, field_b]));
-            let object_store_url = ObjectStoreUrl::local_filesystem();
+            let object_store_url = StorageUrl::local_filesystem();
 
             let file_sink_config = FileSinkConfig {
+                storage: None,
                 original_url: String::default(),
                 object_store_url: object_store_url.clone(),
                 file_group: FileGroup::new(vec![PartitionedFile::new(
@@ -1839,7 +1900,7 @@ mod tests {
             ],
         )?;
 
-        let store = Arc::new(LocalFileSystem::new()) as _;
+        let store = test_utils::storage::local();
         let (meta, _files) = store_parquet(vec![batch], false).await?;
 
         let ctx = SessionContext::new().state();

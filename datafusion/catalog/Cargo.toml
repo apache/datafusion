@@ -30,6 +30,9 @@ version.workspace = true
 [package.metadata.docs.rs]
 all-features = true
 
+[features]
+default = []
+
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }
@@ -42,10 +45,10 @@ datafusion-expr = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-session = { workspace = true }
+datafusion-storage.workspace = true
 futures = { workspace = true }
 itertools = { workspace = true }
 log = { workspace = true }
-object_store = { workspace = true }
 parking_lot = { workspace = true }
 tokio = { workspace = true }
 
@@ -54,3 +57,6 @@ tokio = { workspace = true }
 # https://github.com/rust-lang/cargo/issues/13157
 [lints]
 workspace = true
+
+[dev-dependencies]
+object_store = { workspace = true }

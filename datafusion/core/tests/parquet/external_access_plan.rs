@@ -33,10 +33,10 @@ use datafusion_common::{DFSchema, assert_batches_eq, assert_contains};
 use datafusion_datasource_parquet::{
     ParquetAccessPlan, ParquetRowSelection, RowGroupAccess,
 };
-use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::{Expr, col, lit};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::metrics::{MetricValue, MetricsSet};
+use datafusion_storage::StorageUrl;
 
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
@@ -460,7 +460,7 @@ impl TestFull {
         }
 
         // Create a DataSourceExec to read the file
-        let object_store_url = ObjectStoreUrl::local_filesystem();
+        let object_store_url = StorageUrl::local_filesystem();
         // add the predicate, if requested
         let source = if let Some(predicate) = predicate {
             let df_schema = DFSchema::try_from(schema.clone())?;

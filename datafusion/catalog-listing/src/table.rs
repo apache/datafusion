@@ -53,9 +53,9 @@ use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
+use datafusion_storage::StorageBinding;
 use futures::future::BoxFuture;
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
-use object_store::ObjectStore;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -72,7 +72,7 @@ pub struct ListFilesResult {
 
 /// Built in [`TableProvider`] that reads data from one or more files as a single table.
 ///
-/// The files are read using an  [`ObjectStore`] instance, for example from
+/// The files are read using a [`StorageBinding`] instance, for example from
 /// local files or objects from AWS S3.
 ///
 /// # Features:
@@ -179,6 +179,7 @@ pub struct ListFilesResult {
 /// ```
 #[derive(Debug, Clone)]
 pub struct ListingTable {
+    storage: std::sync::OnceLock<Arc<StorageBinding>>,
     table_paths: Vec<ListingTableUrl>,
     /// `file_schema` contains only the columns physically stored in the data files themselves.
     ///     - Represents the actual fields found in files like Parquet, CSV, etc.
@@ -214,6 +215,14 @@ impl ListingTable {
     ///
     /// See documentation and example on [`ListingTable`] and [`ListingTableConfig`]
     pub fn try_new(config: ListingTableConfig) -> datafusion_common::Result<Self> {
+        if let Some(storage) = &config.storage
+            && config
+                .table_paths
+                .iter()
+                .any(|path| path.storage_url() != *storage.url())
+        {
+            return plan_err!("All table paths must use the same storage registration");
+        }
         // Extract schema_source before moving other parts of the config
         let schema_source = config.schema_source();
 
@@ -241,6 +250,10 @@ impl ListingTable {
             Arc::new(SchemaFingerprint::from_schema(&file_schema));
 
         let table = Self {
+            storage: config
+                .storage
+                .map(std::sync::OnceLock::from)
+                .unwrap_or_default(),
             table_paths: config.table_paths,
             file_schema,
             table_schema,
@@ -255,6 +268,31 @@ impl ListingTable {
         };
 
         Ok(table)
+    }
+
+    fn storage(
+        &self,
+        state: &dyn Session,
+    ) -> datafusion_common::Result<Arc<StorageBinding>> {
+        if let Some(storage) = self.storage.get() {
+            return Ok(Arc::clone(storage));
+        }
+        let first = self
+            .table_paths
+            .first()
+            .ok_or_else(|| internal_datafusion_err!("No table path"))?;
+        let storage = state.runtime_env().storage(first)?;
+        for path in &self.table_paths {
+            if path.storage_url() != *storage.url() {
+                return plan_err!(
+                    "All table paths must use the same storage registration"
+                );
+            }
+        }
+        let _ = self.storage.set(storage);
+        Ok(Arc::clone(
+            self.storage.get().expect("table storage initialized"),
+        ))
     }
 
     /// Assign constraints
@@ -724,7 +762,7 @@ impl ListingTable {
         };
 
         let Some(object_store_url) =
-            self.table_paths.first().map(ListingTableUrl::object_store)
+            self.table_paths.first().map(ListingTableUrl::storage_url)
         else {
             return Ok(ScanResult::new(Arc::new(EmptyExec::new(Arc::new(
                 Schema::empty(),
@@ -733,6 +771,7 @@ impl ListingTable {
 
         let file_source = self.create_file_source();
         let scan_config = FileScanConfigBuilder::new(object_store_url, file_source)
+            .with_storage(self.storage(state)?)
             .with_file_groups(partitioned_file_lists)
             .with_constraints(self.constraints.clone())
             .with_statistics(statistics)
@@ -805,7 +844,7 @@ impl ListingTable {
         }
 
         // Get the object store for the table path.
-        let store = state.runtime_env().object_store(table_path)?;
+        let store = self.storage(state)?;
 
         let file_list_stream = pruned_partition_list(
             state,
@@ -824,6 +863,7 @@ impl ListingTable {
         // Invalidate cache entries for this table if they exist
         if let Some(lfc) = state.runtime_env().cache_manager.get_list_files_cache() {
             let key = TableScopedPath {
+                storage_id: store.id(),
                 table: table_path.get_table_ref().clone(),
                 path: table_path.prefix().clone(),
             };
@@ -832,8 +872,9 @@ impl ListingTable {
 
         // Sink related option, apart from format
         let config = FileSinkConfig {
+            storage: Some(store),
             original_url: String::default(),
-            object_store_url: self.table_paths()[0].object_store(),
+            object_store_url: self.table_paths()[0].storage_url(),
             table_paths: self.table_paths().clone(),
             file_group,
             output_schema: self.schema(),
@@ -884,7 +925,7 @@ impl ListingTable {
     async fn collect_files_for_scan<'a>(
         &'a self,
         ctx: &'a dyn Session,
-        store: &'a Arc<dyn ObjectStore>,
+        store: &'a Arc<StorageBinding>,
         listing_time_filters: &'a [Expr],
         file_limit: Option<usize>,
     ) -> datafusion_common::Result<(FileGroup, bool)> {
@@ -946,8 +987,8 @@ impl ListingTable {
             );
         }
 
-        let store = if let Some(url) = self.table_paths.first() {
-            ctx.runtime_env().object_store(url)?
+        let store = if let Some(_url) = self.table_paths.first() {
+            self.storage(ctx)?
         } else {
             return Ok(ListFilesResult {
                 file_groups: vec![],
@@ -1008,8 +1049,8 @@ impl ListingTable {
             );
         }
 
-        let store = if let Some(url) = self.table_paths.first() {
-            ctx.runtime_env().object_store(url)?
+        let store = if let Some(_url) = self.table_paths.first() {
+            self.storage(ctx)?
         } else {
             return Ok(ListFilesResult {
                 file_groups: vec![],
@@ -1088,10 +1129,11 @@ impl ListingTable {
     async fn do_collect_statistics_and_ordering(
         &self,
         ctx: &dyn Session,
-        store: &Arc<dyn ObjectStore>,
+        store: &Arc<StorageBinding>,
         part_file: &PartitionedFile,
     ) -> datafusion_common::Result<(Arc<Statistics>, Option<LexOrdering>)> {
         let path = TableScopedPath {
+            storage_id: store.id(),
             table: part_file.table_reference.clone(),
             path: part_file.object_meta.location.clone(),
         };

@@ -45,8 +45,8 @@ use datafusion_common::config::{ConfigExtension, ConfigOptions, TableOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
-    DFSchema, DataFusionError, ResolvedTableReference, TableReference, config_err,
-    exec_err, plan_datafusion_err,
+    DFSchema, DataFusionError, ResolvedTableReference, TableReference, exec_err,
+    plan_datafusion_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::config::SessionConfig;
@@ -85,10 +85,11 @@ use datafusion_sql::{
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use datafusion_common::config_err;
 use futures::future::BoxFuture;
 use itertools::Itertools;
-use log::{debug, info};
-use object_store::ObjectStore;
+use log::debug;
+use log::info;
 #[cfg(feature = "sql")]
 use sqlparser::{
     ast::{Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias},
@@ -241,8 +242,9 @@ impl Debug for SessionState {
             .field("config", &self.inner.config)
             .field("runtime_env", &self.inner.runtime_env)
             .field("catalog_list", &self.inner.catalog_list)
-            .field("serializer_registry", &self.inner.serializer_registry)
-            .field("file_formats", &self.inner.file_formats)
+            .field("serializer_registry", &self.inner.serializer_registry);
+        let ret = ret.field("file_formats", &self.inner.file_formats);
+        let ret = ret
             .field("execution_props", &self.execution_props)
             .field("table_options", &self.inner.table_options)
             .field("table_factories", &self.inner.table_factories)
@@ -1590,39 +1592,17 @@ impl SessionStateBuilder {
         self
     }
 
-    /// Register an `ObjectStore` to the [`RuntimeEnv`]. See [`RuntimeEnv::register_object_store`]
-    /// for more details.
-    ///
-    /// Note that this creates a default [`RuntimeEnv`] if  there isn't one passed in already.
-    ///
-    /// ```
-    /// # use datafusion::prelude::*;
-    /// # use datafusion::execution::session_state::SessionStateBuilder;
-    /// # use datafusion_execution::runtime_env::RuntimeEnv;
-    /// # use url::Url;
-    /// # use std::sync::Arc;
-    /// # let http_store = object_store::local::LocalFileSystem::new();
-    /// let url = Url::try_from("file://").unwrap();
-    /// let object_store = object_store::local::LocalFileSystem::new();
-    /// let state = SessionStateBuilder::new()
-    ///     .with_config(SessionConfig::new())
-    ///     .with_object_store(&url, Arc::new(object_store))
-    ///     .with_default_features()
-    ///     .build();
-    /// ```
-    pub fn with_object_store(
+    /// Register a complete storage binding, creating the default runtime if needed.
+    pub fn with_storage(
         mut self,
         url: &Url,
-        object_store: Arc<dyn ObjectStore>,
-    ) -> Self {
-        if self.runtime_env.is_none() {
-            self.runtime_env = Some(Arc::new(RuntimeEnv::default()));
-        }
-        self.runtime_env
-            .as_ref()
-            .unwrap()
-            .register_object_store(url, object_store);
-        self
+        storage: Arc<dyn datafusion_storage::Storage>,
+    ) -> datafusion_common::Result<Self> {
+        let runtime = self
+            .runtime_env
+            .get_or_insert_with(SessionStateDefaults::default_runtime_env);
+        runtime.register_storage(url, storage)?;
+        Ok(self)
     }
 
     /// Builds a [`SessionState`] with the current configuration.
@@ -1665,7 +1645,9 @@ impl SessionStateBuilder {
         } = self;
 
         let config = config.unwrap_or_default();
-        let runtime_env = runtime_env.unwrap_or_else(|| Arc::new(RuntimeEnv::default()));
+        let runtime_env =
+            runtime_env.unwrap_or_else(SessionStateDefaults::default_runtime_env);
+        SessionStateDefaults::configure_runtime(&runtime_env);
 
         let content = Arc::new(SessionStateInner {
             session_id: session_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
@@ -1984,8 +1966,9 @@ impl Debug for SessionStateBuilder {
             .field("config", &self.config)
             .field("runtime_env", &self.runtime_env)
             .field("catalog_list", &self.catalog_list)
-            .field("serializer_registry", &self.serializer_registry)
-            .field("file_formats", &self.file_formats)
+            .field("serializer_registry", &self.serializer_registry);
+        let ret = ret.field("file_formats", &self.file_formats);
+        let ret = ret
             .field("execution_props", &self.execution_props)
             .field("table_options", &self.table_options)
             .field("table_factories", &self.table_factories)

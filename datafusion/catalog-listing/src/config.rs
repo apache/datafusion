@@ -53,6 +53,8 @@ pub enum SchemaSource {
 /// - **Custom handling of missing columns**: By default they are filled in with nulls, but you may e.g. want to fill them in with `0` or `""`.
 #[derive(Debug, Clone, Default)]
 pub struct ListingTableConfig {
+    /// Retained registration used for discovery and execution.
+    pub storage: Option<Arc<datafusion_storage::StorageBinding>>,
     /// Paths on the `ObjectStore` for creating [`crate::ListingTable`].
     /// They should share the same schema and object store.
     pub table_paths: Vec<ListingTableUrl>,
@@ -87,6 +89,15 @@ impl ListingTableConfig {
             table_paths,
             ..Default::default()
         }
+    }
+
+    /// Bind this table to a registration instead of resolving its URL again.
+    pub fn with_storage(
+        mut self,
+        storage: Arc<datafusion_storage::StorageBinding>,
+    ) -> Self {
+        self.storage = Some(storage);
+        self
     }
 
     /// Returns the source of the schema for this configuration
@@ -203,12 +214,18 @@ impl ListingTableConfig {
     /// # Errors
     /// * if `self.options` is not set. See [`Self::with_listing_options`]
     pub async fn infer_schema(
-        self,
+        mut self,
         state: &dyn Session,
     ) -> datafusion_common::Result<Self> {
+        if self.storage.is_none()
+            && let Some(url) = self.table_paths.first()
+        {
+            self.storage = Some(state.runtime_env().storage(url)?);
+        }
         match self.options {
             Some(options) => {
                 let ListingTableConfig {
+                    storage,
                     table_paths,
                     file_schema,
                     options: _,
@@ -221,7 +238,13 @@ impl ListingTableConfig {
                     None => {
                         if let Some(url) = table_paths.first() {
                             (
-                                options.infer_schema(state, url).await?,
+                                options
+                                    .infer_schema_with_storage(
+                                        state,
+                                        url,
+                                        storage.as_ref().expect("table storage"),
+                                    )
+                                    .await?,
                                 SchemaSource::Inferred,
                             )
                         } else {
@@ -231,6 +254,7 @@ impl ListingTableConfig {
                 };
 
                 Ok(Self {
+                    storage,
                     table_paths,
                     file_schema: Some(schema),
                     options: Some(options),
@@ -247,9 +271,14 @@ impl ListingTableConfig {
     /// # Errors
     /// * if `self.options` is not set. See [`Self::with_listing_options`]
     pub async fn infer_partitions_from_path(
-        self,
+        mut self,
         state: &dyn Session,
     ) -> datafusion_common::Result<Self> {
+        if self.storage.is_none()
+            && let Some(url) = self.table_paths.first()
+        {
+            self.storage = Some(state.runtime_env().storage(url)?);
+        }
         match self.options {
             Some(options) => {
                 let Some(url) = self.table_paths.first() else {
@@ -271,6 +300,7 @@ impl ListingTableConfig {
                     .collect::<Vec<_>>();
                 let options = options.with_table_partition_cols(partitions);
                 Ok(Self {
+                    storage: self.storage,
                     table_paths: self.table_paths,
                     file_schema: self.file_schema,
                     options: Some(options),

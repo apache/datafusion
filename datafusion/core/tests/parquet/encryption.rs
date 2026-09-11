@@ -298,7 +298,7 @@ async fn verify_file_encrypted(
         file_path.to_str().unwrap().to_owned()
     };
 
-    let object_path = object_store::path::Path::from(file_path_str);
+    let object_path = datafusion::storage::path::Path::from(file_path_str);
     let decryption_properties = encryption_factory
         .get_file_decryption_properties(&options, &object_path)
         .await?
@@ -326,7 +326,7 @@ async fn verify_file_encrypted(
 /// which generates encryption keys in a sequence
 #[derive(Debug, Default)]
 struct MockEncryptionFactory {
-    pub encryption_keys: Mutex<HashMap<object_store::path::Path, Vec<u8>>>,
+    pub encryption_keys: Mutex<HashMap<datafusion::storage::path::Path, Vec<u8>>>,
     pub counter: AtomicU8,
 }
 
@@ -336,7 +336,7 @@ impl EncryptionFactory for MockEncryptionFactory {
         &self,
         config: &EncryptionFactoryOptions,
         _schema: &SchemaRef,
-        file_path: &object_store::path::Path,
+        file_path: &datafusion::storage::path::Path,
     ) -> datafusion_common::Result<Option<Arc<FileEncryptionProperties>>> {
         assert_eq!(
             config.options.get("test_key"),
@@ -353,7 +353,7 @@ impl EncryptionFactory for MockEncryptionFactory {
     async fn get_file_decryption_properties(
         &self,
         config: &EncryptionFactoryOptions,
-        file_path: &object_store::path::Path,
+        file_path: &datafusion::storage::path::Path,
     ) -> datafusion_common::Result<Option<Arc<FileDecryptionProperties>>> {
         assert_eq!(
             config.options.get("test_key"),

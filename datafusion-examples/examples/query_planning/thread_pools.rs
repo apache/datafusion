@@ -214,10 +214,16 @@ async fn different_runtime_advanced() -> Result<()> {
         // you will see an error such as:
         // A Tokio 1.x context was found, but IO is disabled.
         .with_http_connector(SpawnedReqwestConnector::new(io_handle))
-        .build()?;
+        .build()
+        .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
 
     // Tell DataFusion to process `http://` urls with this wrapped object store
-    ctx.register_object_store(&base_url, Arc::new(http_store));
+    ctx.register_storage(
+        &base_url,
+        Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+            Arc::new(http_store),
+        )),
+    )?;
 
     // As above, plan and execute the query on the cpu runtime.
     let (tx, mut rx) = tokio::sync::mpsc::channel(2);

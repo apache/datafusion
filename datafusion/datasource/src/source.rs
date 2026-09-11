@@ -26,10 +26,9 @@ use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_plan::execution_plan::{
     Boundedness, EmissionType, SchedulingType,
 };
+use datafusion_physical_plan::metrics::BaselineMetrics;
 use datafusion_physical_plan::metrics::SplitMetrics;
-use datafusion_physical_plan::metrics::{
-    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
-};
+use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::stream::BatchSplitStream;
 use datafusion_physical_plan::{

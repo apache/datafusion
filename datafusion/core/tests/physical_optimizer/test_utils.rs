@@ -38,7 +38,6 @@ use datafusion_common::{
     ColumnStatistics, JoinType, NullEquality, Result, Statistics, internal_err,
 };
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
-use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
 use datafusion_functions_aggregate::count::count_udaf;
@@ -74,11 +73,12 @@ use datafusion_physical_plan::{
     InputDistributionRequirements, InputOrderMode, Partitioning, PlanProperties,
     ReplaceChildrenOptions, SortOrderPushdownResult, StatisticsArgs, displayable,
 };
+use datafusion_storage::StorageUrl;
 
 /// Create a non sorted parquet exec
 pub fn parquet_exec(schema: SchemaRef) -> Arc<DataSourceExec> {
     let config = FileScanConfigBuilder::new(
-        ObjectStoreUrl::parse("test:///").unwrap(),
+        StorageUrl::parse("test:///").unwrap(),
         Arc::new(ParquetSource::new(schema)),
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
@@ -93,7 +93,7 @@ pub(crate) fn parquet_exec_with_sort(
     output_ordering: Vec<LexOrdering>,
 ) -> Arc<DataSourceExec> {
     let config = FileScanConfigBuilder::new(
-        ObjectStoreUrl::parse("test:///").unwrap(),
+        StorageUrl::parse("test:///").unwrap(),
         Arc::new(ParquetSource::new(schema)),
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
@@ -131,7 +131,7 @@ pub(crate) fn parquet_exec_with_stats(file_size: u64) -> Arc<DataSourceExec> {
     statistics.column_statistics = column_stats();
 
     let config = FileScanConfigBuilder::new(
-        ObjectStoreUrl::parse("test:///").unwrap(),
+        StorageUrl::parse("test:///").unwrap(),
         Arc::new(ParquetSource::new(schema())),
     )
     .with_file(PartitionedFile::new("x".to_string(), file_size))

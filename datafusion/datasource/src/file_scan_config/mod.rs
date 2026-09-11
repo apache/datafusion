@@ -42,10 +42,9 @@ use datafusion_common::{
     Constraint, Constraints, Result, ScalarValue, Statistics, internal_datafusion_err,
     internal_err,
 };
-use datafusion_execution::{
-    SendableRecordBatchStream, TaskContext, object_store::ObjectStoreUrl,
-};
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::Operator;
+use datafusion_storage::StorageUrl;
 
 use crate::source::OpenArgs;
 use datafusion_common::stats::{Precision, is_known_empty};
@@ -89,7 +88,7 @@ use std::{fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::{Field, Fields, DataType, Schema, SchemaRef};
-/// # use object_store::ObjectStore;
+/// # use datafusion_storage::StorageBinding;
 /// # use datafusion_common::Result;
 /// # use datafusion_common::tree_node::TreeNodeRecursion;
 /// # use datafusion_datasource::file::FileSource;
@@ -100,7 +99,7 @@ use std::{fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
 /// # use datafusion_datasource::file_stream::FileOpener;
 /// # use datafusion_datasource::source::DataSourceExec;
 /// # use datafusion_datasource::table_schema::TableSchema;
-/// # use datafusion_execution::object_store::ObjectStoreUrl;
+/// # use datafusion_storage::StorageUrl;
 /// # use datafusion_physical_expr::projection::ProjectionExprs;
 /// # use datafusion_physical_plan::ExecutionPlan;
 /// # use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
@@ -116,7 +115,7 @@ use std::{fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
 /// #    table_schema: TableSchema,
 /// # };
 /// # impl FileSource for ParquetSource {
-/// #  fn create_file_opener(&self, _: Arc<dyn ObjectStore>, _: &FileScanConfig, _: usize) -> Result<Arc<dyn FileOpener>> { unimplemented!() }
+/// #  fn create_file_opener(&self, _: Arc<StorageBinding>, _: &FileScanConfig, _: usize, _: datafusion_storage::FileAccessContext) -> Result<Arc<dyn FileOpener>> { unimplemented!() }
 /// #  fn table_schema(&self) -> &TableSchema { &self.table_schema }
 /// #  fn with_batch_size(&self, _: usize) -> Arc<dyn FileSource> { unimplemented!() }
 /// #  fn metrics(&self) -> &ExecutionPlanMetricsSet { unimplemented!() }
@@ -129,7 +128,7 @@ use std::{fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
 /// #  fn new(table_schema: impl Into<TableSchema>) -> Self { Self {table_schema: table_schema.into()} }
 /// # }
 /// // create FileScan config for reading parquet files from file://
-/// let object_store_url = ObjectStoreUrl::local_filesystem();
+/// let object_store_url = StorageUrl::local_filesystem();
 /// let file_source = Arc::new(ParquetSource::new(file_schema.clone()));
 /// let config = FileScanConfigBuilder::new(object_store_url, file_source)
 ///   .with_limit(Some(1000))            // read only the first 1000 records
@@ -151,18 +150,10 @@ use std::{fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
 /// [`DataSourceExec::from_data_source`]: crate::source::DataSourceExec::from_data_source
 #[derive(Clone)]
 pub struct FileScanConfig {
-    /// Object store URL, used to get an [`ObjectStore`] instance from
-    /// [`RuntimeEnv::object_store`]
-    ///
-    /// This `ObjectStoreUrl` should be the prefix of the absolute url for files
-    /// as `file://` or `s3://my_bucket`. It should not include the path to the
-    /// file itself. The relevant URL prefix must be registered via
-    /// [`RuntimeEnv::register_object_store`]
-    ///
-    /// [`ObjectStore`]: object_store::ObjectStore
-    /// [`RuntimeEnv::register_object_store`]: datafusion_execution::runtime_env::RuntimeEnv::register_object_store
-    /// [`RuntimeEnv::object_store`]: datafusion_execution::runtime_env::RuntimeEnv::object_store
-    pub object_store_url: ObjectStoreUrl,
+    /// Storage namespace for these files, such as `file://` or `s3://bucket`.
+    /// A bound configuration retains its storage; otherwise execution resolves
+    /// this namespace from the runtime storage registry.
+    pub object_store_url: StorageUrl,
     /// List of files to be processed, grouped into partitions
     ///
     /// Each file must have a schema of `file_schema` or a subset. If
@@ -201,6 +192,8 @@ pub struct FileScanConfig {
     pub file_compression_type: FileCompressionType,
     /// File source such as `ParquetSource`, `CsvSource`, `JsonSource`, etc.
     pub file_source: Arc<dyn FileSource>,
+    /// Storage resolved during planning, retained across execution.
+    pub storage: Option<Arc<datafusion_storage::StorageBinding>>,
     /// Batch size while creating new batches
     /// Defaults to [`datafusion_common::config::ExecutionOptions`] batch_size.
     pub batch_size: Option<usize>,
@@ -238,7 +231,7 @@ pub struct FileScanConfig {
 /// # use datafusion_datasource::file_groups::FileGroup;
 /// # use datafusion_datasource::PartitionedFile;
 /// # use datafusion_datasource::table_schema::TableSchema;
-/// # use datafusion_execution::object_store::ObjectStoreUrl;
+/// # use datafusion_storage::StorageUrl;
 /// # use datafusion_common::Statistics;
 /// # use datafusion_datasource::file::FileSource;
 ///
@@ -262,7 +255,7 @@ pub struct FileScanConfig {
 ///
 ///     // Create a builder for scanning Parquet files from a local filesystem
 ///     let config = FileScanConfigBuilder::new(
-///         ObjectStoreUrl::local_filesystem(),
+///         StorageUrl::local_filesystem(),
 ///         file_source,
 ///     )
 ///     // Set a limit of 1000 rows
@@ -284,8 +277,9 @@ pub struct FileScanConfig {
 /// ```
 #[derive(Clone)]
 pub struct FileScanConfigBuilder {
-    object_store_url: ObjectStoreUrl,
+    object_store_url: StorageUrl,
     file_source: Arc<dyn FileSource>,
+    storage: Option<Arc<datafusion_storage::StorageBinding>>,
     limit: Option<usize>,
     preserve_order: bool,
     constraints: Option<Constraints>,
@@ -305,13 +299,11 @@ impl FileScanConfigBuilder {
     /// * `object_store_url`: See [`FileScanConfig::object_store_url`]
     /// * `file_source`: See [`FileScanConfig::file_source`]. The file source must have
     ///   a schema set via its constructor.
-    pub fn new(
-        object_store_url: ObjectStoreUrl,
-        file_source: Arc<dyn FileSource>,
-    ) -> Self {
+    pub fn new(object_store_url: StorageUrl, file_source: Arc<dyn FileSource>) -> Self {
         Self {
             object_store_url,
             file_source,
+            storage: None,
             file_groups: vec![],
             statistics: None,
             output_ordering: vec![],
@@ -348,6 +340,15 @@ impl FileScanConfigBuilder {
     ///
     /// This method allows you to change the file source implementation (e.g.
     /// ParquetSource, CsvSource, etc.) after the builder has been created.
+    /// Retain the complete binding selected during planning.
+    pub fn with_storage(
+        mut self,
+        storage: Arc<datafusion_storage::StorageBinding>,
+    ) -> Self {
+        self.storage = Some(storage);
+        self
+    }
+
     pub fn with_source(mut self, file_source: Arc<dyn FileSource>) -> Self {
         self.file_source = file_source;
         self
@@ -530,6 +531,7 @@ impl FileScanConfigBuilder {
         let Self {
             object_store_url,
             file_source,
+            storage,
             limit,
             preserve_order,
             constraints,
@@ -556,6 +558,7 @@ impl FileScanConfigBuilder {
         FileScanConfig {
             object_store_url,
             file_source,
+            storage,
             limit,
             preserve_order,
             constraints,
@@ -599,6 +602,7 @@ fn add_key_distinct_counts(constraints: &Constraints, statistics: &mut Statistic
 impl From<FileScanConfig> for FileScanConfigBuilder {
     fn from(config: FileScanConfig) -> Self {
         Self {
+            storage: config.storage,
             object_store_url: config.object_store_url,
             file_source: Arc::<dyn FileSource>::clone(&config.file_source),
             file_groups: config.file_groups,
@@ -731,14 +735,22 @@ impl DataSource for FileScanConfig {
             context,
             sibling_state,
         } = args;
-        let object_store = context.runtime_env().object_store(&self.object_store_url)?;
         let batch_size = self
             .batch_size
             .unwrap_or_else(|| context.session_config().batch_size());
 
         let source = self.file_source.with_batch_size(batch_size);
 
-        let morselizer = source.create_morselizer(object_store, self, partition)?;
+        let access_context = datafusion_storage::FileAccessContext::new(
+            context.task_id().unwrap_or_else(|| context.session_id()),
+        );
+        let cancel_on_drop = access_context.cancellation.clone().drop_guard();
+        let morselizer = source.create_morselizer_with_context(
+            self,
+            partition,
+            &context,
+            access_context,
+        )?;
 
         // Extract the shared work source from the sibling state if it exists.
         // This allows multiple sibling streams to steal work from a single
@@ -754,7 +766,20 @@ impl DataSource for FileScanConfig {
             .with_morselizer(morselizer)
             .with_metrics(source.metrics())
             .build()?;
-        Ok(Box::pin(cooperative(stream)))
+        use datafusion_execution::RecordBatchStream;
+        use futures::StreamExt;
+        let schema = stream.schema();
+        let stream = futures::stream::unfold(
+            (cooperative(stream), cancel_on_drop),
+            |(mut stream, guard)| async move {
+                stream.next().await.map(|batch| (batch, (stream, guard)))
+            },
+        );
+        Ok(Box::pin(
+            datafusion_physical_plan::stream::RecordBatchStreamAdapter::new(
+                schema, stream,
+            ),
+        ))
     }
 
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
@@ -1684,10 +1709,10 @@ mod tests {
     use datafusion_physical_plan::proto::{ExecutionPlanEncode, ExecutionPlanEncodeCtx};
     #[cfg(feature = "proto")]
     use datafusion_proto_models::protobuf::{PhysicalExprNode, PhysicalPlanNode};
+    use datafusion_storage::StorageBinding;
     use futures::FutureExt as _;
     use futures::StreamExt as _;
     use futures::stream;
-    use object_store::ObjectStore;
     use std::fmt::Debug;
 
     #[derive(Clone)]
@@ -1708,9 +1733,10 @@ mod tests {
     impl FileSource for InexactSortPushdownSource {
         fn create_file_opener(
             &self,
-            _object_store: Arc<dyn ObjectStore>,
+            _object_store: Arc<StorageBinding>,
             _base_config: &FileScanConfig,
             _partition: usize,
+            _access_context: datafusion_storage::FileAccessContext,
         ) -> Result<Arc<dyn crate::file_stream::FileOpener>> {
             unimplemented!()
         }
@@ -1770,9 +1796,10 @@ mod tests {
     impl FileSource for ProtoHookSource {
         fn create_file_opener(
             &self,
-            _object_store: Arc<dyn ObjectStore>,
+            _object_store: Arc<StorageBinding>,
             _base_config: &FileScanConfig,
             _partition: usize,
+            _access_context: datafusion_storage::FileAccessContext,
         ) -> Result<Arc<dyn crate::file_stream::FileOpener>> {
             internal_err!("not needed for proto delegation test")
         }
@@ -1848,8 +1875,7 @@ mod tests {
         )]));
         let source = Arc::new(ProtoHookSource::new(TableSchema::from(&schema)));
         let config =
-            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
-                .build();
+            FileScanConfigBuilder::new(StorageUrl::local_filesystem(), source).build();
         let exec = DataSourceExec::from_data_source(config);
         let encoder = UnusedPlanEncoder;
         let ctx = ExecutionPlanEncodeCtx::new(&encoder);
@@ -1893,7 +1919,7 @@ mod tests {
         use datafusion_common::DFSchema;
         use datafusion_expr::execution_props::ExecutionProps;
         use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
-        use object_store::{ObjectMeta, path::Path};
+        use datafusion_storage::{FileInfo as ObjectMeta, path::Path};
 
         struct File {
             name: &'static str,
@@ -2209,7 +2235,7 @@ mod tests {
         projection: Option<Vec<usize>>,
     ) -> FileScanConfig {
         FileScanConfigBuilder::new(
-            ObjectStoreUrl::parse("test:///").unwrap(),
+            StorageUrl::parse("test:///").unwrap(),
             Arc::new(MockSource::new(table_schema)),
         )
         .with_statistics(statistics)
@@ -2328,7 +2354,7 @@ mod tests {
             )
             .build();
         FileScanConfigBuilder::new(
-            ObjectStoreUrl::parse("test:///").unwrap(),
+            StorageUrl::parse("test:///").unwrap(),
             Arc::new(MockSource::new(table_schema.clone())),
         )
         .with_projection_indices(projection)
@@ -2340,7 +2366,7 @@ mod tests {
     #[test]
     fn test_file_scan_config_builder() {
         let file_schema = aggr_test_schema();
-        let object_store_url = ObjectStoreUrl::parse("test:///").unwrap();
+        let object_store_url = StorageUrl::parse("test:///").unwrap();
 
         let table_schema = TableSchemaBuilder::from(&file_schema)
             .with_table_partition_cols(vec![Arc::new(Field::new(
@@ -2408,7 +2434,7 @@ mod tests {
     #[test]
     fn equivalence_properties_after_schema_change() {
         let file_schema = aggr_test_schema();
-        let object_store_url = ObjectStoreUrl::parse("test:///").unwrap();
+        let object_store_url = StorageUrl::parse("test:///").unwrap();
 
         let table_schema = TableSchema::from(&file_schema);
 
@@ -2461,7 +2487,7 @@ mod tests {
     #[test]
     fn test_file_scan_config_builder_defaults() {
         let file_schema = aggr_test_schema();
-        let object_store_url = ObjectStoreUrl::parse("test:///").unwrap();
+        let object_store_url = StorageUrl::parse("test:///").unwrap();
 
         let table_schema = TableSchema::from(&file_schema);
 
@@ -2517,7 +2543,7 @@ mod tests {
     #[test]
     fn test_file_scan_config_builder_new_from() {
         let schema = aggr_test_schema();
-        let object_store_url = ObjectStoreUrl::parse("test:///").unwrap();
+        let object_store_url = StorageUrl::parse("test:///").unwrap();
         let partition_cols = vec![Field::new(
             "date",
             wrap_partition_type_in_dict(DataType::Utf8),
@@ -2865,7 +2891,7 @@ mod tests {
 
         // Create a FileScanConfig with projection: only keep columns 0 and 2
         let config = FileScanConfigBuilder::new(
-            ObjectStoreUrl::parse("test:///").unwrap(),
+            StorageUrl::parse("test:///").unwrap(),
             Arc::new(MockSource::new(table_schema.clone())),
         )
         .with_projection_indices(Some(vec![0, 2]))
@@ -2935,7 +2961,7 @@ mod tests {
 
             let table_schema = TableSchema::from(&schema);
             let config = FileScanConfigBuilder::new(
-                ObjectStoreUrl::parse("test:///").unwrap(),
+                StorageUrl::parse("test:///").unwrap(),
                 Arc::new(MockSource::new(table_schema.clone()).with_filter(Arc::new(
                     Literal::new(ScalarValue::Boolean(Some(true))),
                 ))),
@@ -2967,7 +2993,8 @@ mod tests {
         );
 
         let config =
-            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
+                .with_storage(test_utils::storage::local())
                 .with_file_group(FileGroup::new(vec![
                     PartitionedFile::new("file1.parquet", 100),
                     PartitionedFile::new("file2.parquet", 100),
@@ -3205,7 +3232,7 @@ mod tests {
 
         let sort_expr_asc = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
         let config =
-            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
                 .with_file_groups(file_groups)
                 .with_output_ordering(vec![
                     LexOrdering::new(vec![sort_expr_asc.clone()]).unwrap(),
@@ -3281,9 +3308,10 @@ mod tests {
     impl FileSource for ExactSortPushdownSource {
         fn create_file_opener(
             &self,
-            _object_store: Arc<dyn ObjectStore>,
+            _object_store: Arc<StorageBinding>,
             _base_config: &FileScanConfig,
             _partition: usize,
+            _access_context: datafusion_storage::FileAccessContext,
         ) -> Result<Arc<dyn crate::file_stream::FileOpener>> {
             unimplemented!()
         }
@@ -3337,7 +3365,7 @@ mod tests {
 
         let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
         let config =
-            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
                 .with_file_groups(file_groups)
                 .build();
 
@@ -3371,7 +3399,7 @@ mod tests {
 
         let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
         let config =
-            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
                 .with_file_groups(file_groups)
                 .build();
 
@@ -3401,7 +3429,7 @@ mod tests {
             },
         );
         let config =
-            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
                 .with_file_groups(file_groups)
                 .build();
 
@@ -3435,7 +3463,7 @@ mod tests {
         ])];
 
         let config =
-            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
                 .with_file_groups(file_groups)
                 .with_output_ordering(vec![
                     LexOrdering::new(vec![sort_expr.clone()]).unwrap(),
@@ -3469,7 +3497,7 @@ mod tests {
         ])];
 
         let config =
-            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
                 .with_file_groups(file_groups)
                 .with_output_ordering(vec![
                     LexOrdering::new(vec![sort_expr.clone()]).unwrap(),
@@ -3503,7 +3531,7 @@ mod tests {
         ])];
 
         let config =
-            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
                 .with_file_groups(file_groups)
                 .with_output_ordering(vec![
                     LexOrdering::new(vec![sort_expr.clone()]).unwrap(),
@@ -3539,7 +3567,7 @@ mod tests {
 
         let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
         let config =
-            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
                 .with_file_groups(file_groups)
                 .build();
 
@@ -3571,7 +3599,7 @@ mod tests {
 
         let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
         let config =
-            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
                 .with_file_groups(file_groups)
                 .build();
 
@@ -3611,7 +3639,7 @@ mod tests {
 
         let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
         let config =
-            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
                 .with_file_groups(file_groups)
                 .build();
 
@@ -3645,7 +3673,7 @@ mod tests {
 
         let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
         let config =
-            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
                 .with_file_groups(file_groups)
                 .build();
 
@@ -3692,7 +3720,7 @@ mod tests {
         ];
 
         let config =
-            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
                 .with_file_groups(file_groups)
                 .with_output_ordering(vec![
                     LexOrdering::new(vec![sort_expr.clone()]).unwrap(),
@@ -3743,7 +3771,7 @@ mod tests {
         ])];
 
         let config =
-            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
                 .with_file_groups(file_groups)
                 .with_output_ordering(vec![
                     LexOrdering::new(vec![sort_expr.clone()]).unwrap(),
@@ -3809,7 +3837,7 @@ mod tests {
         ])];
 
         let config =
-            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
                 .with_file_groups(file_groups)
                 .with_output_ordering(vec![
                     LexOrdering::new(vec![sort_expr.clone()]).unwrap(),
@@ -3841,7 +3869,7 @@ mod tests {
         ])];
 
         let config =
-            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
                 .with_file_groups(file_groups)
                 .with_output_ordering(vec![
                     LexOrdering::new(vec![sort_expr.clone()]).unwrap(),

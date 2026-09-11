@@ -33,11 +33,11 @@ use crate::{functions, functions_aggregate, functions_table, functions_window};
 use datafusion_catalog::TableFunction;
 use datafusion_catalog::{MemoryCatalogProvider, MemorySchemaProvider};
 use datafusion_execution::config::SessionConfig;
-use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::registry::ExtensionTypeRegistrationRef;
 use datafusion_expr::{AggregateUDF, HigherOrderUDF, ScalarUDF, WindowUDF};
+use datafusion_storage::StorageUrl;
 use std::collections::HashMap;
 use std::sync::Arc;
 use url::Url;
@@ -47,6 +47,26 @@ use url::Url;
 pub struct SessionStateDefaults {}
 
 impl SessionStateDefaults {
+    /// Assemble the default runtime. Backend features only affect this boundary.
+    pub fn default_runtime_env() -> Arc<RuntimeEnv> {
+        let runtime = Arc::new(RuntimeEnv::default());
+        Self::configure_runtime(&runtime);
+        runtime
+    }
+
+    /// Install default backends once, preserving application registrations.
+    pub(crate) fn configure_runtime(runtime: &RuntimeEnv) {
+        #[cfg(all(feature = "object_store", not(target_arch = "wasm32")))]
+        runtime
+            .storage_registry
+            .register_default(
+                StorageUrl::local_filesystem().as_ref(),
+                Arc::new(datafusion_storage_object_store::ObjectStoreStorage::local()),
+            )
+            .expect("valid local storage namespace");
+        let _ = runtime;
+    }
+
     /// returns a map of the default [`TableProviderFactory`]s
     pub fn default_table_factories() -> HashMap<String, Arc<dyn TableProviderFactory>> {
         let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
@@ -207,10 +227,10 @@ impl SessionStateDefaults {
             None => format!("{}://", url.scheme()),
         };
         let path = &url.as_str()[authority.len()..];
-        let path = object_store::path::Path::parse(path).expect("Can't parse path");
-        let store = ObjectStoreUrl::parse(authority.as_str())
-            .expect("Invalid default catalog url");
-        let Ok(store) = runtime.object_store(store) else {
+        let path = datafusion_storage::path::Path::parse(path).expect("Can't parse path");
+        let store =
+            StorageUrl::parse(authority.as_str()).expect("Invalid default catalog url");
+        let Ok(store) = runtime.storage(store) else {
             return;
         };
         let Some(factory) = table_factories.get(format.as_str()) else {

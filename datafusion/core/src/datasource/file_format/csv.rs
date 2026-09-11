@@ -381,9 +381,10 @@ mod tests {
         let variable_object_store =
             Arc::new(VariableStream::new(Bytes::from("1,2,3,4,5\n"), 200));
         let object_meta = ObjectMeta {
-            location: Path::parse("/")?,
+            location: Path::parse("/").unwrap(),
             last_modified: DateTime::default(),
-            size: u64::MAX,
+            size: variable_object_store.bytes_to_repeat.len() as u64
+                * variable_object_store.max_iterations,
             e_tag: None,
             version: None,
         };
@@ -395,8 +396,8 @@ mod tests {
         let inferred_schema = csv_format
             .infer_schema(
                 &state,
-                &(variable_object_store.clone() as Arc<dyn ObjectStore>),
-                &[object_meta],
+                &test_utils::storage::object_store(variable_object_store.clone()),
+                &[datafusion_storage_object_store::file_info(object_meta)],
             )
             .await?;
 
@@ -439,9 +440,10 @@ mod tests {
             1,
         ));
         let object_meta = ObjectMeta {
-            location: Path::parse("/")?,
+            location: Path::parse("/").unwrap(),
             last_modified: DateTime::default(),
-            size: u64::MAX,
+            size: variable_object_store.bytes_to_repeat.len() as u64
+                * variable_object_store.max_iterations,
             e_tag: None,
             version: None,
         };
@@ -456,8 +458,8 @@ mod tests {
         let inferred_schema = csv_format
             .infer_schema(
                 &state,
-                &(variable_object_store.clone() as Arc<dyn ObjectStore>),
-                &[object_meta],
+                &test_utils::storage::object_store(variable_object_store.clone()),
+                &[datafusion_storage_object_store::file_info(object_meta)],
             )
             .await?;
 
@@ -500,9 +502,9 @@ mod tests {
             1,
         ));
         let object_meta = ObjectMeta {
-            location: Path::parse("/")?,
+            location: Path::parse("/").unwrap(),
             last_modified: DateTime::default(),
-            size: u64::MAX,
+            size: b"c1,c2,c3\n1,1.0,\n,,\n".len() as u64,
             e_tag: None,
             version: None,
         };
@@ -511,8 +513,8 @@ mod tests {
         let inferred_schema = csv_format
             .infer_schema(
                 &state,
-                &(chunked_object_store as Arc<dyn ObjectStore>),
-                &[object_meta],
+                &test_utils::storage::object_store(chunked_object_store),
+                &[datafusion_storage_object_store::file_info(object_meta)],
             )
             .await?;
 
@@ -559,14 +561,14 @@ mod tests {
             .schema_infer_max_rec
             .unwrap_or(DEFAULT_SCHEMA_INFER_MAX_RECORD);
         let store = Arc::new(integration) as Arc<dyn ObjectStore>;
-        let original_stream = store.get(&path).await?;
+        let original_stream = store.get(&path).await.unwrap();
 
         //convert original_stream to compressed_stream for next step
         let compressed_stream =
             file_compression_type.to_owned().convert_to_compress_stream(
                 original_stream
                     .into_stream()
-                    .map_err(DataFusionError::from)
+                    .map_err(|e| DataFusionError::External(Box::new(e)))
                     .boxed(),
             );
 
@@ -1375,9 +1377,10 @@ mod tests {
         let csv_data = Bytes::from("a,b,c\n1,2\n3,4,5\n");
         let variable_object_store = Arc::new(VariableStream::new(csv_data, 1));
         let object_meta = ObjectMeta {
-            location: Path::parse("/")?,
+            location: Path::parse("/").unwrap(),
             last_modified: DateTime::default(),
-            size: u64::MAX,
+            size: variable_object_store.bytes_to_repeat.len() as u64
+                * variable_object_store.max_iterations,
             e_tag: None,
             version: None,
         };
@@ -1392,8 +1395,8 @@ mod tests {
         let inferred_schema = csv_format
             .infer_schema(
                 &state,
-                &(variable_object_store.clone() as Arc<dyn ObjectStore>),
-                &[object_meta],
+                &test_utils::storage::object_store(variable_object_store.clone()),
+                &[datafusion_storage_object_store::file_info(object_meta)],
             )
             .await?;
 
@@ -1452,9 +1455,10 @@ mod tests {
         let csv_data = Bytes::from("id,a,b,c\n1,foo,bar\n2,foo,bar,baz\n");
         let variable_object_store = Arc::new(VariableStream::new(csv_data, 1));
         let object_meta = ObjectMeta {
-            location: Path::parse("/")?,
+            location: Path::parse("/").unwrap(),
             last_modified: DateTime::default(),
-            size: u64::MAX,
+            size: variable_object_store.bytes_to_repeat.len() as u64
+                * variable_object_store.max_iterations,
             e_tag: None,
             version: None,
         };
@@ -1467,8 +1471,8 @@ mod tests {
         let res = csv_format
             .infer_schema(
                 &state,
-                &(variable_object_store.clone() as Arc<dyn ObjectStore>),
-                &[object_meta],
+                &test_utils::storage::object_store(variable_object_store.clone()),
+                &[datafusion_storage_object_store::file_info(object_meta)],
             )
             .await;
 
@@ -1627,7 +1631,7 @@ mod tests {
         let path = directory.path().join("duplicate_header.csv");
         std::fs::write(&path, "id,value,value\n1,10,100\n")?;
 
-        let store = Arc::new(LocalFileSystem::new()) as _;
+        let store = test_utils::storage::local();
         let meta = crate::test::object_store::local_unpartitioned_file(&path);
 
         let ctx = SessionContext::new().state();

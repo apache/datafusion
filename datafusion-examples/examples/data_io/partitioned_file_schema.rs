@@ -21,13 +21,13 @@ use arrow::array::{Int32Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion::common::Result;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::TaskContext;
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::file::reader::Length;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::storage::StorageUrl;
 use futures::StreamExt;
 use std::fs::File;
 use std::path::Path;
@@ -131,7 +131,7 @@ async fn read_file(
     }
 
     let config = FileScanConfigBuilder::new(
-        ObjectStoreUrl::local_filesystem(),
+        StorageUrl::local_filesystem(),
         Arc::new(ParquetSource::new(source_schema)),
     )
     .with_file(partitioned_file)

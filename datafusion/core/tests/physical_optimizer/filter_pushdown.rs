@@ -42,7 +42,6 @@ use datafusion_common::{
 use datafusion_datasource::{
     PartitionedFile, file_groups::FileGroup, file_scan_config::FileScanConfigBuilder,
 };
-use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::math::random::RandomFunc;
 use datafusion_functions_aggregate::{
@@ -75,6 +74,7 @@ use datafusion_physical_plan::{
     repartition::RepartitionExec,
     sorts::sort::SortExec,
 };
+use datafusion_storage::StorageUrl;
 
 use super::pushdown_utils::{
     OptimizationTest, TestNode, TestScanBuilder, TestSource, format_plan_for_test,
@@ -900,7 +900,7 @@ async fn test_topk_filter_passes_through_coalesce_partitions() {
     let source = Arc::new(TestSource::new(schema(), true, batches));
 
     let base_config =
-        FileScanConfigBuilder::new(ObjectStoreUrl::parse("test://").unwrap(), source)
+        FileScanConfigBuilder::new(StorageUrl::parse("test://").unwrap(), source)
             .with_file_groups(vec![
                 // Partition 0
                 FileGroup::new(vec![PartitionedFile::new("test1.parquet", 123)]),
@@ -998,10 +998,14 @@ async fn optimize_and_collect_pushdown_plan(
         .unwrap();
     let session_ctx =
         SessionContext::new_with_config(SessionConfig::from(config).with_batch_size(10));
-    session_ctx.register_object_store(
-        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
-        Arc::new(InMemory::new()),
-    );
+    session_ctx
+        .register_storage(
+            StorageUrl::parse("test://").unwrap().as_ref(),
+            Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+                Arc::new(InMemory::new()),
+            )),
+        )
+        .unwrap();
     let task_ctx = session_ctx.state().task_ctx();
     let batches = collect(Arc::clone(&plan), task_ctx).await.unwrap();
     (plan, batches)
@@ -2287,10 +2291,14 @@ async fn test_no_pushdown_through_global_aggregate_with_name_collision() {
     assert!(optimized.downcast_ref::<FilterExec>().is_some());
 
     let session_ctx = SessionContext::new();
-    session_ctx.register_object_store(
-        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
-        Arc::new(InMemory::new()),
-    );
+    session_ctx
+        .register_storage(
+            StorageUrl::parse("test://").unwrap().as_ref(),
+            Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+                Arc::new(InMemory::new()),
+            )),
+        )
+        .unwrap();
     let batches = collect(optimized, session_ctx.state().task_ctx())
         .await
         .unwrap();
@@ -2728,10 +2736,14 @@ async fn test_hashjoin_dynamic_filter_all_partitions_empty() {
 
     // Put some data through the plan to check that the filter is updated to reflect the TopK state
     let session_ctx = SessionContext::new_with_config(config);
-    session_ctx.register_object_store(
-        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
-        Arc::new(InMemory::new()),
-    );
+    session_ctx
+        .register_storage(
+            StorageUrl::parse("test://").unwrap().as_ref(),
+            Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+                Arc::new(InMemory::new()),
+            )),
+        )
+        .unwrap();
     let state = session_ctx.state();
     let task_ctx = state.task_ctx();
     // Execute all partitions (required for partitioned hash join coordination)
@@ -3128,10 +3140,14 @@ async fn test_hashjoin_dynamic_filter_survives_probe_subtree_replacement() {
 
     let session_ctx =
         SessionContext::new_with_config(SessionConfig::from(config).with_batch_size(10));
-    session_ctx.register_object_store(
-        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
-        Arc::new(InMemory::new()),
-    );
+    session_ctx
+        .register_storage(
+            StorageUrl::parse("test://").unwrap().as_ref(),
+            Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+                Arc::new(InMemory::new()),
+            )),
+        )
+        .unwrap();
     collect(Arc::clone(&plan), session_ctx.state().task_ctx())
         .await
         .unwrap();

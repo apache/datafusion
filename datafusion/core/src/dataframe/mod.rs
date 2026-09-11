@@ -42,7 +42,8 @@ use crate::physical_plan::{
 };
 use crate::prelude::SessionContext;
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
@@ -51,9 +52,10 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::util::display::{ArrayFormatter, FormatOptions};
 use arrow_schema::FieldRef;
 use datafusion_common::config::{CsvOptions, JsonOptions};
+use datafusion_common::not_impl_err;
 use datafusion_common::{
     Column, DFSchema, DataFusionError, ParamValues, ScalarValue, SchemaError,
-    TableReference, UnnestOptions, exec_err, internal_datafusion_err, not_impl_err,
+    TableReference, UnnestOptions, exec_err, internal_datafusion_err,
     plan_datafusion_err, plan_err, unqualified_field_not_found,
 };
 use datafusion_expr::select_expr::SelectExpr;

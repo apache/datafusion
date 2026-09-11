@@ -25,12 +25,12 @@ use crate::write::demux::{DemuxedStreamReceiver, start_demuxer_task};
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::Result;
 use datafusion_common_runtime::SpawnedTask;
-use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
+use datafusion_storage::StorageUrl;
 
 use async_trait::async_trait;
-use object_store::ObjectStore;
+use datafusion_storage::StorageBinding;
 
 #[cfg(feature = "proto")]
 mod proto;
@@ -112,7 +112,7 @@ pub trait FileSink: DataSink {
         context: &Arc<TaskContext>,
         demux_task: SpawnedTask<Result<()>>,
         file_stream_rx: DemuxedStreamReceiver,
-        object_store: Arc<dyn ObjectStore>,
+        object_store: Arc<StorageBinding>,
     ) -> Result<u64>;
 
     /// File sink implementation of the [`DataSink::write_all`] method.
@@ -122,9 +122,10 @@ pub trait FileSink: DataSink {
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
         let config = self.config();
-        let object_store = context
-            .runtime_env()
-            .object_store(&config.object_store_url)?;
+        let object_store = match &config.storage {
+            Some(storage) => Arc::clone(storage),
+            None => context.runtime_env().storage(&config.object_store_url)?,
+        };
         let (demux_task, file_stream_rx) = start_demuxer_task(config, data, context);
         self.spawn_writer_tasks_and_join(
             context,
@@ -140,10 +141,12 @@ pub trait FileSink: DataSink {
 /// writing to any given file format.
 #[derive(Debug, Clone)]
 pub struct FileSinkConfig {
+    /// Immutable output registration retained by the physical plan.
+    pub storage: Option<Arc<StorageBinding>>,
     /// The unresolved URL specified by the user
     pub original_url: String,
-    /// Object store URL, used to get an ObjectStore instance
-    pub object_store_url: ObjectStoreUrl,
+    /// Storage namespace used when no immutable binding has been supplied.
+    pub object_store_url: StorageUrl,
     /// A collection of files organized into groups.
     /// Each FileGroup contains one or more PartitionedFile objects.
     pub file_group: FileGroup,

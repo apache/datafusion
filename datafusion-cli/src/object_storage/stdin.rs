@@ -118,16 +118,20 @@ impl StdinUtils {
     pub(crate) async fn get_or_create(
         state: &SessionState,
         url: &Url,
-    ) -> Result<Arc<dyn ObjectStore>> {
-        let Ok(existing) = state.runtime_env().object_store_registry.get_store(url)
-        else {
-            return Self::object_store(state, url).await;
+    ) -> Result<Arc<dyn datafusion::storage::Storage>> {
+        let Ok(existing) = state.runtime_env().storage_registry.get(url) else {
+            return Ok(Arc::new(
+                datafusion_storage_object_store::ObjectStoreStorage::new(
+                    Self::object_store(state, url).await?,
+                ),
+            ));
         };
 
-        let path = ObjectStorePath::from_url_path(url.path())?;
-        if existing.head(&path).await.is_err() {
+        let path = datafusion::storage::path::Path::from_url_path(url.path())?;
+        let context = datafusion::storage::FileAccessContext::new("stdin");
+        if existing.stat(&path, &context).await.is_err() {
             let buffered = existing
-                .list(None)
+                .list(&datafusion::storage::path::Path::default(), context)
                 .try_next()
                 .await
                 .ok()
@@ -140,7 +144,7 @@ impl StdinUtils {
                  STORED AS format"
             ));
         }
-        Ok(existing)
+        Ok(existing.storage().clone())
     }
 
     /// Builds the object store backing the `stdin://` scheme by reading all of
@@ -191,8 +195,14 @@ impl StdinUtils {
     ) -> Result<Arc<dyn ObjectStore>> {
         let store = InMemory::new();
         store
-            .put(&ObjectStorePath::from_url_path(url.path())?, data.into())
-            .await?;
+            .put(
+                &ObjectStorePath::from_url_path(url.path()).map_err(|e| {
+                    datafusion::common::DataFusionError::External(Box::new(e))
+                })?,
+                data.into(),
+            )
+            .await
+            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
         Ok(Arc::new(store))
     }
 }
@@ -252,7 +262,12 @@ mod tests {
         let store = StdinUtils::in_memory_object_store(&url, data).await?;
 
         let ctx = SessionContext::new();
-        ctx.register_object_store(&url, store);
+        ctx.register_storage(
+            &url,
+            Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+                store,
+            )),
+        )?;
         ctx.sql(&format!(
             "CREATE EXTERNAL TABLE t STORED AS {stored_as} LOCATION '{location}' {options}"
         ))
@@ -276,19 +291,29 @@ mod tests {
         // lookup through `get_or_create` and assert it hands back that exact
         // store rather than rebuilding it.
         let url = Url::parse("stdin:///stdin.csv").unwrap();
-        let path = ObjectStorePath::from_url_path(url.path())?;
+        let path = ObjectStorePath::from_url_path(url.path())
+            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
         let buffered: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        buffered.put(&path, b"a\n1\n2\n".to_vec().into()).await?;
+        buffered
+            .put(&path, b"a\n1\n2\n".to_vec().into())
+            .await
+            .unwrap();
 
         let ctx = SessionContext::new();
-        ctx.register_object_store(&url, Arc::clone(&buffered));
+        ctx.register_storage(
+            &url,
+            Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+                buffered.clone(),
+            )),
+        )?;
 
         let reused = StdinUtils::get_or_create(&ctx.state(), &url).await?;
-        assert!(
-            Arc::ptr_eq(&buffered, &reused),
-            "get_or_create must reuse the registered stdin store, not rebuild it"
-        );
-        let bytes = reused.get(&path).await?.bytes().await?;
+        let original = ctx.runtime_env().storage_registry.get(&url)?;
+        assert!(Arc::ptr_eq(original.storage(), &reused));
+        let path = datafusion::storage::path::Path::from(path.as_ref());
+        let context = datafusion::storage::FileAccessContext::default();
+        let reader = reused.open(&path, context).await?;
+        let bytes = datafusion::storage::collect_bytes(reader.stream(None)).await?;
         assert_eq!(bytes.as_ref(), b"a\n1\n2\n");
         Ok(())
     }
@@ -304,7 +329,12 @@ mod tests {
             StdinUtils::in_memory_object_store(&csv_url, b"a\n1\n".to_vec()).await?;
 
         let ctx = SessionContext::new();
-        ctx.register_object_store(&csv_url, store);
+        ctx.register_storage(
+            &csv_url,
+            Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+                store,
+            )),
+        )?;
 
         let json_url = Url::parse("stdin:///stdin.json").unwrap();
         let err = StdinUtils::get_or_create(&ctx.state(), &json_url)

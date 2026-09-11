@@ -40,17 +40,18 @@ use crate::error::Result;
 use crate::execution::session_state::CacheFactory;
 use crate::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
 use crate::physical_plan::ExecutionPlan;
-use crate::prelude::{CsvReadOptions, SessionContext};
+use crate::prelude::CsvReadOptions;
+use crate::prelude::SessionContext;
 
-use crate::execution::{SendableRecordBatchStream, SessionState, SessionStateBuilder};
+use crate::execution::SendableRecordBatchStream;
+use crate::execution::{SessionState, SessionStateBuilder};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_catalog::Session;
-use datafusion_common::{DFSchemaRef, TableReference, plan_err};
-use datafusion_expr::{
-    CreateExternalTable, Expr, LogicalPlan, SortExpr, TableType,
-    UserDefinedLogicalNodeCore,
-};
+use datafusion_common::DFSchemaRef;
+use datafusion_common::{TableReference, plan_err};
+use datafusion_expr::{CreateExternalTable, Expr, SortExpr, TableType};
+use datafusion_expr::{LogicalPlan, UserDefinedLogicalNodeCore};
 use std::pin::Pin;
 
 use async_trait::async_trait;

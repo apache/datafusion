@@ -20,9 +20,10 @@ use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::ListingTableUrl;
 use datafusion_execution::TaskContext;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use datafusion_storage::WriterOptions;
 use futures::StreamExt;
-use object_store::buffered::BufWriter;
-use object_store::path::Path;
+
+use datafusion_storage::path::Path;
 use parquet::arrow::AsyncArrowWriter;
 use parquet::file::properties::WriterProperties;
 use std::sync::Arc;
@@ -36,8 +37,8 @@ pub async fn plan_to_parquet(
 ) -> datafusion_common::Result<()> {
     let path = path.as_ref();
     let parsed = ListingTableUrl::parse(path)?;
-    let object_store_url = parsed.object_store();
-    let store = task_ctx.runtime_env().object_store(&object_store_url)?;
+    let object_store_url = parsed.storage_url();
+    let store = task_ctx.runtime_env().storage(&object_store_url)?;
     let mut join_set = JoinSet::new();
     for i in 0..plan.output_partitioning().partition_count() {
         let plan: Arc<dyn ExecutionPlan> = Arc::clone(&plan);
@@ -46,15 +47,21 @@ pub async fn plan_to_parquet(
         let propclone = writer_properties.clone();
 
         let storeref = Arc::clone(&store);
-        let buf_writer = BufWriter::with_capacity(
-            storeref,
-            file.clone(),
-            task_ctx
-                .session_config()
-                .options()
-                .execution
-                .objectstore_writer_buffer_size,
-        );
+        let buf_writer = storeref
+            .writer(
+                &file,
+                WriterOptions {
+                    buffer_size: Some(
+                        task_ctx
+                            .session_config()
+                            .options()
+                            .execution
+                            .objectstore_writer_buffer_size,
+                    ),
+                },
+                datafusion_storage::FileAccessContext::new("write"),
+            )
+            .await?;
         let mut stream = plan.execute(i, Arc::clone(&task_ctx))?;
         join_set.spawn(async move {
             let mut writer =

@@ -41,7 +41,6 @@ use arrow::datatypes::Schema;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::utils::{usize_from_wire, usize_to_wire};
 use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
-use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion_physical_expr_common::sort_expr::{
@@ -52,6 +51,7 @@ use datafusion_proto_models::datafusion_common::{
     CompressionTypeVariant as ProtoCompressionTypeVariant, Schema as ProtoSchema,
 };
 use datafusion_proto_models::protobuf;
+use datafusion_storage::StorageUrl;
 
 use crate::file::FileSource;
 use crate::file_compression_type::FileCompressionType;
@@ -74,6 +74,7 @@ impl FileScanConfig {
         // deciding how it is serialized is a compile error, not a silent
         // round-trip gap.
         let Self {
+            storage: _,
             object_store_url,
             file_groups,
             constraints,
@@ -238,8 +239,8 @@ impl FileScanConfig {
             .collect::<Result<Vec<_>>>()?;
 
         let decoded_object_store_url = match object_store_url.is_empty() {
-            false => ObjectStoreUrl::parse(object_store_url)?,
-            true => ObjectStoreUrl::local_filesystem(),
+            false => StorageUrl::parse(object_store_url)?,
+            true => StorageUrl::local_filesystem(),
         };
 
         let mut decoded_output_ordering = vec![];
@@ -319,8 +320,13 @@ impl FileScanConfig {
                 "FileScanConfig: batch_size must be greater than 0"
             );
         }
+        let storage = ctx
+            .task_ctx()
+            .runtime_env()
+            .storage(&decoded_object_store_url)?;
         let mut config =
             FileScanConfigBuilder::new(decoded_object_store_url, decoded_file_source)
+                .with_storage(storage)
                 .with_file_groups(decoded_file_groups)
                 .with_constraints(decoded_constraints)
                 .with_statistics(decoded_statistics)

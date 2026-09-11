@@ -174,7 +174,12 @@ async fn query_parquet() -> Result<()> {
 
     let url = url::Url::parse("file://./")
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    ctx.register_object_store(&url, local_fs);
+    ctx.register_storage(
+        &url,
+        Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+            local_fs,
+        )),
+    )?;
 
     // Register a listing table - this will use all files in the directory as data sources
     // for the query

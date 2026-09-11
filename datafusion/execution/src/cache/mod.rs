@@ -24,9 +24,10 @@ use datafusion_common::arrow::datatypes::{DataType, Schema};
 use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use datafusion_common::instant::Instant;
 use datafusion_common::{HashMap, TableReference};
-use object_store::path::Path;
+use datafusion_storage::path::Path;
 use std::collections::hash_map::DefaultHasher;
-use std::fmt::{Debug, Display, Formatter};
+use std::fmt::Display;
+use std::fmt::{Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
@@ -148,6 +149,8 @@ impl CacheKey for TableScopedPath {
 /// table-level cache invalidation.
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub struct TableScopedPath {
+    /// Isolates entries from registrations that reuse the same namespace and path.
+    pub storage_id: u64,
     pub table: Option<TableReference>,
     pub path: Path,
 }
@@ -272,5 +275,25 @@ mod schema_fingerprint_tests {
                 .with_metadata([("k".to_string(), "v".to_string())].into()),
         );
         assert_eq!(plain, schema_md, "schema metadata must be ignored");
+    }
+}
+
+/// A path scoped to an immutable storage registration.
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+pub struct FileCacheKey {
+    pub storage_id: u64,
+    pub path: Path,
+}
+impl CacheKey for FileCacheKey {
+    fn size(&self) -> usize {
+        self.path.size() + size_of::<u64>()
+    }
+    fn table_ref(&self) -> Option<&TableReference> {
+        None
+    }
+}
+impl Display for FileCacheKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.storage_id, self.path)
     }
 }

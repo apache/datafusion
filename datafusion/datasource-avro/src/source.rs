@@ -32,7 +32,7 @@ use datafusion_physical_expr_adapter::BatchAdapterFactory;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::projection::ProjectionExprs;
 
-use object_store::ObjectStore;
+use datafusion_storage::StorageBinding;
 
 /// AvroSource holds the extra configuration that is necessary for opening avro files
 #[derive(Clone)]
@@ -115,13 +115,15 @@ impl AvroSource {
 impl FileSource for AvroSource {
     fn create_file_opener(
         &self,
-        object_store: Arc<dyn ObjectStore>,
+        object_store: Arc<StorageBinding>,
         _base_config: &FileScanConfig,
         _partition: usize,
+        access_context: datafusion_storage::FileAccessContext,
     ) -> Result<Arc<dyn FileOpener>> {
         let mut opener = Arc::new(private::AvroOpener {
             config: Arc::new(self.clone()),
             object_store,
+            access_context,
         }) as Arc<dyn FileOpener>;
         opener = ProjectionOpener::try_new(
             self.projection.clone(),
@@ -249,73 +251,51 @@ impl AvroSource {
 mod private {
     use super::*;
     use std::io::BufReader;
-    use std::io::Seek;
 
     use bytes::Buf;
     use datafusion_datasource::{PartitionedFile, file_stream::FileOpenFuture};
     use futures::StreamExt;
-    use object_store::{GetResultPayload, ObjectStore, ObjectStoreExt};
+
+    use datafusion_storage::StorageBinding;
 
     pub struct AvroOpener {
         pub config: Arc<AvroSource>,
-        pub object_store: Arc<dyn ObjectStore>,
+        pub object_store: Arc<StorageBinding>,
+        pub access_context: datafusion_storage::FileAccessContext,
     }
 
     impl FileOpener for AvroOpener {
         fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
             let object_store = Arc::clone(&self.object_store);
+            let access_context = self.access_context.clone();
             let config = Arc::clone(&self.config);
             let projected_file_schema = config.projected_file_schema();
 
             Ok(Box::pin(async move {
-                let r = object_store
-                    .get(&partitioned_file.object_meta.location)
+                let reader = object_store
+                    .open(&partitioned_file.object_meta, access_context)
                     .await?;
-                match r.payload {
-                    GetResultPayload::File(mut file, _) => {
-                        // Probe the writer schema first so logical projected columns can be
-                        // translated to the writer-schema ordinals expected by `arrow-avro`.
-                        let probe_reader =
-                            config.open(BufReader::new(file.try_clone()?), None)?;
-                        let writer_projection = config.writer_projection_for_schema(
-                            probe_reader.schema().as_ref(),
-                            projected_file_schema.as_ref(),
-                        );
-                        file.rewind()?;
-                        let reader =
-                            config.open(BufReader::new(file), writer_projection)?;
-                        let batch_adapter =
-                            BatchAdapterFactory::new(Arc::clone(&projected_file_schema))
-                                .make_adapter(&reader.schema())?;
-                        Ok(futures::stream::iter(reader)
-                            .map(move |r| {
-                                r.map_err(Into::into)
-                                    .and_then(|batch| batch_adapter.adapt_batch(&batch))
-                            })
-                            .boxed())
-                    }
-                    GetResultPayload::Stream(_) => {
-                        let bytes = r.bytes().await?;
-                        // As above, inspect the writer schema before constructing the real
-                        // reader so `with_projection` can use writer-schema ordinals.
-                        let probe_reader =
-                            config.open(BufReader::new(bytes.clone().reader()), None)?;
-                        let writer_projection = config.writer_projection_for_schema(
-                            probe_reader.schema().as_ref(),
-                            projected_file_schema.as_ref(),
-                        );
-                        let reader = config
-                            .open(BufReader::new(bytes.reader()), writer_projection)?;
-                        let batch_adapter =
-                            BatchAdapterFactory::new(Arc::clone(&projected_file_schema))
-                                .make_adapter(&reader.schema())?;
-                        Ok(futures::stream::iter(reader)
-                            .map(move |r| {
-                                r.map_err(Into::into)
-                                    .and_then(|batch| batch_adapter.adapt_batch(&batch))
-                            })
-                            .boxed())
-                    }
+                {
+                    let bytes =
+                        datafusion_storage::collect_bytes(reader.stream(None)).await?;
+                    // Inspect the writer schema so projection uses writer-schema ordinals.
+                    let probe_reader =
+                        config.open(BufReader::new(bytes.clone().reader()), None)?;
+                    let writer_projection = config.writer_projection_for_schema(
+                        probe_reader.schema().as_ref(),
+                        projected_file_schema.as_ref(),
+                    );
+                    let reader =
+                        config.open(BufReader::new(bytes.reader()), writer_projection)?;
+                    let batch_adapter =
+                        BatchAdapterFactory::new(Arc::clone(&projected_file_schema))
+                            .make_adapter(&reader.schema())?;
+                    Ok(futures::stream::iter(reader)
+                        .map(move |r| {
+                            r.map_err(Into::into)
+                                .and_then(|batch| batch_adapter.adapt_batch(&batch))
+                        })
+                        .boxed())
                 }
             }))
         }

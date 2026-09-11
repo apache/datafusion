@@ -15,58 +15,49 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Object store implementation used for testing
+//! Native storage fixtures for listing tests.
+use crate::execution::{context::SessionState, session_state::SessionStateBuilder};
+use crate::prelude::SessionContext;
+use async_trait::async_trait;
+use bytes::Bytes;
+use datafusion_storage::{
+    DirectoryListing, Error, FileAccessContext, FileInfo, FileReader, ReadRange, Storage,
+    StorageBinding, StorageUrl, path::Path,
+};
+use futures::{StreamExt, stream::BoxStream};
+use std::{collections::BTreeMap, sync::Arc};
+use tokio::sync::Barrier;
 
-use crate::{
-    execution::{context::SessionState, session_state::SessionStateBuilder},
-    object_store::{
-        Error, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
-        ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
-        memory::InMemory, path::Path,
-    },
-    prelude::SessionContext,
-};
-use futures::{FutureExt, stream::BoxStream};
-use object_store::{CopyOptions, ObjectStoreExt};
-use std::{
-    fmt::{Debug, Display, Formatter},
-    sync::Arc,
-};
-use tokio::{
-    sync::Barrier,
-    time::{Duration, timeout},
-};
-use url::Url;
-
-/// Registers a test object store with the provided `ctx`
+/// Register a read-only collection of zero-filled files.
 pub fn register_test_store(ctx: &SessionContext, files: &[(&str, u64)]) {
-    let url = Url::parse("test://").unwrap();
-    ctx.register_object_store(&url, make_test_store_and_state(files).0);
+    let storage = make_test_store_and_state(files).0;
+    ctx.register_storage(storage.url().as_ref(), Arc::clone(storage.storage()))
+        .unwrap();
 }
 
-/// Create a test object store with the provided files
-pub fn make_test_store_and_state(files: &[(&str, u64)]) -> (Arc<InMemory>, SessionState) {
-    let memory = InMemory::new();
-
-    for (name, size) in files {
-        memory
-            .put(&Path::from(*name), vec![0; *size as usize].into())
-            .now_or_never()
-            .unwrap()
-            .unwrap();
-    }
-
+/// Create a read-only collection and a session for listing tests.
+pub fn make_test_store_and_state(
+    files: &[(&str, u64)],
+) -> (Arc<StorageBinding>, SessionState) {
+    let files = files
+        .iter()
+        .map(|(path, size)| (Path::from(*path), *size))
+        .collect();
+    let backend = Arc::new(TestFiles { files });
     (
-        Arc::new(memory),
+        Arc::new(StorageBinding::new(
+            StorageUrl::parse("test://").unwrap(),
+            backend,
+        )),
         SessionStateBuilder::new().with_default_features().build(),
     )
 }
 
-/// Helper method to fetch the file size and date at given path and create a `ObjectMeta`
-pub fn local_unpartitioned_file(path: impl AsRef<std::path::Path>) -> ObjectMeta {
+/// Metadata of an existing local file.
+pub fn local_unpartitioned_file(path: impl AsRef<std::path::Path>) -> FileInfo {
     let location = Path::from_filesystem_path(path.as_ref()).unwrap();
-    let metadata = std::fs::metadata(path).expect("Local file metadata");
-    ObjectMeta {
+    let metadata = std::fs::metadata(path).expect("local file metadata");
+    FileInfo {
         location,
         last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
         size: metadata.len(),
@@ -74,119 +65,149 @@ pub fn local_unpartitioned_file(path: impl AsRef<std::path::Path>) -> ObjectMeta
         version: None,
     }
 }
-
-/// Blocks the object_store `head` call until `concurrency` number of calls are pending.
-pub fn ensure_head_concurrency(
-    object_store: Arc<dyn ObjectStore>,
-    concurrency: usize,
-) -> Arc<dyn ObjectStore> {
-    Arc::new(BlockingObjectStore::new(object_store, concurrency))
-}
-
-/// An object store that “blocks” in its `head` call until an expected number of concurrent calls are reached.
 #[derive(Debug)]
-struct BlockingObjectStore {
-    inner: Arc<dyn ObjectStore>,
-    barrier: Arc<Barrier>,
+struct TestFiles {
+    files: BTreeMap<Path, u64>,
 }
-
-impl BlockingObjectStore {
-    const NAME: &'static str = "BlockingObjectStore";
-    fn new(inner: Arc<dyn ObjectStore>, expected_concurrency: usize) -> Self {
-        Self {
-            inner,
-            barrier: Arc::new(Barrier::new(expected_concurrency)),
-        }
+impl TestFiles {
+    fn descriptor(&self, path: &Path) -> datafusion_storage::Result<FileInfo> {
+        let size = *self
+            .files
+            .get(path)
+            .ok_or_else(|| Error::NotFound(path.to_string()))?;
+        Ok(FileInfo::new(path.clone(), size))
     }
 }
-
-impl Display for BlockingObjectStore {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        Display::fmt(&self.inner, f)
-    }
-}
-
-/// All trait methods are forwarded to the inner object store, except for
-/// the `head` method which waits until the expected number of concurrent calls is reached.
-#[async_trait::async_trait]
-impl ObjectStore for BlockingObjectStore {
-    async fn put_opts(
+#[async_trait]
+impl Storage for TestFiles {
+    async fn open(
         &self,
-        location: &Path,
-        payload: PutPayload,
-        opts: PutOptions,
-    ) -> object_store::Result<PutResult> {
-        self.inner.put_opts(location, payload, opts).await
-    }
-    async fn put_multipart_opts(
-        &self,
-        location: &Path,
-        opts: PutMultipartOptions,
-    ) -> object_store::Result<Box<dyn MultipartUpload>> {
-        self.inner.put_multipart_opts(location, opts).await
+        path: &Path,
+        _: FileAccessContext,
+    ) -> datafusion_storage::Result<Arc<dyn FileReader>> {
+        self.descriptor(path)?;
+        Ok(Arc::new(ZeroReader))
     }
 
-    async fn get_opts(
+    async fn stat(
         &self,
-        location: &Path,
-        options: GetOptions,
-    ) -> object_store::Result<GetResult> {
-        if options.head {
-            println!(
-                "{} received head call for {location}",
-                BlockingObjectStore::NAME
-            );
-            // Wait until the expected number of concurrent calls is reached, but timeout after 1 second to avoid hanging failing tests.
-            let wait_result = timeout(Duration::from_secs(1), self.barrier.wait()).await;
-            match wait_result {
-                Ok(_) => println!(
-                    "{} barrier reached for {location}",
-                    BlockingObjectStore::NAME
-                ),
-                Err(_) => {
-                    let error_message = format!(
-                        "{} barrier wait timed out for {location}",
-                        BlockingObjectStore::NAME
-                    );
-                    log::error!("{error_message}");
-                    return Err(Error::Generic {
-                        store: BlockingObjectStore::NAME,
-                        source: error_message.into(),
-                    });
-                }
-            }
-        }
-
-        // Forward the call to the inner object store.
-        self.inner.get_opts(location, options).await
+        path: &Path,
+        _: &FileAccessContext,
+    ) -> datafusion_storage::Result<FileInfo> {
+        self.descriptor(path)
     }
-    fn delete_stream(
-        &self,
-        locations: BoxStream<'static, object_store::Result<Path>>,
-    ) -> BoxStream<'static, object_store::Result<Path>> {
-        self.inner.delete_stream(locations)
-    }
-
     fn list(
         &self,
-        prefix: Option<&Path>,
-    ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
-        self.inner.list(prefix)
+        prefix: &Path,
+        _: FileAccessContext,
+    ) -> BoxStream<'_, datafusion_storage::Result<FileInfo>> {
+        let files = self
+            .files
+            .keys()
+            .filter(|p| p.prefix_match(prefix).is_some())
+            .map(|path| self.descriptor(path))
+            .collect::<Vec<_>>();
+        futures::stream::iter(files).boxed()
     }
-
     async fn list_with_delimiter(
         &self,
-        prefix: Option<&Path>,
-    ) -> object_store::Result<ListResult> {
-        self.inner.list_with_delimiter(prefix).await
+        prefix: &Path,
+        _: &FileAccessContext,
+    ) -> datafusion_storage::Result<DirectoryListing> {
+        let mut result = DirectoryListing::default();
+        let mut directories = std::collections::BTreeSet::new();
+        for path in self.files.keys() {
+            let Some(mut parts) = path.prefix_match(prefix) else {
+                continue;
+            };
+            let Some(first) = parts.next() else { continue };
+            if parts.next().is_some() {
+                directories.insert(prefix.clone().join(first));
+            } else {
+                result.files.push(self.descriptor(path)?);
+            }
+        }
+        result.directories = directories.into_iter().collect();
+        Ok(result)
+    }
+}
+#[derive(Debug)]
+struct ZeroReader;
+#[async_trait]
+impl FileReader for ZeroReader {
+    async fn read_range(&self, range: ReadRange) -> datafusion_storage::Result<Bytes> {
+        let length = match range {
+            ReadRange::Bounded(r) => r.end - r.start,
+            ReadRange::Suffix(n) => n,
+        };
+        Ok(Bytes::from(vec![0; length as usize]))
     }
 
-    async fn copy_opts(
+    async fn read_ranges(
         &self,
-        from: &Path,
-        to: &Path,
-        options: CopyOptions,
-    ) -> object_store::Result<()> {
-        self.inner.copy_opts(from, to, options).await
+        ranges: Vec<std::ops::Range<u64>>,
+    ) -> datafusion_storage::Result<Vec<Bytes>> {
+        Ok(ranges
+            .into_iter()
+            .map(|r| Bytes::from(vec![0; (r.end - r.start) as usize]))
+            .collect())
+    }
+    fn stream(
+        self: Arc<Self>,
+        range: Option<ReadRange>,
+    ) -> BoxStream<'static, datafusion_storage::Result<Bytes>> {
+        futures::stream::once(async move {
+            self.read_range(range.unwrap_or(ReadRange::Bounded(0..0)))
+                .await
+        })
+        .boxed()
+    }
+}
+
+/// Delay stat calls until the expected concurrency is reached.
+pub fn ensure_head_concurrency(
+    inner: Arc<StorageBinding>,
+    concurrency: usize,
+) -> Arc<StorageBinding> {
+    let url = inner.url().clone();
+    let backend = Arc::new(BlockingDiscovery {
+        inner,
+        barrier: Barrier::new(concurrency),
+    });
+    Arc::new(StorageBinding::new(url, backend))
+}
+#[derive(Debug)]
+struct BlockingDiscovery {
+    inner: Arc<StorageBinding>,
+    barrier: Barrier,
+}
+#[async_trait]
+impl Storage for BlockingDiscovery {
+    async fn open(
+        &self,
+        path: &Path,
+        context: FileAccessContext,
+    ) -> datafusion_storage::Result<Arc<dyn FileReader>> {
+        self.inner.storage().open(path, context).await
+    }
+
+    async fn stat(
+        &self,
+        path: &Path,
+        context: &FileAccessContext,
+    ) -> datafusion_storage::Result<FileInfo> {
+        tokio::time::timeout(std::time::Duration::from_secs(1), self.barrier.wait())
+            .await
+            .map_err(|_| {
+                Error::InvalidInput("stat concurrency barrier timed out".into())
+            })?;
+        self.inner.storage().stat(path, context).await
+    }
+    fn list(
+        &self,
+        prefix: &Path,
+        context: FileAccessContext,
+    ) -> BoxStream<'_, datafusion_storage::Result<FileInfo>> {
+        self.inner.storage().list(prefix, context)
     }
 }

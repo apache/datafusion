@@ -20,9 +20,9 @@
 use std::sync::Arc;
 
 use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
-use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::dml::InsertOp;
 use datafusion_proto_models::protobuf;
+use datafusion_storage::StorageUrl;
 
 use crate::ListingTableUrl;
 use crate::file_groups::FileGroup;
@@ -140,8 +140,9 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
         })?;
 
         Ok(Self {
+            storage: None,
             original_url: String::default(),
-            object_store_url: ObjectStoreUrl::parse(&conf.object_store_url)?,
+            object_store_url: StorageUrl::parse(&conf.object_store_url)?,
             file_group,
             table_paths,
             output_schema: Arc::new(output_schema.try_into()?),
@@ -162,7 +163,7 @@ mod tests {
 
     fn valid_file_sink_config() -> protobuf::FileSinkConfig {
         protobuf::FileSinkConfig {
-            object_store_url: ObjectStoreUrl::local_filesystem().to_string(),
+            object_store_url: StorageUrl::local_filesystem().to_string(),
             output_schema: Some(
                 (&Schema::empty())
                     .try_into()

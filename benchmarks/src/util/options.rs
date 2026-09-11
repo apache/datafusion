@@ -18,6 +18,7 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
 use clap::Args;
+use datafusion::storage::StorageUrl;
 use datafusion::{
     execution::{
         disk_manager::DiskManagerBuilder,
@@ -25,7 +26,6 @@ use datafusion::{
             FairSpillPool, GreedyMemoryPool, MemoryPool, PeakRecordingPool,
             TrackConsumersPool,
         },
-        object_store::ObjectStoreUrl,
         runtime_env::{RuntimeEnv, RuntimeEnvBuilder},
     },
     prelude::SessionConfig,
@@ -145,8 +145,14 @@ impl CommonOpt {
         if self.simulate_latency {
             let store: Arc<dyn object_store::ObjectStore> =
                 Arc::new(LatencyObjectStore::new(LocalFileSystem::new()));
-            let url = ObjectStoreUrl::parse("file:///")?;
-            rt.register_object_store(url.as_ref(), store);
+            let url = StorageUrl::parse("file:///")?;
+            rt.register_storage(
+                url.as_ref(),
+                Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+                    store,
+                )),
+            )
+            .unwrap();
             println!(
                 "Simulating S3-like object store latency (get: 25-200ms, list: 40-400ms)"
             );

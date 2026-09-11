@@ -35,7 +35,7 @@ arrow = { workspace = true }
 arrow-schema = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
-datafusion-common = { workspace = true, features = ["object_store", "parquet"] }
+datafusion-common = { workspace = true, features = ["parquet"] }
 datafusion-common-runtime = { workspace = true }
 datafusion-datasource = { workspace = true }
 datafusion-execution = { workspace = true }
@@ -49,20 +49,23 @@ datafusion-physical-plan = { workspace = true }
 datafusion-proto-models = { workspace = true, optional = true }
 datafusion-pruning = { workspace = true }
 datafusion-session = { workspace = true }
+datafusion-storage = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
 log = { workspace = true }
-object_store = { workspace = true }
 parking_lot = { workspace = true }
 parquet = { workspace = true }
 tokio = { workspace = true }
+url = { workspace = true }
 
 [dev-dependencies]
 chrono = { workspace = true }
 criterion = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-functions-nested = { workspace = true }
+object_store = { workspace = true }
 tempfile = { workspace = true }
+test-utils = { path = "../../test-utils" }
 
 # Note: add additional linter rules in lib.rs.
 # Rust does not support workspace + new linter rules in subcrates yet
@@ -75,7 +78,9 @@ name = "datafusion_datasource_parquet"
 path = "src/mod.rs"
 
 [features]
+default = []
 proto = [
+
     "dep:datafusion-proto-models",
     "datafusion-datasource/proto",
     "datafusion-physical-plan/proto",

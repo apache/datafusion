@@ -17,28 +17,29 @@
 
 //! [`SessionContext`] API for registering data sources and executing queries
 
+use crate::execution::SessionStateDefaults;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
+use super::options::ArrowReadOptions;
 use super::options::ReadOptions;
+use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::datasource::dynamic_file::DynamicListTableFactory;
+use crate::datasource::listing::{
+    ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
+};
 use crate::execution::session_state::SessionStateBuilder;
 use crate::{
-    catalog::listing_schema::ListingSchemaProvider,
     catalog::{
         CatalogProvider, CatalogProviderList, TableProvider, TableProviderFactory,
     },
     dataframe::DataFrame,
-    datasource::listing::{
-        ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
-    },
     datasource::{MemTable, ViewTable, provider_as_source},
     error::Result,
     execution::{
         FunctionRegistry,
-        options::ArrowReadOptions,
         runtime_env::{RuntimeEnv, RuntimeEnvBuilder},
     },
     logical_expr::AggregateUDF,
@@ -50,28 +51,28 @@ use crate::{
         SetVariable, TableType, UNNAMED_TABLE,
     },
     physical_expr::PhysicalExpr,
-    physical_plan::ExecutionPlan,
     variable::{VarProvider, VarType},
 };
 
 // backwards compatibility
 pub use crate::execution::session_state::SessionState;
 
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::Schema;
+use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_catalog::MemoryCatalogProvider;
 use datafusion_catalog::memory::MemorySchemaProvider;
-use datafusion_catalog::{
-    DynamicFileCatalog, TableFunction, TableFunctionImpl, UrlTableFactory,
-};
+use datafusion_catalog::{DynamicFileCatalog, UrlTableFactory};
+use datafusion_catalog::{TableFunction, TableFunctionImpl};
 use datafusion_catalog_listing::SchemaSource;
 use datafusion_common::config::{ConfigField, ConfigOptions};
+use datafusion_common::internal_datafusion_err;
 use datafusion_common::metadata::ScalarAndMetadata;
 use datafusion_common::{
     DFSchema, DataFusionError, ParamValues, SchemaError, SchemaReference, TableReference,
     config::{ConfigExtension, TableOptions},
-    exec_datafusion_err, exec_err, internal_datafusion_err, not_impl_err,
-    plan_datafusion_err, plan_err, schema_err,
+    exec_datafusion_err, exec_err, not_impl_err, plan_datafusion_err, plan_err,
+    schema_err,
     tree_node::{TreeNodeRecursion, TreeNodeVisitor},
 };
 pub use datafusion_execution::TaskContext;
@@ -101,9 +102,9 @@ use datafusion_optimizer::{Analyzer, OptimizerContext};
 use datafusion_optimizer::{AnalyzerRule, OptimizerRule};
 use datafusion_session::SessionStore;
 
+use crate::physical_plan::ExecutionPlan;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use object_store::ObjectStore;
 use parking_lot::RwLock;
 use url::Url;
 
@@ -306,6 +307,24 @@ impl Default for SessionContext {
 }
 
 impl SessionContext {
+    /// Register a complete storage backend once for all users of this runtime.
+    /// Replacing a binding does not change already constructed storage tables.
+    pub fn register_storage(
+        &self,
+        url: &Url,
+        storage: Arc<dyn datafusion_storage::Storage>,
+    ) -> Result<Option<Arc<datafusion_storage::StorageBinding>>> {
+        self.runtime_env().register_storage(url, storage)
+    }
+
+    /// Deregister storage while allowing existing tables and plans to finish.
+    pub fn deregister_storage(
+        &self,
+        url: &Url,
+    ) -> Result<Arc<datafusion_storage::StorageBinding>> {
+        self.runtime_env().deregister_storage(url)
+    }
+
     /// Creates a new `SessionContext` using the default [`SessionConfig`].
     pub fn new() -> Self {
         Self::new_with_config(SessionConfig::new())
@@ -337,7 +356,7 @@ impl SessionContext {
     /// See [`Self::new_with_config_rt`] for more details on resource
     /// limits.
     pub fn new_with_config(config: SessionConfig) -> Self {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let runtime = SessionStateDefaults::default_runtime_env();
         Self::new_with_config_rt(config, runtime)
     }
 
@@ -500,36 +519,6 @@ impl SessionContext {
     /// See [`SessionState`] for more control of when the rule is applied.
     pub fn add_analyzer_rule(&self, analyzer_rule: Arc<dyn AnalyzerRule + Send + Sync>) {
         self.state.write().add_analyzer_rule(analyzer_rule);
-    }
-
-    /// Registers an [`ObjectStore`] to be used with a specific URL prefix.
-    ///
-    /// See [`RuntimeEnv::register_object_store`] for more details.
-    ///
-    /// # Example: register a local object store for the "file://" URL prefix
-    /// ```
-    /// # use std::sync::Arc;
-    /// # use datafusion::prelude::SessionContext;
-    /// # use datafusion_execution::object_store::ObjectStoreUrl;
-    /// let object_store_url = ObjectStoreUrl::parse("file://").unwrap();
-    /// let object_store = object_store::local::LocalFileSystem::new();
-    /// let ctx = SessionContext::new();
-    /// // All files with the file:// url prefix will be read from the local file system
-    /// ctx.register_object_store(object_store_url.as_ref(), Arc::new(object_store));
-    /// ```
-    pub fn register_object_store(
-        &self,
-        url: &Url,
-        object_store: Arc<dyn ObjectStore>,
-    ) -> Option<Arc<dyn ObjectStore>> {
-        self.runtime_env().register_object_store(url, object_store)
-    }
-
-    /// Deregisters an [`ObjectStore`] associated with the specific URL prefix.
-    ///
-    /// See [`RuntimeEnv::deregister_object_store`] for more details.
-    pub fn deregister_object_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
-        self.runtime_env().deregister_object_store(url)
     }
 
     /// Registers the given [`RecordBatch`] as the specified table reference.
@@ -1741,7 +1730,9 @@ impl SessionContext {
         }
 
         let schema_table_path = table_paths[0].clone();
+        let storage = self.runtime_env().storage(&schema_table_path)?;
         let config = ListingTableConfig::new_with_multi_paths(table_paths)
+            .with_storage(storage)
             .with_listing_options(listing_options);
         let config = match options.schema_source() {
             SchemaSource::Inferred | SchemaSource::Unset => {
@@ -1828,12 +1819,11 @@ impl SessionContext {
         ))
     }
     /// Registers a [`ListingTable`] that can assemble multiple files
-    /// from locations in an [`ObjectStore`] instance into a single
+    /// from locations in an [`StorageBinding`](datafusion_storage::StorageBinding) instance into a single
     /// table.
     ///
     /// This method is `async` because it might need to resolve the schema.
     ///
-    /// [`ObjectStore`]: object_store::ObjectStore
     pub async fn register_listing_table(
         &self,
         table_ref: impl Into<TableReference>,
@@ -1845,13 +1835,14 @@ impl SessionContext {
         let table_ref = table_ref.into();
         let table_path =
             ListingTableUrl::parse(table_path)?.with_table_ref(table_ref.clone());
-        let resolved_schema = match provided_schema {
-            Some(s) => s,
-            None => options.infer_schema(&self.state(), &table_path).await?,
-        };
+        let storage = self.runtime_env().storage(&table_path)?;
         let config = ListingTableConfig::new(table_path)
-            .with_listing_options(options)
-            .with_schema(resolved_schema);
+            .with_storage(storage)
+            .with_listing_options(options);
+        let config = match provided_schema {
+            Some(schema) => config.with_schema(schema),
+            None => config.infer_schema(&self.state()).await?,
+        };
         let table = ListingTable::try_new(config)?
             .with_definition(sql_definition)
             .with_cache(self.runtime_env().cache_manager.get_file_statistic_cache());
@@ -2375,6 +2366,7 @@ mod tests {
 
     use crate::catalog::SchemaProvider;
     use crate::execution::session_state::SessionStateBuilder;
+    use crate::physical_plan::ExecutionPlan;
     use crate::physical_planner::PhysicalPlanner;
     use async_trait::async_trait;
     use datafusion_expr::planner::TypePlanner;
@@ -2570,7 +2562,7 @@ mod tests {
 
     #[tokio::test]
     async fn custom_query_planner() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let runtime = SessionStateDefaults::default_runtime_env();
         let session_state = SessionStateBuilder::new()
             .with_config(SessionConfig::new())
             .with_runtime_env(runtime)

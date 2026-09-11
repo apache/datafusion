@@ -24,6 +24,7 @@ pub mod file_format;
 pub mod listing;
 pub mod listing_table_factory;
 mod memory_test;
+
 pub mod physical_plan;
 pub mod provider;
 mod view_test;
@@ -47,14 +48,13 @@ pub use datafusion_datasource::schema_adapter;
 pub use datafusion_datasource::sink;
 pub use datafusion_datasource::source;
 pub use datafusion_datasource::table_schema;
-pub use datafusion_execution::object_store;
+
 pub use datafusion_physical_expr::create_ordering;
 
 #[cfg(all(test, feature = "parquet"))]
 mod tests {
 
     use crate::prelude::SessionContext;
-    use ::object_store::{ObjectMeta, path::Path};
     use arrow::{
         array::Int32Array,
         datatypes::{DataType, Field, Schema, SchemaRef},
@@ -75,6 +75,7 @@ mod tests {
     };
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_plan::collect;
+    use datafusion_storage::{FileInfo, path::Path};
     use std::{fs, sync::Arc};
     use tempfile::TempDir;
     use url::Url;
@@ -85,7 +86,7 @@ mod tests {
         // record batches returned from parquet. This can be useful for schema evolution
         // where older files may not have all columns.
 
-        use datafusion_execution::object_store::ObjectStoreUrl;
+        use datafusion_storage::StorageUrl;
         let tmp_dir = TempDir::new().unwrap();
         let table_dir = tmp_dir.path().join("parquet_test");
         fs::DirBuilder::new().create(table_dir.as_path()).unwrap();
@@ -108,7 +109,7 @@ mod tests {
         let url = Url::from_file_path(path.canonicalize().unwrap()).unwrap();
         let location = Path::from_url_path(url.path()).unwrap();
         let metadata = fs::metadata(path.as_path()).expect("Local file metadata");
-        let meta = ObjectMeta {
+        let meta = FileInfo {
             location,
             last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
             size: metadata.len(),
@@ -124,7 +125,7 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![f1.clone(), f2.clone()]));
         let source = Arc::new(ParquetSource::new(Arc::clone(&schema)));
         let base_conf =
-            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+            FileScanConfigBuilder::new(StorageUrl::local_filesystem(), source)
                 .with_file(partitioned_file)
                 .with_expr_adapter(Some(Arc::new(TestPhysicalExprAdapterFactory)))
                 .build();

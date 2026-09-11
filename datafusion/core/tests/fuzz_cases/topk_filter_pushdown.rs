@@ -27,11 +27,12 @@ use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTable
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource_parquet::ParquetFormat;
-use datafusion_execution::object_store::ObjectStoreUrl;
+use datafusion_storage::StorageUrl;
 use itertools::Itertools;
+use object_store::PutPayload;
 use object_store::memory::InMemory;
 use object_store::path::Path;
-use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
+use object_store::{ObjectStore, ObjectStoreExt};
 use parquet::arrow::ArrowWriter;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -180,8 +181,14 @@ async fn run_query_with_config(
     let store = dataset.store;
     let schema = dataset.schema;
     let ctx = SessionContext::new_with_config(config);
-    let url = ObjectStoreUrl::parse("memory://").unwrap();
-    ctx.register_object_store(url.as_ref(), store.clone());
+    let url = StorageUrl::parse("memory://").unwrap();
+    ctx.register_storage(
+        url.as_ref(),
+        Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+            store.clone(),
+        )),
+    )
+    .unwrap();
 
     let format = Arc::new(
         ParquetFormat::default()

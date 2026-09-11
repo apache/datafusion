@@ -35,8 +35,8 @@ use std::sync::Arc;
 use chrono::{TimeZone, Utc};
 use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
 use datafusion_proto_models::protobuf;
-use object_store::ObjectMeta;
-use object_store::path::Path;
+use datafusion_storage::FileInfo;
+use datafusion_storage::path::Path;
 
 use crate::file_groups::FileGroup;
 use crate::{FileRange, PartitionedFile};
@@ -70,7 +70,7 @@ impl TryFrom<&PartitionedFile> for protobuf::PartitionedFile {
         let last_modified = file.object_meta.last_modified;
         let last_modified_ns = last_modified.timestamp_nanos_opt().ok_or_else(|| {
             DataFusionError::Plan(format!(
-                "Invalid timestamp on PartitionedFile::ObjectMeta: {last_modified}"
+                "Invalid timestamp on PartitionedFile::FileInfo: {last_modified}"
             ))
         })? as u64;
         Ok(protobuf::PartitionedFile {
@@ -97,7 +97,7 @@ impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
     type Error = DataFusionError;
 
     fn try_from(file: &protobuf::PartitionedFile) -> Result<Self> {
-        let mut pf = PartitionedFile::new_from_meta(ObjectMeta {
+        let mut pf = PartitionedFile::new_from_meta(FileInfo {
             location: Path::parse(file.path.as_str()).map_err(|e| {
                 internal_datafusion_err!("Invalid object_store path: {e}")
             })?,
@@ -169,7 +169,7 @@ mod tests {
     #[test]
     fn partitioned_file_roundtrip_preserves_all_fields() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
-        let pf = PartitionedFile::new_from_meta(ObjectMeta {
+        let pf = PartitionedFile::new_from_meta(FileInfo {
             location: Path::parse("foo/bar.parquet")?,
             last_modified: Utc.timestamp_nanos(1_000_000_000),
             size: 1234,
@@ -209,7 +209,7 @@ mod tests {
         // contains percent escapes must survive without a second round of
         // encoding or decoding.
         let path_str = "foo/foo%2Fbar/baz%252Fqux";
-        let pf = PartitionedFile::new_from_meta(ObjectMeta {
+        let pf = PartitionedFile::new_from_meta(FileInfo {
             location: Path::parse(path_str)?,
             last_modified: Utc.timestamp_nanos(1_000),
             size: 42,

@@ -147,10 +147,9 @@ pub enum OnError {
     Skip,
 }
 
-/// Generic API for opening a file using an [`ObjectStore`] and resolving to a
+/// Generic API for opening a file using an [`StorageBinding`](datafusion_storage::StorageBinding) and resolving to a
 /// stream of [`RecordBatch`]
 ///
-/// [`ObjectStore`]: object_store::ObjectStore
 pub trait FileOpener: Unpin + Send + Sync {
     /// Asynchronously open the specified file and return a stream
     /// of [`RecordBatch`]
@@ -184,8 +183,8 @@ mod tests {
     use datafusion_common::DataFusionError;
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::error::Result;
-    use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+    use datafusion_storage::StorageUrl;
     use futures::{FutureExt as _, StreamExt as _};
     use std::collections::{BTreeMap, VecDeque};
     use std::sync::Arc;
@@ -318,7 +317,7 @@ mod tests {
 
             let table_schema = TableSchema::from(file_schema);
             let config = FileScanConfigBuilder::new(
-                ObjectStoreUrl::parse("test:///").unwrap(),
+                StorageUrl::parse("test:///").unwrap(),
                 Arc::new(MockSource::new(table_schema)),
             )
             .with_file_group(file_group)
@@ -355,7 +354,7 @@ mod tests {
     fn builder_test_config() -> FileScanConfig {
         let table_schema = TableSchema::from(Arc::new(Schema::empty()));
         FileScanConfigBuilder::new(
-            ObjectStoreUrl::parse("test:///").unwrap(),
+            StorageUrl::parse("test:///").unwrap(),
             Arc::new(MockSource::new(table_schema)),
         )
         .with_file(PartitionedFile::new("mock_file", 10))
@@ -1641,7 +1640,7 @@ mod tests {
                 )
             });
             FileScanConfigBuilder::new(
-                ObjectStoreUrl::parse("test:///").unwrap(),
+                StorageUrl::parse("test:///").unwrap(),
                 Arc::new(MockSource::new(table_schema)),
             )
             .with_file_groups(file_groups)

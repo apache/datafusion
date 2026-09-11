@@ -47,11 +47,12 @@ use futures::StreamExt;
 use futures::stream::{self, BoxStream};
 use insta::assert_snapshot;
 use object_store::{
-    Attributes, CopyOptions, GetRange, MultipartUpload, PutMultipartOptions, PutPayload,
+    Attributes, CopyOptions, GetRange, MultipartUpload, ObjectMeta, ObjectStore,
+    PutMultipartOptions, PutPayload,
 };
 use object_store::{
-    GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore,
-    PutOptions, PutResult, path::Path,
+    GetOptions, GetResult, GetResultPayload, ListResult, PutOptions, PutResult,
+    path::Path,
 };
 use url::Url;
 
@@ -547,10 +548,13 @@ fn register_partitioned_aggregate_csv(
     let csv_file_path = format!("{testdata}/csv/aggregate_test_100.csv");
     let file_schema = test_util::aggr_test_schema();
     let url = Url::parse("mirror://").unwrap();
-    ctx.register_object_store(
+    ctx.register_storage(
         &url,
-        MirroringObjectStore::new_arc(csv_file_path, store_paths),
-    );
+        Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+            MirroringObjectStore::new_arc(csv_file_path, store_paths),
+        )),
+    )
+    .unwrap();
 
     let options = ListingOptions::new(Arc::new(CsvFormat::default()))
         .with_table_partition_cols(
@@ -599,10 +603,13 @@ async fn create_partitioned_alltypes_parquet_table(
     let testdata = parquet_test_data();
     let parquet_file_path = format!("{testdata}/{source_file}");
     let url = Url::parse("mirror://").unwrap();
-    ctx.register_object_store(
+    ctx.register_storage(
         &url,
-        MirroringObjectStore::new_arc(parquet_file_path.clone(), store_paths),
-    );
+        Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+            MirroringObjectStore::new_arc(parquet_file_path.clone(), store_paths),
+        )),
+    )
+    .unwrap();
 
     let options = ListingOptions::new(Arc::new(ParquetFormat::default()))
         .with_table_partition_cols(

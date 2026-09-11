@@ -51,9 +51,10 @@ use datafusion_physical_plan::projection::ProjectionExprs;
 
 use datafusion_datasource::file_stream::FileOpenFuture;
 use datafusion_datasource::file_stream::FileOpener;
+use datafusion_storage::FileAccessContext;
+use datafusion_storage::StorageBinding;
 use futures::StreamExt;
 use itertools::Itertools;
-use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore, ObjectStoreExt};
 
 /// Enum indicating which Arrow IPC format to use
 #[derive(Clone, Copy, Debug)]
@@ -64,9 +65,29 @@ enum ArrowFormat {
     Stream,
 }
 
+/// Read the IPC file footer independently of the writer's message alignment.
+pub(crate) async fn read_file_footer(
+    reader: &dyn datafusion_storage::FileReader,
+) -> Result<bytes::Bytes> {
+    use datafusion_storage::ReadRange;
+    let trailer = reader.read_range(ReadRange::Suffix(10)).await?;
+    let trailer: [u8; 10] = trailer.as_ref().try_into().map_err(|_| {
+        exec_datafusion_err!("Arrow IPC file is shorter than its trailer")
+    })?;
+    let footer_len = arrow_ipc::reader::read_footer_length(trailer)? as u64;
+    let bytes = reader
+        .read_range(ReadRange::Suffix(10 + footer_len))
+        .await?;
+    if bytes.len() < 10 + footer_len as usize {
+        return Err(exec_datafusion_err!("Arrow IPC footer exceeds file size"));
+    }
+    Ok(bytes.slice(..bytes.len() - 10))
+}
+
 /// `FileOpener` for Arrow IPC stream format. Supports only sequential reading.
 pub(crate) struct ArrowStreamFileOpener {
-    object_store: Arc<dyn ObjectStore>,
+    object_store: Arc<StorageBinding>,
+    access_context: FileAccessContext,
     projection: Option<Vec<usize>>,
 }
 
@@ -78,30 +99,21 @@ impl FileOpener for ArrowStreamFileOpener {
             ));
         }
         let object_store = Arc::clone(&self.object_store);
+        let access_context = self.access_context.clone();
         let projection = self.projection.clone();
 
         Ok(Box::pin(async move {
-            let r = object_store
-                .get(&partitioned_file.object_meta.location)
+            let reader = object_store
+                .open(&partitioned_file.object_meta, access_context)
                 .await?;
 
-            let stream = match r.payload {
-                #[cfg(not(target_arch = "wasm32"))]
-                GetResultPayload::File(file, _) => futures::stream::iter(
-                    StreamReader::try_new(file.try_clone()?, projection.clone())?,
-                )
-                .map(|r| r.map_err(Into::into))
-                .boxed(),
-                GetResultPayload::Stream(_) => {
-                    let bytes = r.bytes().await?;
-                    let cursor = Cursor::new(bytes);
-                    futures::stream::iter(StreamReader::try_new(
-                        cursor,
-                        projection.clone(),
-                    )?)
+            let stream = {
+                let bytes =
+                    datafusion_storage::collect_bytes(reader.stream(None)).await?;
+                let cursor = Cursor::new(bytes);
+                futures::stream::iter(StreamReader::try_new(cursor, projection.clone())?)
                     .map(|r| r.map_err(Into::into))
                     .boxed()
-                }
             };
 
             Ok(stream)
@@ -111,72 +123,46 @@ impl FileOpener for ArrowStreamFileOpener {
 
 /// `FileOpener` for Arrow IPC file format. Supports range-based parallel reading.
 pub(crate) struct ArrowFileOpener {
-    object_store: Arc<dyn ObjectStore>,
+    object_store: Arc<StorageBinding>,
+    access_context: FileAccessContext,
     projection: Option<Vec<usize>>,
 }
 
 impl FileOpener for ArrowFileOpener {
     fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
         let object_store = Arc::clone(&self.object_store);
+        let access_context = self.access_context.clone();
         let projection = self.projection.clone();
 
         Ok(Box::pin(async move {
+            let reader = object_store
+                .open(&partitioned_file.object_meta, access_context)
+                .await?;
             let range = partitioned_file.range.clone();
             match range {
                 None => {
-                    let r = object_store
-                        .get(&partitioned_file.object_meta.location)
-                        .await?;
-                    let stream = match r.payload {
-                        #[cfg(not(target_arch = "wasm32"))]
-                        GetResultPayload::File(file, _) => futures::stream::iter(
-                            FileReader::try_new(file.try_clone()?, projection.clone())?,
-                        )
+                    let stream = {
+                        let bytes =
+                            datafusion_storage::collect_bytes(reader.stream(None))
+                                .await?;
+                        let cursor = Cursor::new(bytes);
+                        futures::stream::iter(FileReader::try_new(
+                            cursor,
+                            projection.clone(),
+                        )?)
                         .map(|r| r.map_err(Into::into))
-                        .boxed(),
-                        GetResultPayload::Stream(_) => {
-                            let bytes = r.bytes().await?;
-                            let cursor = Cursor::new(bytes);
-                            futures::stream::iter(FileReader::try_new(
-                                cursor,
-                                projection.clone(),
-                            )?)
-                            .map(|r| r.map_err(Into::into))
-                            .boxed()
-                        }
+                        .boxed()
                     };
 
                     Ok(stream)
                 }
                 Some(range) => {
-                    // range is not none, the file maybe split into multiple parts to scan in parallel
-                    // get footer_len firstly
-                    let get_option = GetOptions {
-                        range: Some(GetRange::Suffix(10)),
-                        ..Default::default()
-                    };
-                    let get_result = object_store
-                        .get_opts(&partitioned_file.object_meta.location, get_option)
-                        .await?;
-                    let footer_len_buf = get_result.bytes().await?;
-                    let footer_len = arrow_ipc::reader::read_footer_length(
-                        footer_len_buf[..].try_into().unwrap(),
+                    let footer_buf = read_file_footer(reader.as_ref()).await?;
+                    let footer = arrow_ipc::root_as_footer(footer_buf.as_ref()).map_err(
+                        |err| {
+                            exec_datafusion_err!("Unable to get root as footer: {err:?}")
+                        },
                     )?;
-                    // read footer according to footer_len
-                    let get_option = GetOptions {
-                        range: Some(GetRange::Suffix(10 + (footer_len as u64))),
-                        ..Default::default()
-                    };
-                    let get_result = object_store
-                        .get_opts(&partitioned_file.object_meta.location, get_option)
-                        .await?;
-                    let footer_buf = get_result.bytes().await?;
-                    let footer = arrow_ipc::root_as_footer(
-                        footer_buf[..footer_len].try_into().unwrap(),
-                    )
-                    .map_err(|err| {
-                        exec_datafusion_err!("Unable to get root as footer: {err:?}")
-                    })?;
                     // build decoder according to footer & projection
                     let schema =
                         arrow_ipc::convert::fb_to_schema(footer.schema().unwrap());
@@ -195,9 +181,7 @@ impl FileOpener for ArrowFileOpener {
                             block_offset..block_offset + block_len
                         })
                         .collect_vec();
-                    let dict_results = object_store
-                        .get_ranges(&partitioned_file.object_meta.location, &dict_ranges)
-                        .await?;
+                    let dict_results = reader.read_ranges(dict_ranges).await?;
                     for (dict_block, dict_result) in
                         footer.dictionaries().iter().flatten().zip(dict_results)
                     {
@@ -228,12 +212,8 @@ impl FileOpener for ArrowFileOpener {
                         })
                         .collect_vec();
 
-                    let recordbatch_results = object_store
-                        .get_ranges(
-                            &partitioned_file.object_meta.location,
-                            &recordbatch_ranges,
-                        )
-                        .await?;
+                    let recordbatch_results =
+                        reader.read_ranges(recordbatch_ranges).await?;
 
                     let stream = futures::stream::iter(
                         recordbatches
@@ -291,19 +271,22 @@ impl ArrowSource {
 impl FileSource for ArrowSource {
     fn create_file_opener(
         &self,
-        object_store: Arc<dyn ObjectStore>,
+        object_store: Arc<StorageBinding>,
         _base_config: &FileScanConfig,
         _partition: usize,
+        access_context: FileAccessContext,
     ) -> Result<Arc<dyn FileOpener>> {
         let split_projection = self.projection.clone();
 
         let opener: Arc<dyn FileOpener> = match self.format {
             ArrowFormat::File => Arc::new(ArrowFileOpener {
                 object_store,
+                access_context,
                 projection: Some(split_projection.file_indices.clone()),
             }),
             ArrowFormat::Stream => Arc::new(ArrowStreamFileOpener {
                 object_store,
+                access_context,
                 projection: Some(split_projection.file_indices.clone()),
             }),
         };
@@ -510,24 +493,26 @@ impl ArrowOpener {
     }
 
     pub fn new_file_opener(
-        object_store: Arc<dyn ObjectStore>,
+        object_store: Arc<StorageBinding>,
         projection: Option<Vec<usize>>,
     ) -> Self {
         Self {
             inner: Arc::new(ArrowFileOpener {
                 object_store,
+                access_context: FileAccessContext::new("scan"),
                 projection,
             }),
         }
     }
 
     pub fn new_stream_file_opener(
-        object_store: Arc<dyn ObjectStore>,
+        object_store: Arc<StorageBinding>,
         projection: Option<Vec<usize>>,
     ) -> Self {
         Self {
             inner: Arc::new(ArrowStreamFileOpener {
                 object_store,
+                access_context: FileAccessContext::new("scan"),
                 projection,
             }),
         }
@@ -548,10 +533,11 @@ mod tests {
     use arrow_ipc::reader::{FileReader, StreamReader};
     use bytes::Bytes;
     use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
-    use datafusion_execution::object_store::ObjectStoreUrl;
+    use datafusion_storage::StorageUrl;
     use object_store::memory::InMemory;
 
     use super::*;
+    use object_store::ObjectStoreExt;
 
     #[tokio::test]
     async fn test_file_opener_without_ranges() -> Result<()> {
@@ -565,8 +551,14 @@ mod tests {
             let object_store = Arc::new(InMemory::new());
             let partitioned_file = PartitionedFile::new(filename, file_size);
             object_store
-                .put(&partitioned_file.object_meta.location, bytes.into())
-                .await?;
+                .put(
+                    &object_store::path::Path::from(
+                        partitioned_file.object_meta.location.as_ref(),
+                    ),
+                    bytes.into(),
+                )
+                .await
+                .unwrap();
 
             let schema = match FileReader::try_new(File::open(path_str)?, None) {
                 Ok(reader) => reader.schema(),
@@ -580,12 +572,17 @@ mod tests {
             };
 
             let scan_config = FileScanConfigBuilder::new(
-                ObjectStoreUrl::local_filesystem(),
+                StorageUrl::local_filesystem(),
                 source.clone(),
             )
             .build();
 
-            let file_opener = source.create_file_opener(object_store, &scan_config, 0)?;
+            let file_opener = source.create_file_opener(
+                test_utils::storage::object_store(object_store),
+                &scan_config,
+                0,
+                FileAccessContext::default(),
+            )?;
             let mut stream = file_opener.open(partitioned_file)?.await?;
 
             assert!(stream.next().await.is_some());
@@ -611,20 +608,29 @@ mod tests {
             (file_size - 1) as i64,
         );
         object_store
-            .put(&partitioned_file.object_meta.location, bytes.into())
-            .await?;
+            .put(
+                &object_store::path::Path::from(
+                    partitioned_file.object_meta.location.as_ref(),
+                ),
+                bytes.into(),
+            )
+            .await
+            .unwrap();
 
         let schema = FileReader::try_new(File::open(path_str)?, None)?.schema();
 
         let source = Arc::new(ArrowSource::new_file_source(schema));
 
-        let scan_config = FileScanConfigBuilder::new(
-            ObjectStoreUrl::local_filesystem(),
-            source.clone(),
-        )
-        .build();
+        let scan_config =
+            FileScanConfigBuilder::new(StorageUrl::local_filesystem(), source.clone())
+                .build();
 
-        let file_opener = source.create_file_opener(object_store, &scan_config, 0)?;
+        let file_opener = source.create_file_opener(
+            test_utils::storage::object_store(object_store),
+            &scan_config,
+            0,
+            FileAccessContext::default(),
+        )?;
         let mut stream = file_opener.open(partitioned_file)?.await?;
 
         assert!(stream.next().await.is_some());
@@ -649,20 +655,29 @@ mod tests {
             (file_size - 1) as i64,
         );
         object_store
-            .put(&partitioned_file.object_meta.location, bytes.into())
-            .await?;
+            .put(
+                &object_store::path::Path::from(
+                    partitioned_file.object_meta.location.as_ref(),
+                ),
+                bytes.into(),
+            )
+            .await
+            .unwrap();
 
         let schema = StreamReader::try_new(File::open(path_str)?, None)?.schema();
 
         let source = Arc::new(ArrowSource::new_stream_file_source(schema));
 
-        let scan_config = FileScanConfigBuilder::new(
-            ObjectStoreUrl::local_filesystem(),
-            source.clone(),
-        )
-        .build();
+        let scan_config =
+            FileScanConfigBuilder::new(StorageUrl::local_filesystem(), source.clone())
+                .build();
 
-        let file_opener = source.create_file_opener(object_store, &scan_config, 0)?;
+        let file_opener = source.create_file_opener(
+            test_utils::storage::object_store(object_store),
+            &scan_config,
+            0,
+            FileAccessContext::default(),
+        )?;
         let result = file_opener.open(partitioned_file);
         assert!(result.is_err());
 
@@ -676,7 +691,7 @@ mod tests {
         let source = ArrowSource::new_stream_file_source(schema);
 
         let config = FileScanConfigBuilder::new(
-            ObjectStoreUrl::local_filesystem(),
+            StorageUrl::local_filesystem(),
             Arc::new(source.clone()) as Arc<dyn FileSource>,
         )
         .build();
@@ -706,11 +721,18 @@ mod tests {
         let object_store = Arc::new(InMemory::new());
         let partitioned_file = PartitionedFile::new(filename, file_size);
         object_store
-            .put(&partitioned_file.object_meta.location, bytes.into())
-            .await?;
+            .put(
+                &object_store::path::Path::from(
+                    partitioned_file.object_meta.location.as_ref(),
+                ),
+                bytes.into(),
+            )
+            .await
+            .unwrap();
 
         let opener = ArrowStreamFileOpener {
-            object_store,
+            object_store: test_utils::storage::object_store(object_store),
+            access_context: FileAccessContext::default(),
             projection: Some(vec![0]), // just the first column
         };
 

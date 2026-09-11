@@ -36,7 +36,7 @@ use datafusion_cli::functions::{
     ListFilesCacheFunc, MetadataCacheFunc, ParquetMetadataFunc, StatisticsCacheFunc,
 };
 use datafusion_cli::object_storage::instrumented::{
-    InstrumentedObjectStoreMode, InstrumentedObjectStoreRegistry,
+    InstrumentedObjectStoreMode, ObjectStoreProfiler,
 };
 use datafusion_cli::object_storage::{StdinCarriesCommands, is_stdin_location};
 use datafusion_cli::{
@@ -244,13 +244,19 @@ async fn main_inner() -> Result<()> {
         rt_builder = rt_builder.with_disk_manager_builder(builder);
     }
 
-    let instrumented_registry = Arc::new(
-        InstrumentedObjectStoreRegistry::new()
-            .with_profile_mode(args.object_store_profiling),
+    let object_store_profiler = Arc::new(
+        ObjectStoreProfiler::new().with_profile_mode(args.object_store_profiling),
     );
-    rt_builder = rt_builder.with_object_store_registry(instrumented_registry.clone());
+    let session_config = session_config.with_extension(object_store_profiler.clone());
 
     let runtime_env = rt_builder.build_arc()?;
+    runtime_env.register_storage(
+        datafusion::storage::StorageUrl::local_filesystem().as_ref(),
+        Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+            object_store_profiler
+                .instrument(Arc::new(object_store::local::LocalFileSystem::new())),
+        )),
+    )?;
 
     let mut state_builder = SessionStateBuilder::new()
         .with_config(session_config)
@@ -299,7 +305,7 @@ async fn main_inner() -> Result<()> {
         quiet: args.quiet,
         maxrows: args.maxrows,
         color: args.color,
-        instrumented_registry: Arc::clone(&instrumented_registry),
+        object_store_profiler: Arc::clone(&object_store_profiler),
     };
 
     let repl_mode = args.repl_mode();
@@ -795,10 +801,12 @@ mod tests {
 
         let ctx = SessionContext::new_with_config_rt(SessionConfig::default(), rt);
 
-        ctx.register_object_store(
+        ctx.register_storage(
             &Url::parse("mem://test_table").unwrap(),
-            Arc::new(InMemory::new()),
-        );
+            Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+                Arc::new(InMemory::new()),
+            )),
+        )?;
 
         ctx.register_udtf(
             "list_files_cache",

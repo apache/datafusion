@@ -55,6 +55,9 @@ members = [
     "datafusion/spark",
     "datafusion/sql",
     "datafusion/sqllogictest",
+    "datafusion/storage",
+    "datafusion/storage-object-store",
+    "datafusion/storage-opendal",
     "datafusion/substrait",
     "datafusion/wasmtest",
     "datafusion-cli",
@@ -84,6 +87,10 @@ rust-version = "1.94.0"
 version = "55.0.0"
 
 [workspace.dependencies]
+datafusion-storage-object-store = { path = "datafusion/storage-object-store", version = "55.0.0" }
+datafusion-storage-opendal = { path = "datafusion/storage-opendal", version = "55.0.0" }
+
+datafusion-storage = { path = "datafusion/storage", version = "55.0.0", default-features = false }
 # We turn off default-features for some dependencies here so the workspaces which inherit them can
 # selectively turn them on if needed, since we can override default-features = true (from false)
 # for the inherited dependency but cannot do the reverse (override from true to false).
@@ -123,7 +130,7 @@ criterion = "0.8"
 ctor = "1.0.7"
 dashmap = "6.2.1"
 datafusion = { path = "datafusion/core", version = "55.0.0", default-features = false }
-datafusion-catalog = { path = "datafusion/catalog", version = "55.0.0" }
+datafusion-catalog = { path = "datafusion/catalog", version = "55.0.0", default-features = false }
 datafusion-catalog-listing = { path = "datafusion/catalog-listing", version = "55.0.0" }
 datafusion-common = { path = "datafusion/common", version = "55.0.0", default-features = false }
 datafusion-common-runtime = { path = "datafusion/common-runtime", version = "55.0.0" }
@@ -138,11 +145,19 @@ datafusion-execution = { path = "datafusion/execution", version = "55.0.0", defa
 datafusion-expr = { path = "datafusion/expr", version = "55.0.0", default-features = false }
 datafusion-expr-common = { path = "datafusion/expr-common", version = "55.0.0" }
 datafusion-ffi = { path = "datafusion/ffi", version = "55.0.0" }
-datafusion-functions = { path = "datafusion/functions", version = "55.0.0" }
-datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "55.0.0" }
+# Select the existing expression defaults without implicitly enabling storage.
+datafusion-functions = { path = "datafusion/functions", version = "55.0.0", default-features = false, features = [
+    "datetime_expressions",
+    "encoding_expressions",
+    "math_expressions",
+    "regex_expressions",
+    "string_expressions",
+    "unicode_expressions",
+] }
+datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "55.0.0", default-features = false }
 datafusion-functions-aggregate-common = { path = "datafusion/functions-aggregate-common", version = "55.0.0" }
 datafusion-functions-nested = { path = "datafusion/functions-nested", version = "55.0.0", default-features = false }
-datafusion-functions-table = { path = "datafusion/functions-table", version = "55.0.0" }
+datafusion-functions-table = { path = "datafusion/functions-table", version = "55.0.0", default-features = false }
 datafusion-functions-window = { path = "datafusion/functions-window", version = "55.0.0" }
 datafusion-functions-window-common = { path = "datafusion/functions-window-common", version = "55.0.0" }
 datafusion-macros = { path = "datafusion/macros", version = "55.0.0" }
@@ -150,15 +165,18 @@ datafusion-optimizer = { path = "datafusion/optimizer", version = "55.0.0", defa
 datafusion-physical-expr = { path = "datafusion/physical-expr", version = "55.0.0", default-features = false }
 datafusion-physical-expr-adapter = { path = "datafusion/physical-expr-adapter", version = "55.0.0", default-features = false }
 datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "55.0.0", default-features = false }
-datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", version = "55.0.0" }
-datafusion-physical-plan = { path = "datafusion/physical-plan", version = "55.0.0" }
+datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", version = "55.0.0", default-features = false }
+datafusion-physical-plan = { path = "datafusion/physical-plan", version = "55.0.0", default-features = false }
 datafusion-proto = { path = "datafusion/proto", version = "55.0.0", default-features = false }
 datafusion-proto-common = { path = "datafusion/proto-common", version = "55.0.0" }
 datafusion-proto-models = { path = "datafusion/proto-models", version = "55.0.0" }
-datafusion-pruning = { path = "datafusion/pruning", version = "55.0.0" }
-datafusion-session = { path = "datafusion/session", version = "55.0.0" }
+datafusion-pruning = { path = "datafusion/pruning", version = "55.0.0", default-features = false }
+datafusion-session = { path = "datafusion/session", version = "55.0.0", default-features = false }
 datafusion-spark = { path = "datafusion/spark", version = "55.0.0" }
-datafusion-sql = { path = "datafusion/sql", version = "55.0.0" }
+datafusion-sql = { path = "datafusion/sql", version = "55.0.0", default-features = false, features = [
+    "unicode_expressions",
+    "unparser",
+] }
 datafusion-substrait = { path = "datafusion/substrait", version = "55.0.0" }
 
 doc-comment = "0.3"
@@ -178,11 +196,11 @@ log = "^0.4"
 memchr = "2.8.1"
 num-traits = { version = "0.2" }
 object_store = { version = "0.13.2", default-features = false }
+opendal = { version = "0.59.1", default-features = false }
 parking_lot = "0.12"
 parquet = { version = "59.2.0", default-features = false, features = [
     "arrow",
     "async",
-    "object_store",
 ] }
 pbjson = { version = "0.9.0" }
 pbjson-types = "0.9"

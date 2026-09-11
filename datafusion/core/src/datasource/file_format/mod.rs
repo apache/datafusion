@@ -42,7 +42,7 @@ pub(crate) mod test_util {
     use datafusion_datasource::TableSchema;
     use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
     use datafusion_datasource::{PartitionedFile, file_format::FileFormat};
-    use datafusion_execution::object_store::ObjectStoreUrl;
+    use datafusion_storage::StorageUrl;
     use std::sync::Arc;
 
     use crate::test::object_store::local_unpartitioned_file;
@@ -56,7 +56,7 @@ pub(crate) mod test_util {
         projection: Option<Vec<usize>>,
         limit: Option<usize>,
     ) -> Result<Arc<dyn datafusion_physical_plan::ExecutionPlan>> {
-        let store = Arc::new(object_store::local::LocalFileSystem::new()) as _;
+        let store = test_utils::storage::local();
         let meta = local_unpartitioned_file(format!("{store_root}/{file_name}"));
 
         let file_schema = if let Some(file_schema) = schema {
@@ -79,7 +79,7 @@ pub(crate) mod test_util {
             .create_physical_plan(
                 state,
                 FileScanConfigBuilder::new(
-                    ObjectStoreUrl::local_filesystem(),
+                    StorageUrl::local_filesystem(),
                     format.file_source(table_schema),
                 )
                 .with_file_groups(file_groups)
@@ -112,9 +112,15 @@ mod tests {
         let ctx = SessionContext::new();
         // register a local file system object store for /tmp directory
         let tmp_dir = TempDir::new()?;
-        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir).unwrap());
         let local_url = Url::parse("file://local").unwrap();
-        ctx.register_object_store(&local_url, local);
+        ctx.register_storage(
+            &local_url,
+            Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+                local,
+            )),
+        )
+        .unwrap();
 
         let options = CsvReadOptions::default()
             .schema_infer_max_records(2)

@@ -17,7 +17,7 @@
 
 use arrow::datatypes::SchemaRef;
 use arrow::{array::RecordBatch, compute::concat_batches};
-use datafusion::{datasource::object_store::ObjectStoreUrl, physical_plan::PhysicalExpr};
+use datafusion::{physical_plan::PhysicalExpr, storage::StorageUrl};
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, config::ConfigOptions, internal_err};
 use datafusion_datasource::{
@@ -40,9 +40,9 @@ use datafusion_physical_plan::{
     },
     metrics::ExecutionPlanMetricsSet,
 };
+use datafusion_storage::StorageBinding;
 use futures::StreamExt;
 use futures::{FutureExt, Stream};
-use object_store::ObjectStore;
 use std::fmt::Write as _;
 use std::{
     fmt::{Display, Formatter},
@@ -130,9 +130,10 @@ impl TestSource {
 impl FileSource for TestSource {
     fn create_file_opener(
         &self,
-        _object_store: Arc<dyn ObjectStore>,
+        _object_store: Arc<StorageBinding>,
         _base_config: &FileScanConfig,
         _partition: usize,
+        _access_context: datafusion_storage::FileAccessContext,
     ) -> Result<Arc<dyn FileOpener>> {
         Ok(Arc::new(TestOpener {
             batches: self.batches.clone(),
@@ -287,7 +288,7 @@ impl TestScanBuilder {
             self.batches,
         ));
         let base_config =
-            FileScanConfigBuilder::new(ObjectStoreUrl::parse("test://").unwrap(), source)
+            FileScanConfigBuilder::new(StorageUrl::parse("test://").unwrap(), source)
                 .with_file(PartitionedFile::new("test.parquet", 123))
                 .build();
         DataSourceExec::from_data_source(base_config)

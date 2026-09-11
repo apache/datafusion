@@ -128,10 +128,13 @@ impl ReplaceTest {
                 )
                 .await
                 .expect("could not create object store");
-            ctx.register_object_store(
+            ctx.register_storage(
                 &Url::parse("test://").unwrap(),
-                Arc::new(object_store),
-            );
+                Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+                    Arc::new(object_store),
+                )),
+            )
+            .unwrap();
             let task_ctx = Arc::new(TaskContext::from(&ctx));
             let res = collect(optimized_physical_plan, task_ctx).await;
             assert!(

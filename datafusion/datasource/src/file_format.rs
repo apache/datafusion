@@ -39,7 +39,7 @@ use datafusion_physical_plan::ExecutionPlan;
 use datafusion_session::Session;
 
 use async_trait::async_trait;
-use object_store::{ObjectMeta, ObjectStore};
+use datafusion_storage::{FileInfo, StorageBinding};
 
 /// Default max records to scan to infer the schema
 pub const DEFAULT_SCHEMA_INFER_MAX_RECORD: usize = 1000;
@@ -120,8 +120,8 @@ pub trait FileFormat: Any + Send + Sync + fmt::Debug {
     async fn infer_schema(
         &self,
         state: &dyn Session,
-        store: &Arc<dyn ObjectStore>,
-        objects: &[ObjectMeta],
+        store: &Arc<StorageBinding>,
+        objects: &[FileInfo],
     ) -> Result<SchemaRef>;
 
     /// Infer the statistics for the provided object. The cost and accuracy of the
@@ -134,9 +134,9 @@ pub trait FileFormat: Any + Send + Sync + fmt::Debug {
     async fn infer_stats(
         &self,
         state: &dyn Session,
-        store: &Arc<dyn ObjectStore>,
+        store: &Arc<StorageBinding>,
         table_schema: SchemaRef,
-        object: &ObjectMeta,
+        object: &FileInfo,
     ) -> Result<Statistics>;
 
     /// Infer the ordering (sort order) for the provided object from file metadata.
@@ -151,9 +151,9 @@ pub trait FileFormat: Any + Send + Sync + fmt::Debug {
     async fn infer_ordering(
         &self,
         _state: &dyn Session,
-        _store: &Arc<dyn ObjectStore>,
+        _store: &Arc<StorageBinding>,
         _table_schema: SchemaRef,
-        _object: &ObjectMeta,
+        _object: &FileInfo,
     ) -> Result<Option<LexOrdering>> {
         Ok(None)
     }
@@ -169,9 +169,9 @@ pub trait FileFormat: Any + Send + Sync + fmt::Debug {
     async fn infer_stats_and_ordering(
         &self,
         state: &dyn Session,
-        store: &Arc<dyn ObjectStore>,
+        store: &Arc<StorageBinding>,
         table_schema: SchemaRef,
-        object: &ObjectMeta,
+        object: &FileInfo,
     ) -> Result<FileMeta> {
         let statistics = self
             .infer_stats(state, store, Arc::clone(&table_schema), object)

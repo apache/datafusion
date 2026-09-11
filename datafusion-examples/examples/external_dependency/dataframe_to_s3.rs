@@ -50,12 +50,18 @@ pub async fn dataframe_to_s3() -> Result<()> {
         .with_region(region)
         .with_access_key_id(env::var("AWS_ACCESS_KEY_ID").unwrap())
         .with_secret_access_key(env::var("AWS_SECRET_ACCESS_KEY").unwrap())
-        .build()?;
+        .build()
+        .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
 
     let path = format!("s3://{bucket_name}");
     let s3_url = Url::parse(&path).unwrap();
     let arc_s3 = Arc::new(s3);
-    ctx.register_object_store(&s3_url, arc_s3.clone());
+    ctx.register_storage(
+        &s3_url,
+        Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+            arc_s3.clone(),
+        )),
+    )?;
 
     let path = format!("s3://{bucket_name}/test_data/");
     let file_format = ParquetFormat::default().with_enable_pruning(true);

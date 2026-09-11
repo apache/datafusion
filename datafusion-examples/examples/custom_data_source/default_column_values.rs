@@ -32,7 +32,6 @@ use datafusion::common::{Result, ScalarValue};
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
 use datafusion::execution::context::SessionContext;
-use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion::parquet::arrow::ArrowWriter;
@@ -40,6 +39,7 @@ use datafusion::parquet::file::properties::WriterProperties;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::{SessionConfig, lit};
+use datafusion::storage::StorageUrl;
 use datafusion_physical_expr_adapter::{
     DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
     replace_columns_with_literals,
@@ -47,7 +47,7 @@ use datafusion_physical_expr_adapter::{
 use futures::StreamExt;
 use object_store::memory::InMemory;
 use object_store::path::Path;
-use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
+use object_store::{ObjectStoreExt, PutPayload};
 
 // Metadata key for storing default values in field metadata
 const DEFAULT_VALUE_METADATA_KEY: &str = "example.default_value";
@@ -90,7 +90,10 @@ pub async fn default_column_values() -> Result<()> {
     };
     let path = Path::from("example.parquet");
     let payload = PutPayload::from_bytes(buf.into());
-    store.put(&path, payload).await?;
+    store
+        .put(&path, payload)
+        .await
+        .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
 
     // Create a custom table provider that handles missing columns with defaults
     let table_provider = Arc::new(DefaultValueTableProvider::new(logical_schema));
@@ -103,10 +106,12 @@ pub async fn default_column_values() -> Result<()> {
     // Register our table
     ctx.register_table("example_table", table_provider)?;
 
-    ctx.runtime_env().register_object_store(
-        ObjectStoreUrl::parse("memory://")?.as_ref(),
-        Arc::new(store),
-    );
+    ctx.runtime_env().register_storage(
+        StorageUrl::parse("memory://")?.as_ref(),
+        Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+            Arc::new(store),
+        )),
+    )?;
 
     println!("\n=== Demonstrating default value injection in filter predicates ===");
     let query = "SELECT id, name FROM example_table WHERE status = 'active' ORDER BY id";
@@ -233,11 +238,14 @@ impl TableProvider for DefaultValueTableProvider {
             .with_predicate(filter)
             .with_pushdown_filters(true);
 
-        let object_store_url = ObjectStoreUrl::parse("memory://")?;
-        let store = state.runtime_env().object_store(object_store_url)?;
+        let object_store_url = StorageUrl::parse("memory://")?;
+        let store = state.runtime_env().storage(object_store_url)?;
 
         let mut files = vec![];
-        let mut listing = store.list(None);
+        let mut listing = store.list(
+            &datafusion::storage::path::Path::default(),
+            datafusion::storage::FileAccessContext::default(),
+        );
         while let Some(file) = listing.next().await {
             if let Ok(file) = file {
                 files.push(file);
@@ -250,7 +258,7 @@ impl TableProvider for DefaultValueTableProvider {
             .collect();
 
         let file_scan_config = FileScanConfigBuilder::new(
-            ObjectStoreUrl::parse("memory://")?,
+            StorageUrl::parse("memory://")?,
             Arc::new(parquet_source),
         )
         .with_projection_indices(projection.map(|p| p.to_vec()))?

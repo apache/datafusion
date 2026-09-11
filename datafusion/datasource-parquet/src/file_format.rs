@@ -20,7 +20,6 @@
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Debug;
-use std::ops::Range;
 use std::sync::Arc;
 
 // Re-export so the historical `file_format::*` paths still resolve.
@@ -60,20 +59,15 @@ use datafusion_physical_plan::ExecutionPlan;
 use datafusion_session::Session;
 
 use crate::metadata::{DFParquetMetadata, lex_ordering_to_sorting_columns};
-use crate::reader::CachedParquetFileReaderFactory;
 use crate::source::{
     ParquetSource, parse_coerce_int96_string, parse_coerce_int96_tz_string,
 };
 use async_trait::async_trait;
-use bytes::Bytes;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::cache::cache_manager::FileMetadataCache;
-use futures::future::BoxFuture;
-use futures::{FutureExt, StreamExt, TryStreamExt};
-use object_store::path::Path;
-use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
-use parquet::arrow::async_reader::MetadataFetch;
-use parquet::errors::ParquetError;
+use datafusion_storage::path::Path;
+use datafusion_storage::{FileAccessContext, FileInfo, StorageBinding};
+use futures::{StreamExt, TryStreamExt};
 use parquet::file::metadata::ParquetMetaData;
 
 #[derive(Default)]
@@ -334,8 +328,8 @@ impl FileFormat for ParquetFormat {
     async fn infer_schema(
         &self,
         state: &dyn Session,
-        store: &Arc<dyn ObjectStore>,
-        objects: &[ObjectMeta],
+        store: &Arc<StorageBinding>,
+        objects: &[FileInfo],
     ) -> Result<SchemaRef> {
         let coerce_int96 = match self.coerce_int96() {
             Some(time_unit) => Some(parse_coerce_int96_string(time_unit.as_str())?),
@@ -360,10 +354,16 @@ impl FileFormat for ParquetFormat {
                     &object.location,
                 )
                 .await?;
-                let result = DFParquetMetadata::new(store.as_ref(), object)
+                let reader = store
+                    .open(object, FileAccessContext::new("parquet-schema"))
+                    .await?;
+                let result = DFParquetMetadata::new(reader.as_ref(), object)
                     .with_metadata_size_hint(self.metadata_size_hint())
                     .with_decryption_properties(file_decryption_properties)
-                    .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
+                    .with_file_metadata_cache(
+                        Some(Arc::clone(&file_metadata_cache)),
+                        store.id(),
+                    )
                     .with_coerce_int96(coerce_int96)
                     .with_coerce_int96_tz(coerce_int96_tz.clone())
                     .fetch_schema_with_location()
@@ -428,19 +428,22 @@ impl FileFormat for ParquetFormat {
     async fn infer_stats(
         &self,
         state: &dyn Session,
-        store: &Arc<dyn ObjectStore>,
+        store: &Arc<StorageBinding>,
         table_schema: SchemaRef,
-        object: &ObjectMeta,
+        object: &FileInfo,
     ) -> Result<Statistics> {
         let file_decryption_properties =
             get_file_decryption_properties(state, &self.options, &object.location)
                 .await?;
         let file_metadata_cache =
             state.runtime_env().cache_manager.get_file_metadata_cache();
-        DFParquetMetadata::new(store, object)
+        let reader = store
+            .open(object, FileAccessContext::new("parquet-statistics"))
+            .await?;
+        DFParquetMetadata::new(reader.as_ref(), object)
             .with_metadata_size_hint(self.metadata_size_hint())
             .with_decryption_properties(file_decryption_properties)
-            .with_file_metadata_cache(Some(file_metadata_cache))
+            .with_file_metadata_cache(Some(file_metadata_cache), store.id())
             .fetch_statistics(&table_schema)
             .await
     }
@@ -448,19 +451,22 @@ impl FileFormat for ParquetFormat {
     async fn infer_ordering(
         &self,
         state: &dyn Session,
-        store: &Arc<dyn ObjectStore>,
+        store: &Arc<StorageBinding>,
         table_schema: SchemaRef,
-        object: &ObjectMeta,
+        object: &FileInfo,
     ) -> Result<Option<LexOrdering>> {
         let file_decryption_properties =
             get_file_decryption_properties(state, &self.options, &object.location)
                 .await?;
         let file_metadata_cache =
             state.runtime_env().cache_manager.get_file_metadata_cache();
-        let metadata = DFParquetMetadata::new(store, object)
+        let reader = store
+            .open(object, FileAccessContext::new("parquet-statistics"))
+            .await?;
+        let metadata = DFParquetMetadata::new(reader.as_ref(), object)
             .with_metadata_size_hint(self.metadata_size_hint())
             .with_decryption_properties(file_decryption_properties)
-            .with_file_metadata_cache(Some(file_metadata_cache))
+            .with_file_metadata_cache(Some(file_metadata_cache), store.id())
             .fetch_metadata()
             .await?;
         crate::metadata::ordering_from_parquet_metadata(&metadata, &table_schema)
@@ -469,19 +475,22 @@ impl FileFormat for ParquetFormat {
     async fn infer_stats_and_ordering(
         &self,
         state: &dyn Session,
-        store: &Arc<dyn ObjectStore>,
+        store: &Arc<StorageBinding>,
         table_schema: SchemaRef,
-        object: &ObjectMeta,
+        object: &FileInfo,
     ) -> Result<datafusion_datasource::file_format::FileMeta> {
         let file_decryption_properties =
             get_file_decryption_properties(state, &self.options, &object.location)
                 .await?;
         let file_metadata_cache =
             state.runtime_env().cache_manager.get_file_metadata_cache();
-        let metadata = DFParquetMetadata::new(store, object)
+        let reader = store
+            .open(object, FileAccessContext::new("parquet-statistics"))
+            .await?;
+        let metadata = DFParquetMetadata::new(reader.as_ref(), object)
             .with_metadata_size_hint(self.metadata_size_hint())
             .with_decryption_properties(file_decryption_properties)
-            .with_file_metadata_cache(Some(file_metadata_cache))
+            .with_file_metadata_cache(Some(file_metadata_cache), store.id())
             .fetch_metadata()
             .await?;
         let statistics = DFParquetMetadata::statistics_from_parquet_metadata(
@@ -513,15 +522,6 @@ impl FileFormat for ParquetFormat {
             .cloned()
             .ok_or_else(|| internal_datafusion_err!("Expected ParquetSource"))?;
         source = source.with_table_parquet_options(self.options.clone());
-
-        // Use the CachedParquetFileReaderFactory
-        let metadata_cache = state.runtime_env().cache_manager.get_file_metadata_cache();
-        let store = state
-            .runtime_env()
-            .object_store(conf.object_store_url.clone())?;
-        let cached_parquet_read_factory =
-            Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
-        source = source.with_parquet_file_reader_factory(cached_parquet_read_factory);
 
         if let Some(metadata_size_hint) = metadata_size_hint {
             source = source.with_metadata_size_hint(metadata_size_hint)
@@ -617,30 +617,6 @@ impl ParquetFormat {
     }
 }
 
-/// [`MetadataFetch`] adapter for reading bytes from an [`ObjectStore`]
-pub struct ObjectStoreFetch<'a> {
-    store: &'a dyn ObjectStore,
-    meta: &'a ObjectMeta,
-}
-
-impl<'a> ObjectStoreFetch<'a> {
-    pub fn new(store: &'a dyn ObjectStore, meta: &'a ObjectMeta) -> Self {
-        Self { store, meta }
-    }
-}
-
-impl MetadataFetch for ObjectStoreFetch<'_> {
-    fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes, ParquetError>> {
-        async {
-            self.store
-                .get_range(&self.meta.location, range)
-                .await
-                .map_err(ParquetError::from)
-        }
-        .boxed()
-    }
-}
-
 /// Fetches parquet metadata from ObjectStore for given object
 ///
 /// This component is a subject to **change** in near future and is exposed for low level integrations
@@ -652,17 +628,20 @@ impl MetadataFetch for ObjectStoreFetch<'_> {
     note = "Use `DFParquetMetadata::fetch_metadata` instead"
 )]
 pub async fn fetch_parquet_metadata(
-    store: &dyn ObjectStore,
-    object_meta: &ObjectMeta,
+    store: &StorageBinding,
+    object_meta: &FileInfo,
     size_hint: Option<usize>,
     decryption_properties: Option<&FileDecryptionProperties>,
     file_metadata_cache: Option<Arc<FileMetadataCache>>,
 ) -> Result<Arc<ParquetMetaData>> {
     let decryption_properties = decryption_properties.cloned().map(Arc::new);
-    DFParquetMetadata::new(store, object_meta)
+    let reader = store
+        .open(object_meta, FileAccessContext::new("parquet-metadata"))
+        .await?;
+    DFParquetMetadata::new(reader.as_ref(), object_meta)
         .with_metadata_size_hint(size_hint)
         .with_decryption_properties(decryption_properties)
-        .with_file_metadata_cache(file_metadata_cache)
+        .with_file_metadata_cache(file_metadata_cache, store.id())
         .fetch_metadata()
         .await
 }
@@ -675,18 +654,21 @@ pub async fn fetch_parquet_metadata(
     note = "Use `DFParquetMetadata::fetch_statistics` instead"
 )]
 pub async fn fetch_statistics(
-    store: &dyn ObjectStore,
+    store: &StorageBinding,
     table_schema: SchemaRef,
-    file: &ObjectMeta,
+    file: &FileInfo,
     metadata_size_hint: Option<usize>,
     decryption_properties: Option<&FileDecryptionProperties>,
     file_metadata_cache: Option<Arc<FileMetadataCache>>,
 ) -> Result<Statistics> {
     let decryption_properties = decryption_properties.cloned().map(Arc::new);
-    DFParquetMetadata::new(store, file)
+    let reader = store
+        .open(file, FileAccessContext::new("parquet-metadata"))
+        .await?;
+    DFParquetMetadata::new(reader.as_ref(), file)
         .with_metadata_size_hint(metadata_size_hint)
         .with_decryption_properties(decryption_properties)
-        .with_file_metadata_cache(file_metadata_cache)
+        .with_file_metadata_cache(file_metadata_cache, store.id())
         .fetch_statistics(&table_schema)
         .await
 }

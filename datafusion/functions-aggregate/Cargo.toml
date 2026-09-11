@@ -109,4 +109,5 @@ name = "variance"
 harness = false
 
 [features]
+default = []
 force_hash_collisions = ["datafusion-common/force_hash_collisions"]

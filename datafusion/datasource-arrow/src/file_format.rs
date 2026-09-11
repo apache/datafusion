@@ -21,13 +21,11 @@
 
 use std::collections::HashMap;
 use std::fmt::{self, Debug};
-use std::io::{Seek, SeekFrom};
 use std::sync::Arc;
 
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::ipc::convert::fb_to_schema;
-use arrow::ipc::reader::{FileReader, StreamReader};
 use arrow::ipc::writer::IpcWriteOptions;
 use arrow::ipc::{CompressionType, root_as_message};
 use datafusion_common::error::Result;
@@ -41,9 +39,7 @@ use datafusion_datasource::display::FileGroupDisplay;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::sink::{DataSink, DataSinkExec};
-use datafusion_datasource::write::{
-    ObjectWriterBuilder, SharedBuffer, get_writer_schema,
-};
+use datafusion_datasource::write::{FileWriterBuilder, SharedBuffer, get_writer_schema};
 use datafusion_datasource::{TableSchema, TableSchemaBuilder};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
@@ -59,12 +55,10 @@ use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
+use datafusion_storage::{FileAccessContext, path::Path};
+use datafusion_storage::{FileInfo, StorageBinding};
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use object_store::{
-    GetOptions, GetRange, GetResultPayload, ObjectMeta, ObjectStore, ObjectStoreExt,
-    path::Path,
-};
 use tokio::io::AsyncWriteExt;
 
 /// Initial writing buffer size. Note this is just a size hint for efficiency. It
@@ -136,35 +130,13 @@ impl FileFormat for ArrowFormat {
     async fn infer_schema(
         &self,
         _state: &dyn Session,
-        store: &Arc<dyn ObjectStore>,
-        objects: &[ObjectMeta],
+        store: &Arc<StorageBinding>,
+        objects: &[FileInfo],
     ) -> Result<SchemaRef> {
         let mut schemas = vec![];
         for object in objects {
-            let r = store.as_ref().get(&object.location).await?;
-            let schema = match r.payload {
-                #[cfg(not(target_arch = "wasm32"))]
-                GetResultPayload::File(mut file, _) => {
-                    match FileReader::try_new(&mut file, None) {
-                        Ok(reader) => reader.schema(),
-                        Err(file_error) => {
-                            // not in the file format, but FileReader read some bytes
-                            // while trying to parse the file and so we need to rewind
-                            // it to the beginning of the file
-                            file.seek(SeekFrom::Start(0))?;
-                            match StreamReader::try_new(&mut file, None) {
-                                Ok(reader) => reader.schema(),
-                                Err(stream_error) => {
-                                    return Err(internal_datafusion_err!(
-                                        "Failed to parse Arrow file as either file format or stream format. File format error: {file_error}. Stream format error: {stream_error}"
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
-                GetResultPayload::Stream(stream) => infer_stream_schema(stream).await?,
-            };
+            let reader = store.open(object, FileAccessContext::new("schema")).await?;
+            let schema = infer_stream_schema(reader.stream(None)).await?;
             schemas.push(Arc::unwrap_or_clone(schema));
         }
         let merged_schema = Schema::try_merge(schemas)?;
@@ -174,9 +146,9 @@ impl FileFormat for ArrowFormat {
     async fn infer_stats(
         &self,
         _state: &dyn Session,
-        _store: &Arc<dyn ObjectStore>,
+        _store: &Arc<StorageBinding>,
         table_schema: SchemaRef,
-        _object: &ObjectMeta,
+        _object: &FileInfo,
     ) -> Result<Statistics> {
         Ok(Statistics::new_unknown(&table_schema))
     }
@@ -186,7 +158,7 @@ impl FileFormat for ArrowFormat {
         state: &dyn Session,
         conf: FileScanConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let object_store = state.runtime_env().object_store(&conf.object_store_url)?;
+        let object_store = state.runtime_env().storage(&conf.object_store_url)?;
         let object_location = &conf
             .file_groups
             .first()
@@ -266,7 +238,7 @@ impl FileSink for ArrowFileSink {
         context: &Arc<TaskContext>,
         demux_task: SpawnedTask<Result<()>>,
         mut file_stream_rx: DemuxedStreamReceiver,
-        object_store: Arc<dyn ObjectStore>,
+        object_store: Arc<StorageBinding>,
     ) -> Result<u64> {
         let mut file_write_tasks: JoinSet<std::result::Result<usize, DataFusionError>> =
             JoinSet::new();
@@ -281,7 +253,7 @@ impl FileSink for ArrowFileSink {
                 &get_writer_schema(&self.config),
                 ipc_options.clone(),
             )?;
-            let mut object_store_writer = ObjectWriterBuilder::new(
+            let mut object_store_writer = FileWriterBuilder::new(
                 FileCompressionType::UNCOMPRESSED,
                 &path,
                 Arc::clone(&object_store),
@@ -293,7 +265,8 @@ impl FileSink for ArrowFileSink {
                     .execution
                     .objectstore_writer_buffer_size,
             ))
-            .build()?;
+            .build()
+            .await?;
             file_write_tasks.spawn(async move {
                 let mut row_count = 0;
                 while let Some(batch) = rx.recv().await {
@@ -384,7 +357,7 @@ const ARROW_MAGIC: [u8; 6] = *b"ARROW1";
 const CONTINUATION_MARKER: [u8; 4] = [0xff; 4];
 
 async fn infer_stream_schema(
-    mut stream: BoxStream<'static, object_store::Result<Bytes>>,
+    mut stream: BoxStream<'static, datafusion_storage::Result<Bytes>>,
 ) -> Result<SchemaRef> {
     // IPC streaming format.
     // See https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format
@@ -426,17 +399,25 @@ async fn infer_stream_schema(
     // For the purposes of this function, the arrow "preamble" is the magic number, padding,
     // and the continuation marker. 16 bytes covers the preamble and metadata length
     // no matter which version or format is used.
-    let bytes = extend_bytes_to_n_length_from_stream(vec![], 16, &mut stream).await?;
+    let mut bytes = extend_bytes_to_n_length_from_stream(vec![], 16, &mut stream).await?;
 
     // The preamble length is everything before the metadata length
     let preamble_len = if bytes[0..6] == ARROW_MAGIC {
-        // File format starts with magic number "ARROW1"
-        if bytes[8..12] == CONTINUATION_MARKER {
-            // Continuation marker was added in v0.15.0
-            12
+        // IPC writers may align the first message beyond the minimum 8-byte
+        // prefix. Skip zero padding before reading its length/continuation marker.
+        let mut offset = 8;
+        loop {
+            bytes = extend_bytes_to_n_length_from_stream(bytes, offset + 4, &mut stream)
+                .await?;
+            if bytes[offset..offset + 4] != [0; 4] {
+                break;
+            }
+            offset += 4;
+        }
+        if bytes[offset..offset + 4] == CONTINUATION_MARKER {
+            offset + 4
         } else {
-            // File format before v0.15.0
-            8
+            offset
         }
     } else if bytes[0..4] == CONTINUATION_MARKER {
         // Stream format after v0.15.0 starts with continuation marker
@@ -446,6 +427,8 @@ async fn infer_stream_schema(
         0
     };
 
+    bytes = extend_bytes_to_n_length_from_stream(bytes, preamble_len + 4, &mut stream)
+        .await?;
     let meta_len_bytes: [u8; 4] = bytes[preamble_len..preamble_len + 4]
         .try_into()
         .map_err(|err| {
@@ -489,7 +472,7 @@ async fn infer_stream_schema(
 async fn extend_bytes_to_n_length_from_stream(
     bytes: Vec<u8>,
     n: usize,
-    stream: &mut BoxStream<'static, object_store::Result<Bytes>>,
+    stream: &mut BoxStream<'static, datafusion_storage::Result<Bytes>>,
 ) -> Result<Vec<u8>> {
     if bytes.len() >= n {
         return Ok(bytes);
@@ -516,24 +499,23 @@ async fn extend_bytes_to_n_length_from_stream(
 }
 
 async fn is_object_in_arrow_ipc_file_format(
-    store: Arc<dyn ObjectStore>,
+    store: Arc<StorageBinding>,
     object_location: &Path,
 ) -> Result<bool> {
-    let get_opts = GetOptions {
-        range: Some(GetRange::Bounded(0..6)),
-        ..Default::default()
-    };
-    let bytes = store
-        .get_opts(object_location, get_opts)
-        .await?
-        .bytes()
-        .await?;
+    let context = FileAccessContext::new("format");
+    let info = store.stat(object_location, &context).await?;
+    if info.size == 0 {
+        return Err(ArrowError::ParseError("Empty Arrow IPC file".into()).into());
+    }
+    let reader = store.open(&info, context).await?;
+    let bytes = reader.read_range((0..info.size.min(6)).into()).await?;
     Ok(bytes.len() >= 6 && bytes[0..6] == ARROW_MAGIC)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use object_store::{ObjectStore, ObjectStoreExt};
 
     use std::any::Any;
 
@@ -646,10 +628,16 @@ mod tests {
             bytes.truncate(bytes.len() - 20); // mangle end to show we don't need to read whole file
             let location = Path::parse(file)?;
             let in_memory_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-            in_memory_store.put(&location, bytes.into()).await?;
+            in_memory_store
+                .put(
+                    &object_store::path::Path::from(location.as_ref()),
+                    bytes.into(),
+                )
+                .await
+                .unwrap();
 
             let state = MockSession::new();
-            let object_meta = ObjectMeta {
+            let object_meta = FileInfo {
                 location,
                 last_modified: DateTime::default(),
                 size: u64::MAX,
@@ -668,7 +656,7 @@ mod tests {
                 let inferred_schema = arrow_format
                     .infer_schema(
                         &state,
-                        &(store.clone() as Arc<dyn ObjectStore>),
+                        &test_utils::storage::object_store(store.clone()),
                         std::slice::from_ref(&object_meta),
                     )
                     .await?;
@@ -690,13 +678,19 @@ mod tests {
             bytes.truncate(20); // should cause error that file shorter than expected
             let location = Path::parse(file)?;
             let in_memory_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-            in_memory_store.put(&location, bytes.into()).await?;
+            in_memory_store
+                .put(
+                    &object_store::path::Path::from(location.as_ref()),
+                    bytes.into(),
+                )
+                .await
+                .unwrap();
 
             let state = MockSession::new();
-            let object_meta = ObjectMeta {
+            let object_meta = FileInfo {
                 location,
                 last_modified: DateTime::default(),
-                size: u64::MAX,
+                size: 20,
                 e_tag: None,
                 version: None,
             };
@@ -707,7 +701,7 @@ mod tests {
             let err = arrow_format
                 .infer_schema(
                     &state,
-                    &(store.clone() as Arc<dyn ObjectStore>),
+                    &test_utils::storage::object_store(store.clone()),
                     std::slice::from_ref(&object_meta),
                 )
                 .await;
@@ -728,9 +722,19 @@ mod tests {
         let path = Path::from("test.arrow");
 
         let file_bytes = std::fs::read("tests/data/example.arrow")?;
-        store.put(&path, file_bytes.into()).await?;
+        store
+            .put(
+                &object_store::path::Path::from(path.as_ref()),
+                file_bytes.into(),
+            )
+            .await
+            .unwrap();
 
-        let is_file = is_object_in_arrow_ipc_file_format(store.clone(), &path).await?;
+        let is_file = is_object_in_arrow_ipc_file_format(
+            test_utils::storage::object_store(store.clone()),
+            &path,
+        )
+        .await?;
         assert!(is_file, "Should detect file format");
         Ok(())
     }
@@ -741,9 +745,19 @@ mod tests {
         let path = Path::from("test_stream.arrow");
 
         let stream_bytes = std::fs::read("tests/data/example_stream.arrow")?;
-        store.put(&path, stream_bytes.into()).await?;
+        store
+            .put(
+                &object_store::path::Path::from(path.as_ref()),
+                stream_bytes.into(),
+            )
+            .await
+            .unwrap();
 
-        let is_file = is_object_in_arrow_ipc_file_format(store.clone(), &path).await?;
+        let is_file = is_object_in_arrow_ipc_file_format(
+            test_utils::storage::object_store(store.clone()),
+            &path,
+        )
+        .await?;
 
         assert!(!is_file, "Should detect stream format (not file)");
 
@@ -756,10 +770,18 @@ mod tests {
         let path = Path::from("corrupted.arrow");
 
         store
-            .put(&path, Bytes::from(vec![0x43, 0x4f, 0x52, 0x41]).into())
-            .await?;
+            .put(
+                &object_store::path::Path::from(path.as_ref()),
+                Bytes::from(vec![0x43, 0x4f, 0x52, 0x41]).into(),
+            )
+            .await
+            .unwrap();
 
-        let is_file = is_object_in_arrow_ipc_file_format(store.clone(), &path).await?;
+        let is_file = is_object_in_arrow_ipc_file_format(
+            test_utils::storage::object_store(store.clone()),
+            &path,
+        )
+        .await?;
 
         assert!(
             !is_file,
@@ -774,11 +796,21 @@ mod tests {
         let store = Arc::new(InMemory::new());
         let path = Path::from("empty.arrow");
 
-        store.put(&path, Bytes::new().into()).await?;
+        store
+            .put(
+                &object_store::path::Path::from(path.as_ref()),
+                Bytes::new().into(),
+            )
+            .await
+            .unwrap();
 
-        let result = is_object_in_arrow_ipc_file_format(store.clone(), &path).await;
+        let result = is_object_in_arrow_ipc_file_format(
+            test_utils::storage::object_store(store.clone()),
+            &path,
+        )
+        .await;
 
-        // currently errors because it tries to read 0..6 from an empty file
+        // Empty data cannot identify either Arrow IPC format.
         assert!(result.is_err(), "Empty file should error");
 
         Ok(())

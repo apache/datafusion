@@ -60,7 +60,8 @@ use datafusion_session::Session;
 
 use crate::utils::JsonArrayToNdjsonReader;
 use async_trait::async_trait;
-use object_store::{GetResultPayload, ObjectMeta, ObjectStore, ObjectStoreExt};
+
+use datafusion_storage::{FileInfo, StorageBinding};
 
 #[derive(Default)]
 /// Factory struct used to create [JsonFormat]
@@ -255,8 +256,8 @@ impl FileFormat for JsonFormat {
     async fn infer_schema(
         &self,
         _state: &dyn Session,
-        store: &Arc<dyn ObjectStore>,
-        objects: &[ObjectMeta],
+        store: &Arc<StorageBinding>,
+        objects: &[FileInfo],
     ) -> Result<SchemaRef> {
         let mut schemas = Vec::new();
         let mut records_to_read = self
@@ -272,53 +273,30 @@ impl FileFormat for JsonFormat {
                 break;
             }
 
-            let r = store.as_ref().get(&object.location).await?;
+            let reader = store
+                .open(object, datafusion_storage::FileAccessContext::new("schema"))
+                .await?;
 
-            let (schema, records_consumed) = match r.payload {
-                #[cfg(not(target_arch = "wasm32"))]
-                GetResultPayload::File(file, _) => {
-                    let decoder = file_compression_type.convert_read(file)?;
-                    let reader = BufReader::new(decoder);
+            let (schema, records_consumed) = {
+                let data = datafusion_storage::collect_bytes(reader.stream(None)).await?;
+                let decoder = file_compression_type.convert_read(data.reader())?;
+                let reader = BufReader::new(decoder);
 
-                    if newline_delimited {
-                        // NDJSON: use ValueIter directly
-                        let iter = ValueIter::new(reader, None);
-                        let mut count = 0;
-                        let schema =
-                            infer_json_schema_from_iterator(iter.take_while(|_| {
-                                let should_take = count < records_to_read;
-                                if should_take {
-                                    count += 1;
-                                }
-                                should_take
-                            }))?;
-                        (schema, count)
-                    } else {
-                        // JSON array format: use streaming converter
-                        infer_schema_from_json_array(reader, records_to_read)?
-                    }
-                }
-                GetResultPayload::Stream(_) => {
-                    let data = r.bytes().await?;
-                    let decoder = file_compression_type.convert_read(data.reader())?;
-                    let reader = BufReader::new(decoder);
-
-                    if newline_delimited {
-                        let iter = ValueIter::new(reader, None);
-                        let mut count = 0;
-                        let schema =
-                            infer_json_schema_from_iterator(iter.take_while(|_| {
-                                let should_take = count < records_to_read;
-                                if should_take {
-                                    count += 1;
-                                }
-                                should_take
-                            }))?;
-                        (schema, count)
-                    } else {
-                        // JSON array format: use streaming converter
-                        infer_schema_from_json_array(reader, records_to_read)?
-                    }
+                if newline_delimited {
+                    let iter = ValueIter::new(reader, None);
+                    let mut count = 0;
+                    let schema =
+                        infer_json_schema_from_iterator(iter.take_while(|_| {
+                            let should_take = count < records_to_read;
+                            if should_take {
+                                count += 1;
+                            }
+                            should_take
+                        }))?;
+                    (schema, count)
+                } else {
+                    // JSON array format: use streaming converter
+                    infer_schema_from_json_array(reader, records_to_read)?
                 }
             };
 
@@ -334,9 +312,9 @@ impl FileFormat for JsonFormat {
     async fn infer_stats(
         &self,
         _state: &dyn Session,
-        _store: &Arc<dyn ObjectStore>,
+        _store: &Arc<StorageBinding>,
         table_schema: SchemaRef,
-        _object: &ObjectMeta,
+        _object: &FileInfo,
     ) -> Result<Statistics> {
         Ok(Statistics::new_unknown(&table_schema))
     }
@@ -461,7 +439,7 @@ impl FileSink for JsonSink {
         context: &Arc<TaskContext>,
         demux_task: SpawnedTask<Result<()>>,
         file_stream_rx: DemuxedStreamReceiver,
-        object_store: Arc<dyn ObjectStore>,
+        object_store: Arc<StorageBinding>,
     ) -> Result<u64> {
         let serializer = Arc::new(JsonSerializer::new()) as _;
         spawn_writer_tasks_and_join(
@@ -598,7 +576,12 @@ impl JsonSink {
                 "JsonSinkExecNode is missing required field 'sink'"
             )
         })?;
-        let data_sink = JsonSink::try_from(proto_sink)?;
+        let mut data_sink = JsonSink::try_from(proto_sink)?;
+        data_sink.config.storage = Some(
+            ctx.task_ctx()
+                .runtime_env()
+                .storage(&data_sink.config.object_store_url)?,
+        );
         let sort_order = DataSinkExec::decode_sort_order(
             sort_order.as_ref(),
             ctx,

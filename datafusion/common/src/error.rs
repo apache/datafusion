@@ -74,9 +74,8 @@ pub enum DataFusionError {
     /// Error when reading / writing Parquet data.
     #[cfg(feature = "parquet")]
     ParquetError(Box<ParquetError>),
-    /// Error when reading / writing to / from an object_store (e.g. S3 or LocalFile)
-    #[cfg(feature = "object_store")]
-    ObjectStore(Box<object_store::Error>),
+    /// Error accessing storage.
+    Storage(Box<datafusion_storage::Error>),
     /// Error when an I/O operation fails
     IoError(io::Error),
     /// Error when SQL is syntactically incorrect.
@@ -393,20 +392,6 @@ impl From<ParquetError> for DataFusionError {
     }
 }
 
-#[cfg(feature = "object_store")]
-impl From<object_store::Error> for DataFusionError {
-    fn from(e: object_store::Error) -> Self {
-        DataFusionError::ObjectStore(Box::new(e))
-    }
-}
-
-#[cfg(feature = "object_store")]
-impl From<object_store::path::Error> for DataFusionError {
-    fn from(e: object_store::path::Error) -> Self {
-        DataFusionError::ObjectStore(Box::new(e.into()))
-    }
-}
-
 #[cfg(feature = "sql")]
 impl From<ParserError> for DataFusionError {
     fn from(e: ParserError) -> Self {
@@ -443,8 +428,7 @@ impl Error for DataFusionError {
             DataFusionError::ArrowError(e, _) => Some(e.as_ref()),
             #[cfg(feature = "parquet")]
             DataFusionError::ParquetError(e) => Some(e.as_ref()),
-            #[cfg(feature = "object_store")]
-            DataFusionError::ObjectStore(e) => Some(e.as_ref()),
+            DataFusionError::Storage(e) => Some(e.as_ref()),
             DataFusionError::IoError(e) => Some(e),
             #[cfg(feature = "sql")]
             DataFusionError::SQL(e, _) => Some(e.as_ref()),
@@ -572,8 +556,7 @@ impl DataFusionError {
             DataFusionError::ArrowError(_, _) => "Arrow error: ",
             #[cfg(feature = "parquet")]
             DataFusionError::ParquetError(_) => "Parquet error: ",
-            #[cfg(feature = "object_store")]
-            DataFusionError::ObjectStore(_) => "Object Store error: ",
+            DataFusionError::Storage(_) => "Storage error: ",
             DataFusionError::IoError(_) => "IO error: ",
             #[cfg(feature = "sql")]
             DataFusionError::SQL(_, _) => "SQL error: ",
@@ -635,8 +618,7 @@ impl DataFusionError {
             DataFusionError::ExecutionJoin(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::ResourcesExhausted(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::External(ref desc) => Cow::Owned(desc.to_string()),
-            #[cfg(feature = "object_store")]
-            DataFusionError::ObjectStore(ref desc) => Cow::Owned(desc.to_string()),
+            DataFusionError::Storage(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::Context(ref desc, ref err) => {
                 Cow::Owned(format!("{desc}\ncaused by\n{}", *err))
             }
@@ -1190,6 +1172,17 @@ pub fn add_possible_columns_to_diag(
 
     for name in field_names {
         diagnostic.add_note(format!("possible column {name}"), None);
+    }
+}
+
+impl From<datafusion_storage::Error> for DataFusionError {
+    fn from(error: datafusion_storage::Error) -> Self {
+        Self::Storage(Box::new(error))
+    }
+}
+impl From<datafusion_storage::path::Error> for DataFusionError {
+    fn from(error: datafusion_storage::path::Error) -> Self {
+        Self::External(Box::new(error))
     }
 }
 

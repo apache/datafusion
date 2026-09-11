@@ -42,7 +42,7 @@ use datafusion::{
     prelude::SessionContext,
 };
 
-use object_store::{ObjectMeta, ObjectStore};
+use datafusion::storage::{FileInfo, StorageBinding};
 use tempfile::tempdir;
 
 /// Example of a custom file format that reads and writes TSV files.
@@ -123,8 +123,8 @@ impl FileFormat for TSVFileFormat {
     async fn infer_schema(
         &self,
         state: &dyn Session,
-        store: &Arc<dyn ObjectStore>,
-        objects: &[ObjectMeta],
+        store: &Arc<StorageBinding>,
+        objects: &[FileInfo],
     ) -> Result<SchemaRef> {
         self.csv_file_format
             .infer_schema(state, store, objects)
@@ -134,9 +134,9 @@ impl FileFormat for TSVFileFormat {
     async fn infer_stats(
         &self,
         state: &dyn Session,
-        store: &Arc<dyn ObjectStore>,
+        store: &Arc<StorageBinding>,
         table_schema: SchemaRef,
-        object: &ObjectMeta,
+        object: &FileInfo,
     ) -> Result<Statistics> {
         self.csv_file_format
             .infer_stats(state, store, table_schema, object)

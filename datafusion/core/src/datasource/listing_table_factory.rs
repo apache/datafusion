@@ -126,16 +126,16 @@ impl ListingTableFactory {
         // object stores is intentionally not supported (see
         // https://github.com/apache/datafusion/issues/16303); reject it here with
         // a clear error rather than producing incorrect results at scan time.
-        let object_store_url = first_path.object_store();
+        let object_store_url = first_path.storage_url();
         if let Some(other) = table_paths
             .iter()
-            .find(|path| path.object_store() != object_store_url)
+            .find(|path| path.storage_url() != object_store_url)
         {
             return plan_err!(
                 "All locations of a CREATE EXTERNAL TABLE must be on the same \
                  object store, but found '{}' and '{}'",
                 object_store_url.as_str(),
-                other.object_store().as_str()
+                other.storage_url().as_str()
             );
         }
 

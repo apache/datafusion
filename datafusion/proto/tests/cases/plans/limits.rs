@@ -22,7 +22,6 @@ use super::{roundtrip_test, roundtrip_test_and_return};
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
     FileGroup, FileScanConfig, FileScanConfigBuilder, ParquetSource,
 };
@@ -42,6 +41,7 @@ use datafusion::physical_plan::{
     ChildrenPropertiesMode, ExecutionPlan, ReplaceChildrenOptions,
 };
 use datafusion::prelude::SessionContext;
+use datafusion::storage::StorageUrl;
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_proto::physical_plan::{
@@ -186,7 +186,7 @@ fn roundtrip_limit_required_ordering_reaches_data_source() -> Result<()> {
     let make_scan = || {
         let file_source = Arc::new(ParquetSource::new(Arc::clone(&file_schema)));
         let scan_config =
-            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
                 .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
                     "/path/to/file.parquet".to_string(),
                     1024,

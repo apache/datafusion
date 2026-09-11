@@ -25,7 +25,7 @@ use arrow::datatypes::Schema;
 use datafusion_common::{Result, tree_node::TreeNodeRecursion};
 use datafusion_physical_expr::{PhysicalExpr, expressions::Column};
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
-use object_store::ObjectStore;
+use datafusion_storage::StorageBinding;
 
 /// Minimal [`crate::file::FileSource`] implementation for use in tests.
 #[derive(Clone)]
@@ -77,9 +77,10 @@ impl MockSource {
 impl FileSource for MockSource {
     fn create_file_opener(
         &self,
-        _object_store: Arc<dyn ObjectStore>,
+        _object_store: Arc<StorageBinding>,
         _base_config: &FileScanConfig,
         _partition: usize,
+        _access_context: datafusion_storage::FileAccessContext,
     ) -> Result<Arc<dyn FileOpener>> {
         self.file_opener.clone().ok_or_else(|| {
             datafusion_common::internal_datafusion_err!("MockSource missing FileOpener")
@@ -145,25 +146,70 @@ pub(crate) fn col(name: &str, schema: &Schema) -> Result<Arc<dyn PhysicalExpr>> 
 /// "one chunk containing everything", giving the single-chunk fast path.
 pub(crate) const CHUNK_SIZES: &[usize] = &[1, 2, 3, 4, 5, 7, 8, 11, 13, 16, usize::MAX];
 
-/// Seed a fresh `InMemory` store with `data` and wrap it in a
-/// [`ChunkedStore`] that splits every GET response into `chunk_size`-byte
-/// pieces.
-pub(crate) async fn make_chunked_store(
+/// A reader with controllable chunk boundaries for stream alignment tests.
+pub(crate) fn make_chunked_reader(
     data: &[u8],
     chunk_size: usize,
-) -> (Arc<dyn ObjectStore>, object_store::path::Path) {
-    use bytes::Bytes;
-    use object_store::ObjectStoreExt;
-    use object_store::PutPayload;
-    use object_store::chunked::ChunkedStore;
-    use object_store::memory::InMemory;
-    use object_store::path::Path;
+) -> Arc<dyn datafusion_storage::FileReader> {
+    #[derive(Debug)]
+    struct Reader {
+        data: bytes::Bytes,
+        chunk_size: usize,
+    }
+    #[async_trait::async_trait]
+    impl datafusion_storage::FileReader for Reader {
+        async fn read_range(
+            &self,
+            range: datafusion_storage::ReadRange,
+        ) -> datafusion_storage::Result<bytes::Bytes> {
+            let range = match range {
+                datafusion_storage::ReadRange::Bounded(r) => r,
+                datafusion_storage::ReadRange::Suffix(n) => {
+                    (self.data.len() as u64).saturating_sub(n)..self.data.len() as u64
+                }
+            };
+            Ok(self.data.slice(range.start as usize..range.end as usize))
+        }
 
-    let inner = Arc::new(InMemory::new());
-    let path = Path::from("test");
-    inner
-        .put(&path, PutPayload::from(Bytes::copy_from_slice(data)))
-        .await
-        .unwrap();
-    (Arc::new(ChunkedStore::new(inner, chunk_size)), path)
+        async fn read_ranges(
+            &self,
+            ranges: Vec<std::ops::Range<u64>>,
+        ) -> datafusion_storage::Result<Vec<bytes::Bytes>> {
+            Ok(ranges
+                .into_iter()
+                .map(|r| self.data.slice(r.start as usize..r.end as usize))
+                .collect())
+        }
+        fn stream(
+            self: Arc<Self>,
+            range: Option<datafusion_storage::ReadRange>,
+        ) -> futures::stream::BoxStream<'static, datafusion_storage::Result<bytes::Bytes>>
+        {
+            use futures::StreamExt;
+            let size = self.data.len() as u64;
+            let range = match range {
+                Some(datafusion_storage::ReadRange::Bounded(r)) => r,
+                Some(datafusion_storage::ReadRange::Suffix(n)) => {
+                    size.saturating_sub(n)..size
+                }
+                None => 0..size,
+            };
+            futures::stream::unfold(
+                (self, range.start as usize, range.end as usize),
+                |(reader, start, end)| async move {
+                    if start == end {
+                        return None;
+                    }
+                    let next = start.saturating_add(reader.chunk_size).min(end);
+                    let bytes = reader.data.slice(start..next);
+                    Some((Ok(bytes), (reader, next, end)))
+                },
+            )
+            .boxed()
+        }
+    }
+    Arc::new(Reader {
+        data: bytes::Bytes::copy_from_slice(data),
+        chunk_size,
+    })
 }

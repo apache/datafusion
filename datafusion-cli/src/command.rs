@@ -131,16 +131,16 @@ impl Command {
                             exec_datafusion_err!("Failed to parse input: {mode}. Valid options are disabled, summary, trace")
                         )?;
                     print_options
-                        .instrumented_registry
+                        .object_store_profiler
                         .set_instrument_mode(profile_mode);
                     println!(
                         "ObjectStore Profile mode set to {}",
-                        print_options.instrumented_registry.instrument_mode()
+                        print_options.object_store_profiler.instrument_mode()
                     );
                 } else {
                     println!(
                         "ObjectStore Profile mode is {}",
-                        print_options.instrumented_registry.instrument_mode()
+                        print_options.object_store_profiler.instrument_mode()
                     );
                 }
 
@@ -284,7 +284,7 @@ mod tests {
 
     use crate::{
         object_storage::instrumented::{
-            InstrumentedObjectStoreMode, InstrumentedObjectStoreRegistry,
+            InstrumentedObjectStoreMode, ObjectStoreProfiler,
         },
         print_options::MaxRows,
     };
@@ -300,7 +300,7 @@ mod tests {
             quiet: false,
             maxrows: MaxRows::Unlimited,
             color: true,
-            instrumented_registry: Arc::new(InstrumentedObjectStoreRegistry::new()),
+            object_store_profiler: Arc::new(ObjectStoreProfiler::new()),
         };
 
         let mut cmd: Command = "object_store_profiling"
@@ -308,7 +308,7 @@ mod tests {
             .expect("expected parse to succeed");
         assert!(cmd.execute(&ctx, &mut print_options).await.is_ok());
         assert_eq!(
-            print_options.instrumented_registry.instrument_mode(),
+            print_options.object_store_profiler.instrument_mode(),
             InstrumentedObjectStoreMode::default()
         );
 
@@ -317,7 +317,7 @@ mod tests {
             .expect("expected parse to succeed");
         assert!(cmd.execute(&ctx, &mut print_options).await.is_ok());
         assert_eq!(
-            print_options.instrumented_registry.instrument_mode(),
+            print_options.object_store_profiler.instrument_mode(),
             InstrumentedObjectStoreMode::Summary
         );
 
@@ -326,7 +326,7 @@ mod tests {
             .expect("expected parse to succeed");
         assert!(cmd.execute(&ctx, &mut print_options).await.is_ok());
         assert_eq!(
-            print_options.instrumented_registry.instrument_mode(),
+            print_options.object_store_profiler.instrument_mode(),
             InstrumentedObjectStoreMode::Trace
         );
 

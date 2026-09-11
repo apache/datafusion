@@ -30,11 +30,11 @@ use datafusion_common::{
 use datafusion_expr::CreateExternalTable;
 
 use async_trait::async_trait;
+use datafusion_storage::StorageBinding;
 use futures::TryStreamExt;
 use itertools::Itertools;
-use object_store::ObjectStore;
 
-/// A [`SchemaProvider`] that scans an [`ObjectStore`] to automatically discover tables
+/// A [`SchemaProvider`] that scans a [`StorageBinding`] to automatically discover tables
 ///
 /// A subfolder relationship is assumed, i.e. given:
 /// - authority = `s3://host.example.com:3000`
@@ -48,13 +48,12 @@ use object_store::ObjectStore;
 /// - `s3://host.example.com:3000/data/tpch/customer/part-00000-xxxx.snappy.parquet`
 /// - `s3://host.example.com:3000/data/tpch/customer/_delta_log/`
 ///
-/// [`ObjectStore`]: object_store::ObjectStore
 #[derive(Debug)]
 pub struct ListingSchemaProvider {
     authority: String,
-    path: object_store::path::Path,
+    path: datafusion_storage::path::Path,
     factory: Arc<dyn TableProviderFactory>,
-    store: Arc<dyn ObjectStore>,
+    store: Arc<StorageBinding>,
     tables: Arc<Mutex<HashMap<String, Arc<dyn TableProvider>>>>,
     format: String,
 }
@@ -66,14 +65,14 @@ impl ListingSchemaProvider {
     /// `authority`: The scheme (i.e. s3://) + host (i.e. example.com:3000)
     /// `path`: The root path that contains subfolders which represent tables
     /// `factory`: The `TableProviderFactory` to use to instantiate tables for each subfolder
-    /// `store`: The `ObjectStore` containing the table data
+    /// `store`: The storage binding containing the table data
     /// `format`: The `FileFormat` of the tables
     /// `has_header`: Indicates whether the created external table has the has_header flag enabled
     pub fn new(
         authority: String,
-        path: object_store::path::Path,
+        path: datafusion_storage::path::Path,
         factory: Arc<dyn TableProviderFactory>,
-        store: Arc<dyn ObjectStore>,
+        store: Arc<StorageBinding>,
         format: String,
     ) -> Self {
         Self {
@@ -88,7 +87,14 @@ impl ListingSchemaProvider {
 
     /// Reload table information from ObjectStore
     pub async fn refresh(&self, state: &dyn Session) -> datafusion_common::Result<()> {
-        let entries: Vec<_> = self.store.list(Some(&self.path)).try_collect().await?;
+        let entries: Vec<_> = self
+            .store
+            .list(
+                &self.path,
+                datafusion_storage::FileAccessContext::new("catalog"),
+            )
+            .try_collect()
+            .await?;
         let base = Path::new(self.path.as_ref());
         let mut tables = HashSet::new();
         for file in entries.iter() {

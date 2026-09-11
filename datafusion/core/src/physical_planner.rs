@@ -682,7 +682,7 @@ impl DefaultPhysicalPlanner {
                 let original_url = output_url.clone();
                 let input_exec = children.one()?;
                 let parsed_url = ListingTableUrl::parse(output_url)?;
-                let object_store_url = parsed_url.object_store();
+                let object_store_url = parsed_url.storage_url();
 
                 let schema = Arc::clone(input.schema().inner());
 
@@ -749,6 +749,9 @@ impl DefaultPhysicalPlanner {
 
                 // Set file sink related options
                 let config = FileSinkConfig {
+                    storage: Some(
+                        session_state.runtime_env().storage(&object_store_url)?,
+                    ),
                     original_url,
                     object_store_url,
                     table_paths: vec![parsed_url],

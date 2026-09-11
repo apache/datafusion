@@ -34,7 +34,12 @@ pub async fn query_http_csv() -> Result<()> {
         .with_url(base_url.clone())
         .build()
         .unwrap();
-    ctx.register_object_store(&base_url, Arc::new(http_store));
+    ctx.register_storage(
+        &base_url,
+        Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+            Arc::new(http_store),
+        )),
+    )?;
 
     // register csv file with the execution context
     ctx.register_csv(

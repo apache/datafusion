@@ -23,7 +23,7 @@ use crate::print_format::PrintFormat;
 use crate::{
     command::{Command, OutputFormat},
     helper::CliHelper,
-    object_storage::{get_object_store, stdin::StdinUtils},
+    object_storage::{get_storage, stdin::StdinUtils},
     print_options::{MaxRows, PrintOptions},
 };
 use datafusion::common::instant::Instant;
@@ -327,10 +327,7 @@ impl StatementExecutor {
 
         let df = match ctx.execute_logical_plan(plan).await {
             Ok(df) => Ok(df),
-            Err(DataFusionError::ObjectStore(err))
-                if matches!(err.as_ref(), Generic { store, source: _ } if "S3".eq_ignore_ascii_case(store))
-                    && self.statement_for_retry.is_some() =>
-            {
+            Err(err) if is_s3_error(&err) && self.statement_for_retry.is_some() => {
                 warn!(
                     "S3 region is incorrect, auto-detecting the correct region (this may be slow). Consider updating your region configuration."
                 );
@@ -419,7 +416,7 @@ async fn create_plan(
         // object store, registered like any other scheme in `get_object_store`.
         for location in &mut cmd.locations {
             *location = StdinUtils::rewrite_location(location, format.as_ref());
-            register_object_store_and_config_extensions(
+            register_storage_and_config_extensions(
                 ctx,
                 location,
                 &cmd.options,
@@ -433,7 +430,7 @@ async fn create_plan(
     if let LogicalPlan::Copy(copy_to) = &mut plan {
         let format = config_file_type_from_str(&copy_to.file_type.get_ext());
 
-        register_object_store_and_config_extensions(
+        register_storage_and_config_extensions(
             ctx,
             &copy_to.output_url,
             &copy_to.options,
@@ -472,7 +469,7 @@ async fn create_plan(
 /// This function can return an error if the location parsing fails, options
 /// alteration fails, or if the object store cannot be retrieved and registered
 /// successfully.
-pub(crate) async fn register_object_store_and_config_extensions(
+pub(crate) async fn register_storage_and_config_extensions(
     ctx: &dyn CliSessionContext,
     location: &String,
     options: &HashMap<String, String>,
@@ -498,8 +495,28 @@ pub(crate) async fn register_object_store_and_config_extensions(
     }
     table_options.alter_with_string_hash_map(options)?;
 
+    // Keep application registrations unless the statement explicitly changes
+    // backend options or retries SDK region detection.
+    let changes_backend = options
+        .keys()
+        .any(|key| key.starts_with("aws.") || key.starts_with("gcp."));
+    if !resolve_region
+        && !changes_backend
+        && ctx
+            .session_state()
+            .runtime_env()
+            .storage_registry
+            .get(url)
+            .is_ok()
+    {
+        if scheme == StdinUtils::SCHEME {
+            StdinUtils::get_or_create(&ctx.session_state(), url).await?;
+        }
+        return Ok(());
+    }
+
     // Retrieve the appropriate object store based on the scheme, URL, and modified table options
-    let store = get_object_store(
+    let store = get_storage(
         &ctx.session_state(),
         scheme,
         url,
@@ -509,20 +526,58 @@ pub(crate) async fn register_object_store_and_config_extensions(
     .await?;
 
     // Register the retrieved object store in the session context's runtime environment
-    ctx.register_object_store(url, store);
+    ctx.register_storage(url, store)?;
 
     Ok(())
+}
+
+/// SDK errors can be wrapped by storage and query execution layers.
+fn is_s3_error(error: &DataFusionError) -> bool {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    while let Some(error) = source {
+        if matches!(error.downcast_ref::<object_store::Error>(), Some(Generic { store, .. }) if "S3".eq_ignore_ascii_case(store))
+        {
+            return true;
+        }
+        source = error.source();
+    }
+    false
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     use datafusion::common::plan_err;
 
     use datafusion::prelude::SessionContext;
     use datafusion_common::assert_contains;
     use url::Url;
+
+    #[tokio::test]
+    async fn statement_preserves_an_application_storage_registration() -> Result<()> {
+        let ctx = SessionContext::new();
+        let url = Url::parse("s3://registered").unwrap();
+        ctx.register_storage(
+            &url,
+            Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+                Arc::new(object_store::memory::InMemory::new()),
+            )),
+        )?;
+        let before = ctx.runtime_env().storage_registry.get(&url)?;
+        register_storage_and_config_extensions(
+            &ctx,
+            &"s3://registered/data.csv".to_string(),
+            &HashMap::new(),
+            Some(ConfigFileType::CSV),
+            false,
+        )
+        .await?;
+        let after = ctx.runtime_env().storage_registry.get(&url)?;
+        assert!(Arc::ptr_eq(&before, &after));
+        Ok(())
+    }
 
     async fn create_external_table_test(location: &str, sql: &str) -> Result<()> {
         let ctx = SessionContext::new();
@@ -531,7 +586,7 @@ mod tests {
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
             let format = config_file_type_from_str(&cmd.file_type);
             for location in &cmd.locations {
-                register_object_store_and_config_extensions(
+                register_storage_and_config_extensions(
                     &ctx,
                     location,
                     &cmd.options,
@@ -546,7 +601,7 @@ mod tests {
 
         // Ensure the URL is supported by the object store
         ctx.runtime_env()
-            .object_store(ListingTableUrl::parse(location)?)?;
+            .storage(ListingTableUrl::parse(location)?)?;
 
         Ok(())
     }
@@ -559,7 +614,7 @@ mod tests {
 
         if let LogicalPlan::Copy(cmd) = &plan {
             let format = config_file_type_from_str(&cmd.file_type.get_ext());
-            register_object_store_and_config_extensions(
+            register_storage_and_config_extensions(
                 &ctx,
                 &cmd.output_url,
                 &cmd.options,
@@ -573,7 +628,7 @@ mod tests {
 
         // Ensure the URL is supported by the object store
         ctx.runtime_env()
-            .object_store(ListingTableUrl::parse(location)?)?;
+            .storage(ListingTableUrl::parse(location)?)?;
 
         Ok(())
     }
@@ -628,8 +683,8 @@ mod tests {
                     assert_eq!(copy_to.output_url, location);
                     assert_eq!(copy_to.file_type.get_ext(), "parquet".to_string());
                     ctx.runtime_env()
-                        .object_store_registry
-                        .get_store(&Url::parse(&copy_to.output_url).unwrap())?;
+                        .storage_registry
+                        .get(&Url::parse(&copy_to.output_url).unwrap())?;
                 } else {
                     return plan_err!("LogicalPlan is not a CopyTo");
                 }

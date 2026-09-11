@@ -43,8 +43,8 @@ use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema};
 use datafusion_expr::{Expr, Volatility};
 use datafusion_physical_expr::create_physical_expr;
-use object_store::path::Path;
-use object_store::{ObjectMeta, ObjectStore};
+use datafusion_storage::path::Path;
+use datafusion_storage::{FileInfo, StorageBinding};
 use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, utf8_percent_encode};
 
 const PARTITION_VALUE_ENCODE_SET: &AsciiSet =
@@ -150,30 +150,34 @@ pub struct Partition {
     /// or equivalently the number of partition values in `path`
     depth: usize,
     /// The files contained as direct children of this `Partition` if known
-    files: Option<Vec<ObjectMeta>>,
+    files: Option<Vec<FileInfo>>,
 }
 
 impl Partition {
     /// List the direct children of this partition updating `self.files` with
     /// any child files, and returning a list of child "directories"
-    async fn list(mut self, store: &dyn ObjectStore) -> Result<(Self, Vec<Path>)> {
+    async fn list(mut self, store: &StorageBinding) -> Result<(Self, Vec<Path>)> {
         trace!("Listing partition {}", self.path);
-        let prefix = Some(&self.path).filter(|p| !p.as_ref().is_empty());
-        let result = store.list_with_delimiter(prefix).await?;
+        let result = store
+            .list_with_delimiter(
+                &self.path,
+                &datafusion_storage::FileAccessContext::new("listing"),
+            )
+            .await?;
         self.files = Some(
             result
-                .objects
+                .files
                 .into_iter()
                 .filter(|object_meta| object_meta.size > 0)
                 .collect(),
         );
-        Ok((self, result.common_prefixes))
+        Ok((self, result.directories))
     }
 }
 
 /// Returns a recursive list of the partitions in `table_path` up to `max_depth`
 pub async fn list_partitions(
-    store: &dyn ObjectStore,
+    store: &StorageBinding,
     table_path: &ListingTableUrl,
     max_depth: usize,
     partition_prefix: Option<Path>,
@@ -351,7 +355,7 @@ pub fn filter_partitioned_file(
 /// because hive-style partition values are never null and there is no valid
 /// value to assign for non-partitioned files.
 fn try_into_partitioned_file(
-    object_meta: ObjectMeta,
+    object_meta: FileInfo,
     partition_cols: &[(String, DataType)],
     table_path: &ListingTableUrl,
 ) -> Result<Option<PartitionedFile>> {
@@ -384,7 +388,7 @@ fn try_into_partitioned_file(
 /// using only the partition columns.
 pub async fn pruned_partition_list<'a>(
     ctx: &'a dyn Session,
-    store: &'a dyn ObjectStore,
+    store: &'a StorageBinding,
     table_path: &'a ListingTableUrl,
     filters: &'a [Expr],
     file_extension: &'a str,
@@ -442,7 +446,7 @@ pub async fn pruned_partition_list<'a>(
 }
 
 fn object_meta_to_partitioned_file(
-    object_meta: ObjectMeta,
+    object_meta: FileInfo,
     table_ref: Option<&TableReference>,
 ) -> Result<Option<PartitionedFile>> {
     Ok(Some(PartitionedFile {
@@ -664,7 +668,7 @@ mod tests {
     fn test_try_into_partitioned_file_valid_partition() {
         let table_path = ListingTableUrl::parse("file:///bucket/mytable").unwrap();
         let partition_cols = vec![("year_month".to_string(), DataType::Utf8)];
-        let meta = ObjectMeta {
+        let meta = FileInfo {
             location: Path::from("bucket/mytable/year_month=2024-01/data.parquet"),
             last_modified: chrono::Utc::now(),
             size: 100,
@@ -687,7 +691,7 @@ mod tests {
     fn test_try_into_partitioned_file_decodes_partition_value() {
         let table_path = ListingTableUrl::parse("file:///bucket/mytable").unwrap();
         let partition_cols = vec![("category".to_string(), DataType::Utf8)];
-        let meta = ObjectMeta {
+        let meta = FileInfo {
             location: Path::parse(
                 "bucket/mytable/category=Electronics%2FComputers/data.parquet",
             )
@@ -716,7 +720,7 @@ mod tests {
         // hive partitioning was added.
         let table_path = ListingTableUrl::parse("file:///bucket/mytable").unwrap();
         let partition_cols = vec![("year_month".to_string(), DataType::Utf8)];
-        let meta = ObjectMeta {
+        let meta = FileInfo {
             location: Path::from("bucket/mytable/data.parquet"),
             last_modified: chrono::Utc::now(),
             size: 100,
@@ -737,7 +741,7 @@ mod tests {
         // File in a directory that doesn't match the expected partition column
         let table_path = ListingTableUrl::parse("file:///bucket/mytable").unwrap();
         let partition_cols = vec![("year_month".to_string(), DataType::Utf8)];
-        let meta = ObjectMeta {
+        let meta = FileInfo {
             location: Path::from("bucket/mytable/wrong_col=2024-01/data.parquet"),
             last_modified: chrono::Utc::now(),
             size: 100,
@@ -760,7 +764,7 @@ mod tests {
             ("year".to_string(), DataType::Utf8),
             ("month".to_string(), DataType::Utf8),
         ];
-        let meta = ObjectMeta {
+        let meta = FileInfo {
             location: Path::from("bucket/mytable/year=2024/month=01/data.parquet"),
             last_modified: chrono::Utc::now(),
             size: 100,
@@ -791,7 +795,7 @@ mod tests {
             ("year".to_string(), DataType::Utf8),
             ("month".to_string(), DataType::Utf8),
         ];
-        let meta = ObjectMeta {
+        let meta = FileInfo {
             location: Path::from("bucket/mytable/year=2024/data.parquet"),
             last_modified: chrono::Utc::now(),
             size: 100,

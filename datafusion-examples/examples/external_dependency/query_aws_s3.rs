@@ -44,11 +44,17 @@ pub async fn query_aws_s3() -> Result<()> {
         .with_region(region)
         .with_access_key_id(env::var("AWS_ACCESS_KEY_ID").unwrap())
         .with_secret_access_key(env::var("AWS_SECRET_ACCESS_KEY").unwrap())
-        .build()?;
+        .build()
+        .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
 
     let path = format!("s3://{bucket_name}");
     let s3_url = Url::parse(&path).unwrap();
-    ctx.register_object_store(&s3_url, Arc::new(s3));
+    ctx.register_storage(
+        &s3_url,
+        Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+            Arc::new(s3),
+        )),
+    )?;
 
     // cannot query the parquet files from this bucket because the path contains a whitespace
     // and we don't support that yet

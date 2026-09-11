@@ -17,6 +17,7 @@
 
 use std::sync::Arc;
 
+use datafusion::storage::{Storage, StorageBinding};
 use datafusion::{
     dataframe::DataFrame,
     error::DataFusionError,
@@ -24,7 +25,6 @@ use datafusion::{
     logical_expr::LogicalPlan,
     prelude::SessionContext,
 };
-use object_store::ObjectStore;
 
 use crate::object_storage::{AwsOptions, GcpOptions};
 
@@ -38,11 +38,11 @@ pub trait CliSessionContext {
     fn session_state(&self) -> SessionState;
 
     /// Register an object store with the session context.
-    fn register_object_store(
+    fn register_storage(
         &self,
         url: &url::Url,
-        object_store: Arc<dyn ObjectStore>,
-    ) -> Option<Arc<dyn ObjectStore + 'static>>;
+        storage: Arc<dyn Storage>,
+    ) -> Result<Option<Arc<StorageBinding>>, DataFusionError>;
 
     /// Register table options extension from scheme.
     fn register_table_options_extension_from_scheme(&self, scheme: &str);
@@ -64,12 +64,12 @@ impl CliSessionContext for SessionContext {
         self.state()
     }
 
-    fn register_object_store(
+    fn register_storage(
         &self,
         url: &url::Url,
-        object_store: Arc<dyn ObjectStore>,
-    ) -> Option<Arc<dyn ObjectStore + 'static>> {
-        self.register_object_store(url, object_store)
+        storage: Arc<dyn Storage>,
+    ) -> Result<Option<Arc<StorageBinding>>, DataFusionError> {
+        self.register_storage(url, storage)
     }
 
     fn register_table_options_extension_from_scheme(&self, scheme: &str) {

@@ -918,10 +918,10 @@ fn setup_context(
         .unwrap();
 
     let runtime = Arc::new(RuntimeEnv {
+        storage_registry: Arc::clone(&runtime.storage_registry),
         memory_pool: runtime.memory_pool.clone(),
         disk_manager: Arc::new(disk_manager),
         cache_manager: runtime.cache_manager.clone(),
-        object_store_registry: runtime.object_store_registry.clone(),
         #[cfg(feature = "parquet_encryption")]
         parquet_encryption_factory_registry: runtime
             .parquet_encryption_factory_registry

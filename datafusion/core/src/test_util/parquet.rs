@@ -25,7 +25,6 @@ use crate::arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use crate::common::ToDFSchema;
 use crate::config::ConfigOptions;
 use crate::datasource::listing::{ListingTableUrl, PartitionedFile};
-use crate::datasource::object_store::ObjectStoreUrl;
 use crate::datasource::physical_plan::ParquetSource;
 use crate::error::Result;
 use crate::logical_expr::execution_props::ExecutionProps;
@@ -37,11 +36,12 @@ use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::metrics::MetricsSet;
 use crate::prelude::{Expr, SessionConfig, SessionContext};
+use datafusion_storage::StorageUrl;
 
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
-use object_store::ObjectMeta;
-use object_store::path::Path;
+use datafusion_storage::FileInfo;
+use datafusion_storage::path::Path;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 
@@ -49,8 +49,8 @@ use parquet::file::properties::WriterProperties;
 pub struct TestParquetFile {
     path: PathBuf,
     schema: SchemaRef,
-    object_store_url: ObjectStoreUrl,
-    object_meta: ObjectMeta,
+    object_store_url: StorageUrl,
+    object_meta: FileInfo,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -118,9 +118,9 @@ impl TestParquetFile {
 
         let object_store_url =
             ListingTableUrl::parse(canonical_path.to_str().unwrap_or_default())?
-                .object_store();
+                .storage_url();
 
-        let object_meta = ObjectMeta {
+        let object_meta = FileInfo {
             location: Path::parse(canonical_path.to_str().unwrap_or_default())?,
             last_modified: Default::default(),
             size,

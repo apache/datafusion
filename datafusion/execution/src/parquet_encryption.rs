@@ -21,7 +21,7 @@ use dashmap::DashMap;
 use datafusion_common::config::EncryptionFactoryOptions;
 use datafusion_common::error::Result;
 use datafusion_common::internal_datafusion_err;
-use object_store::path::Path;
+use datafusion_storage::path::Path;
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use std::sync::Arc;

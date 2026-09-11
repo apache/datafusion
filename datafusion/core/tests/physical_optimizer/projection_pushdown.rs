@@ -27,7 +27,6 @@ use datafusion_common::config::{ConfigOptions, CsvOptions};
 use datafusion_common::{JoinSide, JoinType, NullEquality, Result, ScalarValue};
 use datafusion_datasource::TableSchemaBuilder;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
-use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{
     Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
@@ -59,6 +58,7 @@ use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeE
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{ExecutionPlan, displayable};
+use datafusion_storage::StorageUrl;
 
 use insta::assert_snapshot;
 use itertools::Itertools;
@@ -385,20 +385,19 @@ fn create_simple_csv_exec() -> Arc<dyn ExecutionPlan> {
         Field::new("d", DataType::Int32, true),
         Field::new("e", DataType::Int32, true),
     ]));
-    let config =
-        FileScanConfigBuilder::new(ObjectStoreUrl::parse("test:///").unwrap(), {
-            let options = CsvOptions {
-                has_header: Some(false),
-                delimiter: 0,
-                quote: 0,
-                ..Default::default()
-            };
-            Arc::new(CsvSource::new(schema.clone()).with_csv_options(options))
-        })
-        .with_file(PartitionedFile::new("x", 100))
-        .with_projection_indices(Some(vec![0, 1, 2, 3, 4]))
-        .unwrap()
-        .build();
+    let config = FileScanConfigBuilder::new(StorageUrl::parse("test:///").unwrap(), {
+        let options = CsvOptions {
+            has_header: Some(false),
+            delimiter: 0,
+            quote: 0,
+            ..Default::default()
+        };
+        Arc::new(CsvSource::new(schema.clone()).with_csv_options(options))
+    })
+    .with_file(PartitionedFile::new("x", 100))
+    .with_projection_indices(Some(vec![0, 1, 2, 3, 4]))
+    .unwrap()
+    .build();
 
     DataSourceExec::from_data_source(config)
 }
@@ -410,20 +409,19 @@ fn create_projecting_csv_exec() -> Arc<dyn ExecutionPlan> {
         Field::new("c", DataType::Int32, true),
         Field::new("d", DataType::Int32, true),
     ]));
-    let config =
-        FileScanConfigBuilder::new(ObjectStoreUrl::parse("test:///").unwrap(), {
-            let options = CsvOptions {
-                has_header: Some(false),
-                delimiter: 0,
-                quote: 0,
-                ..Default::default()
-            };
-            Arc::new(CsvSource::new(schema.clone()).with_csv_options(options))
-        })
-        .with_file(PartitionedFile::new("x", 100))
-        .with_projection_indices(Some(vec![3, 2, 1]))
-        .unwrap()
-        .build();
+    let config = FileScanConfigBuilder::new(StorageUrl::parse("test:///").unwrap(), {
+        let options = CsvOptions {
+            has_header: Some(false),
+            delimiter: 0,
+            quote: 0,
+            ..Default::default()
+        };
+        Arc::new(CsvSource::new(schema.clone()).with_csv_options(options))
+    })
+    .with_file(PartitionedFile::new("x", 100))
+    .with_projection_indices(Some(vec![3, 2, 1]))
+    .unwrap()
+    .build();
 
     DataSourceExec::from_data_source(config)
 }
@@ -1584,7 +1582,7 @@ fn partitioned_data_source() -> Arc<DataSourceExec> {
         ))])
         .build();
     let config = FileScanConfigBuilder::new(
-        ObjectStoreUrl::parse("test:///").unwrap(),
+        StorageUrl::parse("test:///").unwrap(),
         Arc::new(CsvSource::new(table_schema).with_csv_options(options)),
     )
     .with_file(PartitionedFile::new("x", 100))

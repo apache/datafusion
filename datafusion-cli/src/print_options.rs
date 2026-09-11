@@ -22,7 +22,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::object_storage::instrumented::{
-    InstrumentedObjectStoreMode, InstrumentedObjectStoreRegistry, RequestSummaries,
+    InstrumentedObjectStoreMode, ObjectStoreProfiler, RequestSummaries,
 };
 use crate::print_format::PrintFormat;
 
@@ -81,7 +81,7 @@ pub struct PrintOptions {
     pub quiet: bool,
     pub maxrows: MaxRows,
     pub color: bool,
-    pub instrumented_registry: Arc<InstrumentedObjectStoreRegistry>,
+    pub object_store_profiler: Arc<ObjectStoreProfiler>,
 }
 
 // Returns the query execution details formatted
@@ -190,10 +190,10 @@ impl PrintOptions {
         if !self.quiet {
             writeln!(writer, "{formatted_exec_details}")?;
 
-            let instrument_mode = self.instrumented_registry.instrument_mode();
+            let instrument_mode = self.object_store_profiler.instrument_mode();
             if instrument_mode != InstrumentedObjectStoreMode::Disabled {
                 writeln!(writer, "{OBJECT_STORE_PROFILING_HEADER}")?;
-                for store in self.instrumented_registry.stores() {
+                for store in self.object_store_profiler.stores() {
                     let requests = store.take_requests();
 
                     if !requests.is_empty() {
@@ -226,13 +226,13 @@ mod tests {
 
     #[test]
     fn write_output() -> Result<()> {
-        let instrumented_registry = Arc::new(InstrumentedObjectStoreRegistry::new());
+        let object_store_profiler = Arc::new(ObjectStoreProfiler::new());
         let mut print_options = PrintOptions {
             format: PrintFormat::Automatic,
             quiet: true,
             maxrows: MaxRows::Unlimited,
             color: true,
-            instrumented_registry: Arc::clone(&instrumented_registry),
+            object_store_profiler: Arc::clone(&object_store_profiler),
         };
 
         let mut print_output: Vec<u8> = Vec::new();
@@ -251,7 +251,7 @@ mod tests {
         // clear the previous data from the output so it doesn't pollute the next test
         print_output.clear();
         print_options
-            .instrumented_registry
+            .object_store_profiler
             .set_instrument_mode(InstrumentedObjectStoreMode::Trace);
         print_options.write_output(&mut print_output, &exec_out)?;
         let out_str: String = print_output

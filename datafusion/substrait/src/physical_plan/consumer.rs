@@ -21,13 +21,13 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::common::{not_impl_err, substrait_err};
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
     FileGroup, FileScanConfigBuilder, ParquetSource,
 };
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
+use datafusion::storage::StorageUrl;
 
 use crate::variation_const::{
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, LARGE_CONTAINER_TYPE_VARIATION_REF,
@@ -36,7 +36,7 @@ use crate::variation_const::{
 use async_recursion::async_recursion;
 use chrono::DateTime;
 use datafusion::datasource::memory::DataSourceExec;
-use object_store::ObjectMeta;
+use datafusion::storage::FileInfo;
 use substrait::proto::Type;
 use substrait::proto::read_rel::local_files::file_or_files::PathType;
 use substrait::proto::r#type::{Kind, Nullability};
@@ -82,7 +82,7 @@ pub async fn from_substrait_rel(
                     let schema = Arc::new(Schema::new(fields));
                     let source = Arc::new(ParquetSource::new(Arc::clone(&schema)));
                     base_config_builder = FileScanConfigBuilder::new(
-                        ObjectStoreUrl::local_filesystem(),
+                        StorageUrl::local_filesystem(),
                         source,
                     );
                 }
@@ -107,7 +107,7 @@ pub async fn from_substrait_rel(
                             ))
                         }?;
 
-                        // TODO substrait plans do not have `last_modified` or `size` but `ObjectMeta`
+                        // TODO substrait plans do not have `last_modified` or `size` but `FileInfo`
                         // requires them both - perhaps we can change the object-store crate
                         // to make these optional? We cannot guarantee that we have access to the
                         // files to get this information, depending on how this library is being
@@ -119,14 +119,13 @@ pub async fn from_substrait_rel(
                         .unwrap();
                         let size = 0;
 
-                        let partitioned_file =
-                            PartitionedFile::new_from_meta(ObjectMeta {
-                                last_modified: last_modified.into(),
-                                location: path.into(),
-                                size,
-                                e_tag: None,
-                                version: None,
-                            });
+                        let partitioned_file = PartitionedFile::new_from_meta(FileInfo {
+                            last_modified: last_modified.into(),
+                            location: path.into(),
+                            size,
+                            e_tag: None,
+                            version: None,
+                        });
 
                         let part_index = file.partition_index as usize;
                         while part_index >= file_groups.len() {

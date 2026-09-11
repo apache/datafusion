@@ -45,7 +45,6 @@ use futures::TryStreamExt;
 use futures::stream::BoxStream;
 #[cfg(feature = "compression")]
 use liblzma::read::XzDecoder;
-use object_store::buffered::BufWriter;
 use tokio::io::AsyncWrite;
 #[cfg(feature = "compression")]
 use tokio_util::io::{ReaderStream, StreamReader};
@@ -158,7 +157,7 @@ impl FileCompressionType {
     /// according to this `FileCompressionType` using the default compression level.
     pub fn convert_async_writer(
         &self,
-        w: BufWriter,
+        w: impl AsyncWrite + Send + Unpin + 'static,
     ) -> Result<Box<dyn AsyncWrite + Send + Unpin>> {
         self.convert_async_writer_with_level(w, None)
     }
@@ -170,7 +169,7 @@ impl FileCompressionType {
     /// compression level. If `None`, the default level for each algorithm is used.
     pub fn convert_async_writer_with_level(
         &self,
-        w: BufWriter,
+        w: impl AsyncWrite + Send + Unpin + 'static,
         compression_level: Option<u32>,
     ) -> Result<Box<dyn AsyncWrite + Send + Unpin>> {
         #[cfg(feature = "compression")]

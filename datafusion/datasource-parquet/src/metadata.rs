@@ -15,43 +15,46 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`DFParquetMetadata`] for fetching Parquet file metadata, statistics
-//! and schema information.
+//! Parquet file metadata, statistics, and schema information.
+//! ObjectStore metadata loading is available with the `object_store` feature.
 
-use crate::file_format::ObjectStoreFetch;
-use crate::{Int96Coercer, apply_file_schema_type_coercions};
+use crate::Int96Coercer;
+use crate::apply_file_schema_type_coercions;
+use crate::metadata_io::FileReaderFetch;
 use arrow::array::{Array, ArrayRef, BooleanArray};
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::{and, sum};
-use arrow::datatypes::{DataType, Schema, SchemaRef, TimeUnit};
+use arrow::datatypes::TimeUnit;
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::stats::Precision;
-use datafusion_common::{
-    ColumnStatistics, DataFusionError, HashMap, Result, ScalarValue, Statistics,
-    internal_datafusion_err,
-};
-use datafusion_execution::cache::cache_manager::{
-    CachedFileMetadataEntry, FileMetadata, FileMetadataCache,
-};
+use datafusion_common::{ColumnStatistics, HashMap, Result, ScalarValue, Statistics};
+use datafusion_execution::cache::cache_manager::FileMetadata;
 use datafusion_functions_aggregate_common::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_plan::Accumulator;
+use datafusion_storage::FileInfo;
+use datafusion_storage::FileReader;
+use datafusion_storage::path::Path;
 use log::debug;
-use object_store::path::Path;
-use object_store::{ObjectMeta, ObjectStore};
-use parquet::DecodeResult;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::{parquet_column, parquet_to_arrow_schema};
 use parquet::basic::{ColumnOrder, SortOrder, Type as PhysicalType};
-use parquet::file::metadata::{
-    PageIndexPolicy, ParquetMetaData, ParquetMetaDataPushDecoder, ParquetMetaDataReader,
-    RowGroupMetaData, SortingColumn,
-};
+use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData, SortingColumn};
 use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use std::any::Any;
 use std::sync::Arc;
+
+use datafusion_execution::cache::cache_manager::{
+    CachedFileMetadataEntry, FileMetadataCache,
+};
+use parquet::file::metadata::{
+    PageIndexPolicy, ParquetMetaDataPushDecoder, ParquetMetaDataReader,
+};
+
+use datafusion_common::{DataFusionError, internal_datafusion_err};
 
 /// Minimum fraction of row groups that must report NDV statistics for the
 /// merged result to be `Inexact` rather than `Absent`, as the estimate
@@ -121,10 +124,11 @@ pub(crate) fn has_untrusted_byte_array_stats<'a>(
 /// [`ParquetFileReaderFactory`]: crate::ParquetFileReaderFactory
 #[derive(Debug)]
 pub struct DFParquetMetadata<'a> {
+    cache_key: Option<datafusion_execution::cache::FileCacheKey>,
     /// Source of the Parquet file's bytes.
-    store: &'a dyn ObjectStore,
+    store: &'a dyn FileReader,
     /// Location, size and last-modified time of the target Parquet file.
-    object_meta: &'a ObjectMeta,
+    object_meta: &'a FileInfo,
     /// Hint for the number of trailing bytes to prefetch before parsing the
     /// footer, mirroring [`ParquetMetaDataReader::with_prefetch_hint`].
     metadata_size_hint: Option<usize>,
@@ -153,8 +157,9 @@ impl<'a> DFParquetMetadata<'a> {
     ///
     /// Use the `with_*` builder methods to customize behavior
     /// before calling [`Self::fetch_metadata`] or [`Self::fetch_schema`].
-    pub fn new(store: &'a dyn ObjectStore, object_meta: &'a ObjectMeta) -> Self {
+    pub fn new(store: &'a dyn FileReader, object_meta: &'a FileInfo) -> Self {
         Self {
+            cache_key: None,
             store,
             object_meta,
             metadata_size_hint: None,
@@ -196,7 +201,12 @@ impl<'a> DFParquetMetadata<'a> {
     pub fn with_file_metadata_cache(
         mut self,
         file_metadata_cache: Option<Arc<FileMetadataCache>>,
+        storage_id: u64,
     ) -> Self {
+        self.cache_key = Some(datafusion_execution::cache::FileCacheKey {
+            storage_id,
+            path: self.object_meta.location.clone(),
+        });
         self.file_metadata_cache = file_metadata_cache;
         self
     }
@@ -265,7 +275,8 @@ impl<'a> DFParquetMetadata<'a> {
 
         if cache_metadata
             && let Some(file_metadata_cache) = self.file_metadata_cache.as_ref()
-            && let Some(cached) = file_metadata_cache.get(&self.object_meta.location)
+            && let Some(cached) =
+                file_metadata_cache.get(self.cache_key.as_ref().expect("cache scope"))
             && cached.is_valid_for(self.object_meta)
             && let Some(cached_parquet) = cached
                 .file_metadata
@@ -329,7 +340,7 @@ impl<'a> DFParquetMetadata<'a> {
     fn cache_metadata(&self, metadata: Arc<ParquetMetaData>) -> Result<()> {
         if let Some(file_metadata_cache) = &self.file_metadata_cache {
             file_metadata_cache.put(
-                &self.object_meta.location,
+                self.cache_key.as_ref().expect("cache scope"),
                 CachedFileMetadataEntry::new(
                     self.object_meta.clone(),
                     Arc::new(CachedParquetMetaData::new(metadata)),
@@ -357,52 +368,25 @@ impl<'a> DFParquetMetadata<'a> {
 
         decoder = decoder.with_page_index_policy(page_index_policy);
 
-        if let Some(hint) = self.metadata_size_hint {
-            let prefetch_start = file_size.saturating_sub(hint as u64);
-            let prefetch_range = prefetch_start..file_size;
-            let data = self
-                .store
-                .get_ranges(
-                    &self.object_meta.location,
-                    std::slice::from_ref(&prefetch_range),
-                )
-                .await
-                .map_err(DataFusionError::from)?;
-            decoder
-                .push_ranges(vec![prefetch_range], data)
-                .map_err(DataFusionError::from)?;
-        }
-
-        let metadata = loop {
-            match decoder.try_decode().map_err(DataFusionError::from)? {
-                DecodeResult::Data(metadata) => break metadata,
-                DecodeResult::NeedsData(ranges) => {
-                    let buffers = self
-                        .store
-                        .get_ranges(&self.object_meta.location, &ranges)
-                        .await
-                        .map_err(DataFusionError::from)?;
-                    decoder
-                        .push_ranges(ranges, buffers)
-                        .map_err(DataFusionError::from)?;
-                }
-                DecodeResult::Finished => {
-                    return Err(DataFusionError::Internal(
-                        "ParquetMetaDataPushDecoder finished without producing metadata"
-                            .to_string(),
-                    ));
-                }
-            }
-        };
-
-        Ok(Arc::new(metadata))
+        crate::metadata_io::decode_metadata(
+            decoder,
+            file_size,
+            self.metadata_size_hint,
+            |ranges| async move {
+                self.store
+                    .read_ranges(ranges)
+                    .await
+                    .map_err(DataFusionError::from)
+            },
+        )
+        .await
     }
 
     /// If `metadata` does not already have a page index, fetch and attach the
     /// column and offset indexes.
     async fn load_page_index(
-        store: &dyn ObjectStore,
-        object_meta: &ObjectMeta,
+        store: &dyn FileReader,
+        _object_meta: &FileInfo,
         metadata: Arc<ParquetMetaData>,
     ) -> Result<Arc<ParquetMetaData>> {
         if metadata.column_index().is_some() && metadata.offset_index().is_some() {
@@ -412,7 +396,7 @@ impl<'a> DFParquetMetadata<'a> {
             Arc::try_unwrap(metadata).unwrap_or_else(|shared| (*shared).clone());
         let mut reader = ParquetMetaDataReader::new_with_metadata(metadata)
             .with_page_index_policy(PageIndexPolicy::Optional);
-        let fetch = ObjectStoreFetch::new(store, object_meta);
+        let fetch = FileReaderFetch::new(store);
         reader
             .load_page_index(fetch)
             .await
@@ -496,152 +480,158 @@ impl<'a> DFParquetMetadata<'a> {
     /// - If neither method is applicable, byte size is marked as Precision::Absent
     pub fn statistics_from_parquet_metadata(
         metadata: &ParquetMetaData,
-        logical_file_schema: &SchemaRef,
+        table_schema: &SchemaRef,
     ) -> Result<Statistics> {
-        let row_groups_metadata = metadata.row_groups();
-
-        // Use Statistics::default() as opposed to Statistics::new_unknown()
-        // because we are going to replace the column statistics below
-        // and we don't want to initialize them twice.
-        let mut statistics = Statistics::default();
-        let mut has_statistics = false;
-        let mut num_rows = 0_usize;
-        for row_group_meta in row_groups_metadata {
-            num_rows += row_group_meta.num_rows() as usize;
-
-            if !has_statistics {
-                has_statistics = row_group_meta
-                    .columns()
-                    .iter()
-                    .any(|column| column.statistics().is_some());
-            }
-        }
-        statistics.num_rows = Precision::Exact(num_rows);
-
-        let file_metadata = metadata.file_metadata();
-        let mut physical_file_schema = parquet_to_arrow_schema(
-            file_metadata.schema_descr(),
-            file_metadata.key_value_metadata(),
-        )?;
-
-        if let Some(merged) =
-            apply_file_schema_type_coercions(logical_file_schema, &physical_file_schema)
-        {
-            physical_file_schema = merged;
-        }
-
-        statistics.column_statistics =
-            if has_statistics {
-                let (mut max_accs, mut min_accs) =
-                    create_max_min_accs(logical_file_schema);
-                let mut null_counts_array =
-                    vec![Precision::Absent; logical_file_schema.fields().len()];
-                let mut column_byte_sizes =
-                    vec![Precision::Absent; logical_file_schema.fields().len()];
-                let mut is_max_value_exact =
-                    vec![Some(true); logical_file_schema.fields().len()];
-                let mut is_min_value_exact =
-                    vec![Some(true); logical_file_schema.fields().len()];
-                let mut distinct_counts_array =
-                    vec![Precision::Absent; logical_file_schema.fields().len()];
-                logical_file_schema.fields().iter().enumerate().for_each(
-                    |(idx, field)| match StatisticsConverter::try_new(
-                        field.name(),
-                        &physical_file_schema,
-                        file_metadata.schema_descr(),
-                    ) {
-                        Ok(stats_converter) => {
-                            let parquet_index = stats_converter.parquet_column_index();
-                            if parquet_index.is_some_and(|index| {
-                                has_untrusted_min_max_order(
-                                    file_metadata.schema_descr(),
-                                    file_metadata.column_orders().map(Vec::as_slice),
-                                    index,
-                                )
-                            }) || has_untrusted_byte_array_stats(
-                                file_metadata.schema_descr(),
-                                parquet_index,
-                                row_groups_metadata,
-                            ) {
-                                // The remaining row groups cannot establish bounds
-                                // for the whole file. Keep unrelated statistics.
-                                min_accs[idx] = None;
-                                max_accs[idx] = None;
-                            }
-                            let mut accumulators = StatisticsAccumulators {
-                                min_accs: &mut min_accs,
-                                max_accs: &mut max_accs,
-                                null_counts_array: &mut null_counts_array,
-                                is_min_value_exact: &mut is_min_value_exact,
-                                is_max_value_exact: &mut is_max_value_exact,
-                                column_byte_sizes: &mut column_byte_sizes,
-                                distinct_counts_array: &mut distinct_counts_array,
-                            };
-                            summarize_column_statistics(
-                                logical_file_schema,
-                                &mut accumulators,
-                                idx,
-                                &stats_converter,
-                                row_groups_metadata,
-                                num_rows,
-                            )
-                            .ok();
-                        }
-                        Err(e) => {
-                            debug!("Failed to create statistics converter: {e}");
-                            null_counts_array[idx] = Precision::Exact(num_rows);
-                        }
-                    },
-                );
-
-                let mut accumulators = StatisticsAccumulators {
-                    min_accs: &mut min_accs,
-                    max_accs: &mut max_accs,
-                    null_counts_array: &mut null_counts_array,
-                    is_min_value_exact: &mut is_min_value_exact,
-                    is_max_value_exact: &mut is_max_value_exact,
-                    column_byte_sizes: &mut column_byte_sizes,
-                    distinct_counts_array: &mut distinct_counts_array,
-                };
-                accumulators.build_column_statistics(logical_file_schema)
-            } else {
-                // Record column sizes
-                logical_file_schema
-                    .fields()
-                    .iter()
-                    .enumerate()
-                    .map(|(logical_file_schema_index, field)| {
-                        let arrow_field =
-                            logical_file_schema.field(logical_file_schema_index);
-                        let parquet_idx = parquet_column(
-                            file_metadata.schema_descr(),
-                            &physical_file_schema,
-                            arrow_field.name(),
-                        )
-                        .map(|(idx, _)| idx);
-                        let byte_size = compute_arrow_column_size(
-                            field.data_type(),
-                            row_groups_metadata,
-                            parquet_idx,
-                            num_rows,
-                        );
-                        ColumnStatistics::new_unknown().with_byte_size(byte_size)
-                    })
-                    .collect()
-            };
-
-        #[cfg(debug_assertions)]
-        {
-            // Check that the column statistics length matches the table schema fields length
-            assert_eq!(
-                statistics.column_statistics.len(),
-                logical_file_schema.fields().len(),
-                "Column statistics length does not match table schema fields length"
-            );
-        }
-
-        Ok(statistics)
+        statistics_from_parquet_metadata(metadata, table_schema)
     }
+}
+
+pub fn statistics_from_parquet_metadata(
+    metadata: &ParquetMetaData,
+    logical_file_schema: &SchemaRef,
+) -> Result<Statistics> {
+    let row_groups_metadata = metadata.row_groups();
+
+    // Use Statistics::default() as opposed to Statistics::new_unknown()
+    // because we are going to replace the column statistics below
+    // and we don't want to initialize them twice.
+    let mut statistics = Statistics::default();
+    let mut has_statistics = false;
+    let mut num_rows = 0_usize;
+    for row_group_meta in row_groups_metadata {
+        num_rows += row_group_meta.num_rows() as usize;
+
+        if !has_statistics {
+            has_statistics = row_group_meta
+                .columns()
+                .iter()
+                .any(|column| column.statistics().is_some());
+        }
+    }
+    statistics.num_rows = Precision::Exact(num_rows);
+
+    let file_metadata = metadata.file_metadata();
+    let mut physical_file_schema = parquet_to_arrow_schema(
+        file_metadata.schema_descr(),
+        file_metadata.key_value_metadata(),
+    )?;
+
+    if let Some(merged) =
+        apply_file_schema_type_coercions(logical_file_schema, &physical_file_schema)
+    {
+        physical_file_schema = merged;
+    }
+
+    statistics.column_statistics = if has_statistics {
+        let (mut max_accs, mut min_accs) = create_max_min_accs(logical_file_schema);
+        let mut null_counts_array =
+            vec![Precision::Absent; logical_file_schema.fields().len()];
+        let mut column_byte_sizes =
+            vec![Precision::Absent; logical_file_schema.fields().len()];
+        let mut is_max_value_exact = vec![Some(true); logical_file_schema.fields().len()];
+        let mut is_min_value_exact = vec![Some(true); logical_file_schema.fields().len()];
+        let mut distinct_counts_array =
+            vec![Precision::Absent; logical_file_schema.fields().len()];
+        logical_file_schema
+            .fields()
+            .iter()
+            .enumerate()
+            .for_each(|(idx, field)| {
+                match StatisticsConverter::try_new(
+                    field.name(),
+                    &physical_file_schema,
+                    file_metadata.schema_descr(),
+                ) {
+                    Ok(stats_converter) => {
+                        let parquet_index = stats_converter.parquet_column_index();
+                        if parquet_index.is_some_and(|index| {
+                            has_untrusted_min_max_order(
+                                file_metadata.schema_descr(),
+                                file_metadata.column_orders().map(Vec::as_slice),
+                                index,
+                            )
+                        }) || has_untrusted_byte_array_stats(
+                            file_metadata.schema_descr(),
+                            parquet_index,
+                            row_groups_metadata,
+                        ) {
+                            // The remaining row groups cannot establish bounds
+                            // for the whole file. Keep unrelated statistics.
+                            min_accs[idx] = None;
+                            max_accs[idx] = None;
+                        }
+                        let mut accumulators = StatisticsAccumulators {
+                            min_accs: &mut min_accs,
+                            max_accs: &mut max_accs,
+                            null_counts_array: &mut null_counts_array,
+                            is_min_value_exact: &mut is_min_value_exact,
+                            is_max_value_exact: &mut is_max_value_exact,
+                            column_byte_sizes: &mut column_byte_sizes,
+                            distinct_counts_array: &mut distinct_counts_array,
+                        };
+                        summarize_column_statistics(
+                            logical_file_schema,
+                            &mut accumulators,
+                            idx,
+                            &stats_converter,
+                            row_groups_metadata,
+                            num_rows,
+                        )
+                        .ok();
+                    }
+                    Err(e) => {
+                        debug!("Failed to create statistics converter: {e}");
+                        null_counts_array[idx] = Precision::Exact(num_rows);
+                    }
+                }
+            });
+
+        let mut accumulators = StatisticsAccumulators {
+            min_accs: &mut min_accs,
+            max_accs: &mut max_accs,
+            null_counts_array: &mut null_counts_array,
+            is_min_value_exact: &mut is_min_value_exact,
+            is_max_value_exact: &mut is_max_value_exact,
+            column_byte_sizes: &mut column_byte_sizes,
+            distinct_counts_array: &mut distinct_counts_array,
+        };
+        accumulators.build_column_statistics(logical_file_schema)
+    } else {
+        // Record column sizes
+        logical_file_schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(logical_file_schema_index, field)| {
+                let arrow_field = logical_file_schema.field(logical_file_schema_index);
+                let parquet_idx = parquet_column(
+                    file_metadata.schema_descr(),
+                    &physical_file_schema,
+                    arrow_field.name(),
+                )
+                .map(|(idx, _)| idx);
+                let byte_size = compute_arrow_column_size(
+                    field.data_type(),
+                    row_groups_metadata,
+                    parquet_idx,
+                    num_rows,
+                );
+                ColumnStatistics::new_unknown().with_byte_size(byte_size)
+            })
+            .collect()
+    };
+
+    #[cfg(debug_assertions)]
+    {
+        // Check that the column statistics length matches the table schema fields length
+        assert_eq!(
+            statistics.column_statistics.len(),
+            logical_file_schema.fields().len(),
+            "Column statistics length does not match table schema fields length"
+        );
+    }
+
+    Ok(statistics)
 }
 
 /// Min/max aggregation can take Dictionary encode input but always produces unpacked

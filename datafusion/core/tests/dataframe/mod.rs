@@ -5889,9 +5889,15 @@ async fn write_partitioned_parquet_results(#[case] string_type: DataType) -> Res
     let ctx = SessionContext::new();
     ctx.register_table("test", mem_table)?;
 
-    let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+    let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir).unwrap());
     let local_url = Url::parse("file://local").unwrap();
-    ctx.register_object_store(&local_url, local);
+    ctx.register_storage(
+        &local_url,
+        Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+            local,
+        )),
+    )
+    .unwrap();
 
     // execute a simple query and write the results to parquet
     let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out/";
@@ -5970,9 +5976,15 @@ async fn write_parquet_results() -> Result<()> {
     .await?;
 
     // register a local file system object store for /tmp directory
-    let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+    let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir).unwrap());
     let local_url = Url::parse("file://local").unwrap();
-    ctx.register_object_store(&local_url, local);
+    ctx.register_storage(
+        &local_url,
+        Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+            local,
+        )),
+    )
+    .unwrap();
 
     // execute a simple query and write the results to parquet
     let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out/";

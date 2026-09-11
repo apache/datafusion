@@ -324,8 +324,8 @@ mod tests {
     use datafusion_expr::ColumnarValue;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
-    use object_store::ObjectMeta;
-    use object_store::path::Path;
+    use datafusion_storage::FileInfo;
+    use datafusion_storage::path::Path;
     use std::sync::Mutex;
     use std::thread;
     use std::time::Duration;
@@ -354,8 +354,8 @@ mod tests {
         }
     }
 
-    fn create_test_object_meta(path: &str, size: usize) -> ObjectMeta {
-        ObjectMeta {
+    fn create_test_object_meta(path: &str, size: usize) -> FileInfo {
+        FileInfo {
             location: Path::from(path),
             last_modified: DateTime::parse_from_rfc3339("2025-07-29T12:12:12+00:00")
                 .unwrap()
@@ -431,8 +431,8 @@ mod tests {
     fn generate_test_metadata_with_size(
         path: &str,
         size: usize,
-    ) -> (ObjectMeta, Arc<dyn FileMetadata>) {
-        let object_meta = ObjectMeta {
+    ) -> (FileInfo, Arc<dyn FileMetadata>) {
+        let object_meta = FileInfo {
             location: Path::from(path),
             last_modified: chrono::Utc::now(),
             size: size as u64,
@@ -804,8 +804,8 @@ mod tests {
         assert_eq!(cache.list_entries(), HashMap::from([]));
     }
 
-    fn create_test_meta(path: &str, size: u64) -> ObjectMeta {
-        ObjectMeta {
+    fn create_test_meta(path: &str, size: u64) -> FileInfo {
+        FileInfo {
             location: Path::from(path),
             last_modified: DateTime::parse_from_rfc3339("2022-09-27T22:36:00+02:00")
                 .unwrap()
@@ -828,6 +828,7 @@ mod tests {
         )]);
 
         let path = TableScopedPath {
+            storage_id: 0,
             path: meta.location.clone(),
             table: None,
         };
@@ -889,6 +890,7 @@ mod tests {
         assert_eq!(entries.len(), 1);
 
         let path_3 = TableScopedPath {
+            storage_id: 0,
             path: Path::from("test"),
             table: None,
         };
@@ -964,6 +966,7 @@ mod tests {
         );
 
         let path = TableScopedPath {
+            storage_id: 0,
             path: meta.location.clone(),
             table: None,
         };
@@ -993,6 +996,7 @@ mod tests {
     fn test_cache_invalidation_on_file_modification() {
         let cache = DefaultCache::new(DEFAULT_FILE_STATISTICS_MEMORY_LIMIT);
         let path = TableScopedPath {
+            storage_id: 0,
             path: Path::from("test.parquet"),
             table: None,
         };
@@ -1035,6 +1039,7 @@ mod tests {
     fn test_ordering_cache_invalidation_on_file_modification() {
         let cache = DefaultCache::new(DEFAULT_FILE_STATISTICS_MEMORY_LIMIT);
         let path = TableScopedPath {
+            storage_id: 0,
             path: Path::from("test.parquet"),
             table: None,
         };
@@ -1042,7 +1047,7 @@ mod tests {
         let schema_fingerprint = Arc::new(SchemaFingerprint::from_schema(&schema));
 
         // Cache with original metadata and ordering
-        let meta_v1 = ObjectMeta {
+        let meta_v1 = FileInfo {
             location: path.path.clone(),
             last_modified: DateTime::parse_from_rfc3339("2022-09-27T22:36:00+02:00")
                 .unwrap()
@@ -1066,7 +1071,7 @@ mod tests {
         assert!(cached.ordering.is_some());
 
         // File modified (size changed)
-        let meta_v2 = ObjectMeta {
+        let meta_v2 = FileInfo {
             location: path.path.clone(),
             last_modified: DateTime::parse_from_rfc3339("2022-09-28T10:00:00+02:00")
                 .unwrap()
@@ -1115,6 +1120,7 @@ mod tests {
         );
 
         let path_1 = TableScopedPath {
+            storage_id: 0,
             path: meta1.location.clone(),
             table: None,
         };
@@ -1129,6 +1135,7 @@ mod tests {
         );
 
         let path_2 = TableScopedPath {
+            storage_id: 0,
             path: meta2.location.clone(),
             table: None,
         };
@@ -1180,11 +1187,13 @@ mod tests {
         // create a cache with a limit which fits exactly 2 entries
         let cache = DefaultCache::new(limit_for_2_entries);
         let path_1 = TableScopedPath {
+            storage_id: 0,
             path: meta_1.location.clone(),
             table: None,
         };
 
         let path_2 = TableScopedPath {
+            storage_id: 0,
             path: meta_2.location.clone(),
             table: None,
         };
@@ -1201,6 +1210,7 @@ mod tests {
         assert_eq!(result_2.unwrap(), value_2);
 
         let path_3 = TableScopedPath {
+            storage_id: 0,
             path: meta_3.location.clone(),
             table: None,
         };
@@ -1249,6 +1259,7 @@ mod tests {
         let cache = DefaultCache::new(limit_less_than_the_entry);
 
         let path_1 = TableScopedPath {
+            storage_id: 0,
             path: meta.location.clone(),
             table: None,
         };
@@ -1276,7 +1287,7 @@ mod tests {
     fn create_cached_file_metadata_with_stats(
         file_name: &str,
         series_size: i32,
-    ) -> (ObjectMeta, CachedFileMetadata) {
+    ) -> (FileInfo, CachedFileMetadata) {
         let series: Vec<i32> = (0..=series_size).collect();
         let values = Int32Array::from(series);
         let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, series_size + 1]));
@@ -1335,8 +1346,8 @@ mod tests {
         }
     }
 
-    /// Helper function to create a test ObjectMeta with a specific path and location string size
-    fn create_object_meta(path: &str, location_size: usize) -> ObjectMeta {
+    /// Helper function to create a test FileInfo with a specific path and location string size
+    fn create_object_meta(path: &str, location_size: usize) -> FileInfo {
         // Create a location string of the desired size by padding with zeros
         let location_str = if location_size > path.len() {
             format!("{}{}", path, "0".repeat(location_size - path.len()))
@@ -1344,7 +1355,7 @@ mod tests {
             path.to_string()
         };
 
-        ObjectMeta {
+        FileInfo {
             location: Path::from(location_str),
             last_modified: DateTime::parse_from_rfc3339("2022-09-27T22:36:00+02:00")
                 .unwrap()
@@ -1363,10 +1374,11 @@ mod tests {
         table: Option<TableReference>,
     ) -> (TableScopedPath, CachedFileList) {
         let key = TableScopedPath {
+            storage_id: 0,
             table,
             path: Path::from(path),
         };
-        let metas: Vec<ObjectMeta> = (0..count)
+        let metas: Vec<FileInfo> = (0..count)
             .map(|i| create_object_meta(&format!("file{i}"), meta_size))
             .collect();
         let value = CachedFileList::new(metas);
@@ -1379,6 +1391,7 @@ mod tests {
         let table_ref = Some(TableReference::from("table"));
         let path = Path::from("test_path");
         let key = TableScopedPath {
+            storage_id: 0,
             table: table_ref.clone(),
             path,
         };
@@ -1780,8 +1793,8 @@ mod tests {
 
     #[test]
     fn test_meta_heap_bytes_calculation() {
-        // Test with minimal ObjectMeta (no e_tag, no version)
-        let meta1 = ObjectMeta {
+        // Test with minimal FileInfo (no e_tag, no version)
+        let meta1 = FileInfo {
             location: Path::from("test"),
             last_modified: chrono::Utc::now(),
             size: 100,
@@ -1791,7 +1804,7 @@ mod tests {
         assert_eq!(meta_heap_bytes(&meta1), 4); // Just the location string "test"
 
         // Test with e_tag
-        let meta2 = ObjectMeta {
+        let meta2 = FileInfo {
             location: Path::from("test"),
             last_modified: chrono::Utc::now(),
             size: 100,
@@ -1801,7 +1814,7 @@ mod tests {
         assert_eq!(meta_heap_bytes(&meta2), 4 + 7); // location (4) + e_tag (7)
 
         // Test with version
-        let meta3 = ObjectMeta {
+        let meta3 = FileInfo {
             location: Path::from("test"),
             last_modified: chrono::Utc::now(),
             size: 100,
@@ -1811,7 +1824,7 @@ mod tests {
         assert_eq!(meta_heap_bytes(&meta3), 4 + 4); // location (4) + version (4)
 
         // Test with both e_tag and version
-        let meta4 = ObjectMeta {
+        let meta4 = FileInfo {
             location: Path::from("test"),
             last_modified: chrono::Utc::now(),
             size: 100,
@@ -1865,9 +1878,9 @@ mod tests {
 
     // Prefix filtering tests using CachedFileList::filter_by_prefix
 
-    /// Helper function to create ObjectMeta with a specific location path
-    fn create_object_meta_with_path(location: &str) -> ObjectMeta {
-        ObjectMeta {
+    /// Helper function to create FileInfo with a specific location path
+    fn create_object_meta_with_path(location: &str) -> FileInfo {
+        FileInfo {
             location: Path::from(location),
             last_modified: DateTime::parse_from_rfc3339("2022-09-27T22:36:00+02:00")
                 .unwrap()
@@ -1894,6 +1907,7 @@ mod tests {
         // Cache the full table listing
         let table_ref = Some(TableReference::from("table"));
         let key = TableScopedPath {
+            storage_id: 0,
             table: table_ref,
             path: table_base,
         };
@@ -1938,6 +1952,7 @@ mod tests {
 
         let table_ref = Some(TableReference::from("table"));
         let key = TableScopedPath {
+            storage_id: 0,
             table: table_ref,
             path: table_base,
         };
@@ -1972,6 +1987,7 @@ mod tests {
 
         let table_ref = Some(TableReference::from("table"));
         let key = TableScopedPath {
+            storage_id: 0,
             table: table_ref,
             path: table_base,
         };

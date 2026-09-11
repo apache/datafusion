@@ -25,7 +25,8 @@ use std::sync::Arc;
 use crate::file_groups::FileGroupPartitioner;
 use crate::file_scan_config::FileScanConfig;
 use crate::file_stream::FileOpener;
-use crate::morsel::{FileOpenerMorselizer, Morselizer};
+use crate::morsel::FileOpenerMorselizer;
+use crate::morsel::Morselizer;
 #[expect(deprecated)]
 use crate::schema_adapter::SchemaAdapterFactory;
 use datafusion_common::config::ConfigOptions;
@@ -39,7 +40,7 @@ use datafusion_physical_plan::filter_pushdown::{FilterPushdownPropagation, Pushe
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
-use object_store::ObjectStore;
+use datafusion_storage::StorageBinding;
 
 /// Helper function to convert any type implementing [`FileSource`] to `Arc<dyn FileSource>`
 pub fn as_file_source<T: FileSource + 'static>(source: T) -> Arc<dyn FileSource> {
@@ -64,15 +65,33 @@ pub fn as_file_source<T: FileSource + 'static>(source: T) -> Arc<dyn FileSource>
 ///
 /// [`DataSource`]: crate::source::DataSource
 pub trait FileSource: Any + Send + Sync {
+    /// Create a morselizer using the plan's immutable storage binding.
+    fn create_morselizer_with_context(
+        &self,
+        base_config: &FileScanConfig,
+        partition: usize,
+        context: &Arc<datafusion_execution::TaskContext>,
+        access_context: datafusion_storage::FileAccessContext,
+    ) -> Result<Box<dyn Morselizer>> {
+        let storage = match &base_config.storage {
+            Some(storage) => Arc::clone(storage),
+            None => context
+                .runtime_env()
+                .storage(&base_config.object_store_url)?,
+        };
+        self.create_morselizer(storage, base_config, partition, access_context)
+    }
+
     /// Creates a `dyn FileOpener` based on given parameters.
     ///
     /// Note: File sources with a native morsel implementation should return an
     /// error from this method and implementing [`Self::create_morselizer`] instead.
     fn create_file_opener(
         &self,
-        object_store: Arc<dyn ObjectStore>,
+        object_store: Arc<StorageBinding>,
         base_config: &FileScanConfig,
         partition: usize,
+        access_context: datafusion_storage::FileAccessContext,
     ) -> Result<Arc<dyn FileOpener>>;
 
     /// Creates a `dyn Morselizer` based on given parameters.
@@ -84,11 +103,17 @@ pub trait FileSource: Any + Send + Sync {
     /// implementing this method.
     fn create_morselizer(
         &self,
-        object_store: Arc<dyn ObjectStore>,
+        object_store: Arc<StorageBinding>,
         base_config: &FileScanConfig,
         partition: usize,
+        access_context: datafusion_storage::FileAccessContext,
     ) -> Result<Box<dyn Morselizer>> {
-        let opener = self.create_file_opener(object_store, base_config, partition)?;
+        let opener = self.create_file_opener(
+            object_store,
+            base_config,
+            partition,
+            access_context,
+        )?;
         Ok(Box::new(FileOpenerMorselizer::new(opener)))
     }
 

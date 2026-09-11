@@ -97,7 +97,13 @@ async fn run_query() {
 
     // Register the traceable object store with a test URL.
     let url = Url::parse("test://").unwrap();
-    ctx.register_object_store(&url, traceable_store.clone());
+    ctx.register_storage(
+        &url,
+        Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+            traceable_store.clone(),
+        )),
+    )
+    .unwrap();
 
     // Register a listing table from the test data directory.
     let table_path = format!("test://{test_data}/");

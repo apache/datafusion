@@ -24,7 +24,6 @@ use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::empty::EmptyTable;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
     FileGroup, FileScanConfig, FileScanConfigBuilder, ParquetSource,
 };
@@ -51,6 +50,7 @@ use datafusion::physical_plan::{
     PlanProperties, ReplaceChildrenOptions, SendableRecordBatchStream,
 };
 use datafusion::prelude::SessionContext;
+use datafusion::storage::StorageUrl;
 use datafusion_common::config::{ConfigOptions, TableParquetOptions};
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{NullEquality, Result, internal_datafusion_err, internal_err};
@@ -171,7 +171,7 @@ fn roundtrip_dynamic_filter_plan_pair() -> Result<(
             .with_predicate(Arc::clone(&filter_expr_2)),
     );
     let scan_config =
-        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+        FileScanConfigBuilder::new(StorageUrl::local_filesystem(), file_source)
             .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
                 "/path/to/file.parquet".to_string(),
                 1024,
@@ -381,10 +381,9 @@ fn datasource_for_dynamic_filter_pushdown(
         ParquetSource::new(Arc::clone(schema))
             .with_table_parquet_options(parquet_options),
     );
-    let scan_config =
-        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
-            .with_file(PartitionedFile::new("/path/to/file.parquet", 1024))
-            .build();
+    let scan_config = FileScanConfigBuilder::new(StorageUrl::local_filesystem(), source)
+        .with_file(PartitionedFile::new("/path/to/file.parquet", 1024))
+        .build();
 
     let mut config = ConfigOptions::default();
     config.execution.parquet.pushdown_filters = true;

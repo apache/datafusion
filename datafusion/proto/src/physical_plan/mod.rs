@@ -119,7 +119,6 @@ mod file_scan_config_serde {
     };
     use datafusion_datasource::file_stream::FileOpener;
     use datafusion_datasource::{PartitionedFile, TableSchema};
-    use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_expr::projection::{
         ProjectionExpr as FileProjectionExpr, ProjectionExprs as FileProjectionExprs,
@@ -128,7 +127,7 @@ mod file_scan_config_serde {
         LexOrdering, Partitioning, PhysicalSortExpr, RangePartitioning, SplitPoint,
     };
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
-    use object_store::ObjectStore;
+    use datafusion_storage::StorageUrl;
 
     #[derive(Clone)]
     struct SerdeTestSource {
@@ -175,9 +174,10 @@ mod file_scan_config_serde {
     impl FileSource for SerdeTestSource {
         fn create_file_opener(
             &self,
-            _object_store: Arc<dyn ObjectStore>,
+            _storage: Arc<datafusion_storage::StorageBinding>,
             _base_config: &FileScanConfig,
             _partition: usize,
+            _access_context: datafusion_storage::FileAccessContext,
         ) -> Result<Arc<dyn FileOpener>> {
             internal_err!("not needed for FileScanConfig serde tests")
         }
@@ -275,7 +275,7 @@ mod file_scan_config_serde {
         ))])
         .expect("single expression ordering");
 
-        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+        FileScanConfigBuilder::new(StorageUrl::local_filesystem(), source)
             .with_file_groups(vec![
                 FileGroup::new(vec![first_file, second_file]),
                 FileGroup::new(vec![third_file]),
@@ -322,10 +322,16 @@ mod file_scan_config_serde {
 
     impl FileScanSerdeHarness {
         fn new() -> Self {
+            let task_ctx = TaskContext::default();
+            let binding = test_utils::storage::local();
+            task_ctx
+                .runtime_env()
+                .register_storage(binding.url().as_ref(), Arc::clone(binding.storage()))
+                .unwrap();
             Self {
                 codec: DefaultPhysicalExtensionCodec {},
                 converter: DefaultPhysicalProtoConverter {},
-                task_ctx: TaskContext::default(),
+                task_ctx,
             }
         }
 

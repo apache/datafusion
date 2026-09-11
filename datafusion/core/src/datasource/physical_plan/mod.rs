@@ -51,3 +51,6 @@ pub use datafusion_datasource::file_sink_config::*;
 pub use datafusion_datasource::file_stream::{
     FileOpenFuture, FileOpener, FileStream, FileStreamBuilder, OnError,
 };
+
+#[cfg(feature = "parquet")]
+pub use datafusion_datasource_parquet::storage::StorageParquetTable;

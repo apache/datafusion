@@ -31,7 +31,6 @@ use datafusion::datasource::listing::{
     ListingTable, ListingTableConfig, ListingTableConfigExt, ListingTableUrl,
 };
 use datafusion::execution::context::SessionContext;
-use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
@@ -41,6 +40,7 @@ use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::{ScalarFunctionExpr, expressions};
 use datafusion::prelude::SessionConfig;
 use datafusion::scalar::ScalarValue;
+use datafusion::storage::StorageUrl;
 use datafusion_physical_expr_adapter::{
     DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
 };
@@ -87,16 +87,21 @@ pub async fn json_shredding() -> Result<()> {
     };
     let path = Path::from("example.parquet");
     let payload = PutPayload::from_bytes(buf.into());
-    store.put(&path, payload).await?;
+    store
+        .put(&path, payload)
+        .await
+        .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
 
     // Set up query execution
     let mut cfg = SessionConfig::new();
     cfg.options_mut().execution.parquet.pushdown_filters = true;
     let ctx = SessionContext::new_with_config(cfg);
-    ctx.runtime_env().register_object_store(
-        ObjectStoreUrl::parse("memory://")?.as_ref(),
-        Arc::new(store),
-    );
+    ctx.runtime_env().register_storage(
+        StorageUrl::parse("memory://")?.as_ref(),
+        Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+            Arc::new(store),
+        )),
+    )?;
 
     // Create a custom table provider that rewrites struct field access
     let listing_table_config =

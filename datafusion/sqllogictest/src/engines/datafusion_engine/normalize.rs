@@ -146,7 +146,7 @@ fn normalize_paths(mut row: Vec<String>) -> Vec<String> {
 }
 
 /// The location of the datafusion checkout
-static WORKSPACE_ROOT: LazyLock<object_store::path::Path> = LazyLock::new(|| {
+static WORKSPACE_ROOT: LazyLock<datafusion_storage::path::Path> = LazyLock::new(|| {
     // e.g. /Software/datafusion/datafusion/core
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
@@ -162,12 +162,15 @@ static WORKSPACE_ROOT: LazyLock<object_store::path::Path> = LazyLock::new(|| {
     let sanitized_workplace_root = if cfg!(windows) {
         // Object store paths are delimited with `/`, e.g. `/datafusion/datafusion/testing/data/csv/aggregate_test_100.csv`.
         // The default windows delimiter is `\`, so the workplace path is `datafusion\datafusion`.
-        workspace_root.replace(std::path::MAIN_SEPARATOR, object_store::path::DELIMITER)
+        workspace_root.replace(
+            std::path::MAIN_SEPARATOR,
+            datafusion_storage::path::DELIMITER,
+        )
     } else {
         workspace_root.to_string()
     };
 
-    object_store::path::Path::parse(sanitized_workplace_root).unwrap()
+    datafusion_storage::path::Path::parse(sanitized_workplace_root).unwrap()
 });
 
 macro_rules! get_row_value {

@@ -38,7 +38,7 @@ use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuil
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_expr_common::operator::Operator;
 use datafusion_expr::{JoinType, SortExpr};
-use datafusion_execution::object_store::ObjectStoreUrl;
+use datafusion_storage::StorageUrl;
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, PhysicalSortExpr, PhysicalSortRequirement, OrderingRequirements
 };
@@ -86,7 +86,7 @@ fn csv_exec_sorted(
         ..Default::default()
     };
     let mut builder = FileScanConfigBuilder::new(
-        ObjectStoreUrl::parse("test:///").unwrap(),
+        StorageUrl::parse("test:///").unwrap(),
         Arc::new(CsvSource::new(schema.clone()).with_csv_options(options)),
     )
     .with_file(PartitionedFile::new("x".to_string(), 100));

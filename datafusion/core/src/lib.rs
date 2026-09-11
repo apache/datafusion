@@ -670,7 +670,7 @@
 //!    as the table definitions and the function registries.
 //!
 //! 2. [`TaskContext`]: State needed for execution such as the
-//!    [`MemoryPool`], [`DiskManager`], and [`ObjectStoreRegistry`].
+//!    [`MemoryPool`], [`DiskManager`], and [`StorageRegistry`].
 //!
 //! 3. [`ExecutionProps`]: Per-execution properties and data (such as
 //!    starting timestamps, etc).
@@ -689,7 +689,7 @@
 //! [`DiskManager`]: crate::execution::DiskManager
 //! [`MemoryPool`]: crate::execution::memory_pool::MemoryPool
 //! [`RuntimeEnv`]: crate::execution::runtime_env::RuntimeEnv
-//! [`ObjectStoreRegistry`]: crate::datasource::object_store::ObjectStoreRegistry
+//! [`StorageRegistry`]: crate::storage::StorageRegistry
 //!
 //! ## Crate Organization
 //!
@@ -779,7 +779,6 @@ pub mod scalar;
 
 // Re-export dependencies that are part of DataFusion public API (e.g. via DataFusionError)
 pub use arrow;
-pub use object_store;
 
 #[cfg(feature = "parquet")]
 pub use parquet;
@@ -1239,3 +1238,12 @@ doc_comment::doctest!(
     "../../../docs/source/contributor-guide/api-health.md",
     contributor_guide_api_health
 );
+
+/// Backend-independent file access and storage registration.
+pub mod storage {
+    pub use datafusion_storage::*;
+    #[cfg(feature = "object_store")]
+    pub use datafusion_storage_object_store::ObjectStoreStorage;
+    #[cfg(feature = "opendal")]
+    pub use datafusion_storage_opendal::OpendalStorage;
+}

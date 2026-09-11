@@ -177,9 +177,17 @@ async fn handle_create_external_catalog(
 
     // Register a local object store rooted at the workspace root.
     // We use a specific authority 'workspace' to ensure consistent resolution.
-    let store = Arc::new(LocalFileSystem::new_with_prefix(workspace_root())?);
+    let store = Arc::new(
+        LocalFileSystem::new_with_prefix(workspace_root())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?,
+    );
     let store_url = url::Url::parse("local://workspace").unwrap();
-    ctx.register_object_store(&store_url, Arc::clone(&store) as _);
+    ctx.register_storage(
+        &store_url,
+        Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+            store.clone() as _,
+        )),
+    )?;
 
     let target_ext = format!(".{}", stmt.catalog_type.to_lowercase());
 
@@ -195,7 +203,7 @@ async fn handle_create_external_catalog(
     let mut list_stream = store.list(Some(&prefix));
 
     while let Some(meta) = list_stream.next().await {
-        let meta = meta?;
+        let meta = meta.map_err(|e| DataFusionError::External(Box::new(e)))?;
         let path = &meta.location;
 
         if path.as_ref().ends_with(&target_ext) {

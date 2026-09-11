@@ -19,7 +19,8 @@ use std::sync::Arc;
 
 use arrow_schema::DataType;
 use futures::{FutureExt, StreamExt as _, TryStreamExt as _};
-use object_store::{ObjectStoreExt, memory::InMemory, path::Path};
+use object_store::ObjectStoreExt;
+use object_store::memory::InMemory;
 
 use datafusion::execution::SessionStateBuilder;
 use datafusion_catalog_listing::helpers::{
@@ -235,17 +236,23 @@ async fn test_list_partition() {
 
 pub fn make_test_store_and_state(
     files: &[(&str, u64)],
-) -> (Arc<InMemory>, Arc<dyn Session>) {
+) -> (Arc<datafusion_storage::StorageBinding>, Arc<dyn Session>) {
     let memory = InMemory::new();
 
     for (name, size) in files {
         memory
-            .put(&Path::from(*name), vec![0; *size as usize].into())
+            .put(
+                &object_store::path::Path::from(*name),
+                vec![0; *size as usize].into(),
+            )
             .now_or_never()
             .unwrap()
             .unwrap();
     }
 
     let state = SessionStateBuilder::new().build();
-    (Arc::new(memory), Arc::new(state))
+    (
+        test_utils::storage::object_store(Arc::new(memory)),
+        Arc::new(state),
+    )
 }

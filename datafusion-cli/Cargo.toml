@@ -35,6 +35,8 @@ default = []
 backtrace = ["datafusion/backtrace"]
 
 [dependencies]
+object_store = { workspace = true, features = ["aws", "gcp", "http"] }
+datafusion-storage-object-store = { workspace = true }
 arrow = { workspace = true }
 async-trait = { workspace = true }
 aws-config = "1.8.18"
@@ -48,6 +50,7 @@ datafusion = { workspace = true, features = [
     "datetime_expressions",
     "encoding_expressions",
     "nested_expressions",
+    "object_store",
     "parquet",
     "parquet_encryption",
     "recursive_protection",
@@ -62,7 +65,6 @@ env_logger = { workspace = true }
 futures = { workspace = true }
 log = { workspace = true }
 mimalloc = { version = "0.1", default-features = false }
-object_store = { workspace = true, features = ["aws", "gcp", "http"] }
 parking_lot = { workspace = true }
 parquet = { workspace = true, default-features = false }
 regex = { workspace = true }

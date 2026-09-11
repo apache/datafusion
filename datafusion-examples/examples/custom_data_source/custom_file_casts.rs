@@ -30,11 +30,11 @@ use datafusion::datasource::listing::{
     ListingTable, ListingTableConfig, ListingTableConfigExt, ListingTableUrl,
 };
 use datafusion::execution::context::SessionContext;
-use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::expressions::CastExpr;
 use datafusion::prelude::SessionConfig;
+use datafusion::storage::StorageUrl;
 use datafusion_physical_expr_adapter::{
     DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
 };
@@ -68,8 +68,12 @@ pub async fn custom_file_casts() -> Result<()> {
     // Turn on filter pushdown so that the PhysicalExprAdapter is used
     cfg.options_mut().execution.parquet.pushdown_filters = true;
     let ctx = SessionContext::new_with_config(cfg);
-    ctx.runtime_env()
-        .register_object_store(ObjectStoreUrl::parse("memory://")?.as_ref(), store);
+    ctx.runtime_env().register_storage(
+        StorageUrl::parse("memory://")?.as_ref(),
+        Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+            store,
+        )),
+    )?;
 
     // Register our good and bad files via ListingTable
     let listing_table_config =
@@ -136,7 +140,10 @@ async fn write_data(
     writer.close()?;
 
     let payload = PutPayload::from_bytes(buf.into());
-    store.put(path, payload).await?;
+    store
+        .put(path, payload)
+        .await
+        .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
     Ok(())
 }
 

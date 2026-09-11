@@ -33,7 +33,6 @@ use datafusion::datasource::TableProvider;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::memory::DataSourceExec;
 use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
-use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::{
     TableProviderFilterPushDown, TableType, utils::conjunction,
 };
@@ -45,6 +44,7 @@ use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_optimizer::pruning::PruningPredicateBuilder;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
+use datafusion::storage::StorageUrl;
 use std::collections::HashSet;
 use std::fmt::Display;
 use std::fs;
@@ -127,7 +127,12 @@ pub async fn parquet_index() -> Result<()> {
     // register object store provider for urls like `file://` work
     let url = Url::try_from("file://").unwrap();
     let object_store = object_store::local::LocalFileSystem::new();
-    ctx.register_object_store(&url, Arc::new(object_store));
+    ctx.register_storage(
+        &url,
+        Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+            Arc::new(object_store),
+        )),
+    )?;
 
     // Select data from the table without any predicates (and thus no pruning)
     println!("** Select data, no predicates:");
@@ -237,7 +242,7 @@ impl TableProvider for IndexTableProvider {
         // will not be returned.
         let files = self.index.get_files(predicate.clone())?;
 
-        let object_store_url = ObjectStoreUrl::parse("file://")?;
+        let object_store_url = StorageUrl::parse("file://")?;
         let source =
             Arc::new(ParquetSource::new(self.schema()).with_predicate(predicate));
         let mut file_scan_config_builder =

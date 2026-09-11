@@ -58,7 +58,7 @@ impl EncryptionContext {
 
     pub(super) async fn get_file_decryption_properties(
         &self,
-        file_location: &object_store::path::Path,
+        file_location: &datafusion_storage::path::Path,
     ) -> Result<Option<Arc<FileDecryptionProperties>>> {
         match &self.file_decryption_properties {
             Some(file_decryption_properties) => {
@@ -80,7 +80,7 @@ impl EncryptionContext {
 impl EncryptionContext {
     pub(super) async fn get_file_decryption_properties(
         &self,
-        _file_location: &object_store::path::Path,
+        _file_location: &datafusion_storage::path::Path,
     ) -> Result<
         Option<std::sync::Arc<datafusion_common::encryption::FileDecryptionProperties>>,
     > {

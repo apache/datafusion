@@ -16,7 +16,7 @@
 // under the License.
 
 //! [`ParquetSink`] — DataFusion `DataSink` implementation that writes one
-//! or more Parquet files to an [`ObjectStore`], optionally with parallel
+//! or more Parquet files to a [`StorageBinding`], optionally with parallel
 //! per-column and per-row-group serialization.
 
 use std::fmt;
@@ -36,9 +36,7 @@ use datafusion_datasource::sink::DataSink;
 #[cfg(feature = "proto")]
 use datafusion_datasource::sink::DataSinkExec;
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
-use datafusion_datasource::write::{
-    ObjectWriterBuilder, SharedBuffer, get_writer_schema,
-};
+use datafusion_datasource::write::{FileWriterBuilder, SharedBuffer, get_writer_schema};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
@@ -49,9 +47,9 @@ use datafusion_physical_plan::metrics::{
     MetricsSet, Time,
 };
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType};
-use object_store::ObjectStore;
-use object_store::buffered::BufWriter;
-use object_store::path::Path;
+use datafusion_storage::StorageBinding;
+use datafusion_storage::path::Path;
+use datafusion_storage::{FileAccessContext, FileOutput, WriterOptions};
 use parquet::arrow::arrow_writer::{
     ArrowColumnChunk, ArrowColumnWriter, ArrowLeafColumn, ArrowRowGroupWriterFactory,
     ArrowWriterOptions, compute_leaves,
@@ -64,6 +62,7 @@ use parquet::file::properties::{
     DEFAULT_MAX_ROW_GROUP_ROW_COUNT, WriterProperties, WriterPropertiesBuilder,
 };
 use parquet::file::writer::SerializedFileWriter;
+
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
@@ -175,22 +174,28 @@ impl ParquetSink {
 
     /// Creates an AsyncArrowWriter which serializes a parquet file to an ObjectStore
     /// AsyncArrowWriters are used when individual parquet file serialization is not parallelized
-    fn create_async_arrow_writer(
+    async fn create_async_arrow_writer(
         &self,
         location: &Path,
-        object_store: Arc<dyn ObjectStore>,
+        object_store: Arc<StorageBinding>,
         context: &Arc<TaskContext>,
         parquet_props: WriterProperties,
-    ) -> Result<AsyncArrowWriter<BufWriter>> {
-        let buf_writer = BufWriter::with_capacity(
-            object_store,
-            location.clone(),
-            context
-                .session_config()
-                .options()
-                .execution
-                .objectstore_writer_buffer_size,
-        );
+    ) -> Result<AsyncArrowWriter<FileOutput>> {
+        let buf_writer = object_store
+            .writer(
+                location,
+                WriterOptions {
+                    buffer_size: Some(
+                        context
+                            .session_config()
+                            .options()
+                            .execution
+                            .objectstore_writer_buffer_size,
+                    ),
+                },
+                FileAccessContext::new("parquet-write"),
+            )
+            .await?;
         let options = ArrowWriterOptions::new()
             .with_properties(parquet_props)
             .with_skip_arrow_metadata(self.parquet_options.global.skip_arrow_metadata);
@@ -265,7 +270,7 @@ impl FileSink for ParquetSink {
         context: &Arc<TaskContext>,
         demux_task: SpawnedTask<Result<()>>,
         mut file_stream_rx: DemuxedStreamReceiver,
-        object_store: Arc<dyn ObjectStore>,
+        object_store: Arc<StorageBinding>,
     ) -> Result<u64> {
         let rows_written_counter = MetricBuilder::new(&self.metrics)
             .with_category(MetricCategory::Rows)
@@ -300,12 +305,14 @@ impl FileSink for ParquetSink {
             if !parquet_opts.global.allow_single_file_parallelism
                 || parquet_opts.global.content_defined_chunking.enabled
             {
-                let mut writer = self.create_async_arrow_writer(
-                    &path,
-                    Arc::clone(&object_store),
-                    context,
-                    parquet_props.clone(),
-                )?;
+                let mut writer = self
+                    .create_async_arrow_writer(
+                        &path,
+                        Arc::clone(&object_store),
+                        context,
+                        parquet_props.clone(),
+                    )
+                    .await?;
                 let reservation = MemoryConsumer::new(format!("ParquetSink[{path}]"))
                     .register(context.memory_pool());
                 file_write_tasks.spawn(
@@ -323,7 +330,7 @@ impl FileSink for ParquetSink {
                     .with_elapsed_compute(elapsed_compute.clone()),
                 );
             } else {
-                let writer = ObjectWriterBuilder::new(
+                let writer = FileWriterBuilder::new(
                     // Parquet files as a whole are never compressed, since they
                     // manage compressed blocks themselves.
                     FileCompressionType::UNCOMPRESSED,
@@ -337,7 +344,8 @@ impl FileSink for ParquetSink {
                         .execution
                         .objectstore_writer_buffer_size,
                 ))
-                .build()?;
+                .build()
+                .await?;
                 let ctx = ParquetFileWriteContext {
                     schema: get_writer_schema(&self.config),
                     props: Arc::new(parquet_props),
@@ -499,7 +507,12 @@ impl ParquetSink {
                 "ParquetSinkExecNode is missing required field 'sink'"
             )
         })?;
-        let data_sink = ParquetSink::try_from(proto_sink)?;
+        let mut data_sink = ParquetSink::try_from(proto_sink)?;
+        data_sink.config.storage = Some(
+            ctx.task_ctx()
+                .runtime_env()
+                .storage(&data_sink.config.object_store_url)?,
+        );
         let sort_order = DataSinkExec::decode_sort_order(
             sink_node.sort_order.as_ref(),
             ctx,
@@ -759,7 +772,7 @@ fn spawn_parquet_parallel_serialization_task(
 }
 
 /// Consume RowGroups serialized by other parallel tasks and concatenate them in
-/// to the final parquet file, while flushing finalized bytes to an [ObjectStore]
+/// to the final parquet file, while flushing finalized bytes to a [`StorageBinding`]
 async fn concatenate_parallel_row_groups(
     mut parquet_writer: SerializedFileWriter<SharedBuffer>,
     merged_buff: SharedBuffer,

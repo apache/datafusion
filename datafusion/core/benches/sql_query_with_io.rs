@@ -117,7 +117,13 @@ where
 async fn setup_context(object_store: Arc<dyn ObjectStore>) -> SessionContext {
     let config = SessionConfig::new().with_target_partitions(THREADS);
     let rt = Arc::new(RuntimeEnv::default());
-    rt.register_object_store(&Url::parse("data://my_store").unwrap(), object_store);
+    rt.register_storage(
+        &Url::parse("data://my_store").unwrap(),
+        Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+            object_store,
+        )),
+    )
+    .unwrap();
     let context = SessionContext::new_with_config_rt(config, rt);
 
     for table_id in 0..TABLES {

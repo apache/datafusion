@@ -38,6 +38,7 @@ all-features = true
 workspace = true
 
 [features]
+default = []
 recursive_protection = ["dep:recursive"]
 
 [dependencies]

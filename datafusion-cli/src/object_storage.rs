@@ -139,7 +139,9 @@ async fn get_s3_object_store_builder_inner(
         .is_none()
         || resolve_region
     {
-        let region = resolve_bucket_region(bucket_name, &ClientOptions::new()).await?;
+        let region = resolve_bucket_region(bucket_name, &ClientOptions::new())
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
         builder = builder.with_region(region);
     }
 
@@ -189,7 +191,7 @@ impl CredentialsFromConfig {
         let credentials = config
             .credentials_provider()
             .ok_or_else(|| {
-                DataFusionError::ObjectStore(Box::new(Generic {
+                DataFusionError::External(Box::new(Generic {
                     store: "S3",
                     source: "Failed to get S3 credentials aws_config".into(),
                 }))
@@ -219,7 +221,7 @@ impl CredentialsFromConfig {
                     "Error getting credentials from provider: {e}{source_message}",
                 );
 
-                return Err(DataFusionError::ObjectStore(Box::new(Generic {
+                return Err(DataFusionError::External(Box::new(Generic {
                     store: "S3",
                     source: message.into(),
                 })));
@@ -523,13 +525,13 @@ impl ConfigExtension for GcpOptions {
     const PREFIX: &'static str = "gcp";
 }
 
-pub(crate) async fn get_object_store(
+pub(crate) async fn get_storage(
     state: &SessionState,
     scheme: &str,
     url: &Url,
     table_options: &TableOptions,
     resolve_region: bool,
-) -> Result<Arc<dyn ObjectStore>, DataFusionError> {
+) -> Result<Arc<dyn datafusion::storage::Storage>, DataFusionError> {
     let store: Arc<dyn ObjectStore> = match scheme {
         "s3" => {
             let Some(options) = table_options.extensions.get::<AwsOptions>() else {
@@ -539,7 +541,11 @@ pub(crate) async fn get_object_store(
             };
             let builder =
                 get_s3_object_store_builder(url, options, resolve_region).await?;
-            Arc::new(builder.build()?)
+            Arc::new(
+                builder
+                    .build()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?,
+            )
         }
         "oss" => {
             let Some(options) = table_options.extensions.get::<AwsOptions>() else {
@@ -548,7 +554,11 @@ pub(crate) async fn get_object_store(
                 );
             };
             let builder = get_oss_object_store_builder(url, options)?;
-            Arc::new(builder.build()?)
+            Arc::new(
+                builder
+                    .build()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?,
+            )
         }
         "cos" => {
             let Some(options) = table_options.extensions.get::<AwsOptions>() else {
@@ -557,7 +567,11 @@ pub(crate) async fn get_object_store(
                 );
             };
             let builder = get_cos_object_store_builder(url, options)?;
-            Arc::new(builder.build()?)
+            Arc::new(
+                builder
+                    .build()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?,
+            )
         }
         "gs" | "gcs" => {
             let Some(options) = table_options.extensions.get::<GcpOptions>() else {
@@ -566,29 +580,41 @@ pub(crate) async fn get_object_store(
                 );
             };
             let builder = get_gcs_object_store_builder(url, options)?;
-            Arc::new(builder.build()?)
+            Arc::new(
+                builder
+                    .build()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?,
+            )
         }
         "http" | "https" => Arc::new(
             HttpBuilder::new()
                 .with_client_options(ClientOptions::new().with_allow_http(true))
                 .with_url(url.origin().ascii_serialization())
-                .build()?,
+                .build()
+                .map_err(|e| DataFusionError::External(Box::new(e)))?,
         ),
         _ if scheme == stdin::StdinUtils::SCHEME => {
-            stdin::StdinUtils::get_or_create(state, url).await?
+            return stdin::StdinUtils::get_or_create(state, url).await;
         }
         _ => {
-            // For other types, try to get from `object_store_registry`:
-            state
+            return Ok(state
                 .runtime_env()
-                .object_store_registry
-                .get_store(url)
-                .map_err(|_| {
-                    exec_datafusion_err!("Unsupported object store scheme: {}", scheme)
-                })?
+                .storage_registry
+                .get(url)?
+                .storage()
+                .clone());
         }
     };
-    Ok(store)
+    let store = match state
+        .config()
+        .get_extension::<instrumented::ObjectStoreProfiler>()
+    {
+        Some(profiler) => profiler.instrument(store),
+        None => store,
+    };
+    Ok(Arc::new(
+        datafusion_storage_object_store::ObjectStoreStorage::new(store),
+    ))
 }
 
 #[cfg(test)]

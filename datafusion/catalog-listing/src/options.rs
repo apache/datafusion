@@ -277,8 +277,17 @@ impl ListingOptions {
         state: &dyn Session,
         table_path: &'a ListingTableUrl,
     ) -> datafusion_common::Result<SchemaRef> {
-        let store = state.runtime_env().object_store(table_path)?;
+        let store = state.runtime_env().storage(table_path)?;
+        self.infer_schema_with_storage(state, table_path, &store)
+            .await
+    }
 
+    pub(crate) async fn infer_schema_with_storage(
+        &self,
+        state: &dyn Session,
+        table_path: &ListingTableUrl,
+        store: &Arc<datafusion_storage::StorageBinding>,
+    ) -> datafusion_common::Result<SchemaRef> {
         let all_files: Vec<_> = table_path
             .list_all_files(state, store.as_ref(), &self.file_extension)
             .await?
@@ -300,7 +309,7 @@ impl ListingOptions {
             .filter(|object_meta| object_meta.size > 0)
             .collect();
 
-        let schema = self.format.infer_schema(state, &store, &files).await?;
+        let schema = self.format.infer_schema(state, store, &files).await?;
 
         Ok(schema)
     }
@@ -369,7 +378,7 @@ impl ListingOptions {
         state: &dyn Session,
         table_path: &ListingTableUrl,
     ) -> datafusion_common::Result<Vec<String>> {
-        let store = state.runtime_env().object_store(table_path)?;
+        let store = state.runtime_env().storage(table_path)?;
 
         // only use 10 files for inference
         // This can fail to detect inconsistent partition keys

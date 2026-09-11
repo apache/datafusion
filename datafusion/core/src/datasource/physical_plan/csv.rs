@@ -485,7 +485,13 @@ mod tests {
     ) -> Result<()> {
         let ctx = SessionContext::new();
         let url = Url::parse("file://").unwrap();
-        ctx.register_object_store(&url, store.clone());
+        ctx.register_storage(
+            &url,
+            Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+                store.clone(),
+            )),
+        )
+        .unwrap();
 
         let task_ctx = ctx.task_ctx();
 
@@ -564,7 +570,14 @@ mod tests {
         store.put(&path, data.into()).await.unwrap();
 
         let url = Url::parse("memory://").unwrap();
-        session_ctx.register_object_store(&url, Arc::new(store));
+        session_ctx
+            .register_storage(
+                &url,
+                Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+                    Arc::new(store),
+                )),
+            )
+            .unwrap();
 
         let df = session_ctx
             .read_csv("memory:///", CsvReadOptions::new())
@@ -593,7 +606,14 @@ mod tests {
         store.put(&path, data.into()).await.unwrap();
 
         let url = Url::parse("memory://").unwrap();
-        session_ctx.register_object_store(&url, Arc::new(store));
+        session_ctx
+            .register_storage(
+                &url,
+                Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+                    Arc::new(store),
+                )),
+            )
+            .unwrap();
 
         let df = session_ctx
             .read_csv("memory:///", CsvReadOptions::new().terminator(Some(b'\r')))
@@ -690,9 +710,15 @@ mod tests {
 
         // register a local file system object store
         let tmp_dir = TempDir::new()?;
-        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir).unwrap());
         let local_url = Url::parse("file://local").unwrap();
-        ctx.register_object_store(&local_url, local);
+        ctx.register_storage(
+            &local_url,
+            Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+                local,
+            )),
+        )
+        .unwrap();
         let options = CsvReadOptions::default()
             .schema_infer_max_records(2)
             .has_header(true);
@@ -736,10 +762,16 @@ mod tests {
 
         // register a local file system object store
         let tmp_dir = TempDir::new()?;
-        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir).unwrap());
         let local_url = Url::parse("file://local").unwrap();
 
-        ctx.register_object_store(&local_url, local);
+        ctx.register_storage(
+            &local_url,
+            Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+                local,
+            )),
+        )
+        .unwrap();
 
         // execute a simple query and write the results to CSV
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out/";

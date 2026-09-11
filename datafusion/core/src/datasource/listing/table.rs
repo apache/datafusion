@@ -85,16 +85,20 @@ fn infer_boxed(
 
 /// Body of [`ListingTableConfigExt::infer_options`].
 fn infer_options_boxed(
-    config: ListingTableConfig,
+    mut config: ListingTableConfig,
     state: &dyn Session,
 ) -> BoxFuture<'_, datafusion_common::Result<ListingTableConfig>> {
     Box::pin(async move {
         let store = if let Some(url) = config.table_paths.first() {
-            state.runtime_env().object_store(url)?
+            match &config.storage {
+                Some(storage) => std::sync::Arc::clone(storage),
+                None => state.runtime_env().storage(url)?,
+            }
         } else {
             return Ok(config);
         };
 
+        config.storage = Some(std::sync::Arc::clone(&store));
         let file = config
             .table_paths
             .first()
@@ -582,7 +586,8 @@ mod tests {
         let head_concurrency_store = ensure_head_concurrency(store, expected_concurrency);
 
         let url = Url::parse("test://").unwrap();
-        ctx.register_object_store(&url, head_concurrency_store.clone());
+        ctx.register_storage(&url, Arc::clone(head_concurrency_store.storage()))
+            .unwrap();
 
         let format = JsonFormat::default();
 

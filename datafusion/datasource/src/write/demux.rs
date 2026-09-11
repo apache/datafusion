@@ -43,8 +43,8 @@ use datafusion_common_runtime::SpawnedTask;
 
 use chrono::NaiveDate;
 use datafusion_execution::TaskContext;
+use datafusion_storage::path::Path;
 use futures::StreamExt;
-use object_store::path::Path;
 use rand::distr::SampleString;
 use tokio::sync::mpsc::{self, Receiver, Sender, UnboundedReceiver, UnboundedSender};
 

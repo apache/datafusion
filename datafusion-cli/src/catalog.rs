@@ -17,7 +17,7 @@
 
 use std::sync::{Arc, Weak};
 
-use crate::object_storage::{AwsOptions, GcpOptions, get_object_store};
+use crate::object_storage::{AwsOptions, GcpOptions, get_storage};
 
 use datafusion::catalog::{CatalogProvider, CatalogProviderList, SchemaProvider};
 
@@ -163,7 +163,7 @@ impl SchemaProvider for DynamicObjectStoreSchemaProvider {
         // will return `Ok` which means we don't need to register it again. However,
         // if `get_store` returns an `Err` then it means the corresponding store is
         // not registered yet and we need to register it
-        match state.runtime_env().object_store_registry.get_store(url) {
+        match state.runtime_env().storage_registry.get(url) {
             Ok(_) => { /*Nothing to do here, store for this URL is already registered*/ }
             Err(_) => {
                 // Register the store for this URL. Here we don't have access
@@ -182,7 +182,7 @@ impl SchemaProvider for DynamicObjectStoreSchemaProvider {
                     _ => {}
                 }
                 state = builder.build();
-                let store = get_object_store(
+                let store = get_storage(
                     &state,
                     table_url.scheme(),
                     url,
@@ -190,7 +190,7 @@ impl SchemaProvider for DynamicObjectStoreSchemaProvider {
                     false,
                 )
                 .await?;
-                state.runtime_env().register_object_store(url, store);
+                state.runtime_env().register_storage(url, store)?;
             }
         }
         self.inner.table(name).await
@@ -260,9 +260,9 @@ mod tests {
         // It should still create an object store for the location in the SessionState
         let store = ctx
             .runtime_env()
-            .object_store(ListingTableUrl::parse(location)?)?;
+            .storage(ListingTableUrl::parse(location)?)?;
 
-        assert_eq!(format!("{store}"), "HttpStore");
+        assert_eq!(store.url().as_str(), format!("http://{domain}/"));
 
         // The store must be configured for this domain
         let expected_domain = format!("Domain(\"{domain}\")");
@@ -296,8 +296,8 @@ mod tests {
 
         let store = ctx
             .runtime_env()
-            .object_store(ListingTableUrl::parse(location)?)?;
-        assert_eq!(format!("{store}"), format!("AmazonS3({bucket})"));
+            .storage(ListingTableUrl::parse(location)?)?;
+        assert_eq!(store.url().as_str(), format!("s3://{bucket}/"));
 
         // The store must be configured for this domain
         let expected_bucket = format!("bucket: \"{bucket}\"");
@@ -318,8 +318,8 @@ mod tests {
 
         let store = ctx
             .runtime_env()
-            .object_store(ListingTableUrl::parse(location)?)?;
-        assert_eq!(format!("{store}"), format!("GoogleCloudStorage({bucket})"));
+            .storage(ListingTableUrl::parse(location)?)?;
+        assert_eq!(store.url().as_str(), format!("gs://{bucket}/"));
 
         // The store must be configured for this domain
         let expected_bucket = format!("bucket_name_encoded: \"{bucket}\"");

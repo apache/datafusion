@@ -40,6 +40,9 @@ workspace = true
 [lib]
 name = "datafusion_functions_table"
 
+[features]
+default = []
+
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }

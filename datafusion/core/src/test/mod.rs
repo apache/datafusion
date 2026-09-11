@@ -189,7 +189,7 @@ pub fn partitioned_file_groups(
         }
     }
 
-    // Must drop the stream before creating ObjectMeta below as drop triggers
+    // Must drop the stream before creating FileInfo below as drop triggers
     // finish for ZstdEncoder/BzEncoder which writes additional data
     for mut w in writers.into_iter() {
         w.flush().unwrap();

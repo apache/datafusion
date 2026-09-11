@@ -920,6 +920,98 @@ async fn query_single_parquet_file_multi_row_groups_multiple_predicates() {
     );
 }
 
+#[tokio::test]
+async fn storage_adapter_preserves_native_read_requests() {
+    use datafusion_storage::{FileAccessContext, ReadRange};
+    let test = Test::new().with_bytes("file", "0123456789").await;
+    let binding = test
+        .session_context
+        .runtime_env()
+        .storage_registry
+        .get(&Url::parse("mem://").unwrap())
+        .unwrap();
+    let reader = binding
+        .storage()
+        .open(
+            &datafusion_storage::path::Path::from("file"),
+            FileAccessContext::default(),
+        )
+        .await
+        .unwrap();
+    assert!(test.object_store.recorded_requests().is_empty());
+    assert_eq!(
+        reader.read_range(ReadRange::Suffix(3)).await.unwrap(),
+        b"789"[..]
+    );
+    assert_eq!(reader.read_range((1..3).into()).await.unwrap(), b"12"[..]);
+    reader.read_ranges(vec![0..2, 5..7]).await.unwrap();
+    assert_eq!(
+        datafusion_storage::collect_bytes(reader.stream(None))
+            .await
+            .unwrap(),
+        b"0123456789"[..]
+    );
+    assert_snapshot!(test.requests(), @r"
+    RequestCountingObjectStore()
+    Total Requests: 4
+    - GET  (opts) path=file range=suffix:3
+    - GET  (opts) path=file range=1-3
+    - GET  (ranges) path=file ranges=0-2,5-7
+    - GET  (opts) path=file
+    ");
+    for request in test.object_store.recorded_requests() {
+        if let RequestDetails::GetOpts { get_options, .. } = request {
+            assert!(!get_options.head);
+            assert!(get_options.if_match.is_none());
+            assert!(get_options.version.is_none());
+        }
+    }
+}
+
+#[tokio::test]
+async fn storage_writer_retains_object_store_buffer_threshold() {
+    use datafusion_storage::{FileAccessContext, WriterOptions};
+    use tokio::io::AsyncWriteExt;
+    for (size, multipart) in [(4, true), (1024, false)] {
+        let test = Test::new();
+        let binding = test
+            .session_context
+            .runtime_env()
+            .storage_registry
+            .get(&Url::parse("mem://").unwrap())
+            .unwrap();
+        let mut writer = binding
+            .writer(
+                &datafusion_storage::path::Path::from("output"),
+                WriterOptions {
+                    buffer_size: Some(size),
+                },
+                FileAccessContext::default(),
+            )
+            .await
+            .unwrap();
+        writer.write_all(b"0123456789").await.unwrap();
+        writer.shutdown().await.unwrap();
+        let requests = test.object_store.recorded_requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            matches!(requests[0], RequestDetails::PutMultipart),
+            multipart
+        );
+        assert_eq!(
+            test.object_store
+                .inner
+                .get(&Path::from("output"))
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap(),
+            b"0123456789"[..]
+        );
+    }
+}
+
 /// Runs tests with a request counting object store
 struct Test {
     object_store: Arc<RequestCountingObjectStore>,
@@ -942,7 +1034,13 @@ impl Test {
         let session_context = SessionContext::new();
         session_context
             .runtime_env()
-            .register_object_store(&Url::parse("mem://").unwrap(), object_store.clone());
+            .register_storage(
+                &Url::parse("mem://").unwrap(),
+                Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+                    object_store.clone(),
+                )),
+            )
+            .unwrap();
         Self {
             object_store,
             session_context,
@@ -1255,6 +1353,8 @@ impl Test {
 /// Details of individual requests made through the [`RequestCountingObjectStore`]
 #[derive(Clone, Debug)]
 enum RequestDetails {
+    Put,
+    PutMultipart,
     GetOpts { path: Path, get_options: GetOptions },
     GetRanges { path: Path, ranges: Vec<Range<u64>> },
     List { prefix: Option<Path> },
@@ -1274,6 +1374,8 @@ fn display_range(range: &Range<u64>) -> impl Display + '_ {
 impl Display for RequestDetails {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
+            RequestDetails::Put => write!(f, "PUT"),
+            RequestDetails::PutMultipart => write!(f, "PUT (multipart)"),
             RequestDetails::GetOpts { path, get_options } => {
                 write!(f, "GET  (opts) path={path}")?;
                 if let Some(range) = &get_options.range {
@@ -1379,19 +1481,21 @@ impl RequestCountingObjectStore {
 impl ObjectStore for RequestCountingObjectStore {
     async fn put_opts(
         &self,
-        _location: &Path,
-        _payload: PutPayload,
-        _opts: PutOptions,
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
     ) -> object_store::Result<PutResult> {
-        unimplemented!()
+        self.requests.lock().push(RequestDetails::Put);
+        self.inner.put_opts(location, payload, opts).await
     }
 
     async fn put_multipart_opts(
         &self,
-        _location: &Path,
-        _opts: PutMultipartOptions,
+        location: &Path,
+        opts: PutMultipartOptions,
     ) -> object_store::Result<Box<dyn MultipartUpload>> {
-        unimplemented!()
+        self.requests.lock().push(RequestDetails::PutMultipart);
+        self.inner.put_multipart_opts(location, opts).await
     }
 
     async fn get_opts(

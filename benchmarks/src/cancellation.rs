@@ -30,10 +30,10 @@ use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTableUrl};
 use datafusion::execution::TaskContext;
-use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::prelude::*;
+use datafusion::storage::StorageUrl;
 use datafusion_common::instant::Instant;
 use futures::TryStreamExt;
 use object_store::ObjectStore;
@@ -166,8 +166,14 @@ async fn datafusion(store: Arc<dyn ObjectStore>) -> Result<()> {
         .with_target_partitions(4)
         .set_bool("datafusion.execution.parquet.pushdown_filters", true);
     let ctx = SessionContext::new_with_config(config);
-    let object_store_url = ObjectStoreUrl::parse("test:///").unwrap();
-    ctx.register_object_store(object_store_url.as_ref(), Arc::clone(&store));
+    let object_store_url = StorageUrl::parse("test:///").unwrap();
+    ctx.register_storage(
+        object_store_url.as_ref(),
+        Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+            store.clone(),
+        )),
+    )
+    .unwrap();
 
     let file_format = ParquetFormat::default().with_enable_pruning(true);
     let listing_options = ListingOptions::new(Arc::new(file_format))

@@ -20,6 +20,7 @@
 
 use std::sync::Arc;
 
+use datafusion::storage::{Storage, StorageBinding};
 use datafusion::{
     dataframe::DataFrame,
     error::DataFusionError,
@@ -29,10 +30,8 @@ use datafusion::{
 };
 use datafusion_cli::{
     cli_context::CliSessionContext, exec::exec_from_repl,
-    object_storage::instrumented::InstrumentedObjectStoreRegistry,
-    print_options::PrintOptions,
+    object_storage::instrumented::ObjectStoreProfiler, print_options::PrintOptions,
 };
-use object_store::ObjectStore;
 
 /// This is a toy example of a custom session context that unions the input plan with itself.
 struct MyUnionerContext {
@@ -57,12 +56,12 @@ impl CliSessionContext for MyUnionerContext {
         self.ctx.state()
     }
 
-    fn register_object_store(
+    fn register_storage(
         &self,
         url: &url::Url,
-        object_store: Arc<dyn ObjectStore>,
-    ) -> Option<Arc<dyn ObjectStore + 'static>> {
-        self.ctx.register_object_store(url, object_store)
+        storage: Arc<dyn Storage>,
+    ) -> Result<Option<Arc<StorageBinding>>, DataFusionError> {
+        self.ctx.register_storage(url, storage)
     }
 
     fn register_table_options_extension_from_scheme(&self, _scheme: &str) {
@@ -91,7 +90,7 @@ pub async fn main() {
         quiet: false,
         maxrows: datafusion_cli::print_options::MaxRows::Unlimited,
         color: true,
-        instrumented_registry: Arc::new(InstrumentedObjectStoreRegistry::new()),
+        object_store_profiler: Arc::new(ObjectStoreProfiler::new()),
     };
 
     exec_from_repl(&my_ctx, &mut print_options).await.unwrap();

@@ -28,8 +28,8 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::assert_batches_eq;
 use datafusion::common::Result;
-use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::prelude::{CsvReadOptions, SessionContext};
+use datafusion::storage::StorageUrl;
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
@@ -41,9 +41,14 @@ use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
 pub async fn in_memory_object_store() -> Result<()> {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let ctx = SessionContext::new();
-    let object_store_url = ObjectStoreUrl::parse("memory://")?;
+    let object_store_url = StorageUrl::parse("memory://")?;
     // Register a URL prefix to route reads through this object store.
-    ctx.register_object_store(object_store_url.as_ref(), Arc::clone(&store));
+    ctx.register_storage(
+        object_store_url.as_ref(),
+        Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+            store.clone(),
+        )),
+    )?;
 
     let schema = Schema::new(vec![
         Field::new("id", DataType::Int64, false),
@@ -56,7 +61,8 @@ pub async fn in_memory_object_store() -> Result<()> {
     // Write bytes into the in-memory object store.
     store
         .put(&csv_path, PutPayload::from_static(csv_data))
-        .await?;
+        .await
+        .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
     // Read using the URL that matches the registered prefix.
     let csv = ctx
         .read_csv(

@@ -184,10 +184,17 @@ mod tests {
         for compression in test_compressions.into_iter() {
             let df = test_df.clone();
             let tmp_dir = TempDir::new()?;
-            let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+            let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir).unwrap());
             let local_url = Url::parse("file://local").unwrap();
             let ctx = &test_df.session_state;
-            ctx.runtime_env().register_object_store(&local_url, local);
+            ctx.runtime_env()
+                .register_storage(
+                    &local_url,
+                    Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+                        local,
+                    )),
+                )
+                .unwrap();
             let mut options = TableParquetOptions::default();
             options.global.compression = Some(compression.to_string());
             df.write_parquet(
@@ -233,10 +240,17 @@ mod tests {
         for rg_size in 1..10 {
             let df = test_df.clone();
             let tmp_dir = TempDir::new()?;
-            let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+            let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir).unwrap());
             let local_url = Url::parse("file://local").unwrap();
             let ctx = &test_df.session_state;
-            ctx.runtime_env().register_object_store(&local_url, local);
+            ctx.runtime_env()
+                .register_storage(
+                    &local_url,
+                    Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+                        local,
+                    )),
+                )
+                .unwrap();
             let mut options = TableParquetOptions::default();
             options.global.max_row_group_size = rg_size;
             options.global.allow_single_file_parallelism = true;

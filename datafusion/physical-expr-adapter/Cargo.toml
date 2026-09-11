@@ -15,6 +15,9 @@ rust-version = { workspace = true }
 name = "datafusion_physical_expr_adapter"
 path = "src/lib.rs"
 
+[features]
+default = []
+
 [dependencies]
 arrow = { workspace = true }
 datafusion-common = { workspace = true }

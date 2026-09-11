@@ -36,7 +36,6 @@ use datafusion_common::{ColumnStatistics, Result, Statistics};
 use datafusion_common::{ScalarValue, assert_batches_eq};
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_execution::TaskContext;
-use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::Operator;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::sum::sum_udaf;
@@ -53,6 +52,7 @@ use datafusion_physical_plan::common;
 use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_storage::StorageUrl;
 
 /// Mock data using a MemorySourceConfig which has an exact count statistic
 fn mock_data() -> Result<Arc<DataSourceExec>> {
@@ -472,7 +472,7 @@ async fn test_count_distinct_optimization() -> Result<()> {
         };
 
         let config = FileScanConfigBuilder::new(
-            ObjectStoreUrl::parse("test:///").unwrap(),
+            StorageUrl::parse("test:///").unwrap(),
             Arc::new(ParquetSource::new(Arc::clone(&schema))),
         )
         .with_file(PartitionedFile::new("x".to_string(), 100))
@@ -762,7 +762,7 @@ async fn test_sum_from_statistics() -> Result<()> {
         };
 
         let config = FileScanConfigBuilder::new(
-            ObjectStoreUrl::parse("test:///").unwrap(),
+            StorageUrl::parse("test:///").unwrap(),
             Arc::new(ParquetSource::new(Arc::clone(&schema))),
         )
         .with_file(PartitionedFile::new("x".to_string(), 100))

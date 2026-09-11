@@ -655,10 +655,14 @@ mod tests {
         let file_metrics =
             ParquetFileMetrics::new(0, object_meta.location.as_ref(), &metrics);
         let store: Arc<dyn ObjectStore> = Arc::new(in_memory);
-        let partitioned_file = PartitionedFile::new_from_meta(object_meta);
+        let partitioned_file =
+            PartitionedFile::new_from_meta(test_utils::storage::file_info(object_meta));
 
-        let reader =
-            ParquetFileReader::new(file_metrics.clone(), store, partitioned_file);
+        let reader = ParquetFileReader::new(
+            file_metrics.clone(),
+            test_utils::storage::object_store(store),
+            partitioned_file,
+        );
         let mut builder = ParquetRecordBatchStreamBuilder::new(reader).await.unwrap();
 
         let access_plan = ParquetAccessPlan::new_all(builder.metadata().num_row_groups());

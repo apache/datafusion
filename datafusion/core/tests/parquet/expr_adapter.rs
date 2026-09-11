@@ -36,13 +36,13 @@ use datafusion_common::DataFusionError;
 use datafusion_common::ScalarValue;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_datasource::ListingTableUrl;
-use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::expressions::{self, Column};
 use datafusion_physical_expr_adapter::{
     DefaultPhysicalExprAdapter, DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter,
     PhysicalExprAdapterFactory,
 };
+use datafusion_storage::StorageUrl;
 use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory, path::Path};
 use parquet::arrow::ArrowWriter;
 
@@ -258,8 +258,14 @@ async fn register_memory_listing_table(
     base_path: &str,
     table_schema: SchemaRef,
 ) {
-    let store_url = ObjectStoreUrl::parse("memory://").unwrap();
-    ctx.register_object_store(store_url.as_ref(), Arc::clone(&store));
+    let store_url = StorageUrl::parse("memory://").unwrap();
+    ctx.register_storage(
+        store_url.as_ref(),
+        Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+            store.clone(),
+        )),
+    )
+    .unwrap();
 
     let listing_table_config =
         ListingTableConfig::new(ListingTableUrl::parse(base_path).unwrap())
@@ -601,7 +607,7 @@ async fn test_custom_schema_adapter_and_custom_expression_adapter() {
         record_batch!(("extra", Int64, [1, 2, 3]), ("c1", Int32, [1, 2, 3])).unwrap();
 
     let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-    let store_url = ObjectStoreUrl::parse("memory://").unwrap();
+    let store_url = StorageUrl::parse("memory://").unwrap();
     let path = "test.parquet";
     write_parquet(batch, store.clone(), path).await;
 
@@ -617,7 +623,13 @@ async fn test_custom_schema_adapter_and_custom_expression_adapter() {
         .with_parquet_page_index_pruning(false);
     cfg.options_mut().execution.parquet.pushdown_filters = true;
     let ctx = SessionContext::new_with_config(cfg);
-    ctx.register_object_store(store_url.as_ref(), Arc::clone(&store));
+    ctx.register_storage(
+        store_url.as_ref(),
+        Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+            store.clone(),
+        )),
+    )
+    .unwrap();
     assert!(
         !ctx.state()
             .config_mut()
@@ -699,7 +711,7 @@ async fn test_physical_expr_adapter_with_non_null_defaults() {
     let batch = record_batch!(("c1", Int32, [10, 20, 30])).unwrap();
 
     let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-    let store_url = ObjectStoreUrl::parse("memory://").unwrap();
+    let store_url = StorageUrl::parse("memory://").unwrap();
     write_parquet(batch, store.clone(), "defaults_test.parquet").await;
 
     // Table schema has additional columns c2 (Utf8) and c3 (Int64) that don't exist in file
@@ -714,7 +726,13 @@ async fn test_physical_expr_adapter_with_non_null_defaults() {
         .with_parquet_pruning(false);
     cfg.options_mut().execution.parquet.pushdown_filters = true;
     let ctx = SessionContext::new_with_config(cfg);
-    ctx.register_object_store(store_url.as_ref(), Arc::clone(&store));
+    ctx.register_storage(
+        store_url.as_ref(),
+        Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+            store.clone(),
+        )),
+    )
+    .unwrap();
 
     // CustomPhysicalExprAdapterFactory fills:
     // - missing Utf8 columns with 'b'
@@ -1026,7 +1044,7 @@ async fn test_struct_schema_evolution_projection_and_filter() -> Result<()> {
         RecordBatch::try_new(Arc::clone(&physical_schema), vec![Arc::new(struct_array)])?;
 
     let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-    let store_url = ObjectStoreUrl::parse("memory://").unwrap();
+    let store_url = StorageUrl::parse("memory://").unwrap();
     write_parquet(batch, store.clone(), "struct_evolution.parquet").await;
 
     // Logical struct: {id: Int64?, name: Utf8?, extra: Boolean?} + metadata
@@ -1051,7 +1069,13 @@ async fn test_struct_schema_evolution_projection_and_filter() -> Result<()> {
     cfg.options_mut().execution.parquet.pushdown_filters = true;
 
     let ctx = SessionContext::new_with_config(cfg);
-    ctx.register_object_store(store_url.as_ref(), Arc::clone(&store));
+    ctx.register_storage(
+        store_url.as_ref(),
+        Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+            store.clone(),
+        )),
+    )
+    .unwrap();
 
     let listing_table_config =
         ListingTableConfig::new(ListingTableUrl::parse("memory:///").unwrap())
@@ -1452,7 +1476,7 @@ async fn test_physical_expr_adapter_factory_reuse_across_tables() {
     let batch2 = record_batch!(("c1", Int32, [10, 20, 30])).unwrap();
 
     let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-    let store_url = ObjectStoreUrl::parse("memory://").unwrap();
+    let store_url = StorageUrl::parse("memory://").unwrap();
 
     // Write files to different paths
     write_parquet(batch1, store.clone(), "table1/data.parquet").await;
@@ -1469,7 +1493,13 @@ async fn test_physical_expr_adapter_factory_reuse_across_tables() {
         .with_parquet_pruning(false);
     cfg.options_mut().execution.parquet.pushdown_filters = true;
     let ctx = SessionContext::new_with_config(cfg);
-    ctx.register_object_store(store_url.as_ref(), Arc::clone(&store));
+    ctx.register_storage(
+        store_url.as_ref(),
+        Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+            store.clone(),
+        )),
+    )
+    .unwrap();
 
     // Create ONE factory instance wrapped in Arc - this will be REUSED
     let factory: Arc<dyn PhysicalExprAdapterFactory> =

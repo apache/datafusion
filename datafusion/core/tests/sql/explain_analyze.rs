@@ -23,7 +23,7 @@ use datafusion::config::ConfigOptions;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::metrics::Timestamp;
 use datafusion_common::format::{ExplainAnalyzeCategories, MetricCategory, MetricType};
-use object_store::path::Path;
+use datafusion_storage::path::Path;
 
 #[tokio::test]
 async fn explain_analyze_baseline_metrics() {

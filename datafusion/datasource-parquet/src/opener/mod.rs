@@ -2306,7 +2306,9 @@ mod test {
                 parquet_file_reader_factory: self
                     .parquet_file_reader_factory
                     .unwrap_or_else(|| {
-                        Arc::new(DefaultParquetFileReaderFactory::new(store)) as _
+                        Arc::new(DefaultParquetFileReaderFactory::new(
+                            test_utils::storage::object_store(store),
+                        )) as _
                     }),
                 pushdown_filters: self.pushdown_filters,
                 reorder_filters: self.reorder_filters,
@@ -3671,10 +3673,12 @@ mod test {
         use parquet::file::properties::WriterProperties;
 
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let binding = test_utils::storage::object_store(store.clone());
         let metadata_cache: Arc<FileMetadataCache> =
-            Arc::new(DefaultCache::<Path, CachedFileMetadataEntry>::new(
-                64 * 1024 * 1024,
-            ));
+            Arc::new(DefaultCache::<
+                datafusion_execution::cache::FileCacheKey,
+                CachedFileMetadataEntry,
+            >::new(64 * 1024 * 1024));
         let values: Vec<i32> = (1..=100).collect();
         let batch = record_batch!((
             "a",
@@ -3711,7 +3715,7 @@ mod test {
             .with_metrics(metrics.clone())
             .with_parquet_file_reader_factory(Arc::new(
                 CachedParquetFileReaderFactory::new(
-                    Arc::clone(&store),
+                    Arc::clone(&binding),
                     Arc::clone(&metadata_cache),
                 ),
             ))
@@ -3723,7 +3727,10 @@ mod test {
         assert_eq!(counter_metric_value(&metrics, "page_index_load_skipped"), 1);
 
         let cached = metadata_cache
-            .get(&Path::from("test.parquet"))
+            .get(&datafusion_execution::cache::FileCacheKey {
+                storage_id: binding.id(),
+                path: datafusion_storage::path::Path::from("test.parquet"),
+            })
             .expect("metadata cache should contain the file");
         let extra_info = cached.file_metadata.extra_info();
         let page_index_cached = extra_info.get("page_index").map(String::as_str);

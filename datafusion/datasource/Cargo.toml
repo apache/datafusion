@@ -39,6 +39,7 @@ default = ["compression"]
 # consumers that never serialize plans pay nothing. Mirrors the `proto` feature
 # on `datafusion-physical-plan`.
 proto = [
+
     "dep:datafusion-proto-models",
     "datafusion-physical-plan/proto",
 ]
@@ -56,7 +57,7 @@ async-trait = { workspace = true }
 bytes = { workspace = true }
 bzip2 = { workspace = true, optional = true }
 chrono = { workspace = true }
-datafusion-common = { workspace = true, features = ["object_store"] }
+datafusion-common = { workspace = true }
 datafusion-common-runtime = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
@@ -66,13 +67,13 @@ datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-proto-models = { workspace = true, optional = true }
 datafusion-session = { workspace = true }
+datafusion-storage = { workspace = true }
 flate2 = { workspace = true, optional = true }
 futures = { workspace = true }
 glob = { workspace = true }
 itertools = { workspace = true }
 liblzma = { workspace = true, optional = true }
 log = { workspace = true }
-object_store = { workspace = true }
 parking_lot = { workspace = true }
 rand = { workspace = true }
 tempfile = { workspace = true, optional = true }
@@ -85,7 +86,9 @@ zstd = { workspace = true, optional = true }
 criterion = { workspace = true }
 datafusion-functions = { workspace = true }
 insta = { workspace = true }
+object_store = { workspace = true }
 tempfile = { workspace = true }
+test-utils = { path = "../../test-utils" }
 
 # Note: add additional linter rules in lib.rs.
 # Rust does not support workspace + new linter rules in subcrates yet

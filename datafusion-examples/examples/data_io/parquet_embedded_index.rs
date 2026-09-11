@@ -123,7 +123,6 @@ use datafusion::datasource::TableType;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::memory::DataSourceExec;
 use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
-use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::{Operator, TableProviderFilterPushDown};
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::errors::ParquetError;
@@ -132,6 +131,7 @@ use datafusion::parquet::file::reader::{FileReader, SerializedFileReader};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
+use datafusion::storage::StorageUrl;
 use std::fs::{File, read_dir};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -443,7 +443,7 @@ impl TableProvider for DistinctIndexTable {
         println!("Scanning only files: {files_to_scan:?}");
 
         // Build ParquetSource to actually read the files
-        let url = ObjectStoreUrl::parse("file://")?;
+        let url = StorageUrl::parse("file://")?;
         let source = Arc::new(
             ParquetSource::new(self.schema.clone()).with_enable_page_index(true),
         );

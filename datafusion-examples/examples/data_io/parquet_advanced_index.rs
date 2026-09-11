@@ -34,7 +34,6 @@ use datafusion::datasource::physical_plan::parquet::ParquetAccessPlan;
 use datafusion::datasource::physical_plan::{
     FileScanConfigBuilder, ParquetFileReaderFactory, ParquetSource,
 };
-use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{TableProviderFilterPushDown, TableType};
 use datafusion::parquet::arrow::ArrowWriter;
@@ -52,6 +51,7 @@ use datafusion::physical_optimizer::pruning::PruningPredicateBuilder;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::prelude::*;
+use datafusion::storage::StorageUrl;
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
 use arrow::datatypes::SchemaRef;
@@ -174,7 +174,12 @@ pub async fn parquet_advanced_index() -> Result<()> {
 
     // register object store provider for urls like `file://` work
     let url = Url::try_from("file://").unwrap();
-    ctx.register_object_store(&url, object_store);
+    ctx.register_storage(
+        &url,
+        Arc::new(datafusion_storage_object_store::ObjectStoreStorage::new(
+            object_store,
+        )),
+    )?;
 
     // Select data from the table without any predicates (and thus no pruning)
     println!("** Select data, no predicates:");
@@ -484,7 +489,7 @@ impl TableProvider for IndexTableProvider {
 
         // Prepare for scanning
         let schema = self.schema();
-        let object_store_url = ObjectStoreUrl::parse("file://")?;
+        let object_store_url = StorageUrl::parse("file://")?;
 
         // Configure a factory interface to avoid re-reading the metadata for each file
         let reader_factory =
@@ -579,7 +584,9 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
             .to_string();
 
         let object_store = Arc::clone(&self.object_store);
-        let location = partitioned_file.object_meta.location;
+        let location = object_store::path::Path::from(
+            partitioned_file.object_meta.location.as_ref(),
+        );
 
         let metadata = self
             .metadata
