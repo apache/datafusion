@@ -898,7 +898,7 @@ mod tests {
         let values: ArrayRef = Arc::new(StringViewArray::from_iter_values(
             (0..1_000).map(|i| format!("distinct value number {i}")),
         ));
-        map.insert_if_new(&values, |_| (), |_| ());
+        map.insert_if_new(&values, |_| (), |()| {});
 
         let warm_size = map.map.allocation_size();
         assert!(warm_size > 0);
@@ -938,7 +938,7 @@ mod tests {
         ]));
 
         let mut map = ArrowBytesViewMap::new(OutputType::Utf8View);
-        map.insert_if_new(&values, |_| (), |_| {});
+        map.insert_if_new(&values, |_| (), |()| {});
 
         // Make unused vector capacity explicit; the completed buffers were created
         // by the map's flush path.
@@ -981,7 +981,7 @@ mod tests {
         assert_eq!(map.size() - legacy_size, retained_capacity_delta);
 
         let size_after_insert = map.size();
-        map.insert_if_new(&values, |_| (), |_| {});
+        map.insert_if_new(&values, |_| (), |()| {});
         assert_eq!(map.size(), size_after_insert);
     }
 

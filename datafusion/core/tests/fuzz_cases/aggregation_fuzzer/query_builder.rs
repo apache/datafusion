@@ -337,7 +337,7 @@ impl QueryBuilder {
                     )
                 }
             } else {
-                (self.random_argument(), "".to_string(), "".to_string())
+                (self.random_argument(), String::new(), String::new())
             };
 
             let function = format!(

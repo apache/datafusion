@@ -358,20 +358,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
             if name.eq_ignore_ascii_case(inner.name()) {
                 return Ok(Expr::ScalarFunction(inner));
-            } else {
-                // If the function is called by an alias, a verbose string representation is created
-                // (e.g., "my_alias(arg1, arg2)") and the expression is wrapped in an `Alias`
-                // to ensure the output column name matches the user's query.
-                let arg_names = inner
-                    .args
-                    .iter()
-                    .map(|arg| arg.to_string())
-                    .collect::<Vec<_>>()
-                    .join(",");
-                let verbose_alias = format!("{name}({arg_names})");
-
-                return Ok(Expr::ScalarFunction(inner).alias(verbose_alias));
             }
+            // If the function is called by an alias, a verbose string representation is created
+            // (e.g., "my_alias(arg1, arg2)") and the expression is wrapped in an `Alias`
+            // to ensure the output column name matches the user's query.
+            let arg_names = inner
+                .args
+                .iter()
+                .map(|arg| arg.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            let verbose_alias = format!("{name}({arg_names})");
+
+            return Ok(Expr::ScalarFunction(inner).alias(verbose_alias));
         }
 
         if let Some(fm) = self.context_provider.get_higher_order_meta(&name) {
@@ -536,20 +535,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
             if name.eq_ignore_ascii_case(inner.name()) {
                 return Ok(Expr::HigherOrderFunction(inner));
-            } else {
-                // If the function is called by an alias, a verbose string representation is created
-                // (e.g., "my_alias(arg1, arg2)") and the expression is wrapped in an `Alias`
-                // to ensure the output column name matches the user's query.
-                let arg_names = inner
-                    .args
-                    .iter()
-                    .map(|arg| arg.to_string())
-                    .collect::<Vec<_>>()
-                    .join(",");
-                let verbose_alias = format!("{name}({arg_names})");
-
-                return Ok(Expr::HigherOrderFunction(inner).alias(verbose_alias));
             }
+            // If the function is called by an alias, a verbose string representation is created
+            // (e.g., "my_alias(arg1, arg2)") and the expression is wrapped in an `Alias`
+            // to ensure the output column name matches the user's query.
+            let arg_names = inner
+                .args
+                .iter()
+                .map(|arg| arg.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            let verbose_alias = format!("{name}({arg_names})");
+
+            return Ok(Expr::HigherOrderFunction(inner).alias(verbose_alias));
         }
 
         // Build Unnest expression.
@@ -620,7 +618,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     let window_frame: WindowFrame = window_frame.clone().try_into()?;
                     window_frame
                         .regularize_order_bys(&mut order_by)
-                        .map(|_| window_frame)
+                        .map(|()| window_frame)
                 })
                 .transpose()?;
 
@@ -708,21 +706,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                 if name.eq_ignore_ascii_case(inner.fun.name()) {
                     return Ok(Expr::WindowFunction(Box::new(inner)));
-                } else {
-                    // If the function is called by an alias, a verbose string representation is created
-                    // (e.g., "my_alias(arg1, arg2)") and the expression is wrapped in an `Alias`
-                    // to ensure the output column name matches the user's query.
-                    let arg_names = inner
-                        .params
-                        .args
-                        .iter()
-                        .map(|arg| arg.to_string())
-                        .collect::<Vec<_>>()
-                        .join(",");
-                    let verbose_alias = format!("{name}({arg_names})");
-
-                    return Ok(Expr::WindowFunction(Box::new(inner)).alias(verbose_alias));
                 }
+                // If the function is called by an alias, a verbose string representation is created
+                // (e.g., "my_alias(arg1, arg2)") and the expression is wrapped in an `Alias`
+                // to ensure the output column name matches the user's query.
+                let arg_names = inner
+                    .params
+                    .args
+                    .iter()
+                    .map(|arg| arg.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let verbose_alias = format!("{name}({arg_names})");
+
+                return Ok(Expr::WindowFunction(Box::new(inner)).alias(verbose_alias));
             }
         } else {
             // User defined aggregate functions (UDAF) have precedence in case it has the same name as a scalar built-in function
@@ -864,21 +861,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                 if name.eq_ignore_ascii_case(inner.func.name()) {
                     return Ok(Expr::AggregateFunction(inner));
-                } else {
-                    // If the function is called by an alias, a verbose string representation is created
-                    // (e.g., "my_alias(arg1, arg2)") and the expression is wrapped in an `Alias`
-                    // to ensure the output column name matches the user's query.
-                    let arg_names = inner
-                        .params
-                        .args
-                        .iter()
-                        .map(|arg| arg.to_string())
-                        .collect::<Vec<_>>()
-                        .join(",");
-                    let verbose_alias = format!("{name}({arg_names})");
-
-                    return Ok(Expr::AggregateFunction(inner).alias(verbose_alias));
                 }
+                // If the function is called by an alias, a verbose string representation is created
+                // (e.g., "my_alias(arg1, arg2)") and the expression is wrapped in an `Alias`
+                // to ensure the output column name matches the user's query.
+                let arg_names = inner
+                    .params
+                    .args
+                    .iter()
+                    .map(|arg| arg.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let verbose_alias = format!("{name}({arg_names})");
+
+                return Ok(Expr::AggregateFunction(inner).alias(verbose_alias));
             }
         }
 
@@ -890,19 +886,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .map(|part| part.as_ident().cloned().ok_or(()))
                 .collect::<Result<Vec<_>, ()>>();
             if let Ok(ids) = maybe_ids {
-                if ids.len() == 1 {
-                    return self.sql_identifier_to_expr(
+                return if ids.len() == 1 {
+                    self.sql_identifier_to_expr(
                         ids.into_iter().next().unwrap(),
                         schema,
                         planner_context,
-                    );
+                    )
                 } else {
-                    return self.sql_compound_identifier_to_expr(
-                        ids,
-                        schema,
-                        planner_context,
-                    );
-                }
+                    self.sql_compound_identifier_to_expr(ids, schema, planner_context)
+                };
             }
         }
 

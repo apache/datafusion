@@ -433,10 +433,10 @@ impl DisplayAs for SortMergeJoinExec {
                     Self::static_name(),
                     self.join_type,
                     on,
-                    self.filter.as_ref().map_or_else(
-                        || "".to_string(),
-                        |f| format!(", filter={}", f.expression())
-                    ),
+                    self.filter.as_ref().map_or_else(String::new, |f| format!(
+                        ", filter={}",
+                        f.expression()
+                    )),
                     display_null_equality,
                     display_projections,
                 )

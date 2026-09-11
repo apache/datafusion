@@ -1414,7 +1414,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         .map(|t| {
                             let name = match t.name.clone() {
                                 Some(name) => name.value,
-                                None => "".to_string(),
+                                None => String::new(),
                             };
                             Arc::new(Field::new(name, t.data_type.clone(), true))
                         })
@@ -2877,9 +2877,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         return schema_err!(SchemaError::DuplicateUnqualifiedField {
                             name: c,
                         });
-                    } else {
-                        value_indices[column_index] = Some(i);
                     }
+                    value_indices[column_index] = Some(i);
                     Ok(Arc::clone(table_schema.field(column_index)))
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -3038,7 +3037,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 _ => return plan_err!("Unsupported SHOW FUNCTIONS filter"),
             }
         } else {
-            "".to_string()
+            String::new()
         };
 
         // Scalar / aggregate / window functions are resolved by joining
