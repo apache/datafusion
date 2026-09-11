@@ -519,7 +519,6 @@ async fn csv_explain_verbose() {
 async fn csv_explain_inlist_verbose() {
     let ctx = SessionContext::new();
     register_aggregate_csv_by_sql(&ctx).await;
-    // Inlist len <=3 case will be transformed to OR List so we test with len=4
     let sql = "EXPLAIN VERBOSE SELECT c1 FROM aggregate_test_100 where c2 in (1,2,4,5)";
     let actual = execute(&ctx, sql).await;
 

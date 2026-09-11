@@ -242,7 +242,7 @@ query TT
 EXPLAIN SELECT * FROM test_regex_utf8view WHERE s ~ '^(foo|Bazzz)$'
 ----
 logical_plan
-01)Filter: test_regex_utf8view.s = Utf8View("foo") OR test_regex_utf8view.s = Utf8View("Bazzz")
+01)Filter: test_regex_utf8view.s IN ([Utf8View("foo"), Utf8View("Bazzz")])
 02)--TableScan: test_regex_utf8view projection=[s]
 
 # `~*` anchored alternation -> NOT simplified: it falls back to a regex match,
@@ -275,7 +275,7 @@ query TT
 EXPLAIN SELECT * FROM test_regex_utf8view WHERE s !~ '^(foo|Bazzz)$'
 ----
 logical_plan
-01)Filter: test_regex_utf8view.s != Utf8View("foo") AND test_regex_utf8view.s != Utf8View("Bazzz")
+01)Filter: test_regex_utf8view.s NOT IN ([Utf8View("foo"), Utf8View("Bazzz")])
 02)--TableScan: test_regex_utf8view projection=[s]
 
 # `!~*` anchored alternation -> NOT simplified: it falls back to a regex match,
@@ -580,8 +580,8 @@ EXPLAIN SELECT * FROM aggregate_test_100
 WHERE (c2 = 1 OR c3 = 100) OR (c2 = 2 OR c2 = 3 OR c2 = 4)
 ----
 logical_plan
-01)Filter: aggregate_test_100.c2 = Int8(1) OR aggregate_test_100.c3 = Int16(100) OR aggregate_test_100.c2 = Int8(2) OR aggregate_test_100.c2 = Int8(3) OR aggregate_test_100.c2 = Int8(4)
-02)--TableScan: aggregate_test_100 projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13], partial_filters=[aggregate_test_100.c2 = Int8(1) OR aggregate_test_100.c3 = Int16(100) OR aggregate_test_100.c2 = Int8(2) OR aggregate_test_100.c2 = Int8(3) OR aggregate_test_100.c2 = Int8(4)]
+01)Filter: aggregate_test_100.c2 = Int8(1) OR aggregate_test_100.c3 = Int16(100) OR aggregate_test_100.c2 IN ([Int8(2), Int8(3), Int8(4)])
+02)--TableScan: aggregate_test_100 projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13], partial_filters=[aggregate_test_100.c2 = Int8(1) OR aggregate_test_100.c3 = Int16(100) OR aggregate_test_100.c2 IN ([Int8(2), Int8(3), Int8(4)])]
 
 # Partially simplifiable, mixed column
 query TT
@@ -909,8 +909,8 @@ logical_plan
 05)--------Inner Join: lineitem.l_partkey = part.p_partkey
 06)----------TableScan: lineitem projection=[l_partkey, l_extendedprice, l_discount]
 07)----------Projection: part.p_partkey
-08)------------Filter: part.p_brand = Utf8View("Brand#12") OR part.p_brand = Utf8View("Brand#23")
-09)--------------TableScan: part projection=[p_partkey, p_brand], partial_filters=[part.p_brand = Utf8View("Brand#12") OR part.p_brand = Utf8View("Brand#23")]
+08)------------Filter: part.p_brand IN ([Utf8View("Brand#12"), Utf8View("Brand#23")])
+09)--------------TableScan: part projection=[p_partkey, p_brand], partial_filters=[part.p_brand IN ([Utf8View("Brand#12"), Utf8View("Brand#23")])]
 10)------TableScan: partsupp projection=[ps_partkey, ps_suppkey]
 physical_plan
 01)AggregateExec: mode=SinglePartitioned, gby=[p_partkey@2 as p_partkey], aggr=[sum(lineitem.l_extendedprice), avg(lineitem.l_discount), count(DISTINCT partsupp.ps_suppkey)]
@@ -920,7 +920,7 @@ physical_plan
 05)------RepartitionExec: partitioning=Hash([l_partkey@0], 4), input_partitions=1
 06)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/lineitem.csv]]}, projection=[l_partkey, l_extendedprice, l_discount], file_type=csv, has_header=true
 07)------RepartitionExec: partitioning=Hash([p_partkey@0], 4), input_partitions=4
-08)--------FilterExec: p_brand@1 = Brand#12 OR p_brand@1 = Brand#23, projection=[p_partkey@0]
+08)--------FilterExec: p_brand@1 IN (SET) ([Brand#12, Brand#23]), projection=[p_partkey@0]
 09)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 10)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/part.csv]]}, projection=[p_partkey, p_brand], file_type=csv, has_header=true
 
