@@ -51,6 +51,8 @@ use datafusion_execution::memory_pool::FairSpillPool;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_functions_aggregate::array_agg::array_agg_udaf;
 
+use crate::helper::plan_metrics::{plan_spill_count, plan_spilled_bytes};
+
 /// Returns the fields of the struct column `b`: a single `colA Boolean`.
 ///
 /// `col_a_nullable` controls whether `colA` is declared nullable — the only
@@ -150,10 +152,21 @@ impl AggregateBatchesTest {
         };
         ctx.register_table("t", Arc::new(table))?;
 
-        let result = ctx.sql(sql).await?.collect().await?;
+        let plan = ctx.sql(sql).await?.create_physical_plan().await?;
+        let result = collect(Arc::clone(&plan), ctx.task_ctx()).await?;
 
         let total_rows: usize = result.iter().map(|batch| batch.num_rows()).sum();
         assert_eq!(total_rows, self.num_rows as usize);
+        if self.memory_limit.is_some() {
+            assert!(
+                plan_spill_count(plan.as_ref()) > 0,
+                "expected aggregation to spill"
+            );
+            assert!(
+                plan_spilled_bytes(plan.as_ref()) > 0,
+                "expected aggregation to spill bytes"
+            );
+        }
         Ok(())
     }
 }
@@ -176,7 +189,7 @@ async fn array_agg_distinct_struct_from_stricter_batches() -> Result<()> {
 async fn array_agg_struct_from_stricter_batches_with_spilling() -> Result<()> {
     AggregateBatchesTest::new()
         .with_num_rows(10_000)
-        .with_memory_limit(4_000_000)
+        .with_memory_limit(1_000_000)
         .run("SELECT a, array_agg(b) FROM t GROUP BY a")
         .await
 }
@@ -185,7 +198,7 @@ async fn array_agg_struct_from_stricter_batches_with_spilling() -> Result<()> {
 async fn array_agg_distinct_struct_from_stricter_batches_with_spilling() -> Result<()> {
     AggregateBatchesTest::new()
         .with_num_rows(10_000)
-        .with_memory_limit(4_000_000)
+        .with_memory_limit(4_256_000)
         .run("SELECT a, array_agg(DISTINCT b) FROM t GROUP BY a")
         .await
 }
