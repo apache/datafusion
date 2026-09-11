@@ -188,9 +188,6 @@ fn array_resize_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-/// Resolve the requested size for one row. A negative size is rejected as a
-/// user error; reporting it as an internal error asks the caller to file a bug
-/// report for input they control.
 fn resize_count(count_array: &Int64Array, idx: usize) -> Result<usize> {
     let c = count_array.value(idx);
     usize::try_from(c).map_err(|_| {
