@@ -17,10 +17,9 @@
 
 # Tests for pushing a TopK (Sort with fetch) through an outer join.
 #
-# These queries exercise the scenarios handled by the PushDownTopKThroughJoin
-# rule. That rule lands in a follow-up PR; the EXPLAIN plans below capture
-# current behavior, so the follow-up's diff shows exactly which plans change.
-# The query-result checks hold whether or not the rule is enabled.
+# These queries exercise the scenarios handled by the `push_down_limit`
+# rule's TopK-through-join rewrite (see
+# `datafusion/optimizer/src/push_down_limit/topk_through_join.rs`).
 
 statement ok
 set datafusion.execution.target_partitions = 1;
@@ -1138,6 +1137,223 @@ logical_plan
 08)--------------Sort: random() ASC NULLS LAST, fetch=10
 09)----------------TableScan: t1 projection=[a]
 10)--------TableScan: t2 projection=[x]
+
+###
+### Degenerate cases: LIMIT 0, sort keys with no column references
+###
+
+# LIMIT 0 is folded away to an EmptyRelation by an earlier optimizer pass
+# before the TopK-through-join rewrite ever sees it.
+query TT
+EXPLAIN SELECT t1.a, t1.b, t2.x
+FROM t1 LEFT JOIN t2 ON t1.a = t2.x
+ORDER BY t1.b ASC LIMIT 0;
+----
+logical_plan EmptyRelation: rows=0
+
+query III
+SELECT t1.a, t1.b, t2.x
+FROM t1 LEFT JOIN t2 ON t1.a = t2.x
+ORDER BY t1.b ASC LIMIT 0;
+----
+
+# A sort key with no column references at all is trivially "entirely from"
+# either side, so it pushes to the first candidate side (left, for LEFT
+# JOIN). `1 + 1` is constant-folded to `2` (aliased back to its original
+# display name) by an earlier optimizer pass.
+query TT
+EXPLAIN SELECT t1.a, t1.b, t2.x
+FROM t1 LEFT JOIN t2 ON t1.a = t2.x
+ORDER BY 1 + 1 LIMIT 3;
+----
+logical_plan
+01)Sort: Int64(2) AS Int64(1) + Int64(1) ASC NULLS LAST, fetch=3
+02)--Left Join: t1.a = t2.x
+03)----Sort: Int64(2) AS Int64(1) + Int64(1) ASC NULLS LAST, fetch=3
+04)------TableScan: t1 projection=[a, b]
+05)----TableScan: t2 projection=[x]
+
+query III
+SELECT t1.a, t1.b, t2.x
+FROM t1 LEFT JOIN t2 ON t1.a = t2.x
+ORDER BY 1 + 1 LIMIT 3;
+----
+1 10 1
+2 20 2
+3 30 3
+
+###
+### JoinConstraint::Using
+###
+
+statement ok
+CREATE TABLE t_using1 (a INT, b INT) AS VALUES (1, 10), (2, 20), (3, 30);
+
+statement ok
+CREATE TABLE t_using2 (a INT, y INT) AS VALUES (1, 100), (2, 200);
+
+# A USING join wraps the join in a Projection (to coalesce the shared join
+# column); the rewrite still peels through that Projection to reach the Join.
+query TT
+EXPLAIN SELECT t_using1.a, t_using1.b, t_using2.y
+FROM t_using1 LEFT JOIN t_using2 USING (a)
+ORDER BY t_using1.b ASC LIMIT 2;
+----
+logical_plan
+01)Sort: t_using1.b ASC NULLS LAST, fetch=2
+02)--Projection: t_using1.a, t_using1.b, t_using2.y
+03)----Left Join: Using t_using1.a = t_using2.a
+04)------Sort: t_using1.b ASC NULLS LAST, fetch=2
+05)--------TableScan: t_using1 projection=[a, b]
+06)------TableScan: t_using2 projection=[a, y]
+
+query III
+SELECT t_using1.a, t_using1.b, t_using2.y
+FROM t_using1 LEFT JOIN t_using2 USING (a)
+ORDER BY t_using1.b ASC LIMIT 2;
+----
+1 10 100
+2 20 200
+
+statement ok
+DROP TABLE t_using1;
+
+statement ok
+DROP TABLE t_using2;
+
+###
+### Mark joins produced from EXISTS combined with OR
+###
+
+# `t1.b > 25 OR EXISTS (...)` decorrelates to a LeftMark join, but — unlike
+# a bare `EXISTS` decorrelating to LeftSemi — the OR needs the mark's boolean
+# value, so a Filter always sits directly above the LeftMark join to combine
+# it with the other predicate. That Filter is not one of the transparent
+# nodes this rewrite peels through, so pushdown is (currently) blocked for
+# every mark join reachable this way from SQL, even though the LeftMark
+# preserved-side guarantee itself holds (see the unit tests
+# `topk_pushed_to_left_of_left_mark_join` / `..._right_mark_join`).
+query TT
+EXPLAIN SELECT t1.a, t1.b
+FROM t1
+WHERE t1.b > 25 OR EXISTS (SELECT 1 FROM t2 WHERE t2.x = t1.a)
+ORDER BY t1.b ASC LIMIT 3;
+----
+logical_plan
+01)Sort: t1.b ASC NULLS LAST, fetch=3
+02)--Projection: t1.a, t1.b
+03)----Filter: t1.b > Int32(25) OR __correlated_sq_1.mark
+04)------LeftMark Join: t1.a = __correlated_sq_1.x
+05)--------TableScan: t1 projection=[a, b]
+06)--------SubqueryAlias: __correlated_sq_1
+07)----------TableScan: t2 projection=[x]
+
+query II
+SELECT t1.a, t1.b
+FROM t1
+WHERE t1.b > 25 OR EXISTS (SELECT 1 FROM t2 WHERE t2.x = t1.a)
+ORDER BY t1.b ASC LIMIT 3;
+----
+1 10
+2 20
+3 30
+
+###
+### Sort key is a projected expression, not a plain column
+###
+
+# The outer ORDER BY references a projected expression built only from
+# preserved-side columns. The rule resolves neg_b through the Projection to
+# (- t1.b) and pushes a Sort on that expression below the join.
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT t1.a, -t1.b AS neg_b, t2.y
+    FROM t1 LEFT JOIN t2 ON t1.a = t2.x
+) sub
+ORDER BY neg_b ASC LIMIT 3;
+----
+logical_plan
+01)Sort: sub.neg_b ASC NULLS LAST, fetch=3
+02)--SubqueryAlias: sub
+03)----Projection: t1.a, (- t1.b) AS neg_b, t2.y
+04)------Left Join: t1.a = t2.x
+05)--------Sort: (- t1.b) ASC NULLS LAST, fetch=3
+06)----------TableScan: t1 projection=[a, b]
+07)--------TableScan: t2 projection=[x, y]
+
+query III
+SELECT * FROM (
+    SELECT t1.a, -t1.b AS neg_b, t2.y
+    FROM t1 LEFT JOIN t2 ON t1.a = t2.x
+) sub
+ORDER BY neg_b ASC LIMIT 3;
+----
+5 -50 NULL
+4 -40 NULL
+3 -30 300
+
+# Negative case: the projected expression mixes both sides. After resolving
+# through the Projection the key references t2.y, so nothing is pushed.
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT t1.a, t1.b + coalesce(t2.y, 0) AS mixed
+    FROM t1 LEFT JOIN t2 ON t1.a = t2.x
+) sub
+ORDER BY mixed DESC LIMIT 3;
+----
+logical_plan
+01)Sort: sub.mixed DESC NULLS FIRST, fetch=3
+02)--SubqueryAlias: sub
+03)----Projection: t1.a, CAST(t1.b AS Int64) + CASE WHEN __common_expr_1 IS NOT NULL THEN __common_expr_1 ELSE Int64(0) END AS mixed
+04)------Projection: CAST(t2.y AS Int64) AS __common_expr_1, t1.a, t1.b
+05)--------Left Join: t1.a = t2.x
+06)----------TableScan: t1 projection=[a, b]
+07)----------TableScan: t2 projection=[x, y]
+
+query II
+SELECT * FROM (
+    SELECT t1.a, t1.b + coalesce(t2.y, 0) AS mixed
+    FROM t1 LEFT JOIN t2 ON t1.a = t2.x
+) sub
+ORDER BY mixed DESC LIMIT 3;
+----
+3 330
+2 220
+1 110
+
+# Two stacked Projections: the key is computed in the inner one and re-aliased
+# in the outer one. Resolution must substitute through both layers.
+query TT
+EXPLAIN SELECT a, k2 FROM (
+    SELECT a, k1 AS k2 FROM (
+        SELECT t1.a, t1.b * 2 AS k1, t2.y
+        FROM t1 LEFT JOIN t2 ON t1.a = t2.x
+    ) s1
+) s2
+ORDER BY k2 DESC LIMIT 2;
+----
+logical_plan
+01)Sort: s2.k2 DESC NULLS FIRST, fetch=2
+02)--SubqueryAlias: s2
+03)----Projection: s1.a, s1.k1 AS k2
+04)------SubqueryAlias: s1
+05)--------Projection: t1.a, CAST(t1.b AS Int64) * Int64(2) AS k1
+06)----------Left Join: t1.a = t2.x
+07)------------Sort: CAST(t1.b AS Int64) * Int64(2) DESC NULLS FIRST, fetch=2
+08)--------------TableScan: t1 projection=[a, b]
+09)------------TableScan: t2 projection=[x]
+
+query II
+SELECT a, k2 FROM (
+    SELECT a, k1 AS k2 FROM (
+        SELECT t1.a, t1.b * 2 AS k1, t2.y
+        FROM t1 LEFT JOIN t2 ON t1.a = t2.x
+    ) s1
+) s2
+ORDER BY k2 DESC LIMIT 2;
+----
+5 100
+4 80
 
 statement ok
 set datafusion.execution.target_partitions = 4;
