@@ -456,8 +456,9 @@ where
         };
 
         let views = ScalarBuffer::from(self.views);
-        let array =
-            unsafe { BinaryViewArray::new_unchecked(views, self.completed, null_buffer) };
+        let array = unsafe {
+            BinaryViewArray::new_unchecked(views, self.completed.into(), null_buffer)
+        };
 
         match self.output_type {
             OutputType::BinaryView => Arc::new(array),

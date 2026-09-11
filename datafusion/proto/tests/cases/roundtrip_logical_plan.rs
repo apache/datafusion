@@ -21,8 +21,8 @@ use arrow::array::{
 };
 use arrow::datatypes::{
     DECIMAL256_MAX_PRECISION, DataType, Field, FieldRef, Fields, Int32Type,
-    IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef,
-    TimeUnit, UnionFields, UnionMode,
+    IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, Metadata, Schema,
+    SchemaRef, TimeUnit, UnionFields, UnionMode,
 };
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::datasource::file_format::json::{JsonFormat, JsonFormatFactory};
@@ -1676,9 +1676,7 @@ async fn roundtrip_logical_plan_prepared_statement_with_metadata() -> Result<()>
             "".to_string(),
             vec![
                 Field::new("", DataType::Int32, true)
-                    .with_metadata(
-                        [("some_key".to_string(), "some_value".to_string())].into(),
-                    )
+                    .with_metadata(Metadata::new().with("some_key", "some_value"))
                     .into(),
             ],
         )

@@ -497,7 +497,7 @@ fn split_part_scalar_view(
     unsafe {
         Ok(Arc::new(StringViewArray::new_unchecked(
             views_buf,
-            string_view_array.data_buffers().to_vec(),
+            Arc::clone(string_view_array.data_buffers()),
             nulls,
         )) as ArrayRef)
     }

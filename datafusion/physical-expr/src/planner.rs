@@ -742,7 +742,7 @@ pub fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
 #[cfg(test)]
 mod tests {
     use arrow::array::{ArrayRef, BooleanArray, RecordBatch, StringArray};
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::{DataType, Field, Metadata};
     use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
     use datafusion_common::HashMap;
     use datafusion_expr::physical_planning_context::{
@@ -884,15 +884,10 @@ mod tests {
         // With exact target metadata semantics, all target metadata should propagate.
         let target_field = Arc::new(
             Field::new("cast_target", DataType::Int64, true).with_metadata(
-                [
-                    (
-                        EXTENSION_TYPE_NAME_KEY.to_string(),
-                        "arrow.json".to_string(),
-                    ),
-                    (EXTENSION_TYPE_METADATA_KEY.to_string(), "{}".to_string()),
-                    ("custom_target_meta".to_string(), "custom_value".to_string()),
-                ]
-                .into(),
+                Metadata::new()
+                    .with(EXTENSION_TYPE_NAME_KEY, "arrow.json")
+                    .with(EXTENSION_TYPE_METADATA_KEY, "{}")
+                    .with("custom_target_meta", "custom_value"),
             ),
         );
         let cast_expr = Expr::Cast(Cast::new_from_field(
@@ -962,14 +957,9 @@ mod tests {
         // With exact target metadata semantics, all target metadata should propagate.
         let target_field = Arc::new(
             Field::new("same_type_cast", DataType::Int32, true).with_metadata(
-                [
-                    (
-                        EXTENSION_TYPE_NAME_KEY.to_string(),
-                        "arrow.opaque".to_string(),
-                    ),
-                    ("custom_meta".to_string(), "custom_value".to_string()),
-                ]
-                .into(),
+                Metadata::new()
+                    .with(EXTENSION_TYPE_NAME_KEY, "arrow.opaque")
+                    .with("custom_meta", "custom_value"),
             ),
         );
 

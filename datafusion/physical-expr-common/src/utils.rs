@@ -305,7 +305,7 @@ fn scatter_byte_view<T: ByteViewType>(
     unsafe {
         GenericByteViewArray::new_unchecked(
             new_views,
-            truthy.data_buffers().to_vec(),
+            Arc::clone(truthy.data_buffers()),
             nulls,
         )
     }

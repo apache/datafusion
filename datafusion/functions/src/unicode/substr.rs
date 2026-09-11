@@ -311,7 +311,7 @@ fn string_view_substr(
     unsafe {
         let array = StringViewArray::new_unchecked(
             views_buf,
-            string_view_array.data_buffers().to_vec(),
+            Arc::clone(string_view_array.data_buffers()),
             nulls,
         );
         Ok(Arc::new(array) as ArrayRef)

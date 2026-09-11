@@ -20,8 +20,7 @@
 use super::{SpillReaderStream, in_progress_spill_file::InProgressSpillFile};
 use crate::coop::cooperative;
 use crate::{common::spawn_buffered, metrics::SpillMetrics};
-use arrow::array::{BinaryViewArray, GenericByteViewArray, StringViewArray};
-use arrow::datatypes::{ByteViewType, SchemaRef};
+use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result, config::SpillCompression};
 use datafusion_execution::SendableRecordBatchStream;
@@ -220,33 +219,12 @@ impl GetSlicedSize for RecordBatch {
         let mut total = 0;
         for array in self.columns() {
             let data = array.to_data();
+            // Since https://github.com/apache/arrow-rs/issues/8230 this also
+            // accounts for the variadic data buffers retained by view arrays
             total += data.get_slice_memory_size()?;
-
-            // While StringViewArray holds large data buffer for non inlined string, the Arrow layout (BufferSpec)
-            // does not include any data buffers. Currently, ArrayData::get_slice_memory_size()
-            // under-counts memory size by accounting only views buffer although data buffer is cloned during slice()
-            //
-            // Therefore, we manually add the sum of the lengths used by all non inlined views
-            // on top of the sliced size for views buffer. This matches the intended semantics of
-            // "bytes needed if we materialized exactly this slice into fresh buffers".
-            // This is a workaround until https://github.com/apache/arrow-rs/issues/8230
-            if let Some(sv) = array.as_any().downcast_ref::<StringViewArray>() {
-                total += byte_view_data_buffer_size(sv);
-            }
-            if let Some(bv) = array.as_any().downcast_ref::<BinaryViewArray>() {
-                total += byte_view_data_buffer_size(bv);
-            }
         }
         Ok(total)
     }
-}
-
-fn byte_view_data_buffer_size<T: ByteViewType>(array: &GenericByteViewArray<T>) -> usize {
-    array
-        .data_buffers()
-        .iter()
-        .map(|buffer| buffer.capacity())
-        .sum()
 }
 
 #[cfg(test)]
@@ -399,10 +377,11 @@ mod tests {
             half_batch.get_sliced_size().unwrap()
                 < get_record_batch_memory_size(&half_batch)
         );
+        // Since arrow 60, `get_slice_memory_size` accounts for the retained
+        // variadic data buffers as well, so it matches `get_sliced_size`
         let data = arrow::array::Array::to_data(&half_batch.column(0));
         let views_sliced_size = data.get_slice_memory_size()?;
-        // The sliced size should be larger than sliced views buffer size
-        assert!(views_sliced_size < half_batch.get_sliced_size().unwrap());
+        assert_eq!(views_sliced_size, half_batch.get_sliced_size().unwrap());
 
         Ok(())
     }

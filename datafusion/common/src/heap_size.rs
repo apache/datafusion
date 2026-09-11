@@ -47,12 +47,12 @@ use arrow::array::{
 };
 use arrow::datatypes::{
     DataType, Field, Fields, IntervalDayTime, IntervalMonthDayNano, IntervalUnit,
-    TimeUnit, UnionFields, UnionMode, i256,
+    Metadata, TimeUnit, UnionFields, UnionMode, i256,
 };
 use chrono::{DateTime, Utc};
 use half::f16;
 use hashbrown::HashSet;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -393,6 +393,24 @@ impl DFHeapSize for UnionFields {
         self.iter()
             .map(|f| f.0.heap_size(ctx) + f.1.heap_size(ctx))
             .sum()
+    }
+}
+
+impl<K: DFHeapSize, V: DFHeapSize> DFHeapSize for BTreeMap<K, V> {
+    fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
+        // BTreeMap does not provide a way to get its heap size, so this
+        // approximates it as the entries' sizes, ignoring node overhead.
+        self.iter()
+            .map(|(k, v)| size_of::<(K, V)>() + k.heap_size(ctx) + v.heap_size(ctx))
+            .sum()
+    }
+}
+
+impl DFHeapSize for Metadata {
+    fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
+        // `as_arc` returns `None` when the metadata is empty; the `Arc` impl
+        // dedupes instances that share the same allocation.
+        self.as_arc().map_or(0, |map| map.heap_size(ctx))
     }
 }
 

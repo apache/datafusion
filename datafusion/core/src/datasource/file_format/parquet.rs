@@ -165,10 +165,8 @@ mod tests {
     };
     use parquet::arrow::ParquetRecordBatchStreamBuilder;
     use parquet::arrow::arrow_reader::ArrowReaderOptions;
-    use parquet::file::metadata::{
-        KeyValue, PageIndexPolicy, ParquetColumnIndex, ParquetMetaData,
-        ParquetOffsetIndex,
-    };
+    use parquet::file::metadata::page_index::PageIndexProvider;
+    use parquet::file::metadata::{KeyValue, PageIndexPolicy, ParquetMetaData};
     use parquet::file::page_index::column_index::ColumnIndexMetaData;
     use tokio::fs::File;
 
@@ -1116,7 +1114,7 @@ mod tests {
                 .await?
                 .metadata()
                 .clone();
-        check_page_index_validation(builder.column_index(), builder.offset_index());
+        check_page_index_validation(builder.page_index());
 
         let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
         let file = File::open(path).await?;
@@ -1125,34 +1123,28 @@ mod tests {
             .await?
             .metadata()
             .clone();
-        check_page_index_validation(builder.column_index(), builder.offset_index());
+        check_page_index_validation(builder.page_index());
 
         Ok(())
     }
 
-    fn check_page_index_validation(
-        page_index: Option<&ParquetColumnIndex>,
-        offset_index: Option<&ParquetOffsetIndex>,
-    ) {
-        assert!(page_index.is_some());
-        assert!(offset_index.is_some());
-
+    fn check_page_index_validation(page_index: Option<&Arc<dyn PageIndexProvider>>) {
         let page_index = page_index.unwrap();
-        let offset_index = offset_index.unwrap();
+        assert!(page_index.is_complete());
 
-        // there is only one row group in one file.
-        assert_eq!(page_index.len(), 1);
-        assert_eq!(offset_index.len(), 1);
-        let page_index = page_index.first().unwrap();
-        let offset_index = offset_index.first().unwrap();
-
-        // 13 col in one row group
-        assert_eq!(page_index.len(), 13);
-        assert_eq!(offset_index.len(), 13);
+        // there is only one row group in one file, with 13 columns.
+        // All columns have an offset index; all except column 10 also have a
+        // column index.
+        for col in 0..13 {
+            assert_eq!(page_index.column_index(0, col).is_some(), col != 10);
+            assert!(page_index.offset_index(0, col).is_some());
+        }
+        assert!(page_index.column_index(1, 0).is_none());
+        assert!(page_index.offset_index(1, 0).is_none());
 
         // test result in int_col
-        let int_col_index = page_index.get(4).unwrap();
-        let int_col_offset = offset_index.get(4).unwrap().page_locations();
+        let int_col_index = page_index.column_index(0, 4).unwrap();
+        let int_col_offset = page_index.offset_index(0, 4).unwrap().page_locations();
 
         // 325 pages in int_col
         assert_eq!(int_col_offset.len(), 325);

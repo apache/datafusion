@@ -337,8 +337,10 @@ impl FileMetadata for CachedParquetMetaData {
     }
 
     fn extra_info(&self) -> HashMap<String, String> {
-        let page_index =
-            self.0.column_index().is_some() && self.0.offset_index().is_some();
+        let page_index = self
+            .0
+            .page_index()
+            .is_some_and(|page_index| page_index.is_complete());
         HashMap::from([("page_index".to_owned(), page_index.to_string())])
     }
 }

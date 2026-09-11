@@ -18,7 +18,7 @@
 //! DFSchema is an extended schema struct that DataFusion uses to provide support for
 //! fields with optional relation names.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashSet};
 use std::fmt::Write as _;
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
@@ -32,7 +32,7 @@ use crate::{
 
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
-    DataType, Field, FieldRef, Fields, Schema, SchemaBuilder, SchemaRef,
+    DataType, Field, FieldRef, Fields, Metadata, Schema, SchemaBuilder, SchemaRef,
 };
 
 /// A reference-counted reference to a [DFSchema].
@@ -154,7 +154,7 @@ impl DFSchema {
     /// Create a `DFSchema` from an Arrow schema where all the fields have a given qualifier
     pub fn new_with_metadata(
         qualified_fields: Vec<(Option<TableReference>, Arc<Field>)>,
-        metadata: HashMap<String, String>,
+        metadata: impl Into<Metadata>,
     ) -> Result<Self> {
         let (qualifiers, fields): (Vec<Option<TableReference>>, Vec<Arc<Field>>) =
             qualified_fields.into_iter().unzip();
@@ -173,7 +173,7 @@ impl DFSchema {
     /// Create a new `DFSchema` from a list of Arrow [Field]s
     pub fn from_unqualified_fields(
         fields: Fields,
-        metadata: HashMap<String, String>,
+        metadata: impl Into<Metadata>,
     ) -> Result<Self> {
         let field_count = fields.len();
         let schema = Arc::new(Schema::new_with_metadata(fields, metadata));
@@ -865,7 +865,7 @@ impl DFSchema {
     }
 
     /// Get metadata of this schema
-    pub fn metadata(&self) -> &HashMap<String, String> {
+    pub fn metadata(&self) -> &Metadata {
         &self.inner.metadata
     }
 
@@ -1192,7 +1192,7 @@ impl ToDFSchema for Vec<Field> {
         let field_count = self.len();
         let schema = Schema {
             fields: self.into(),
-            metadata: HashMap::new(),
+            metadata: Metadata::new(),
         };
         let dfschema = DFSchema {
             inner: schema.into(),
@@ -1234,7 +1234,7 @@ pub trait ExprSchema: std::fmt::Debug {
     }
 
     /// Returns the column's optional metadata.
-    fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>> {
+    fn metadata(&self, col: &Column) -> Result<&Metadata> {
         Ok(self.field_from_column(col)?.metadata())
     }
 
@@ -1258,7 +1258,7 @@ impl<P: AsRef<DFSchema> + std::fmt::Debug> ExprSchema for P {
         self.as_ref().data_type(col)
     }
 
-    fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>> {
+    fn metadata(&self, col: &Column) -> Result<&Metadata> {
         ExprSchema::metadata(self.as_ref(), col)
     }
 
@@ -1391,6 +1391,7 @@ pub fn qualified_name(qualifier: Option<&TableReference>, name: &str) -> String 
 #[cfg(test)]
 mod tests {
     use crate::assert_contains;
+    use std::collections::HashMap;
 
     use super::*;
 

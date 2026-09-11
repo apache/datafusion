@@ -80,7 +80,12 @@ pub(crate) fn has_untrusted_min_max_order(
     parquet_column_index: usize,
 ) -> bool {
     let column = parquet_schema.column(parquet_column_index);
-    if column.sort_order() == SortOrder::UNDEFINED {
+    // As of arrow 60, INT96 columns report `SortOrder::INT96_TIMESTAMP`
+    // rather than `UNDEFINED`; keep treating their min/max as untrusted.
+    if matches!(
+        column.sort_order(),
+        SortOrder::UNDEFINED | SortOrder::INT96_TIMESTAMP
+    ) {
         return true;
     }
     requires_unsigned_byte_array_order(&column)
@@ -313,12 +318,13 @@ impl<'a> DFParquetMetadata<'a> {
     }
 
     /// Check whether `metadata` already has both the column index and the
-    /// offset index populated (see [`ParquetMetaData::column_index`] and
-    /// [`ParquetMetaData::offset_index`]).
+    /// offset index populated (see [`ParquetMetaData::page_index`]).
     ///
     /// Used to decide whether page index I/O can be skipped.
     fn metadata_has_page_index(metadata: &ParquetMetaData) -> bool {
-        metadata.column_index().is_some() && metadata.offset_index().is_some()
+        metadata
+            .page_index()
+            .is_some_and(|page_index| page_index.is_complete())
     }
 
     /// Store `metadata` in the configured [`FileMetadataCache`], keyed by
@@ -405,7 +411,10 @@ impl<'a> DFParquetMetadata<'a> {
         object_meta: &ObjectMeta,
         metadata: Arc<ParquetMetaData>,
     ) -> Result<Arc<ParquetMetaData>> {
-        if metadata.column_index().is_some() && metadata.offset_index().is_some() {
+        if metadata
+            .page_index()
+            .is_some_and(|page_index| page_index.is_complete())
+        {
             return Ok(metadata);
         }
         let metadata =
@@ -1017,8 +1026,10 @@ impl FileMetadata for CachedParquetMetaData {
     }
 
     fn extra_info(&self) -> HashMap<String, String> {
-        let page_index =
-            self.0.column_index().is_some() && self.0.offset_index().is_some();
+        let page_index = self
+            .0
+            .page_index()
+            .is_some_and(|page_index| page_index.is_complete());
         HashMap::from([("page_index".to_owned(), page_index.to_string())])
     }
 }

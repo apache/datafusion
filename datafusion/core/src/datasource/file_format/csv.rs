@@ -136,6 +136,7 @@ mod tests {
                 },
                 range: Default::default(),
                 attributes: Attributes::default(),
+                extensions: Default::default(),
             })
         }
 

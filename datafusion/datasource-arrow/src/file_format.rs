@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
-use arrow::ipc::convert::fb_to_schema;
+use arrow::ipc::convert::try_fb_to_schema;
 use arrow::ipc::reader::{FileReader, StreamReader};
 use arrow::ipc::writer::IpcWriteOptions;
 use arrow::ipc::{CompressionType, root_as_message};
@@ -481,7 +481,9 @@ async fn infer_stream_schema(
     let fb_schema = message.header_as_schema().ok_or_else(|| {
         ArrowError::IpcError("Unable to read IPC message schema".to_string())
     })?;
-    let schema = fb_to_schema(fb_schema);
+    let schema = try_fb_to_schema(fb_schema).map_err(|err| {
+        ArrowError::IpcError(format!("Unable to convert IPC schema: {err:?}"))
+    })?;
 
     Ok(Arc::new(schema))
 }

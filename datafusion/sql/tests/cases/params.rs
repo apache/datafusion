@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::logical_plan;
-use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::datatypes::{DataType, Field, FieldRef, Metadata};
 use datafusion_common::{
     ParamValues, ScalarValue, assert_contains,
     metadata::{ScalarAndMetadata, format_type_and_metadata},
@@ -732,9 +732,8 @@ fn test_prepare_statement_to_plan_one_param() {
 fn test_update_infer_with_metadata() {
     // Here the uuid field is inferred as nullable because it appears in the filter
     // (and not in the update values, where its nullability would be inferred)
-    let uuid_field = Field::new("", DataType::FixedSizeBinary(16), true).with_metadata(
-        [("ARROW:extension:name".to_string(), "arrow.uuid".to_string())].into(),
-    );
+    let uuid_field = Field::new("", DataType::FixedSizeBinary(16), true)
+        .with_metadata(Metadata::new().with("ARROW:extension:name", "arrow.uuid"));
     let uuid_bytes = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
     let expected_types = vec![
         (
@@ -801,9 +800,8 @@ fn test_update_infer_with_metadata() {
 
 #[test]
 fn test_insert_infer_with_metadata() {
-    let uuid_field = Field::new("", DataType::FixedSizeBinary(16), false).with_metadata(
-        [("ARROW:extension:name".to_string(), "arrow.uuid".to_string())].into(),
-    );
+    let uuid_field = Field::new("", DataType::FixedSizeBinary(16), false)
+        .with_metadata(Metadata::new().with("ARROW:extension:name", "arrow.uuid"));
     let uuid_bytes = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
     let expected_types = vec![
         ("$1", Some(uuid_field.clone().with_name("id").into())),

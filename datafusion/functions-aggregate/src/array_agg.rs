@@ -1760,7 +1760,7 @@ mod tests {
         acc2.update_batch(&[string_list_data([vec!["e", "f", "g"]])])?;
         acc1 = merge(acc1, acc2)?;
 
-        assert_eq!(acc1.size(), 2274);
+        assert_eq!(acc1.size(), 2194);
 
         Ok(())
     }
@@ -1780,7 +1780,7 @@ mod tests {
         ])])?;
 
         // without compaction, the size is 17112
-        assert_eq!(acc.size(), 2224);
+        assert_eq!(acc.size(), 2144);
 
         Ok(())
     }

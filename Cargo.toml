@@ -90,30 +90,30 @@ version = "55.0.0"
 #
 # See for more details: https://github.com/rust-lang/cargo/issues/11329
 apache-avro = { version = "0.21", default-features = false }
-arrow = { version = "59.2.0", features = [
+arrow = { version = "60.0.0", features = [
     "prettyprint",
     "chrono-tz",
 ] }
-arrow-avro = { version = "59.2.0", default-features = false, features = [
+arrow-avro = { version = "60.0.0", default-features = false, features = [
     "deflate",
     "snappy",
     "zstd",
     "bzip2",
     "xz",
 ] }
-arrow-buffer = { version = "59.2.0", default-features = false }
-arrow-data = { version = "59.2.0", default-features = false }
-arrow-flight = { version = "59.2.0", features = [
-    "flight-sql-experimental",
+arrow-buffer = { version = "60.0.0", default-features = false }
+arrow-data = { version = "60.0.0", default-features = false }
+arrow-flight = { version = "60.0.0", features = [
+    "flight-sql",
 ] }
 # Both codecs are required here to make sure that code paths like
 # file-spilling have access to all compression codecs.
-arrow-ipc = { version = "59.2.0", default-features = false, features = [
+arrow-ipc = { version = "60.0.0", default-features = false, features = [
     "lz4",
     "zstd",
 ] }
-arrow-ord = { version = "59.2.0", default-features = false }
-arrow-schema = { version = "59.2.0", default-features = false }
+arrow-ord = { version = "60.0.0", default-features = false }
+arrow-schema = { version = "60.0.0", default-features = false }
 async-trait = "0.1.89"
 bigdecimal = "0.4.8"
 bytes = "1.11"
@@ -178,9 +178,9 @@ log = "^0.4"
 loom = "0.7"
 memchr = "2.8.1"
 num-traits = { version = "0.2" }
-object_store = { version = "0.13.2", default-features = false }
+object_store = { version = "0.14.1", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "59.2.0", default-features = false, features = [
+parquet = { version = "60.0.0", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
@@ -406,3 +406,21 @@ debug = false
 debug-assertions = false
 strip = "debuginfo"
 incremental = false
+
+## Temporary arrow-rs patch until 60.0.0 is released
+## Pinned to https://github.com/apache/arrow-rs/pull/11036
+
+[patch.crates-io]
+arrow = { git = "https://github.com/alamb/arrow-rs.git", rev = "3e30695f3cb72fd105b62688fee41d9cb3593082" }
+arrow-array = { git = "https://github.com/alamb/arrow-rs.git", rev = "3e30695f3cb72fd105b62688fee41d9cb3593082" }
+arrow-avro = { git = "https://github.com/alamb/arrow-rs.git", rev = "3e30695f3cb72fd105b62688fee41d9cb3593082" }
+arrow-buffer = { git = "https://github.com/alamb/arrow-rs.git", rev = "3e30695f3cb72fd105b62688fee41d9cb3593082" }
+arrow-cast = { git = "https://github.com/alamb/arrow-rs.git", rev = "3e30695f3cb72fd105b62688fee41d9cb3593082" }
+arrow-data = { git = "https://github.com/alamb/arrow-rs.git", rev = "3e30695f3cb72fd105b62688fee41d9cb3593082" }
+arrow-ipc = { git = "https://github.com/alamb/arrow-rs.git", rev = "3e30695f3cb72fd105b62688fee41d9cb3593082" }
+arrow-schema = { git = "https://github.com/alamb/arrow-rs.git", rev = "3e30695f3cb72fd105b62688fee41d9cb3593082" }
+arrow-select = { git = "https://github.com/alamb/arrow-rs.git", rev = "3e30695f3cb72fd105b62688fee41d9cb3593082" }
+arrow-string = { git = "https://github.com/alamb/arrow-rs.git", rev = "3e30695f3cb72fd105b62688fee41d9cb3593082" }
+arrow-ord = { git = "https://github.com/alamb/arrow-rs.git", rev = "3e30695f3cb72fd105b62688fee41d9cb3593082" }
+arrow-flight = { git = "https://github.com/alamb/arrow-rs.git", rev = "3e30695f3cb72fd105b62688fee41d9cb3593082" }
+parquet = { git = "https://github.com/alamb/arrow-rs.git", rev = "3e30695f3cb72fd105b62688fee41d9cb3593082" }

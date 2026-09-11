@@ -182,7 +182,7 @@ impl PhysicalExpr for ScalarSubqueryExpr {
                         "ScalarSubqueryExpr",
                         "index",
                     )?,
-                    metadata: self.field.metadata().clone(),
+                    metadata: self.field.metadata().into(),
                 },
             )),
         }))

@@ -64,7 +64,7 @@ impl ParamValues {
                     check_metadata_with_storage_equal(
                         (
                             &lit.value.data_type(),
-                            lit.metadata.as_ref().map(|m| m.to_hashmap()).as_ref(),
+                            lit.metadata.as_ref().map(|m| m.to_metadata()).as_ref(),
                         ),
                         (param_type.data_type(), Some(param_type.metadata())),
                         "parameter",
