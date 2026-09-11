@@ -15,15 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::consumer::{SubstraitConsumer, from_substrait_func_args};
+use crate::logical_plan::consumer::{
+    SubstraitConsumer, from_substrait_func_args, from_substrait_type_without_names,
+};
+use crate::logical_plan::decimal::DecimalArithmetic;
+use datafusion::arrow::datatypes::{
+    DataType, Decimal128Type, Decimal256Type, validate_decimal_precision_and_scale,
+};
 use datafusion::common::Result;
 use datafusion::common::{
     DFSchema, DataFusionError, ScalarValue, not_impl_err, plan_err, substrait_err,
 };
 use datafusion::execution::FunctionRegistry;
-use datafusion::logical_expr::{Between, BinaryExpr, Expr, Like, Operator, expr};
+use datafusion::logical_expr::{
+    Between, BinaryExpr, Expr, ExprSchemable, Like, Operator, ScalarUDF, expr,
+};
 use std::vec::Drain;
 use substrait::proto::expression::ScalarFunction;
+use substrait::proto::r#type::Kind;
 
 pub async fn from_scalar_function(
     consumer: &impl SubstraitConsumer,
@@ -86,12 +95,97 @@ pub async fn from_scalar_function(
             );
         }
         // In those cases we build a balanced tree of BinaryExprs
-        arg_list_to_binary_op_tree(op, args)
+        let expr = arg_list_to_binary_op_tree(op, args)?;
+        if matches!(
+            op,
+            Operator::Plus
+                | Operator::Minus
+                | Operator::Multiply
+                | Operator::Divide
+                | Operator::Modulo
+        ) {
+            return apply_decimal_output_type(
+                consumer,
+                f,
+                fn_signature,
+                expr,
+                input_schema,
+            );
+        }
+        Ok(expr)
     } else if let Some(builder) = BuiltinExprBuilder::try_from_name(fn_name) {
         builder.build(consumer, f, args)
     } else {
         not_impl_err!("Unsupported function name: {fn_name:?}")
     }
+}
+
+/// Preserve the declared decimal type with arithmetic evaluated at that scale.
+/// Keep native expressions when their result type matches and no explicit
+/// function options require different execution behavior.
+fn apply_decimal_output_type(
+    consumer: &impl SubstraitConsumer,
+    f: &ScalarFunction,
+    fn_signature: &str,
+    expr: Expr,
+    input_schema: &DFSchema,
+) -> Result<Expr> {
+    // Preserve compatibility with existing plans that omit the output type.
+    let Some(output_type) = &f.output_type else {
+        return Ok(expr);
+    };
+    // Native inference can itself fail (for example, multiplication with an
+    // intermediate scale over 38). A valid declared decimal type can still be
+    // implemented by DecimalArithmetic in that case.
+    let derived_type = expr.get_type(input_schema);
+    if !matches!(output_type.kind, Some(Kind::Decimal(_)))
+        && !derived_type.as_ref().is_ok_and(|dt| dt.is_decimal())
+    {
+        return Ok(expr);
+    }
+
+    // The type decoder narrows these protobuf integers with `as`. Check them
+    // first so an invalid declaration cannot wrap into a matching type.
+    if let Some(Kind::Decimal(decimal)) = &output_type.kind
+        && (u8::try_from(decimal.precision).is_err()
+            || i8::try_from(decimal.scale).is_err())
+    {
+        return substrait_err!(
+            "Invalid decimal output type for {fn_signature}: precision {}, scale {}",
+            decimal.precision,
+            decimal.scale
+        );
+    }
+    let declared_type = from_substrait_type_without_names(consumer, output_type)?;
+    match &declared_type {
+        DataType::Decimal128(p, s) => {
+            validate_decimal_precision_and_scale::<Decimal128Type>(*p, *s)?;
+        }
+        DataType::Decimal256(p, s) => {
+            validate_decimal_precision_and_scale::<Decimal256Type>(*p, *s)?;
+        }
+        _ => {}
+    }
+    if derived_type.as_ref().is_ok_and(|dt| *dt == declared_type) && f.options.is_empty()
+    {
+        return Ok(expr);
+    }
+    let Expr::BinaryExpr(BinaryExpr { left, op, right }) = expr else {
+        unreachable!("called only for native binary expressions")
+    };
+    if f.arguments.len() != 2 {
+        return substrait_err!(
+            "Declared decimal arithmetic requires two arguments for {fn_signature}"
+        );
+    }
+    let function = DecimalArithmetic::try_new(
+        fn_signature,
+        op,
+        [left.get_type(input_schema)?, right.get_type(input_schema)?],
+        &declared_type,
+        &f.options,
+    )?;
+    Ok(ScalarUDF::from(function).call(vec![*left, *right]))
 }
 
 pub fn substrait_fun_name(name: &str) -> &str {
@@ -378,14 +472,488 @@ mod tests {
     use crate::extensions::Extensions;
     use crate::logical_plan::consumer::tests::TEST_SESSION_STATE;
     use crate::logical_plan::consumer::{DefaultSubstraitConsumer, SubstraitConsumer};
+    use crate::logical_plan::producer::{
+        DefaultSubstraitProducer, substrait_field_ref, to_substrait_type,
+    };
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::common::{DFSchema, Result, ScalarValue};
-    use datafusion::logical_expr::{Expr, Operator};
+    use datafusion::logical_expr::{Expr, ExprSchemable, Operator};
     use insta::assert_snapshot;
     use substrait::proto::expression::literal::LiteralType;
     use substrait::proto::expression::{Literal, RexType, ScalarFunction};
     use substrait::proto::function_argument::ArgType;
     use substrait::proto::{Expression, FunctionArgument};
+
+    fn decimal_function(
+        name: &str,
+        left_type: DataType,
+        right_type: DataType,
+        output_type: Option<DataType>,
+    ) -> Result<(Extensions, ScalarFunction, DFSchema)> {
+        let mut extensions = Extensions::default();
+        extensions.functions.insert(0, format!("{name}:dec_dec"));
+        let mut producer = DefaultSubstraitProducer::new(&TEST_SESSION_STATE);
+        let func = ScalarFunction {
+            function_reference: 0,
+            arguments: (0..2)
+                .map(|index| {
+                    Ok(FunctionArgument {
+                        arg_type: Some(ArgType::Value(substrait_field_ref(index)?)),
+                    })
+                })
+                .collect::<Result<_>>()?,
+            output_type: output_type
+                .map(|dt| to_substrait_type(&mut producer, &dt, false))
+                .transpose()?,
+            ..Default::default()
+        };
+        let schema = DFSchema::try_from(Schema::new(vec![
+            Field::new("a", left_type, false),
+            Field::new("b", right_type, false),
+        ]))?;
+        Ok((extensions, func, schema))
+    }
+
+    #[tokio::test]
+    async fn test_decimal_arithmetic_output_types() -> Result<()> {
+        use DataType::Decimal128 as D;
+
+        // The five cases from #25043, plus subtraction and both remainder names.
+        for (name, left, right, declared, derived) in [
+            ("add", D(10, 2), D(5, 1), D(11, 2), D(11, 2)),
+            ("add", D(38, 10), D(38, 10), D(38, 9), D(38, 10)),
+            ("multiply", D(10, 2), D(5, 1), D(16, 3), D(16, 3)),
+            ("multiply", D(38, 10), D(38, 10), D(38, 6), D(38, 20)),
+            ("divide", D(10, 2), D(5, 1), D(21, 8), D(15, 6)),
+            ("subtract", D(38, 10), D(38, 10), D(38, 9), D(38, 10)),
+            ("modulus", D(10, 2), D(5, 1), D(6, 2), D(6, 2)),
+            ("mod", D(10, 2), D(5, 1), D(7, 2), D(6, 2)),
+            (
+                "add",
+                DataType::Decimal256(10, 2),
+                DataType::Decimal256(5, 1),
+                DataType::Decimal256(11, 2),
+                DataType::Decimal256(11, 2),
+            ),
+        ] {
+            let (extensions, func, schema) =
+                decimal_function(name, left, right, Some(declared.clone()))?;
+            let consumer =
+                DefaultSubstraitConsumer::new(&extensions, &TEST_SESSION_STATE);
+            let expr = consumer.consume_scalar_function(&func, &schema).await?;
+            assert_eq!(expr.get_type(&schema)?, declared);
+            if declared == derived {
+                assert!(matches!(expr, Expr::BinaryExpr(_)));
+            } else {
+                assert!(matches!(expr, Expr::ScalarFunction(_)));
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_decimal_output_type_compatibility() -> Result<()> {
+        for output_type in [None, Some(DataType::Decimal128(15, 6))] {
+            let (extensions, func, schema) = decimal_function(
+                "divide",
+                DataType::Decimal128(10, 2),
+                DataType::Decimal128(5, 1),
+                output_type,
+            )?;
+            let consumer =
+                DefaultSubstraitConsumer::new(&extensions, &TEST_SESSION_STATE);
+            let expr = consumer.consume_scalar_function(&func, &schema).await?;
+            assert!(matches!(expr, Expr::BinaryExpr(_)));
+            assert_eq!(expr.get_type(&schema)?, DataType::Decimal128(15, 6));
+        }
+
+        for (left, right, declared) in [
+            (
+                DataType::Decimal128(10, 2),
+                DataType::Decimal128(5, 1),
+                DataType::Decimal256(11, 2),
+            ),
+            (
+                DataType::Decimal128(10, 2),
+                DataType::Decimal128(5, 1),
+                DataType::Float64,
+            ),
+            (
+                DataType::Int64,
+                DataType::Int64,
+                DataType::Decimal128(20, 0),
+            ),
+        ] {
+            let (extensions, func, schema) =
+                decimal_function("add", left, right, Some(declared))?;
+            let consumer =
+                DefaultSubstraitConsumer::new(&extensions, &TEST_SESSION_STATE);
+            let err = consumer
+                .consume_scalar_function(&func, &schema)
+                .await
+                .unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("Unsupported decimal arithmetic type"),
+                "{err}"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_invalid_decimal_output_type() -> Result<()> {
+        for (precision, scale) in
+            [(267, 2), (11, 258), (-245, 2), (0, 0), (39, 2), (11, 12)]
+        {
+            let (extensions, mut func, schema) = decimal_function(
+                "add",
+                DataType::Decimal128(10, 2),
+                DataType::Decimal128(5, 1),
+                Some(DataType::Decimal128(11, 2)),
+            )?;
+            let Some(super::Kind::Decimal(decimal)) =
+                &mut func.output_type.as_mut().unwrap().kind
+            else {
+                unreachable!()
+            };
+            decimal.precision = precision;
+            decimal.scale = scale;
+            let consumer =
+                DefaultSubstraitConsumer::new(&extensions, &TEST_SESSION_STATE);
+            assert!(
+                consumer
+                    .consume_scalar_function(&func, &schema)
+                    .await
+                    .is_err()
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_nested_decimal_output_type() -> Result<()> {
+        let (mut extensions, mut func, schema) = decimal_function(
+            "divide",
+            DataType::Decimal128(10, 2),
+            DataType::Decimal128(5, 1),
+            Some(DataType::Decimal128(21, 8)),
+        )?;
+        extensions.functions.insert(1, "add:dec_dec".to_string());
+        let inner = Expression {
+            rex_type: Some(RexType::ScalarFunction(func.clone())),
+        };
+        func.function_reference = 1;
+        func.output_type = None;
+        func.arguments[0].arg_type = Some(ArgType::Value(inner));
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &TEST_SESSION_STATE);
+        let expr = consumer.consume_scalar_function(&func, &schema).await?;
+        assert_eq!(expr.get_type(&schema)?, DataType::Decimal128(22, 8));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_declared_decimal_execution() -> Result<()> {
+        use datafusion::arrow::array::Decimal128Array;
+        use datafusion::arrow::record_batch::RecordBatch;
+        use datafusion::prelude::SessionContext;
+        use std::sync::Arc;
+
+        // Include cases whose *native type inference* fails because the
+        // intermediate scale exceeds 38, as well as native execution overflow.
+        for (name, left_type, right_type, output, left, right, expected) in [
+            ("divide", (10, 2), (5, 1), (21, 8), 100, 30, 33_333_333),
+            (
+                "divide",
+                (10, 2),
+                (10, 2),
+                (31, 13),
+                100,
+                300,
+                3_333_333_333_333,
+            ),
+            ("divide", (18, 2), (18, 2), (38, 6), 100, 300, 333_333),
+            (
+                "divide",
+                (38, 38),
+                (38, 38),
+                (38, 6),
+                10_i128.pow(37),
+                10_i128.pow(37),
+                1_000_000,
+            ),
+            (
+                "multiply",
+                (38, 38),
+                (38, 38),
+                (38, 6),
+                10_i128.pow(37),
+                10_i128.pow(37),
+                10_000,
+            ),
+            (
+                "add",
+                (38, 10),
+                (38, 10),
+                (38, 9),
+                9 * 10_i128.pow(37),
+                9 * 10_i128.pow(37),
+                18 * 10_i128.pow(36),
+            ),
+            (
+                "subtract",
+                (38, 10),
+                (38, 10),
+                (38, 9),
+                9 * 10_i128.pow(37),
+                9 * 10_i128.pow(37) - 6,
+                1,
+            ),
+            ("modulus", (10, 3), (5, 1), (5, 2), 12_345, 20, 35),
+        ] {
+            let left_type = DataType::Decimal128(left_type.0, left_type.1);
+            let right_type = DataType::Decimal128(right_type.0, right_type.1);
+            let (extensions, mut func, _) = decimal_function(
+                name,
+                left_type.clone(),
+                right_type.clone(),
+                Some(DataType::Decimal128(output.0, output.1)),
+            )?;
+            if let Some(super::Kind::Decimal(decimal)) =
+                &mut func.output_type.as_mut().unwrap().kind
+            {
+                decimal.nullability =
+                    substrait::proto::r#type::Nullability::Nullable as i32;
+            }
+            let ctx = SessionContext::new();
+            let state = ctx.state();
+            let consumer = DefaultSubstraitConsumer::new(&extensions, &state);
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("a", left_type.clone(), true),
+                Field::new("b", right_type.clone(), true),
+            ]));
+            let df_schema = DFSchema::try_from(schema.as_ref().clone())?;
+            let expr = consumer.consume_scalar_function(&func, &df_schema).await?;
+            let DataType::Decimal128(lp, ls) = left_type else {
+                unreachable!()
+            };
+            let DataType::Decimal128(rp, rs) = right_type else {
+                unreachable!()
+            };
+            let batch = RecordBatch::try_new(
+                schema,
+                vec![
+                    Arc::new(
+                        Decimal128Array::from(vec![Some(left), None, Some(-left)])
+                            .with_precision_and_scale(lp, ls)?,
+                    ),
+                    Arc::new(
+                        Decimal128Array::from(vec![Some(right), Some(0), Some(-right)])
+                            .with_precision_and_scale(rp, rs)?,
+                    ),
+                ],
+            )?;
+            ctx.register_batch("decimals", batch)?;
+            let batches = ctx
+                .table("decimals")
+                .await?
+                .select(vec![expr])?
+                .collect()
+                .await?;
+            assert_eq!(
+                ScalarValue::try_from_array(batches[0].column(0), 0)?,
+                ScalarValue::Decimal128(Some(expected), output.0, output.1),
+                "{name}"
+            );
+            // NULL propagation must skip arithmetic, including division by 0.
+            assert_eq!(
+                ScalarValue::try_from_array(batches[0].column(0), 1)?,
+                ScalarValue::Decimal128(None, output.0, output.1),
+                "{name}"
+            );
+            let negative = if matches!(name, "divide" | "multiply") {
+                expected
+            } else {
+                -expected
+            };
+            assert_eq!(
+                ScalarValue::try_from_array(batches[0].column(0), 2)?,
+                ScalarValue::Decimal128(Some(negative), output.0, output.1),
+                "{name}"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_declared_decimal_scalar_and_array_arguments() -> Result<()> {
+        use crate::logical_plan::producer::to_substrait_literal_expr;
+        use datafusion::arrow::array::{Array, Decimal128Array};
+        use datafusion::arrow::record_batch::RecordBatch;
+        use std::sync::Arc;
+
+        for scalar_left in [false, true] {
+            for scalar_right in [false, true] {
+                let (extensions, mut func, schema) = decimal_function(
+                    "divide",
+                    DataType::Decimal128(10, 2),
+                    DataType::Decimal128(5, 1),
+                    Some(DataType::Decimal128(21, 8)),
+                )?;
+                let mut producer = DefaultSubstraitProducer::new(&TEST_SESSION_STATE);
+                for (index, scalar, value) in [
+                    (0, scalar_left, ScalarValue::Decimal128(Some(200), 10, 2)),
+                    (1, scalar_right, ScalarValue::Decimal128(Some(30), 5, 1)),
+                ] {
+                    if scalar {
+                        func.arguments[index].arg_type = Some(ArgType::Value(
+                            to_substrait_literal_expr(&mut producer, &value)?,
+                        ));
+                    }
+                }
+                let consumer =
+                    DefaultSubstraitConsumer::new(&extensions, &TEST_SESSION_STATE);
+                let expr = consumer.consume_scalar_function(&func, &schema).await?;
+                let physical = TEST_SESSION_STATE.create_physical_expr(expr, &schema)?;
+                for rows in [0, 3] {
+                    let batch = RecordBatch::try_new(
+                        Arc::new(schema.as_arrow().clone()),
+                        vec![
+                            Arc::new(
+                                Decimal128Array::from(vec![200; rows])
+                                    .with_precision_and_scale(10, 2)?,
+                            ),
+                            Arc::new(
+                                Decimal128Array::from(vec![30; rows])
+                                    .with_precision_and_scale(5, 1)?,
+                            ),
+                        ],
+                    )?;
+                    let result = physical.evaluate(&batch)?.into_array(rows)?;
+                    assert_eq!(result.len(), rows);
+                    if rows > 0 {
+                        assert_eq!(
+                            ScalarValue::try_from_array(&result, 2)?,
+                            ScalarValue::Decimal128(Some(66_666_667), 21, 8)
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_decimal_output_types_survive_optimization() -> Result<()> {
+        use datafusion::arrow::array::{ArrayRef, Decimal128Array};
+        use datafusion::arrow::record_batch::RecordBatch;
+        use datafusion::prelude::SessionContext;
+        use std::sync::Arc;
+
+        let ctx = SessionContext::new();
+        let state = ctx.state();
+        let mut expressions = Vec::new();
+        for (scale, alias) in [(8, "eight"), (7, "seven")] {
+            let (extensions, func, schema) = decimal_function(
+                "divide",
+                DataType::Decimal128(10, 2),
+                DataType::Decimal128(5, 1),
+                Some(DataType::Decimal128(21, scale)),
+            )?;
+            let consumer = DefaultSubstraitConsumer::new(&extensions, &state);
+            expressions.push(
+                consumer
+                    .consume_scalar_function(&func, &schema)
+                    .await?
+                    .alias(alias),
+            );
+        }
+        let batch = RecordBatch::try_from_iter(vec![
+            (
+                "a",
+                Arc::new(
+                    Decimal128Array::from(vec![100]).with_precision_and_scale(10, 2)?,
+                ) as ArrayRef,
+            ),
+            (
+                "b",
+                Arc::new(Decimal128Array::from(vec![30]).with_precision_and_scale(5, 1)?),
+            ),
+        ])?;
+        ctx.register_batch("decimals", batch)?;
+        let batches = ctx
+            .table("decimals")
+            .await?
+            .select(expressions)?
+            .collect()
+            .await?;
+        assert_eq!(
+            ScalarValue::try_from_array(batches[0].column(0), 0)?,
+            ScalarValue::Decimal128(Some(33_333_333), 21, 8)
+        );
+        assert_eq!(
+            ScalarValue::try_from_array(batches[0].column(1), 0)?,
+            ScalarValue::Decimal128(Some(3_333_333), 21, 7)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_decimal_overflow_option_survives_roundtrip() -> Result<()> {
+        use crate::logical_plan::consumer::from_substrait_plan;
+        use crate::logical_plan::producer::to_substrait_plan;
+        use datafusion::arrow::array::{ArrayRef, Decimal128Array};
+        use datafusion::arrow::record_batch::RecordBatch;
+        use datafusion::prelude::SessionContext;
+        use std::sync::Arc;
+        use substrait::proto::FunctionOption;
+
+        let ctx = SessionContext::new();
+        let state = ctx.state();
+        // The declared type matches Arrow's, but the explicit ERROR option
+        // must still select checked arithmetic and survive serialization.
+        let (extensions, mut func, schema) = decimal_function(
+            "add",
+            DataType::Decimal128(38, 0),
+            DataType::Decimal128(38, 0),
+            Some(DataType::Decimal128(38, 0)),
+        )?;
+        func.options = vec![FunctionOption {
+            name: "overflow".into(),
+            preference: vec!["ERROR".into()],
+        }];
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &state);
+        let expr = consumer.consume_scalar_function(&func, &schema).await?;
+        assert!(matches!(expr, Expr::ScalarFunction(_)));
+        let batch = RecordBatch::try_from_iter(vec![
+            (
+                "a",
+                Arc::new(
+                    Decimal128Array::from(vec![9 * 10_i128.pow(37)])
+                        .with_precision_and_scale(38, 0)?,
+                ) as ArrayRef,
+            ),
+            (
+                "b",
+                Arc::new(
+                    Decimal128Array::from(vec![9 * 10_i128.pow(37)])
+                        .with_precision_and_scale(38, 0)?,
+                ),
+            ),
+        ])?;
+        ctx.register_batch("decimals", batch)?;
+        let df = ctx
+            .table("decimals")
+            .await?
+            .select(vec![expr.alias("result")])?;
+        let proto = to_substrait_plan(df.logical_plan(), &state)?;
+        let reimported = from_substrait_plan(&state, &proto).await?;
+        for df in [df, ctx.execute_logical_plan(reimported).await?] {
+            let err = df.collect().await.unwrap_err();
+            assert!(err.to_string().contains("Decimal overflow"), "{err}");
+        }
+        Ok(())
+    }
 
     /// Test that large argument lists for binary operations do not crash the consumer
     #[tokio::test]
