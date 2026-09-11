@@ -445,6 +445,7 @@ impl RepartitionExecState {
         name: &str,
         context: &Arc<TaskContext>,
         spill_manager: SpillManager,
+        coalescer_batch_size: usize,
     ) -> Result<&mut ConsumingInputStreamsState> {
         let streams_and_metrics = match self {
             RepartitionExecState::NotInitialized => {
@@ -544,7 +545,7 @@ impl RepartitionExecState {
             let shared_coalescer = coalesce_batches.then(|| {
                 SharedCoalescer::new(
                     input.schema(),
-                    context.session_config().batch_size(),
+                    coalescer_batch_size,
                     num_input_partitions,
                 )
             });
@@ -1522,6 +1523,9 @@ pub struct RepartitionExec {
     preserve_order: bool,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: Arc<PlanProperties>,
+    /// Optional override for the batch size used by the output coalescer.
+    /// When `None`, falls back to `SessionConfig::batch_size`.
+    batch_size: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -1741,6 +1745,9 @@ impl ExecutionPlan for RepartitionExec {
         let name = self.name().to_owned();
         let schema = self.schema();
         let schema_captured = Arc::clone(&schema);
+        let coalescer_batch_size = self
+            .batch_size
+            .unwrap_or_else(|| context.session_config().batch_size());
 
         let spill_manager = SpillManager::new(
             Arc::clone(&context.runtime_env()),
@@ -1776,6 +1783,7 @@ impl ExecutionPlan for RepartitionExec {
                     &name,
                     &context,
                     spill_manager.clone(),
+                    coalescer_batch_size,
                 )?;
 
                 // now return stream for the specified *output* partition which will
@@ -2050,6 +2058,7 @@ impl ExecutionPlan for RepartitionExec {
             metrics: self.metrics.clone(),
             preserve_order: self.preserve_order,
             cache: new_properties.into(),
+            batch_size: self.batch_size,
         })))
     }
 
@@ -2072,6 +2081,8 @@ impl ExecutionPlan for RepartitionExec {
             // the plan's own `partitioning`) and *is* serialized below; the rest
             // is recomputed on decode.
             cache,
+            // User-configurable output batch size, recomputed on decode from session config.
+            batch_size: _,
         } = self;
 
         let input = ctx.encode_child(input)?;
@@ -2156,6 +2167,7 @@ impl RepartitionExec {
             metrics: ExecutionPlanMetricsSet::new(),
             preserve_order,
             cache: Arc::new(cache),
+            batch_size: None,
         })
     }
 
@@ -2218,6 +2230,21 @@ impl RepartitionExec {
         let eq_properties = Self::eq_properties_helper(&self.input, self.preserve_order);
         Arc::make_mut(&mut self.cache).set_eq_properties(eq_properties);
         self
+    }
+
+    /// Override the target batch size used by the output coalescer.
+    ///
+    /// By default the coalescer targets the session batch size. Use
+    /// this method when you need a different batch size for a specific
+    /// `RepartitionExec` node without changing the global session config.
+    ///
+    /// Returns an error if `batch_size` is zero.
+    pub fn with_batch_size(mut self, batch_size: usize) -> Result<Self> {
+        if batch_size == 0 {
+            return internal_err!("batch_size must be greater than zero");
+        }
+        self.batch_size = Some(batch_size);
+        Ok(self)
     }
 
     /// Return the sort expressions that are used to merge
@@ -3727,6 +3754,30 @@ mod tests {
                 let batch = result?;
                 assert_eq!(200, batch.num_rows());
             }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_with_batch_size_overrides_session_config() -> Result<()> {
+        let schema = test_schema(false);
+        // 2 partitions × 50 batches of 8 rows each = 800 rows total funnelled into 1 output partition.
+        let partition = create_vec_batches(50);
+        let partitions = vec![partition.clone(), partition.clone()];
+        let partitioning = Partitioning::RoundRobinBatch(1);
+
+        // Session config says batch_size = 200, but with_batch_size overrides to 100.
+        let session_config = SessionConfig::new().with_batch_size(200);
+        let task_ctx =
+            Arc::new(TaskContext::default().with_session_config(session_config));
+
+        let exec = TestMemoryExec::try_new_exec(&partitions, Arc::clone(&schema), None)?;
+        let exec = RepartitionExec::try_new(exec, partitioning)?.with_batch_size(100)?;
+
+        let mut stream = exec.execute(0, Arc::clone(&task_ctx))?;
+        while let Some(result) = stream.next().await {
+            let batch = result?;
+            assert_eq!(100, batch.num_rows());
         }
         Ok(())
     }

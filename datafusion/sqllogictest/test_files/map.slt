@@ -597,6 +597,36 @@ NULL
 # TODO(https://github.com/apache/datafusion/pull/18394): Test accessing map with empty map as key
 # TODO(https://github.com/apache/datafusion/pull/18394): Test accessing map with null map as key
 
+# accessing map with list key: match on a later entry, absent key, match on the first entry
+query III
+SELECT MAP {[1,2]:1, [3,4]:2}[[3,4]], MAP {[1,2]:1, [3,4]:2}[[9,9]], MAP {[1,2]:1, [3,4]:2}[[1,2]];
+----
+2 NULL 1
+
+# accessing map with struct key
+query II
+SELECT MAP {named_struct('a',1):1, named_struct('a',2):2}[named_struct('a',2)],
+       MAP {named_struct('a',1):1, named_struct('a',2):2}[named_struct('a',3)];
+----
+2 NULL
+
+# accessing map with list key from a column, so the lookup runs on a batch rather than at planning time
+statement ok
+CREATE TABLE map_list_keys AS
+SELECT MAP {[1,2]:1, [3,4]:2} AS m
+UNION ALL SELECT MAP {[3,4]:5, [1,2]:6}
+UNION ALL SELECT NULL;
+
+query II rowsort
+SELECT m[[3,4]], m[[9,9]] FROM map_list_keys;
+----
+2 NULL
+5 NULL
+NULL NULL
+
+statement ok
+DROP TABLE map_list_keys;
+
 # accessing map with non-string key
 query I
 SELECT MAKE_MAP(1, null, 2, 33, 3, null)[2];
