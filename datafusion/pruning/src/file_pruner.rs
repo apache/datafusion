@@ -22,7 +22,7 @@ use std::sync::Arc;
 use arrow::datatypes::{FieldRef, SchemaRef};
 use datafusion_common::{Result, internal_datafusion_err, pruning::PrunableStatistics};
 use datafusion_datasource::PartitionedFile;
-use datafusion_physical_expr::DynamicFilterTracking;
+use datafusion_physical_expr::{DynamicFilterTracking, PhysicalExprSimplifier};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::metrics::Count;
 use log::debug;
@@ -45,6 +45,7 @@ pub struct FilePruner {
     checked_once: bool,
     /// Schema used for pruning (the logical file schema).
     file_schema: SchemaRef,
+    table_schema: SchemaRef,
     file_stats_pruning: PrunableStatistics,
     predicate_creation_errors: Count,
 }
@@ -57,6 +58,7 @@ impl FilePruner {
     #[expect(clippy::needless_pass_by_value)]
     pub fn new(
         predicate: Arc<dyn PhysicalExpr>,
+        table_schema: &SchemaRef,
         logical_file_schema: &SchemaRef,
         _partition_fields: Vec<FieldRef>,
         partitioned_file: PartitionedFile,
@@ -64,6 +66,7 @@ impl FilePruner {
     ) -> Result<Self> {
         Self::try_new(
             predicate,
+            table_schema,
             logical_file_schema,
             &partitioned_file,
             predicate_creation_errors,
@@ -87,6 +90,7 @@ impl FilePruner {
     /// partition-value folding even without column statistics.
     pub fn try_new(
         predicate: Arc<dyn PhysicalExpr>,
+        table_schema: &SchemaRef,
         file_schema: &SchemaRef,
         partitioned_file: &PartitionedFile,
         predicate_creation_errors: Count,
@@ -103,6 +107,7 @@ impl FilePruner {
         if !partitioned_file.has_statistics() && !tracking.contains_dynamic_filter() {
             return None;
         }
+
         let file_stats_pruning =
             PrunableStatistics::new(vec![file_stats.clone()], Arc::clone(file_schema));
         Some(Self {
@@ -110,6 +115,7 @@ impl FilePruner {
             tracking,
             checked_once: false,
             file_schema: Arc::clone(file_schema),
+            table_schema: Arc::clone(table_schema),
             file_stats_pruning,
             predicate_creation_errors,
         })
@@ -143,8 +149,17 @@ impl FilePruner {
         if !should_build {
             return Ok(false);
         }
+        // If there is no dynamic-filter-expression involved, convert constant expression
+        // such as  `a > 100` to  `true`/`false` so `PruningPredicate` can use to prune the file.
+        let predicate = if !self.tracking.contains_dynamic_filter() {
+            let simplifier = PhysicalExprSimplifier::new(&self.table_schema);
+            simplifier.simplify(Arc::clone(&self.predicate))?
+        } else {
+            Arc::clone(&self.predicate)
+        };
+
         let pruning_predicate = build_pruning_predicate(
-            Arc::clone(&self.predicate),
+            predicate,
             &self.file_schema,
             &self.predicate_creation_errors,
         );
@@ -167,5 +182,67 @@ impl FilePruner {
         }
 
         Ok(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::{
+        ColumnStatistics, ScalarValue, Statistics, stats::Precision,
+    };
+    use datafusion_expr::{col, lit};
+    use datafusion_physical_expr::planner::logical2physical;
+
+    #[test]
+    fn test_pruning_on_various_predicates() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+
+        let file = PartitionedFile::new("test.parquet".to_string(), 100).with_statistics(
+            Arc::new(Statistics {
+                num_rows: Precision::Exact(5),
+                total_byte_size: Precision::Absent,
+                column_statistics: vec![
+                    ColumnStatistics::new_unknown()
+                        .with_min_value(Precision::Exact(ScalarValue::Int32(Some(5))))
+                        .with_max_value(Precision::Exact(ScalarValue::Int32(Some(5))))
+                        .with_null_count(Precision::Exact(0)),
+                ],
+            }),
+        );
+
+        let predicate = logical2physical(&lit(5i32).gt(lit(100i32)), &schema);
+
+        let mut pruner =
+            FilePruner::try_new(predicate, &schema, &schema, &file, Count::new())
+                .unwrap();
+
+        assert!(
+            pruner.should_prune().unwrap(),
+            "constant predicate `5 > 100` should simplify to `false` and prune the file"
+        );
+
+        let predicate = logical2physical(&lit(5i32).gt(lit(1i32)), &schema);
+
+        let mut pruner =
+            FilePruner::try_new(predicate, &schema, &schema, &file, Count::new())
+                .unwrap();
+
+        assert!(
+            !pruner.should_prune().unwrap(),
+            "constant predicate `5 > 1` should simplify to `true` and not prune the file"
+        );
+
+        let predicate = logical2physical(&col("a").gt(lit(100i32)), &schema);
+
+        let mut pruner =
+            FilePruner::try_new(predicate, &schema, &schema, &file, Count::new())
+                .unwrap();
+
+        assert!(
+            pruner.should_prune().unwrap(),
+            "`a > 100` with max(a) = 5 should prune via column statistics"
+        );
     }
 }
