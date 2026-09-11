@@ -962,5 +962,10 @@ query error Cannot cast string 'abc' to value of Int32 type
 SELECT CASE WHEN s ~ '^[a-z]+$' THEN CAST(s AS INT) > 0 ELSE false END
 FROM guarded_cast;
 
+# The first WHEN must be evaluated even when both branch outputs are identical.
+query error Cannot cast string 'abc' to value of Int32 type
+SELECT CASE WHEN CAST(s AS INT) > 0 THEN false ELSE false END
+FROM (VALUES ('abc')) t(s);
+
 statement ok
 DROP VIEW guarded_cast;

@@ -2438,22 +2438,16 @@ fn simplify_inlist_set_operation(
 
 /// Conservatively checks the inputs whose evaluation can change when lowering
 /// CASE to AND/OR. [`Expr`] has no general fallibility analysis: only columns and
-/// literals are admitted from conditional branches, including later WHEN conditions.
-/// The first WHEN already runs on every row, but must not be volatile because
-/// the rewrite can evaluate it more than once.
+/// literals are admitted for all WHEN conditions and branch outputs.
 fn can_lower_case_to_boolean(
     when_then_expr: &[(Box<Expr>, Box<Expr>)],
     else_expr: Option<&Expr>,
 ) -> bool {
     let is_leaf = |expr: &Expr| matches!(expr, Expr::Column(_) | Expr::Literal(..));
-    when_then_expr.iter().enumerate().all(|(i, (when, then))| {
-        is_leaf(then)
-            && if i == 0 {
-                !when.is_volatile()
-            } else {
-                is_leaf(when)
-            }
-    }) && else_expr.is_none_or(is_leaf)
+    when_then_expr
+        .iter()
+        .all(|(when, then)| is_leaf(when) && is_leaf(then))
+        && else_expr.is_none_or(is_leaf)
 }
 
 /// Returns expression testing a boolean `expr` for being exactly `true` (not `false` or NULL).
@@ -4291,6 +4285,11 @@ mod tests {
         for expr in [
             Expr::Case(Case::new(
                 None,
+                vec![(Box::new(fallible.clone()), Box::new(lit(false)))],
+                Some(Box::new(lit(false))),
+            )),
+            Expr::Case(Case::new(
+                None,
                 vec![(Box::new(col("c2")), Box::new(fallible.clone()))],
                 Some(Box::new(lit(false))),
             )),
@@ -4358,19 +4357,20 @@ mod tests {
 
         // CASE WHEN ISNULL(c2) THEN true ELSE c2
         // -->
-        // ISNULL(c2) OR c2
-        //
-        // Need to call simplify 2x due to
-        // https://github.com/apache/datafusion/issues/1160
+        // Preserve CASE because the WHEN expression is outside the conservative
+        // column/literal subset.
+        let expected = Expr::Case(Case::new(
+            None,
+            vec![(Box::new(col("c2").is_null()), Box::new(lit(true)))],
+            Some(Box::new(col("c2"))),
+        ));
         assert_eq!(
             simplify(simplify(Expr::Case(Case::new(
                 None,
                 vec![(Box::new(col("c2").is_null()), Box::new(lit(true)),)],
                 Some(Box::new(col("c2"))),
             )))),
-            col("c2")
-                .is_null()
-                .or(col("c2").is_not_null().and(col("c2")))
+            expected
         );
 
         // CASE WHEN c1 then true WHEN c2 then false ELSE true
@@ -4411,29 +4411,21 @@ mod tests {
             col("c1_non_null").or(col("c1_non_null").not().and(col("c2_non_null").not()))
         );
 
-        // CASE WHEN c > 0 THEN true END AS c1
-        assert_eq!(
-            simplify(simplify(Expr::Case(Case::new(
+        // Preserve CASE with a non-leaf WHEN condition, with or without ELSE.
+        for expr in [
+            Expr::Case(Case::new(
                 None,
                 vec![(Box::new(col("c3").gt(lit(0_i64))), Box::new(lit(true)))],
                 None,
-            )))),
-            not_distinct_from(col("c3").gt(lit(0_i64)), lit(true)).or(distinct_from(
-                col("c3").gt(lit(0_i64)),
-                lit(true)
-            )
-            .and(lit_bool_null()))
-        );
-
-        // CASE WHEN c > 0 THEN true ELSE false END AS c1
-        assert_eq!(
-            simplify(simplify(Expr::Case(Case::new(
+            )),
+            Expr::Case(Case::new(
                 None,
                 vec![(Box::new(col("c3").gt(lit(0_i64))), Box::new(lit(true)))],
                 Some(Box::new(lit(false))),
-            )))),
-            not_distinct_from(col("c3").gt(lit(0_i64)), lit(true))
-        );
+            )),
+        ] {
+            assert_eq!(simplify(simplify(expr.clone())), expr);
+        }
     }
 
     #[test]
@@ -4628,22 +4620,6 @@ mod tests {
             Some(Box::new(lit(2))),
         ));
         assert_eq!(simplify(expr.clone()), expr);
-    }
-
-    fn distinct_from(left: impl Into<Expr>, right: impl Into<Expr>) -> Expr {
-        Expr::BinaryExpr(BinaryExpr {
-            left: Box::new(left.into()),
-            op: Operator::IsDistinctFrom,
-            right: Box::new(right.into()),
-        })
-    }
-
-    fn not_distinct_from(left: impl Into<Expr>, right: impl Into<Expr>) -> Expr {
-        Expr::BinaryExpr(BinaryExpr {
-            left: Box::new(left.into()),
-            op: Operator::IsNotDistinctFrom,
-            right: Box::new(right.into()),
-        })
     }
 
     #[test]
