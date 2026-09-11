@@ -57,12 +57,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
     ),
     argument(
         name = "flags",
-        description = r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
-  - **i**: case-insensitive: letters match both upper and lower case
-  - **m**: multi-line mode: ^ and $ match begin/end of line
-  - **s**: allow . to match \n
-  - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
-  - **U**: swap the meaning of x* and x*?"#
+        description = r#"Optional regular expression flags that control the behavior of the regular expression. Refer to the flags reference above for supported flags."#
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -197,7 +192,10 @@ fn regexp_match_scalar_pattern(args: &[ColumnarValue]) -> Result<Option<ArrayRef
     }
 
     let pattern = pattern.to_scalar()?;
-    let flags = flags.map(ScalarValue::to_scalar).transpose()?;
+    let flags = flags
+        .filter(|flags| flags.try_as_str() != Some(Some("")))
+        .map(ScalarValue::to_scalar)
+        .transpose()?;
 
     regexp::regexp_match(
         values,
@@ -242,7 +240,8 @@ pub fn regexp_match(args: &[ArrayRef]) -> Result<ArrayRef> {
                 }
             }
 
-            regexp::regexp_match(&args[0], &args[1], Some(&args[2]))
+            let flags = super::normalize_empty_flags(&args[2])?;
+            regexp::regexp_match(&args[0], &args[1], Some(&flags))
                 .map_err(|e| arrow_datafusion_err!(e))
         }
         other => exec_err!(

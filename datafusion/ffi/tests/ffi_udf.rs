@@ -21,11 +21,13 @@
 mod tests {
     use arrow::array::{Array, AsArray, record_batch};
     use arrow::datatypes::DataType;
+    use datafusion::common::config::ConfigOptions;
     use datafusion::error::Result;
     use datafusion::logical_expr::{ExpressionPlacement, ScalarUDF, ScalarUDFImpl};
     use datafusion::prelude::{SessionContext, col};
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::lit;
+    use datafusion_expr::sort_properties::ExprProperties;
     use datafusion_ffi::tests::create_record_batch;
     use datafusion_ffi::tests::utils::get_module;
     use std::sync::Arc;
@@ -58,8 +60,8 @@ mod tests {
             ("abs_b", Float64, vec![5., 4., 3., 2., 1.])
         )?;
 
-        assert!(result.len() == 1);
-        assert!(result[0] == expected);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], expected);
 
         Ok(())
     }
@@ -81,7 +83,7 @@ mod tests {
 
         let result = df.collect().await?;
 
-        assert!(result.len() == 1);
+        assert_eq!(result.len(), 1);
         assert_eq!(
             result[0].column_by_name("time_now").unwrap().data_type(),
             &DataType::Float64
@@ -90,8 +92,7 @@ mod tests {
         Ok(())
     }
 
-    /// This test validates that a producer's `placement` override survives the
-    /// FFI boundary instead of collapsing to the default `KeepInPlace`.
+    /// Checks planning-property overrides across the FFI boundary.
     #[tokio::test]
     async fn test_scalar_udf_placement() -> Result<()> {
         let module = get_module()?;
@@ -111,6 +112,12 @@ mod tests {
                 .placement(&[ExpressionPlacement::Literal, ExpressionPlacement::Column]),
             ExpressionPlacement::KeepInPlace
         );
+
+        let preserves = ExprProperties::new_unknown().with_preserves_lex_ordering(true);
+        let does_not_preserve = ExprProperties::new_unknown();
+
+        assert!(foreign_func.preserves_lex_ordering(std::slice::from_ref(&preserves))?);
+        assert!(!foreign_func.preserves_lex_ordering(&[preserves, does_not_preserve])?);
 
         Ok(())
     }
@@ -144,10 +151,36 @@ mod tests {
 
         let result = df.collect().await?;
 
-        assert!(result.len() == 1);
+        assert_eq!(result.len(), 1);
         assert!(!result[0].column(0).as_string::<i32>().is_null(0));
         let result = result[0].column(0).as_string::<i32>().value(0);
         assert_eq!(result, "AEST");
+
+        Ok(())
+    }
+
+    /// Validates that a provider's `with_updated_config` override survives the
+    /// FFI boundary (the trait default returns `None`).
+    #[test]
+    fn test_with_updated_config_on_scalar_udf() -> Result<()> {
+        let module = get_module()?;
+
+        let ffi_udf = (module.create_timezone_udf)();
+        let foreign_udf: Arc<dyn ScalarUDFImpl> = (&ffi_udf).into();
+
+        assert!(
+            foreign_udf
+                .with_updated_config(&ConfigOptions::default())
+                .is_none()
+        );
+
+        let mut options = ConfigOptions::default();
+        options.execution.time_zone = Some("AEST".into());
+
+        let updated = foreign_udf
+            .with_updated_config(&options)
+            .expect("provider should return an updated UDF");
+        assert_eq!(updated.name(), "TimeZoneUDF");
 
         Ok(())
     }

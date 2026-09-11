@@ -220,8 +220,8 @@ impl ListingTableUrl {
     pub fn file_extension(&self) -> Option<&str> {
         if let Some(mut segments) = self.url.path_segments()
             && let Some(last_segment) = segments.next_back()
-            && last_segment.contains(".")
-            && !last_segment.ends_with(".")
+            && last_segment.contains('.')
+            && !last_segment.ends_with('.')
         {
             return last_segment.split('.').next_back();
         }
@@ -523,6 +523,7 @@ mod tests {
     };
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_plan::ExecutionPlan;
+    use datafusion_session::{CatalogProviderList, EmptyCatalogProviderList};
     use object_store::{
         CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload,
         PutMultipartOptions, PutPayload,
@@ -1189,6 +1190,10 @@ mod tests {
 
         fn config(&self) -> &SessionConfig {
             &self.config
+        }
+
+        fn catalog_list(&self) -> Arc<dyn CatalogProviderList> {
+            Arc::new(EmptyCatalogProviderList)
         }
 
         async fn create_physical_plan(

@@ -93,6 +93,7 @@ cargo run --example dataframe -- dataframe
 | catalog                 | [`data_io/catalog.rs`](examples/data_io/catalog.rs)                                       | Register tables into a custom catalog                                     |
 | in_memory_object_store  | [`data_io/in_memory_object_store.rs`](examples/data_io/in_memory_object_store.rs)         | Read CSV from an in-memory object store (pattern applies to JSON/Parquet) |
 | json_shredding          | [`data_io/json_shredding.rs`](examples/data_io/json_shredding.rs)                         | Implement filter rewriting for JSON shredding                             |
+| object_store_spill      | [`data_io/object_store_spill.rs`](examples/data_io/object_store_spill.rs)                 | Use ObjectStore-backed spill files                                        |
 | parquet_adv_idx         | [`data_io/parquet_advanced_index.rs`](examples/data_io/parquet_advanced_index.rs)         | Create a secondary index across multiple parquet files                    |
 | parquet_emb_idx         | [`data_io/parquet_embedded_index.rs`](examples/data_io/parquet_embedded_index.rs)         | Store a custom index inside Parquet files                                 |
 | parquet_enc             | [`data_io/parquet_encrypted.rs`](examples/data_io/parquet_encrypted.rs)                   | Read & write encrypted Parquet files                                      |
@@ -212,6 +213,16 @@ cargo run --example dataframe -- dataframe
 | custom_sql_parser | [`sql_ops/custom_sql_parser.rs`](examples/sql_ops/custom_sql_parser.rs) | Implement a custom SQL parser to extend DataFusion |
 | frontend          | [`sql_ops/frontend.rs`](examples/sql_ops/frontend.rs)                   | Build LogicalPlans from SQL                        |
 | query             | [`sql_ops/query.rs`](examples/sql_ops/query.rs)                         | Query data using SQL                               |
+
+## Statistics Examples
+
+### Group: `statistics`
+
+#### Category: Single Process
+
+| Subcommand   | File Path                                                           | Description                                                             |
+| ------------ | ------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| join_reorder | [`statistics/join_reorder.rs`](examples/statistics/join_reorder.rs) | Supply and refine column statistics via a provider to flip a join order |
 
 ## UDF Examples
 

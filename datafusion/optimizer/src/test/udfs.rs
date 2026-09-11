@@ -64,6 +64,13 @@ impl PlacementTestUDF {
         self.id = id;
         self
     }
+
+    /// Set the volatility of the UDF, so that rules which must not duplicate a
+    /// volatile computation (e.g. `random()`) can be exercised.
+    pub fn with_volatility(mut self, volatility: Volatility) -> Self {
+        self.signature.volatility = volatility;
+        self
+    }
 }
 
 impl ScalarUDFImpl for PlacementTestUDF {

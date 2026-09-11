@@ -28,6 +28,7 @@ use crate::source::{DataSource, DataSourceExec};
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{Schema, SchemaRef};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Result, ScalarValue, assert_or_internal_err, plan_err, project_schema,
 };
@@ -128,7 +129,12 @@ impl DataSource for MemorySourceConfig {
                 }
             }
             DisplayFormatType::TreeRender => {
-                let total_rows = self.partitions.iter().map(|b| b.len()).sum::<usize>();
+                let total_rows = self
+                    .partitions
+                    .iter()
+                    .flatten()
+                    .map(RecordBatch::num_rows)
+                    .sum::<usize>();
                 let total_bytes: usize = self
                     .partitions
                     .iter()
@@ -255,6 +261,83 @@ impl DataSource for MemorySourceConfig {
                 })
             })
             .transpose()
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    /// Serialize this `MemorySourceConfig` as a `MemoryScanExecNode` wrapped
+    /// in a [`PhysicalPlanNode`]. Byte-compatible with the former central
+    /// `MemoryScan` arm in `datafusion-proto`.
+    ///
+    /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_common::utils::usize_to_wire;
+        use datafusion_physical_expr_common::sort_expr::sort_exprs_try_to_proto;
+        use datafusion_proto_models::protobuf;
+
+        // Exhaustive destructure: adding a field to `MemorySourceConfig`
+        // without deciding how it is serialized is a compile error, not a
+        // silent round-trip gap.
+        let Self {
+            partitions: source_partitions,
+            schema,
+            // Derived from `schema` and `projection` by `try_new` on decode.
+            projected_schema: _,
+            projection: source_projection,
+            sort_information,
+            show_sizes,
+            fetch,
+        } = self;
+
+        let proto_partitions = source_partitions
+            .iter()
+            .map(|batches| record_batches_to_ipc_bytes(batches))
+            .collect::<Result<Vec<_>>>()?;
+
+        // Proto3 can't tell `None` from `Some(vec![])`; encode the latter
+        // as the `[u32::MAX]` sentinel, matching the join/filter nodes.
+        let proto_projection = match source_projection.as_ref() {
+            None => Vec::new(),
+            Some(v) if v.is_empty() => vec![u32::MAX],
+            Some(v) => v.iter().map(|x| *x as u32).collect(),
+        };
+
+        let mut proto_sort_information = Vec::with_capacity(sort_information.len());
+        for ordering in sort_information {
+            let physical_sort_expr_nodes =
+                sort_exprs_try_to_proto(ordering.iter(), &ctx.expr_ctx())?;
+            proto_sort_information.push(protobuf::PhysicalSortExprNodeCollection {
+                physical_sort_expr_nodes,
+            });
+        }
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::MemoryScan(
+                    protobuf::MemoryScanExecNode {
+                        partitions: proto_partitions,
+                        schema: Some(schema.as_ref().try_into()?),
+                        projection: proto_projection,
+                        sort_information: proto_sort_information,
+                        show_sizes: *show_sizes,
+                        fetch: fetch
+                            .map(|fetch| {
+                                usize_to_wire(fetch, "MemoryScanExecNode", "fetch")
+                            })
+                            .transpose()?,
+                    },
+                ),
+            ),
+        }))
     }
 }
 
@@ -436,23 +519,8 @@ impl MemorySourceConfig {
         mut self,
         mut sort_information: Vec<LexOrdering>,
     ) -> Result<Self> {
-        // All sort expressions must refer to the original schema
-        let fields = self.schema.fields();
-        let ambiguous_column = sort_information
-            .iter()
-            .flat_map(|ordering| ordering.clone())
-            .flat_map(|expr| collect_columns(&expr.expr))
-            .find(|col| {
-                fields
-                    .get(col.index())
-                    .map(|field| field.name() != col.name())
-                    .unwrap_or(true)
-            });
-        assert_or_internal_err!(
-            ambiguous_column.is_none(),
-            "Column {:?} is not found in the original schema of the MemorySourceConfig",
-            ambiguous_column.as_ref().unwrap()
-        );
+        // All sort expressions must refer to the original schema.
+        Self::validate_sort_information(&sort_information, &self.schema, "original")?;
 
         // If there is a projection on the source, we also need to project orderings
         if self.projection.is_some() {
@@ -462,6 +530,30 @@ impl MemorySourceConfig {
 
         self.sort_information = sort_information;
         Ok(self)
+    }
+
+    fn validate_sort_information(
+        sort_information: &[LexOrdering],
+        schema: &Schema,
+        schema_name: &str,
+    ) -> Result<()> {
+        let fields = schema.fields();
+        let ambiguous_column = sort_information
+            .iter()
+            .flat_map(|ordering| ordering.iter())
+            .flat_map(|expr| collect_columns(&expr.expr))
+            .find(|col| {
+                fields
+                    .get(col.index())
+                    .map(|field| field.name() != col.name())
+                    .unwrap_or(true)
+            });
+        assert_or_internal_err!(
+            ambiguous_column.is_none(),
+            "Column {:?} is not found in the {schema_name} schema of the MemorySourceConfig",
+            ambiguous_column.as_ref().unwrap()
+        );
+        Ok(())
     }
 
     /// Arc clone of ref to original schema
@@ -605,6 +697,121 @@ impl MemorySourceConfig {
 
         Ok(Some(partitions))
     }
+}
+
+#[cfg(feature = "proto")]
+impl MemorySourceConfig {
+    /// Reconstruct a [`DataSourceExec`] wrapping a `MemorySourceConfig` from
+    /// its protobuf representation. Byte-compatible with the former central
+    /// `MemoryScan` arm in `datafusion-proto`.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn datafusion_physical_plan::ExecutionPlan>> {
+        use datafusion_common::internal_datafusion_err;
+        use datafusion_common::utils::usize_from_wire;
+        use datafusion_physical_expr_common::sort_expr::optional_ordering_try_from_proto;
+        use datafusion_proto_models::protobuf;
+
+        let scan = datafusion_physical_plan::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::MemoryScan,
+            "MemorySourceConfig",
+        );
+
+        // Destructure exhaustively so a newly added protobuf field must be
+        // handled here instead of being silently ignored.
+        let protobuf::MemoryScanExecNode {
+            partitions: proto_partitions,
+            schema: encoded_schema,
+            projection: proto_projection,
+            sort_information: proto_sort_information,
+            show_sizes,
+            fetch: proto_fetch,
+        } = scan;
+
+        let partitions = proto_partitions
+            .iter()
+            .map(|buf| record_batches_from_ipc_bytes(buf))
+            .collect::<Result<Vec<_>>>()?;
+
+        let proto_schema = encoded_schema.as_ref().ok_or_else(|| {
+            internal_datafusion_err!("schema in MemoryScanExecNode is missing.")
+        })?;
+        let source_schema: SchemaRef = SchemaRef::new(proto_schema.try_into()?);
+
+        // Preserve the empty-projection sentinel written by `try_to_proto`.
+        let projection = match proto_projection.as_slice() {
+            [] => None,
+            [u32::MAX] => Some(Vec::new()),
+            indices => Some(indices.iter().map(|i| *i as usize).collect()),
+        };
+        let fetch = proto_fetch
+            .map(|fetch| usize_from_wire(fetch, "MemoryScanExecNode", "fetch"))
+            .transpose()?;
+        let mut source = Self::try_new(&partitions, source_schema, projection)?
+            .with_limit(fetch)
+            .with_show_sizes(*show_sizes);
+
+        // Stored sort information has already been projected by
+        // `try_with_sort_information`; decode it against that same schema and
+        // do not project it a second time.
+        let mut decoded_sort_information = vec![];
+        for ordering in proto_sort_information {
+            let protobuf::PhysicalSortExprNodeCollection {
+                physical_sort_expr_nodes,
+            } = ordering;
+            if let Some(ordering) = optional_ordering_try_from_proto(
+                physical_sort_expr_nodes,
+                &ctx.expr_ctx(&source.projected_schema),
+            )? {
+                decoded_sort_information.push(ordering);
+            }
+        }
+        Self::validate_sort_information(
+            &decoded_sort_information,
+            &source.projected_schema,
+            "projected",
+        )?;
+        source.sort_information = decoded_sort_information;
+
+        Ok(DataSourceExec::from_data_source(source))
+    }
+}
+
+/// Encode record batches as Arrow IPC stream bytes; an empty slice encodes to
+/// an empty buffer.
+#[cfg(feature = "proto")]
+fn record_batches_to_ipc_bytes(batches: &[RecordBatch]) -> Result<Vec<u8>> {
+    use arrow::ipc::writer::StreamWriter;
+
+    if batches.is_empty() {
+        return Ok(vec![]);
+    }
+    let schema = batches[0].schema();
+    let mut buf = Vec::new();
+    let mut writer = StreamWriter::try_new(&mut buf, &schema)?;
+    for batch in batches {
+        writer.write(batch)?;
+    }
+    writer.finish()?;
+    Ok(buf)
+}
+
+/// Inverse of [`record_batches_to_ipc_bytes`].
+#[cfg(feature = "proto")]
+fn record_batches_from_ipc_bytes(buf: &[u8]) -> Result<Vec<RecordBatch>> {
+    use arrow::ipc::reader::StreamReader;
+
+    if buf.is_empty() {
+        return Ok(vec![]);
+    }
+    let reader = StreamReader::try_new(buf, None)?;
+    let mut batches = Vec::new();
+    for batch in reader {
+        batches.push(batch?);
+    }
+    Ok(batches)
 }
 
 /// For use in repartitioning, track the total size and original partition index.

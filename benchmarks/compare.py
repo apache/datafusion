@@ -30,7 +30,7 @@ try:
     from rich.console import Console
     from rich.table import Table
 except ImportError:
-    print("Couldn't import modules -- run `./bench.sh venv` first")
+    print("Couldn't import modules -- run with uv (`uv run compare.py`)")
     raise
 
 
@@ -258,7 +258,7 @@ def main() -> None:
         "--noise-threshold",
         type=float,
         default=0.05,
-        help="The threshold for statistically insignificant results (+/- %5).",
+        help="The threshold for statistically insignificant results (+/- 5%%).",
     )
     compare_parser.add_argument(
         "--detailed",

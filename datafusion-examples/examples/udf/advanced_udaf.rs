@@ -393,11 +393,6 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
             Arc::new(counts) as ArrayRef,
         ])
     }
-
-    fn supports_convert_to_state(&self) -> bool {
-        true
-    }
-
     fn size(&self) -> usize {
         self.counts.capacity() * size_of::<u32>()
             + self.prods.capacity() * size_of::<Float64Type>()

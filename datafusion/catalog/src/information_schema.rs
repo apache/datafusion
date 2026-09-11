@@ -151,7 +151,7 @@ impl InformationSchemaConfig {
         Ok(())
     }
 
-    async fn make_schemata(&self, builder: &mut InformationSchemataBuilder) {
+    fn make_schemata(&self, builder: &mut InformationSchemataBuilder) {
         for catalog_name in self.catalog_list.catalog_names() {
             let catalog = self.catalog_list.catalog(&catalog_name).unwrap();
 
@@ -1152,7 +1152,7 @@ impl PartitionStream for InformationSchemata {
             Arc::clone(&self.schema),
             // TODO: Stream this
             futures::stream::once(async move {
-                config.make_schemata(&mut builder).await;
+                config.make_schemata(&mut builder);
                 builder.finish()
             }),
         ))

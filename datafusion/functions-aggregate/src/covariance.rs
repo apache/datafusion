@@ -132,14 +132,14 @@ impl AggregateUDFImpl for CovarianceSample {
 
 #[user_doc(
     doc_section(label = "Statistical Functions"),
-    description = "Returns the sample covariance of a set of number pairs.",
-    syntax_example = "covar_samp(expression1, expression2)",
+    description = "Returns the population covariance of a set of number pairs.",
+    syntax_example = "covar_pop(expression1, expression2)",
     sql_example = r#"```sql
-> SELECT covar_samp(column1, column2) FROM table_name;
+> SELECT covar_pop(column1, column2) FROM table_name;
 +-----------------------------------+
-| covar_samp(column1, column2)      |
+| covar_pop(column1, column2)       |
 +-----------------------------------+
-| 8.25                              |
+| 7.63333333333                     |
 +-----------------------------------+
 ```"#,
     standard_argument(name = "expression1", prefix = "First"),
@@ -274,9 +274,8 @@ impl Accumulator for CovarianceAccumulator {
         let values2 = as_float64_array(&values[1])?;
 
         for (value1, value2) in values1.iter().zip(values2) {
-            let (value1, value2) = match (value1, value2) {
-                (Some(a), Some(b)) => (a, b),
-                _ => continue,
+            let (Some(value1), Some(value2)) = (value1, value2) else {
+                continue;
             };
 
             let new_count = self.count + 1;
@@ -300,9 +299,8 @@ impl Accumulator for CovarianceAccumulator {
         let values2 = as_float64_array(&values[1])?;
 
         for (value1, value2) in values1.iter().zip(values2) {
-            let (value1, value2) = match (value1, value2) {
-                (Some(a), Some(b)) => (a, b),
-                _ => continue,
+            let (Some(value1), Some(value2)) = (value1, value2) else {
+                continue;
             };
 
             if self.count <= 1 {

@@ -24,12 +24,13 @@ use insta::internals::SettingsBindDropGuard;
 use insta::{Settings, glob};
 use insta_cmd::{assert_cmd_snapshot, get_cargo_bin};
 use std::path::PathBuf;
+use std::time::Duration;
 use std::{env, fs};
 use testcontainers_modules::minio;
 use testcontainers_modules::testcontainers::core::{CmdWaitFor, ExecCommand, Mount};
 use testcontainers_modules::testcontainers::runners::AsyncRunner;
 use testcontainers_modules::testcontainers::{
-    ContainerAsync, ImageExt, TestcontainersError,
+    ContainerAsync, Image, ImageExt, TestcontainersError,
 };
 
 fn cli() -> Command {
@@ -45,10 +46,110 @@ fn make_settings() -> Settings {
     settings
 }
 
-async fn setup_minio_container() -> Result<ContainerAsync<minio::MinIO>, String> {
-    const MINIO_ROOT_USER: &str = "TEST-DataFusionLogin";
-    const MINIO_ROOT_PASSWORD: &str = "TEST-DataFusionPassword";
+const MINIO_ROOT_USER: &str = "TEST-DataFusionLogin";
+const MINIO_ROOT_PASSWORD: &str = "TEST-DataFusionPassword";
 
+/// How many times to try bringing up the MinIO container before failing.
+///
+/// Both the Docker Hub image pull and the `mc` calls that provision the bucket
+/// fail intermittently on CI with transient errors such as
+/// `bytes remaining on stream`. Retrying is much cheaper than a flaky run.
+const MINIO_SETUP_ATTEMPTS: u32 = 3;
+
+/// Delay before the first retry of the MinIO setup, doubled on each attempt.
+const MINIO_SETUP_RETRY_DELAY: Duration = Duration::from_secs(5);
+
+/// Time budget for a single MinIO setup attempt. A stalled image pull or `mc`
+/// invocation is retried instead of hanging the whole test run.
+const MINIO_SETUP_TIMEOUT: Duration = Duration::from_mins(3);
+
+/// Starts a MinIO container preloaded with the test data, retrying transient
+/// Docker failures.
+///
+/// Returns `None` when the test should be skipped, that is when
+/// `TEST_STORAGE_INTEGRATION` is unset or Docker Hub is rate limiting the image
+/// pull. Panics if the container cannot be started for any other reason.
+async fn start_minio_or_skip() -> Option<ContainerAsync<minio::MinIO>> {
+    if env::var("TEST_STORAGE_INTEGRATION").is_err() {
+        eprintln!("Skipping external storages integration tests");
+        return None;
+    }
+
+    match setup_minio_container().await {
+        Ok(container) => Some(container),
+        Err(e) if is_docker_pull_rate_limit(&e) => {
+            eprintln!("Skipping test: Docker pull rate limit reached: {e}");
+            None
+        }
+        Err(e) => panic!("{e}"),
+    }
+}
+
+/// A Docker Hub pull rate limit does not clear up within a test run, so the
+/// affected tests are skipped rather than retried.
+fn is_docker_pull_rate_limit(error: &str) -> bool {
+    error.contains("toomanyrequests")
+}
+
+/// Retrying only pays off for transient failures. An exhausted pull quota or a
+/// Docker daemon that cannot be reached at all stays broken for the whole run.
+fn is_retryable(error: &str) -> bool {
+    !is_docker_pull_rate_limit(error)
+        && !error.contains("failed to initialize a docker client")
+}
+
+async fn setup_minio_container() -> Result<ContainerAsync<minio::MinIO>, String> {
+    let mut delay = MINIO_SETUP_RETRY_DELAY;
+    let mut last_error = String::from("MinIO container setup was not attempted at all");
+
+    for attempt in 1..=MINIO_SETUP_ATTEMPTS {
+        last_error = match tokio::time::timeout(
+            MINIO_SETUP_TIMEOUT,
+            try_setup_minio_container(),
+        )
+        .await
+        {
+            Ok(Ok(container)) => return Ok(container),
+            Ok(Err(e)) => e,
+            Err(_) => format!(
+                "Timed out after {MINIO_SETUP_TIMEOUT:?} while starting the MinIO container"
+            ),
+        };
+
+        if attempt == MINIO_SETUP_ATTEMPTS || !is_retryable(&last_error) {
+            break;
+        }
+
+        eprintln!(
+            "MinIO container setup failed (attempt {attempt}/{MINIO_SETUP_ATTEMPTS}), \
+             retrying in {delay:?}: {last_error}"
+        );
+        tokio::time::sleep(delay).await;
+        delay *= 2;
+    }
+
+    Err(last_error)
+}
+
+/// A single attempt at starting and provisioning a MinIO container.
+///
+/// The container is removed again if provisioning fails, so that the next
+/// attempt starts from a clean state.
+async fn try_setup_minio_container() -> Result<ContainerAsync<minio::MinIO>, String> {
+    let container = start_minio_container().await?;
+
+    match provision_minio_container(&container).await {
+        Ok(()) => Ok(container),
+        Err(e) => {
+            if let Err(rm_error) = container.rm().await {
+                eprintln!("Failed to remove the MinIO container: {rm_error}");
+            }
+            Err(e)
+        }
+    }
+}
+
+async fn start_minio_container() -> Result<ContainerAsync<minio::MinIO>, String> {
     let data_path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../datafusion/core/tests/data");
 
@@ -56,7 +157,7 @@ async fn setup_minio_container() -> Result<ContainerAsync<minio::MinIO>, String>
         .canonicalize()
         .expect("Failed to get absolute path for test data");
 
-    let container = minio::MinIO::default()
+    minio::MinIO::default()
         .with_env_var("MINIO_ROOT_USER", MINIO_ROOT_USER)
         .with_env_var("MINIO_ROOT_PASSWORD", MINIO_ROOT_PASSWORD)
         .with_mount(Mount::bind_mount(
@@ -64,60 +165,81 @@ async fn setup_minio_container() -> Result<ContainerAsync<minio::MinIO>, String>
             "/source",
         ))
         .start()
-        .await;
+        .await
+        .map_err(|e| match e {
+            TestcontainersError::Client(e) => format!(
+                "Failed to start MinIO container. Ensure Docker is running and accessible: {e}"
+            ),
+            e => format!("Failed to start MinIO container: {e}"),
+        })
+}
 
-    match container {
-        Ok(container) => {
-            // We wait for MinIO to be healthy and prepare test files. We do it via CLI to avoid s3 dependency
-            let commands = [
-                ExecCommand::new(["/usr/bin/mc", "ready", "local"]),
-                ExecCommand::new([
-                    "/usr/bin/mc",
-                    "alias",
-                    "set",
-                    "localminio",
-                    "http://localhost:9000",
-                    MINIO_ROOT_USER,
-                    MINIO_ROOT_PASSWORD,
-                ]),
-                ExecCommand::new(["/usr/bin/mc", "mb", "localminio/data"]),
-                ExecCommand::new([
-                    "/usr/bin/mc",
-                    "cp",
-                    "-r",
-                    "/source/",
-                    "localminio/data/",
-                ]),
-            ];
+/// Waits for MinIO to be healthy and uploads the test files.
+///
+/// This is done via the `mc` CLI shipped in the image to avoid an s3 dependency.
+async fn provision_minio_container(
+    container: &ContainerAsync<minio::MinIO>,
+) -> Result<(), String> {
+    let commands = [
+        ExecCommand::new(["/usr/bin/mc", "ready", "local"]),
+        ExecCommand::new([
+            "/usr/bin/mc",
+            "alias",
+            "set",
+            "localminio",
+            "http://localhost:9000",
+            MINIO_ROOT_USER,
+            MINIO_ROOT_PASSWORD,
+        ]),
+        ExecCommand::new(["/usr/bin/mc", "mb", "localminio/data"]),
+        ExecCommand::new(["/usr/bin/mc", "cp", "-r", "/source/", "localminio/data/"]),
+    ];
 
-            for command in commands {
-                let command =
-                    command.with_cmd_ready_condition(CmdWaitFor::Exit { code: Some(0) });
+    for command in commands {
+        let command =
+            command.with_cmd_ready_condition(CmdWaitFor::Exit { code: Some(0) });
 
-                let cmd_ref = format!("{command:?}");
+        let cmd_ref = format!("{command:?}");
 
-                if let Err(e) = container.exec(command).await {
-                    let stdout = container.stdout_to_vec().await.unwrap_or_default();
-                    let stderr = container.stderr_to_vec().await.unwrap_or_default();
+        if let Err(e) = container.exec(command).await {
+            let stdout = container.stdout_to_vec().await.unwrap_or_default();
+            let stderr = container.stderr_to_vec().await.unwrap_or_default();
 
-                    return Err(format!(
-                        "Failed to execute command: {}\nError: {}\nStdout: {:?}\nStderr: {:?}",
-                        cmd_ref,
-                        e,
-                        String::from_utf8_lossy(&stdout),
-                        String::from_utf8_lossy(&stderr)
-                    ));
-                }
-            }
-
-            Ok(container)
+            return Err(format!(
+                "Failed to execute command: {}\nError: {}\nStdout: {:?}\nStderr: {:?}",
+                cmd_ref,
+                e,
+                String::from_utf8_lossy(&stdout),
+                String::from_utf8_lossy(&stderr)
+            ));
         }
-
-        Err(TestcontainersError::Client(e)) => Err(format!(
-            "Failed to start MinIO container. Ensure Docker is running and accessible: {e}"
-        )),
-        Err(e) => Err(format!("Failed to start MinIO container: {e}")),
     }
+
+    Ok(())
+}
+
+/// CI pre-pulls the MinIO image so that the storage integration tests do not
+/// have to pull it themselves. Guard against that pre-pull going stale when
+/// `testcontainers-modules` bumps the image it uses.
+#[test]
+fn minio_image_matches_ci_prepull() {
+    let workflow =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.github/workflows/rust.yml");
+
+    // The workflow is not shipped with the published crate.
+    let Ok(contents) = fs::read_to_string(&workflow) else {
+        return;
+    };
+
+    let image = minio::MinIO::default();
+    let image_ref = format!("{}:{}", image.name(), image.tag());
+
+    assert!(
+        contents.contains(&image_ref),
+        "{} does not pre-pull `{image_ref}`. Update MINIO_IMAGE in the \
+         `Pre-pull MinIO image` step to match the image used by the tests.",
+        workflow.display()
+    );
 }
 
 #[cfg(test)]
@@ -171,6 +293,37 @@ fn cli_quick_test<'a>(
     cmd.args(args);
 
     assert_cmd_snapshot!(cmd);
+}
+
+#[test]
+fn spark_features_require_opt_in() {
+    let dialect_query = "SELECT CAST(1 AS LONG);";
+    let spark_query = "SELECT concat_ws(',', array(1, 2)), CAST(1 AS LONG);";
+
+    let output = cli()
+        .args(["-q", "--command", dialect_query])
+        .output()
+        .expect("failed to run datafusion-cli without --spark");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!output.status.success(), "query unexpectedly succeeded");
+    assert!(
+        stdout.contains("Unsupported SQL type LONG"),
+        "expected Spark SQL syntax to be unavailable without --spark, got:\n{stdout}"
+    );
+
+    let output = cli()
+        .args(["-q", "--spark", "--format", "csv", "--command", spark_query])
+        .output()
+        .expect("failed to run datafusion-cli with --spark");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "query failed with --spark, got:\n{stdout}"
+    );
+    assert!(
+        stdout.lines().any(|line| line == "\"1,2\",1"),
+        "expected Spark planner and dialect result, got:\n{stdout}"
+    );
 }
 
 /// Read data piped into the CLI via the `/dev/stdin` pseudo-path.
@@ -522,18 +675,8 @@ fn test_cli_wide_result_set_no_crash() {
 
 #[tokio::test]
 async fn test_cli() {
-    if env::var("TEST_STORAGE_INTEGRATION").is_err() {
-        eprintln!("Skipping external storages integration tests");
+    let Some(container) = start_minio_or_skip().await else {
         return;
-    }
-
-    let container = match setup_minio_container().await {
-        Ok(c) => c,
-        Err(e) if e.contains("toomanyrequests") => {
-            eprintln!("Skipping test: Docker pull rate limit reached: {e}");
-            return;
-        }
-        e @ Err(_) => e.unwrap(),
     };
 
     let settings = make_settings();
@@ -546,8 +689,8 @@ async fn test_cli() {
         assert_cmd_snapshot!(
             cli()
                 .env_clear()
-                .env("AWS_ACCESS_KEY_ID", "TEST-DataFusionLogin")
-                .env("AWS_SECRET_ACCESS_KEY", "TEST-DataFusionPassword")
+                .env("AWS_ACCESS_KEY_ID", MINIO_ROOT_USER)
+                .env("AWS_SECRET_ACCESS_KEY", MINIO_ROOT_PASSWORD)
                 .env("AWS_ENDPOINT", format!("http://localhost:{port}"))
                 .env("AWS_ALLOW_HTTP", "true")
                 .pass_stdin(input)
@@ -559,22 +702,13 @@ async fn test_cli() {
 async fn test_aws_options() {
     // Separate test is needed to pass aws as options in sql and not via env
 
-    if env::var("TEST_STORAGE_INTEGRATION").is_err() {
-        eprintln!("Skipping external storages integration tests");
+    let Some(container) = start_minio_or_skip().await else {
         return;
-    }
+    };
 
     let settings = make_settings();
     let _bound = settings.bind_to_scope();
 
-    let container = match setup_minio_container().await {
-        Ok(c) => c,
-        Err(e) if e.contains("toomanyrequests") => {
-            eprintln!("Skipping test: Docker pull rate limit reached: {e}");
-            return;
-        }
-        e @ Err(_) => e.unwrap(),
-    };
     let port = container.get_host_port_ipv4(9000).await.unwrap();
 
     let input = format!(
@@ -582,8 +716,8 @@ async fn test_aws_options() {
 STORED AS CSV
 LOCATION 's3://data/cars.csv'
 OPTIONS(
-    'aws.access_key_id' 'TEST-DataFusionLogin',
-    'aws.secret_access_key' 'TEST-DataFusionPassword',
+    'aws.access_key_id' '{MINIO_ROOT_USER}',
+    'aws.secret_access_key' '{MINIO_ROOT_PASSWORD}',
     'aws.endpoint' 'http://localhost:{port}',
     'aws.allow_http' 'true'
 );
@@ -658,18 +792,8 @@ fn test_backtrace_output(#[case] query: &str) {
 
 #[tokio::test]
 async fn test_s3_url_fallback() {
-    if env::var("TEST_STORAGE_INTEGRATION").is_err() {
-        eprintln!("Skipping external storages integration tests");
+    let Some(container) = start_minio_or_skip().await else {
         return;
-    }
-
-    let container = match setup_minio_container().await {
-        Ok(c) => c,
-        Err(e) if e.contains("toomanyrequests") => {
-            eprintln!("Skipping test: Docker pull rate limit reached: {e}");
-            return;
-        }
-        e @ Err(_) => e.unwrap(),
     };
 
     let mut settings = make_settings();
@@ -695,19 +819,10 @@ SELECT * FROM partitioned_data ORDER BY column_1, column_2 LIMIT 5;
 /// Validate object store profiling output
 #[tokio::test]
 async fn test_object_store_profiling() {
-    if env::var("TEST_STORAGE_INTEGRATION").is_err() {
-        eprintln!("Skipping external storages integration tests");
+    let Some(container) = start_minio_or_skip().await else {
         return;
-    }
-
-    let container = match setup_minio_container().await {
-        Ok(c) => c,
-        Err(e) if e.contains("toomanyrequests") => {
-            eprintln!("Skipping test: Docker pull rate limit reached: {e}");
-            return;
-        }
-        e @ Err(_) => e.unwrap(),
     };
+
     let mut settings = make_settings();
 
     // as the object store profiling contains timestamps and durations, we must
@@ -769,8 +884,8 @@ impl MinioCommandExt for Command {
         let port = container.get_host_port_ipv4(9000).await.unwrap();
 
         self.env_clear()
-            .env("AWS_ACCESS_KEY_ID", "TEST-DataFusionLogin")
-            .env("AWS_SECRET_ACCESS_KEY", "TEST-DataFusionPassword")
+            .env("AWS_ACCESS_KEY_ID", MINIO_ROOT_USER)
+            .env("AWS_SECRET_ACCESS_KEY", MINIO_ROOT_PASSWORD)
             .env("AWS_ENDPOINT", format!("http://localhost:{port}"))
             .env("AWS_ALLOW_HTTP", "true")
     }

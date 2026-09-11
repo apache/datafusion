@@ -186,6 +186,12 @@ impl GroupOrderingPartial {
         };
     }
 
+    /// Starts tracking a new ordered input segment with the same sort-key
+    /// columns.
+    pub fn reset(&mut self) {
+        self.state = State::Start;
+    }
+
     fn updated_sort_key(
         current_sort: usize,
         sort_key: Option<Vec<ScalarValue>>,

@@ -31,10 +31,13 @@ use datafusion_expr::{
 };
 use datafusion_macros::user_doc;
 
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
+use datafusion_expr::simplify::{
+    ExprSimplifyResult, REGEX_PLANNING_SIZE_LIMIT_BYTES, SimplifyContext,
+};
 use datafusion_expr_common::operator::Operator;
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
-use regex::Regex;
+use regex::{Error as RegexError, Regex, RegexBuilder};
+use std::borrow::Cow;
 use std::sync::Arc;
 
 #[user_doc(
@@ -61,12 +64,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
     standard_argument(name = "regexp", prefix = "Regular"),
     argument(
         name = "flags",
-        description = r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
-  - **i**: case-insensitive: letters match both upper and lower case
-  - **m**: multi-line mode: ^ and $ match begin/end of line
-  - **s**: allow . to match \n
-  - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
-  - **U**: swap the meaning of x* and x*?"#
+        description = r#"Optional regular expression flags that control the behavior of the regular expression. Refer to the flags reference above for supported flags."#
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -163,6 +161,35 @@ impl ScalarUDFImpl for RegexpLikeFunc {
                 regexp_like(&args).map(ColumnarValue::Array)
             }
         }
+    }
+
+    fn should_evaluate_const(&self, args: &[&ScalarValue]) -> bool {
+        let Some(pattern) = args.get(1).and_then(|arg| arg.try_as_str()).flatten() else {
+            return true;
+        };
+        let flags = args.get(2).and_then(|arg| arg.try_as_str()).flatten();
+
+        // Preserve normal error handling for unsupported and malformed flags.
+        if flags.is_some_and(|flags| flags.contains('g')) {
+            return true;
+        }
+
+        // regexp_like returns NULL without compiling the pattern when the
+        // value is NULL. Preserve that fast path during constant folding.
+        if args.first().is_some_and(|arg| arg.is_null()) {
+            return true;
+        }
+
+        let pattern = match flags.filter(|flags| !flags.is_empty()) {
+            Some(flags) => Cow::Owned(format!("(?{flags}){pattern}")),
+            None => Cow::Borrowed(pattern),
+        };
+        !matches!(
+            RegexBuilder::new(pattern.as_ref())
+                .size_limit(REGEX_PLANNING_SIZE_LIMIT_BYTES)
+                .build(),
+            Err(RegexError::CompiledTooBig(_))
+        )
     }
 
     fn simplify(
@@ -281,10 +308,11 @@ pub fn regexp_like(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args.len() {
         2 => handle_regexp_like(&args[0], &args[1], None),
         3 => {
-            let flags = match args[2].data_type() {
-                Utf8 => args[2].as_string::<i32>(),
+            let flags = super::normalize_empty_flags(&args[2])?;
+            let flags = match flags.data_type() {
+                Utf8 => flags.as_string::<i32>(),
                 LargeUtf8 => {
-                    let large_string_array = args[2].as_string::<i64>();
+                    let large_string_array = flags.as_string::<i64>();
                     let string_vec: Vec<Option<&str>> = (0..large_string_array.len())
                         .map(|i| {
                             if large_string_array.is_null(i) {
@@ -298,7 +326,7 @@ pub fn regexp_like(args: &[ArrayRef]) -> Result<ArrayRef> {
                     &GenericStringArray::<i32>::from(string_vec)
                 }
                 _ => {
-                    let string_view_array = args[2].as_string_view();
+                    let string_view_array = flags.as_string_view();
                     let string_vec: Vec<Option<String>> = (0..string_view_array.len())
                         .map(|i| {
                             if string_view_array.is_null(i) {
@@ -347,6 +375,7 @@ fn regexp_like_array_scalar(
     let Some(pattern) = pattern else {
         return Ok(Arc::new(BooleanArray::new_null(values.len())));
     };
+    let flags = flags.filter(|flags| !flags.is_empty());
     let array = match values.data_type() {
         Utf8 => {
             let array = values.as_string::<i32>();
@@ -385,7 +414,7 @@ fn regexp_like_scalar(
 
     let value = value.unwrap();
     let pattern = pattern.unwrap();
-    let pattern = match flags {
+    let pattern = match flags.filter(|flags| !flags.is_empty()) {
         Some(flagz) => format!("(?{flagz}){pattern}"),
         None => pattern.to_string(),
     };
@@ -630,6 +659,40 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Boolean(Some(true))) => {}
             other => panic!("Unexpected result {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_const_evaluation_budget() {
+        let function = RegexpLikeFunc::new();
+        let args = |pattern: &str, flags: Option<&str>| {
+            let mut args = vec![
+                ScalarValue::Utf8(Some("aaaaa".to_string())),
+                ScalarValue::Utf8(Some(pattern.to_string())),
+            ];
+            if let Some(flags) = flags {
+                args.push(ScalarValue::Utf8(Some(flags.to_string())));
+            }
+            args
+        };
+        let should_evaluate = |args: Vec<ScalarValue>| {
+            let args = args.iter().collect::<Vec<_>>();
+            function.should_evaluate_const(&args)
+        };
+
+        assert!(should_evaluate(args("^a+$", None)));
+        assert!(!should_evaluate(args("a{5}{5}{5}{5}{5}{5}", None)));
+        assert!(!should_evaluate(args("a{5}{5}{5}{5}{5}{5}", Some(""))));
+        assert!(!should_evaluate(args("a{5}{5}{5}{5}{5}{5}", Some("m"))));
+
+        let null_value = vec![
+            ScalarValue::Utf8(None),
+            ScalarValue::Utf8(Some("a{5}{5}{5}{5}{5}{5}{5}{5}".to_string())),
+        ];
+        assert!(should_evaluate(null_value));
+
+        // Unsupported flags and syntax errors retain their existing error paths.
+        assert!(should_evaluate(args("^a+$", Some("g"))));
+        assert!(should_evaluate(args("[", None)));
     }
 
     #[test]

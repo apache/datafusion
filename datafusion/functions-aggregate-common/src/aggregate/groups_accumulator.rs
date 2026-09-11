@@ -34,7 +34,9 @@ use arrow::{
 };
 use datafusion_common::{Result, ScalarValue, arrow_datafusion_err};
 use datafusion_expr_common::accumulator::Accumulator;
-use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
+use datafusion_expr_common::groups_accumulator::{
+    EmitTo, GroupSelection, GroupsAccumulator,
+};
 
 /// An adapter that implements [`GroupsAccumulator`] for any [`Accumulator`]
 ///
@@ -100,6 +102,10 @@ pub struct GroupsAccumulatorAdapter {
     /// bottleneck in earlier implementations when there were many
     /// distinct groups.
     allocation_bytes: usize,
+
+    /// The portion of [`Self::allocation_bytes`] that is the scratch
+    /// [`AccumulatorState::indices`] capacity held by [`Self::states`].
+    indices_allocation_bytes: usize,
 }
 
 struct AccumulatorState {
@@ -137,6 +143,7 @@ impl GroupsAccumulatorAdapter {
             factory: Box::new(factory),
             states: vec![],
             allocation_bytes: 0,
+            indices_allocation_bytes: 0,
         }
     }
 
@@ -219,8 +226,12 @@ impl GroupsAccumulatorAdapter {
         let mut offsets = vec![0];
 
         let mut offset_so_far = 0;
+        let mut indices_allocation_bytes = 0;
         for (group_index, state) in self.states.iter_mut().enumerate() {
             let indices = &state.indices;
+            // this pass already visits every group, so totalling the scratch
+            // capacity here costs a field read rather than a `size()` call
+            indices_allocation_bytes += indices.allocated_size();
             if indices.is_empty() {
                 continue;
             }
@@ -231,6 +242,13 @@ impl GroupsAccumulatorAdapter {
             offsets.push(offset_so_far);
         }
         let batch_indices = batch_indices.into();
+
+        // The push loop above is the only place `indices` grows. Charge the
+        // growth since the previous batch here: the pre/post deltas below
+        // observe the identical capacity on both sides, because `f` does not
+        // touch `indices` and the `clear()` after it retains the capacity.
+        self.adjust_allocation(self.indices_allocation_bytes, indices_allocation_bytes);
+        self.indices_allocation_bytes = indices_allocation_bytes;
 
         // reorder the values and opt_filter by batch_indices so that
         // all values for each group are contiguous, then invoke the
@@ -282,6 +300,18 @@ impl GroupsAccumulatorAdapter {
         self.allocation_bytes = self.allocation_bytes.saturating_sub(size)
     }
 
+    /// Release the allocation held by a state that is being emitted.
+    ///
+    /// [`AccumulatorState::size`] covers the scratch `indices` capacity, so
+    /// this also drops it from [`Self::indices_allocation_bytes`] to keep that
+    /// running total equal to the capacity still held by [`Self::states`].
+    fn free_state_allocation(&mut self, state: &AccumulatorState) {
+        self.free_allocation(state.size());
+        self.indices_allocation_bytes = self
+            .indices_allocation_bytes
+            .saturating_sub(state.indices.allocated_size());
+    }
+
     /// Adjusts the allocation for something that started with
     /// start_size and now has new_size avoiding overflow
     ///
@@ -323,7 +353,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         let results: Vec<ScalarValue> = states
             .into_iter()
             .map(|mut state| {
-                self.free_allocation(state.size());
+                self.free_state_allocation(&state);
                 state.accumulator.evaluate()
             })
             .collect::<Result<_>>()?;
@@ -333,6 +363,34 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         self.adjust_allocation(vec_size_pre, self.states.allocated_size());
 
         result
+    }
+
+    fn evaluate_preserving(&mut self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
+        selection.validate_num_groups(self.states.len())?;
+        let selected_len = selection.len();
+        if selected_len == 0 {
+            // ScalarValue::iter_to_array needs at least one value to infer the
+            // output type, so evaluate a temporary empty accumulator.
+            let mut accumulator = (self.factory)()?;
+            return Ok(ScalarValue::iter_to_array([accumulator.evaluate()?])?.slice(0, 0));
+        }
+
+        let mut results = Vec::with_capacity(selected_len);
+        for group_index in selection.iter() {
+            let (result, size_pre, size_post) = {
+                let state = &mut self.states[group_index];
+                let size_pre = state.size();
+                let result = state.accumulator.evaluate()?;
+                (result, size_pre, state.size())
+            };
+            self.adjust_allocation(size_pre, size_post);
+            results.push(result);
+        }
+        ScalarValue::iter_to_array(results)
+    }
+
+    fn supports_evaluate_preserving(&self) -> bool {
+        true
     }
 
     // filtered_null_mask(opt_filter, &values);
@@ -345,7 +403,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         let mut results: Vec<Vec<ScalarValue>> = vec![];
 
         for mut state in states {
-            self.free_allocation(state.size());
+            self.free_state_allocation(&state);
             let accumulator_state = state.accumulator.state()?;
             results.resize_with(accumulator_state.len(), Vec::new);
             for (idx, state_val) in accumulator_state.into_iter().enumerate() {
@@ -441,10 +499,6 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
 
         Ok(arrays)
     }
-
-    fn supports_convert_to_state(&self) -> bool {
-        true
-    }
 }
 
 /// Extension trait for [`Vec`] to account for allocations.
@@ -501,5 +555,53 @@ pub(crate) fn slice_and_maybe_filter(
             .collect()
     } else {
         Ok(sliced_arrays)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::min_max::MaxAccumulator;
+    use arrow::array::{AsArray, Int64Array};
+    use arrow::datatypes::{DataType, Int64Type};
+
+    #[test]
+    fn adapter_preserving_evaluation_uses_accumulator_contract() -> Result<()> {
+        let mut accumulator = GroupsAccumulatorAdapter::new(|| {
+            Ok(Box::new(MaxAccumulator::try_new(&DataType::Int64)?)
+                as Box<dyn Accumulator>)
+        });
+        let values = Arc::new(Int64Array::from(vec![Some(1), Some(5), Some(2), None]));
+        accumulator.update_batch(&[values], &[0, 0, 1, 2], None, 4)?;
+
+        let selection = GroupSelection::try_from_indices(&[1, 0, 3, 1], 4)?;
+        let expected = Int64Array::from(vec![Some(2), Some(5), None, Some(2)]);
+        for _ in 0..2 {
+            assert_eq!(
+                accumulator
+                    .evaluate_preserving(selection)?
+                    .as_primitive::<Int64Type>(),
+                &expected
+            );
+        }
+
+        let empty =
+            accumulator.evaluate_preserving(GroupSelection::try_from_indices(&[], 4)?)?;
+        assert_eq!(empty.data_type(), &DataType::Int64);
+        assert!(empty.is_empty());
+
+        let values = Arc::new(Int64Array::from(vec![7, 4, 9]));
+        accumulator.update_batch(&[values], &[0, 2, 3], None, 4)?;
+        assert_eq!(
+            accumulator
+                .evaluate_preserving(GroupSelection::all(4))?
+                .as_primitive::<Int64Type>(),
+            &Int64Array::from(vec![Some(7), Some(2), Some(4), Some(9)])
+        );
+        assert!(accumulator.supports_evaluate_preserving());
+        assert!(!accumulator.supports_state_preserving());
+        Ok(())
     }
 }

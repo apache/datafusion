@@ -17,6 +17,7 @@
 
 //! [`ParquetFormat`]: Parquet [`FileFormat`] abstractions
 
+use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Debug;
 use std::ops::Range;
@@ -37,7 +38,9 @@ use datafusion_datasource::TableSchema;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_sink_config::FileSinkConfig;
 
-use datafusion_datasource::file_format::{FileFormat, FileFormatFactory};
+use datafusion_datasource::file_format::{
+    FileFormat, FileFormatFactory, ensure_unique_field_names,
+};
 
 use datafusion_common::Statistics;
 use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions};
@@ -50,6 +53,7 @@ use datafusion_common::{
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::sink::DataSinkExec;
+use datafusion_datasource::write::get_writer_schema;
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::ExecutionPlan;
@@ -151,46 +155,47 @@ impl ParquetFormat {
         Self::default()
     }
 
-    /// Activate statistics based row group level pruning
-    /// - If `None`, defaults to value on `config_options`
+    /// Set [`pruning`]
+    ///
+    /// [`pruning`]: datafusion_common::config::ParquetOptions::pruning
     pub fn with_enable_pruning(mut self, enable: bool) -> Self {
         self.options.global.pruning = enable;
         self
     }
 
-    /// Return `true` if pruning is enabled
+    /// Get [`pruning`]
+    ///
+    /// [`pruning`]: datafusion_common::config::ParquetOptions::pruning
     pub fn enable_pruning(&self) -> bool {
         self.options.global.pruning
     }
 
-    /// Provide a hint to the size of the file metadata. If a hint is provided
-    /// the reader will try and fetch the last `size_hint` bytes of the parquet file optimistically.
-    /// Without a hint, two read are required. One read to fetch the 8-byte parquet footer and then
-    /// another read to fetch the metadata length encoded in the footer.
+    /// Set [`metadata_size_hint`]
     ///
-    /// - If `None`, defaults to value on `config_options`
+    /// [`metadata_size_hint`]: datafusion_common::config::ParquetOptions::metadata_size_hint
     pub fn with_metadata_size_hint(mut self, size_hint: Option<usize>) -> Self {
         self.options.global.metadata_size_hint = size_hint;
         self
     }
 
-    /// Return the metadata size hint if set
+    /// Get [`metadata_size_hint`]
+    ///
+    /// [`metadata_size_hint`]: datafusion_common::config::ParquetOptions::metadata_size_hint
     pub fn metadata_size_hint(&self) -> Option<usize> {
         self.options.global.metadata_size_hint
     }
 
-    /// Tell the parquet reader to skip any metadata that may be in
-    /// the file Schema. This can help avoid schema conflicts due to
-    /// metadata.
+    /// Set [`skip_metadata`]
     ///
-    /// - If `None`, defaults to value on `config_options`
+    /// [`skip_metadata`]: datafusion_common::config::ParquetOptions::skip_metadata
     pub fn with_skip_metadata(mut self, skip_metadata: bool) -> Self {
         self.options.global.skip_metadata = skip_metadata;
         self
     }
 
-    /// Returns `true` if schema metadata will be cleared prior to
-    /// schema merging.
+    /// Get [`skip_metadata`]
+    ///
+    /// [`skip_metadata`]: datafusion_common::config::ParquetOptions::skip_metadata
     pub fn skip_metadata(&self) -> bool {
         self.options.global.skip_metadata
     }
@@ -206,49 +211,46 @@ impl ParquetFormat {
         &self.options
     }
 
-    /// Return `true` if should use view types.
+    /// Get [`schema_force_view_types`]
     ///
-    /// If this returns true, DataFusion will instruct the parquet reader
-    /// to read string / binary columns using view `StringView` or `BinaryView`
-    /// if the table schema specifies those types, regardless of any embedded metadata
-    /// that may specify an alternate Arrow type. The parquet reader is optimized
-    /// for reading `StringView` and `BinaryView` and such queries are significantly faster.
-    ///
-    /// If this returns false, the parquet reader will read the columns according to the
-    /// defaults or any embedded Arrow type information. This may result in reading
-    /// `StringArrays` and then casting to `StringViewArray` which is less efficient.
+    /// [`schema_force_view_types`]: datafusion_common::config::ParquetOptions::schema_force_view_types
     pub fn force_view_types(&self) -> bool {
         self.options.global.schema_force_view_types
     }
 
-    /// If true, will use view types. See [`Self::force_view_types`] for details
+    /// Set [`schema_force_view_types`]
+    ///
+    /// [`schema_force_view_types`]: datafusion_common::config::ParquetOptions::schema_force_view_types
     pub fn with_force_view_types(mut self, use_views: bool) -> Self {
         self.options.global.schema_force_view_types = use_views;
         self
     }
 
-    /// Return `true` if binary types will be read as strings.
+    /// Get [`binary_as_string`]
     ///
-    /// If this returns true, DataFusion will instruct the parquet reader
-    /// to read binary columns such as `Binary` or `BinaryView` as the
-    /// corresponding string type such as `Utf8` or `LargeUtf8`.
-    /// The parquet reader has special optimizations for `Utf8` and `LargeUtf8`
-    /// validation, and such queries are significantly faster than reading
-    /// binary columns and then casting to string columns.
+    /// [`binary_as_string`]: datafusion_common::config::ParquetOptions::binary_as_string
     pub fn binary_as_string(&self) -> bool {
         self.options.global.binary_as_string
     }
 
-    /// If true, will read binary types as strings. See [`Self::binary_as_string`] for details
+    /// Set [`binary_as_string`]
+    ///
+    /// [`binary_as_string`]: datafusion_common::config::ParquetOptions::binary_as_string
     pub fn with_binary_as_string(mut self, binary_as_string: bool) -> Self {
         self.options.global.binary_as_string = binary_as_string;
         self
     }
 
+    /// Get [`coerce_int96`]
+    ///
+    /// [`coerce_int96`]: datafusion_common::config::ParquetOptions::coerce_int96
     pub fn coerce_int96(&self) -> Option<String> {
         self.options.global.coerce_int96.clone()
     }
 
+    /// Set [`coerce_int96`]
+    ///
+    /// [`coerce_int96`]: datafusion_common::config::ParquetOptions::coerce_int96
     pub fn with_coerce_int96(mut self, time_unit: Option<String>) -> Self {
         self.options.global.coerce_int96 = time_unit;
         self
@@ -297,6 +299,7 @@ async fn get_file_decryption_properties(
 }
 
 #[cfg(not(feature = "parquet_encryption"))]
+#[expect(clippy::unused_async)]
 async fn get_file_decryption_properties(
     _state: &dyn Session,
     _options: &TableParquetOptions,
@@ -385,6 +388,17 @@ impl FileFormat for ParquetFormat {
         // https://github.com/apache/datafusion/pull/6629
         schemas
             .sort_unstable_by(|(location1, _), (location2, _)| location1.cmp(location2));
+
+        let mut seen = HashSet::new();
+        for (location, schema) in &schemas {
+            ensure_unique_field_names(schema, &mut seen).map_err(|err| {
+                DataFusionError::Context(
+                    format!("Error when processing Parquet file {location}"),
+                    Box::new(err),
+                )
+            })?;
+        }
+        drop(seen);
 
         let schemas = schemas.into_iter().map(|(_, schema)| schema);
 
@@ -533,11 +547,18 @@ impl FileFormat for ParquetFormat {
         // Convert ordering requirements to Parquet SortingColumns for file metadata
         let sorting_columns = if let Some(ref requirements) = order_requirements {
             let ordering: LexOrdering = requirements.clone().into();
+            let writer_schema = get_writer_schema(&conf);
             // In cases like `COPY (... ORDER BY ...) TO ...` the ORDER BY clause
             // may not be compatible with Parquet sorting columns (e.g. ordering on `random()`).
             // So if we cannot create a Parquet sorting column from the ordering requirement,
             // we skip setting sorting columns on the Parquet sink.
-            lex_ordering_to_sorting_columns(&ordering).ok()
+            lex_ordering_to_sorting_columns(
+                &ordering,
+                conf.output_schema(),
+                &writer_schema,
+            )
+            .ok()
+            .filter(|columns| !columns.is_empty())
         } else {
             None
         };
@@ -678,4 +699,130 @@ pub fn statistics_from_parquet_meta_calc(
     table_schema: SchemaRef,
 ) -> Result<Statistics> {
     DFParquetMetadata::statistics_from_parquet_metadata(metadata, &table_schema)
+}
+
+#[cfg(feature = "proto")]
+use datafusion_proto_models::protobuf::{self, parquet_column_options, parquet_options};
+
+/// Encode a [`ParquetFormatFactory`]'s options as their protobuf form.
+///
+/// The reverse direction is `TryFrom<&protobuf::TableParquetOptions> for
+/// TableParquetOptions` in `datafusion-proto-models`: `TableParquetOptions` is
+/// a `datafusion-common` type, so that half cannot live here.
+#[cfg(feature = "proto")]
+impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
+    fn from(factory: &ParquetFormatFactory) -> Self {
+        let global_options = if let Some(ref options) = factory.options {
+            options.clone()
+        } else {
+            return protobuf::TableParquetOptions::default();
+        };
+
+        let column_specific_options = global_options.column_specific_options;
+        protobuf::TableParquetOptions {
+        global: Some(protobuf::ParquetOptions {
+            enable_page_index: global_options.global.enable_page_index,
+            pruning: global_options.global.pruning,
+            skip_metadata: global_options.global.skip_metadata,
+            metadata_size_hint_opt: global_options.global.metadata_size_hint.map(|size| {
+                parquet_options::MetadataSizeHintOpt::MetadataSizeHint(size as u64)
+            }),
+            pushdown_filters: global_options.global.pushdown_filters,
+            reorder_filters: global_options.global.reorder_filters,
+            force_filter_selections: global_options.global.force_filter_selections,
+            data_pagesize_limit: global_options.global.data_pagesize_limit as u64,
+            write_batch_size: global_options.global.write_batch_size as u64,
+            writer_version: global_options.global.writer_version.to_string(),
+            compression_opt: global_options.global.compression.map(|compression| {
+                parquet_options::CompressionOpt::Compression(compression)
+            }),
+            dictionary_enabled_opt: global_options.global.dictionary_enabled.map(|enabled| {
+                parquet_options::DictionaryEnabledOpt::DictionaryEnabled(enabled)
+            }),
+            dictionary_page_size_limit: global_options.global.dictionary_page_size_limit as u64,
+            statistics_enabled_opt: global_options.global.statistics_enabled.map(|enabled| {
+                parquet_options::StatisticsEnabledOpt::StatisticsEnabled(enabled.to_string())
+            }),
+            max_row_group_size: global_options.global.max_row_group_size as u64,
+            max_in_list_size: global_options.global.max_in_list_size as u64,
+            created_by: global_options.global.created_by.clone(),
+            column_index_truncate_length_opt: global_options.global.column_index_truncate_length.map(|length| {
+                parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(length as u64)
+            }),
+            statistics_truncate_length_opt: global_options.global.statistics_truncate_length.map(|length| {
+                parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(length as u64)
+            }),
+            data_page_row_count_limit: global_options.global.data_page_row_count_limit as u64,
+            encoding_opt: global_options.global.encoding.map(|encoding| {
+                parquet_options::EncodingOpt::Encoding(encoding)
+            }),
+            bloom_filter_on_read: global_options.global.bloom_filter_on_read,
+            bloom_filter_on_write: global_options.global.bloom_filter_on_write,
+            bloom_filter_fpp_opt: global_options.global.bloom_filter_fpp.map(|fpp| {
+                parquet_options::BloomFilterFppOpt::BloomFilterFpp(fpp)
+            }),
+            bloom_filter_ndv_opt: global_options.global.bloom_filter_ndv.map(|ndv| {
+                parquet_options::BloomFilterNdvOpt::BloomFilterNdv(ndv)
+            }),
+            allow_single_file_parallelism: global_options.global.allow_single_file_parallelism,
+            maximum_parallel_row_group_writers: global_options.global.maximum_parallel_row_group_writers as u64,
+            maximum_buffered_record_batches_per_stream: global_options.global.maximum_buffered_record_batches_per_stream as u64,
+            schema_force_view_types: global_options.global.schema_force_view_types,
+            binary_as_string: global_options.global.binary_as_string,
+            skip_arrow_metadata: global_options.global.skip_arrow_metadata,
+            coerce_int96_opt: global_options.global.coerce_int96.map(|compression| {
+                parquet_options::CoerceInt96Opt::CoerceInt96(compression)
+            }),
+            coerce_int96_tz_opt: global_options.global.coerce_int96_tz.map(|tz| {
+                parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(tz)
+            }),
+            max_predicate_cache_size_opt: global_options.global.max_predicate_cache_size.map(|size| {
+                parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size as u64)
+            }),
+            max_row_group_bytes_opt: global_options.global.max_row_group_bytes.map(|size| {
+                parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(size.get() as u64)
+            }),
+            content_defined_chunking: Some(protobuf::ParquetCdcOptions {
+                enabled: global_options.global.content_defined_chunking.enabled,
+                min_chunk_size: global_options.global.content_defined_chunking.min_chunk_size as u64,
+                max_chunk_size: global_options.global.content_defined_chunking.max_chunk_size as u64,
+                norm_level: global_options.global.content_defined_chunking.norm_level,
+            }),
+        }),
+        column_specific_options: column_specific_options.into_iter().map(|(column_name, options)| {
+            protobuf::ParquetColumnSpecificOptions {
+                column_name,
+                options: Some(protobuf::ParquetColumnOptions {
+                    bloom_filter_enabled_opt: options.bloom_filter_enabled.map(|enabled| {
+                        parquet_column_options::BloomFilterEnabledOpt::BloomFilterEnabled(enabled)
+                    }),
+                    encoding_opt: options.encoding.map(|encoding| {
+                        parquet_column_options::EncodingOpt::Encoding(encoding)
+                    }),
+                    dictionary_enabled_opt: options.dictionary_enabled.map(|enabled| {
+                        parquet_column_options::DictionaryEnabledOpt::DictionaryEnabled(enabled)
+                    }),
+                    compression_opt: options.compression.map(|compression| {
+                        parquet_column_options::CompressionOpt::Compression(compression)
+                    }),
+                    statistics_enabled_opt: options.statistics_enabled.map(|enabled| {
+                        parquet_column_options::StatisticsEnabledOpt::StatisticsEnabled(enabled)
+                    }),
+                    bloom_filter_fpp_opt: options.bloom_filter_fpp.map(|fpp| {
+                        parquet_column_options::BloomFilterFppOpt::BloomFilterFpp(fpp)
+                    }),
+                    bloom_filter_ndv_opt: options.bloom_filter_ndv.map(|ndv| {
+                        parquet_column_options::BloomFilterNdvOpt::BloomFilterNdv(ndv)
+                    }),
+                })
+            }
+        }).collect(),
+        key_value_metadata: global_options.key_value_metadata
+            .iter()
+            .filter_map(|(key, value)| {
+                value.as_ref().map(|v| (key.clone(), v.clone()))
+            })
+            .collect(),
+    }
+    }
 }

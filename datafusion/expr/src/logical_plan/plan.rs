@@ -39,15 +39,18 @@ use crate::expr_rewriter::{
 };
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
-use crate::logical_plan::{DmlStatement, Statement};
+use crate::logical_plan::{DmlStatement, Statement, WriteOp};
 use crate::utils::{
-    enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs,
-    grouping_set_expr_count, grouping_set_to_exprlist, merge_schema, split_conjunction,
+    check_aggregate_and_window_nesting, check_no_window_functions,
+    enumerate_grouping_sets, expr_to_columns, exprlist_to_fields,
+    find_out_reference_exprs, grouping_set_expr_count, grouping_set_to_exprlist,
+    merge_schema, split_conjunction,
 };
 use crate::{
     BinaryExpr, CreateMemoryTable, CreateView, Execute, Expr, ExprSchemable, GroupingSet,
     LogicalPlanBuilder, Operator, Prepare, TableProviderFilterPushDown, TableSource,
-    WindowFunctionDefinition, build_join_schema, expr_vec_fmt, requalify_sides_if_needed,
+    WindowFunctionDefinition, build_asof_join_schema, build_join_schema, expr_vec_fmt,
+    requalify_sides_if_needed,
 };
 
 use crate::statistics::StatisticsRequest;
@@ -64,7 +67,7 @@ use datafusion_common::{
     FunctionalDependence, FunctionalDependencies, NullEquality, ParamValues, Result,
     ScalarValue, Spans, SplitPoint, TableReference, UnnestOptions,
     aggregate_functional_dependencies, assert_eq_or_internal_err, assert_or_internal_err,
-    internal_err, plan_err, validate_range_split_points,
+    internal_err, plan_datafusion_err, plan_err, validate_range_split_points,
 };
 use indexmap::IndexSet;
 use itertools::Itertools as _;
@@ -294,6 +297,9 @@ pub enum LogicalPlan {
     Unnest(Unnest),
     /// A variadic query (e.g. "Recursive CTEs")
     RecursiveQuery(RecursiveQuery),
+    /// Match each left row with at most one ordered row from the right input.
+    /// This is used to implement SQL `ASOF JOIN`.
+    AsOfJoin(AsOfJoin),
 }
 
 impl Default for LogicalPlan {
@@ -341,6 +347,7 @@ impl LogicalPlan {
             LogicalPlan::Aggregate(Aggregate { schema, .. }) => schema,
             LogicalPlan::Sort(Sort { input, .. }) => input.schema(),
             LogicalPlan::Join(Join { schema, .. }) => schema,
+            LogicalPlan::AsOfJoin(AsOfJoin { schema, .. }) => schema,
             LogicalPlan::Repartition(Repartition { input, .. }) => input.schema(),
             LogicalPlan::Limit(Limit { input, .. }) => input.schema(),
             LogicalPlan::Statement(statement) => statement.schema(),
@@ -369,7 +376,8 @@ impl LogicalPlan {
             | LogicalPlan::Projection(_)
             | LogicalPlan::Aggregate(_)
             | LogicalPlan::Unnest(_)
-            | LogicalPlan::Join(_) => self
+            | LogicalPlan::Join(_)
+            | LogicalPlan::AsOfJoin(_) => self
                 .inputs()
                 .iter()
                 .map(|input| input.schema().as_ref())
@@ -427,11 +435,11 @@ impl LogicalPlan {
     pub fn all_out_ref_exprs(self: &LogicalPlan) -> Vec<Expr> {
         let mut exprs = vec![];
         self.apply_expressions(|e| {
-            find_out_reference_exprs(e).into_iter().for_each(|e| {
+            for e in find_out_reference_exprs(e) {
                 if !exprs.contains(&e) {
                     exprs.push(e)
                 }
-            });
+            }
             Ok(TreeNodeRecursion::Continue)
         })
         // closure always returns OK
@@ -459,6 +467,9 @@ impl LogicalPlan {
             LogicalPlan::Aggregate(Aggregate { input, .. }) => vec![input],
             LogicalPlan::Sort(Sort { input, .. }) => vec![input],
             LogicalPlan::Join(Join { left, right, .. }) => vec![left, right],
+            LogicalPlan::AsOfJoin(AsOfJoin { left, right, .. }) => {
+                vec![left, right]
+            }
             LogicalPlan::Limit(Limit { input, .. }) => vec![input],
             LogicalPlan::Subquery(Subquery { subquery, .. }) => vec![subquery],
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => vec![input],
@@ -494,12 +505,20 @@ impl LogicalPlan {
         let mut using_columns: Vec<HashSet<Column>> = vec![];
 
         self.apply_with_subqueries(|plan| {
-            if let LogicalPlan::Join(Join {
-                join_constraint: JoinConstraint::Using,
-                on,
-                ..
-            }) = plan
-            {
+            let on = match plan {
+                LogicalPlan::Join(Join {
+                    join_constraint: JoinConstraint::Using,
+                    on,
+                    ..
+                })
+                | LogicalPlan::AsOfJoin(AsOfJoin {
+                    join_constraint: JoinConstraint::Using,
+                    on,
+                    ..
+                }) => Some(on),
+                _ => None,
+            };
+            if let Some(on) = on {
                 // The join keys in using-join must be columns.
                 let columns =
                     on.iter().try_fold(HashSet::new(), |mut accumu, (l, r)| {
@@ -567,6 +586,7 @@ impl LogicalPlan {
                     right.head_output_expr()
                 }
             },
+            LogicalPlan::AsOfJoin(AsOfJoin { left, .. }) => left.head_output_expr(),
             LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
                 static_term.head_output_expr()
             }
@@ -690,6 +710,26 @@ impl LogicalPlan {
                     null_aware,
                 }))
             }
+            LogicalPlan::AsOfJoin(AsOfJoin {
+                left,
+                right,
+                on,
+                match_condition,
+                join_constraint,
+                schema: _,
+            }) => Ok(LogicalPlan::AsOfJoin(AsOfJoin::try_new(
+                left,
+                right,
+                on.into_iter()
+                    .map(|(left, right)| (left.unalias(), right.unalias()))
+                    .collect(),
+                AsOfMatch {
+                    left: match_condition.left.unalias(),
+                    op: match_condition.op,
+                    right: match_condition.right.unalias(),
+                },
+                join_constraint,
+            )?)),
             LogicalPlan::Subquery(_) => Ok(self),
             LogicalPlan::SubqueryAlias(SubqueryAlias {
                 input,
@@ -810,12 +850,20 @@ impl LogicalPlan {
                 op,
                 ..
             }) => {
-                self.assert_no_expressions(expr)?;
                 let input = self.only_input(inputs)?;
+                let op = match op {
+                    WriteOp::MergeInto(merge_op) => {
+                        WriteOp::MergeInto(Box::new(merge_op.with_new_exprs(expr)?))
+                    }
+                    other => {
+                        self.assert_no_expressions(expr)?;
+                        other.clone()
+                    }
+                };
                 Ok(LogicalPlan::Dml(DmlStatement::new(
                     table_name.clone(),
                     Arc::clone(target),
-                    op.clone(),
+                    op,
                     Arc::new(input),
                 )))
             }
@@ -984,6 +1032,45 @@ impl LogicalPlan {
                     null_equality: *null_equality,
                     null_aware: *null_aware,
                 }))
+            }
+            LogicalPlan::AsOfJoin(AsOfJoin {
+                on,
+                match_condition,
+                join_constraint,
+                ..
+            }) => {
+                let (left, right) = self.only_two_inputs(inputs)?;
+                let expected = on.len() * 2 + 2;
+                assert_eq_or_internal_err!(
+                    expected,
+                    expr.len(),
+                    "Invalid number of new ASOF join expressions: expected {}, got {}",
+                    expected,
+                    expr.len()
+                );
+
+                let mut iter = expr.into_iter();
+                let mut new_on = Vec::with_capacity(on.len());
+                for _ in 0..on.len() {
+                    let left = iter.next().expect("expression count checked").unalias();
+                    let right = iter.next().expect("expression count checked").unalias();
+                    new_on.push((left, right));
+                }
+                let match_left = iter.next().expect("expression count checked").unalias();
+                let match_right =
+                    iter.next().expect("expression count checked").unalias();
+
+                Ok(LogicalPlan::AsOfJoin(AsOfJoin::try_new(
+                    Arc::new(left),
+                    Arc::new(right),
+                    new_on,
+                    AsOfMatch {
+                        left: match_left,
+                        op: match_condition.op,
+                        right: match_right,
+                    },
+                    *join_constraint,
+                )?))
             }
             LogicalPlan::Subquery(Subquery {
                 outer_ref_columns,
@@ -1410,6 +1497,7 @@ impl LogicalPlan {
                     right.max_rows()
                 }
             },
+            LogicalPlan::AsOfJoin(AsOfJoin { left, .. }) => left.max_rows(),
             LogicalPlan::Repartition(Repartition { input, .. }) => input.max_rows(),
             LogicalPlan::Union(Union { inputs, .. }) => {
                 inputs.iter().try_fold(0usize, |mut acc, plan| {
@@ -1418,7 +1506,9 @@ impl LogicalPlan {
                 })
             }
             LogicalPlan::TableScan(TableScan { fetch, .. }) => *fetch,
-            LogicalPlan::EmptyRelation(_) => Some(0),
+            LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row, ..
+            }) => Some(usize::from(*produce_one_row)),
             LogicalPlan::RecursiveQuery(_) => None,
             LogicalPlan::Subquery(_) => None,
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => input.max_rows(),
@@ -1442,6 +1532,83 @@ impl LogicalPlan {
         }
     }
 
+    /// Returns a lower bound on the number of rows that this plan can output.
+    ///
+    /// A return value of `0` means that the plan may produce no rows. A positive
+    /// value guarantees that the plan produces at least that many rows.
+    ///
+    /// See [`Self::max_rows`] for the corresponding upper bound.
+    pub fn min_rows(&self) -> usize {
+        match self {
+            LogicalPlan::Projection(Projection { input, .. })
+            | LogicalPlan::Window(Window { input, .. })
+            | LogicalPlan::Repartition(Repartition { input, .. })
+            | LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => input.min_rows(),
+            LogicalPlan::Filter(_) => 0,
+            LogicalPlan::Aggregate(Aggregate { group_expr, .. }) => {
+                // An ungrouped aggregate always produces one row, even for an
+                // empty input.
+                usize::from(group_expr.is_empty())
+            }
+            LogicalPlan::Sort(Sort { input, fetch, .. }) => fetch
+                .map(|fetch| input.min_rows().min(fetch))
+                .unwrap_or_else(|| input.min_rows()),
+            LogicalPlan::Join(Join {
+                left,
+                right,
+                on,
+                filter,
+                join_type,
+                ..
+            }) => match join_type {
+                JoinType::Inner if on.is_empty() && filter.is_none() => {
+                    left.min_rows().saturating_mul(right.min_rows())
+                }
+                JoinType::Left | JoinType::LeftMark => left.min_rows(),
+                JoinType::Right | JoinType::RightMark => right.min_rows(),
+                JoinType::Full => left.min_rows().max(right.min_rows()),
+                JoinType::Inner
+                | JoinType::LeftSemi
+                | JoinType::RightSemi
+                | JoinType::LeftAnti
+                | JoinType::RightAnti => 0,
+            },
+            LogicalPlan::AsOfJoin(AsOfJoin { left, .. }) => left.min_rows(),
+            LogicalPlan::Union(Union { inputs, .. }) => inputs
+                .iter()
+                .fold(0, |rows, input| rows.saturating_add(input.min_rows())),
+            LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row, ..
+            }) => usize::from(*produce_one_row),
+            LogicalPlan::Subquery(Subquery { subquery, .. }) => subquery.min_rows(),
+            LogicalPlan::Limit(limit) => {
+                match (limit.get_skip_type(), limit.get_fetch_type()) {
+                    (Ok(SkipType::Literal(skip)), Ok(FetchType::Literal(fetch))) => fetch
+                        .map(|fetch| {
+                            limit.input.min_rows().saturating_sub(skip).min(fetch)
+                        })
+                        .unwrap_or_else(|| limit.input.min_rows().saturating_sub(skip)),
+                    _ => 0,
+                }
+            }
+            LogicalPlan::Distinct(
+                Distinct::All(input) | Distinct::On(DistinctOn { input, .. }),
+            ) => usize::from(input.min_rows() > 0),
+            LogicalPlan::Values(values) => values.values.len(),
+            LogicalPlan::TableScan(_)
+            | LogicalPlan::RecursiveQuery(_)
+            | LogicalPlan::Unnest(_)
+            | LogicalPlan::Ddl(_)
+            | LogicalPlan::Explain(_)
+            | LogicalPlan::Analyze(_)
+            | LogicalPlan::Dml(_)
+            | LogicalPlan::Copy(_)
+            | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::Statement(_)
+            | LogicalPlan::Extension(_) => 0,
+        }
+    }
+
     /// Returns the skip (offset) of this plan node, if it has one.
     ///
     /// Only [`LogicalPlan::Limit`] carries a skip value; all other variants
@@ -1460,6 +1627,7 @@ impl LogicalPlan {
             LogicalPlan::Window(_) => Ok(None),
             LogicalPlan::Aggregate(_) => Ok(None),
             LogicalPlan::Join(_) => Ok(None),
+            LogicalPlan::AsOfJoin(_) => Ok(None),
             LogicalPlan::Repartition(_) => Ok(None),
             LogicalPlan::Union(_) => Ok(None),
             LogicalPlan::EmptyRelation(_) => Ok(None),
@@ -1498,6 +1666,7 @@ impl LogicalPlan {
             LogicalPlan::Window(_) => Ok(None),
             LogicalPlan::Aggregate(_) => Ok(None),
             LogicalPlan::Join(_) => Ok(None),
+            LogicalPlan::AsOfJoin(_) => Ok(None),
             LogicalPlan::Repartition(_) => Ok(None),
             LogicalPlan::Union(_) => Ok(None),
             LogicalPlan::EmptyRelation(_) => Ok(None),
@@ -1619,7 +1788,7 @@ impl LogicalPlan {
     /// updated according to the new parameters.
     ///
     /// Unlike `recompute_schema()`, this method rebuilds VALUES plans entirely to properly infer
-    /// types types from literal values after placeholder substitution.
+    /// types from literal values after placeholder substitution.
     fn update_schema_data_type(self) -> Result<LogicalPlan> {
         match self {
             // Build `LogicalPlan::Values` from the values for type inference.
@@ -1905,7 +2074,7 @@ impl LogicalPlan {
                         produce_one_row,
                         schema: _,
                     }) => {
-                        let rows = if *produce_one_row { 1 } else { 0 };
+                        let rows = i32::from(*produce_one_row);
                         write!(f, "EmptyRelation: rows={rows}")
                     }
                     LogicalPlan::RecursiveQuery(RecursiveQuery {
@@ -1984,7 +2153,7 @@ impl LogicalPlan {
                                     ", full_filters=[{}]",
                                     expr_vec_fmt!(full_filter)
                                 )?;
-                            };
+                            }
                             if !partial_filter.is_empty() {
                                 write!(
                                     f,
@@ -2102,7 +2271,7 @@ impl LogicalPlan {
                         };
                         match join_constraint {
                             JoinConstraint::On => {
-                                write!(f, "{join_type} Join:",)?;
+                                write!(f, "{join_type} Join:")?;
                                 if !join_expr.is_empty() || !filter_expr.is_empty() {
                                     write!(
                                         f,
@@ -2125,6 +2294,25 @@ impl LogicalPlan {
                                 )
                             }
                         }
+                    }
+                    LogicalPlan::AsOfJoin(AsOfJoin {
+                        on,
+                        match_condition,
+                        join_constraint,
+                        ..
+                    }) => {
+                        let equality = on
+                            .iter()
+                            .map(|(left, right)| format!("{left} = {right}"))
+                            .join(", ");
+                        write!(
+                            f,
+                            "AsOf Join: match=[{match_condition}], constraint={join_constraint:?}"
+                        )?;
+                        if !equality.is_empty() {
+                            write!(f, ", on=[{equality}]")?;
+                        }
+                        Ok(())
                     }
                     LogicalPlan::Repartition(Repartition {
                         partitioning_scheme,
@@ -2173,7 +2361,7 @@ impl LogicalPlan {
                                 .as_ref()
                                 .map_or_else(|| "None".to_string(), |x| x.to_string()),
                         };
-                        write!(f, "Limit: skip={skip_str}, fetch={fetch_str}",)
+                        write!(f, "Limit: skip={skip_str}, fetch={fetch_str}")
                     }
                     LogicalPlan::Subquery(Subquery { .. }) => {
                         write!(f, "Subquery:")
@@ -2635,18 +2823,23 @@ pub struct Filter {
 impl Filter {
     /// Create a new filter operator.
     ///
-    /// Skips the type-checking and dealiasing done in [Self::try_new].
-    /// For internal use in DataFusion only.
+    /// Skips the type-checking, window function check and dealiasing done in
+    /// [Self::try_new]. For internal use in DataFusion only.
     ///
     /// **Preconditions:**
     /// - the `predicate` expression returns a boolean value
     /// - the `predicate` expression is not aliased
+    /// - the `predicate` expression contains no window function calls
     #[doc(hidden)]
     pub fn new(predicate: Expr, input: Arc<LogicalPlan>) -> Self {
         Self { predicate, input }
     }
 
     /// Create a new filter operator.
+    ///
+    /// Returns an error if the predicate is not boolean or contains a window
+    /// function call, which cannot be evaluated by a filter (see
+    /// [`check_no_window_functions`]).
     ///
     /// Notes: as Aliases have no effect on the output of a filter operator,
     /// they are removed from the predicate expression.
@@ -2666,6 +2859,11 @@ impl Filter {
     }
 
     fn try_new_internal(predicate: Expr, input: Arc<LogicalPlan>) -> Result<Self> {
+        // Filters are evaluated before window functions are computed, so a
+        // window call in the predicate has no physical equivalent. Reject it
+        // here rather than failing during physical planning.
+        check_no_window_functions(&predicate, "filter predicates")?;
+
         // Filter predicates must return a boolean value so we try and validate that here.
         // Note that it is not always possible to resolve the predicate expression during plan
         // construction (such as with correlated subqueries) so we make a best effort here and
@@ -2779,6 +2977,11 @@ pub struct Window {
 impl Window {
     /// Create a new window operator.
     pub fn try_new(window_expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
+        // Reject e.g. `sum(sum(x) OVER ()) OVER ()` here rather than letting it
+        // reach physical planning, which has no equivalent for a nested window
+        // function.
+        check_aggregate_and_window_nesting(window_expr.iter())?;
+
         let fields: Vec<(Option<TableReference>, Arc<Field>)> = input
             .schema()
             .iter()
@@ -3690,7 +3893,12 @@ impl Limit {
                     // `skip = NULL` is equivalent to `skip = 0`
                     let s = s.unwrap_or(0);
                     if s >= 0 {
-                        Ok(SkipType::Literal(s as usize))
+                        let s = usize::try_from(s).map_err(|_| {
+                            plan_datafusion_err!(
+                                "OFFSET value {s} cannot be represented as usize"
+                            )
+                        })?;
+                        Ok(SkipType::Literal(s))
                     } else {
                         plan_err!("OFFSET must be >=0, '{}' was provided", s)
                     }
@@ -3708,7 +3916,12 @@ impl Limit {
             Some(expr) => match *expr {
                 Expr::Literal(ScalarValue::Int64(Some(s)), _) => {
                     if s >= 0 {
-                        Ok(FetchType::Literal(Some(s as usize)))
+                        let s = usize::try_from(s).map_err(|_| {
+                            plan_datafusion_err!(
+                                "LIMIT value {s} cannot be represented as usize"
+                            )
+                        })?;
+                        Ok(FetchType::Literal(Some(s)))
                     } else {
                         plan_err!("LIMIT must be >= 0, '{}' was provided", s)
                     }
@@ -3892,6 +4105,10 @@ impl Aggregate {
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
     ) -> Result<Self> {
+        // Reject e.g. `sum(sum(x))` here rather than letting it reach physical
+        // planning, which has no equivalent for a nested aggregate.
+        check_aggregate_and_window_nesting(group_expr.iter().chain(aggr_expr.iter()))?;
+
         let group_expr = enumerate_grouping_sets(group_expr)?;
 
         let is_grouping_set = matches!(group_expr.as_slice(), [Expr::GroupingSet(_)]);
@@ -3984,7 +4201,7 @@ impl Aggregate {
             exprs.push(&INTERNAL_ID_EXPR);
         }
         exprs.extend(self.aggr_expr.iter());
-        debug_assert!(exprs.len() == self.schema.fields().len());
+        debug_assert_eq!(exprs.len(), self.schema.fields().len());
         Ok(exprs)
     }
 
@@ -4227,14 +4444,196 @@ pub struct Join {
     pub schema: DFSchemaRef,
     /// Defines the null equality for the join.
     pub null_equality: NullEquality,
-    /// Whether this is a null-aware anti join (for NOT IN semantics).
+    /// Whether this join needs null-aware NOT IN semantics.
     ///
-    /// Only applies to LeftAnti joins. When true, implements SQL NOT IN semantics where:
-    /// - If the right side (subquery) contains any NULL in join keys, no rows are output
-    /// - Left side rows with NULL in join keys are not output
+    /// For `LeftAnti`, if the right side contains any NULL in join keys, no rows are output and
+    /// left rows with NULL join keys are also excluded.
     ///
-    /// This is required for correct NOT IN subquery behavior with three-valued logic.
+    /// For `LeftMark`, the generated `mark` column becomes nullable so unmatched rows can produce
+    /// `NULL` rather than `false` when SQL three-valued logic requires it.
     pub null_aware: bool,
+}
+
+/// The ordered comparison used by an [`AsOfJoin`].
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub struct AsOfMatch {
+    /// Expression evaluated against the left input.
+    pub left: Expr,
+    /// One of [`Operator::Lt`], [`Operator::LtEq`], [`Operator::Gt`], or
+    /// [`Operator::GtEq`].
+    pub op: Operator,
+    /// Expression evaluated against the right input.
+    pub right: Expr,
+}
+
+impl AsOfMatch {
+    /// Creates an ordered ASOF match condition.
+    pub fn new(left: Expr, op: Operator, right: Expr) -> Self {
+        Self { left, op, right }
+    }
+}
+
+impl TryFrom<Expr> for AsOfMatch {
+    type Error = DataFusionError;
+
+    fn try_from(condition: Expr) -> Result<Self> {
+        let Expr::BinaryExpr(BinaryExpr { left, op, right }) = condition else {
+            return plan_err!("ASOF MATCH_CONDITION must be a single comparison");
+        };
+        if !matches!(
+            op,
+            Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq
+        ) {
+            return plan_err!(
+                "ASOF MATCH_CONDITION requires <, <=, >, or >=, found {op}"
+            );
+        }
+        Ok(Self::new(*left, op, *right))
+    }
+}
+
+impl Display for AsOfMatch {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{} {} {}", self.left, self.op, self.right)
+    }
+}
+
+/// Match each left row with at most one ordered row from the right input.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AsOfJoin {
+    /// Left input. Every left row is preserved exactly once.
+    pub left: Arc<LogicalPlan>,
+    /// Right input.
+    pub right: Arc<LogicalPlan>,
+    /// Equality clauses expressed as pairs of left and right expressions.
+    pub on: Vec<(Expr, Expr)>,
+    /// Ordered match condition.
+    pub match_condition: Box<AsOfMatch>,
+    /// Whether equality keys came from `ON` or `USING`.
+    pub join_constraint: JoinConstraint,
+    /// Output schema.
+    pub schema: DFSchemaRef,
+}
+
+impl AsOfJoin {
+    /// Creates an ASOF join and validates its logical contract.
+    ///
+    /// This is the pre-coercion boundary. The physical ASOF constructor repeats
+    /// the shared operator, side-ownership, and determinism checks for direct
+    /// physical-plan callers and adds execution-only constraints. Keep the
+    /// shared checks aligned across both entry points.
+    pub fn try_new(
+        left: Arc<LogicalPlan>,
+        right: Arc<LogicalPlan>,
+        on: Vec<(Expr, Expr)>,
+        match_condition: AsOfMatch,
+        join_constraint: JoinConstraint,
+    ) -> Result<Self> {
+        if !matches!(
+            match_condition.op,
+            Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq
+        ) {
+            return plan_err!(
+                "ASOF MATCH_CONDITION requires <, <=, >, or >=, found {}",
+                match_condition.op
+            );
+        }
+
+        Self::validate_side(&match_condition.left, left.schema(), "left match")?;
+        Self::validate_side(&match_condition.right, right.schema(), "right match")?;
+        if match_condition.left.is_volatile() || match_condition.right.is_volatile() {
+            return plan_err!("ASOF MATCH_CONDITION must be deterministic");
+        }
+
+        let left_type = match_condition.left.get_type(left.schema())?;
+        let right_type = match_condition.right.get_type(right.schema())?;
+        if crate::type_coercion::binary::comparison_coercion(&left_type, &right_type)
+            .is_none()
+        {
+            return plan_err!(
+                "ASOF match expressions have incompatible types {left_type} and {right_type}"
+            );
+        }
+
+        for (left_expr, right_expr) in &on {
+            Self::validate_side(left_expr, left.schema(), "left equality")?;
+            Self::validate_side(right_expr, right.schema(), "right equality")?;
+            if left_expr.is_volatile() || right_expr.is_volatile() {
+                return plan_err!("ASOF equality expressions must be deterministic");
+            }
+            let left_type = left_expr.get_type(left.schema())?;
+            let right_type = right_expr.get_type(right.schema())?;
+            let Some(common_type) = crate::type_coercion::binary::comparison_coercion(
+                &left_type,
+                &right_type,
+            ) else {
+                return plan_err!(
+                    "ASOF equality expressions have incompatible types {left_type} and {right_type}"
+                );
+            };
+            if !crate::utils::can_hash(&common_type) {
+                return plan_err!(
+                    "ASOF equality expressions have unsupported hash type {common_type}"
+                );
+            }
+        }
+
+        if join_constraint == JoinConstraint::Using
+            && on.iter().any(|(left, right)| {
+                left.get_as_join_column().is_none()
+                    || right.get_as_join_column().is_none()
+            })
+        {
+            return plan_err!("ASOF USING keys must be columns");
+        }
+
+        let schema = build_asof_join_schema(left.schema(), right.schema())?;
+        Ok(Self {
+            left,
+            right,
+            on,
+            match_condition: Box::new(match_condition),
+            join_constraint,
+            schema: Arc::new(schema),
+        })
+    }
+
+    fn validate_side(expr: &Expr, schema: &DFSchema, name: &str) -> Result<()> {
+        let mut columns = HashSet::new();
+        expr_to_columns(expr, &mut columns)?;
+        if columns.is_empty() {
+            return plan_err!("ASOF {name} expression must reference its input");
+        }
+        if let Some(column) = columns
+            .iter()
+            .find(|column| !schema.is_column_from_schema(column))
+        {
+            return plan_err!(
+                "ASOF {name} expression references column {column} outside its input"
+            );
+        }
+        Ok(())
+    }
+}
+
+impl PartialOrd for AsOfJoin {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        (
+            &self.left,
+            &self.right,
+            &self.on,
+            &self.match_condition,
+            &self.join_constraint,
+        )
+            .partial_cmp(&(
+                &other.left,
+                &other.right,
+                &other.on,
+                &other.match_condition,
+                &other.join_constraint,
+            ))
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
+    }
 }
 
 impl Join {
@@ -4252,7 +4651,7 @@ impl Join {
     /// * `join_type` - Type of join (Inner, Left, Right, etc.)
     /// * `join_constraint` - Join constraint (On, Using)
     /// * `null_equality` - How to handle nulls in join comparisons
-    /// * `null_aware` - Whether this is a null-aware anti join (for NOT IN semantics)
+    /// * `null_aware` - Whether this join needs null-aware NOT IN semantics
     ///
     /// # Returns
     ///
@@ -4291,9 +4690,8 @@ impl Join {
         right: Arc<LogicalPlan>,
         column_on: (Vec<Column>, Vec<Column>),
     ) -> Result<(Self, bool)> {
-        let original_join = match original {
-            LogicalPlan::Join(join) => join,
-            _ => return plan_err!("Could not create join with project input"),
+        let LogicalPlan::Join(original_join) = original else {
+            return plan_err!("Could not create join with project input");
         };
 
         let mut left_sch = LogicalPlanBuilder::from(Arc::clone(&left));
@@ -4760,7 +5158,7 @@ impl Unnest {
                                     ));
                                 }
                                 _ => {}
-                            };
+                            }
                         }
 
                         // new columns dependent on the same original index
@@ -4851,7 +5249,7 @@ fn get_unnested_columns(
         _ => {
             return internal_err!("trying to unnest on invalid data type {data_type}");
         }
-    };
+    }
     Ok(qualified_columns)
 }
 
@@ -4873,7 +5271,7 @@ fn get_unnested_list_datatype_recursive(
             return get_unnested_list_datatype_recursive(field.data_type(), depth - 1);
         }
         _ => {}
-    };
+    }
 
     internal_err!("trying to unnest on invalid data type {data_type}")
 }
@@ -4934,6 +5332,33 @@ mod tests {
             8,
             "CreateFunction should be Box'd inside DdlStatement"
         );
+    }
+
+    #[test]
+    fn limit_literals_use_checked_usize_conversion() -> Result<()> {
+        let value = i64::from(u32::MAX) + 1;
+        let input = Arc::new(LogicalPlanBuilder::empty(false).build()?);
+        let limit = Limit {
+            skip: Some(Box::new(lit(value))),
+            fetch: Some(Box::new(lit(value))),
+            input,
+        };
+
+        if usize::BITS < 64 {
+            assert!(limit.get_skip_type().is_err());
+            assert!(limit.get_fetch_type().is_err());
+        } else {
+            let expected = usize::try_from(value).unwrap();
+            let SkipType::Literal(skip) = limit.get_skip_type()? else {
+                panic!("expected literal skip")
+            };
+            let FetchType::Literal(Some(fetch)) = limit.get_fetch_type()? else {
+                panic!("expected literal fetch")
+            };
+            assert_eq!(skip, expected);
+            assert_eq!(fetch, expected);
+        }
+        Ok(())
     }
 
     fn employee_schema() -> Schema {
@@ -5699,6 +6124,122 @@ mod tests {
     }
 
     #[test]
+    fn min_rows_is_a_conservative_lower_bound() -> Result<()> {
+        let no_rows = LogicalPlanBuilder::empty(false).build()?;
+        let one_row = LogicalPlanBuilder::empty(true).build()?;
+        assert_eq!(no_rows.min_rows(), 0);
+        assert_eq!(no_rows.max_rows(), Some(0));
+        assert_eq!(one_row.min_rows(), 1);
+        assert_eq!(one_row.max_rows(), Some(1));
+
+        let projection = LogicalPlanBuilder::from(one_row.clone())
+            .project(vec![lit(1)])?
+            .build()?;
+        assert_eq!(projection.min_rows(), 1);
+
+        let filter = LogicalPlanBuilder::from(projection.clone())
+            .filter(lit(true))?
+            .build()?;
+        assert_eq!(filter.min_rows(), 0);
+
+        let aggregate = LogicalPlanBuilder::from(no_rows)
+            .aggregate(Vec::<Expr>::new(), vec![count(lit(1))])?
+            .build()?;
+        assert_eq!(aggregate.min_rows(), 1);
+
+        let offset = LogicalPlanBuilder::from(projection.clone())
+            .limit(1, None)?
+            .build()?;
+        assert_eq!(offset.min_rows(), 0);
+
+        let union = LogicalPlanBuilder::from(projection.clone())
+            .union(projection)?
+            .build()?;
+        assert_eq!(union.min_rows(), 2);
+        assert_eq!(
+            LogicalPlanBuilder::from(union)
+                .distinct()?
+                .build()?
+                .min_rows(),
+            1
+        );
+
+        let values =
+            LogicalPlanBuilder::values(vec![vec![lit(1)], vec![lit(2)]])?.build()?;
+        assert_eq!(values.min_rows(), 2);
+
+        let sort_key = col("column1").sort(true, false);
+        let sort = LogicalPlanBuilder::from(values.clone())
+            .sort(vec![sort_key.clone()])?
+            .build()?;
+        assert_eq!(sort.min_rows(), 2);
+        let sort_with_fetch = LogicalPlanBuilder::from(values.clone())
+            .sort_with_limit(vec![sort_key], Some(1))?
+            .build()?;
+        assert_eq!(sort_with_fetch.min_rows(), 1);
+
+        let limit = LogicalPlanBuilder::from(values.clone())
+            .limit(1, Some(5))?
+            .build()?;
+        assert_eq!(limit.min_rows(), 1);
+
+        let grouped = LogicalPlanBuilder::from(values)
+            .aggregate(vec![col("column1")], vec![count(lit(1))])?
+            .build()?;
+        assert_eq!(grouped.min_rows(), 0);
+
+        let scan = table_scan(Some("employee"), &employee_schema(), None)?.build()?;
+        assert_eq!(scan.min_rows(), 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn min_rows_of_joins() -> Result<()> {
+        let two_rows = LogicalPlanBuilder::values(vec![vec![lit(1)], vec![lit(2)]])?
+            .alias("l")?
+            .build()?;
+        let one_row = LogicalPlanBuilder::values(vec![vec![lit(1)]])?
+            .alias("r")?
+            .build()?;
+
+        let cross_join = LogicalPlanBuilder::from(two_rows.clone())
+            .cross_join(one_row.clone())?
+            .build()?;
+        assert_eq!(cross_join.min_rows(), 2);
+
+        let asof_join = LogicalPlanBuilder::from(two_rows.clone())
+            .asof_join_on(
+                one_row.clone(),
+                None,
+                col("l.column1").gt_eq(col("r.column1")),
+            )?
+            .build()?;
+        assert_eq!(asof_join.min_rows(), 2);
+
+        for (join_type, expected_min_rows) in [
+            // An inner join with a join condition may filter out every row,
+            // while outer joins preserve the rows of the outer side(s).
+            (JoinType::Inner, 0),
+            (JoinType::Left, 2),
+            (JoinType::Right, 1),
+            (JoinType::Full, 2),
+            (JoinType::LeftSemi, 0),
+        ] {
+            let join = LogicalPlanBuilder::from(two_rows.clone())
+                .join_on(
+                    one_row.clone(),
+                    join_type,
+                    [col("l.column1").eq(col("r.column1"))],
+                )?
+                .build()?;
+            assert_eq!(join.min_rows(), expected_min_rows, "{join_type} join");
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn test_replace_invalid_placeholder() {
         // test empty placeholder
         let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
@@ -6398,7 +6939,9 @@ mod tests {
 
                     assert!(!fields[0].is_nullable());
                     assert!(!fields[1].is_nullable());
-                    assert!(!fields[2].is_nullable());
+                    // The mark column is always nullable: null-aware `LeftMark`
+                    // joins use NULL to represent SQL UNKNOWN for `NOT IN`.
+                    assert!(fields[2].is_nullable());
                 }
                 _ => {
                     assert_eq!(join.schema.fields().len(), 4);
@@ -6596,6 +7139,32 @@ mod tests {
             assert_eq!(join.null_equality, NullEquality::NullEqualsNull);
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_asof_using_preserves_qualified_keys() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("ts", DataType::Int64, false),
+        ]);
+        let left = Arc::new(table_scan(Some("t1"), &schema, None)?.build()?);
+        let right = Arc::new(table_scan(Some("t2"), &schema, None)?.build()?);
+        let join = AsOfJoin::try_new(
+            left,
+            right,
+            vec![(col("t1.id"), col("t2.id"))],
+            AsOfMatch::new(col("t1.ts"), Operator::GtEq, col("t2.ts")),
+            JoinConstraint::Using,
+        )?;
+
+        assert_eq!(join.schema.fields().len(), 4);
+        assert_eq!(
+            join.schema
+                .index_of_column(&Column::from_qualified_name("t2.id"))?,
+            2
+        );
+        assert!(join.schema.field(2).is_nullable());
         Ok(())
     }
 

@@ -1,4 +1,4 @@
--- k = 8: seven ~90% compares followed by one ~5% compare. See q30.
+-- k = 8: seven ~90% compares then one ~5% compare.
 SELECT count(*) FROM t
 WHERE c0 < 90
   AND c1 < 90

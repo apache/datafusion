@@ -209,7 +209,7 @@ pub fn get_query_sql_for_scale_factor(
                         .collect());
                 }
                 Err(e) => errors.push(format!("{filename}: {e}")),
-            };
+            }
         }
         plan_err!("invalid query. Could not find query: {:?}", errors)
     } else {

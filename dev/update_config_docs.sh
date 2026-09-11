@@ -27,8 +27,8 @@ cd "${ROOT_DIR}"
 source "${ROOT_DIR}/ci/scripts/utils/tool_versions.sh"
 
 TARGET_FILE="docs/source/user-guide/configs.md"
-PRINT_CONFIG_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --bin print_config_docs"
-PRINT_RUNTIME_CONFIG_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --bin print_runtime_config_docs"
+PRINT_CONFIG_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --features docs_generation --bin print_config_docs"
+PRINT_RUNTIME_CONFIG_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --features docs_generation --bin print_runtime_config_docs"
 
 echo "Inserting header"
 cat <<'EOF' > "$TARGET_FILE"
