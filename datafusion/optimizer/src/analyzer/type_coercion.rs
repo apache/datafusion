@@ -39,8 +39,8 @@ use datafusion_expr::expr::{
     HigherOrderFunction, InList, InSubquery, Like, ScalarFunction, SetComparison, Sort,
     WindowFunction,
 };
-use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
-use datafusion_expr::expr_schema::cast_subquery;
+use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema_with_session_time_zone;
+use datafusion_expr::expr_schema::cast_subquery_with_session_time_zone;
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
     comparison_coercion, like_coercion, regex_coercion, type_union_coercion,
@@ -52,6 +52,7 @@ use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_expression, get_coerce_type_for_case_when,
     get_coerce_type_for_list,
 };
+use datafusion_expr::type_coercion::session_time_zone::cast_to_with_session_time_zone;
 use datafusion_expr::type_coercion::{
     is_datetime, is_interval, is_signed_numeric, is_timestamp,
 };
@@ -86,7 +87,11 @@ fn coerce_output(plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPla
     }
 
     if let Some(dfschema) = transform_schema_to_nonview(plan.schema()) {
-        coerce_plan_expr_for_schema(plan, &dfschema?)
+        coerce_plan_expr_for_schema_with_session_time_zone(
+            plan,
+            &dfschema?,
+            config.execution.time_zone.as_deref(),
+        )
     } else {
         Ok(plan)
     }
@@ -100,9 +105,13 @@ impl AnalyzerRule for TypeCoercion {
     fn analyze(&self, plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan> {
         static EMPTY_SCHEMA: LazyLock<DFSchema> = LazyLock::new(DFSchema::empty);
 
+        let session_time_zone = config.execution.time_zone.as_deref();
+
         // recurse
         let transformed_plan = plan
-            .transform_up_with_subqueries(|plan| analyze_internal(&EMPTY_SCHEMA, plan))?
+            .transform_up_with_subqueries(|plan| {
+                analyze_internal(&EMPTY_SCHEMA, plan, session_time_zone)
+            })?
             .data;
 
         // finish
@@ -113,9 +122,13 @@ impl AnalyzerRule for TypeCoercion {
 /// use the external schema to handle the correlated subqueries case
 ///
 /// Assumes that children have already been optimized
+///
+/// `session_time_zone` is `datafusion.execution.time_zone`; see
+/// [`cast_to_with_session_time_zone`].
 fn analyze_internal(
     external_schema: &DFSchema,
     plan: LogicalPlan,
+    session_time_zone: Option<&str>,
 ) -> Result<Transformed<LogicalPlan>> {
     // get schema representing all available input fields. This is used for data type
     // resolution only, so order does not matter here
@@ -151,13 +164,19 @@ fn analyze_internal(
 
     // Coerce filter predicates to boolean (handles `WHERE NULL`)
     let plan = if let LogicalPlan::Filter(mut filter) = plan {
-        filter.predicate = filter.predicate.cast_to(&DataType::Boolean, &schema)?;
+        filter.predicate = cast_to_with_session_time_zone(
+            filter.predicate,
+            &DataType::Boolean,
+            &schema,
+            session_time_zone,
+        )?;
         LogicalPlan::Filter(filter)
     } else {
         plan
     };
 
-    let mut expr_rewrite = TypeCoercionRewriter::new(&schema);
+    let mut expr_rewrite =
+        TypeCoercionRewriter::new(&schema).with_session_time_zone(session_time_zone);
 
     let name_preserver = NamePreserver::new(&plan);
     // apply coercion rewrite all expressions in the plan individually
@@ -175,13 +194,71 @@ fn analyze_internal(
 /// Rewrite expressions to apply type coercion.
 pub struct TypeCoercionRewriter<'a> {
     pub(crate) schema: &'a DFSchema,
+    /// `datafusion.execution.time_zone`, when set.
+    ///
+    /// Timezone-naive timestamps are read in this zone wherever coercion turns
+    /// one into a timezone-aware timestamp. `None`, the default, keeps arrow's
+    /// behaviour of reading them in the target type's own zone.
+    session_time_zone: Option<&'a str>,
 }
 
 impl<'a> TypeCoercionRewriter<'a> {
     /// Create a new [`TypeCoercionRewriter`] with a provided schema
     /// representing both the inputs and output of the [`LogicalPlan`] node.
+    ///
+    /// The session time zone is unset; see
+    /// [`with_session_time_zone`](Self::with_session_time_zone).
     pub fn new(schema: &'a DFSchema) -> Self {
-        Self { schema }
+        Self {
+            schema,
+            session_time_zone: None,
+        }
+    }
+
+    /// Read timezone-naive timestamps in `session_time_zone` wherever coercion
+    /// converts one to a timezone-aware type.
+    ///
+    /// Pass `datafusion.execution.time_zone` to coerce the way SQL planning
+    /// does, and so the way PostgreSQL and DuckDB do. See
+    /// [`cast_to_with_session_time_zone`] for what changes.
+    pub fn with_session_time_zone(mut self, session_time_zone: Option<&'a str>) -> Self {
+        self.session_time_zone = session_time_zone;
+        self
+    }
+
+    /// Wrap `expr` in a cast to `to`, reading timezone-naive timestamps in the
+    /// session time zone.
+    ///
+    /// Every cast this rewriter inserts goes through here.
+    fn cast(&self, expr: Expr, to: &DataType, schema: &DFSchema) -> Result<Expr> {
+        cast_to_with_session_time_zone(expr, to, schema, self.session_time_zone)
+    }
+
+    /// Support the `IsTrue` `IsNotTrue` `IsFalse` `IsNotFalse` type coercion.
+    /// The above op will be rewrite to the binary op when creating the physical
+    /// op.
+    fn casted_expr_for_bool_op(&self, expr: Expr) -> Result<Expr> {
+        let left_type = expr.get_type(self.schema)?;
+        BinaryTypeCoercer::new(&left_type, &Operator::IsDistinctFrom, &DataType::Boolean)
+            .get_input_types()?;
+        self.cast(expr, &DataType::Boolean, self.schema)
+    }
+
+    /// [`cast_subquery_with_session_time_zone`], reading timezone-naive
+    /// timestamps in the session time zone.
+    ///
+    /// The cast lands in the subquery's projection rather than on an expression
+    /// of this plan, so it is built there rather than through [`Self::cast`].
+    fn cast_subquery(
+        &self,
+        subquery: Subquery,
+        cast_to_type: &DataType,
+    ) -> Result<Subquery> {
+        cast_subquery_with_session_time_zone(
+            subquery,
+            cast_to_type,
+            self.session_time_zone,
+        )
     }
 
     /// Coerce the [`LogicalPlan`].
@@ -192,8 +269,10 @@ impl<'a> TypeCoercionRewriter<'a> {
         match plan {
             LogicalPlan::Join(join) => self.coerce_join(join),
             LogicalPlan::AsOfJoin(join) => self.coerce_asof_join(join),
-            LogicalPlan::Union(union) => Self::coerce_union(union),
-            LogicalPlan::Limit(limit) => Self::coerce_limit(limit),
+            LogicalPlan::Union(union) => {
+                Self::coerce_union_in_time_zone(union, self.session_time_zone)
+            }
+            LogicalPlan::Limit(limit) => self.coerce_limit(limit),
             LogicalPlan::Dml(dml) => self.coerce_dml(dml),
             _ => Ok(plan),
         }
@@ -221,7 +300,8 @@ impl<'a> TypeCoercionRewriter<'a> {
                 datafusion_expr::dml::MergeIntoAction::Update(assignments) => {
                     for (column, value) in assignments {
                         let field = target_schema.field_with_unqualified_name(column)?;
-                        *value = value.clone().cast_to(field.data_type(), self.schema)?;
+                        *value =
+                            self.cast(value.clone(), field.data_type(), self.schema)?;
                     }
                 }
                 datafusion_expr::dml::MergeIntoAction::Insert { columns, values } => {
@@ -230,14 +310,14 @@ impl<'a> TypeCoercionRewriter<'a> {
                             values.iter_mut().zip(target_schema.fields())
                         {
                             *value =
-                                value.clone().cast_to(field.data_type(), self.schema)?;
+                                self.cast(value.clone(), field.data_type(), self.schema)?;
                         }
                     } else {
                         for (column, value) in columns.iter().zip(values) {
                             let field =
                                 target_schema.field_with_unqualified_name(column)?;
                             *value =
-                                value.clone().cast_to(field.data_type(), self.schema)?;
+                                self.cast(value.clone(), field.data_type(), self.schema)?;
                         }
                     }
                 }
@@ -317,7 +397,19 @@ impl<'a> TypeCoercionRewriter<'a> {
 
     /// Coerce the union’s inputs to a common schema compatible with all inputs.
     /// This occurs after wildcard expansion and the coercion of the input expressions.
+    ///
+    /// Timezone-naive timestamps are read in the zone of the branch they are
+    /// aligned to. Use
+    /// [`with_session_time_zone`](Self::with_session_time_zone) and coerce the
+    /// whole plan to read them in the session time zone instead.
     pub fn coerce_union(union_plan: Union) -> Result<LogicalPlan> {
+        Self::coerce_union_in_time_zone(union_plan, None)
+    }
+
+    fn coerce_union_in_time_zone(
+        union_plan: Union,
+        session_time_zone: Option<&str>,
+    ) -> Result<LogicalPlan> {
         let union_schema = Arc::new(coerce_union_schema_with_schema(
             &union_plan.inputs,
             &union_plan.schema,
@@ -326,8 +418,11 @@ impl<'a> TypeCoercionRewriter<'a> {
             .inputs
             .into_iter()
             .map(|p| {
-                let plan =
-                    coerce_plan_expr_for_schema(Arc::unwrap_or_clone(p), &union_schema)?;
+                let plan = coerce_plan_expr_for_schema_with_session_time_zone(
+                    Arc::unwrap_or_clone(p),
+                    &union_schema,
+                    session_time_zone,
+                )?;
                 match plan {
                     LogicalPlan::Projection(Projection { expr, input, .. }) => {
                         Ok(Arc::new(project_with_column_index(
@@ -347,15 +442,16 @@ impl<'a> TypeCoercionRewriter<'a> {
     }
 
     /// Coerce the fetch and skip expression to Int64 type.
-    fn coerce_limit(limit: Limit) -> Result<LogicalPlan> {
+    fn coerce_limit(&self, limit: Limit) -> Result<LogicalPlan> {
         fn coerce_limit_expr(
+            rewriter: &TypeCoercionRewriter<'_>,
             expr: Expr,
             schema: &DFSchema,
             expr_name: &str,
         ) -> Result<Expr> {
             let dt = expr.get_type(schema)?;
             if dt.is_integer() || dt.is_null() {
-                expr.cast_to(&DataType::Int64, schema)
+                rewriter.cast(expr, &DataType::Int64, schema)
             } else {
                 plan_err!("Expected {expr_name} to be an integer or null, but got {dt}")
             }
@@ -364,11 +460,11 @@ impl<'a> TypeCoercionRewriter<'a> {
         let empty_schema = DFSchema::empty();
         let new_fetch = limit
             .fetch
-            .map(|expr| coerce_limit_expr(*expr, &empty_schema, "LIMIT"))
+            .map(|expr| coerce_limit_expr(self, *expr, &empty_schema, "LIMIT"))
             .transpose()?;
         let new_skip = limit
             .skip
-            .map(|expr| coerce_limit_expr(*expr, &empty_schema, "OFFSET"))
+            .map(|expr| coerce_limit_expr(self, *expr, &empty_schema, "OFFSET"))
             .transpose()?;
         Ok(LogicalPlan::Limit(Limit {
             input: limit.input,
@@ -381,7 +477,7 @@ impl<'a> TypeCoercionRewriter<'a> {
         let expr_type = expr.get_type(self.schema)?;
         match expr_type {
             DataType::Boolean => Ok(expr),
-            DataType::Null => expr.cast_to(&DataType::Boolean, self.schema),
+            DataType::Null => self.cast(expr, &DataType::Boolean, self.schema),
             other => {
                 plan_err!("{description} must be boolean type, but got {other:?}")
             }
@@ -416,7 +512,7 @@ impl<'a> TypeCoercionRewriter<'a> {
                 &right_type,
             )?
         } else {
-            left.cast_to(&left_type, left_schema)?
+            self.cast(left, &left_type, left_schema)?
         };
 
         let right_expr = if !right_cast_ok {
@@ -428,7 +524,7 @@ impl<'a> TypeCoercionRewriter<'a> {
                 &left_type,
             )?
         } else {
-            right.cast_to(&right_type, right_schema)?
+            self.cast(right, &right_type, right_schema)?
         };
 
         Ok((left_expr, right_expr))
@@ -568,9 +664,9 @@ impl<'a> TypeCoercionRewriter<'a> {
             {
                 Box::new(expr)
             }
-            _ => Box::new(expr.cast_to(&coerced_type, self.schema)?),
+            _ => Box::new(self.cast(expr, &coerced_type, self.schema)?),
         };
-        let pattern = Box::new(pattern.cast_to(&coerced_type, self.schema)?);
+        let pattern = Box::new(self.cast(pattern, &coerced_type, self.schema)?);
         Ok((expr, pattern))
     }
 }
@@ -588,8 +684,12 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 outer_ref_columns,
                 spans,
             }) => {
-                let new_plan =
-                    analyze_internal(self.schema, Arc::unwrap_or_clone(subquery))?.data;
+                let new_plan = analyze_internal(
+                    self.schema,
+                    Arc::unwrap_or_clone(subquery),
+                    self.session_time_zone,
+                )?
+                .data;
                 Ok(Transformed::yes(Expr::ScalarSubquery(Subquery {
                     subquery: Arc::new(new_plan),
                     outer_ref_columns,
@@ -600,6 +700,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 let new_plan = analyze_internal(
                     self.schema,
                     Arc::unwrap_or_clone(subquery.subquery),
+                    self.session_time_zone,
                 )?
                 .data;
                 Ok(Transformed::yes(Expr::Exists(Exists {
@@ -619,6 +720,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 let new_plan = analyze_internal(
                     self.schema,
                     Arc::unwrap_or_clone(subquery.subquery),
+                    self.session_time_zone,
                 )?
                 .data;
                 let expr_type = expr.get_type(self.schema)?;
@@ -634,8 +736,8 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     spans: subquery.spans,
                 };
                 Ok(Transformed::yes(Expr::InSubquery(InSubquery::new(
-                    Box::new(expr.cast_to(&common_type, self.schema)?),
-                    cast_subquery(new_subquery, &common_type)?,
+                    Box::new(self.cast(*expr, &common_type, self.schema)?),
+                    self.cast_subquery(new_subquery, &common_type)?,
                     negated,
                 ))))
             }
@@ -648,6 +750,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 let new_plan = analyze_internal(
                     self.schema,
                     Arc::unwrap_or_clone(subquery.subquery),
+                    self.session_time_zone,
                 )?
                 .data;
                 let expr_type = expr.get_type(self.schema)?;
@@ -670,33 +773,32 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     spans: subquery.spans,
                 };
                 Ok(Transformed::yes(Expr::SetComparison(SetComparison::new(
-                    Box::new(expr.cast_to(&common_type, self.schema)?),
-                    cast_subquery(new_subquery, &common_type)?,
+                    Box::new(self.cast(*expr, &common_type, self.schema)?),
+                    self.cast_subquery(new_subquery, &common_type)?,
                     op,
                     quantifier,
                 ))))
             }
-            Expr::Not(expr) => Ok(Transformed::yes(not(get_casted_expr_for_bool_op(
-                *expr,
-                self.schema,
-            )?))),
+            Expr::Not(expr) => {
+                Ok(Transformed::yes(not(self.casted_expr_for_bool_op(*expr)?)))
+            }
             Expr::IsTrue(expr) => Ok(Transformed::yes(is_true(
-                get_casted_expr_for_bool_op(*expr, self.schema)?,
+                self.casted_expr_for_bool_op(*expr)?,
             ))),
             Expr::IsNotTrue(expr) => Ok(Transformed::yes(is_not_true(
-                get_casted_expr_for_bool_op(*expr, self.schema)?,
+                self.casted_expr_for_bool_op(*expr)?,
             ))),
             Expr::IsFalse(expr) => Ok(Transformed::yes(is_false(
-                get_casted_expr_for_bool_op(*expr, self.schema)?,
+                self.casted_expr_for_bool_op(*expr)?,
             ))),
             Expr::IsNotFalse(expr) => Ok(Transformed::yes(is_not_false(
-                get_casted_expr_for_bool_op(*expr, self.schema)?,
+                self.casted_expr_for_bool_op(*expr)?,
             ))),
             Expr::IsUnknown(expr) => Ok(Transformed::yes(is_unknown(
-                get_casted_expr_for_bool_op(*expr, self.schema)?,
+                self.casted_expr_for_bool_op(*expr)?,
             ))),
             Expr::IsNotUnknown(expr) => Ok(Transformed::yes(is_not_unknown(
-                get_casted_expr_for_bool_op(*expr, self.schema)?,
+                self.casted_expr_for_bool_op(*expr)?,
             ))),
             Expr::Negative(expr) => {
                 let data_type = expr.get_type(self.schema)?;
@@ -799,10 +901,10 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                             )
                         })?;
                 Ok(Transformed::yes(Expr::Between(Between::new(
-                    Box::new(expr.cast_to(&coercion_type, self.schema)?),
+                    Box::new(self.cast(*expr, &coercion_type, self.schema)?),
                     negated,
-                    Box::new(low.cast_to(&coercion_type, self.schema)?),
-                    Box::new(high.cast_to(&coercion_type, self.schema)?),
+                    Box::new(self.cast(*low, &coercion_type, self.schema)?),
+                    Box::new(self.cast(*high, &coercion_type, self.schema)?),
                 ))))
             }
             Expr::InList(InList {
@@ -824,11 +926,11 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     ),
                     Some(coerced_type) => {
                         // find the coerced type
-                        let cast_expr = expr.cast_to(&coerced_type, self.schema)?;
+                        let cast_expr = self.cast(*expr, &coerced_type, self.schema)?;
                         let cast_list_expr = list
                             .into_iter()
                             .map(|list_expr| {
-                                list_expr.cast_to(&coerced_type, self.schema)
+                                self.cast(list_expr, &coerced_type, self.schema)
                             })
                             .collect::<Result<Vec<_>>>()?;
                         Ok(Transformed::yes(Expr::InList(InList::new(
@@ -840,7 +942,8 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 }
             }
             Expr::Case(case) => {
-                let case = coerce_case_expression(case, self.schema)?;
+                let case =
+                    coerce_case_expression(case, self.schema, self.session_time_zone)?;
                 Ok(Transformed::yes(Expr::Case(case)))
             }
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
@@ -848,6 +951,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     args,
                     self.schema,
                     func.as_ref(),
+                    self.session_time_zone,
                 )?;
                 Ok(Transformed::yes(Expr::ScalarFunction(
                     ScalarFunction::new_udf(func, new_expr),
@@ -864,11 +968,15 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                         null_treatment,
                     },
             }) => {
-                let new_expr =
-                    coerce_arguments_for_signature(args, self.schema, func.as_ref())?;
+                let new_expr = coerce_arguments_for_signature(
+                    args,
+                    self.schema,
+                    func.as_ref(),
+                    self.session_time_zone,
+                )?;
 
                 let filter = filter
-                    .map(|filter| filter.cast_to(&DataType::Boolean, self.schema))
+                    .map(|filter| self.cast(*filter, &DataType::Boolean, self.schema))
                     .transpose()?
                     .map(Box::new);
 
@@ -902,15 +1010,25 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
 
                 let args = match &fun {
                     expr::WindowFunctionDefinition::AggregateUDF(udf) => {
-                        coerce_arguments_for_signature(args, self.schema, udf.as_ref())?
+                        coerce_arguments_for_signature(
+                            args,
+                            self.schema,
+                            udf.as_ref(),
+                            self.session_time_zone,
+                        )?
                     }
                     expr::WindowFunctionDefinition::WindowUDF(udf) => {
-                        coerce_arguments_for_signature(args, self.schema, udf.as_ref())?
+                        coerce_arguments_for_signature(
+                            args,
+                            self.schema,
+                            udf.as_ref(),
+                            self.session_time_zone,
+                        )?
                     }
                 };
 
                 let filter = filter
-                    .map(|filter| filter.cast_to(&DataType::Boolean, self.schema))
+                    .map(|filter| self.cast(*filter, &DataType::Boolean, self.schema))
                     .transpose()?
                     .map(Box::new);
 
@@ -948,7 +1066,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     .map(|(arg, new_field)| match (&arg, new_field) {
                         (Expr::Lambda(_lambda), ValueOrLambda::Lambda(_)) => Ok(arg),
                         (Expr::Lambda(_lambda), ValueOrLambda::Value(_)) => internal_err!("value_fields_with_higher_order_udf returned a value for a lambda argument"),
-                        (_, ValueOrLambda::Value(new_field)) => arg.cast_to(new_field.data_type(), self.schema),
+                        (_, ValueOrLambda::Value(new_field)) => self.cast(arg, new_field.data_type(), self.schema),
                         (_, ValueOrLambda::Lambda(_)) => internal_err!("value_fields_with_higher_order_udf returned a lambda for a value argument"),
                     })
                     .collect::<Result<_>>()?;
@@ -1169,15 +1287,6 @@ fn coerce_window_frame(
     Ok(window_frame)
 }
 
-// Support the `IsTrue` `IsNotTrue` `IsFalse` `IsNotFalse` type coercion.
-// The above op will be rewrite to the binary op when creating the physical op.
-fn get_casted_expr_for_bool_op(expr: Expr, schema: &DFSchema) -> Result<Expr> {
-    let left_type = expr.get_type(schema)?;
-    BinaryTypeCoercer::new(&left_type, &Operator::IsDistinctFrom, &DataType::Boolean)
-        .get_input_types()?;
-    expr.cast_to(&DataType::Boolean, schema)
-}
-
 /// Returns `expressions` coerced to types compatible with
 /// `signature`, if possible.
 ///
@@ -1186,13 +1295,16 @@ fn coerce_arguments_for_signature<F: UDFCoercionExt>(
     expressions: Vec<Expr>,
     schema: &DFSchema,
     func: &F,
+    session_time_zone: Option<&str>,
 ) -> Result<Vec<Expr>> {
     let coerced_types = coerced_argument_types(&expressions, schema, func)?;
 
     expressions
         .into_iter()
         .zip(coerced_types)
-        .map(|(expr, data_type)| expr.cast_to(&data_type, schema))
+        .map(|(expr, data_type)| {
+            cast_to_with_session_time_zone(expr, &data_type, schema, session_time_zone)
+        })
         .collect()
 }
 
@@ -1204,6 +1316,7 @@ fn coerce_scalar_function_arguments_for_signature<F: UDFCoercionExt>(
     expressions: Vec<Expr>,
     schema: &DFSchema,
     func: &F,
+    session_time_zone: Option<&str>,
 ) -> Result<Vec<Expr>> {
     let coerced_types = coerced_argument_types(&expressions, schema, func)?;
 
@@ -1211,7 +1324,7 @@ fn coerce_scalar_function_arguments_for_signature<F: UDFCoercionExt>(
         .into_iter()
         .zip(coerced_types)
         .map(|(expr, data_type)| {
-            coerce_scalar_function_argument(expr, &data_type, schema)
+            coerce_scalar_function_argument(expr, &data_type, schema, session_time_zone)
         })
         .collect()
 }
@@ -1238,6 +1351,7 @@ fn coerce_scalar_function_argument(
     expr: Expr,
     data_type: &DataType,
     schema: &DFSchema,
+    session_time_zone: Option<&str>,
 ) -> Result<Expr> {
     if matches!(&expr, Expr::Cast(_) | Expr::TryCast(_))
         && expr.get_type(schema)? == *data_type
@@ -1245,23 +1359,40 @@ fn coerce_scalar_function_argument(
         return Ok(expr);
     }
 
-    let Expr::Literal(value, metadata) = expr else {
-        return expr.cast_to(data_type, schema);
-    };
+    if !matches!(expr, Expr::Literal(_, _)) {
+        return cast_to_with_session_time_zone(
+            expr,
+            data_type,
+            schema,
+            session_time_zone,
+        );
+    }
 
-    if value.data_type() != *data_type
+    let coerced =
+        cast_to_with_session_time_zone(expr, data_type, schema, session_time_zone)?;
+
+    // Materialize the cast into the literal, unless the session time zone split
+    // it in two: casting the value would read its wall clock in `data_type`'s
+    // own time zone, which is the reading the split is there to avoid.
+    if let Expr::Cast(Cast { expr, .. }) = &coerced
+        && let Expr::Literal(value, metadata) = expr.as_ref()
+        && value.data_type() != *data_type
         && let Ok(value) = value.cast_to(data_type)
     {
-        return Ok(Expr::Literal(value, metadata));
+        return Ok(Expr::Literal(value, metadata.clone()));
     }
 
     // A failed value cast remains an expression cast so execution produces the
     // same error as before. Since it is no longer a literal at the coerced type,
     // it is reported as `None` in `ReturnFieldArgs::scalar_arguments`.
-    Expr::Literal(value, metadata).cast_to(data_type, schema)
+    Ok(coerced)
 }
 
-fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
+fn coerce_case_expression(
+    case: Case,
+    schema: &DFSchema,
+    session_time_zone: Option<&str>,
+) -> Result<Case> {
     // Given expressions like:
     //
     // CASE a1
@@ -1351,7 +1482,14 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
     let case_expr = case
         .expr
         .zip(case_when_coerce_type.as_ref())
-        .map(|(case_expr, coercible_type)| case_expr.cast_to(coercible_type, schema))
+        .map(|(case_expr, coercible_type)| {
+            cast_to_with_session_time_zone(
+                *case_expr,
+                coercible_type,
+                schema,
+                session_time_zone,
+            )
+        })
         .transpose()?
         .map(Box::new);
     let when_then = case
@@ -1359,7 +1497,13 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
         .into_iter()
         .map(|(when, then)| {
             let when_type = case_when_coerce_type.as_ref().unwrap_or(&DataType::Boolean);
-            let when = when.cast_to(when_type, schema).map_err(|e| {
+            let when = cast_to_with_session_time_zone(
+                *when,
+                when_type,
+                schema,
+                session_time_zone,
+            )
+            .map_err(|e| {
                 DataFusionError::Context(
                     format!(
                         "WHEN expressions in CASE couldn't be \
@@ -1368,13 +1512,25 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
                     Box::new(e),
                 )
             })?;
-            let then = then.cast_to(&then_else_coerce_type, schema)?;
+            let then = cast_to_with_session_time_zone(
+                *then,
+                &then_else_coerce_type,
+                schema,
+                session_time_zone,
+            )?;
             Ok((Box::new(when), Box::new(then)))
         })
         .collect::<Result<Vec<_>>>()?;
     let else_expr = case
         .else_expr
-        .map(|expr| expr.cast_to(&then_else_coerce_type, schema))
+        .map(|expr| {
+            cast_to_with_session_time_zone(
+                *expr,
+                &then_else_coerce_type,
+                schema,
+                session_time_zone,
+            )
+        })
         .transpose()?
         .map(Box::new);
 
@@ -2721,7 +2877,7 @@ mod test {
             vec![Field::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
-        let mut rewriter = TypeCoercionRewriter { schema: &schema };
+        let mut rewriter = TypeCoercionRewriter::new(&schema);
         let expr = is_true(lit(12i32).gt(lit(13i64)));
         let expected = is_true(cast(lit(12i32), DataType::Int64).gt(lit(13i64)));
         let result = expr.rewrite(&mut rewriter).data()?;
@@ -2732,7 +2888,7 @@ mod test {
             vec![Field::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
-        let mut rewriter = TypeCoercionRewriter { schema: &schema };
+        let mut rewriter = TypeCoercionRewriter::new(&schema);
         let expr = is_true(lit(12i32).eq(lit(13i64)));
         let expected = is_true(cast(lit(12i32), DataType::Int64).eq(lit(13i64)));
         let result = expr.rewrite(&mut rewriter).data()?;
@@ -2743,7 +2899,7 @@ mod test {
             vec![Field::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
-        let mut rewriter = TypeCoercionRewriter { schema: &schema };
+        let mut rewriter = TypeCoercionRewriter::new(&schema);
         let expr = is_true(lit(12i32).lt(lit(13i64)));
         let expected = is_true(cast(lit(12i32), DataType::Int64).lt(lit(13i64)));
         let result = expr.rewrite(&mut rewriter).data()?;
@@ -2860,7 +3016,7 @@ mod test {
             &then_else_common_type,
             &schema,
         );
-        let actual = coerce_case_expression(case, &schema)?;
+        let actual = coerce_case_expression(case, &schema, None)?;
         assert_eq!(expected, actual);
 
         // CASE string WHEN float/integer/string: comparison coercion
@@ -2883,7 +3039,7 @@ mod test {
             &then_else_common_type,
             &schema,
         );
-        let actual = coerce_case_expression(case, &schema)?;
+        let actual = coerce_case_expression(case, &schema, None)?;
         assert_eq!(expected, actual);
 
         let case = Case {
@@ -2895,7 +3051,7 @@ mod test {
             ],
             else_expr: Some(Box::new(col("string"))),
         };
-        let err = coerce_case_expression(case, &schema).unwrap_err();
+        let err = coerce_case_expression(case, &schema, None).unwrap_err();
         assert_snapshot!(
             err.strip_backtrace(),
             @"Error during planning: Failed to coerce case (Interval(MonthDayNano)) and when (Float32, Binary, Utf8) to common types in CASE WHEN expression"
@@ -2910,7 +3066,7 @@ mod test {
             ],
             else_expr: Some(Box::new(col("timestamp"))),
         };
-        let err = coerce_case_expression(case, &schema).unwrap_err();
+        let err = coerce_case_expression(case, &schema, None).unwrap_err();
         assert_snapshot!(
             err.strip_backtrace(),
             @"Error during planning: Failed to coerce then (Date32, Float32, Binary) and else (Timestamp(ns)) to common types in CASE WHEN expression"
@@ -2930,7 +3086,7 @@ mod test {
             let expected =
                 cast_helper(case.clone(), &$case_when_type, &$then_else_type, &$schema);
 
-            let actual = coerce_case_expression(case, &$schema)?;
+            let actual = coerce_case_expression(case, &$schema, None)?;
             assert_eq!(expected, actual);
         };
     }
@@ -3285,5 +3441,350 @@ mod test {
           EmptyRelation: rows=0
         "
         )
+    }
+
+    /// Tests for reading timezone-naive timestamps in
+    /// `datafusion.execution.time_zone` wherever coercion converts one to a
+    /// timezone-aware type.
+    ///
+    /// Each test also pins the plan with no session time zone, which must stay
+    /// exactly what DataFusion produced before.
+    mod session_time_zone {
+        use super::*;
+
+        use datafusion_expr::expr::{SetComparison, SetQuantifier};
+        use datafusion_expr::{Case, Union};
+
+        /// The session time zone: a fixed offset, so that the tests do not
+        /// depend on any time zone database.
+        const SESSION: &str = "+08:00";
+        const NY: &str = "America/New_York";
+
+        fn naive() -> DataType {
+            DataType::Timestamp(TimeUnit::Nanosecond, None)
+        }
+
+        fn aware() -> DataType {
+            DataType::Timestamp(TimeUnit::Second, Some(NY.into()))
+        }
+
+        /// `tstz`, a timezone-aware timestamp, and `ts`, a timezone-naive one.
+        fn timestamps() -> Arc<LogicalPlan> {
+            Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: Arc::new(
+                    DFSchema::from_unqualified_fields(
+                        vec![
+                            Field::new("tstz", aware(), true),
+                            Field::new("ts", naive(), true),
+                        ]
+                        .into(),
+                        std::collections::HashMap::new(),
+                    )
+                    .unwrap(),
+                ),
+            }))
+        }
+
+        fn one_column(name: &str, data_type: DataType) -> Arc<LogicalPlan> {
+            Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: Arc::new(
+                    DFSchema::from_unqualified_fields(
+                        vec![Field::new(name, data_type, true)].into(),
+                        std::collections::HashMap::new(),
+                    )
+                    .unwrap(),
+                ),
+            }))
+        }
+
+        macro_rules! assert_analyzed_plan_in_time_zone {
+            (
+                $time_zone: expr,
+                $plan: expr,
+                @ $expected: literal $(,)?
+            ) => {{
+                let mut options = ConfigOptions::default();
+                options.execution.time_zone =
+                    Option::<&str>::map($time_zone, str::to_string);
+                let rule = Arc::new(TypeCoercion::new());
+                assert_analyzed_plan_with_config_eq_snapshot!(
+                    options,
+                    rule,
+                    $plan,
+                    @ $expected,
+                )
+            }};
+        }
+
+        fn subtraction_plan() -> Result<LogicalPlan> {
+            let subtract = |left: &str, right: &str| {
+                Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(col(left)),
+                    Operator::Minus,
+                    Box::new(col(right)),
+                ))
+            };
+            Ok(LogicalPlan::Projection(Projection::try_new(
+                vec![subtract("tstz", "ts"), subtract("ts", "tstz")],
+                timestamps(),
+            )?))
+        }
+
+        /// The naive operand of a subtraction is read in the session time zone;
+        /// the aware operand only has its unit changed.
+        #[test]
+        fn subtraction() -> Result<()> {
+            assert_analyzed_plan_in_time_zone!(
+                Some(SESSION),
+                subtraction_plan()?,
+                @r#"
+            Projection: CAST(tstz AS Timestamp(ns, "America/New_York")) - CAST(CAST(ts AS Timestamp(ns, "+08:00")) AS Timestamp(ns, "America/New_York")), CAST(CAST(ts AS Timestamp(ns, "+08:00")) AS Timestamp(ns, "America/New_York")) - CAST(tstz AS Timestamp(ns, "America/New_York"))
+              EmptyRelation: rows=0
+            "#
+            )
+        }
+
+        #[test]
+        fn subtraction_without_session_time_zone() -> Result<()> {
+            assert_analyzed_plan_in_time_zone!(
+                None,
+                subtraction_plan()?,
+                @r#"
+            Projection: CAST(tstz AS Timestamp(ns, "America/New_York")) - CAST(ts AS Timestamp(ns, "America/New_York")), CAST(ts AS Timestamp(ns, "America/New_York")) - CAST(tstz AS Timestamp(ns, "America/New_York"))
+              EmptyRelation: rows=0
+            "#
+            )
+        }
+
+        /// `= ANY (<subquery>)` casts inside the subquery's projection.
+        fn set_comparison_plan() -> Result<LogicalPlan> {
+            let set_comparison = Expr::SetComparison(SetComparison::new(
+                Box::new(col("a")),
+                Subquery {
+                    subquery: one_column("a", naive()),
+                    outer_ref_columns: vec![],
+                    spans: Spans::new(),
+                },
+                Operator::Eq,
+                SetQuantifier::Any,
+            ));
+            Ok(LogicalPlan::Filter(Filter::try_new(
+                set_comparison,
+                one_column("a", aware()),
+            )?))
+        }
+
+        #[test]
+        fn set_comparison() -> Result<()> {
+            assert_analyzed_plan_in_time_zone!(
+                Some(SESSION),
+                set_comparison_plan()?,
+                @r#"
+            Filter: CAST(a AS Timestamp(ns, "America/New_York")) = ANY (<subquery>)
+              Subquery:
+                Projection: CAST(CAST(a AS Timestamp(ns, "+08:00")) AS Timestamp(ns, "America/New_York"))
+                  EmptyRelation: rows=0
+              EmptyRelation: rows=0
+            "#
+            )
+        }
+
+        #[test]
+        fn set_comparison_without_session_time_zone() -> Result<()> {
+            assert_analyzed_plan_in_time_zone!(
+                None,
+                set_comparison_plan()?,
+                @r#"
+            Filter: CAST(a AS Timestamp(ns, "America/New_York")) = ANY (<subquery>)
+              Subquery:
+                Projection: CAST(a AS Timestamp(ns, "America/New_York"))
+                  EmptyRelation: rows=0
+              EmptyRelation: rows=0
+            "#
+            )
+        }
+
+        fn union_plan() -> Result<LogicalPlan> {
+            Ok(LogicalPlan::Union(Union::try_new_with_loose_types(vec![
+                one_column("a", naive()),
+                one_column("a", aware()),
+            ])?))
+        }
+
+        #[test]
+        fn union() -> Result<()> {
+            assert_analyzed_plan_in_time_zone!(
+                Some(SESSION),
+                union_plan()?,
+                @r#"
+            Union
+              Projection: CAST(CAST(a AS Timestamp(ns, "+08:00")) AS Timestamp(ns, "America/New_York")) AS a
+                EmptyRelation: rows=0
+              Projection: CAST(a AS Timestamp(ns, "America/New_York")) AS a
+                EmptyRelation: rows=0
+            "#
+            )
+        }
+
+        #[test]
+        fn union_without_session_time_zone() -> Result<()> {
+            assert_analyzed_plan_in_time_zone!(
+                None,
+                union_plan()?,
+                @r#"
+            Union
+              Projection: CAST(a AS Timestamp(ns, "America/New_York")) AS a
+                EmptyRelation: rows=0
+              Projection: CAST(a AS Timestamp(ns, "America/New_York")) AS a
+                EmptyRelation: rows=0
+            "#
+            )
+        }
+
+        fn case_plan() -> Result<LogicalPlan> {
+            let case = Expr::Case(Case::new(
+                None,
+                vec![(Box::new(lit(true)), Box::new(col("ts")))],
+                Some(Box::new(col("tstz"))),
+            ));
+            Ok(LogicalPlan::Projection(Projection::try_new(
+                vec![case],
+                timestamps(),
+            )?))
+        }
+
+        #[test]
+        fn case() -> Result<()> {
+            assert_analyzed_plan_in_time_zone!(
+                Some(SESSION),
+                case_plan()?,
+                @r#"
+            Projection: CASE WHEN Boolean(true) THEN CAST(CAST(ts AS Timestamp(ns, "+08:00")) AS Timestamp(ns, "America/New_York")) ELSE CAST(tstz AS Timestamp(ns, "America/New_York")) END
+              EmptyRelation: rows=0
+            "#
+            )
+        }
+
+        #[test]
+        fn case_without_session_time_zone() -> Result<()> {
+            assert_analyzed_plan_in_time_zone!(
+                None,
+                case_plan()?,
+                @r#"
+            Projection: CASE WHEN Boolean(true) THEN CAST(ts AS Timestamp(ns, "America/New_York")) ELSE CAST(tstz AS Timestamp(ns, "America/New_York")) END
+              EmptyRelation: rows=0
+            "#
+            )
+        }
+
+        /// Stands in for `coalesce`: both arguments are coerced to a common
+        /// type. `datafusion-optimizer` deliberately does not depend on the
+        /// function crates, so the real one is out of reach here.
+        #[derive(Debug, Hash, PartialEq, Eq)]
+        struct TestCoalesceUDF {
+            signature: Signature,
+        }
+
+        impl ScalarUDFImpl for TestCoalesceUDF {
+            fn name(&self) -> &str {
+                "test_coalesce"
+            }
+
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+
+            fn return_type(&self, args: &[DataType]) -> Result<DataType> {
+                Ok(args[0].clone())
+            }
+
+            fn invoke_with_args(
+                &self,
+                _args: ScalarFunctionArgs,
+            ) -> Result<ColumnarValue> {
+                datafusion_common::internal_err!("not executed")
+            }
+        }
+
+        fn function_argument_plan() -> Result<LogicalPlan> {
+            let udf = ScalarUDF::from(TestCoalesceUDF {
+                signature: Signature::comparable(2, Volatility::Immutable),
+            })
+            .call(vec![col("ts"), col("tstz")]);
+            Ok(LogicalPlan::Projection(Projection::try_new(
+                vec![udf],
+                timestamps(),
+            )?))
+        }
+
+        #[test]
+        fn function_argument() -> Result<()> {
+            assert_analyzed_plan_in_time_zone!(
+                Some(SESSION),
+                function_argument_plan()?,
+                @r#"
+            Projection: test_coalesce(CAST(CAST(ts AS Timestamp(ns, "+08:00")) AS Timestamp(ns, "America/New_York")), CAST(tstz AS Timestamp(ns, "America/New_York")))
+              EmptyRelation: rows=0
+            "#
+            )
+        }
+
+        /// A naive timestamp *literal* argument is read in the session time zone
+        /// too: it must stay an expression cast rather than being folded into a
+        /// literal at the coerced type, which would read its wall clock in the
+        /// coerced type's own zone.
+        fn literal_function_argument_plan() -> Result<LogicalPlan> {
+            let udf = ScalarUDF::from(TestCoalesceUDF {
+                signature: Signature::comparable(2, Volatility::Immutable),
+            })
+            .call(vec![
+                lit(ScalarValue::TimestampNanosecond(Some(0), None)),
+                col("tstz"),
+            ]);
+            Ok(LogicalPlan::Projection(Projection::try_new(
+                vec![udf],
+                timestamps(),
+            )?))
+        }
+
+        #[test]
+        fn function_argument_literal() -> Result<()> {
+            assert_analyzed_plan_in_time_zone!(
+                Some(SESSION),
+                literal_function_argument_plan()?,
+                @r#"
+            Projection: test_coalesce(CAST(CAST(TimestampNanosecond(0, None) AS Timestamp(ns, "+08:00")) AS Timestamp(ns, "America/New_York")), CAST(tstz AS Timestamp(ns, "America/New_York")))
+              EmptyRelation: rows=0
+            "#
+            )
+        }
+
+        /// With no session time zone the literal is still folded to the coerced
+        /// type, exactly as before.
+        #[test]
+        fn function_argument_literal_without_session_time_zone() -> Result<()> {
+            assert_analyzed_plan_in_time_zone!(
+                None,
+                literal_function_argument_plan()?,
+                @r#"
+            Projection: test_coalesce(TimestampNanosecond(18000000000000, Some("America/New_York")), CAST(tstz AS Timestamp(ns, "America/New_York"))) AS test_coalesce(TimestampNanosecond(0, None),tstz)
+              EmptyRelation: rows=0
+            "#
+            )
+        }
+
+        #[test]
+        fn function_argument_without_session_time_zone() -> Result<()> {
+            assert_analyzed_plan_in_time_zone!(
+                None,
+                function_argument_plan()?,
+                @r#"
+            Projection: test_coalesce(CAST(ts AS Timestamp(ns, "America/New_York")), CAST(tstz AS Timestamp(ns, "America/New_York")))
+              EmptyRelation: rows=0
+            "#
+            )
+        }
     }
 }

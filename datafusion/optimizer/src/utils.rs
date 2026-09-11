@@ -244,7 +244,9 @@ fn evaluate_expr_with_null_column<'a>(
 }
 
 fn coerce(expr: Expr, schema: &DFSchema) -> Result<Expr> {
-    let mut expr_rewrite = TypeCoercionRewriter { schema };
+    // No session time zone: this coerces a predicate that the analyzer has
+    // already coerced, so any naive -> aware timestamp cast is in place.
+    let mut expr_rewrite = TypeCoercionRewriter::new(schema);
     expr.rewrite(&mut expr_rewrite).data()
 }
 
