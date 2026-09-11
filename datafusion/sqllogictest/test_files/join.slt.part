@@ -841,7 +841,7 @@ LEFT JOIN department AS d
 ON (e.name = 'Alice' OR e.name = 'Bob');
 ----
 logical_plan
-01)Left Join:  Filter: e.name = Utf8View("Alice") OR e.name = Utf8View("Bob")
+01)Left Join:  Filter: e.name IN ([Utf8View("Alice"), Utf8View("Bob")])
 02)--SubqueryAlias: e
 03)----TableScan: employees projection=[emp_id, name]
 04)--SubqueryAlias: d
@@ -850,7 +850,7 @@ physical_plan
 01)ProjectionExec: expr=[emp_id@1 as emp_id, name@2 as name, dept_name@0 as dept_name]
 02)--NestedLoopJoinExec: join_type=Right, filter=join_proj_push_down_1@0, projection=[dept_name@0, emp_id@1, name@2]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)----ProjectionExec: expr=[emp_id@0 as emp_id, name@1 as name, name@1 = Alice OR name@1 = Bob as join_proj_push_down_1]
+04)----ProjectionExec: expr=[emp_id@0 as emp_id, name@1 as name, name@1 IN (SET) ([Alice, Bob]) as join_proj_push_down_1]
 05)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query ITT rowsort
@@ -927,15 +927,15 @@ JOIN department AS d
 ON (e.name = 'Alice' OR e.name = 'Bob');
 ----
 logical_plan
-01)Cross Join: 
+01)Cross Join:
 02)--SubqueryAlias: e
-03)----Filter: employees.name = Utf8View("Alice") OR employees.name = Utf8View("Bob")
+03)----Filter: employees.name IN ([Utf8View("Alice"), Utf8View("Bob")])
 04)------TableScan: employees projection=[emp_id, name]
 05)--SubqueryAlias: d
 06)----TableScan: department projection=[dept_name]
 physical_plan
 01)CrossJoinExec
-02)--FilterExec: name@1 = Alice OR name@1 = Bob
+02)--FilterExec: name@1 IN (SET) ([Alice, Bob])
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 04)--DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -977,7 +977,7 @@ logical_plan
 02)--Projection: e.emp_id, e.name, d.dept_name
 03)----Left Join: e.emp_id = d.emp_id
 04)------SubqueryAlias: e
-05)--------Filter: employees.name = Utf8View("Alice") OR employees.name = Utf8View("Carol")
+05)--------Filter: employees.name IN ([Utf8View("Alice"), Utf8View("Carol")])
 06)----------TableScan: employees projection=[emp_id, name]
 07)------SubqueryAlias: d
 08)--------TableScan: department projection=[emp_id, dept_name]
@@ -985,7 +985,7 @@ physical_plan
 01)FilterExec: dept_name@2 != Engineering AND name@1 = Alice OR name@1 = Carol
 02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 03)----HashJoinExec: mode=CollectLeft, join_type=Left, on=[(emp_id@0, emp_id@0)], projection=[emp_id@0, name@1, dept_name@3]
-04)------FilterExec: name@1 = Alice OR name@1 = Carol
+04)------FilterExec: name@1 IN (SET) ([Alice, Carol])
 05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 06)------DataSourceExec: partitions=1, partition_sizes=[1]
 

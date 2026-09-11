@@ -45,7 +45,9 @@ use datafusion_expr::{
 };
 
 use crate::optimizer::ApplyOrder;
-use crate::simplify_expressions::{reorder_predicates, simplify_predicates};
+use crate::simplify_expressions::{
+    reorder_predicates, simplify_inlist_disjunction, simplify_predicates,
+};
 use crate::utils::{
     ColumnReference, has_all_column_refs, is_restrict_null_predicate, schema_columns,
 };
@@ -310,28 +312,35 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
 /// * `((A AND B) OR (C AND D)) AND (A OR C)`
 /// * `((A AND B) OR (C AND D)) AND ((A AND B) OR C)`
 /// * do nothing.
-fn extract_or_clauses_for_join<'a>(
-    filters: &'a [Expr],
-    schema_cols: &'a HashSet<ColumnReference>,
-) -> impl Iterator<Item = Expr> + 'a {
+fn extract_or_clauses_for_join(
+    filters: &[Expr],
+    schema_cols: &HashSet<ColumnReference>,
+    schema: &DFSchema,
+) -> Result<Vec<Expr>> {
     // new formed OR clauses and their column references
-    filters.iter().filter_map(move |expr| {
-        if let Expr::BinaryExpr(BinaryExpr {
-            left,
-            op: Operator::Or,
-            right,
-        }) = expr
-        {
-            let left_expr = extract_or_clause(left.as_ref(), schema_cols);
-            let right_expr = extract_or_clause(right.as_ref(), schema_cols);
+    filters
+        .iter()
+        .filter_map(move |expr| {
+            if let Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::Or,
+                right,
+            }) = expr
+            {
+                let left_expr = extract_or_clause(left.as_ref(), schema_cols);
+                let right_expr = extract_or_clause(right.as_ref(), schema_cols);
 
-            // If nothing can be extracted from any sub clauses, do nothing for this OR clause.
-            if let (Some(left_expr), Some(right_expr)) = (left_expr, right_expr) {
-                return Some(or(left_expr, right_expr));
+                // If nothing can be extracted from any sub clauses, do nothing for this OR clause.
+                if let (Some(left_expr), Some(right_expr)) = (left_expr, right_expr) {
+                    return Some(simplify_inlist_disjunction(
+                        or(left_expr, right_expr),
+                        schema,
+                    ));
+                }
             }
-        }
-        None
-    })
+            None
+        })
+        .collect()
 }
 
 /// extract qual from OR sub-clause.
@@ -464,21 +473,25 @@ fn push_down_all_join(
         left_push.extend(extract_or_clauses_for_join(
             &keep_predicates,
             &left_schema_columns,
-        ));
+            left_schema,
+        )?);
         left_push.extend(extract_or_clauses_for_join(
             &join_conditions,
             &left_schema_columns,
-        ));
+            left_schema,
+        )?);
     }
     if right_preserved {
         right_push.extend(extract_or_clauses_for_join(
             &keep_predicates,
             &right_schema_columns,
-        ));
+            right_schema,
+        )?);
         right_push.extend(extract_or_clauses_for_join(
             &join_conditions,
             &right_schema_columns,
-        ));
+            right_schema,
+        )?);
     }
 
     // For predicates from join filter, we should check with if a join side is preserved
@@ -487,13 +500,15 @@ fn push_down_all_join(
         left_push.extend(extract_or_clauses_for_join(
             &on_filter_join_conditions,
             &left_schema_columns,
-        ));
+            left_schema,
+        )?);
     }
     if on_right_preserved {
         right_push.extend(extract_or_clauses_for_join(
             &on_filter_join_conditions,
             &right_schema_columns,
-        ));
+            right_schema,
+        )?);
     }
 
     // Add any new join conditions as the non join predicates
@@ -3613,6 +3628,81 @@ mod tests {
             TableScan: test1
         "
         )
+    }
+
+    #[test]
+    fn join_or_pushdown_deduplicates_retained_inlist_across_passes() -> Result<()> {
+        let optimizer = Optimizer::with_rules(vec![
+            Arc::new(SimplifyExpressions::new()),
+            Arc::new(PushDownFilter::new()),
+        ]);
+        let context = OptimizerContext::new().with_max_passes(1);
+        let expected = col("b").in_list(vec![lit(1_i32), lit(2_i32)], false);
+
+        for support in [
+            TableProviderFilterPushDown::Unsupported,
+            TableProviderFilterPushDown::Inexact,
+            TableProviderFilterPushDown::Exact,
+        ] {
+            let left =
+                table_scan_with_pushdown_provider_builder(support.clone(), vec![], None)?
+                    .alias("left")?
+                    .build()?;
+            let right =
+                table_scan_with_pushdown_provider_builder(support.clone(), vec![], None)?
+                    .alias("right")?
+                    .build()?;
+            let mut plan = LogicalPlanBuilder::from(left)
+                .join(
+                    right,
+                    JoinType::Left,
+                    (vec!["left.a"], vec!["right.a"]),
+                    None,
+                )?
+                .filter(
+                    col("right.b")
+                        .not_eq(lit(10_i32))
+                        .and(col("left.b").eq(lit(1_i32)))
+                        .or(col("left.b").eq(lit(2_i32))),
+                )?
+                .build()?;
+
+            // The predicate above the join remains in place, so every pass
+            // extracts the same left-side disjunction again. Each destination
+            // must retain only one copy, including filters stored in a scan.
+            for _ in 0..3 {
+                plan = optimizer.optimize(plan, &context, observe)?;
+                let LogicalPlan::Filter(filter) = &plan else {
+                    panic!("expected the unpushable filter: {plan}");
+                };
+                let LogicalPlan::Join(join) = filter.input.as_ref() else {
+                    panic!("expected a join: {plan}");
+                };
+                let LogicalPlan::SubqueryAlias(alias) = join.left.as_ref() else {
+                    panic!("expected the left alias: {plan}");
+                };
+                let scan = if support == TableProviderFilterPushDown::Exact {
+                    alias.input.as_ref()
+                } else {
+                    let LogicalPlan::Filter(filter) = alias.input.as_ref() else {
+                        panic!("expected the pushed filter: {plan}");
+                    };
+                    assert_eq!(filter.predicate, expected, "{plan}");
+                    filter.input.as_ref()
+                };
+                let LogicalPlan::TableScan(scan) = scan else {
+                    panic!("expected the left scan: {plan}");
+                };
+                let expected_scan_filters =
+                    if support == TableProviderFilterPushDown::Unsupported {
+                        vec![]
+                    } else {
+                        vec![expected.clone()]
+                    };
+                assert_eq!(scan.filters, expected_scan_filters, "{plan}");
+            }
+        }
+        Ok(())
     }
 
     #[test]

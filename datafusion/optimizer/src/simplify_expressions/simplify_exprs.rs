@@ -767,7 +767,7 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Filter: test.d != Int32(1) AND test.d != Int32(2) AND test.d != Int32(3)
+        Filter: test.d NOT IN ([Int32(1), Int32(2), Int32(3)])
           TableScan: test
         "
         )
@@ -784,7 +784,7 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Filter: test.d = Int32(1) OR test.d = Int32(2) OR test.d = Int32(3)
+        Filter: test.d IN ([Int32(1), Int32(2), Int32(3)])
           TableScan: test
         "
         )
