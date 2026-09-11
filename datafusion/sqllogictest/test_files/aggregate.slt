@@ -9883,3 +9883,46 @@ SELECT sum(s) FROM (SELECT sum(column2) OVER () AS s FROM nested_agg_t);
 
 statement ok
 DROP TABLE nested_agg_t;
+
+# Tests for COUNT(... ORDER BY ...)
+statement ok
+CREATE TABLE count_order_by_t (a INT, b INT, c INT) AS VALUES
+(1, NULL, 10),
+(2, 20, 10),
+(3, 30, 20),
+(NULL, 40, 20);
+
+# Single-argument grouped count with ORDER BY
+query II rowsort
+SELECT c, COUNT(a ORDER BY b) FROM count_order_by_t GROUP BY c;
+----
+10 2
+20 1
+
+# Multi-argument count with nullable ORDER BY key
+query I
+SELECT COUNT(a, c ORDER BY b) FROM count_order_by_t;
+----
+3
+
+# Single-argument non-grouped count with nullable ORDER BY key
+# A bare COUNT(a ORDER BY b) is folded to num_rows - null_count(a), bypassing
+# CountAccumulator. a + 0 preserves nullness and forces execution.
+query I
+SELECT COUNT(a + 0 ORDER BY b) FROM count_order_by_t;
+----
+3
+
+# COUNT does not require sorting its input, even with an explicit ORDER BY.
+query TT
+EXPLAIN SELECT COUNT(a + 0 ORDER BY b) FROM count_order_by_t;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[count(CAST(count_order_by_t.a AS Int64) + Int64(0)) ORDER BY [count_order_by_t.b ASC NULLS LAST]]]
+02)--TableScan: count_order_by_t projection=[a, b]
+physical_plan
+01)AggregateExec: mode=Single, gby=[], aggr=[count(count_order_by_t.a + Int64(0)) ORDER BY [count_order_by_t.b ASC NULLS LAST]]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE count_order_by_t;
