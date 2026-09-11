@@ -36,7 +36,7 @@ use crate::metrics::{ExecutionPlanMetricsSet, SpillMetrics};
 use crate::projection::{ProjectionExec, ProjectionExpr};
 use crate::spill::spill_manager::SpillManager;
 use crate::test::TestMemoryExec;
-use crate::test::exec::BarrierExec;
+use crate::test::exec::{BarrierExec, PanicExec};
 use crate::test::{build_table_i32, build_table_i32_two_cols};
 use crate::{ExecutionPlan, RecordBatchStream, common};
 use crate::{
@@ -519,6 +519,207 @@ fn projection_pushdown_without_filter() -> Result<()> {
 
     assert!(swapped.filter().is_none());
 
+    Ok(())
+}
+
+/// The buffered side panics when polled, so these pass only if an empty streamed
+/// partition ends the join before the buffered input is touched.
+fn empty_left_and_panicking_right() -> (Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>) {
+    let left = build_table(
+        ("a1", &Vec::<i32>::new()),
+        ("b1", &Vec::<i32>::new()),
+        ("c1", &Vec::<i32>::new()),
+    );
+    let right_schema =
+        build_table(("a2", &vec![1]), ("b1", &vec![1]), ("c2", &vec![1])).schema();
+    let right: Arc<dyn ExecutionPlan> = Arc::new(PanicExec::new(right_schema, 1));
+    (left, right)
+}
+
+fn on_b1(
+    left: &Arc<dyn ExecutionPlan>,
+    right: &Arc<dyn ExecutionPlan>,
+) -> Result<JoinOn> {
+    Ok(vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+    )])
+}
+
+#[tokio::test]
+async fn join_empty_streamed_side_never_polls_buffered_side() -> Result<()> {
+    // Left-probing joins stream the left side; the right side must stay untouched.
+    for join_type in [Inner, Left, LeftSemi, LeftAnti, LeftMark] {
+        let (left, right) = empty_left_and_panicking_right();
+        let on = on_b1(&left, &right)?;
+        let (_, batches) = join_collect(left, right, on, join_type).await?;
+        assert_eq!(
+            batches.iter().map(|b| b.num_rows()).sum::<usize>(),
+            0,
+            "{join_type:?}"
+        );
+    }
+    // Right-probing joins stream the right side; the left side must stay untouched.
+    for join_type in [Right, RightSemi, RightAnti] {
+        let (empty, panicking) = empty_left_and_panicking_right();
+        let on = on_b1(&panicking, &empty)?;
+        let (_, batches) = join_collect(panicking, empty, on, join_type).await?;
+        assert_eq!(
+            batches.iter().map(|b| b.num_rows()).sum::<usize>(),
+            0,
+            "{join_type:?}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn join_full_empty_left_still_emits_buffered_rows() -> Result<()> {
+    let left = build_table(
+        ("a1", &Vec::<i32>::new()),
+        ("b1", &Vec::<i32>::new()),
+        ("c1", &Vec::<i32>::new()),
+    );
+    let right = build_table(
+        ("a2", &vec![10, 20]),
+        ("b1", &vec![4, 5]),
+        ("c2", &vec![70, 80]),
+    );
+    let on = on_b1(&left, &right)?;
+    let (_, batches) = join_collect(left, right, on, Full).await?;
+    assert_snapshot!(batches_to_string(&batches), @r"
+    +----+----+----+----+----+----+
+    | a1 | b1 | c1 | a2 | b1 | c2 |
+    +----+----+----+----+----+----+
+    |    |    |    | 10 | 4  | 70 |
+    |    |    |    | 20 | 5  | 80 |
+    +----+----+----+----+----+----+
+    ");
+    Ok(())
+}
+
+#[tokio::test]
+async fn join_inner_and_semi_finish_once_buffered_side_is_exhausted() -> Result<()> {
+    let right = build_table(
+        ("a2", &Vec::<i32>::new()),
+        ("b1", &Vec::<i32>::new()),
+        ("c2", &Vec::<i32>::new()),
+    );
+    for join_type in [Inner, LeftSemi] {
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![4, 5, 6]),
+            ("c1", &vec![7, 8, 9]),
+        );
+        let on = on_b1(&left, &right)?;
+        let (_, batches) = join_collect(left, Arc::clone(&right), on, join_type).await?;
+        assert_eq!(
+            batches.iter().map(|b| b.num_rows()).sum::<usize>(),
+            0,
+            "{join_type:?}"
+        );
+    }
+    // Anti and mark joins still emit every unmatched streamed row.
+    let left = build_table(
+        ("a1", &vec![1, 2]),
+        ("b1", &vec![4, 5]),
+        ("c1", &vec![7, 8]),
+    );
+    let on = on_b1(&left, &right)?;
+    let (_, batches) = join_collect(left, right, on, LeftAnti).await?;
+    assert_snapshot!(batches_to_string(&batches), @r"
+    +----+----+----+
+    | a1 | b1 | c1 |
+    +----+----+----+
+    | 1  | 4  | 7  |
+    | 2  | 5  | 8  |
+    +----+----+----+
+    ");
+    Ok(())
+}
+
+/// One streamed row below a large buffered key group: the streamed side is exhausted
+/// after the first comparison, and the join must give the group's reservation back before
+/// it hands out its final batch, not when the stream is dropped.
+#[tokio::test]
+async fn join_left_releases_buffered_reservation_before_final_batch() -> Result<()> {
+    let left = build_table(("a1", &vec![1]), ("b1", &vec![1]), ("c1", &vec![1]));
+    let right = build_table_from_batches(
+        (0..16)
+            .map(|_| {
+                build_table_i32(
+                    ("a2", &vec![2; 4096]),
+                    ("b1", &vec![2; 4096]),
+                    ("c2", &vec![2; 4096]),
+                )
+            })
+            .collect(),
+    );
+    let on = on_b1(&left, &right)?;
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(2_000_000, 1.0)
+        .build_arc()?;
+    let ctx = Arc::new(TaskContext::default().with_runtime(Arc::clone(&runtime)));
+    let mut stream = join(left, right, on, Left)?.execute(0, ctx)?;
+    let batch = stream.next().await.unwrap()?;
+    assert_eq!(batch.num_rows(), 1);
+    assert_eq!(
+        runtime.memory_pool.reserved(),
+        0,
+        "reservation held at the final batch"
+    );
+    assert!(stream.next().await.is_none());
+    assert_eq!(
+        runtime.memory_pool.reserved(),
+        0,
+        "reservation held after EOF"
+    );
+    Ok(())
+}
+
+/// The parent join consumes the child's final batch while the child stream is still alive,
+/// with spilling disabled so a reservation the child failed to release surfaces as an error.
+#[tokio::test]
+async fn join_chain_reuses_memory_released_by_completed_child() -> Result<()> {
+    let left = build_table(("a1", &vec![1]), ("b1", &vec![1]), ("c1", &vec![1]));
+    let right = build_table_from_batches(
+        (0..16)
+            .map(|_| {
+                build_table_i32(
+                    ("a2", &vec![2; 4096]),
+                    ("b1", &vec![2; 4096]),
+                    ("c2", &vec![2; 4096]),
+                )
+            })
+            .collect(),
+    );
+    let on = on_b1(&left, &right)?;
+    let child: Arc<dyn ExecutionPlan> = Arc::new(join(left, right, on, Left)?);
+    let parent_right = build_table_from_batches(
+        (0..10)
+            .map(|_| {
+                build_table_i32(
+                    ("a3", &vec![1; 4096]),
+                    ("b3", &vec![1; 4096]),
+                    ("c3", &vec![1; 4096]),
+                )
+            })
+            .collect(),
+    );
+    let on = vec![(
+        Arc::new(Column::new("a1", 0)) as _,
+        Arc::new(Column::new("a3", 0)) as _,
+    )];
+    let parent = join(child, parent_right, on, Inner)?;
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(2_000_000, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
+        )
+        .build_arc()?;
+    let ctx = Arc::new(TaskContext::default().with_runtime(runtime));
+    let batches = common::collect(parent.execute(0, ctx)?).await?;
+    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 40_960);
     Ok(())
 }
 
