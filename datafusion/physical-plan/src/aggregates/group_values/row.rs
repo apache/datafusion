@@ -186,7 +186,8 @@ impl GroupValues for GroupValuesRows {
 
     fn size(&self) -> usize {
         let group_values_size = self.group_values.as_ref().map(|v| v.size()).unwrap_or(0);
-        self.row_converter.size()
+        size_of::<Self>()
+            + self.row_converter.size()
             + group_values_size
             + self.map_size
             + self.rows_buffer.size()
@@ -443,8 +444,37 @@ pub(crate) fn encode_array_if_necessary(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{AsArray, ListArray};
+    use arrow::array::{AsArray, Int32Array, ListArray};
     use arrow::datatypes::{Field, Int32Type, Schema};
+
+    #[test]
+    fn size_includes_owner_and_retained_allocations() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "group",
+            DataType::Int32,
+            true,
+        )]));
+        let mut group_values = GroupValuesRows::try_new(schema)?;
+        let expected_size = |group_values: &GroupValuesRows| {
+            size_of::<GroupValuesRows>()
+                + group_values.row_converter.size()
+                + group_values
+                    .group_values
+                    .as_ref()
+                    .map(|values| values.size())
+                    .unwrap_or_default()
+                + group_values.map_size
+                + group_values.rows_buffer.size()
+                + group_values.hashes_buffer.allocated_size()
+        };
+
+        assert_eq!(group_values.size(), expected_size(&group_values));
+
+        let input: ArrayRef = Arc::new(Int32Array::from_iter_values(0..256));
+        group_values.intern(&[input], &mut vec![])?;
+        assert_eq!(group_values.size(), expected_size(&group_values));
+        Ok(())
+    }
 
     #[test]
     fn preserving_nested_row_values() -> Result<()> {

@@ -3503,7 +3503,7 @@ mod tests {
 
         let task_ctx = if spill {
             // adjust the max memory size to have the partial aggregate result for spill mode.
-            new_spill_ctx(4, 500)
+            new_spill_ctx(4, 1_000)
         } else {
             Arc::new(TaskContext::default())
         };
@@ -7496,7 +7496,7 @@ mod tests {
             Arc::clone(&schema),
         )?);
 
-        let task_ctx = new_migrated_spill_ctx(1, 600);
+        let task_ctx = new_migrated_spill_ctx(1, 1_024);
         let result = collect(aggr.execute(0, Arc::clone(&task_ctx))?).await?;
         assert_spill_count_metric(true, Arc::clone(&aggr));
         let metrics = aggr.metrics().unwrap();

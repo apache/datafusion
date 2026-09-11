@@ -178,7 +178,9 @@ where
     }
 
     fn size(&self) -> usize {
-        self.map.capacity() * size_of::<(usize, u64)>() + self.values.allocated_size()
+        size_of::<Self>()
+            + self.map.capacity() * size_of::<(usize, u64)>()
+            + self.values.allocated_size()
     }
 
     fn is_empty(&self) -> bool {
@@ -295,6 +297,23 @@ mod tests {
     /// With `split_vec_min_alloc` and `n * 2 <= len`, the drain branch is taken:
     /// the emitted prefix gets a compact allocation and `self.values` retains the
     /// original large one.
+    #[test]
+    fn size_includes_owner_and_retained_allocations() -> Result<()> {
+        let mut gv = GroupValuesPrimitive::<Int32Type>::new(DataType::Int32);
+        let expected_size = |gv: &GroupValuesPrimitive<Int32Type>| {
+            size_of::<GroupValuesPrimitive<Int32Type>>()
+                + gv.map.capacity() * size_of::<(usize, u64)>()
+                + gv.values.allocated_size()
+        };
+
+        assert_eq!(gv.size(), expected_size(&gv));
+
+        let input: ArrayRef = Arc::new(Int32Array::from_iter_values(0..256));
+        gv.intern(&[input], &mut vec![])?;
+        assert_eq!(gv.size(), expected_size(&gv));
+        Ok(())
+    }
+
     #[test]
     fn emit_first_small_n_allocates_minimally() -> Result<()> {
         let mut gv = GroupValuesPrimitive::<Int32Type>::new(DataType::Int32);
