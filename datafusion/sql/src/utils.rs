@@ -26,7 +26,7 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{
-    Column, DFSchemaRef, Diagnostic, HashMap, Result, ScalarValue,
+    Column, DFSchemaRef, Diagnostic, HashMap, HashSet, Result, ScalarValue,
     assert_or_internal_err, exec_datafusion_err, exec_err, internal_err, plan_err,
 };
 use datafusion_expr::builder::get_struct_unnested_columns;
@@ -394,7 +394,7 @@ pub(crate) fn value_to_string(value: &Value) -> Option<String> {
 pub(crate) fn rewrite_recursive_unnests_bottom_up(
     input: &LogicalPlan,
     unnest_placeholder_columns: &mut IndexMap<Column, Option<Vec<ColumnUnnestList>>>,
-    inner_projection_exprs: &mut Vec<Expr>,
+    inner_projection_exprs: &mut DedupedProjection,
     original_exprs: &[Expr],
 ) -> Result<Vec<Expr>> {
     Ok(original_exprs
@@ -425,7 +425,7 @@ struct RecursiveUnnestRewriter<'a> {
     // Useful to detect which child expr is a part of/ not a part of unnest operation
     top_most_unnest: Option<Unnest>,
     consecutive_unnest: Vec<Option<Unnest>>,
-    inner_projection_exprs: &'a mut Vec<Expr>,
+    inner_projection_exprs: &'a mut DedupedProjection,
     columns_unnestings: &'a mut IndexMap<Column, Option<Vec<ColumnUnnestList>>>,
     transformed_root_exprs: Option<Vec<Expr>>,
 }
@@ -493,10 +493,8 @@ impl RecursiveUnnestRewriter<'_> {
                     struct_allowed,
                     "unnest on struct can only be applied at the root level of select expression"
                 );
-                push_projection_dedupl(
-                    self.inner_projection_exprs,
-                    expr_in_unnest.clone().alias(placeholder_name.clone()),
-                );
+                self.inner_projection_exprs
+                    .push(expr_in_unnest.clone().alias(placeholder_name.clone()));
                 self.columns_unnestings
                     .insert(Column::from_name(placeholder_name.clone()), None);
                 Ok(get_struct_unnested_columns(&placeholder_name, inner_fields)
@@ -509,10 +507,8 @@ impl RecursiveUnnestRewriter<'_> {
             | DataType::LargeList(_)
             | DataType::ListView(_)
             | DataType::LargeListView(_) => {
-                push_projection_dedupl(
-                    self.inner_projection_exprs,
-                    expr_in_unnest.clone().alias(placeholder_name.clone()),
-                );
+                self.inner_projection_exprs
+                    .push(expr_in_unnest.clone().alias(placeholder_name.clone()));
 
                 let post_unnest_expr = col(post_unnest_name.clone()).alias(alias_name);
                 let list_unnesting = self
@@ -655,20 +651,57 @@ impl TreeNodeRewriter for RecursiveUnnestRewriter<'_> {
         // e.g given expr tree unnest(col_a) + col_b, we have to retain projection of col_b
         // this condition can be checked by maintaining an Option<top most unnest>
         if matches!(&expr, Expr::Column(_)) && self.top_most_unnest.is_none() {
-            push_projection_dedupl(self.inner_projection_exprs, expr.clone());
+            self.inner_projection_exprs.push(expr.clone());
         }
 
         Ok(Transformed::no(expr))
     }
 }
 
-fn push_projection_dedupl(projection: &mut Vec<Expr>, expr: Expr) {
-    let schema_name = expr.schema_name().to_string();
-    if !projection
-        .iter()
-        .any(|e| e.schema_name().to_string() == schema_name)
-    {
-        projection.push(expr);
+/// An inner projection under construction that drops any expression whose
+/// [`Expr::schema_name`] is already present, so the finished projection has
+/// unique field names.
+///
+/// The unnest rewrite references inner projection fields *by schema name* (see
+/// [`rewrite_recursive_unnest_bottom_up`]), so the deduplication has to be by
+/// schema name too. Each pushed expression is rendered once and its name
+/// cached, making an `n` expression projection cost `n` renders rather than
+/// the `O(n^2)` renders a pairwise comparison would need.
+#[derive(Debug, Default)]
+pub(crate) struct DedupedProjection {
+    exprs: Vec<Expr>,
+    names: HashSet<String>,
+}
+
+impl DedupedProjection {
+    /// Pushes `expr` unless an expression with the same schema name is already
+    /// present.
+    fn push(&mut self, expr: Expr) {
+        if self.names.insert(expr.schema_name().to_string()) {
+            self.exprs.push(expr);
+        }
+    }
+
+    /// Like [`Self::push`], but returns the schema name of `expr`, which the
+    /// caller needs in order to reference the field from the outer projection.
+    fn push_returning_name(&mut self, expr: Expr) -> String {
+        let name = expr.schema_name().to_string();
+        if self.names.insert(name.clone()) {
+            self.exprs.push(expr);
+        }
+        name
+    }
+
+    /// The expressions pushed so far, in push order. Only the tests need to
+    /// inspect a projection while it is still being built; `select.rs` takes
+    /// the finished `Vec` via [`Self::into_exprs`].
+    #[cfg(test)]
+    fn exprs(&self) -> &[Expr] {
+        &self.exprs
+    }
+
+    pub(crate) fn into_exprs(self) -> Vec<Expr> {
+        self.exprs
     }
 }
 /// The context is we want to rewrite unnest() into InnerProjection->Unnest->OuterProjection
@@ -683,7 +716,7 @@ fn push_projection_dedupl(projection: &mut Vec<Expr>, expr: Expr) {
 pub(crate) fn rewrite_recursive_unnest_bottom_up(
     input: &LogicalPlan,
     unnest_placeholder_columns: &mut IndexMap<Column, Option<Vec<ColumnUnnestList>>>,
-    inner_projection_exprs: &mut Vec<Expr>,
+    inner_projection_exprs: &mut DedupedProjection,
     original_expr: &Expr,
 ) -> Result<Vec<Expr>> {
     let mut rewriter = RecursiveUnnestRewriter {
@@ -717,13 +750,13 @@ pub(crate) fn rewrite_recursive_unnest_bottom_up(
         if matches!(&transformed_expr, Expr::Column(_))
             || matches!(&transformed_expr, Expr::Wildcard { .. })
         {
-            push_projection_dedupl(inner_projection_exprs, transformed_expr.clone());
+            inner_projection_exprs.push(transformed_expr.clone());
             Ok(vec![transformed_expr])
         } else {
             // We need to evaluate the expr in the inner projection,
             // outer projection just select its name
-            let column_name = transformed_expr.schema_name().to_string();
-            push_projection_dedupl(inner_projection_exprs, transformed_expr);
+            let column_name =
+                inner_projection_exprs.push_returning_name(transformed_expr);
             Ok(vec![Expr::Column(Column::from_name(column_name))])
         }
     } else {
@@ -741,13 +774,66 @@ mod tests {
     use arrow::datatypes::{DataType as ArrowDataType, Field, Fields, Schema};
     use datafusion_common::{Column, DFSchema, Result};
     use datafusion_expr::{
-        ColumnUnnestList, EmptyRelation, LogicalPlan, col, lit, unnest,
+        ColumnUnnestList, EmptyRelation, LogicalPlan, cast, col, lit, try_cast, unnest,
     };
     use datafusion_functions::core::expr_ext::FieldAccessor;
     use datafusion_functions_aggregate::expr_fn::count;
 
-    use crate::utils::{resolve_positions_to_exprs, rewrite_recursive_unnest_bottom_up};
+    use crate::utils::{
+        DedupedProjection, resolve_positions_to_exprs, rewrite_recursive_unnest_bottom_up,
+    };
     use indexmap::IndexMap;
+
+    /// [`DedupedProjection`] deduplicates on [`Expr::schema_name`], which
+    /// hides `CAST`/`TRY_CAST` at *every* depth and hides the expression behind
+    /// an alias entirely.
+    #[test]
+    fn test_deduped_projection() {
+        let mut projection = DedupedProjection::default();
+        projection.push(col("a"));
+        projection.push(col("a"));
+        projection.push(col("t.a"));
+        projection.push(col("x").alias("n"));
+        // same alias name as the previous alias, different inner expr
+        projection.push(col("y").alias("n"));
+        // a cast renders as its input, which is already present
+        projection.push(cast(col("a"), ArrowDataType::Int64));
+        projection.push(try_cast(col("a"), ArrowDataType::Int64));
+        projection.push(col("a").add(lit(1)));
+        projection.push(col("a").add(lit(1)));
+        // casts are hidden at every depth, so these render as `a + Int32(1)`
+        // too and must not be pushed again
+        projection.push(cast(col("a"), ArrowDataType::Int64).add(lit(1)));
+        projection.push(col("a").add(cast(lit(1), ArrowDataType::Int64)));
+        projection.push(try_cast(col("a"), ArrowDataType::Int64).add(lit(1)));
+        projection.push(col("a").add(lit(2)));
+
+        let names: Vec<String> = projection
+            .exprs()
+            .iter()
+            .map(|e| e.schema_name().to_string())
+            .collect();
+        assert_eq!(names, vec!["a", "t.a", "n", "a + Int32(1)", "a + Int32(2)"]);
+    }
+
+    /// The name a caller gets back from `push_returning_name` must be the
+    /// schema name of the pushed expression, whether or not it was retained,
+    /// since the outer projection references the inner field by that name.
+    #[test]
+    fn test_deduped_projection_push_returning_name() {
+        let mut projection = DedupedProjection::default();
+        assert_eq!(
+            projection.push_returning_name(col("a").add(lit(1))),
+            "a + Int32(1)"
+        );
+        // dropped as a duplicate, but the name is still the one to reference
+        assert_eq!(
+            projection
+                .push_returning_name(cast(col("a"), ArrowDataType::Int64).add(lit(1))),
+            "a + Int32(1)"
+        );
+        assert_eq!(projection.exprs().len(), 1);
+    }
 
     fn column_unnests_eq(
         l: Vec<&str>,
@@ -798,7 +884,7 @@ mod tests {
         });
 
         let mut unnest_placeholder_columns = IndexMap::new();
-        let mut inner_projection_exprs = vec![];
+        let mut inner_projection_exprs = DedupedProjection::default();
 
         // unnest(unnest(3d_col)) + unnest(unnest(3d_col))
         let original_expr = unnest(unnest(col("3d_col")))
@@ -833,7 +919,7 @@ mod tests {
         // Still reference struct_col in original schema but with alias,
         // to avoid colliding with the projection on the column itself if any
         assert_eq!(
-            inner_projection_exprs,
+            inner_projection_exprs.exprs().to_vec(),
             vec![
                 col("3d_col").alias("__unnest_placeholder(3d_col)"),
                 col("i64_col")
@@ -865,7 +951,7 @@ mod tests {
         // Still reference struct_col in original schema but with alias,
         // to avoid colliding with the projection on the column itself if any
         assert_eq!(
-            inner_projection_exprs,
+            inner_projection_exprs.exprs().to_vec(),
             vec![
                 col("3d_col").alias("__unnest_placeholder(3d_col)"),
                 col("i64_col")
@@ -905,7 +991,7 @@ mod tests {
         });
 
         let mut unnest_placeholder_columns = IndexMap::new();
-        let mut inner_projection_exprs = vec![];
+        let mut inner_projection_exprs = DedupedProjection::default();
 
         // unnest(struct_col)
         let original_expr = unnest(col("struct_col"));
@@ -929,7 +1015,7 @@ mod tests {
         // Still reference struct_col in original schema but with alias,
         // to avoid colliding with the projection on the column itself if any
         assert_eq!(
-            inner_projection_exprs,
+            inner_projection_exprs.exprs().to_vec(),
             vec![col("struct_col").alias("__unnest_placeholder(struct_col)"),]
         );
 
@@ -962,7 +1048,7 @@ mod tests {
         // Still reference array_col in original schema but with alias,
         // to avoid colliding with the projection on the column itself if any
         assert_eq!(
-            inner_projection_exprs,
+            inner_projection_exprs.exprs().to_vec(),
             vec![
                 col("struct_col").alias("__unnest_placeholder(struct_col)"),
                 col("array_col").alias("__unnest_placeholder(array_col)")
@@ -1019,7 +1105,7 @@ mod tests {
         });
 
         let mut unnest_placeholder_columns = IndexMap::new();
-        let mut inner_projection_exprs = vec![];
+        let mut inner_projection_exprs = DedupedProjection::default();
 
         // An expr with multiple unnest
         let select_expr1 = unnest(unnest(col("struct_list")).field("subfield1"));
@@ -1047,7 +1133,7 @@ mod tests {
         );
 
         assert_eq!(
-            inner_projection_exprs,
+            inner_projection_exprs.exprs().to_vec(),
             vec![col("struct_list").alias("__unnest_placeholder(struct_list)")]
         );
 
@@ -1079,7 +1165,7 @@ mod tests {
         );
 
         assert_eq!(
-            inner_projection_exprs,
+            inner_projection_exprs.exprs().to_vec(),
             vec![col("struct_list").alias("__unnest_placeholder(struct_list)")]
         );
 
