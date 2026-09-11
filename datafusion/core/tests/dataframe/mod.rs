@@ -7611,7 +7611,7 @@ async fn execute_logical_plan_rejects_duplicate_unqualified_names_in_replace_vie
 }
 
 #[tokio::test]
-async fn test_duplicate_state_fields_for_dfschema_construct() -> Result<()> {
+async fn test_partial_aggregate_state_fields_have_unique_names() -> Result<()> {
     let ctx = SessionContext::new();
 
     // Simple schema with just the fields we need
@@ -7686,15 +7686,14 @@ async fn test_duplicate_state_fields_for_dfschema_construct() -> Result<()> {
     )
     .expect("Failed to build partial agg");
 
-    // Assert that the schema field names match the expected names
     let expected_field_names = vec![
         "date",
         "ticker",
         "first_value(value)[first_value]",
-        "timestamp@0",
+        "first_value(value)[ordering_0_timestamp@0]",
         "first_value(value)[first_value_is_set]",
         "last_value(value)[last_value]",
-        "timestamp@0",
+        "last_value(value)[ordering_0_timestamp@0]",
         "last_value(value)[last_value_is_set]",
     ];
 
@@ -7702,12 +7701,7 @@ async fn test_duplicate_state_fields_for_dfschema_construct() -> Result<()> {
     let actual_field_names: Vec<_> = binding.fields().iter().map(|f| f.name()).collect();
     assert_eq!(actual_field_names, expected_field_names);
 
-    // Ensure that DFSchema::try_from does not fail
-    let partial_agg_exec_schema = DFSchema::try_from(partial_agg.schema());
-    assert!(
-        partial_agg_exec_schema.is_ok(),
-        "Expected get AggregateExec schema to succeed with duplicate state fields"
-    );
+    DFSchema::try_from(partial_agg.schema())?;
 
     Ok(())
 }
