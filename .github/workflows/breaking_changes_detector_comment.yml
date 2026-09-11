@@ -61,7 +61,7 @@ jobs:
   comment-on-pr:
     name: Comment on pull request
     if: github.event.workflow_run.event == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Scoped to the minimum needed to upsert/delete the sticky comment.
     permissions:
       actions: read
