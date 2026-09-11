@@ -30,6 +30,7 @@ use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::compute::{SortOptions, cast, filter};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use arrow::row::{OwnedRow, Row, RowConverter, Rows, SortField};
+use arrow_select::dictionary::garbage_collect_any_dictionary;
 
 use datafusion_common::cast::as_list_array;
 use datafusion_common::hash_utils::{RandomState, create_hashes};
@@ -1472,6 +1473,7 @@ impl OrderSensitiveArrayAggAccumulator {
             .unwrap_or(ordering_values);
         // Detach the stored payload from potentially oversized backing buffers.
         let values = make_array(copy_array_data(&values.to_data()));
+        let values = compact_payload(values)?;
 
         let row_count = values.len();
         // RowConverter validates the number, lengths, and types of ordering columns.
@@ -1491,6 +1493,40 @@ impl OrderSensitiveArrayAggAccumulator {
 
         debug_assert_eq!(self.entries.len(), self.ordering_rows.num_rows());
         Ok(Some(start..self.entries.len()))
+    }
+}
+
+/// Compact buffers that `copy_array_data` leaves shared with the input.
+/// Dictionary GC removes unused values without decoding the dictionary, while
+/// view GC copies only referenced bytes. Recurse into children so nested payloads
+/// cannot retain the source buffers either.
+fn compact_payload(array: ArrayRef) -> Result<ArrayRef> {
+    match array.data_type() {
+        DataType::Utf8View => Ok(Arc::new(array.as_string_view().gc())),
+        DataType::BinaryView => Ok(Arc::new(array.as_binary_view().gc())),
+        DataType::Dictionary(_, _) => {
+            let array = garbage_collect_any_dictionary(array.as_any_dictionary())?;
+            let dictionary = array.as_any_dictionary();
+            // GC can return the original values if every entry is referenced.
+            // Detach offset slices as well as any nested view/dictionary buffers.
+            let values = make_array(copy_array_data(&dictionary.values().to_data()));
+            Ok(dictionary.with_values(compact_payload(values)?))
+        }
+        data_type if data_type.is_nested() => {
+            let data = array.to_data();
+            let children = data
+                .child_data()
+                .iter()
+                .map(|child| {
+                    compact_payload(make_array(child.clone()))
+                        .map(|array| array.to_data())
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(make_array(
+                data.into_builder().child_data(children).build()?,
+            ))
+        }
+        _ => Ok(array),
     }
 }
 
@@ -1931,6 +1967,87 @@ mod tests {
         assert_eq!(acc.size(), 2295);
 
         Ok(())
+    }
+
+    // Retaining one row must not retain the source batch's view buffers or
+    // unreferenced dictionary values. Also check the value survives compaction.
+    fn assert_compact_ordered_payload(input: ArrayRef, max_size: usize) -> Result<()> {
+        use arrow::array::Int64Array;
+
+        let input = input.slice(3, 1);
+        let mut acc = ordered_accumulator(
+            input.data_type().clone(),
+            DataType::Int64,
+            SortOptions::new(false, false),
+            false,
+            false,
+        )?;
+        acc.update_batch(&[Arc::clone(&input), Arc::new(Int64Array::from(vec![1]))])?;
+        assert!(
+            acc.size() < max_size,
+            "{}: retained size = {}, expected < {max_size}",
+            input.data_type(),
+            acc.size()
+        );
+        let ScalarValue::List(result) = acc.evaluate()? else {
+            panic!("expected a list");
+        };
+        assert_eq!(
+            ScalarValue::try_from_array(result.values(), 0)?,
+            ScalarValue::try_from_array(&input, 0)?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ordered_array_agg_compacts_views() -> Result<()> {
+        use arrow::array::{BinaryViewArray, StringViewArray};
+
+        for n in [10, 10_000] {
+            let values: Vec<String> = (0..n)
+                .map(|i| format!("this-is-a-long-string-value-{i:08}"))
+                .collect();
+            let strings = StringViewArray::from_iter_values(&values);
+            let binaries =
+                BinaryViewArray::from_iter_values(values.iter().map(|v| v.as_bytes()));
+            assert_compact_ordered_payload(Arc::new(strings), 2_000)?;
+            assert_compact_ordered_payload(Arc::new(binaries), 2_000)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ordered_array_agg_compacts_dictionaries() -> Result<()> {
+        use arrow::array::{DictionaryArray, Int32Array, StringArray};
+        use arrow::datatypes::Int32Type;
+
+        for n in [100, 10_000] {
+            let values = StringArray::from_iter_values(
+                (0..n).map(|i| format!("this-is-a-long-string-value-{i:08}")),
+            );
+            let dict = DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(vec![0, 1, 2, n - 1]),
+                Arc::new(values),
+            )?;
+            assert_compact_ordered_payload(Arc::new(dict), 2_000)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ordered_array_agg_compacts_nested_views() -> Result<()> {
+        use arrow::array::StringViewArray;
+
+        let values = StringViewArray::from_iter_values(
+            (0..10_000).map(|i| format!("this-is-a-long-string-value-{i:08}")),
+        );
+        let list = ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Utf8View, true)),
+            OffsetBuffer::from_lengths([1, 1, 1, 1]),
+            Arc::new(values.slice(0, 4)),
+            None,
+        );
+        assert_compact_ordered_payload(Arc::new(list), 4_000)
     }
 
     #[test]

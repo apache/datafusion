@@ -2275,6 +2275,7 @@ name = "datafusion-functions-aggregate"
 version = "55.0.0"
 dependencies = [
  "arrow",
+ "arrow-select",
  "criterion",
  "datafusion-common",
  "datafusion-doc",
