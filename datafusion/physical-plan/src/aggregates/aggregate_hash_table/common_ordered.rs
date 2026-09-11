@@ -26,7 +26,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_common::assert_or_internal_err;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
-use datafusion_expr::EmitTo;
+use datafusion_expr::{AggregateMetrics, EmitTo};
 
 use crate::InputOrderMode;
 use crate::PhysicalExpr;
@@ -52,7 +52,7 @@ pub(in crate::aggregates) struct OrderedAggregateTableMetrics {
     pub(super) group_by: GroupByMetrics,
     pub(super) aggregate_arguments: AggregateArgumentMetrics,
     pub(super) accumulator: Arc<AggregateAccumulatorMetrics>,
-    pub(super) submetrics: Vec<Arc<dyn datafusion_expr::AggregateMetrics>>,
+    pub(super) submetrics: Vec<Arc<dyn AggregateMetrics>>,
 }
 
 impl OrderedAggregateTableMetrics {
@@ -142,7 +142,7 @@ pub(in crate::aggregates) struct OrderedAggregateTable<OrderedAggrMode> {
     pub(super) aggregate_accumulator_metrics: Arc<AggregateAccumulatorMetrics>,
 
     /// Optional internal metrics owned by each aggregate expression.
-    pub(super) aggregate_submetrics: Vec<Arc<dyn datafusion_expr::AggregateMetrics>>,
+    pub(super) aggregate_submetrics: Vec<Arc<dyn AggregateMetrics>>,
 
     /// Group keys, ordering state, and accumulator states.
     pub(super) buffer: OrderedAggregateTableBuffer,
