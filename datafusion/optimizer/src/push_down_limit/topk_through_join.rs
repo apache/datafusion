@@ -140,9 +140,36 @@ pub(super) fn push_topk_through_join(sort: SortPlan) -> Result<Transformed<Logic
         return Ok(Transformed::no(LogicalPlan::Sort(sort)));
     }
 
+    // A sort key with no column references at all (e.g. `ORDER BY 'x'
+    // LIMIT 3`) can't distinguish any row from any other on either side.
+    // `has_all_column_refs` is vacuously true for such a key (there are no
+    // column refs to fail to find), so without this check we'd still push
+    // a Sort onto a preserved child even though its "top N" doesn't depend
+    // on that child's data at all — a legal result (any N rows satisfy an
+    // all-ties ORDER BY), but wasted work duplicating a Sort node for no
+    // row-reduction benefit.
+    if resolved_sort_exprs
+        .iter()
+        .all(|se| se.expr.column_refs().is_empty())
+    {
+        return Ok(Transformed::no(LogicalPlan::Sort(sort)));
+    }
+
     // Pick the first preserved-side candidate whose schema contains all
     // referenced sort columns. For LEFT/RIGHT this is the fixed side;
     // for CROSS we try both.
+    //
+    // Caveat: `schema_columns` adds an unqualified entry for every field
+    // alongside its qualified one, so an unqualified sort column matches
+    // whichever side has a same-named field first — even if an
+    // identically-named field also exists on the other side, in which case
+    // an unqualified reference is genuinely ambiguous between them. SQL can
+    // never produce this: the planner always qualifies column references
+    // (or rejects the query as ambiguous) before this rule runs. Only a
+    // hand-built `LogicalPlan` with a deliberately unqualified `Column` can
+    // hit this. `push_down_filter` has the exact same caveat, for the same
+    // reason (it also calls `schema_columns` to accept unqualified filter
+    // columns).
     let Some(preserved_side) = preserved_candidates.iter().copied().find(|&side| {
         let schema = match side {
             Side::Left => join.left.schema(),
@@ -174,8 +201,24 @@ pub(super) fn push_topk_through_join(sort: SortPlan) -> Result<Transformed<Logic
         deep_resolved_exprs = new_exprs;
     }
 
-    // If the inner child is a Limit (PushDownLimit's own Limit handling
-    // hasn't merged it with the Sort yet), skip this iteration.
+    // If the inner child is a Limit, skip pushing down for now.
+    //
+    // This is only correct-but-conservative, not a correctness requirement:
+    // inserting `Sort(fetch)` *above* the Limit (`Sort(fetch=N) -> Limit ->
+    // ...`) would be sound regardless of what the Limit's rows are — it
+    // only ever reduces which of the Limit's already-capped rows survive,
+    // the same "insert a new Sort above the preserved child" move used
+    // below when the exprs differ from an existing inner Sort. We decline
+    // instead, which is a missed optimization, not a blocked one:
+    // - If a `Sort` sits below the Limit (`Limit -> Sort`), `PushDownLimit`
+    //   merges the two on a later pass into `Sort(fetch)`, and this rule
+    //   revisits the node then and pushes down as normal.
+    // - If there's no `Sort` at all (e.g. `LEFT JOIN (SELECT * FROM t LIMIT
+    //   100)`), there is nothing for the Limit to ever merge with, so this
+    //   case never gets pushed down at all, on any pass — a real gap, not
+    //   just a later-pass one, but non-blocking: the join still runs
+    //   correctly against the already-limited input, just without the
+    //   extra row reduction a pushed Sort could have added.
     if matches!(inner_child, LogicalPlan::Limit(_)) {
         return Ok(Transformed::no(LogicalPlan::Sort(sort)));
     }
@@ -195,33 +238,28 @@ pub(super) fn push_topk_through_join(sort: SortPlan) -> Result<Transformed<Logic
         LogicalPlan::Sort(s) if !deep_exprs_volatile => Some(s),
         _ => None,
     };
-    let new_preserved_child = if let Some(child_sort) = inner_sort {
-        let same_exprs = sort_exprs_equal(&child_sort.expr, &deep_resolved_exprs);
+    let same_exprs_sort = inner_sort
+        .filter(|child_sort| sort_exprs_equal(&child_sort.expr, &deep_resolved_exprs));
+
+    let new_preserved_child = if let Some(child_sort) = same_exprs_sort {
         let child_fetch_tighter = match child_sort.fetch {
             Some(child_fetch) => child_fetch <= fetch,
             None => false,
         };
-        if same_exprs && child_fetch_tighter {
+        if child_fetch_tighter {
             return Ok(Transformed::no(LogicalPlan::Sort(sort)));
         }
-        if same_exprs {
-            rebuild_with_tightened_sort(
-                preserved_child.as_ref(),
-                &deep_resolved_exprs,
-                fetch,
-            )?
-        } else {
-            // Different exprs — insert new Sort above the preserved
-            // child. If the inner Sort has no fetch, our pushed Sort
-            // is the only row reduction. If it has a fetch, re-sorting
-            // a small set is cheap and still reduces join input.
-            Arc::new(LogicalPlan::Sort(SortPlan {
-                expr: resolved_sort_exprs,
-                input: Arc::clone(preserved_child),
-                fetch: Some(fetch),
-            }))
-        }
+        rebuild_with_tightened_sort(
+            preserved_child.as_ref(),
+            &deep_resolved_exprs,
+            fetch,
+        )?
     } else {
+        // Different exprs, or no existing inner Sort — insert a new Sort
+        // above the preserved child. If an inner Sort exists with no
+        // fetch, our pushed Sort is the only row reduction. If it has a
+        // fetch, re-sorting a small set is cheap and still reduces join
+        // input.
         Arc::new(LogicalPlan::Sort(SortPlan {
             expr: resolved_sort_exprs,
             input: Arc::clone(preserved_child),
@@ -1303,6 +1341,38 @@ mod test {
         )
     }
 
+    /// A sort key with no column references at all (e.g. a literal) can't
+    /// distinguish any row from any other on either side. `has_all_column_refs`
+    /// is vacuously true for it, so without an explicit guard this would
+    /// still push a Sort onto the first candidate side — legal (any N rows
+    /// satisfy an all-ties ORDER BY) but wasted work, since the pushed
+    /// Sort's "top N" doesn't depend on that side's data at all.
+    #[test]
+    fn topk_not_pushed_for_sort_key_with_no_column_refs() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                LogicalPlanBuilder::from(t2).build()?,
+                JoinType::Left,
+                (vec!["a"], vec!["a"]),
+                None,
+            )?
+            .sort_with_limit(vec![lit(1i64).sort(true, false)], Some(3))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: Int64(1) ASC NULLS LAST, fetch=3
+          Left Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        "
+        )
+    }
+
     /// `Limit(skip=0) → Sort(no fetch) → Join`: `rewrite_limit` merges the
     /// Limit's fetch into the Sort on one visit, but only strips the now-
     /// redundant `Limit(skip=0)` wrapper on a *later* visit to that same
@@ -1402,9 +1472,13 @@ mod test {
         )
     }
 
-    /// Preserved child is a bare `Limit` (not yet merged into a `Sort` by
-    /// `rewrite_limit`) — must skip cleanly rather than push past it and
-    /// silently ignore the existing row cap.
+    /// Preserved child is a bare `Limit` with no `Sort` beneath it at all
+    /// (`LEFT JOIN (SELECT * FROM t1 LIMIT 5)`) — there is nothing for the
+    /// Limit to ever merge with, so this is a permanent missed
+    /// optimization, not a transient one that resolves on a later pass (see
+    /// the comment at the `matches!(inner_child, LogicalPlan::Limit(_))`
+    /// check). It must still skip cleanly here rather than push past the
+    /// Limit and silently ignore the existing row cap.
     #[test]
     fn topk_not_pushed_when_child_is_bare_limit() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
@@ -1508,5 +1582,48 @@ mod test {
             TableScan: t2
         "#
         )
+    }
+
+    /// Regression test using the *real* default rule set and order
+    /// (`Optimizer::new()`), not the 2-rule subset above: with
+    /// `max_passes(1)` — e.g. `datafusion.optimizer.max_passes = 1` — the
+    /// TopK is never pushed down for `Sort(fetch) -> Filter -> Left Join`,
+    /// even though `PushDownFilter` does sink the filter into the scan
+    /// within that same single pass. This is because `push_down_limit`
+    /// (which currently owns the TopK-through-join rewrite) runs *before*
+    /// `push_down_filter` in `Optimizer::new()`'s rule list, so by the time
+    /// this rewrite's tree walk reaches the Filter, the Filter hasn't been
+    /// sunk below the Join yet — and `push_down_limit` is never revisited
+    /// again within the same pass. A later fix should let the specialized
+    /// TopK-through-join transformation run after filter pushdown without
+    /// moving the ordinary Limit transformation past filters (see the
+    /// module doc comment).
+    #[test]
+    fn topk_not_pushed_with_default_optimizer_and_one_pass() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                LogicalPlanBuilder::from(t2).build()?,
+                JoinType::Left,
+                (vec!["a"], vec!["a"]),
+                None,
+            )?
+            .filter(col("t1.c").eq(lit("foo")))?
+            .sort_with_limit(vec![col("t1.b").sort(true, false)], Some(3))?
+            .build()?;
+
+        let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+        let optimizer = crate::Optimizer::new();
+        let optimized = optimizer.optimize(plan, &optimizer_ctx, |_, _| {})?;
+
+        insta::assert_snapshot!(optimized, @r#"
+        Sort: t1.b ASC NULLS LAST, fetch=3
+          Left Join: t1.a = t2.a
+            TableScan: t1 projection=[a, b, c], full_filters=[t1.c = Utf8("foo")]
+            TableScan: t2 projection=[a, b, c]
+        "#);
+        Ok(())
     }
 }
