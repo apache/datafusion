@@ -368,3 +368,36 @@ select * from regexp_test where regexp_like('f', regexp_replace((('v\r') like ('
 
 statement ok
 drop table if exists dict_table;
+
+# Empty flags behave like omitted flags for literals and table columns.
+query BBB
+SELECT regexp_like('foobarbaz', 'b..', ''),
+       regexp_like('fooBAR', 'b..', ''),
+       regexp_like('foobarbaz', '', '');
+----
+true false true
+
+statement ok
+CREATE TABLE regexp_empty_flags (str VARCHAR, pattern VARCHAR, flags VARCHAR) AS VALUES
+    ('foobarbaz', 'b..', ''),
+    ('fooBAR', 'b..', ''),
+    ('fooBAR', 'b..', 'i'),
+    ('foobarbaz', '', ''),
+    (NULL, 'b..', ''),
+    ('foobarbaz', NULL, ''),
+    ('foobarbaz', 'b..', NULL);
+
+query BB
+SELECT regexp_like(str, pattern, flags), regexp_like(str, 'b..', '')
+FROM regexp_empty_flags;
+----
+true true
+false false
+true false
+true true
+NULL NULL
+NULL true
+true true
+
+statement ok
+DROP TABLE regexp_empty_flags;
