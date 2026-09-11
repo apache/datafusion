@@ -824,6 +824,65 @@ mod tests {
         Ok(())
     }
 
+    #[derive(Debug)]
+    struct SlowSizeAccumulator {
+        metric: Arc<dyn AggregateMetric>,
+    }
+
+    impl Accumulator for SlowSizeAccumulator {
+        fn update_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
+            Ok(())
+        }
+
+        fn grouped_update_batch_metric(&self) -> Option<Arc<dyn AggregateMetric>> {
+            Some(Arc::clone(&self.metric))
+        }
+
+        fn update_batch_grouped(&mut self, _values: &[ArrayRef]) -> Result<()> {
+            Ok(())
+        }
+
+        fn evaluate(&mut self) -> Result<ScalarValue> {
+            Ok(ScalarValue::Int64(None))
+        }
+
+        fn size(&self) -> usize {
+            std::thread::sleep(Duration::from_millis(50));
+            size_of_val(self)
+        }
+
+        fn state(&mut self) -> Result<Vec<ScalarValue>> {
+            Ok(vec![ScalarValue::Int64(None)])
+        }
+
+        fn merge_batch(&mut self, _states: &[ArrayRef]) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn adapter_grouped_update_excludes_size_accounting_from_metric() -> Result<()> {
+        let recorded_nanos = Arc::new(AtomicU64::new(0));
+        let mut accumulator = GroupsAccumulatorAdapter::new({
+            let recorded_nanos = Arc::clone(&recorded_nanos);
+            move || {
+                Ok(Box::new(SlowSizeAccumulator {
+                    metric: Arc::new(DurationMetric(Arc::clone(&recorded_nanos))),
+                }) as Box<dyn Accumulator>)
+            }
+        });
+
+        let values: ArrayRef = Arc::new(Int64Array::from(vec![1]));
+        accumulator.update_batch(&[values], &[0], None, 1)?;
+
+        assert!(
+            recorded_nanos.load(Ordering::Relaxed)
+                < Duration::from_millis(25).as_nanos() as u64,
+            "grouped-update metric must exclude size accounting"
+        );
+        Ok(())
+    }
+
     #[test]
     fn adapter_preserving_evaluation_uses_accumulator_contract() -> Result<()> {
         let mut accumulator = GroupsAccumulatorAdapter::new(|| {
