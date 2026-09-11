@@ -472,4 +472,134 @@ mod tests {
         });
         assert!(has_b_predicate, "Should have b > 20 predicate");
     }
+
+    #[test]
+    fn test_equality_subsumes_predicates_it_satisfies() {
+        // The value a is pinned to passes every other predicate, so only a = 5 is left
+        for predicates in [
+            vec![
+                col("a").eq(lit(5i32)),
+                col("a").gt(lit(3i32)),
+                col("a").lt_eq(lit(5i32)),
+                col("a").not_eq(lit(6i32)),
+            ],
+            vec![col("a").eq(lit(5i32)), col("a").gt_eq(lit(5i32))],
+        ] {
+            let result = simplify_predicates(predicates.clone()).unwrap();
+
+            assert_eq!(result, vec![col("a").eq(lit(5i32))], "for {predicates:?}");
+        }
+    }
+
+    #[test]
+    fn test_equality_rejected_by_another_predicate_is_unsatisfiable() {
+        // Each of these pins a to a value that the other predicate excludes
+        for predicates in [
+            vec![col("a").eq(lit(5i32)), col("a").eq(lit(6i32))],
+            vec![col("a").eq(lit(5i32)), col("a").not_eq(lit(5i32))],
+            vec![col("a").eq(lit(5i32)), col("a").gt(lit(5i32))],
+            vec![col("a").eq(lit(5i32)), col("a").gt_eq(lit(6i32))],
+            vec![col("a").eq(lit(5i32)), col("a").lt(lit(3i32))],
+            vec![col("a").eq(lit(5i32)), col("a").lt_eq(lit(3i32))],
+        ] {
+            let result = simplify_predicates(predicates.clone()).unwrap();
+
+            assert_eq!(result, vec![lit(false)], "for {predicates:?}");
+        }
+    }
+
+    #[test]
+    fn test_disjoint_bounds_are_unsatisfiable() {
+        // The strict bounds exclude the value they share, so none of these can hold
+        for predicates in [
+            vec![col("a").gt(lit(5i32)), col("a").lt(lit(3i32))],
+            vec![col("a").gt(lit(1i32)), col("a").lt(lit(1i32))],
+            vec![col("a").gt_eq(lit(1i32)), col("a").lt(lit(1i32))],
+            vec![col("a").gt(lit(1i32)), col("a").lt_eq(lit(1i32))],
+        ] {
+            let result = simplify_predicates(predicates.clone()).unwrap();
+
+            assert_eq!(result, vec![lit(false)], "for {predicates:?}");
+        }
+    }
+
+    #[test]
+    fn test_satisfiable_bounds_are_kept() {
+        // The second case only leaves a = 1, but both bounds are inclusive so it holds
+        for predicates in [
+            vec![col("a").gt(lit(1i32)), col("a").lt(lit(9i32))],
+            vec![col("a").gt_eq(lit(1i32)), col("a").lt_eq(lit(1i32))],
+        ] {
+            let result = simplify_predicates(predicates.clone()).unwrap();
+
+            assert_eq!(result, predicates, "for {predicates:?}");
+        }
+    }
+
+    #[test]
+    fn test_unsatisfiable_column_discards_other_predicates() {
+        // Nothing can make the conjunction true once one column contradicts itself
+        let predicates = vec![
+            col("b").gt(lit(0i32)),
+            col("a").gt(lit(5i32)),
+            col("a").lt(lit(3i32)),
+        ];
+
+        let result = simplify_predicates(predicates).unwrap();
+
+        assert_eq!(result, vec![lit(false)]);
+    }
+
+    #[test]
+    fn test_not_eq_excluded_by_a_bound_is_removed() {
+        // a > 10 already rules out a = 5
+        let predicates = vec![col("a").gt(lit(10i32)), col("a").not_eq(lit(5i32))];
+
+        let result = simplify_predicates(predicates).unwrap();
+
+        assert_eq!(result, vec![col("a").gt(lit(10i32))]);
+    }
+
+    #[test]
+    fn test_not_eq_inside_the_bounds_is_kept() {
+        // 5 is within a > 1, so the inequality still filters rows
+        let predicates = vec![col("a").gt(lit(1i32)), col("a").not_eq(lit(5i32))];
+
+        let result = simplify_predicates(predicates).unwrap();
+
+        assert_eq!(
+            result,
+            vec![col("a").not_eq(lit(5i32)), col("a").gt(lit(1i32))]
+        );
+    }
+
+    #[test]
+    fn test_null_comparisons_are_left_alone() {
+        // Comparisons with NULL are never true, so they carry no bound to reason
+        // about. Treating NULL as an ordinary value would drop `a > NULL` for being
+        // less restrictive than `a > 5`, or drop `a != NULL` for being excluded by
+        // `a > 5`, and either would let rows through that must be filtered out.
+        for predicates in [
+            vec![
+                col("a").gt(lit(ScalarValue::Int32(None))),
+                col("a").gt(lit(5i32)),
+            ],
+            vec![
+                col("a").not_eq(lit(ScalarValue::Int32(None))),
+                col("a").gt(lit(5i32)),
+            ],
+            vec![
+                col("a").gt(lit(ScalarValue::Int32(None))),
+                col("a").lt(lit(3i32)),
+            ],
+            vec![
+                col("a").gt(lit(ScalarValue::Int32(None))),
+                col("a").lt(lit(ScalarValue::Int32(None))),
+            ],
+        ] {
+            let result = simplify_predicates(predicates.clone()).unwrap();
+
+            assert_eq!(result, predicates, "for {predicates:?}");
+        }
+    }
 }
