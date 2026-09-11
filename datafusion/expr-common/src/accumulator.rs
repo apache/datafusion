@@ -102,6 +102,15 @@ pub trait Accumulator: Send + Sync + Debug + std::any::Any {
         self.update_batch(values)
     }
 
+    /// Merges state when called by a grouped accumulator adapter.
+    ///
+    /// The default delegates to [`Self::merge_batch`]. Implementations that
+    /// return a [`Self::grouped_update_batch_metric`] can avoid timing every
+    /// per-group merge; the adapter records one interval for the full batch.
+    fn merge_batch_grouped(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.merge_batch(states)
+    }
+
     /// Returns the final aggregate value.
     ///
     /// For example, the `SUM` accumulator maintains a running sum,
