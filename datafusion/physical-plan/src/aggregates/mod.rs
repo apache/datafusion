@@ -4831,6 +4831,16 @@ mod tests {
         let stream: SendableRecordBatchStream = stream.into();
         let output = collect(stream).await?;
 
+        assert_eq!(
+            partial_reduce
+                .metrics()
+                .unwrap()
+                .sum_by_name("early_emit_count")
+                .unwrap()
+                .as_usize(),
+            num_input_batches
+        );
+
         // The table is flushed after every input batch, so each of the three
         // groups is emitted once per input batch instead of being merged into a
         // single row. Each flush is sliced into batches of 2 and 1 rows.
