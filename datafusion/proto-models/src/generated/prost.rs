@@ -1995,6 +1995,10 @@ pub struct FileScanExecConf {
         tag = "16"
     )]
     pub file_compression_type: ::core::option::Option<i32>,
+    /// Whether file processing order must be preserved. Absent payloads retain the
+    /// legacy behavior of deriving this from output_ordering.
+    #[prost(bool, optional, tag = "17")]
+    pub preserve_order: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ParquetScanExecNode {
@@ -2006,6 +2010,10 @@ pub struct ParquetScanExecNode {
     pub parquet_options: ::core::option::Option<
         super::datafusion_common::TableParquetOptions,
     >,
+    #[prost(message, optional, tag = "5")]
+    pub sort_order_for_reorder: ::core::option::Option<PhysicalSortExprNodeCollection>,
+    #[prost(bool, tag = "6")]
+    pub reverse_row_groups: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CsvScanExecNode {
@@ -2689,6 +2697,12 @@ pub struct PhysicalScalarSubqueryExprNode {
     pub nullable: bool,
     #[prost(uint32, tag = "3")]
     pub index: u32,
+    /// Serialized separately from data_type to keep older wire formats valid.
+    #[prost(map = "string, string", tag = "4")]
+    pub metadata: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]

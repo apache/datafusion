@@ -23,5 +23,6 @@ pub use partitioned_hash_eval::{HashExpr, HashTableLookupExpr, SeededRandomState
 mod exec;
 mod inlist_builder;
 mod partitioned_hash_eval;
+mod probe_completion;
 mod shared_bounds;
 mod stream;

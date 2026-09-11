@@ -45,7 +45,10 @@ use datafusion_expr::{
     BinaryExpr, Case, ColumnarValue, Expr, ExprSchemable, Like, Operator, Volatility,
     and, binary::BinaryTypeCoercer, lit, or, preimage::PreimageResult,
 };
-use datafusion_expr::{Cast, TryCast, simplify::ExprSimplifyResult};
+use datafusion_expr::{
+    Cast, TryCast,
+    simplify::{ExprSimplifyResult, REGEX_PLANNING_SIZE_LIMIT_BYTES},
+};
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_expr::{
     expr::{InList, InSubquery},
@@ -69,7 +72,7 @@ use crate::{
 use datafusion_expr::expr_rewriter::rewrite_with_guarantees_map;
 use datafusion_expr_common::casts::try_cast_literal_to_type;
 use indexmap::IndexSet;
-use regex::Regex;
+use regex::{Error as RegexError, Regex, RegexBuilder};
 
 /// This structure handles API for expression simplification
 ///
@@ -494,6 +497,8 @@ enum ConstSimplifyResult {
     NotSimplified(ScalarValue, Option<FieldMetadata>),
     // Evaluation encountered an error, contains the original expression
     SimplifyRuntimeError(DataFusionError, Expr),
+    // Evaluation was deliberately deferred to runtime
+    Deferred(Expr),
 }
 
 impl TreeNodeRewriter for ConstEvaluator {
@@ -551,6 +556,14 @@ impl TreeNodeRewriter for ConstEvaluator {
                     // For other expressions (like CASE, COALESCE), preserve the original
                     // to allow short-circuit evaluation at execution time
                     Ok(Transformed::yes(expr))
+                }
+                ConstSimplifyResult::Deferred(expr) => {
+                    // Prevent an evaluatable parent (for example, an Alias)
+                    // from evaluating this deferred subtree indirectly.
+                    self.can_evaluate.iter_mut().for_each(|can_evaluate| {
+                        *can_evaluate = false;
+                    });
+                    Ok(Transformed::no(expr))
                 }
             },
             Some(false) => Ok(Transformed::no(expr)),
@@ -691,6 +704,10 @@ impl ConstEvaluator {
             return ConstSimplifyResult::NotSimplified(s, m);
         }
 
+        if !should_evaluate_const_expr(&expr) {
+            return ConstSimplifyResult::Deferred(expr);
+        }
+
         let phys_expr = match create_physical_expr(
             &expr,
             &DUMMY_DF_SCHEMA,
@@ -745,6 +762,51 @@ impl ConstEvaluator {
             ColumnarValue::Scalar(s) => ConstSimplifyResult::Simplified(s, metadata),
         }
     }
+}
+
+fn should_evaluate_const_expr(expr: &Expr) -> bool {
+    match expr {
+        Expr::ScalarFunction(ScalarFunction { func, args }) => {
+            let Some(args) = args
+                .iter()
+                .map(|arg| match arg {
+                    Expr::Literal(value, _) => Some(value),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()
+            else {
+                return true;
+            };
+            func.should_evaluate_const(&args)
+        }
+        Expr::BinaryExpr(BinaryExpr { op, right, .. })
+            if matches!(
+                op,
+                Operator::RegexMatch
+                    | Operator::RegexNotMatch
+                    | Operator::RegexIMatch
+                    | Operator::RegexNotIMatch
+            ) =>
+        {
+            regex_is_within_planning_budget(op, right)
+        }
+        _ => true,
+    }
+}
+
+fn regex_is_within_planning_budget(op: &Operator, pattern: &Expr) -> bool {
+    let Expr::Literal(pattern, _) = pattern else {
+        return true;
+    };
+    let Some(pattern) = pattern.try_as_str().flatten() else {
+        return true;
+    };
+    let mut builder = RegexBuilder::new(pattern);
+    builder.size_limit(REGEX_PLANNING_SIZE_LIMIT_BYTES);
+    if matches!(op, Operator::RegexIMatch | Operator::RegexNotIMatch) {
+        builder.case_insensitive(true);
+    }
+    !matches!(builder.build(), Err(RegexError::CompiledTooBig(_)))
 }
 
 /// Simplifies [`Expr`]s by applying algebraic transformation rules
@@ -1649,7 +1711,17 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 left,
                 op: op @ (RegexMatch | RegexNotMatch | RegexIMatch | RegexNotIMatch),
                 right,
-            }) => simplify_regex_expr(left, op, right)?,
+            }) => {
+                // Non-constant regexes are not evaluated during planning, so
+                // avoid adding a compilation preflight to their normal path.
+                if !matches!(left.as_ref(), Expr::Literal(_, _))
+                    || regex_is_within_planning_budget(&op, &right)
+                {
+                    simplify_regex_expr(left, op, right)?
+                } else {
+                    Transformed::no(Expr::BinaryExpr(BinaryExpr { left, op, right }))
+                }
+            }
 
             // Rules for Like
             Expr::Like(like) => {
@@ -1826,7 +1898,14 @@ impl TreeNodeRewriter for Simplifier<'_> {
             {
                 match (*left, *right) {
                     (Expr::InList(l1), Expr::InList(l2)) => {
-                        return inlist_intersection(l1, &l2, false).map(Transformed::yes);
+                        let simplified = inlist_intersection(l1.clone(), &l2, false)?;
+                        if let Some(simplified) =
+                            simplify_inlist_set_operation(info, &l1, &l2, simplified)?
+                        {
+                            Transformed::yes(simplified)
+                        } else {
+                            Transformed::no(Expr::InList(l1).and(Expr::InList(l2)))
+                        }
                     }
                     // Matched previously once
                     _ => unreachable!(),
@@ -1866,7 +1945,14 @@ impl TreeNodeRewriter for Simplifier<'_> {
             {
                 match (*left, *right) {
                     (Expr::InList(l1), Expr::InList(l2)) => {
-                        return inlist_except(l1, &l2).map(Transformed::yes);
+                        let simplified = inlist_except(l1.clone(), &l2)?;
+                        if let Some(simplified) =
+                            simplify_inlist_set_operation(info, &l1, &l2, simplified)?
+                        {
+                            Transformed::yes(simplified)
+                        } else {
+                            Transformed::no(Expr::InList(l1).and(Expr::InList(l2)))
+                        }
                     }
                     // Matched previously once
                     _ => unreachable!(),
@@ -1886,7 +1972,14 @@ impl TreeNodeRewriter for Simplifier<'_> {
             {
                 match (*left, *right) {
                     (Expr::InList(l1), Expr::InList(l2)) => {
-                        return inlist_except(l2, &l1).map(Transformed::yes);
+                        let simplified = inlist_except(l2.clone(), &l1)?;
+                        if let Some(simplified) =
+                            simplify_inlist_set_operation(info, &l1, &l2, simplified)?
+                        {
+                            Transformed::yes(simplified)
+                        } else {
+                            Transformed::no(Expr::InList(l1).and(Expr::InList(l2)))
+                        }
                     }
                     // Matched previously once
                     _ => unreachable!(),
@@ -1906,7 +1999,14 @@ impl TreeNodeRewriter for Simplifier<'_> {
             {
                 match (*left, *right) {
                     (Expr::InList(l1), Expr::InList(l2)) => {
-                        return inlist_intersection(l1, &l2, true).map(Transformed::yes);
+                        let simplified = inlist_intersection(l1.clone(), &l2, true)?;
+                        if let Some(simplified) =
+                            simplify_inlist_set_operation(info, &l1, &l2, simplified)?
+                        {
+                            Transformed::yes(simplified)
+                        } else {
+                            Transformed::no(Expr::InList(l1).or(Expr::InList(l2)))
+                        }
                     }
                     // Matched previously once
                     _ => unreachable!(),
@@ -2302,6 +2402,34 @@ fn inlist_except(mut l1: InList, l2: &InList) -> Result<Expr> {
         return Ok(lit(false));
     }
     Ok(Expr::InList(l1))
+}
+
+/// Set algebra on `IN` lists is only sound if nullable list items are not
+/// discarded. When the tested expression is nullable, preserve the NULL branch
+/// of an otherwise constant result explicitly.
+fn simplify_inlist_set_operation(
+    info: &SimplifyContext,
+    left: &InList,
+    right: &InList,
+    result: Expr,
+) -> Result<Option<Expr>> {
+    for item in left.list.iter().chain(&right.list) {
+        if info.nullable(item)? {
+            return Ok(None);
+        }
+    }
+
+    if !is_true(&result) && !is_false(&result) {
+        return Ok(Some(result));
+    }
+
+    Ok(Some(if !info.nullable(left.expr.as_ref())? {
+        result
+    } else if is_true(&result) {
+        Expr::IsNotNull(left.expr.clone()).or(lit_bool_null())
+    } else {
+        Expr::IsNull(left.expr.clone()).and(lit_bool_null())
+    }))
 }
 
 /// Returns expression testing a boolean `expr` for being exactly `true` (not `false` or NULL).
@@ -3459,6 +3587,60 @@ mod tests {
     }
 
     #[test]
+    fn test_constant_regex_respects_planning_budget() {
+        // Small regexes retain the common-case constant folding behavior.
+        assert_eq!(simplify(regex_match(lit("aaaaa"), lit("^a+$"))), lit(true));
+
+        // Six nested repetitions fit under the runtime regex limit, but exceed
+        // the smaller planning budget and therefore remain for execution.
+        let pattern = "a{5}{5}{5}{5}{5}{5}";
+        let binary_expr = regex_match(lit("aaaaa"), lit(pattern));
+        assert_eq!(simplify(binary_expr.clone()), binary_expr);
+
+        // Deferring a subtree must also prevent an evaluatable parent from
+        // invoking it indirectly during constant folding.
+        let aliased = regex_match(lit("aaaaa"), lit(pattern)).alias("matched");
+        assert_eq!(simplify(aliased.clone()), aliased);
+
+        #[derive(Debug, PartialEq, Eq, Hash)]
+        struct DeferredConstUdf {
+            signature: Signature,
+        }
+
+        impl ScalarUDFImpl for DeferredConstUdf {
+            fn name(&self) -> &str {
+                "deferred_const"
+            }
+
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+
+            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+                Ok(DataType::Boolean)
+            }
+
+            fn invoke_with_args(
+                &self,
+                _args: ScalarFunctionArgs,
+            ) -> Result<ColumnarValue> {
+                panic!("deferred UDF must not be evaluated during planning")
+            }
+
+            fn should_evaluate_const(&self, _args: &[&ScalarValue]) -> bool {
+                false
+            }
+        }
+
+        // UDFs can use the same hook when their literal inputs are expensive.
+        let udf = ScalarUDF::new_from_impl(DeferredConstUdf {
+            signature: Signature::exact(vec![DataType::Utf8], Volatility::Immutable),
+        });
+        let udf_expr = udf.call(vec![lit("value")]);
+        assert_eq!(simplify(udf_expr.clone()), udf_expr);
+    }
+
+    #[test]
     fn test_simplify_regex() {
         // malformed regex
         assert_contains!(
@@ -4550,11 +4732,24 @@ mod tests {
             col("c1").eq(subquery1).or(col("c1").eq(subquery2))
         );
 
-        // 1. c1 IN (1,2,3,4) AND c1 IN (5,6,7,8) -> false
+        // 1. c1_non_null IN (1,2,3,4) AND c1_non_null IN (5,6,7,8) -> false
+        let expr = in_list(
+            col("c1_non_null"),
+            vec![lit(1), lit(2), lit(3), lit(4)],
+            false,
+        )
+        .and(in_list(
+            col("c1_non_null"),
+            vec![lit(5), lit(6), lit(7), lit(8)],
+            false,
+        ));
+        assert_eq!(simplify(expr), lit(false));
+
+        // Preserve the NULL branch when the tested expression is nullable.
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], false).and(
             in_list(col("c1"), vec![lit(5), lit(6), lit(7), lit(8)], false),
         );
-        assert_eq!(simplify(expr), lit(false));
+        assert_eq!(simplify(expr), col("c1").is_null().and(lit_bool_null()));
 
         // 2. c1 IN (1,2,3,4) AND c1 IN (4,5,6,7) -> c1 = 4
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], false).and(
@@ -4562,11 +4757,24 @@ mod tests {
         );
         assert_eq!(simplify(expr), col("c1").eq(lit(4)));
 
-        // 3. c1 NOT IN (1, 2, 3, 4) OR c1 NOT IN (5, 6, 7, 8) -> true
+        // 3. c1_non_null NOT IN (1, 2, 3, 4) OR c1_non_null NOT IN (5, 6, 7, 8) -> true
+        let expr = in_list(
+            col("c1_non_null"),
+            vec![lit(1), lit(2), lit(3), lit(4)],
+            true,
+        )
+        .or(in_list(
+            col("c1_non_null"),
+            vec![lit(5), lit(6), lit(7), lit(8)],
+            true,
+        ));
+        assert_eq!(simplify(expr), lit(true));
+
+        // Preserve the NULL branch when the tested expression is nullable.
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).or(
             in_list(col("c1"), vec![lit(5), lit(6), lit(7), lit(8)], true),
         );
-        assert_eq!(simplify(expr), lit(true));
+        assert_eq!(simplify(expr), col("c1").is_not_null().or(lit_bool_null()));
 
         // 3.5 c1 NOT IN (1, 2, 3, 4) OR c1 NOT IN (4, 5, 6, 7) -> c1 != 4 (4 overlaps)
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).or(
@@ -4600,13 +4808,23 @@ mod tests {
             )
         );
 
-        // 6. c1 IN (1,2,3) AND c1 NOT INT (1,2,3,4,5) -> false
+        // 6. c1_non_null IN (1,2,3) AND c1_non_null NOT IN (1,2,3,4,5) -> false
+        let expr = in_list(col("c1_non_null"), vec![lit(1), lit(2), lit(3)], false).and(
+            in_list(
+                col("c1_non_null"),
+                vec![lit(1), lit(2), lit(3), lit(4), lit(5)],
+                true,
+            ),
+        );
+        assert_eq!(simplify(expr), lit(false));
+
+        // Preserve the NULL branch when the tested expression is nullable.
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3)], false).and(in_list(
             col("c1"),
             vec![lit(1), lit(2), lit(3), lit(4), lit(5)],
             true,
         ));
-        assert_eq!(simplify(expr), lit(false));
+        assert_eq!(simplify(expr), col("c1").is_null().and(lit_bool_null()));
 
         // 7. c1 NOT IN (1,2,3,4) AND c1 IN (1,2,3,4,5) -> c1 = 5
         let expr =
@@ -4670,6 +4888,64 @@ mod tests {
         // https://github.com/apache/datafusion/issues/8970
         // assert_eq!(simplify(expr.clone()), lit(true));
         assert_eq!(simplify(expr.clone()), expr);
+    }
+
+    #[test]
+    fn simplify_inlist_set_operation_propagates_nullability_errors() {
+        let info = SimplifyContext::builder()
+            .with_schema(expr_test_schema())
+            .build();
+        let valid = InList {
+            expr: Box::new(col("c1")),
+            list: vec![lit("a")],
+            negated: false,
+        };
+
+        let invalid_list_item = InList {
+            expr: Box::new(col("c1")),
+            list: vec![col("missing")],
+            negated: false,
+        };
+        let error =
+            simplify_inlist_set_operation(&info, &invalid_list_item, &valid, lit(false))
+                .unwrap_err();
+        assert_contains!(error.to_string(), "No field named missing");
+
+        let invalid_tested_expr = InList {
+            expr: Box::new(col("missing")),
+            list: vec![lit("a")],
+            negated: false,
+        };
+        let error = simplify_inlist_set_operation(
+            &info,
+            &invalid_tested_expr,
+            &valid,
+            lit(false),
+        )
+        .unwrap_err();
+        assert_contains!(error.to_string(), "No field named missing");
+    }
+
+    #[test]
+    fn simplify_inlist_set_operation_preserves_null_result() {
+        let info = SimplifyContext::builder()
+            .with_schema(expr_test_schema())
+            .build();
+        let left = InList {
+            expr: Box::new(col("c1")),
+            list: vec![lit("a")],
+            negated: false,
+        };
+        let right = InList {
+            expr: Box::new(col("c1")),
+            list: vec![lit("b")],
+            negated: false,
+        };
+
+        assert_eq!(
+            simplify_inlist_set_operation(&info, &left, &right, lit_bool_null()).unwrap(),
+            Some(lit_bool_null())
+        );
     }
 
     #[test]

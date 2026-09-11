@@ -208,9 +208,9 @@ FROM (
 ----
 100000 5000050000
 
-# Assert spill happened in the final aggregation.
-# In multi-partitions configuration, 'spilled_rows' is not deterministic, so assert
-# the unit to be 'K'
+# Assert spill happened in the final aggregation and the partial aggregation
+# reports memory-pressure emissions. Their exact counts are not deterministic,
+# so assert only the spilled_rows unit and the presence of early_emit_count.
 query TT
 EXPLAIN ANALYZE
 SELECT count(*), sum(total)
@@ -222,6 +222,8 @@ FROM (
 ----
 <slt:ignore>
 06)----------AggregateExec: mode=FinalPartitioned, gby=[t.v * Int64(7) % Int64(100000)@0 as t.v * Int64(7) % Int64(100000)], aggr=[sum(t.v)], metrics=[<slt:ignore>spilled_rows=<slt:ignore>K,<slt:ignore>]
+<slt:ignore>
+08)--------------AggregateExec: mode=Partial, gby=[v@0 * 7 % 100000 as t.v * Int64(7) % Int64(100000)], aggr=[sum(t.v)], metrics=[<slt:ignore>early_emit_count=<slt:ignore>]
 <slt:ignore>
 
 # Restore settings to slt runner defaults

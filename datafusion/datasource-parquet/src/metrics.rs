@@ -227,8 +227,7 @@ impl ParquetFileMetrics {
         let bytes_scanned = builder
             .clone()
             .with_type(MetricType::Summary)
-            .with_category(MetricCategory::Bytes)
-            .counter("bytes_scanned", partition);
+            .bytes_counter("bytes_scanned", partition);
 
         let metadata_load_time = builder
             .clone()
@@ -349,8 +348,7 @@ impl ParquetFileMetrics {
         MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
             .with_type(MetricType::Summary)
-            .with_category(MetricCategory::Bytes)
-            .counter("bytes_processed", partition)
+            .bytes_counter("bytes_processed", partition)
     }
 
     /// Record pages whose page-index pruning was skipped because the containing
@@ -374,6 +372,28 @@ impl ParquetFileMetrics {
             .with_type(MetricType::Summary)
             .with_category(MetricCategory::Rows)
             .counter("page_index_pages_skipped_by_fully_matched", partition);
+        count.add(n);
+    }
+
+    /// Record rows skipped by page-level limit pruning.
+    ///
+    /// This metric is registered lazily to avoid adding per-file metric setup
+    /// overhead when the optimization does not apply.
+    pub(crate) fn add_limit_pruned_rows(
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+        filename: &str,
+        n: usize,
+    ) {
+        if n == 0 {
+            return;
+        }
+
+        let count = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .with_type(MetricType::Summary)
+            .with_category(MetricCategory::Rows)
+            .counter("limit_pruned_rows", partition);
         count.add(n);
     }
 
