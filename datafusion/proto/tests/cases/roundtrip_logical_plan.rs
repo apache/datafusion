@@ -91,7 +91,7 @@ use datafusion_expr::logical_plan::{
     ExplainOption, Extension, UserDefinedLogicalNodeCore,
 };
 use datafusion_expr::{
-    Accumulator, AggregateUDF, AsOfMatch, ColumnarValue, DmlStatement, ExprFunctionExt,
+    Accumulator, AggregateUDF, ColumnarValue, DmlStatement, ExprFunctionExt,
     ExprSchemable, HigherOrderUDF, LimitEffect, Literal, LogicalPlan, LogicalPlanBuilder,
     Operator, PartitionEvaluator, RangePartitioning, Repartition, ScalarUDF, Signature,
     TryCast, Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
@@ -3877,7 +3877,7 @@ async fn roundtrip_asof_join() -> Result<()> {
             .asof_join_using(
                 right.clone(),
                 vec![Column::from_name("symbol")],
-                AsOfMatch::new(col("trades.ts"), op, col("prices.ts")),
+                binary_expr(col("trades.ts"), op, col("prices.ts")),
             )?
             .build()?;
         let bytes = logical_plan_to_bytes(&plan)?;
