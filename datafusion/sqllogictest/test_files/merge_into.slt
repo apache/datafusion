@@ -57,10 +57,9 @@ when not matched then insert (id, val) values (source.id, source.val);
 logical_plan
 01)Dml: op=[MergeInto] table=[target]
 02)--TableScan: source projection=[id, val, is_active]
-physical_plan_error
-01)MERGE INTO operation on table 'target'
-02)caused by
-03)This feature is not implemented: MERGE INTO not supported for Base table
+physical_plan
+01)CooperativeExec
+02)--DmlResultExec: rows_affected=2
 
 # Simple MATCHED DELETE
 query TT
@@ -70,10 +69,9 @@ when matched then delete;
 logical_plan
 01)Dml: op=[MergeInto] table=[target]
 02)--TableScan: source projection=[id, val, is_active]
-physical_plan_error
-01)MERGE INTO operation on table 'target'
-02)caused by
-03)This feature is not implemented: MERGE INTO not supported for Base table
+physical_plan
+01)CooperativeExec
+02)--DmlResultExec: rows_affected=2
 
 # Aliased target and source: alias is canonicalized to the table name
 query TT
@@ -85,10 +83,9 @@ logical_plan
 01)Dml: op=[MergeInto] table=[target]
 02)--SubqueryAlias: s
 03)----TableScan: source projection=[id, val, is_active]
-physical_plan_error
-01)MERGE INTO operation on table 'target'
-02)caused by
-03)This feature is not implemented: MERGE INTO not supported for Base table
+physical_plan
+01)CooperativeExec
+02)--DmlResultExec: rows_affected=2
 
 # WHEN NOT MATCHED THEN DELETE is rejected by the parser (no target row exists);
 query error DELETE is not allowed in a NOT MATCHED merge clause at Line: 2, Column: 23
@@ -103,10 +100,9 @@ when not matched by source then delete;
 logical_plan
 01)Dml: op=[MergeInto] table=[target]
 02)--TableScan: source projection=[id, val, is_active]
-physical_plan_error
-01)MERGE INTO operation on table 'target'
-02)caused by
-03)This feature is not implemented: MERGE INTO not supported for Base table
+physical_plan
+01)CooperativeExec
+02)--DmlResultExec: rows_affected=0
 
 # Subquery as the USING source
 query TT
@@ -120,10 +116,9 @@ logical_plan
 03)----Projection: source.id, max(source.val) AS val
 04)------Aggregate: groupBy=[[source.id]], aggr=[[max(source.val)]]
 05)--------TableScan: source projection=[id, val]
-physical_plan_error
-01)MERGE INTO operation on table 'target'
-02)caused by
-03)This feature is not implemented: MERGE INTO not supported for Base table
+physical_plan
+01)CooperativeExec
+02)--DmlResultExec: rows_affected=0
 
 # INSERT without an explicit column list requires values for all target columns
 query TT
@@ -133,19 +128,18 @@ when not matched then insert values (source.id, source.val, 0);
 logical_plan
 01)Dml: op=[MergeInto] table=[target]
 02)--TableScan: source projection=[id, val, is_active]
-physical_plan_error
-01)MERGE INTO operation on table 'target'
-02)caused by
-03)This feature is not implemented: MERGE INTO not supported for Base table
+physical_plan
+01)CooperativeExec
+02)--DmlResultExec: rows_affected=2
 
-# Execution fails: the default TableProvider does not implement merge_into
-statement error
+# Execution: MATCHED DELETE
+statement ok
 merge into target using source on target.id = source.id
 when matched then delete;
+
+query ITI rowsort
+select * from target;
 ----
-DataFusion error: MERGE INTO operation on table 'target'
-caused by
-This feature is not implemented: MERGE INTO not supported for Base table
 
 
 ##########
@@ -246,3 +240,53 @@ drop table target;
 
 statement ok
 drop table source;
+
+##########
+# Execution: WHEN NOT MATCHED BY SOURCE with predicate
+##########
+
+statement ok
+CREATE TABLE t_not_matched(id int, flag boolean);
+
+statement ok
+INSERT INTO t_not_matched VALUES (1, true), (2, false), (3, NULL), (4, false);
+
+statement ok
+CREATE TABLE s_not_matched(id int);
+
+statement ok
+INSERT INTO s_not_matched VALUES (2);
+
+# Matched row (id=2) updated to flag=false.
+# Unmatched rows:
+# id=1: flag=true -> deleted (predicate is true)
+# id=3: flag=NULL -> kept (predicate is NULL)
+# id=4: flag=false -> kept (predicate is false)
+statement ok
+MERGE INTO t_not_matched USING s_not_matched ON t_not_matched.id = s_not_matched.id
+WHEN MATCHED THEN UPDATE SET flag = false
+WHEN NOT MATCHED BY SOURCE AND t_not_matched.flag THEN DELETE;
+
+query IB rowsort
+SELECT id, flag FROM t_not_matched;
+----
+2 false
+3 NULL
+4 false
+
+# WHEN NOT MATCHED BY SOURCE without predicate deletes all remaining unmatched rows
+statement ok
+MERGE INTO t_not_matched USING s_not_matched ON t_not_matched.id = s_not_matched.id
+WHEN NOT MATCHED BY SOURCE THEN DELETE;
+
+query IB rowsort
+SELECT id, flag FROM t_not_matched;
+----
+2 false
+
+statement ok
+DROP TABLE t_not_matched;
+
+statement ok
+DROP TABLE s_not_matched;
+
