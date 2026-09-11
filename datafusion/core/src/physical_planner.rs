@@ -57,7 +57,7 @@ use crate::physical_plan::{
 };
 use crate::schema_equivalence::schema_satisfied_by;
 
-use arrow::array::{RecordBatch, builder::StringBuilder};
+use arrow::array::{ArrayRef, RecordBatch, UInt64Array, builder::StringBuilder};
 use arrow::compute::SortOptions;
 use arrow::datatypes::Schema;
 use arrow_schema::Field;
@@ -794,17 +794,29 @@ impl DefaultPhysicalPlanner {
                 target,
                 op: WriteOp::Delete,
                 input,
-                ..
+                output_schema,
             }) => {
                 if let Some(provider) = target.downcast_ref::<DefaultTableSource>() {
-                    let filters = extract_dml_filters(input, table_name)?;
-                    provider
-                        .table_provider
-                        .delete_from(session_state, filters)
-                        .await
-                        .map_err(|e| {
-                            e.context(format!("DELETE operation on table '{table_name}'"))
-                        })?
+                    let allowed_refs = collect_dml_target_refs(input, table_name)?;
+                    match classify_dml_input(input, table_name, &allowed_refs, "DELETE")?
+                    {
+                        DmlInput::NoRows => {
+                            zero_rows_affected_exec(Arc::clone(output_schema.inner()))?
+                        }
+                        DmlInput::Filters => {
+                            let filters =
+                                extract_dml_filters(input, table_name, &allowed_refs)?;
+                            provider
+                                .table_provider
+                                .delete_from(session_state, filters)
+                                .await
+                                .map_err(|e| {
+                                    e.context(format!(
+                                        "DELETE operation on table '{table_name}'"
+                                    ))
+                                })?
+                        }
+                    }
                 } else {
                     return exec_err!(
                         "Table source can't be downcasted to DefaultTableSource"
@@ -816,21 +828,33 @@ impl DefaultPhysicalPlanner {
                 target,
                 op: WriteOp::Update,
                 input,
-                ..
+                output_schema,
             }) => {
                 if let Some(provider) = target.downcast_ref::<DefaultTableSource>() {
-                    // For UPDATE, the assignments are encoded in the projection of input
-                    // We pass the filters and let the provider handle the projection
-                    let filters = extract_dml_filters(input, table_name)?;
-                    // Extract assignments from the projection in input plan
-                    let assignments = extract_update_assignments(input)?;
-                    provider
-                        .table_provider
-                        .update(session_state, assignments, filters)
-                        .await
-                        .map_err(|e| {
-                            e.context(format!("UPDATE operation on table '{table_name}'"))
-                        })?
+                    let allowed_refs = collect_dml_target_refs(input, table_name)?;
+                    match classify_dml_input(input, table_name, &allowed_refs, "UPDATE")?
+                    {
+                        DmlInput::NoRows => {
+                            zero_rows_affected_exec(Arc::clone(output_schema.inner()))?
+                        }
+                        DmlInput::Filters => {
+                            // For UPDATE, the assignments are encoded in the projection of input
+                            // We pass the filters and let the provider handle the projection
+                            let filters =
+                                extract_dml_filters(input, table_name, &allowed_refs)?;
+                            // Extract assignments from the projection in input plan
+                            let assignments = extract_update_assignments(input)?;
+                            provider
+                                .table_provider
+                                .update(session_state, assignments, filters)
+                                .await
+                                .map_err(|e| {
+                                    e.context(format!(
+                                        "UPDATE operation on table '{table_name}'"
+                                    ))
+                                })?
+                        }
+                    }
                 } else {
                     return exec_err!(
                         "Table source can't be downcasted to DefaultTableSource"
@@ -2251,6 +2275,149 @@ fn get_physical_expr_pair(
     Ok((physical_expr, physical_name))
 }
 
+/// How a DELETE or an UPDATE reaches its target table.
+///
+/// The `filters` argument of [`TableProvider::delete_from`] and
+/// [`TableProvider::update`] is the only channel that carries the `WHERE` clause
+/// to the provider, and an empty vector means "no `WHERE` clause, so every row".
+/// A plan whose row restriction cannot travel through that channel must
+/// therefore never reach the provider.
+///
+/// [`TableProvider::delete_from`]: datafusion_catalog::TableProvider::delete_from
+/// [`TableProvider::update`]: datafusion_catalog::TableProvider::update
+enum DmlInput {
+    /// Every row restriction of the statement reaches the provider as a filter.
+    Filters,
+    /// No row matches, so the statement affects no rows and the provider is not
+    /// called at all.
+    NoRows,
+}
+
+/// Collect the table references that a predicate of a DELETE or an UPDATE may
+/// name: the target table itself, and the alias of every scan of the target
+/// table in the input plan.
+///
+/// Both [`classify_dml_input`] and [`extract_dml_filters`] need this set, so the
+/// caller collects it once and passes it to each of them.
+fn collect_dml_target_refs(
+    input: &Arc<LogicalPlan>,
+    target: &TableReference,
+) -> Result<Vec<TableReference>> {
+    let mut allowed_refs = vec![target.clone()];
+    input.apply(|node| {
+        if let LogicalPlan::SubqueryAlias(alias) = node
+            // Check if this alias points to the target table
+            && let LogicalPlan::TableScan(scan) = alias.input.as_ref()
+            && scan.table_name.resolved_eq(target)
+        {
+            allowed_refs.push(TableReference::bare(alias.alias.to_string()));
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(allowed_refs)
+}
+
+/// Check that the input plan of a DELETE or an UPDATE can reach the table
+/// provider without losing part of its `WHERE` clause.
+///
+/// The optimizer rewrites an `IN` or an `EXISTS` subquery into a semi join, and
+/// it folds an always-false predicate into an empty relation. In both cases the
+/// condition leaves the `Filter` nodes that [`extract_dml_filters`] reads, and
+/// the provider would see an empty filter list and change every row.
+///
+/// # Parameters
+/// - `input`: the input plan of the DELETE or the UPDATE
+/// - `target`: the target table of the statement
+/// - `allowed_refs`: the target table and its aliases, from [`collect_dml_target_refs`]
+/// - `op`: `"DELETE"` or `"UPDATE"`, used in the error message
+///
+/// # Returns
+/// * [`DmlInput::Filters`] when the provider may be called
+/// * [`DmlInput::NoRows`] when the statement matches no row
+/// * a "not implemented" error when part of the `WHERE` clause cannot reach the provider.
+fn classify_dml_input(
+    input: &Arc<LogicalPlan>,
+    target: &TableReference,
+    allowed_refs: &[TableReference],
+    op: &str,
+) -> Result<DmlInput> {
+    let mut result = DmlInput::Filters;
+    input.apply(|node| {
+        match node {
+            // An empty relation means the optimizer proved that no row matches,
+            // so the statement affects no rows.
+            LogicalPlan::EmptyRelation(empty) if !empty.produce_one_row => {
+                result = DmlInput::NoRows;
+                return Ok(TreeNodeRecursion::Stop);
+            }
+            // A join carries the condition in its `on` clause, where
+            // `extract_dml_filters` cannot read it. The optimizer builds one for
+            // an `IN` or an `EXISTS` subquery.
+            LogicalPlan::Join(join) => {
+                return not_impl_err!(
+                    "{op} on table '{target}' with an IN or an EXISTS subquery in its \
+                     WHERE clause is not supported: the optimizer rewrites the subquery \
+                     into a {} join, and the condition does not reach the table provider",
+                    join.join_type
+                );
+            }
+            LogicalPlan::Filter(filter) => {
+                // A predicate on another table restricts the rows of the target
+                // table, and the provider cannot evaluate it.
+                for predicate in split_conjunction(&filter.predicate) {
+                    if !predicate_is_on_target_multi(predicate, allowed_refs)? {
+                        return not_impl_err!(
+                            "{op} on table '{target}' with a WHERE clause that \
+                             references another table is not supported"
+                        );
+                    }
+                }
+            }
+            // Plans that pass every row of the target table through, or that
+            // hold no row restriction of their own.
+            LogicalPlan::TableScan(_)
+            | LogicalPlan::Projection(_)
+            | LogicalPlan::SubqueryAlias(_)
+            | LogicalPlan::Sort(_)
+            | LogicalPlan::Repartition(_)
+            // A `Limit` carries no predicate, so it reaches the provider as no
+            // filter at all and `DELETE FROM t LIMIT n` deletes every matching
+            // row. `UPDATE ... LIMIT` is already rejected by the SQL planner.
+            // That gap is separate from this one, and it is tracked separately.
+            | LogicalPlan::Limit(_)
+            // A subquery expression that survives to this point fails later,
+            // when the provider compiles the filter it belongs to.
+            | LogicalPlan::Subquery(_) => {}
+            // Everything else either restricts or multiplies the rows of the
+            // target table in a way that no filter list can express.
+            other => {
+                return not_impl_err!(
+                    "{op} on table '{target}' is not supported: the statement plan \
+                     contains \"{}\", and its effect on the rows cannot reach the table \
+                     provider as a filter",
+                    other.display()
+                );
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+
+    Ok(result)
+}
+
+/// Build a plan that reports no rows affected, for a DELETE or an UPDATE that
+/// matches no row. `schema` is the output schema of the statement, one `count`
+/// column of type `UInt64`.
+fn zero_rows_affected_exec(schema: Arc<Schema>) -> Result<Arc<dyn ExecutionPlan>> {
+    let count = Arc::new(UInt64Array::from(vec![0_u64])) as ArrayRef;
+    let batch = RecordBatch::try_new(Arc::clone(&schema), vec![count])?;
+    Ok(MemorySourceConfig::try_new_exec(
+        &[vec![batch]],
+        schema,
+        None,
+    )?)
+}
+
 /// Extract filter predicates from a DML input plan (DELETE/UPDATE).
 ///
 /// Walks the logical plan tree and collects Filter predicates and any filters
@@ -2267,6 +2434,7 @@ fn get_physical_expr_pair(
 /// # Parameters
 /// - `input`: The logical plan tree to extract filters from (typically a DELETE or UPDATE plan)
 /// - `target`: The target table reference to scope filter extraction (prevents multi-table filter leakage)
+/// - `allowed_refs`: The target table and its aliases, from [`collect_dml_target_refs`]
 ///
 /// # Returns
 /// A vector of unqualified filter expressions that can be passed to the TableProvider for execution.
@@ -2276,28 +2444,16 @@ fn get_physical_expr_pair(
 fn extract_dml_filters(
     input: &Arc<LogicalPlan>,
     target: &TableReference,
+    allowed_refs: &[TableReference],
 ) -> Result<Vec<Expr>> {
     let mut filters = Vec::new();
-    let mut allowed_refs = vec![target.clone()];
-
-    // First pass: collect any alias references to the target table
-    input.apply(|node| {
-        if let LogicalPlan::SubqueryAlias(alias) = node
-            // Check if this alias points to the target table
-            && let LogicalPlan::TableScan(scan) = alias.input.as_ref()
-            && scan.table_name.resolved_eq(target)
-        {
-            allowed_refs.push(TableReference::bare(alias.alias.to_string()));
-        }
-        Ok(TreeNodeRecursion::Continue)
-    })?;
 
     input.apply(|node| {
         match node {
             LogicalPlan::Filter(filter) => {
                 // Split AND predicates into individual expressions
                 for predicate in split_conjunction(&filter.predicate) {
-                    if predicate_is_on_target_multi(predicate, &allowed_refs)? {
+                    if predicate_is_on_target_multi(predicate, allowed_refs)? {
                         filters.push(predicate.clone());
                     }
                 }
