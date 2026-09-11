@@ -46,43 +46,67 @@ enum Side {
     Right,
 }
 
-/// Top-level pushdown for `Sort(fetch) → ... → Join` patterns. The plan
-/// passed in is guaranteed by the caller to be `LogicalPlan::Sort` with
-/// `fetch.is_some()`; we re-bind to a borrow inside.
-pub(super) fn push_topk_through_join(
-    plan: LogicalPlan,
-) -> Result<Transformed<LogicalPlan>> {
-    let LogicalPlan::Sort(sort) = &plan else {
-        return Ok(Transformed::no(plan));
-    };
+/// If `node` is a transparent node (`Projection` or `SubqueryAlias`),
+/// returns its child together with `exprs` resolved through it (column
+/// references rewritten to match the child's schema). Returns `None` for
+/// any other node, signaling the walk should stop.
+///
+/// Shared by both tree walks in [`push_topk_through_join`]: peeling down
+/// from the `Sort` to find the `Join`, and scanning inside the preserved
+/// child for an existing inner `Sort`.
+fn peel_transparent_layer<'a>(
+    node: &'a LogicalPlan,
+    exprs: &[SortExpr],
+) -> Result<Option<(&'a LogicalPlan, Vec<SortExpr>)>> {
+    match node {
+        LogicalPlan::Projection(proj) => Ok(Some((
+            proj.input.as_ref(),
+            resolve_sort_exprs_through_projection(exprs, proj)?,
+        ))),
+        LogicalPlan::SubqueryAlias(sq) => Ok(Some((
+            sq.input.as_ref(),
+            resolve_sort_exprs_through_subquery_alias(exprs, sq)?,
+        ))),
+        _ => Ok(None),
+    }
+}
+
+/// Top-level pushdown for `Sort(fetch) → ... → Join` patterns. The caller
+/// (`PushDownLimit::rewrite`) has already matched `LogicalPlan::Sort(sort)`
+/// with `sort.fetch.is_some()`; taking `Sort` by value here (rather than
+/// re-wrapping it into a `LogicalPlan` just to immediately unwrap it) means
+/// early exits can hand `sort` straight back via `LogicalPlan::Sort(sort)`
+/// without cloning.
+pub(super) fn push_topk_through_join(sort: SortPlan) -> Result<Transformed<LogicalPlan>> {
     let Some(fetch) = sort.fetch else {
-        return Ok(Transformed::no(plan));
+        return Ok(Transformed::no(LogicalPlan::Sort(sort)));
     };
 
     // Don't push if any sort expression is non-deterministic (e.g.
     // `random()`). Duplicating such expressions would produce different
     // values at each evaluation point, potentially changing results.
     if sort.expr.iter().any(|se| se.expr.is_volatile()) {
-        return Ok(Transformed::no(plan));
+        return Ok(Transformed::no(LogicalPlan::Sort(sort)));
     }
 
-    // Peel through transparent nodes (SubqueryAlias, Projection) to
-    // find the Join. Track intermediates so we can reconstruct the tree
-    // and resolve sort expressions through them.
+    // Peel through transparent nodes (SubqueryAlias, Projection) to find
+    // the Join, resolving sort expressions through each layer along the
+    // way so column references end up matching the join's schema. Track
+    // intermediates so we can reconstruct the tree afterward.
     let mut current = sort.input.as_ref();
     let mut intermediates: Vec<&LogicalPlan> = Vec::new();
+    let mut resolved_sort_exprs = sort.expr.clone();
     let join = loop {
-        match current {
-            LogicalPlan::Join(join) => break join,
-            LogicalPlan::Projection(proj) => {
+        if let LogicalPlan::Join(join) = current {
+            break join;
+        }
+        match peel_transparent_layer(current, &resolved_sort_exprs)? {
+            Some((next, new_exprs)) => {
                 intermediates.push(current);
-                current = proj.input.as_ref();
+                current = next;
+                resolved_sort_exprs = new_exprs;
             }
-            LogicalPlan::SubqueryAlias(sq) => {
-                intermediates.push(current);
-                current = sq.input.as_ref();
-            }
-            _ => return Ok(Transformed::no(plan)),
+            None => return Ok(Transformed::no(LogicalPlan::Sort(sort))),
         }
     };
 
@@ -106,37 +130,14 @@ pub(super) fn push_topk_through_join(
         JoinType::Inner if join.on.is_empty() && join.filter.is_none() => {
             &[Side::Left, Side::Right]
         }
-        _ => return Ok(Transformed::no(plan)),
+        _ => return Ok(Transformed::no(LogicalPlan::Sort(sort))),
     };
-
-    // Resolve sort expressions through all intermediate nodes
-    // (Projection, SubqueryAlias) so column references match the
-    // join's schema.
-    let mut resolved_sort_exprs = sort.expr.clone();
-    for node in &intermediates {
-        match node {
-            LogicalPlan::Projection(proj) => {
-                resolved_sort_exprs =
-                    resolve_sort_exprs_through_projection(&resolved_sort_exprs, proj)?;
-            }
-            LogicalPlan::SubqueryAlias(sq) => {
-                resolved_sort_exprs =
-                    resolve_sort_exprs_through_subquery_alias(&resolved_sort_exprs, sq)?;
-            }
-            _ => {
-                return internal_err!(
-                    "push_topk_through_join: unexpected intermediate node: {}",
-                    node.display()
-                );
-            }
-        }
-    }
 
     // After resolving through projections, sort expressions may now
     // contain volatile functions (e.g. `random() AS col`). Duplicating
     // them would change results.
     if resolved_sort_exprs.iter().any(|se| se.expr.is_volatile()) {
-        return Ok(Transformed::no(plan));
+        return Ok(Transformed::no(LogicalPlan::Sort(sort)));
     }
 
     // Pick the first preserved-side candidate whose schema contains all
@@ -152,7 +153,7 @@ pub(super) fn push_topk_through_join(
             .iter()
             .all(|se| has_all_column_refs(&se.expr, &cols))
     }) else {
-        return Ok(Transformed::no(plan));
+        return Ok(Transformed::no(LogicalPlan::Sort(sort)));
     };
 
     let preserved_child = match preserved_side {
@@ -166,26 +167,17 @@ pub(super) fn push_topk_through_join(
     // directly below the join as the preserved child's wrapper.
     let mut inner_child = preserved_child.as_ref();
     let mut deep_resolved_exprs = resolved_sort_exprs.clone();
-    loop {
-        match inner_child {
-            LogicalPlan::SubqueryAlias(sq) => {
-                deep_resolved_exprs =
-                    resolve_sort_exprs_through_subquery_alias(&deep_resolved_exprs, sq)?;
-                inner_child = sq.input.as_ref();
-            }
-            LogicalPlan::Projection(proj) => {
-                deep_resolved_exprs =
-                    resolve_sort_exprs_through_projection(&deep_resolved_exprs, proj)?;
-                inner_child = proj.input.as_ref();
-            }
-            _ => break,
-        }
+    while let Some((next, new_exprs)) =
+        peel_transparent_layer(inner_child, &deep_resolved_exprs)?
+    {
+        inner_child = next;
+        deep_resolved_exprs = new_exprs;
     }
 
     // If the inner child is a Limit (PushDownLimit's own Limit handling
     // hasn't merged it with the Sort yet), skip this iteration.
     if matches!(inner_child, LogicalPlan::Limit(_)) {
-        return Ok(Transformed::no(plan));
+        return Ok(Transformed::no(LogicalPlan::Sort(sort)));
     }
 
     // Determine action based on existing inner Sort:
@@ -210,7 +202,7 @@ pub(super) fn push_topk_through_join(
             None => false,
         };
         if same_exprs && child_fetch_tighter {
-            return Ok(Transformed::no(plan));
+            return Ok(Transformed::no(LogicalPlan::Sort(sort)));
         }
         if same_exprs {
             rebuild_with_tightened_sort(
@@ -265,23 +257,27 @@ pub(super) fn push_topk_through_join(
     }
 
     Ok(Transformed::yes(LogicalPlan::Sort(SortPlan {
-        expr: sort.expr.clone(),
+        expr: sort.expr,
         input: new_sort_input,
         fetch: sort.fetch,
     })))
 }
 
-/// Replace column references in sort expressions using a name→expr map.
+/// Replace column references in sort expressions using a structural
+/// `Column`→expr map. Keying by `Column` (rather than `Column::flat_name()`)
+/// avoids collisions between an unqualified column whose name happens to
+/// contain a dot (e.g. a quoted alias `"t1.b"`) and a qualified column that
+/// stringifies the same way (`t1.b`).
 fn replace_columns_in_sort_exprs(
     sort_exprs: &[SortExpr],
-    replace_map: &HashMap<String, Expr>,
+    replace_map: &HashMap<Column, Expr>,
 ) -> Result<Vec<SortExpr>> {
     sort_exprs
         .iter()
         .map(|sort_expr| {
             let new_expr = sort_expr.expr.clone().transform(|expr| {
                 let replacement = match &expr {
-                    Expr::Column(col) => replace_map.get(&col.flat_name()).cloned(),
+                    Expr::Column(col) => replace_map.get(col).cloned(),
                     _ => None,
                 };
                 Ok(replacement.map_or_else(|| Transformed::no(expr), Transformed::yes))
@@ -300,12 +296,12 @@ fn resolve_sort_exprs_through_projection(
     sort_exprs: &[SortExpr],
     projection: &Projection,
 ) -> Result<Vec<SortExpr>> {
-    let replace_map: HashMap<String, Expr> = projection
+    let replace_map: HashMap<Column, Expr> = projection
         .schema
         .iter()
         .zip(projection.expr.iter())
         .map(|((qualifier, field), expr)| {
-            let key = Column::from((qualifier, field)).flat_name();
+            let key = Column::from((qualifier, field));
             (key, expr.clone().unalias())
         })
         .collect();
@@ -329,14 +325,14 @@ fn resolve_sort_exprs_through_subquery_alias(
     sort_exprs: &[SortExpr],
     subquery_alias: &SubqueryAlias,
 ) -> Result<Vec<SortExpr>> {
-    let replace_map: HashMap<String, Expr> = subquery_alias
+    let replace_map: HashMap<Column, Expr> = subquery_alias
         .schema
         .iter()
         .zip(subquery_alias.input.schema().iter())
         .map(|((alias_qual, alias_field), (input_qual, input_field))| {
             let alias_col = Column::from((alias_qual, alias_field));
             let input_col = Column::from((input_qual, input_field));
-            (alias_col.flat_name(), Expr::Column(input_col))
+            (alias_col, Expr::Column(input_col))
         })
         .collect();
 
@@ -391,6 +387,7 @@ mod test {
     use crate::test::*;
 
     use datafusion_expr::col;
+    use datafusion_expr::lit;
     use datafusion_expr::logical_plan::builder::LogicalPlanBuilder;
 
     macro_rules! assert_optimized_plan_equal {
@@ -998,6 +995,50 @@ mod test {
         Ok(())
     }
 
+    /// Regression test for a `flat_name()` collision: an unqualified alias
+    /// literally named "t1.b" (as produced by a quoted identifier like
+    /// `t2.y AS "t1.b"`) must not be confused with the qualified column
+    /// `t1.b` that is also present in the same projection. Both used to
+    /// stringify to the same `flat_name()` ("t1.b"), so the old
+    /// `HashMap<String, Expr>` would silently resolve the alias to the
+    /// wrong underlying expression.
+    ///
+    /// Built via `Projection::try_new` directly rather than
+    /// `LogicalPlanBuilder::project`: the builder's `project()` rejects two
+    /// expressions with the same `schema_name()` up front (so this exact
+    /// shape can't come from a `SELECT` list), but nothing stops a
+    /// `Projection` built by other means — e.g. a different optimizer rule,
+    /// or a plan constructed directly via the expr API — from having two
+    /// structurally distinct output columns whose *string* names collide.
+    /// `resolve_sort_exprs_through_projection` must handle that shape
+    /// correctly regardless of how the `Projection` was constructed.
+    #[test]
+    fn resolve_through_projection_quoted_alias_no_collision() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+        let join = LogicalPlanBuilder::from(t1)
+            .join(
+                LogicalPlanBuilder::from(t2).build()?,
+                JoinType::Left,
+                (vec!["a"], vec!["a"]),
+                None,
+            )?
+            .build()?;
+        let proj = Projection::try_new(
+            vec![col("t1.a"), col("t2.b").alias("t1.b"), col("t1.b")],
+            Arc::new(join),
+        )?;
+
+        // `"t1.b"` here is the unqualified alias output column, not the
+        // qualified `t1.b` column also present in the projection.
+        let quoted_alias = Expr::Column(Column::new_unqualified("t1.b"));
+        let sort_exprs = vec![quoted_alias.sort(true, false)];
+        let resolved = resolve_sort_exprs_through_projection(&sort_exprs, &proj)?;
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].expr.to_string(), "t2.b");
+        Ok(())
+    }
+
     /// Multi-column resolution preserves direction and nulls_first per column.
     #[test]
     fn resolve_through_projection_multi_column() -> Result<()> {
@@ -1180,6 +1221,292 @@ mod test {
                 TableScan: t1
             TableScan: t2
         "
+        )
+    }
+
+    /// End-to-end regression for the `flat_name()` collision: `t2.b AS
+    /// "t1.b"` (an unqualified alias literally named "t1.b") sits next to
+    /// the qualified column `t1.b` in the same projection. ORDER BY the
+    /// quoted alias must push down sorted on `t2.b` (the right/preserved
+    /// side of this RIGHT JOIN), not silently resolve to `t1.b` and push
+    /// the wrong TopK onto the wrong side.
+    #[test]
+    fn topk_pushed_through_projection_quoted_alias_no_collision() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        let join = LogicalPlanBuilder::from(t1)
+            .join(
+                LogicalPlanBuilder::from(t2).build()?,
+                JoinType::Right,
+                (vec!["a"], vec!["a"]),
+                None,
+            )?
+            .build()?;
+        // Built via `Projection::try_new` (see comment on
+        // `resolve_through_projection_quoted_alias_no_collision`): the
+        // builder's `project()` would reject this expression list outright.
+        let proj = LogicalPlan::Projection(Projection::try_new(
+            vec![col("t1.a"), col("t2.b").alias("t1.b"), col("t1.b")],
+            Arc::new(join),
+        )?);
+        let plan = LogicalPlanBuilder::from(proj)
+            .sort_with_limit(
+                vec![Expr::Column(Column::new_unqualified("t1.b")).sort(true, false)],
+                Some(3),
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r#"
+        Sort: t1.b ASC NULLS LAST, fetch=3
+          Projection: t1.a, t2.b AS t1.b, t1.b
+            Right Join: t1.a = t2.a
+              TableScan: t1
+              Sort: t2.b ASC NULLS LAST, fetch=3
+                TableScan: t2
+        "#
+        )
+    }
+
+    /// CROSS JOIN pushdown evaluates the sort expression on the preserved
+    /// side eagerly, even though the join's output would be empty (and the
+    /// expression never evaluated) if the *other* side turned out to be
+    /// empty. This mirrors `push_down_filter`'s existing behavior of pushing
+    /// predicates into both sides of an Inner/Cross join, so it is not a
+    /// new class of risk; this test just pins down that pushdown still
+    /// happens for a division (a fallible expression) rather than being
+    /// silently skipped.
+    #[test]
+    fn topk_pushed_for_cross_join_with_fallible_sort_expr() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        let plan = LogicalPlanBuilder::from(t1)
+            .cross_join(LogicalPlanBuilder::from(t2).build()?)?
+            .sort_with_limit(
+                vec![(col("t1.a") / col("t1.b")).sort(true, false)],
+                Some(3),
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: t1.a / t1.b ASC NULLS LAST, fetch=3
+          Cross Join:
+            Sort: t1.a / t1.b ASC NULLS LAST, fetch=3
+              TableScan: t1
+            TableScan: t2
+        "
+        )
+    }
+
+    /// `Limit(skip=0) → Sort(no fetch) → Join`: `rewrite_limit` merges the
+    /// Limit's fetch into the Sort on one visit, but only strips the now-
+    /// redundant `Limit(skip=0)` wrapper on a *later* visit to that same
+    /// node (it only recognizes the wrapper as redundant once the Sort
+    /// already carries the matching fetch). Confirms the TopK-through-join
+    /// pushdown and the Limit/Sort merge both still converge to the fully
+    /// collapsed form with two passes.
+    #[test]
+    fn topk_pushed_through_limit_then_sort_with_two_passes() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                LogicalPlanBuilder::from(t2).build()?,
+                JoinType::Left,
+                (vec!["a"], vec!["a"]),
+                None,
+            )?
+            .sort(vec![col("t1.b").sort(true, false)])?
+            .limit(0, Some(3))?
+            .build()?;
+
+        let optimizer_ctx = OptimizerContext::new().with_max_passes(2);
+        let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> =
+            vec![Arc::new(PushDownLimit::new())];
+        assert_optimized_plan_eq_snapshot!(
+            optimizer_ctx,
+            rules,
+            plan,
+            @r"
+        Sort: t1.b ASC NULLS LAST, fetch=3
+          Left Join: t1.a = t2.a
+            Sort: t1.b ASC NULLS LAST, fetch=3
+              TableScan: t1
+            TableScan: t2
+        "
+        )
+    }
+
+    /// Running the optimizer a second time on its own output must be a
+    /// no-op: a rule that keeps rewriting an already-optimized plan (e.g.
+    /// oscillating between two equivalent forms) would never let the
+    /// overall optimizer converge.
+    #[test]
+    fn topk_pushed_through_join_is_idempotent() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                LogicalPlanBuilder::from(t2).build()?,
+                JoinType::Left,
+                (vec!["a"], vec!["a"]),
+                None,
+            )?
+            .sort_with_limit(vec![col("t1.b").sort(true, false)], Some(3))?
+            .build()?;
+
+        let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> =
+            vec![Arc::new(PushDownLimit::new())];
+        let optimizer = crate::Optimizer::with_rules(rules);
+        let ctx = OptimizerContext::new().with_max_passes(1);
+
+        let once = optimizer.optimize(plan, &ctx, |_, _| {})?;
+        let twice = optimizer.optimize(once.clone(), &ctx, |_, _| {})?;
+        assert_eq!(once, twice);
+        Ok(())
+    }
+
+    /// `fetch = 0` is a degenerate but valid TopK: the pushed Sort still
+    /// carries `fetch=0` rather than being special-cased away.
+    #[test]
+    fn topk_pushed_with_fetch_zero() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                LogicalPlanBuilder::from(t2).build()?,
+                JoinType::Left,
+                (vec!["a"], vec!["a"]),
+                None,
+            )?
+            .sort_with_limit(vec![col("t1.b").sort(true, false)], Some(0))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: t1.b ASC NULLS LAST, fetch=0
+          Left Join: t1.a = t2.a
+            Sort: t1.b ASC NULLS LAST, fetch=0
+              TableScan: t1
+            TableScan: t2
+        "
+        )
+    }
+
+    /// Preserved child is a bare `Limit` (not yet merged into a `Sort` by
+    /// `rewrite_limit`) — must skip cleanly rather than push past it and
+    /// silently ignore the existing row cap.
+    #[test]
+    fn topk_not_pushed_when_child_is_bare_limit() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        let t1_with_limit = LogicalPlanBuilder::from(t1).limit(0, Some(5))?.build()?;
+
+        let plan = LogicalPlanBuilder::from(t1_with_limit)
+            .join(
+                LogicalPlanBuilder::from(t2).build()?,
+                JoinType::Left,
+                (vec!["a"], vec!["a"]),
+                None,
+            )?
+            .sort_with_limit(vec![col("t1.b").sort(true, false)], Some(3))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: t1.b ASC NULLS LAST, fetch=3
+          Left Join: t1.a = t2.a
+            Limit: skip=0, fetch=5
+              TableScan: t1, fetch=5
+            TableScan: t2
+        "
+        )
+    }
+
+    /// A `Filter` between the `Sort` and the `Join` blocks pushdown: `Filter`
+    /// is not one of the transparent nodes this rewrite peels through (a
+    /// `Filter` can drop preserved-side rows, which would change which rows
+    /// survive to be sorted). Running `PushDownLimit` alone can never push
+    /// through it, however many passes are allowed.
+    #[test]
+    fn topk_not_pushed_through_filter_with_push_down_limit_alone() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                LogicalPlanBuilder::from(t2).build()?,
+                JoinType::Left,
+                (vec!["a"], vec!["a"]),
+                None,
+            )?
+            .filter(col("t1.c").eq(lit("foo")))?
+            .sort_with_limit(vec![col("t1.b").sort(true, false)], Some(3))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r#"
+        Sort: t1.b ASC NULLS LAST, fetch=3
+          Filter: t1.c = Utf8("foo")
+            Left Join: t1.a = t2.a
+              TableScan: t1
+              TableScan: t2
+        "#
+        )
+    }
+
+    /// Same plan as above, but with `PushDownFilter` also in the rule set
+    /// and two passes allowed: pass 1 runs `push_down_limit` first (declines,
+    /// same as the single-rule case above) and then `push_down_filter` sinks
+    /// the Filter onto `t1` (the only side it references) below the Join;
+    /// pass 2 revisits the Sort, which now sits directly above the Join and
+    /// pushes through. One pass alone is not enough — see
+    /// `topk_not_pushed_through_filter_with_push_down_limit_alone` and the
+    /// module doc comment's note on this ordering dependency.
+    #[test]
+    fn topk_pushed_through_filter_after_push_down_filter_with_two_passes() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                LogicalPlanBuilder::from(t2).build()?,
+                JoinType::Left,
+                (vec!["a"], vec!["a"]),
+                None,
+            )?
+            .filter(col("t1.c").eq(lit("foo")))?
+            .sort_with_limit(vec![col("t1.b").sort(true, false)], Some(3))?
+            .build()?;
+
+        let optimizer_ctx = OptimizerContext::new().with_max_passes(2);
+        let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![
+            Arc::new(PushDownLimit::new()),
+            Arc::new(crate::push_down_filter::PushDownFilter::new()),
+        ];
+        assert_optimized_plan_eq_snapshot!(
+            optimizer_ctx,
+            rules,
+            plan,
+            @r#"
+        Sort: t1.b ASC NULLS LAST, fetch=3
+          Left Join: t1.a = t2.a
+            Sort: t1.b ASC NULLS LAST, fetch=3
+              TableScan: t1, full_filters=[t1.c = Utf8("foo")]
+            TableScan: t2
+        "#
         )
     }
 }

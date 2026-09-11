@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`PushDownLimit`] pushes `LIMIT` earlier in the query plan
+//! [`PushDownLimit`] pushes `LIMIT` earlier in the query plan, and pushes a
+//! `Sort` with a fetch limit (TopK) onto a join's preserved-side child (see
+//! the `topk_through_join` submodule).
 
 use std::cmp::min;
 use std::sync::Arc;
@@ -33,7 +35,21 @@ mod topk_through_join;
 use topk_through_join::push_topk_through_join;
 
 /// Optimization rule that tries to push down `LIMIT`.
-//. It will push down through projection, limits (taking the smaller limit)
+///
+/// It pushes `LIMIT` through projections, unions, joins and into scans
+/// (taking the smaller limit when one is already present), merges adjacent
+/// limits, and pushes a `Sort` carrying a fetch limit (a TopK) onto a join's
+/// preserved-side child so fewer rows enter the join. See
+/// `topk_through_join` for the latter.
+///
+/// The TopK-through-join rewrite has an implicit ordering dependency on
+/// `push_down_filter` and `eliminate_outer_join`: a `Filter` sitting between
+/// the `Sort` and the `Join` blocks this rule (a `Filter` can't sink below a
+/// fetch-bearing node without changing which rows survive), and an outer
+/// join only has a "preserved side" once `eliminate_outer_join` has already
+/// dropped joins it can prove are equivalent to an inner join. Both of those
+/// rules need a prior or concurrent pass to unblock this one; with
+/// `max_passes >= 2` this resolves on a later pass.
 #[derive(Default, Debug)]
 pub struct PushDownLimit {}
 
@@ -53,13 +69,11 @@ impl OptimizerRule for PushDownLimit {
     fn rewrite(
         &self,
         plan: LogicalPlan,
-        config: &dyn OptimizerConfig,
+        _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
-            LogicalPlan::Limit(limit) => rewrite_limit(limit, config),
-            LogicalPlan::Sort(s) if s.fetch.is_some() => {
-                push_topk_through_join(LogicalPlan::Sort(s))
-            }
+            LogicalPlan::Limit(limit) => rewrite_limit(limit),
+            LogicalPlan::Sort(s) if s.fetch.is_some() => push_topk_through_join(s),
             other => Ok(Transformed::no(other)),
         }
     }
@@ -76,11 +90,7 @@ impl OptimizerRule for PushDownLimit {
 /// Limit-side dispatch (split out from `rewrite` so that the top-level
 /// match in `OptimizerRule::rewrite` reads as a parallel branch alongside
 /// the Sort-with-fetch handler).
-#[expect(clippy::only_used_in_recursion)]
-fn rewrite_limit(
-    mut limit: Limit,
-    config: &dyn OptimizerConfig,
-) -> Result<Transformed<LogicalPlan>> {
+fn rewrite_limit(mut limit: Limit) -> Result<Transformed<LogicalPlan>> {
     // Currently only rewrite if skip and fetch are both literals
     let SkipType::Literal(skip) = limit.get_skip_type()? else {
         return Ok(Transformed::no(LogicalPlan::Limit(limit)));
@@ -106,7 +116,7 @@ fn rewrite_limit(
         };
 
         // recursively reapply the rule on the new limit
-        return rewrite_limit(new_limit, config);
+        return rewrite_limit(new_limit);
     }
 
     // no fetch to push, so return the original plan
