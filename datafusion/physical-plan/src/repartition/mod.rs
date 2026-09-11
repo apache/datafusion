@@ -2234,12 +2234,17 @@ impl RepartitionExec {
 
     /// Override the target batch size used by the output coalescer.
     ///
-    /// By default the coalescer targets [`SessionConfig::batch_size`]. Use
+    /// By default the coalescer targets the session batch size. Use
     /// this method when you need a different batch size for a specific
     /// `RepartitionExec` node without changing the global session config.
-    pub fn with_batch_size(mut self, batch_size: usize) -> Self {
+    ///
+    /// Returns an error if `batch_size` is zero.
+    pub fn with_batch_size(mut self, batch_size: usize) -> Result<Self> {
+        if batch_size == 0 {
+            return internal_err!("batch_size must be greater than zero");
+        }
         self.batch_size = Some(batch_size);
-        self
+        Ok(self)
     }
 
     /// Return the sort expressions that are used to merge
@@ -3767,7 +3772,7 @@ mod tests {
             Arc::new(TaskContext::default().with_session_config(session_config));
 
         let exec = TestMemoryExec::try_new_exec(&partitions, Arc::clone(&schema), None)?;
-        let exec = RepartitionExec::try_new(exec, partitioning)?.with_batch_size(100);
+        let exec = RepartitionExec::try_new(exec, partitioning)?.with_batch_size(100)?;
 
         let mut stream = exec.execute(0, Arc::clone(&task_ctx))?;
         while let Some(result) = stream.next().await {
