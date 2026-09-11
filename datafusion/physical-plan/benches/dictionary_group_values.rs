@@ -247,11 +247,81 @@ fn bench_take_n(c: &mut Criterion) {
     group.finish();
 }
 
+/// Batches that share one dictionary values array, as produced downstream of
+/// a repartition or filter: `take`/`filter` clone the values `Arc` and rewrite
+/// only the keys, so the values array is never compacted and its cardinality
+/// reflects the whole upstream stream rather than a single batch.
+///
+/// The other benchmarks here always allocate a fresh values array per batch
+/// and cap cardinality at the batch size, so neither the `Arc` reuse nor the
+/// `cardinality >> rows` regime is covered by them.
+fn bench_shared_values_arc(c: &mut Criterion) {
+    // More batches than `N_BATCHES`: the cost this exercises is paid once per
+    // batch, so a longer run per values array is what a real partition looks
+    // like (thousands of batches sharing one dictionary).
+    const BATCHES: usize = 32;
+
+    let mut group = c.benchmark_group("dict_shared_values_arc");
+    let size = SIZES[0];
+    let mut rng = StdRng::seed_from_u64(SEED);
+
+    for &cardinality in &[size, 100_000, 500_000] {
+        // One values array, shared by every batch.
+        let strings: Vec<String> =
+            (0..cardinality).map(|i| format!("v_{i:08}")).collect();
+        let values: ArrayRef = Arc::new(StringArray::from(
+            strings.iter().map(|s| Some(s.as_str())).collect::<Vec<_>>(),
+        ));
+
+        let batches: Vec<ArrayRef> = (0..BATCHES)
+            .map(|_| {
+                let keys: Vec<i32> = (0..size)
+                    .map(|_| rng.random_range(0..cardinality) as i32)
+                    .collect();
+                Arc::new(DictionaryArray::<Int32Type>::new(
+                    PrimitiveArray::<Int32Type>::from(keys),
+                    Arc::clone(&values),
+                )) as ArrayRef
+            })
+            .collect();
+
+        let schema = dict_schema();
+        group.throughput(Throughput::Elements((size * BATCHES) as u64));
+        group.bench_function(
+            BenchmarkId::new(
+                "shared_values_arc",
+                format!("size_{size}_card_{cardinality}"),
+            ),
+            |b| {
+                b.iter_batched_ref(
+                    || {
+                        (
+                            new_group_values(schema.clone(), &GroupOrdering::None)
+                                .unwrap(),
+                            Vec::<usize>::with_capacity(size),
+                        )
+                    },
+                    |(gv, groups)| {
+                        for arr in &batches {
+                            gv.intern(std::slice::from_ref(arr), groups).unwrap();
+                            black_box(&*groups);
+                        }
+                        black_box(gv.emit(EmitTo::All).unwrap());
+                    },
+                    BatchSize::SmallInput,
+                );
+            },
+        );
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_intern_emit,
     bench_repeated_intern_emit,
     bench_scalar_append_equal,
-    bench_take_n
+    bench_take_n,
+    bench_shared_values_arc
 );
 criterion_main!(benches);
