@@ -19,24 +19,46 @@
 
 use super::THRESHOLD_INLINE_INLIST;
 
-use datafusion_common::Result;
+use arrow::array::MAX_INLINE_VIEW_LEN;
+use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Expr;
 use datafusion_expr::expr::InList;
+use datafusion_expr::simplify::SimplifyContext;
 
-pub(super) struct ShortenInListSimplifier {}
+pub(super) struct ShortenInListSimplifier<'a> {
+    info: &'a SimplifyContext,
+}
 
-impl ShortenInListSimplifier {
-    pub(super) fn new() -> Self {
-        Self {}
+impl<'a> ShortenInListSimplifier<'a> {
+    pub(super) fn new(info: &'a SimplifyContext) -> Self {
+        Self { info }
+    }
+
+    /// Returns true when the physical `IN` expression has a specialized fast
+    /// path that is preferable to expanding a short static list into ORs.
+    fn has_specialized_static_filter(&self, expr: &Expr, list: &[Expr]) -> bool {
+        if !list.iter().all(|expr| matches!(expr, Expr::Literal(_, _))) {
+            return false;
+        }
+
+        // Valid optimizer inputs have already been type-coerced, so the tested
+        // expression determines the physical list representation.
+        let Ok(data_type) = self.info.get_data_type(expr) else {
+            // Type errors are reported elsewhere. Preserve the existing
+            // shortening behavior instead of making simplification fail.
+            return false;
+        };
+        supports_specialized_static_filter(&data_type, list)
     }
 }
 
-impl TreeNodeRewriter for ShortenInListSimplifier {
+impl TreeNodeRewriter for ShortenInListSimplifier<'_> {
     type Node = Expr;
 
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
-        // if expr is a single column reference:
+        // Rewrite eligible short lists to left-deep comparison chains:
         // expr IN (A, B, ...) --> (expr = A) OR (expr = B) OR (expr = C)
         if let Expr::InList(InList {
             ref expr,
@@ -52,6 +74,7 @@ impl TreeNodeRewriter for ShortenInListSimplifier {
                 list.len() == 1
                     || list.len() <= THRESHOLD_INLINE_INLIST
                         && expr.try_as_col().is_some()
+                        && !self.has_specialized_static_filter(expr, list)
             )
         {
             let first_val = list[0].clone();
@@ -92,4 +115,70 @@ impl TreeNodeRewriter for ShortenInListSimplifier {
 
         Ok(Transformed::no(expr))
     }
+}
+
+/// Mirrors the specialized physical filters used by `InListExpr`.
+///
+/// Keep this type and representation match synchronized with the primitive,
+/// fixed-size-binary, and byte-view selectors under
+/// `datafusion/physical-expr/src/expressions/in_list/`.
+fn supports_specialized_static_filter(data_type: &DataType, list: &[Expr]) -> bool {
+    let data_type = dictionary_value_type(data_type);
+    match data_type {
+        DataType::Int8
+        | DataType::UInt8
+        | DataType::Int16
+        | DataType::UInt16
+        | DataType::Float16
+        | DataType::Int32
+        | DataType::UInt32
+        | DataType::Float32
+        | DataType::Date32
+        | DataType::Int64
+        | DataType::UInt64
+        | DataType::Float64
+        | DataType::Date64
+        | DataType::Timestamp(_, _)
+        | DataType::Duration(_)
+        | DataType::Decimal128(_, _)
+        | DataType::Interval(IntervalUnit::MonthDayNano) => true,
+        DataType::Time32(TimeUnit::Second | TimeUnit::Millisecond)
+        | DataType::Time64(TimeUnit::Microsecond | TimeUnit::Nanosecond) => true,
+        DataType::FixedSizeBinary(width) => matches!(*width, 1 | 2 | 4 | 8 | 16),
+        DataType::Utf8View | DataType::BinaryView => {
+            list.iter().all(|expr| inline_view_literal(expr, data_type))
+        }
+        _ => false,
+    }
+}
+
+fn dictionary_value_type(mut data_type: &DataType) -> &DataType {
+    while let DataType::Dictionary(_, value_type) = data_type {
+        data_type = value_type;
+    }
+    data_type
+}
+
+fn inline_view_literal(expr: &Expr, data_type: &DataType) -> bool {
+    let Expr::Literal(value, _) = expr else {
+        return false;
+    };
+    let value = dictionary_scalar_value(value);
+    if value.is_null() {
+        return true;
+    }
+
+    let len = match (data_type, value) {
+        (DataType::Utf8View, ScalarValue::Utf8View(Some(value))) => value.len(),
+        (DataType::BinaryView, ScalarValue::BinaryView(Some(value))) => value.len(),
+        _ => return false,
+    };
+    len <= MAX_INLINE_VIEW_LEN as usize
+}
+
+fn dictionary_scalar_value(mut value: &ScalarValue) -> &ScalarValue {
+    while let ScalarValue::Dictionary(_, dictionary_value) = value {
+        value = dictionary_value;
+    }
+    value
 }

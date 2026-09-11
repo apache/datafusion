@@ -491,7 +491,8 @@ select array_has_all(arrow_cast(make_array(1,2,3), 'FixedSizeList(3, Int64)'), a
 true false true false false false true true false false true false true
 
 # rewrite various array_has operations to InList where the haystack is a literal list
-# NB that `col in (a, b, c)` is simplified to OR if there are <= 3 elements, so we make 4-element haystack lists
+# Short lists on a column are simplified to OR when they cannot use a specialized
+# static filter. This list has an out-of-line Utf8View value, so use four items.
 
 query I
 with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM generate_series(1, 100000) t(i))

@@ -707,18 +707,22 @@ async fn aggregate_case() -> Result<()> {
 
 #[tokio::test]
 async fn roundtrip_inlist_1() -> Result<()> {
+    // Int64 has a specialized static filter, so this short list remains an
+    // InList through expression simplification.
     roundtrip("SELECT * FROM data WHERE a IN (1, 2, 3)").await
 }
 
 #[tokio::test]
-// Test with length <= datafusion_optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST
 async fn roundtrip_inlist_2() -> Result<()> {
+    // Utf8 uses the generic physical filter, so a list at the shortening
+    // threshold is expanded into OR comparisons.
     roundtrip("SELECT * FROM data WHERE f IN ('a', 'b', 'c')").await
 }
 
 #[tokio::test]
-// Test with length > datafusion_optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST
 async fn roundtrip_inlist_3() -> Result<()> {
+    // Even for generic Utf8, a list above the shortening threshold remains an
+    // InList to avoid growing the expression tree.
     let inlist = (0..=THRESHOLD_INLINE_INLIST)
         .map(|i| format!("'{i}'"))
         .collect::<Vec<_>>()

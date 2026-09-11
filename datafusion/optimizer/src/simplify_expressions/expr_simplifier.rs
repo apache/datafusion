@@ -117,8 +117,15 @@ pub struct ExprSimplifier {
     max_simplifier_cycles: u32,
 }
 
+/// Largest `IN` list considered for expansion into binary comparisons.
+///
+/// The final decision also accounts for whether the list can use a specialized
+/// physical filter.
 pub const THRESHOLD_INLINE_INLIST: usize = 3;
 pub const DEFAULT_MAX_SIMPLIFIER_CYCLES: u32 = 3;
+
+/// Avoid unbounded expression growth when rewriting `IN` lists with preimages.
+const MAX_PREIMAGE_IN_LIST_VALUES: usize = 3;
 
 impl ExprSimplifier {
     /// Create a new `ExprSimplifier` with the given [`SimplifyContext`].
@@ -199,7 +206,7 @@ impl ExprSimplifier {
         let mut simplifier = Simplifier::new(&self.info);
         let config_options = Some(Arc::clone(self.info.config_options()));
         let mut const_evaluator = ConstEvaluator::try_new(config_options)?;
-        let mut shorten_in_list_simplifier = ShortenInListSimplifier::new();
+        let mut shorten_in_list_simplifier = ShortenInListSimplifier::new(&self.info);
         let guarantees_map: HashMap<&Expr, &NullableInterval> =
             self.guarantees.iter().map(|(k, v)| (k, v)).collect();
 
@@ -2144,7 +2151,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 list,
                 negated,
             }) => {
-                if list.len() > THRESHOLD_INLINE_INLIST || list.iter().any(is_null) {
+                if list.len() > MAX_PREIMAGE_IN_LIST_VALUES || list.iter().any(is_null) {
                     return Ok(Transformed::no(Expr::InList(InList {
                         expr,
                         list,
@@ -2476,7 +2483,7 @@ mod tests {
     use super::*;
     use crate::test::test_table_scan_with_name;
     use arrow::{
-        array::{Int32Array, StructArray},
+        array::{Int32Array, MAX_INLINE_VIEW_LEN, StructArray},
         datatypes::{FieldRef, Fields},
     };
     use datafusion_common::{DFSchemaRef, ToDFSchema, assert_contains};
@@ -4678,6 +4685,25 @@ mod tests {
             (col("c1") * lit(10)).eq(lit(2))
         );
 
+        let expr = in_list(col("c3"), vec![lit(1_i64), lit(2_i64)], false);
+        assert_eq!(simplify(expr.clone()), expr);
+
+        let expr = in_list(col("c3"), vec![lit(1_i64), lit(2_i64), lit(3_i64)], true);
+        assert_eq!(simplify(expr.clone()), expr);
+
+        // Dynamic lists cannot use a static filter and retain the existing
+        // comparison expansion even for a specialized primitive type.
+        assert_eq!(
+            simplify(in_list(
+                col("c3"),
+                vec![lit(1_i64), col("c3_non_null")],
+                false,
+            )),
+            col("c3")
+                .eq(lit(1_i64))
+                .or(col("c3").eq(col("c3_non_null")))
+        );
+
         assert_eq!(
             simplify(in_list(col("c1"), vec![lit(1), lit(2)], false)),
             col("c1").eq(lit(1)).or(col("c1").eq(lit(2)))
@@ -4888,6 +4914,117 @@ mod tests {
         // https://github.com/apache/datafusion/issues/8970
         // assert_eq!(simplify(expr.clone()), lit(true));
         assert_eq!(simplify(expr.clone()), expr);
+    }
+
+    #[test]
+    fn simplify_short_inlist_specialized_filter_boundaries() {
+        fn simplify_typed(expr: Expr, data_type: DataType) -> Expr {
+            let schema = Schema::new(vec![Field::new("value", data_type, true)])
+                .to_dfschema_ref()
+                .unwrap();
+            ExprSimplifier::new(SimplifyContext::builder().with_schema(schema).build())
+                .simplify(expr)
+                .unwrap()
+        }
+
+        let expr = in_list(col("value"), vec![lit(0.0_f64), lit(-0.0_f64)], false);
+        assert_eq!(simplify_typed(expr.clone(), DataType::Float64), expr);
+
+        let expr = in_list(
+            col("value"),
+            vec![lit(1_i64), lit(ScalarValue::Int64(None))],
+            false,
+        );
+        assert_eq!(simplify_typed(expr.clone(), DataType::Int64), expr);
+
+        let expr = in_list(
+            col("value"),
+            vec![lit(1_i64), lit(2_i64), lit(ScalarValue::Int64(None))],
+            true,
+        );
+        assert_eq!(simplify_typed(expr.clone(), DataType::Int64), expr);
+
+        let dictionary_type = DataType::Dictionary(
+            Box::new(DataType::Int8),
+            Box::new(DataType::Dictionary(
+                Box::new(DataType::Int16),
+                Box::new(DataType::Int64),
+            )),
+        );
+        let dictionary_literal = |value| {
+            lit(ScalarValue::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(ScalarValue::Dictionary(
+                    Box::new(DataType::Int16),
+                    Box::new(ScalarValue::Int64(Some(value))),
+                )),
+            ))
+        };
+        let expr = in_list(
+            col("value"),
+            vec![dictionary_literal(1), dictionary_literal(2)],
+            false,
+        );
+        assert_eq!(simplify_typed(expr.clone(), dictionary_type), expr);
+
+        let fixed_size_literal = |width, byte| {
+            lit(ScalarValue::FixedSizeBinary(
+                width,
+                Some(vec![byte; width as usize]),
+            ))
+        };
+        let expr = in_list(
+            col("value"),
+            vec![fixed_size_literal(16, 1), fixed_size_literal(16, 2)],
+            false,
+        );
+        assert_eq!(
+            simplify_typed(expr.clone(), DataType::FixedSizeBinary(16)),
+            expr
+        );
+
+        let list = vec![fixed_size_literal(3, 1), fixed_size_literal(3, 2)];
+        let expr = in_list(col("value"), list.clone(), false);
+        let expected = col("value")
+            .eq(list[0].clone())
+            .or(col("value").eq(list[1].clone()));
+        assert_eq!(simplify_typed(expr, DataType::FixedSizeBinary(3)), expected);
+
+        let inline = vec![
+            lit(ScalarValue::Utf8View(Some("abcdefghijkl".into()))),
+            lit(ScalarValue::Utf8View(Some("short".into()))),
+        ];
+        let expr = in_list(col("value"), inline, false);
+        assert_eq!(simplify_typed(expr.clone(), DataType::Utf8View), expr);
+
+        let mixed = vec![
+            lit(ScalarValue::Utf8View(Some("abcdefghijklm".into()))),
+            lit(ScalarValue::Utf8View(Some("short".into()))),
+        ];
+        let expr = in_list(col("value"), mixed.clone(), false);
+        let expected = col("value")
+            .eq(mixed[0].clone())
+            .or(col("value").eq(mixed[1].clone()));
+        assert_eq!(simplify_typed(expr, DataType::Utf8View), expected);
+
+        let binary_view_literal =
+            |len, byte| lit(ScalarValue::BinaryView(Some(vec![byte; len])));
+        let inline = vec![
+            binary_view_literal(MAX_INLINE_VIEW_LEN as usize, 1),
+            binary_view_literal(1, 2),
+        ];
+        let expr = in_list(col("value"), inline, false);
+        assert_eq!(simplify_typed(expr.clone(), DataType::BinaryView), expr);
+
+        let mixed = vec![
+            binary_view_literal(MAX_INLINE_VIEW_LEN as usize + 1, 1),
+            binary_view_literal(1, 2),
+        ];
+        let expr = in_list(col("value"), mixed.clone(), false);
+        let expected = col("value")
+            .eq(mixed[0].clone())
+            .or(col("value").eq(mixed[1].clone()));
+        assert_eq!(simplify_typed(expr, DataType::BinaryView), expected);
     }
 
     #[test]
