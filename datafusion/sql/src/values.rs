@@ -62,11 +62,24 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let schema = planner_context.table_schema().unwrap_or(empty_schema);
-        if schema.fields().is_empty() {
-            LogicalPlanBuilder::values(values)?.build()
-        } else {
-            LogicalPlanBuilder::values_with_schema(values, &schema)?.build()
-        }
+        let table_schema = planner_context.table_schema().unwrap_or(empty_schema);
+        // A VALUES list with no table schema infers its column types from the
+        // values themselves.
+        let schema = (!table_schema.fields().is_empty()).then(|| table_schema.as_ref());
+        // The builder casts every cell to its column's type itself, so it is
+        // handed the session time zone to read a timezone-naive cell that it
+        // makes timezone-aware in.
+        let session_time_zone = self
+            .context_provider
+            .options()
+            .execution
+            .time_zone
+            .as_deref();
+        LogicalPlanBuilder::values_with_session_time_zone(
+            values,
+            schema,
+            session_time_zone,
+        )?
+        .build()
     }
 }
