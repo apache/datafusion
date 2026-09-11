@@ -269,6 +269,12 @@ fn closest_valid_field<'a>(
     best_match.map(|(_, _, _, valid_field)| valid_field)
 }
 
+/// Maximum number of field names listed in a [`SchemaError::FieldNotFound`]
+/// message. Schemas with hundreds or thousands of columns are ordinary in
+/// analytics workloads, and listing all of them produced error messages
+/// thousands of characters long that pushed the actual error off screen.
+const MAX_LISTED_VALID_FIELDS: usize = 20;
+
 impl Display for SchemaError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -297,15 +303,24 @@ impl Display for SchemaError {
                 }
 
                 if !valid_fields.is_empty() {
-                    write!(
-                        f,
-                        "\nValid fields are {}.",
-                        valid_fields
-                            .iter()
-                            .map(|field| field.quoted_flat_name())
-                            .collect::<Vec<String>>()
-                            .join(", ")
-                    )
+                    // Wide schemas are common, and listing every field turns a
+                    // one-line mistake into a screenful of output. The "Did you
+                    // mean" hint above is the actionable part; the list is just
+                    // context, so cap it.
+                    let listed = valid_fields
+                        .iter()
+                        .take(MAX_LISTED_VALID_FIELDS)
+                        .map(|field| field.quoted_flat_name())
+                        .collect::<Vec<String>>()
+                        .join(", ");
+                    match valid_fields.len().saturating_sub(MAX_LISTED_VALID_FIELDS) {
+                        0 => write!(f, "\nValid fields are {listed}."),
+                        remaining => write!(
+                            f,
+                            "\nValid fields are {listed} and {remaining} other{}.",
+                            if remaining == 1 { "" } else { "s" }
+                        ),
+                    }
                 } else {
                     Ok(())
                 }
@@ -1201,6 +1216,51 @@ mod test {
     use std::sync::Arc;
 
     use arrow::error::ArrowError;
+    use insta::assert_snapshot;
+
+    fn field_not_found_message(num_fields: usize) -> String {
+        let valid_fields = (0..num_fields)
+            .map(|i| Column::new_unqualified(format!("col_{i}")))
+            .collect::<Vec<_>>();
+        SchemaError::FieldNotFound {
+            field: Box::new(Column::new_unqualified("nope")),
+            valid_fields,
+        }
+        .to_string()
+    }
+
+    #[test]
+    fn field_not_found_lists_every_field_for_a_narrow_schema() {
+        assert_snapshot!(field_not_found_message(3), @r"
+        No field named nope.
+        Valid fields are col_0, col_1, col_2.
+        ");
+    }
+
+    #[test]
+    fn field_not_found_lists_every_field_at_the_cap() {
+        assert_snapshot!(field_not_found_message(MAX_LISTED_VALID_FIELDS), @r"
+        No field named nope.
+        Valid fields are col_0, col_1, col_2, col_3, col_4, col_5, col_6, col_7, col_8, col_9, col_10, col_11, col_12, col_13, col_14, col_15, col_16, col_17, col_18, col_19.
+        ");
+    }
+
+    #[test]
+    fn field_not_found_uses_singular_for_one_extra_field() {
+        assert_snapshot!(field_not_found_message(MAX_LISTED_VALID_FIELDS + 1), @r"
+        No field named nope.
+        Valid fields are col_0, col_1, col_2, col_3, col_4, col_5, col_6, col_7, col_8, col_9, col_10, col_11, col_12, col_13, col_14, col_15, col_16, col_17, col_18, col_19 and 1 other.
+        ");
+    }
+
+    /// A 200 column schema used to produce roughly 2.8k characters.
+    #[test]
+    fn field_not_found_truncates_a_wide_schema() {
+        assert_snapshot!(field_not_found_message(200), @r"
+        No field named nope.
+        Valid fields are col_0, col_1, col_2, col_3, col_4, col_5, col_6, col_7, col_8, col_9, col_10, col_11, col_12, col_13, col_14, col_15, col_16, col_17, col_18, col_19 and 180 others.
+        ");
+    }
 
     fn ok_result() -> Result<()> {
         Ok(())
