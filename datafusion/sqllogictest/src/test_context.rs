@@ -738,23 +738,25 @@ fn register_dictionary_struct_table(ctx: &SessionContext) {
 
     ctx.register_batch("dict_struct_table", batch).unwrap();
 
-    // Second table: dictionary-encoded struct with nullable entries
-    let names_nullable = Arc::new(StringArray::from(vec!["X", "Y"])) as ArrayRef;
-    let ids_nullable = Arc::new(Int32Array::from(vec![10, 20])) as ArrayRef;
+    // Second table: null keys, null structs with valid children, and null children.
+    let names_nullable =
+        Arc::new(StringArray::from(vec!["X", "Y", "hidden"])) as ArrayRef;
+    let ids_nullable =
+        Arc::new(Int32Array::from(vec![Some(10), None, Some(30)])) as ArrayRef;
     let struct_fields_nullable: Fields = vec![
         Field::new("name", DataType::Utf8, false),
-        Field::new("id", DataType::Int32, false),
+        Field::new("id", DataType::Int32, true),
     ]
     .into();
     let values_struct_nullable = Arc::new(
         StructArray::try_new(
             struct_fields_nullable.clone(),
             vec![names_nullable, ids_nullable],
-            None,
+            Some(vec![true, true, false].into()),
         )
         .unwrap(),
     ) as ArrayRef;
-    let keys_nullable = UInt32Array::from(vec![Some(0), None, Some(1), None]);
+    let keys_nullable = UInt32Array::from(vec![Some(0), None, Some(1), Some(2), Some(2)]);
     let dict_nullable =
         DictionaryArray::<UInt32Type>::try_new(keys_nullable, values_struct_nullable)
             .unwrap();

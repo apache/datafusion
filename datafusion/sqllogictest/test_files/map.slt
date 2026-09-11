@@ -87,10 +87,11 @@ GET 27
 PUT 25
 DELETE 24
 
-query T
-SELECT strings['not_found'] FROM data LIMIT 1;
+# A missing key makes the result nullable even when the map and its values are not.
+query TBB
+SELECT strings['not_found'], arrow_field(strings)['nullable'], arrow_field(strings['not_found'])['nullable'] FROM data LIMIT 1;
 ----
-NULL
+NULL false true
 
 # Select non existent key, expect NULL for each row
 query I
