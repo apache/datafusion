@@ -117,6 +117,10 @@ pub struct ExprSimplifier {
     max_simplifier_cycles: u32,
 }
 
+/// Largest `IN` list considered for expansion into binary comparisons.
+///
+/// The final decision also accounts for the measured performance of the column
+/// representation and whether the list values are literals.
 pub const THRESHOLD_INLINE_INLIST: usize = 3;
 pub const DEFAULT_MAX_SIMPLIFIER_CYCLES: u32 = 3;
 
@@ -199,7 +203,8 @@ impl ExprSimplifier {
         let mut simplifier = Simplifier::new(&self.info);
         let config_options = Some(Arc::clone(self.info.config_options()));
         let mut const_evaluator = ConstEvaluator::try_new(config_options)?;
-        let mut shorten_in_list_simplifier = ShortenInListSimplifier::new();
+        let mut shorten_in_list_simplifier =
+            ShortenInListSimplifier::new(self.info.schema());
         let guarantees_map: HashMap<&Expr, &NullableInterval> =
             self.guarantees.iter().map(|(k, v)| (k, v)).collect();
 
@@ -5005,6 +5010,8 @@ mod tests {
             };
             let left_list = literals(&[0.0, 1.0, 2.0, 3.0])?;
             let right_list = literals(&[-0.0, 4.0, 5.0, 6.0])?;
+            let retains_short_lists =
+                matches!(data_type, DataType::Float32 | DataType::Float64);
             let schema = Arc::new(Schema::new(vec![Field::new("x", data_type, false)]));
             let batch = RecordBatch::try_new(schema, vec![values])?;
             let schema = batch.schema().to_dfschema_ref()?;
@@ -5029,7 +5036,7 @@ mod tests {
                     (left(true).or(right(true)), vec![false, false]),
                 ] {
                     let simplified = simplifier.simplify(expr.clone())?;
-                    if list_len > THRESHOLD_INLINE_INLIST {
+                    if list_len > THRESHOLD_INLINE_INLIST || retains_short_lists {
                         // Floating-point literals must bypass structural set rewrites.
                         assert_eq!(simplified, expr);
                     } else {
@@ -5095,6 +5102,99 @@ mod tests {
                 left.or(right)
             };
             assert_eq!(simplify_no_canonicalize(expr.clone()), expr);
+        }
+    }
+
+    #[test]
+    fn simplify_short_inlist_measured_representations() {
+        for data_type in [
+            DataType::Float32,
+            DataType::Float64,
+            DataType::FixedSizeBinary(8),
+            DataType::Float16,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::UInt64,
+            DataType::FixedSizeBinary(1),
+            DataType::FixedSizeBinary(2),
+            DataType::FixedSizeBinary(3),
+            DataType::FixedSizeBinary(4),
+            DataType::FixedSizeBinary(16),
+            DataType::Utf8View,
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Float64)),
+        ] {
+            let values = (1..=4)
+                .map(|value| {
+                    lit(match &data_type {
+                        DataType::FixedSizeBinary(width) => ScalarValue::FixedSizeBinary(
+                            *width,
+                            Some(vec![value; *width as usize]),
+                        ),
+                        DataType::Utf8View => {
+                            ScalarValue::Utf8View(Some(value.to_string()))
+                        }
+                        _ => ScalarValue::Int32(Some(i32::from(value)))
+                            .cast_to(&data_type)
+                            .unwrap(),
+                    })
+                })
+                .collect::<Vec<_>>();
+            let retain_short = matches!(
+                data_type,
+                DataType::Int32
+                    | DataType::Int64
+                    | DataType::UInt64
+                    | DataType::Float32
+                    | DataType::Float64
+                    | DataType::FixedSizeBinary(1 | 2 | 4 | 8 | 16)
+            );
+            let schema = Schema::new(vec![
+                Field::new("value", data_type.clone(), true),
+                Field::new("other", data_type, true),
+            ])
+            .to_dfschema_ref()
+            .unwrap();
+            let simplifier = ExprSimplifier::new(
+                SimplifyContext::builder().with_schema(schema).build(),
+            );
+            for list_len in 1..=4 {
+                for negated in [false, true] {
+                    let list = values[..list_len].to_vec();
+                    let expr = in_list(col("value"), list.clone(), negated);
+                    let expected = if list_len > THRESHOLD_INLINE_INLIST
+                        || list_len > 1 && retain_short
+                    {
+                        expr.clone()
+                    } else {
+                        let comparisons = list.into_iter().map(|value| {
+                            if negated {
+                                col("value").not_eq(value)
+                            } else {
+                                col("value").eq(value)
+                            }
+                        });
+                        comparisons
+                            .reduce(|left, right| {
+                                if negated {
+                                    left.and(right)
+                                } else {
+                                    left.or(right)
+                                }
+                            })
+                            .unwrap()
+                    };
+                    assert_eq!(simplifier.simplify(expr).unwrap(), expected);
+                }
+            }
+
+            // A column-valued list keeps the comparison path even for a
+            // representation whose static lists use membership filters.
+            let expr =
+                in_list(col("value"), vec![values[0].clone(), col("other")], false);
+            let expected = col("value")
+                .eq(values[0].clone())
+                .or(col("value").eq(col("other")));
+            assert_eq!(simplifier.simplify(expr).unwrap(), expected);
         }
     }
 
