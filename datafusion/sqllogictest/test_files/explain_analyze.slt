@@ -500,7 +500,7 @@ GROUP BY k;
 ----
 Plan with Metrics
 01)ProjectionExec: expr=[k@0 as k, count(Int64(1))@1 as count(*)], metrics=[output_bytes=1056.0 B]
-02)--AggregateExec: mode=Single, gby=[k@0 as k], aggr=[count(Int64(1))], metrics=[output_bytes=1056.0 B, spilled_bytes=0.0 B, peak_mem_used=9.2 KB]
+02)--AggregateExec: mode=Single, gby=[k@0 as k], aggr=[count(Int64(1))], metrics=[output_bytes=1056.0 B, spilled_bytes=0.0 B, peak_mem_used=2.2 KB]
 03)----ProjectionExec: expr=[column1@0 as k], metrics=[output_bytes=32.0 B]
 04)------DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
 
