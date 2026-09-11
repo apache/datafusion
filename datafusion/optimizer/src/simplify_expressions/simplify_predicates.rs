@@ -25,6 +25,7 @@
 //! For example, it can simplify `x > 5 AND x > 6` to just `x > 6`, as the latter condition
 //! encompasses the former, resulting in fewer checks during query execution.
 
+use super::utils::is_null;
 use datafusion_common::{Column, Result, ScalarValue};
 use datafusion_expr::{BinaryExpr, Expr, Operator};
 use std::collections::BTreeMap;
@@ -54,6 +55,8 @@ pub fn simplify_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
     for pred in predicates {
         match pred {
             Expr::BinaryExpr(BinaryExpr { left, op, right })
+                // Comparisons against NULL never evaluate to true, so they carry no
+                // bound that the reasoning below could use
                 if matches!(
                     op,
                     Operator::Gt
@@ -61,7 +64,8 @@ pub fn simplify_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
                         | Operator::Lt
                         | Operator::LtEq
                         | Operator::Eq
-                ) =>
+                ) && !is_null(&left)
+                    && !is_null(&right) =>
             {
                 if let (Some(col), Some(_)) =
                     (extract_column_from_expr(&left), right.as_literal())
