@@ -329,6 +329,9 @@ fn ensure_field_compatibility(
     if !DFSchema::datatype_is_logically_equal(
         datafusion_field.data_type(),
         substrait_field.data_type(),
+    ) && !is_safe_widening(
+        datafusion_field.data_type(),
+        substrait_field.data_type(),
     ) {
         return substrait_err!(
             "Field '{}' in Substrait schema has a different type ({}) than the corresponding field in the table schema ({}).",
@@ -372,6 +375,41 @@ fn ensure_nested_nullability_compatibility(
         }
     }
     Ok(())
+}
+
+/// Returns true if the DataFusion type can be promoted to the Substrait type without loss of
+/// precision. Struct fields are matched recursively by name and position.
+fn is_safe_widening(datafusion_type: &DataType, substrait_type: &DataType) -> bool {
+    match (datafusion_type, substrait_type) {
+        // Signed integer widening
+        (DataType::Int8, DataType::Int16 | DataType::Int32 | DataType::Int64)
+        | (DataType::Int16, DataType::Int32 | DataType::Int64)
+        | (DataType::Int32, DataType::Int64)
+        // Unsigned integer widening
+        | (DataType::UInt8, DataType::UInt16 | DataType::UInt32 | DataType::UInt64)
+        | (DataType::UInt16, DataType::UInt32 | DataType::UInt64)
+        | (DataType::UInt32, DataType::UInt64)
+        // Float widening
+        | (DataType::Float16, DataType::Float32 | DataType::Float64)
+        | (DataType::Float32, DataType::Float64) => true,
+        (DataType::Struct(df_fields), DataType::Struct(substrait_fields)) => {
+            df_fields.len() == substrait_fields.len()
+                && df_fields
+                    .iter()
+                    .zip(substrait_fields.iter())
+                    .all(|(df_field, substrait_field)| {
+                        df_field.name() == substrait_field.name()
+                            && (DFSchema::datatype_is_logically_equal(
+                                df_field.data_type(),
+                                substrait_field.data_type(),
+                            ) || is_safe_widening(
+                                df_field.data_type(),
+                                substrait_field.data_type(),
+                            ))
+                    })
+        }
+        _ => false,
+    }
 }
 
 fn check_nested_field(
@@ -861,6 +899,59 @@ pub(crate) mod tests {
         let inner = Field::new("inner", DataType::Int32, inner_nullable);
         let outer = Field::new("s", DataType::Struct(Fields::from(vec![inner])), false);
         DFSchema::try_from(Schema::new(vec![outer])).unwrap()
+    }
+
+    #[test]
+    fn compatibility_accepts_safe_numeric_widening() -> Result<()> {
+        let df = DFSchema::try_from(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )]))?;
+        let sub = DFSchema::try_from(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            false,
+        )]))?;
+        ensure_schema_compatibility(&df, sub)
+    }
+
+    #[test]
+    fn nested_compatibility_accepts_safe_numeric_widening() -> Result<()> {
+        fn schema(value_type: DataType) -> DFSchema {
+            let period = Field::new(
+                "period",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("period_unit", DataType::Utf8, true),
+                    Field::new("period_value", value_type, true),
+                ])),
+                true,
+            );
+            DFSchema::try_from(Schema::new(vec![period])).unwrap()
+        }
+
+        let df = schema(DataType::Int32);
+        let sub = schema(DataType::Int64);
+        ensure_schema_compatibility(&df, sub)
+    }
+
+    #[test]
+    fn nested_compatibility_rejects_numeric_narrowing() {
+        fn schema(value_type: DataType) -> DFSchema {
+            let period = Field::new(
+                "period",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("period_unit", DataType::Utf8, true),
+                    Field::new("period_value", value_type, true),
+                ])),
+                true,
+            );
+            DFSchema::try_from(Schema::new(vec![period])).unwrap()
+        }
+
+        let df = schema(DataType::Int64);
+        let sub = schema(DataType::Int32);
+        assert!(ensure_schema_compatibility(&df, sub).is_err());
     }
 
     #[test]
