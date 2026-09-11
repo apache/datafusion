@@ -814,6 +814,9 @@ mod tests {
         );
 
         let a_field = Arc::new(Field::new("a", DataType::Float64, true));
+
+        let expected_ordering_field =
+            Arc::new(a_field.as_ref().clone().with_name("a[ordering_0_a]"));
         let state_fields = foreign_udaf.state_fields(StateFieldsArgs {
             name: "a",
             input_fields: &[Field::new("f", DataType::Float64, true).into()],
@@ -823,7 +826,7 @@ mod tests {
         })?;
 
         assert_eq!(state_fields.len(), 3);
-        assert_eq!(state_fields[1], a_field);
+        assert_eq!(state_fields[1], expected_ordering_field);
         Ok(())
     }
 
