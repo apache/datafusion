@@ -350,6 +350,16 @@ impl<'schema> PushdownChecker<'schema> {
         self.allow_list_columns && is_list
     }
 
+    /// Selected structs must obey the same List/Map policy as direct fields.
+    fn subtree_is_pushable(&self, data_type: &DataType) -> bool {
+        match data_type {
+            DataType::Struct(fields) => fields
+                .iter()
+                .all(|field| self.subtree_is_pushable(field.data_type())),
+            other => !other.is_nested() || self.is_nested_type_supported(other),
+        }
+    }
+
     #[inline]
     pub(crate) fn prevents_pushdown(&self) -> bool {
         self.non_primitive_columns || self.projected_columns || self.has_unpushable_udfs
@@ -438,11 +448,8 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
                 };
                 data_type.is_some_and(|data_type| {
                     requirement.field_paths.iter().all(|path| {
-                        resolve_struct_field_type(&data_type, path).is_some_and(|leaf| {
-                            matches!(leaf, DataType::Struct(_))
-                                || !leaf.is_nested()
-                                || self.is_nested_type_supported(leaf)
-                        })
+                        resolve_struct_field_type(&data_type, path)
+                            .is_some_and(|leaf| self.subtree_is_pushable(leaf))
                     })
                 })
             })
@@ -1301,14 +1308,29 @@ mod test {
             )),
             false,
         );
-        for data_type in [
+        for (data_type, leaf_type) in [
             DataType::Int32,
             DataType::Struct(vec![Field::new("value", DataType::Int32, true)].into()),
             DataType::List(Arc::clone(&item)),
             DataType::LargeList(Arc::clone(&item)),
             DataType::FixedSizeList(item, 2),
             map,
-        ] {
+        ]
+        .into_iter()
+        .flat_map(|leaf_type| {
+            let wrap = |data_type| {
+                DataType::Struct(
+                    vec![
+                        Field::new("primitive", DataType::Int32, true),
+                        Field::new("inner", data_type, true),
+                    ]
+                    .into(),
+                )
+            };
+            let wrapped = wrap(leaf_type.clone());
+            [leaf_type.clone(), wrapped.clone(), wrap(wrapped)]
+                .map(|data_type| (data_type, leaf_type.clone()))
+        }) {
             for nested in [false, true] {
                 let (input_type, path) = if nested {
                     (
@@ -1340,7 +1362,7 @@ mod test {
                         let mut checker =
                             PushdownChecker::new(&schema, allow_lists, false);
                         expr.visit(&mut checker).unwrap();
-                        let blocked = match &data_type {
+                        let blocked = match &leaf_type {
                             DataType::Map(_, _) => true,
                             DataType::List(_)
                             | DataType::LargeList(_)
