@@ -1036,12 +1036,22 @@ impl Accumulator for DistinctArrayAggAccumulator {
 
         assert_eq_or_internal_err!(states.len(), 1, "expects single state");
 
-        // The DISTINCT state is `List<value>`.
-        states[0]
+        let distinct_metric = self.distinct_metric.clone();
+        let distinct_start = distinct_metric.as_ref().map(|_| Instant::now());
+
+        // The DISTINCT state is `List<value>`. This calls the update
+        // implementation once per state row, so record the submetric once for
+        // the entire merge rather than once per row.
+        let result = states[0]
             .as_list::<i32>()
             .iter()
             .flatten()
-            .try_for_each(|val| self.update_batch(&[val]))
+            .try_for_each(|val| self.update_batch_impl(&[val], false));
+
+        if let (Some(metric), Some(start)) = (distinct_metric, distinct_start) {
+            metric.add_duration(start.elapsed());
+        }
+        result
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
@@ -1499,7 +1509,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{ListBuilder, StringBuilder};
+    use arrow::array::{Int32Builder, ListBuilder, StringBuilder};
     use arrow::datatypes::Schema;
     use datafusion_common::cast::as_generic_string_array;
     use datafusion_common::internal_err;
@@ -1546,6 +1556,24 @@ mod tests {
         accumulator.set_metrics(Arc::new(CountingMetrics(Arc::clone(&metric_updates))));
 
         accumulator.update_batch(&[Arc::new(Int32Array::from(vec![1; 16]))])?;
+
+        assert_eq!(metric_updates.load(Ordering::Relaxed), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_accumulator_records_merge_metric_once() -> Result<()> {
+        let mut builder = ListBuilder::new(Int32Builder::new());
+        for value in [1, 2, 3] {
+            builder.append_value([Some(value)]);
+        }
+        let state: ArrayRef = Arc::new(builder.finish());
+
+        let metric_updates = Arc::new(AtomicUsize::new(0));
+        let mut target =
+            DistinctArrayAggAccumulator::try_new(&DataType::Int32, None, false)?;
+        target.set_metrics(Arc::new(CountingMetrics(Arc::clone(&metric_updates))));
+        target.merge_batch(&[state])?;
 
         assert_eq!(metric_updates.load(Ordering::Relaxed), 1);
         Ok(())
