@@ -332,7 +332,12 @@ impl AggregateUDFImpl for FirstValue {
             )
             .into(),
         ];
-        fields.extend(args.ordering_fields.iter().cloned());
+        fields.extend(args.ordering_fields.iter().enumerate().map(|(idx, field)| {
+            Arc::new(field.as_ref().clone().with_name(format_state_name(
+                args.name,
+                &format!("ordering_{idx}_{}", field.name()),
+            )))
+        }));
         fields.push(
             Field::new(
                 format_state_name(args.name, "first_value_is_set"),
@@ -1246,7 +1251,12 @@ impl AggregateUDFImpl for LastValue {
             )
             .into(),
         ];
-        fields.extend(args.ordering_fields.iter().cloned());
+        fields.extend(args.ordering_fields.iter().enumerate().map(|(idx, field)| {
+            Arc::new(field.as_ref().clone().with_name(format_state_name(
+                args.name,
+                &format!("ordering_{idx}_{}", field.name()),
+            )))
+        }));
         fields.push(
             Field::new(
                 format_state_name(args.name, "last_value_is_set"),
