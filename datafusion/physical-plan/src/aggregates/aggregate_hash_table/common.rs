@@ -910,6 +910,7 @@ mod tests {
     use datafusion_physical_expr::expressions::Column;
 
     use super::*;
+    use crate::aggregates::group_values::aggregate_sub_metrics;
     use crate::metrics::ExecutionPlanMetricsSet;
 
     #[test]
@@ -968,8 +969,11 @@ mod tests {
                 Arc::new(BooleanArray::from(vec![true, false, true, false])),
             ],
         )?;
-        let accumulator = sum_accumulator(&schema, "include", 1)?;
         let metrics = ExecutionPlanMetricsSet::new();
+        let submetrics = aggregate_sub_metrics(&metrics, 0, ["SUM(value)"])
+            .pop()
+            .expect("one aggregate submetric factory");
+        let accumulator = sum_accumulator(&schema, "include", 1, submetrics)?;
         let group_by_metrics = GroupByMetrics::new(&metrics, 0);
         let argument_metrics = AggregateArgumentMetrics::new(&metrics, 0, ["SUM(value)"]);
         let accumulator_metrics = AggregateAccumulatorMetrics::new(
@@ -1011,6 +1015,7 @@ mod tests {
         schema: &SchemaRef,
         filter_name: &str,
         filter_index: usize,
+        submetrics: Arc<dyn AggregateMetrics>,
     ) -> Result<HashAggregateAccumulator> {
         let argument: Arc<dyn PhysicalExpr> = Arc::new(Column::new("value", 0));
         let aggregate_expr = Arc::new(
@@ -1019,12 +1024,14 @@ mod tests {
                 .alias("SUM(value)")
                 .build()?,
         );
-        let accumulator = create_group_accumulator(&aggregate_expr)?;
+        let accumulator =
+            create_group_accumulator(&aggregate_expr, Arc::clone(&submetrics))?;
         Ok(HashAggregateAccumulator::new(
             aggregate_expr,
             vec![argument],
             Some(Arc::new(Column::new(filter_name, filter_index))),
             accumulator,
+            submetrics,
         ))
     }
 
