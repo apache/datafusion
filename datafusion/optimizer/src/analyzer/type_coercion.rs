@@ -3453,7 +3453,7 @@ mod test {
         use super::*;
 
         use datafusion_expr::expr::{SetComparison, SetQuantifier};
-        use datafusion_expr::{Case, Union};
+        use datafusion_expr::{Case, Cast, Union};
 
         /// The session time zone: a fixed offset, so that the tests do not
         /// depend on any time zone database.
@@ -3591,6 +3591,48 @@ mod test {
             )
         }
 
+        /// A subquery projection that is *already* the common type is not cast
+        /// at all, so an explicit `AT TIME ZONE` at the top of it keeps arrow's
+        /// semantics.
+        fn explicit_set_comparison_plan() -> Result<LogicalPlan> {
+            let projection = LogicalPlan::Projection(Projection::try_new(
+                vec![Expr::Cast(Cast::new(
+                    Box::new(col("a")),
+                    DataType::Timestamp(TimeUnit::Nanosecond, Some(NY.into())),
+                ))],
+                one_column("a", naive()),
+            )?);
+            let set_comparison = Expr::SetComparison(SetComparison::new(
+                Box::new(col("a")),
+                Subquery {
+                    subquery: Arc::new(projection),
+                    outer_ref_columns: vec![],
+                    spans: Spans::new(),
+                },
+                Operator::Eq,
+                SetQuantifier::Any,
+            ));
+            Ok(LogicalPlan::Filter(Filter::try_new(
+                set_comparison,
+                one_column("a", aware()),
+            )?))
+        }
+
+        #[test]
+        fn explicit_set_comparison_is_not_split() -> Result<()> {
+            assert_analyzed_plan_in_time_zone!(
+                Some(SESSION),
+                explicit_set_comparison_plan()?,
+                @r#"
+            Filter: CAST(a AS Timestamp(ns, "America/New_York")) = ANY (<subquery>)
+              Subquery:
+                Projection: CAST(a AS Timestamp(ns, "America/New_York"))
+                  EmptyRelation: rows=0
+              EmptyRelation: rows=0
+            "#
+            )
+        }
+
         #[test]
         fn set_comparison_without_session_time_zone() -> Result<()> {
             assert_analyzed_plan_in_time_zone!(
@@ -3623,6 +3665,41 @@ mod test {
               Projection: CAST(CAST(a AS Timestamp(ns, "+08:00")) AS Timestamp(ns, "America/New_York")) AS a
                 EmptyRelation: rows=0
               Projection: CAST(a AS Timestamp(ns, "America/New_York")) AS a
+                EmptyRelation: rows=0
+            "#
+            )
+        }
+
+        /// A `UNION` branch that is *already* the common type is not cast at
+        /// all, so an explicit `AT TIME ZONE` at the top of it keeps arrow's
+        /// semantics.
+        fn explicit_union_plan() -> Result<LogicalPlan> {
+            let explicit = LogicalPlan::Projection(Projection::try_new(
+                vec![
+                    Expr::Cast(Cast::new(
+                        Box::new(col("a")),
+                        DataType::Timestamp(TimeUnit::Nanosecond, Some(NY.into())),
+                    ))
+                    .alias("a"),
+                ],
+                one_column("a", naive()),
+            )?);
+            Ok(LogicalPlan::Union(Union::try_new_with_loose_types(vec![
+                Arc::new(explicit),
+                one_column("a", naive()),
+            ])?))
+        }
+
+        #[test]
+        fn explicit_union_branch_is_not_split() -> Result<()> {
+            assert_analyzed_plan_in_time_zone!(
+                Some(SESSION),
+                explicit_union_plan()?,
+                @r#"
+            Union
+              Projection: CAST(a AS Timestamp(ns, "America/New_York")) AS a
+                EmptyRelation: rows=0
+              Projection: CAST(CAST(a AS Timestamp(ns, "+08:00")) AS Timestamp(ns, "America/New_York")) AS a
                 EmptyRelation: rows=0
             "#
             )
