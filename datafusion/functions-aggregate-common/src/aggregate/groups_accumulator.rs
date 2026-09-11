@@ -325,6 +325,7 @@ impl GroupsAccumulatorAdapter {
                 }
 
                 let start = grouped_update_metric.as_ref().map(|_| Instant::now());
+                let mut successful_groups = 0;
                 let mut chunk_result = Ok(());
                 for (group_idx, values) in &values_to_accumulate {
                     chunk_result =
@@ -332,17 +333,20 @@ impl GroupsAccumulatorAdapter {
                     if chunk_result.is_err() {
                         break;
                     }
+                    successful_groups += 1;
                 }
                 if let Some(start) = start {
                     aggregate_duration += start.elapsed();
                 }
-                chunk_result?;
-                for (group_idx, _) in &values_to_accumulate {
+                for (group_idx, _) in values_to_accumulate.iter().take(successful_groups)
+                {
                     let state = &mut self.states[*group_idx];
-                    // clear out the state so they are empty for next iteration
+                    // Clear every successfully applied group before propagating
+                    // an error from a later group.
                     state.indices.clear();
                     sizes_post += state.size();
                 }
+                chunk_result?;
             }
             Ok(())
         })();
@@ -880,6 +884,70 @@ mod tests {
                 < Duration::from_millis(25).as_nanos() as u64,
             "grouped-update metric must exclude size accounting"
         );
+        Ok(())
+    }
+
+    #[derive(Debug)]
+    struct FailOnceAccumulator {
+        fail_first_update: bool,
+        successful_group_rows: Option<Arc<AtomicUsize>>,
+    }
+
+    impl Accumulator for FailOnceAccumulator {
+        fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+            if self.fail_first_update {
+                self.fail_first_update = false;
+                return datafusion_common::internal_err!("injected update failure");
+            }
+            if let Some(rows) = &self.successful_group_rows {
+                rows.fetch_add(values[0].len(), Ordering::Relaxed);
+            }
+            Ok(())
+        }
+
+        fn evaluate(&mut self) -> Result<ScalarValue> {
+            Ok(ScalarValue::Int64(None))
+        }
+
+        fn size(&self) -> usize {
+            size_of_val(self)
+        }
+
+        fn state(&mut self) -> Result<Vec<ScalarValue>> {
+            Ok(vec![ScalarValue::Int64(None)])
+        }
+
+        fn merge_batch(&mut self, _states: &[ArrayRef]) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn adapter_clears_successful_group_indices_after_later_error() -> Result<()> {
+        let created = Arc::new(AtomicUsize::new(0));
+        let successful_group_rows = Arc::new(AtomicUsize::new(0));
+        let mut accumulator = GroupsAccumulatorAdapter::new({
+            let created = Arc::clone(&created);
+            let successful_group_rows = Arc::clone(&successful_group_rows);
+            move || {
+                let group = created.fetch_add(1, Ordering::Relaxed);
+                Ok(Box::new(FailOnceAccumulator {
+                    fail_first_update: group == 1,
+                    successful_group_rows: (group == 0)
+                        .then(|| Arc::clone(&successful_group_rows)),
+                }) as Box<dyn Accumulator>)
+            }
+        });
+
+        let values: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
+        assert!(
+            accumulator
+                .update_batch(&[Arc::clone(&values)], &[0, 1], None, 2)
+                .is_err()
+        );
+        accumulator.update_batch(&[values], &[0, 1], None, 2)?;
+
+        assert_eq!(successful_group_rows.load(Ordering::Relaxed), 2);
         Ok(())
     }
 
