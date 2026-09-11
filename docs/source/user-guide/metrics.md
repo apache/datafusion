@@ -169,7 +169,9 @@ input values as `agg_expr_{index}_internal_distinct_time`. Grouped accumulation
 records this once per input batch, rather than once per group, to avoid making
 metric collection proportional to group cardinality. These submetrics complement
 the `update`, `merge`, `state`, and `evaluate` timers rather than subdividing or
-replacing them.
+replacing them. An internal submetric may therefore overlap its enclosing phase
+timer; it is a supplementary diagnostic and must not be added to phase timings
+as a breakdown.
 
 Except for the `Summary` metric `reduction_factor`, these operator-level and
 per-aggregate metrics are `Dev` metrics. They appear in `EXPLAIN ANALYZE` when
