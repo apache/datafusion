@@ -25,6 +25,7 @@ pub mod prim_op;
 
 use std::mem::{size_of, size_of_val};
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use arrow::array::new_empty_array;
 use arrow::{
@@ -111,6 +112,10 @@ pub struct GroupsAccumulatorAdapter {
     /// every group while allowing `convert_to_state(&self)` to use it.
     grouped_update_metric: Arc<OnceLock<Option<Arc<dyn AggregateMetric>>>>,
 }
+
+/// Maximum number of prepared group inputs retained while timing an
+/// aggregate-owned grouped subphase.
+const GROUPED_METRIC_PREPARATION_CHUNK_SIZE: usize = 64;
 
 struct AccumulatorState {
     /// [`Accumulator`] that stores the per-group state
@@ -267,40 +272,59 @@ impl GroupsAccumulatorAdapter {
         let values = take_arrays(values, &batch_indices, None)?;
         let opt_filter = get_filter_at_indices(opt_filter, &batch_indices)?;
 
-        // invoke each accumulator with the appropriate rows, first
-        // pulling the input arguments for this group into their own
-        // RecordBatch(es)
-        let iter = groups_with_rows.iter().zip(offsets.windows(2));
-
         let grouped_update_metric = time_grouped_update
             .then(|| self.grouped_update_metric.get().and_then(Clone::clone))
             .flatten();
-        let start = grouped_update_metric.as_ref().map(|_| Instant::now());
 
         let mut sizes_pre = 0;
         let mut sizes_post = 0;
+        let mut aggregate_duration = Duration::ZERO;
         let result: Result<()> = (|| {
-            for (&group_idx, offsets) in iter {
-                let state = &mut self.states[group_idx];
-                sizes_pre += state.size();
+            // Keep preparation bounded to avoid retaining one filtered array per
+            // group. Time only accumulator invocation: slicing and filtering
+            // are adapter work, not aggregate-owned subphase work.
+            for (chunk_index, groups) in groups_with_rows
+                .chunks(GROUPED_METRIC_PREPARATION_CHUNK_SIZE)
+                .enumerate()
+            {
+                let first_offset = chunk_index * GROUPED_METRIC_PREPARATION_CHUNK_SIZE;
+                let values_to_accumulate = groups
+                    .iter()
+                    .enumerate()
+                    .map(|(index, &group_idx)| {
+                        let values = slice_and_maybe_filter(
+                            &values,
+                            opt_filter.as_ref().map(|f| f.as_boolean()),
+                            &offsets[first_offset + index..first_offset + index + 2],
+                        )?;
+                        Ok((group_idx, values))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
 
-                let values_to_accumulate = slice_and_maybe_filter(
-                    &values,
-                    opt_filter.as_ref().map(|f| f.as_boolean()),
-                    offsets,
-                )?;
-                f(state.accumulator.as_mut(), &values_to_accumulate)?;
+                let start = grouped_update_metric.as_ref().map(|_| Instant::now());
+                let chunk_result: Result<()> = (|| {
+                    for (group_idx, values) in values_to_accumulate {
+                        let state = &mut self.states[group_idx];
+                        sizes_pre += state.size();
+                        f(state.accumulator.as_mut(), &values)?;
 
-                // clear out the state so they are empty for next
-                // iteration
-                state.indices.clear();
-                sizes_post += state.size();
+                        // clear out the state so they are empty for next
+                        // iteration
+                        state.indices.clear();
+                        sizes_post += state.size();
+                    }
+                    Ok(())
+                })();
+                if let Some(start) = start {
+                    aggregate_duration += start.elapsed();
+                }
+                chunk_result?;
             }
             Ok(())
         })();
 
-        if let (Some(metric), Some(start)) = (grouped_update_metric, start) {
-            metric.add_duration(start.elapsed());
+        if let Some(metric) = grouped_update_metric {
+            metric.add_duration(aggregate_duration);
         }
         result?;
         self.adjust_allocation(sizes_pre, sizes_post);
@@ -592,7 +616,7 @@ mod tests {
 
     use super::*;
     use crate::min_max::MaxAccumulator;
-    use arrow::array::{AsArray, Int64Array};
+    use arrow::array::{AsArray, BooleanArray, Int64Array};
     use arrow::datatypes::{DataType, Int64Type};
 
     #[derive(Debug)]
@@ -638,6 +662,26 @@ mod tests {
         fn merge_batch(&mut self, _states: &[ArrayRef]) -> Result<()> {
             Ok(())
         }
+    }
+
+    #[test]
+    fn adapter_grouped_update_records_one_metric_after_filtering() -> Result<()> {
+        let metric_updates = Arc::new(AtomicUsize::new(0));
+        let mut accumulator = GroupsAccumulatorAdapter::new({
+            let metric_updates = Arc::clone(&metric_updates);
+            move || {
+                Ok(Box::new(TimedAccumulator {
+                    metric: Arc::new(CountingMetric(Arc::clone(&metric_updates))),
+                }) as Box<dyn Accumulator>)
+            }
+        });
+
+        let values: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3, 4]));
+        let filter = BooleanArray::from(vec![true, false, true, false]);
+        accumulator.update_batch(&[values], &[0, 0, 1, 1], Some(&filter), 2)?;
+
+        assert_eq!(metric_updates.load(Ordering::Relaxed), 1);
+        Ok(())
     }
 
     #[test]
