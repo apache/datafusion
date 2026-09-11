@@ -1212,6 +1212,61 @@ mod tests {
             assert_eq!(decoded.name(), "test_udwf");
             Ok(())
         }
+
+        #[test]
+        fn composed_codec_round_trips_udf_and_udaf_payloads() -> Result<()> {
+            // The udwf path is covered above; udf and udaf take the same
+            // delegation but through their own hooks, so exercise both.
+            let composed =
+                ComposedPhysicalExtensionCodec::new(vec![Arc::new(PayloadCodec)]);
+
+            let mut buf = vec![];
+            composed.try_encode_udf(&ScalarUDF::from(TestUdf::new()), &mut buf)?;
+            assert!(
+                !buf.is_empty(),
+                "udf: a codec with a payload must produce one"
+            );
+            assert_eq!(
+                composed.try_decode_udf("test_udf", &buf)?.name(),
+                "test_udf"
+            );
+
+            let mut buf = vec![];
+            composed.try_encode_udaf(&AggregateUDF::from(TestUdaf::new()), &mut buf)?;
+            assert!(
+                !buf.is_empty(),
+                "udaf: a codec with a payload must produce one"
+            );
+            assert_eq!(
+                composed.try_decode_udaf("test_udaf", &buf)?.name(),
+                "test_udaf"
+            );
+
+            Ok(())
+        }
+
+        #[test]
+        fn composed_codec_reports_the_last_error_when_every_codec_rejects() -> Result<()>
+        {
+            // Every codec rejecting is distinct from one accepting without a
+            // payload: the first must surface the codec's own error rather
+            // than silently falling back to by-name encoding.
+            let composed = ComposedPhysicalExtensionCodec::new(vec![Arc::new(
+                RejectsFunctionsCodec,
+            )]);
+
+            let mut buf = vec![];
+            let err = composed
+                .try_encode_udwf(&WindowUDF::from(TestUdwf::new()), &mut buf)
+                .expect_err("a rejecting codec must not encode");
+            assert!(
+                err.to_string().contains("not mine"),
+                "expected the codec's own error, got: {err}"
+            );
+            assert!(buf.is_empty(), "a rejected encode must leave buf untouched");
+
+            Ok(())
+        }
     }
 }
 
