@@ -394,12 +394,6 @@ impl ParquetSource {
         &self.table_parquet_options
     }
 
-    /// Optional predicate.
-    #[deprecated(since = "50.2.0", note = "use `filter` instead")]
-    pub fn predicate(&self) -> Option<&Arc<dyn PhysicalExpr>> {
-        self.predicate.as_ref()
-    }
-
     /// return the optional file reader factory
     pub fn parquet_file_reader_factory(
         &self,
@@ -1298,17 +1292,6 @@ mod tests {
     use super::*;
     use arrow::datatypes::Schema;
     use datafusion_physical_expr::expressions::lit;
-
-    #[test]
-    #[expect(deprecated)]
-    fn test_parquet_source_predicate_same_as_filter() {
-        let predicate = lit(true);
-
-        let parquet_source =
-            ParquetSource::new(Arc::new(Schema::empty())).with_predicate(predicate);
-        // same value. but filter() call Arc::clone internally
-        assert_eq!(parquet_source.predicate(), parquet_source.filter().as_ref());
-    }
 
     #[test]
     fn test_reverse_scan_default_value() {

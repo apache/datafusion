@@ -67,14 +67,12 @@ use crate::source::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion_datasource::source::DataSourceExec;
-use datafusion_execution::cache::cache_manager::FileMetadataCache;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use parquet::arrow::async_reader::MetadataFetch;
 use parquet::errors::ParquetError;
-use parquet::file::metadata::ParquetMetaData;
 
 #[derive(Default)]
 /// Factory struct used to create [ParquetFormat]
@@ -637,68 +635,6 @@ impl MetadataFetch for ObjectStoreFetch<'_> {
         }
         .boxed()
     }
-}
-
-/// Fetches parquet metadata from ObjectStore for given object
-///
-/// This component is a subject to **change** in near future and is exposed for low level integrations
-/// through [`ParquetFileReaderFactory`].
-///
-/// [`ParquetFileReaderFactory`]: crate::ParquetFileReaderFactory
-#[deprecated(
-    since = "50.0.0",
-    note = "Use `DFParquetMetadata::fetch_metadata` instead"
-)]
-pub async fn fetch_parquet_metadata(
-    store: &dyn ObjectStore,
-    object_meta: &ObjectMeta,
-    size_hint: Option<usize>,
-    decryption_properties: Option<&FileDecryptionProperties>,
-    file_metadata_cache: Option<Arc<FileMetadataCache>>,
-) -> Result<Arc<ParquetMetaData>> {
-    let decryption_properties = decryption_properties.cloned().map(Arc::new);
-    DFParquetMetadata::new(store, object_meta)
-        .with_metadata_size_hint(size_hint)
-        .with_decryption_properties(decryption_properties)
-        .with_file_metadata_cache(file_metadata_cache)
-        .fetch_metadata()
-        .await
-}
-
-/// Read and parse the statistics of the Parquet file at location `path`
-///
-/// See [`statistics_from_parquet_meta_calc`] for more details
-#[deprecated(
-    since = "50.0.0",
-    note = "Use `DFParquetMetadata::fetch_statistics` instead"
-)]
-pub async fn fetch_statistics(
-    store: &dyn ObjectStore,
-    table_schema: SchemaRef,
-    file: &ObjectMeta,
-    metadata_size_hint: Option<usize>,
-    decryption_properties: Option<&FileDecryptionProperties>,
-    file_metadata_cache: Option<Arc<FileMetadataCache>>,
-) -> Result<Statistics> {
-    let decryption_properties = decryption_properties.cloned().map(Arc::new);
-    DFParquetMetadata::new(store, file)
-        .with_metadata_size_hint(metadata_size_hint)
-        .with_decryption_properties(decryption_properties)
-        .with_file_metadata_cache(file_metadata_cache)
-        .fetch_statistics(&table_schema)
-        .await
-}
-
-#[deprecated(
-    since = "50.0.0",
-    note = "Use `DFParquetMetadata::statistics_from_parquet_metadata` instead"
-)]
-#[expect(clippy::needless_pass_by_value)]
-pub fn statistics_from_parquet_meta_calc(
-    metadata: &ParquetMetaData,
-    table_schema: SchemaRef,
-) -> Result<Statistics> {
-    DFParquetMetadata::statistics_from_parquet_metadata(metadata, &table_schema)
 }
 
 #[cfg(feature = "proto")]
