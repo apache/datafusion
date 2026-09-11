@@ -26,11 +26,16 @@ use datafusion_expr::registry::ExtensionTypeRegistryRef;
 use datafusion_expr::{
     AggregateUDF, Expr, HigherOrderUDF, LogicalPlan, ScalarUDF, WindowUDF,
 };
+use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
 use datafusion_physical_plan::{ExecutionPlan, PhysicalExpr};
+
+use crate::CatalogProviderList;
 use parking_lot::{Mutex, RwLock};
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
+
+use crate::{PhysicalOptimizerRule, QueryPlanner, UnsupportedQueryPlanner};
 
 /// Interface for accessing [`SessionState`] from the catalog and data source.
 ///
@@ -79,9 +84,60 @@ pub trait Session: Send + Sync {
     /// Return the [`SessionConfig`]
     fn config(&self) -> &SessionConfig;
 
+    /// Return the catalogs registered with this session.
+    fn catalog_list(&self) -> Arc<dyn CatalogProviderList>;
+
     /// return the [`ConfigOptions`]
     fn config_options(&self) -> &ConfigOptions {
         self.config().options()
+    }
+
+    /// Return the query planner for this session.
+    ///
+    /// # Warning
+    ///
+    /// The default implementation returns an [`UnsupportedQueryPlanner`], so
+    /// [`Session::create_physical_plan`] will fail. Sessions that support
+    /// physical planning should override this method (for example by returning
+    /// `SessionState::query_planner`).
+    fn query_planner(&self) -> Arc<dyn QueryPlanner + Send + Sync> {
+        Arc::new(UnsupportedQueryPlanner)
+    }
+
+    /// Optimize a logical plan.
+    ///
+    /// # Warning
+    ///
+    /// The default implementation returns the plan **unchanged**, applying no
+    /// logical optimizations whatsoever. This is almost never what you want:
+    /// without optimization, queries execute in their naive, unoptimized form
+    /// and may be dramatically slower or fail to run at all. The default exists
+    /// only so this crate need not depend on the optimizer; any real session
+    /// should override this method (for example by delegating to
+    /// `SessionState::optimize`).
+    fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
+        Ok(plan.clone())
+    }
+
+    /// Return the physical optimizer rules for this session.
+    ///
+    /// # Warning
+    ///
+    /// The default implementation returns **no rules**. This is almost never
+    /// what you want: DataFusion relies on physical optimizer rules for
+    /// correctness-critical rewrites (such as inserting the repartitioning and
+    /// coalescing needed for parallel and multi-partition execution), so a
+    /// session with no rules will produce plans that are inefficient or that
+    /// fail to execute. The default exists only so this crate need not depend
+    /// on the optimizer; any real session should override this method (for
+    /// example by returning `SessionState::physical_optimizers`).
+    fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
+        &[]
+    }
+
+    /// Return the optional statistics registry used during physical optimization.
+    fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
+        None
     }
 
     /// Creates a physical [`ExecutionPlan`] plan from a [`LogicalPlan`].

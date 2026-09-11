@@ -15,12 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::{array::StringViewArray, datatypes::DataType};
+use arrow::{
+    array::{Array, BinaryViewBuilder},
+    datatypes::DataType,
+};
 use datafusion_common::{
     Result, ScalarValue,
     cast::as_binary_array,
     internal_err,
     types::{logical_binary, logical_string},
+    utils::hex::{HexCase, encode_bytes_into},
     utils::take_function_args,
 };
 use datafusion_expr::{
@@ -98,22 +102,6 @@ impl ScalarUDFImpl for Md5Func {
     }
 }
 
-/// Hex encoding lookup table for fast byte-to-hex conversion
-const HEX_CHARS_LOWER: &[u8; 16] = b"0123456789abcdef";
-
-/// Fast hex encoding using a lookup table instead of format strings.
-/// This is significantly faster than using `write!("{:02x}")` for each byte.
-#[inline]
-fn hex_encode(data: impl AsRef<[u8]>) -> String {
-    let bytes = data.as_ref();
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for &b in bytes {
-        s.push(HEX_CHARS_LOWER[(b >> 4) as usize] as char);
-        s.push(HEX_CHARS_LOWER[(b & 0x0f) as usize] as char);
-    }
-    s
-}
-
 fn md5(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let [data] = take_function_args("md5", args)?;
     let value = digest_process(data, DigestAlgorithm::Md5)?;
@@ -122,12 +110,34 @@ fn md5(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     Ok(match value {
         ColumnarValue::Array(array) => {
             let binary_array = as_binary_array(&array)?;
-            let string_array: StringViewArray =
-                binary_array.iter().map(|opt| opt.map(hex_encode)).collect();
-            ColumnarValue::Array(Arc::new(string_array))
+            let mut byte_builder = BinaryViewBuilder::with_capacity(binary_array.len());
+            let mut hex_bytes = Vec::with_capacity(32);
+
+            for i in 0..binary_array.len() {
+                if binary_array.is_null(i) {
+                    byte_builder.append_null();
+                    continue;
+                }
+
+                hex_bytes.clear();
+                let digest = binary_array.value(i);
+                encode_bytes_into(digest, HexCase::Lower, &mut hex_bytes);
+                byte_builder.append_value(&hex_bytes);
+            }
+
+            let str_array = unsafe {
+                // Safe: `encode_bytes_into` only writes ASCII hex digits, so the bytes are valid UTF-8.
+                byte_builder.finish().to_string_view_unchecked()
+            };
+            ColumnarValue::Array(Arc::new(str_array))
         }
         ColumnarValue::Scalar(ScalarValue::Binary(opt)) => {
-            ColumnarValue::Scalar(ScalarValue::Utf8View(opt.map(hex_encode)))
+            ColumnarValue::Scalar(ScalarValue::Utf8View(opt.map(|b| {
+                let mut hex_bytes = Vec::with_capacity(b.len() * 2);
+                encode_bytes_into(&b, HexCase::Lower, &mut hex_bytes);
+                // Safe: `encode_bytes_into` only writes ASCII hex digits, so the bytes are valid UTF-8.
+                unsafe { String::from_utf8_unchecked(hex_bytes) }
+            })))
         }
         _ => return internal_err!("Impossibly got invalid results from digest"),
     })

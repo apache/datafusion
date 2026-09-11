@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`EliminateJoin`] rewrites inner joins to simpler forms to make them cheaper
-//! to evaluate. We implement two distinct rewrites:
+//! [`EliminateJoin`] rewrites joins to simpler forms to make them cheaper
+//! to evaluate. We implement three distinct rewrites:
 //!
 //! * An inner join can be rewritten to an empty relation if the join condition
 //!   is trivially false.
@@ -31,6 +31,18 @@
 //!        join's ancestors are duplicate-insensitive (e.g., DISTINCT) or we can use
 //!        functional dependencies to prove that each L row matches at most one R
 //!        row (R is provably unique on the join keys).
+//!
+//! * A left outer join `L ⟕ R` can be removed entirely, i.e. replaced by `L`,
+//!   under the same two conditions. Unlike an inner join, a left join
+//!   preserves every row of L whether or not it has a match in R, so when R's
+//!   columns are unused and R cannot multiply L's rows the join has no
+//!   observable effect at all. Such joins commonly appear in generated SQL
+//!   and in queries over views that join in lookup tables the query does not
+//!   read. A join filter does not prevent this rewrite: for a left join it
+//!   only decides whether a left row is matched or null-padded, and either
+//!   way the row is emitted. Symmetrically, a right outer join `L ⟖ R` can be
+//!   replaced by `R` when L's columns are unused and L cannot multiply R's
+//!   rows.
 //!
 //! # Overview
 //!
@@ -52,7 +64,8 @@
 //!   so a duplicate-sensitive node further above does not matter.
 //!
 //! At each join, `rewritten_join_type` combines this context with the side's
-//! functional dependencies to choose `Inner`, `LeftSemi`, or `RightSemi`. Most
+//! functional dependencies to choose `Inner`, `LeftSemi`, or `RightSemi`, or
+//! to eliminate the join entirely in favor of its preserved input. Most
 //! node types just forward the context to their single child via
 //! `rewrite_single_input`; nodes that alter column requirements or
 //! duplicate-sensitivity (projection, aggregate, sort, ...) adjust it first.
@@ -142,8 +155,10 @@ impl LiveColumns {
     }
 }
 
-/// Rewrites an inner join to a semi join when one input only filters the other,
-/// and replaces an always-false inner join with an empty relation.
+/// Rewrites an inner join to a semi join when one input only filters the
+/// other, removes an outer join whose non-preserved side is unused and cannot
+/// multiply the preserved side's rows, and replaces an always-false inner join
+/// with an empty relation.
 #[derive(Default, Debug)]
 pub struct EliminateJoin;
 
@@ -394,8 +409,30 @@ fn rewrite_join(
 
     let (visible_left, visible_right) = split_join_output_columns(&join, live);
 
-    let rewritten_join_type =
-        rewritten_join_type(&join, &visible_left, &visible_right, duplicate_insensitive);
+    let rewritten_join_type = match rewritten_join_type(
+        &join,
+        &visible_left,
+        &visible_right,
+        duplicate_insensitive,
+    ) {
+        JoinRewrite::ReplaceWithLeft => {
+            let left = rewrite_subtree(
+                Arc::unwrap_or_clone(join.left),
+                visible_left,
+                duplicate_insensitive,
+            )?;
+            return Ok(Transformed::yes(left.data));
+        }
+        JoinRewrite::ReplaceWithRight => {
+            let right = rewrite_subtree(
+                Arc::unwrap_or_clone(join.right),
+                visible_right,
+                duplicate_insensitive,
+            )?;
+            return Ok(Transformed::yes(right.data));
+        }
+        JoinRewrite::Join(join_type) => join_type,
+    };
 
     let (mut left_live, mut right_live) = match rewritten_join_type {
         JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
@@ -477,40 +514,69 @@ fn child_duplicate_insensitivity(
     }
 }
 
-/// Rewrites an inner join to a semi join when the removed side has no
-/// parent-visible columns and either the parent ignores duplicate output rows or
-/// the removed side is unique on the join keys.
+/// The rewrite chosen for a join by [`rewritten_join_type`].
+enum JoinRewrite {
+    /// Keep the join, with this (possibly rewritten) join type.
+    Join(JoinType),
+    /// The join has no observable effect; replace it with its left input.
+    ReplaceWithLeft,
+    /// The join has no observable effect; replace it with its right input.
+    ReplaceWithRight,
+}
+
+/// Chooses a cheaper form for a join: removes an outer join whose non-preserved
+/// side is redundant, or rewrites an inner join to a semi join when the
+/// removed side has no parent-visible columns and either the parent ignores
+/// duplicate output rows or the removed side is unique on the join keys.
 fn rewritten_join_type(
     join: &Join,
     visible_left: &LiveColumns,
     visible_right: &LiveColumns,
     duplicate_insensitive: bool,
-) -> JoinType {
+) -> JoinRewrite {
+    // A side is redundant when nothing above the join references its columns
+    // and it cannot multiply the other side's rows (the ancestors are
+    // duplicate-insensitive, or the side is unique on the join keys).
+    let can_remove_right = visible_right.is_empty()
+        && (duplicate_insensitive
+            || side_unique_on_join(
+                join.right.schema(),
+                join.on.iter().map(|(_, right)| right),
+                join.null_equality,
+            ));
+
+    // A LEFT JOIN preserves every left row, so with a redundant right side the
+    // join has no observable effect and can be replaced by its left input. A
+    // join filter cannot prevent this: it only decides whether a left row is
+    // matched or null-padded, and either way the row is emitted.
+    if join.join_type == JoinType::Left && can_remove_right {
+        return JoinRewrite::ReplaceWithLeft;
+    }
+    let can_remove_left = visible_left.is_empty()
+        && (duplicate_insensitive
+            || side_unique_on_join(
+                join.left.schema(),
+                join.on.iter().map(|(left, _)| left),
+                join.null_equality,
+            ));
+
+    // Symmetrical rule for RIGHT JOIN removal (same explanation as above for the left-join case)
+    if join.join_type == JoinType::Right && can_remove_left {
+        return JoinRewrite::ReplaceWithRight;
+    }
+
     if join.join_type != JoinType::Inner || join.on.is_empty() {
-        return join.join_type;
+        return JoinRewrite::Join(join.join_type);
     }
 
-    let can_remove_right = duplicate_insensitive
-        || side_unique_on_join(
-            join.right.schema(),
-            join.on.iter().map(|(_, right)| right),
-            join.null_equality,
-        );
-    if visible_right.is_empty() && can_remove_right {
-        return JoinType::LeftSemi;
+    if can_remove_right {
+        return JoinRewrite::Join(JoinType::LeftSemi);
+    }
+    if can_remove_left {
+        return JoinRewrite::Join(JoinType::RightSemi);
     }
 
-    let can_remove_left = duplicate_insensitive
-        || side_unique_on_join(
-            join.left.schema(),
-            join.on.iter().map(|(left, _)| left),
-            join.null_equality,
-        );
-    if visible_left.is_empty() && can_remove_left {
-        return JoinType::RightSemi;
-    }
-
-    JoinType::Inner
+    JoinRewrite::Join(JoinType::Inner)
 }
 
 fn add_join_condition_columns(

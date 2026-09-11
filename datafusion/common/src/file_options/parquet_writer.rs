@@ -248,6 +248,7 @@ impl ParquetOptions {
             coerce_int96_tz: _,  // not used for writer props
             skip_arrow_metadata: _,
             max_predicate_cache_size: _,
+            max_in_list_size: _,
         } = self;
 
         let mut builder = WriterProperties::builder()
@@ -256,9 +257,8 @@ impl ParquetOptions {
             .set_writer_version((*writer_version).into())
             .set_dictionary_page_size_limit(*dictionary_page_size_limit)
             .set_statistics_enabled(
-                statistics_enabled
-                    .as_ref()
-                    .and_then(|s| parse_statistics_string(s).ok())
+                (*statistics_enabled)
+                    .map(Into::into)
                     .unwrap_or(DEFAULT_STATISTICS_ENABLED),
             )
             .set_max_row_group_row_count(Some(*max_row_group_size))
@@ -271,13 +271,13 @@ impl ParquetOptions {
 
         if let Some(bloom_filter_fpp) = bloom_filter_fpp {
             builder = builder.set_bloom_filter_fpp(*bloom_filter_fpp);
-        };
+        }
         if let Some(bloom_filter_ndv) = bloom_filter_ndv {
             builder = builder.set_bloom_filter_max_ndv(*bloom_filter_ndv);
-        };
+        }
         if let Some(dictionary_enabled) = dictionary_enabled {
             builder = builder.set_dictionary_enabled(*dictionary_enabled);
-        };
+        }
 
         // We do not have access to default ColumnProperties set in Arrow.
         // Therefore, only overwrite if these settings exist.
@@ -343,7 +343,7 @@ fn split_compression_string(str_setting: &str) -> Result<(String, Option<u32>)> 
 
 /// Helper to ensure compression codecs which don't support levels
 /// don't have one set. E.g. snappy(2) is invalid.
-fn check_level_is_none(codec: &str, level: &Option<u32>) -> Result<()> {
+fn check_level_is_none(codec: &str, level: Option<&u32>) -> Result<()> {
     if level.is_some() {
         return Err(DataFusionError::Configuration(format!(
             "Compression {codec} does not support specifying a level"
@@ -369,11 +369,11 @@ pub fn parse_compression_string(
     let codec = codec.as_str();
     match codec {
         "uncompressed" => {
-            check_level_is_none(codec, &level)?;
+            check_level_is_none(codec, level.as_ref())?;
             Ok(parquet::basic::Compression::UNCOMPRESSED)
         }
         "snappy" => {
-            check_level_is_none(codec, &level)?;
+            check_level_is_none(codec, level.as_ref())?;
             Ok(parquet::basic::Compression::SNAPPY)
         }
         "gzip" => {
@@ -389,7 +389,7 @@ pub fn parse_compression_string(
             )?))
         }
         "lz4" => {
-            check_level_is_none(codec, &level)?;
+            check_level_is_none(codec, level.as_ref())?;
             Ok(parquet::basic::Compression::LZ4)
         }
         "zstd" => {
@@ -399,7 +399,7 @@ pub fn parse_compression_string(
             )?))
         }
         "lz4_raw" => {
-            check_level_is_none(codec, &level)?;
+            check_level_is_none(codec, level.as_ref())?;
             Ok(parquet::basic::Compression::LZ4_RAW)
         }
         _ => Err(DataFusionError::Configuration(format!(
@@ -433,7 +433,7 @@ mod tests {
         MaxRowGroupBytes, ParquetCdcOptions, ParquetColumnOptions,
         ParquetEncryptionOptions, ParquetOptions,
     };
-    use crate::parquet_config::DFParquetWriterVersion;
+    use crate::parquet_config::{DFParquetStatistics, DFParquetWriterVersion};
     use parquet::basic::Compression;
     use parquet::file::properties::{
         BloomFilterProperties, DEFAULT_BLOOM_FILTER_FPP, DEFAULT_BLOOM_FILTER_NDV,
@@ -473,8 +473,8 @@ mod tests {
             writer_version,
             compression: Some("zstd(22)".into()),
             dictionary_enabled: Some(!defaults.dictionary_enabled.unwrap_or(false)),
-            dictionary_page_size_limit: 42,
-            statistics_enabled: Some("chunk".into()),
+            dictionary_page_size_limit: 43,
+            statistics_enabled: Some(DFParquetStatistics::Chunk),
             max_row_group_size: 42,
             max_row_group_bytes: Some(MaxRowGroupBytes::try_new(42).unwrap()),
             created_by: "wordy".into(),
@@ -489,6 +489,7 @@ mod tests {
             // not in WriterProperties, but itemizing here to not skip newly added props
             enable_page_index: defaults.enable_page_index,
             pruning: defaults.pruning,
+            max_in_list_size: defaults.max_in_list_size,
             skip_metadata: defaults.skip_metadata,
             metadata_size_hint: defaults.metadata_size_hint,
             pushdown_filters: defaults.pushdown_filters,
@@ -543,7 +544,7 @@ mod tests {
     /// (use identity to confirm correct.)
     fn session_config_from_writer_props(props: &WriterProperties) -> TableParquetOptions {
         let default_col = ColumnPath::from("col doesn't have specific config");
-        let default_col_props = extract_column_options(props, default_col);
+        let default_col_props = extract_column_options(props, default_col.clone());
 
         let configured_col = ColumnPath::from(COL_NAME);
         let configured_col_props = extract_column_options(props, configured_col);
@@ -579,7 +580,7 @@ mod tests {
         TableParquetOptions {
             global: ParquetOptions {
                 // global options
-                data_pagesize_limit: props.dictionary_page_size_limit(),
+                data_pagesize_limit: props.data_page_size_limit(),
                 write_batch_size: props.write_batch_size(),
                 writer_version: props.writer_version().into(),
                 dictionary_page_size_limit: props.dictionary_page_size_limit(),
@@ -598,7 +599,7 @@ mod tests {
                 encoding: default_col_props.encoding,
                 compression: default_col_props.compression,
                 dictionary_enabled: default_col_props.dictionary_enabled,
-                statistics_enabled: default_col_props.statistics_enabled,
+                statistics_enabled: Some(props.statistics_enabled(&default_col).into()),
                 bloom_filter_on_write: default_col_props
                     .bloom_filter_enabled
                     .unwrap_or_default(),
@@ -608,6 +609,7 @@ mod tests {
                 // not in WriterProperties
                 enable_page_index: global_options_defaults.enable_page_index,
                 pruning: global_options_defaults.pruning,
+                max_in_list_size: global_options_defaults.max_in_list_size,
                 skip_metadata: global_options_defaults.skip_metadata,
                 metadata_size_hint: global_options_defaults.metadata_size_hint,
                 pushdown_filters: global_options_defaults.pushdown_filters,

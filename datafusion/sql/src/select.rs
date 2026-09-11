@@ -19,6 +19,7 @@ use std::collections::HashSet;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
+use crate::expr::{QUALIFY_HELP, reject_window_functions};
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::query::to_order_by_exprs_with_select;
 use crate::utils::{
@@ -32,10 +33,13 @@ use crate::utils::{
 use arrow::datatypes::DataType;
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, not_impl_err, plan_err};
-use datafusion_common::{RecursionUnnestOption, UnnestOptions};
+use datafusion_common::{
+    Column, DFSchema, DFSchemaRef, HashMap, Result, not_impl_err, plan_err,
+};
+use datafusion_common::{NullHandling, RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::ExprSchemable;
 use datafusion_expr::builder::get_struct_unnested_columns;
+use datafusion_expr::expr::Unnest as UnnestExpr;
 use datafusion_expr::expr::{PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_sorts,
@@ -190,7 +194,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // ON expression is a bare identifier. `b` resolves to the
                 // alias; `b + 0` keeps `b` as the input column.
                 let expr = substitute_top_level_alias(expr, &alias_map);
-                normalize_col(expr, &projected_plan)
+                let expr = normalize_col(expr, &projected_plan)?;
+                let (expr, _) = expr.infer_placeholder_types(&on_expr_schema)?;
+                Ok(expr)
             })
             .collect::<Result<Vec<Expr>>>()?;
 
@@ -199,6 +205,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .having
             .map::<Result<Expr>, _>(|having_expr| {
                 self.warn_on_null_equality_predicate(&having_expr);
+                let window_span = self.window_function_span(&having_expr, &alias_map);
                 let having_expr = self.sql_expr_to_logical_expr(
                     having_expr,
                     &combined_schema,
@@ -218,7 +225,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 //   SELECT c1, MAX(c2) AS m FROM t GROUP BY c1 HAVING MAX(c2) > 10;
                 //
                 let having_expr = resolve_aliases_to_exprs(having_expr, &alias_map)?;
-                normalize_col(having_expr, &projected_plan)
+                // HAVING is evaluated before window functions are computed, so
+                // they may not appear there (checked after alias resolution so
+                // that an alias of a window function is rejected too)
+                reject_window_functions(
+                    &having_expr,
+                    "HAVING",
+                    QUALIFY_HELP,
+                    window_span,
+                )?;
+                let having_expr = normalize_col(having_expr, &projected_plan)?;
+                let (having_expr, _) =
+                    having_expr.infer_placeholder_types(&combined_schema)?;
+                Ok(having_expr)
             })
             .transpose()?;
 
@@ -227,26 +246,38 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             exprs
                 .into_iter()
                 .map(|e| {
-                    let group_by_expr = self.sql_expr_to_logical_expr(
-                        e,
-                        &combined_schema,
-                        planner_context,
-                    )?;
-
                     // Aliases from the projection can conflict with same-named expressions in the input
                     let mut alias_map = alias_map.clone();
                     for f in base_plan.schema().fields() {
                         alias_map.remove(f.name());
                     }
+                    let window_span = self.window_function_span(&e, &alias_map);
+
+                    let group_by_expr = self.sql_expr_to_logical_expr(
+                        e,
+                        &combined_schema,
+                        planner_context,
+                    )?;
                     let group_by_expr =
                         resolve_aliases_to_exprs(group_by_expr, &alias_map)?;
                     let group_by_expr =
                         resolve_positions_to_exprs(group_by_expr, &select_exprs)?;
+                    // Window functions are computed after grouping, so they may
+                    // not be grouped on (checked after aliases and positions are
+                    // resolved so `GROUP BY rn` / `GROUP BY 1` are rejected too)
+                    reject_window_functions(
+                        &group_by_expr,
+                        "GROUP BY",
+                        "Compute the window function in a subquery and group by its result",
+                        window_span,
+                    )?;
                     let group_by_expr = normalize_col(group_by_expr, &projected_plan)?;
                     self.validate_schema_satisfies_exprs(
                         base_plan.schema(),
                         std::slice::from_ref(&group_by_expr),
                     )?;
+                    let (group_by_expr, _) =
+                        group_by_expr.infer_placeholder_types(&combined_schema)?;
                     Ok(group_by_expr)
                 })
                 .collect::<Result<Vec<Expr>>>()?
@@ -285,7 +316,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 //   select row_number() over (PARTITION BY id) as rk from users qualify row_number() over (PARTITION BY id) > 1;
                 //
                 let qualify_expr = resolve_aliases_to_exprs(qualify_expr, &alias_map)?;
-                normalize_col(qualify_expr, &projected_plan)
+                let qualify_expr = normalize_col(qualify_expr, &projected_plan)?;
+                let (qualify_expr, _) =
+                    qualify_expr.infer_placeholder_types(&combined_schema)?;
+                Ok(qualify_expr)
             })
             .transpose()?;
 
@@ -665,8 +699,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 });
             }
 
-            // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
-            let mut unnest_options = UnnestOptions::new().with_preserve_nulls(false);
+            // The default SQL `UNNEST` matches DuckDB/PostgreSQL: drop both
+            // NULL and empty input lists. Outer-unnest (modelled as
+            // `Unnest { outer: true }`) overrides that and selects
+            // `NullHandling::PreserveAndExpandEmpty`. Mixing the two in a
+            // single SELECT is a planning error because `UnnestOptions` is
+            // per-`UnnestExec`, not per-column.
+            let null_handling = collect_unnest_null_handling(&intermediate_expr_groups)?;
+            let mut unnest_options =
+                UnnestOptions::new().with_null_handling(null_handling);
             let mut unnest_col_vec = vec![];
 
             for (col, maybe_list_unnest) in unnest_columns.into_iter() {
@@ -867,6 +908,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let fallback_schemas = plan.fallback_normalize_schemas();
 
                 self.warn_on_null_equality_predicate(&predicate_expr);
+                let window_span =
+                    self.window_function_span(&predicate_expr, &HashMap::new());
                 let filter_expr =
                     self.sql_to_expr(predicate_expr, plan.schema(), planner_context)?;
 
@@ -878,6 +921,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         "Aggregate functions are not allowed in the WHERE clause. Consider using HAVING instead"
                     );
                 }
+                // WHERE is evaluated before window functions are computed, so
+                // they may not appear there either
+                reject_window_functions(
+                    &filter_expr,
+                    "WHERE",
+                    QUALIFY_HELP,
+                    window_span,
+                )?;
 
                 let mut using_columns = HashSet::new();
                 expr_to_columns(&filter_expr, &mut using_columns)?;
@@ -1450,4 +1501,46 @@ fn has_unnest_expr_recursively(expr: &Expr) -> bool {
         }
     });
     has_unnest
+}
+
+/// Walk `select_exprs`, observe every [`Expr::Unnest`] inside them, and
+/// derive the [`NullHandling`] mode for the resulting [`UnnestOptions`].
+///
+/// * No unnest with `outer = true`  → [`NullHandling::Drop`] (default SQL
+///   `UNNEST(...)` semantics, matching DuckDB/PostgreSQL).
+/// * Every unnest with `outer = true` → [`NullHandling::PreserveAndExpandEmpty`]
+///   (outer-unnest semantics: `NULL` and empty input lists each produce a
+///   single `NULL` output row).
+/// * A mix of `outer = true` and `outer = false` in one SELECT → planning
+///   error, because `UnnestOptions` applies per `Unnest` plan node, not
+///   per output column.
+fn collect_unnest_null_handling(expr_groups: &[Vec<Expr>]) -> Result<NullHandling> {
+    let mut saw_outer = false;
+    let mut saw_inner = false;
+    for group in expr_groups {
+        for expr in group {
+            expr.apply(|e| {
+                if let Expr::Unnest(UnnestExpr { outer, .. }) = e {
+                    if *outer {
+                        saw_outer = true;
+                    } else {
+                        saw_inner = true;
+                    }
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+        }
+    }
+    if saw_outer && saw_inner {
+        return plan_err!(
+            "Cannot mix `unnest(...)` with `unnest_outer(...)` in the same \
+             SELECT — the unnest operator carries a single null-handling \
+             mode. Split the query so each unnest projection uses one mode."
+        );
+    }
+    Ok(if saw_outer {
+        NullHandling::PreserveAndExpandEmpty
+    } else {
+        NullHandling::Drop
+    })
 }

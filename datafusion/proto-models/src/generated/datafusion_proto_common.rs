@@ -583,6 +583,8 @@ pub struct EmptyMessage {}
 pub struct JsonWriterOptions {
     #[prost(enumeration = "CompressionTypeVariant", tag = "1")]
     pub compression: i32,
+    #[prost(uint32, optional, tag = "2")]
+    pub compression_level: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CsvWriterOptions {
@@ -862,6 +864,8 @@ pub struct ParquetOptions {
     pub data_page_row_count_limit: u64,
     #[prost(uint64, tag = "15")]
     pub max_row_group_size: u64,
+    #[prost(uint64, tag = "38")]
+    pub max_in_list_size: u64,
     #[prost(string, tag = "16")]
     pub created_by: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "35")]

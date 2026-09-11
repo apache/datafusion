@@ -187,6 +187,45 @@ async fn test_hash_left_join_swap() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_hash_left_semi_join() -> Result<()> {
+    // LeftSemi hash joins emit matched build-side rows only after probing
+    // completes, so their emission type is Final.
+
+    let test1 = BinaryTestCase {
+        // The optimizer swaps the inputs and changes LeftSemi to RightSemi.
+        // The bounded right table becomes the build side, allowing matched
+        // rows from the unbounded left table to be emitted incrementally.
+        source_types: (SourceType::Unbounded, SourceType::Bounded),
+        expect_fail: false,
+    };
+
+    let test2 = BinaryTestCase {
+        // LeftSemi waits for the unbounded probe side to finish before
+        // emitting matched build-side rows. SanityCheckPlan must reject
+        // this pipeline because it cannot produce output.
+        source_types: (SourceType::Bounded, SourceType::Unbounded),
+        expect_fail: true,
+    };
+
+    let test3 = BinaryTestCase {
+        // Both inputs are bounded, so probing can finish and final output
+        // can be emitted.
+        source_types: (SourceType::Bounded, SourceType::Bounded),
+        expect_fail: false,
+    };
+
+    let case = QueryCase {
+        sql: "SELECT l.c1 FROM left AS l LEFT SEMI JOIN right AS r ON l.c1 = r.c1"
+            .to_string(),
+        cases: vec![Arc::new(test1), Arc::new(test2), Arc::new(test3)],
+        error_operator: "operator: HashJoinExec".to_string(),
+    };
+
+    case.run().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_hash_right_join_swap() -> Result<()> {
     let test1 = BinaryTestCase {
         source_types: (SourceType::Unbounded, SourceType::Bounded),
@@ -439,6 +478,32 @@ fn test_partitioned_hash_join_requires_co_partitioned_children() -> Result<()> {
         join_on,
         None,
         &JoinType::Inner,
+    )?;
+    assert_sanity_check(&incompatible_join, false);
+
+    Ok(())
+}
+
+#[test]
+fn test_partitioned_right_hash_join_requires_co_partitioned_children() -> Result<()> {
+    let schema = create_test_schema2();
+    let join_on = vec![(col("a", &schema)?, col("a", &schema)?)];
+
+    let compatible_join = hash_join_exec(
+        range_partitioned_exec(&schema, "a", [10])?,
+        range_partitioned_exec(&schema, "a", [10])?,
+        join_on.clone(),
+        None,
+        &JoinType::Right,
+    )?;
+    assert_sanity_check(&compatible_join, true);
+
+    let incompatible_join = hash_join_exec(
+        range_partitioned_exec(&schema, "a", [10])?,
+        range_partitioned_exec(&schema, "a", [20])?,
+        join_on,
+        None,
+        &JoinType::Right,
     )?;
     assert_sanity_check(&incompatible_join, false);
 

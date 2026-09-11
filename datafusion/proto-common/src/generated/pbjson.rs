@@ -3997,7 +3997,7 @@ impl serde::Serialize for ExplainAnalyzeCategoriesNode {
             struct_ser.serialize_field("all", &self.all)?;
         }
         if !self.only.is_empty() {
-            let v = self.only.iter().cloned().map(|v| {
+            let v = self.only.iter().copied().map(|v| {
                 MetricCategory::try_from(v)
                     .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", v)))
                 }).collect::<std::result::Result<Vec<_>, _>>()?;
@@ -5164,11 +5164,17 @@ impl serde::Serialize for JsonWriterOptions {
         if self.compression != 0 {
             len += 1;
         }
+        if self.compression_level.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.JsonWriterOptions", len)?;
         if self.compression != 0 {
             let v = CompressionTypeVariant::try_from(self.compression)
                 .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.compression)))?;
             struct_ser.serialize_field("compression", &v)?;
+        }
+        if let Some(v) = self.compression_level.as_ref() {
+            struct_ser.serialize_field("compressionLevel", v)?;
         }
         struct_ser.end()
     }
@@ -5181,11 +5187,14 @@ impl<'de> serde::Deserialize<'de> for JsonWriterOptions {
     {
         const FIELDS: &[&str] = &[
             "compression",
+            "compression_level",
+            "compressionLevel",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Compression,
+            CompressionLevel,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -5208,6 +5217,7 @@ impl<'de> serde::Deserialize<'de> for JsonWriterOptions {
                     {
                         match value {
                             "compression" => Ok(GeneratedField::Compression),
+                            "compressionLevel" | "compression_level" => Ok(GeneratedField::CompressionLevel),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -5228,6 +5238,7 @@ impl<'de> serde::Deserialize<'de> for JsonWriterOptions {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut compression__ = None;
+                let mut compression_level__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Compression => {
@@ -5236,10 +5247,19 @@ impl<'de> serde::Deserialize<'de> for JsonWriterOptions {
                             }
                             compression__ = Some(map_.next_value::<CompressionTypeVariant>()? as i32);
                         }
+                        GeneratedField::CompressionLevel => {
+                            if compression_level__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("compressionLevel"));
+                            }
+                            compression_level__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
                     }
                 }
                 Ok(JsonWriterOptions {
                     compression: compression__.unwrap_or_default(),
+                    compression_level: compression_level__,
                 })
             }
         }
@@ -6409,6 +6429,9 @@ impl serde::Serialize for ParquetOptions {
         if self.max_row_group_size != 0 {
             len += 1;
         }
+        if self.max_in_list_size != 0 {
+            len += 1;
+        }
         if !self.created_by.is_empty() {
             len += 1;
         }
@@ -6528,6 +6551,11 @@ impl serde::Serialize for ParquetOptions {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("maxRowGroupSize", ToString::to_string(&self.max_row_group_size).as_str())?;
+        }
+        if self.max_in_list_size != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("maxInListSize", ToString::to_string(&self.max_in_list_size).as_str())?;
         }
         if !self.created_by.is_empty() {
             struct_ser.serialize_field("createdBy", &self.created_by)?;
@@ -6687,6 +6715,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "dataPageRowCountLimit",
             "max_row_group_size",
             "maxRowGroupSize",
+            "max_in_list_size",
+            "maxInListSize",
             "created_by",
             "createdBy",
             "content_defined_chunking",
@@ -6739,6 +6769,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             DictionaryPageSizeLimit,
             DataPageRowCountLimit,
             MaxRowGroupSize,
+            MaxInListSize,
             CreatedBy,
             ContentDefinedChunking,
             MetadataSizeHint,
@@ -6795,6 +6826,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "dictionaryPageSizeLimit" | "dictionary_page_size_limit" => Ok(GeneratedField::DictionaryPageSizeLimit),
                             "dataPageRowCountLimit" | "data_page_row_count_limit" => Ok(GeneratedField::DataPageRowCountLimit),
                             "maxRowGroupSize" | "max_row_group_size" => Ok(GeneratedField::MaxRowGroupSize),
+                            "maxInListSize" | "max_in_list_size" => Ok(GeneratedField::MaxInListSize),
                             "createdBy" | "created_by" => Ok(GeneratedField::CreatedBy),
                             "contentDefinedChunking" | "content_defined_chunking" => Ok(GeneratedField::ContentDefinedChunking),
                             "metadataSizeHint" | "metadata_size_hint" => Ok(GeneratedField::MetadataSizeHint),
@@ -6849,6 +6881,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut dictionary_page_size_limit__ = None;
                 let mut data_page_row_count_limit__ = None;
                 let mut max_row_group_size__ = None;
+                let mut max_in_list_size__ = None;
                 let mut created_by__ = None;
                 let mut content_defined_chunking__ = None;
                 let mut metadata_size_hint_opt__ = None;
@@ -7000,6 +7033,14 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::MaxInListSize => {
+                            if max_in_list_size__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("maxInListSize"));
+                            }
+                            max_in_list_size__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
                         GeneratedField::CreatedBy => {
                             if created_by__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("createdBy"));
@@ -7113,6 +7154,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     dictionary_page_size_limit: dictionary_page_size_limit__.unwrap_or_default(),
                     data_page_row_count_limit: data_page_row_count_limit__.unwrap_or_default(),
                     max_row_group_size: max_row_group_size__.unwrap_or_default(),
+                    max_in_list_size: max_in_list_size__.unwrap_or_default(),
                     created_by: created_by__.unwrap_or_default(),
                     content_defined_chunking: content_defined_chunking__,
                     metadata_size_hint_opt: metadata_size_hint_opt__,

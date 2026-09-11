@@ -23,12 +23,11 @@ use arrow::{
 use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion::prelude::SessionContext;
 use datafusion::{datasource::MemTable, error::Result};
-use futures::executor::block_on;
 use std::hint::black_box;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
-async fn query(ctx: &SessionContext, rt: &Runtime, sql: &str) {
+fn query(ctx: &SessionContext, rt: &Runtime, sql: &str) {
     // execute the query
     let df = rt.block_on(ctx.sql(sql)).unwrap();
     black_box(rt.block_on(df.collect()).unwrap());
@@ -71,7 +70,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
 
     c.bench_function("struct", |b| {
-        b.iter(|| block_on(query(&ctx, &rt, "select struct(f32, f64) from t")))
+        b.iter(|| query(&ctx, &rt, "select struct(f32, f64) from t"))
     });
 }
 

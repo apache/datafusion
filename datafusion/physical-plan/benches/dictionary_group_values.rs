@@ -29,7 +29,7 @@ use criterion::{
 };
 use datafusion_expr::EmitTo;
 use datafusion_physical_plan::aggregates::group_values::new_group_values;
-use datafusion_physical_plan::aggregates::order::GroupOrdering;
+use datafusion_physical_plan::aggregates::order::{GroupOrdering, GroupOrderingFull};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
@@ -172,5 +172,86 @@ fn bench_repeated_intern_emit(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_intern_emit, bench_repeated_intern_emit);
+// GroupOrdering::Full -> GroupValuesColumn::<true>: scalar append_val/equal_to path.
+fn bench_scalar_append_equal(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dict_scalar_append_equal");
+    let schema = dict_schema();
+    let null_density = 0.1;
+    let size = SIZES[1];
+
+    let mut cards = CARDS_RELATIVE.to_vec();
+    cards.push(size);
+    for cardinality in cards {
+        let array = make_dict(size, cardinality, null_density, SEED);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_function(
+            bench_id("scalar_append_equal", size, cardinality, null_density),
+            |b| {
+                b.iter_batched_ref(
+                    || {
+                        (
+                            new_group_values(
+                                schema.clone(),
+                                &GroupOrdering::Full(GroupOrderingFull::new()),
+                            )
+                            .unwrap(),
+                            Vec::<usize>::with_capacity(size),
+                        )
+                    },
+                    |(gv, groups)| {
+                        gv.intern(std::slice::from_ref(&array), groups).unwrap();
+                        black_box(&*groups);
+                        black_box(gv.emit(EmitTo::All).unwrap());
+                    },
+                    BatchSize::SmallInput,
+                );
+            },
+        );
+    }
+    group.finish();
+}
+
+//EmitTo::First exercises repeated
+fn bench_take_n(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dict_take_n");
+    let schema = dict_schema();
+    let null_density = 0.10;
+    let size = SIZES[1];
+
+    let mut cards = CARDS_RELATIVE.to_vec();
+    cards.push(size);
+    for cardinality in cards {
+        let batch = make_dict(size, cardinality, null_density, SEED);
+        group.throughput(Throughput::Elements((size * N_BATCHES) as u64));
+        group.bench_function(bench_id("take_n", size, cardinality, null_density), |b| {
+            b.iter_batched_ref(
+                || {
+                    (
+                        new_group_values(schema.clone(), &GroupOrdering::None).unwrap(),
+                        Vec::<usize>::with_capacity(size),
+                    )
+                },
+                |(gv, groups)| {
+                    for _ in 0..N_BATCHES {
+                        gv.intern(std::slice::from_ref(&batch), groups).unwrap();
+                        black_box(&*groups);
+                        let emit_n = (gv.len() / 2).min(gv.len());
+                        black_box(gv.emit(EmitTo::First(emit_n)).unwrap());
+                    }
+                    black_box(gv.emit(EmitTo::First(gv.len())).unwrap());
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_intern_emit,
+    bench_repeated_intern_emit,
+    bench_scalar_append_equal,
+    bench_take_n
+);
 criterion_main!(benches);

@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field, Fields};
+use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 
 use arrow::array::{
     Array, ArrayRef, BooleanArray, Float64Array, GenericListArray, NullBufferBuilder,
@@ -34,6 +34,57 @@ use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
 
 use datafusion_expr::ColumnarValue;
 use itertools::Itertools as _;
+
+/// Computes the return type of a function that produces a list with the same
+/// inner field as `array_type`, plus an element that may be null when
+/// `element_nullable` is set.
+///
+/// The inner field is carried over from `array_type` verbatim — name, metadata
+/// and all — so that the type promised at planning time is the one the kernel
+/// can actually build. Its nullability is widened when `element_nullable` is
+/// set, because a nullable new element may introduce nulls into a list whose
+/// elements were previously declared non-nullable.
+///
+/// Types other than `List`/`LargeList` are returned unchanged; callers handle
+/// `Null` themselves and the kernels reject anything else at execution time.
+pub(crate) fn list_type_with_element(
+    array_type: &DataType,
+    element_nullable: bool,
+) -> DataType {
+    match array_type {
+        DataType::List(field) => {
+            DataType::List(widen_nullability(field, element_nullable))
+        }
+        DataType::LargeList(field) => {
+            DataType::LargeList(widen_nullability(field, element_nullable))
+        }
+        other => other.clone(),
+    }
+}
+
+fn widen_nullability(field: &FieldRef, nullable: bool) -> FieldRef {
+    if nullable && !field.is_nullable() {
+        Arc::new(field.as_ref().clone().with_nullable(true))
+    } else {
+        Arc::clone(field)
+    }
+}
+
+/// Extracts the inner field of a `List`/`LargeList` type, so that a kernel can
+/// build a list array carrying exactly that field.
+///
+/// Used both on an input's type and on the type promised by
+/// [`ScalarUDFImpl::return_field_from_args`]. Anything else is a bug in the
+/// caller's dispatch, hence the internal error; `context` names the kernel so
+/// that error identifies where the bad dispatch happened.
+///
+/// [`ScalarUDFImpl::return_field_from_args`]: datafusion_expr::ScalarUDFImpl::return_field_from_args
+pub(crate) fn list_inner_field(context: &str, data_type: &DataType) -> Result<FieldRef> {
+    match data_type {
+        DataType::List(field) | DataType::LargeList(field) => Ok(Arc::clone(field)),
+        other => internal_err!("{context} got unexpected data type: {other}"),
+    }
+}
 
 pub(crate) fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
     let data_type = args[0].data_type();
@@ -226,9 +277,8 @@ pub(crate) fn compare_element_to_list(
 pub(crate) fn compute_array_dims(
     arr: Option<ArrayRef>,
 ) -> Result<Option<Vec<Option<u64>>>> {
-    let mut value = match arr {
-        Some(arr) => arr,
-        None => return Ok(None),
+    let Some(mut value) = arr else {
+        return Ok(None);
     };
     if value.is_empty() {
         return Ok(None);

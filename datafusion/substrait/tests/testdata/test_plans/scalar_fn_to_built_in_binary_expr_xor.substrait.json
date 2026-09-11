@@ -85,39 +85,72 @@
                     "direct": {}
                   },
                   "virtualTable": {
-                    "values": [{
-                      "fields": [{
-                        "boolean": true,
-                        "nullable": false
-                      }, {
-                        "boolean": true,
-                        "nullable": false
-                      }]
-                    }, {
-                      "fields": [{
-                        "boolean": true,
-                        "nullable": false
-                      }, {
-                        "boolean": false,
-                        "nullable": false
-                      }]
-                    }, {
-                      "fields": [{
-                        "boolean": false,
-                        "nullable": false
-                      }, {
-                        "boolean": true,
-                        "nullable": false
-                      }]
-                    }, {
-                      "fields": [{
-                        "boolean": false,
-                        "nullable": false
-                      }, {
-                        "boolean": false,
-                        "nullable": false
-                      }]
-                    }]
+                    "expressions": [
+                      {
+                        "fields": [
+                          {
+                            "literal": {
+                              "boolean": true,
+                              "nullable": false
+                            }
+                          },
+                          {
+                            "literal": {
+                              "boolean": true,
+                              "nullable": false
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "fields": [
+                          {
+                            "literal": {
+                              "boolean": true,
+                              "nullable": false
+                            }
+                          },
+                          {
+                            "literal": {
+                              "boolean": false,
+                              "nullable": false
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "fields": [
+                          {
+                            "literal": {
+                              "boolean": false,
+                              "nullable": false
+                            }
+                          },
+                          {
+                            "literal": {
+                              "boolean": true,
+                              "nullable": false
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "fields": [
+                          {
+                            "literal": {
+                              "boolean": false,
+                              "nullable": false
+                            }
+                          },
+                          {
+                            "literal": {
+                              "boolean": false,
+                              "nullable": false
+                            }
+                          }
+                        ]
+                      }
+                    ]
                   }
                 }
               }

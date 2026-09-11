@@ -671,22 +671,43 @@ pub fn intersect_metadata_for_union<'a>(
 }
 
 /// UNNEST expression.
+///
+/// When `outer` is `true`, the unnest should preserve `NULL` and empty input
+/// lists by emitting a single `NULL` output row for each. When `false` (the
+/// historical default), the behavior is identical to the plain `UNNEST(col)`
+/// SQL form: `NULL` and empty input lists are dropped from the output.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct Unnest {
     pub expr: Box<Expr>,
+    /// Outer-unnest behavior: also expand empty input lists into a single
+    /// `NULL` output row (in addition to preserving `NULL` input rows).
+    pub outer: bool,
 }
 
 impl Unnest {
-    /// Create a new Unnest expression.
+    /// Create a new Unnest expression with default (non-outer) semantics.
     pub fn new(expr: Expr) -> Self {
         Self {
             expr: Box::new(expr),
+            outer: false,
         }
     }
 
-    /// Create a new Unnest expression.
+    /// Create a new Unnest expression with default (non-outer) semantics.
     pub fn new_boxed(boxed: Box<Expr>) -> Self {
-        Self { expr: boxed }
+        Self {
+            expr: boxed,
+            outer: false,
+        }
+    }
+
+    /// Create a new Unnest expression with outer-unnest semantics: `NULL`
+    /// and empty input lists each produce a single `NULL` output row.
+    pub fn new_outer(expr: Expr) -> Self {
+        Self {
+            expr: Box::new(expr),
+            outer: true,
+        }
     }
 }
 
@@ -2431,11 +2452,19 @@ impl NormalizeEq for Expr {
             | (Expr::IsNotTrue(self_expr), Expr::IsNotTrue(other_expr))
             | (Expr::IsNotFalse(self_expr), Expr::IsNotFalse(other_expr))
             | (Expr::IsNotUnknown(self_expr), Expr::IsNotUnknown(other_expr))
-            | (Expr::Negative(self_expr), Expr::Negative(other_expr))
-            | (
-                Expr::Unnest(Unnest { expr: self_expr }),
-                Expr::Unnest(Unnest { expr: other_expr }),
-            ) => self_expr.normalize_eq(other_expr),
+            | (Expr::Negative(self_expr), Expr::Negative(other_expr)) => {
+                self_expr.normalize_eq(other_expr)
+            }
+            (
+                Expr::Unnest(Unnest {
+                    expr: self_expr,
+                    outer: self_outer,
+                }),
+                Expr::Unnest(Unnest {
+                    expr: other_expr,
+                    outer: other_outer,
+                }),
+            ) => self_outer == other_outer && self_expr.normalize_eq(other_expr),
             (
                 Expr::Between(Between {
                     expr: self_expr,
@@ -2485,7 +2514,7 @@ impl NormalizeEq for Expr {
                     args: other_args,
                 }),
             ) => {
-                self_func.name() == other_func.name()
+                self_func == other_func
                     && self_args.len() == other_args.len()
                     && self_args
                         .iter()
@@ -2516,7 +2545,7 @@ impl NormalizeEq for Expr {
                         },
                 }),
             ) => {
-                self_func.name() == other_func.name()
+                self_func == other_func
                     && self_distinct == other_distinct
                     && self_null_treatment == other_null_treatment
                     && self_args.len() == other_args.len()
@@ -2569,7 +2598,7 @@ impl NormalizeEq for Expr {
                         },
                 } = other.as_ref();
 
-                self_fun.name() == other_fun.name()
+                self_fun == other_fun
                     && self_window_frame == other_window_frame
                     && match (self_filter, other_filter) {
                         (Some(a), Some(b)) => a.normalize_eq(b),
@@ -2582,10 +2611,12 @@ impl NormalizeEq for Expr {
                         .iter()
                         .zip(other_args.iter())
                         .all(|(a, b)| a.normalize_eq(b))
+                    && self_partition_by.len() == other_partition_by.len()
                     && self_partition_by
                         .iter()
                         .zip(other_partition_by.iter())
                         .all(|(a, b)| a.normalize_eq(b))
+                    && self_order_by.len() == other_order_by.len()
                     && self_order_by
                         .iter()
                         .zip(other_order_by.iter())
@@ -2883,7 +2914,9 @@ impl HashNode for Expr {
                 field.hash(state);
                 column.hash(state);
             }
-            Expr::Unnest(Unnest { expr: _expr }) => {}
+            Expr::Unnest(Unnest { expr: _expr, outer }) => {
+                outer.hash(state);
+            }
             Expr::HigherOrderFunction(HigherOrderFunction { func, args: _args }) => {
                 func.hash(state);
             }
@@ -2898,7 +2931,7 @@ impl HashNode for Expr {
                 name.hash(state);
                 field.hash(state);
             }
-        };
+        }
     }
 }
 
@@ -2921,7 +2954,7 @@ fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Resu
                 *field = Some(other_field.as_ref().clone().with_nullable(true).into());
             }
         }
-    };
+    }
     Ok(())
 }
 
@@ -2992,26 +3025,17 @@ impl Display for SchemaDisplay<'_> {
                 low,
                 high,
             }) => {
-                if *negated {
-                    write!(
-                        f,
-                        "{} NOT BETWEEN {} AND {}",
-                        SchemaDisplay(expr),
-                        SchemaDisplay(low),
-                        SchemaDisplay(high),
-                    )
-                } else {
-                    write!(
-                        f,
-                        "{} BETWEEN {} AND {}",
-                        SchemaDisplay(expr),
-                        SchemaDisplay(low),
-                        SchemaDisplay(high),
-                    )
-                }
+                let not = if *negated { "NOT " } else { "" };
+                write!(
+                    f,
+                    "{} {not}BETWEEN {} AND {}",
+                    SchemaDisplay(expr),
+                    SchemaDisplay(low),
+                    SchemaDisplay(high),
+                )
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                write!(f, "{} {op} {}", SchemaDisplay(left), SchemaDisplay(right),)
+                write!(f, "{} {op} {}", SchemaDisplay(left), SchemaDisplay(right))
             }
             Expr::Case(Case {
                 expr,
@@ -3123,8 +3147,9 @@ impl Display for SchemaDisplay<'_> {
             }
             Expr::Negative(expr) => write!(f, "(- {})", SchemaDisplay(expr)),
             Expr::Not(expr) => write!(f, "NOT {}", SchemaDisplay(expr)),
-            Expr::Unnest(Unnest { expr }) => {
-                write!(f, "UNNEST({})", SchemaDisplay(expr))
+            Expr::Unnest(Unnest { expr, outer }) => {
+                let name = if *outer { "UNNEST_OUTER" } else { "UNNEST" };
+                write!(f, "{name}({})", SchemaDisplay(expr))
             }
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
                 match func.schema_name(args) {
@@ -3230,7 +3255,7 @@ impl Display for SchemaDisplay<'_> {
                                 " ORDER BY [{}]",
                                 schema_name_from_sorts(order_by)?
                             )?;
-                        };
+                        }
 
                         write!(f, " {window_frame}")
                     }
@@ -3273,26 +3298,17 @@ impl Display for SqlDisplay<'_> {
                 low,
                 high,
             }) => {
-                if *negated {
-                    write!(
-                        f,
-                        "{} NOT BETWEEN {} AND {}",
-                        SqlDisplay(expr),
-                        SqlDisplay(low),
-                        SqlDisplay(high),
-                    )
-                } else {
-                    write!(
-                        f,
-                        "{} BETWEEN {} AND {}",
-                        SqlDisplay(expr),
-                        SqlDisplay(low),
-                        SqlDisplay(high),
-                    )
-                }
+                let not = if *negated { "NOT " } else { "" };
+                write!(
+                    f,
+                    "{} {not}BETWEEN {} AND {}",
+                    SqlDisplay(expr),
+                    SqlDisplay(low),
+                    SqlDisplay(high),
+                )
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                write!(f, "{} {op} {}", SqlDisplay(left), SqlDisplay(right),)
+                write!(f, "{} {op} {}", SqlDisplay(left), SqlDisplay(right))
             }
             Expr::Case(Case {
                 expr,
@@ -3306,7 +3322,7 @@ impl Display for SqlDisplay<'_> {
                 }
 
                 for (when, then) in when_then_expr {
-                    write!(f, "WHEN {} THEN {} ", SqlDisplay(when), SqlDisplay(then),)?;
+                    write!(f, "WHEN {} THEN {} ", SqlDisplay(when), SqlDisplay(then))?;
                 }
 
                 if let Some(e) = else_expr {
@@ -3398,8 +3414,9 @@ impl Display for SqlDisplay<'_> {
             }
             Expr::Negative(expr) => write!(f, "(- {})", SqlDisplay(expr)),
             Expr::Not(expr) => write!(f, "NOT {}", SqlDisplay(expr)),
-            Expr::Unnest(Unnest { expr }) => {
-                write!(f, "UNNEST({})", SqlDisplay(expr))
+            Expr::Unnest(Unnest { expr, outer }) => {
+                let name = if *outer { "UNNEST_OUTER" } else { "UNNEST" };
+                write!(f, "{name}({})", SqlDisplay(expr))
             }
             Expr::SimilarTo(Like {
                 negated,
@@ -3752,7 +3769,7 @@ impl Display for Expr {
                 }
             },
             Expr::Placeholder(Placeholder { id, .. }) => write!(f, "{id}"),
-            Expr::Unnest(Unnest { expr }) => {
+            Expr::Unnest(Unnest { expr, .. }) => {
                 write!(f, "{UNNEST_COLUMN_PREFIX}({expr})")
             }
             Expr::HigherOrderFunction(fun) => {
@@ -3798,6 +3815,7 @@ pub fn physical_name(expr: &Expr) -> Result<String> {
 #[cfg(test)]
 mod test {
     use crate::expr_fn::col;
+    use crate::test::function_stub::max_udaf;
     use crate::{
         ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Volatility, case,
         lit, placeholder, qualified_wildcard, wildcard, wildcard_with_options,
@@ -4311,6 +4329,32 @@ mod test {
 
     use super::*;
     use crate::logical_plan::{EmptyRelation, LogicalPlan};
+
+    #[test]
+    fn normalize_eq_window_function_over_clause_lengths() {
+        let window = |partition_by: Vec<Expr>, order_by: Vec<Sort>| {
+            let mut window = WindowFunction::new(max_udaf(), vec![col("value")]);
+            window.params.partition_by = partition_by;
+            window.params.order_by = order_by;
+            Expr::from(window)
+        };
+        let base = window(vec![col("a")], vec![Sort::new(col("a"), true, true)]);
+
+        let extra_partition = window(
+            vec![col("a"), col("b")],
+            vec![Sort::new(col("a"), true, true)],
+        );
+        assert!(!base.normalize_eq(&extra_partition));
+
+        let extra_order = window(
+            vec![col("a")],
+            vec![
+                Sort::new(col("a"), true, true),
+                Sort::new(col("b"), true, true),
+            ],
+        );
+        assert!(!base.normalize_eq(&extra_order));
+    }
 
     #[test]
     fn test_display_wildcard() {

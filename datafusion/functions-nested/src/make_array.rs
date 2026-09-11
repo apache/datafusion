@@ -50,7 +50,7 @@ make_udf_expr_and_func!(
 #[user_doc(
     doc_section(label = "Array Functions"),
     description = "Returns an array using the specified input expressions.",
-    syntax_example = "make_array(expression1[, ..., expression_n])",
+    syntax_example = "make_array([expression1, ..., expression_n])",
     sql_example = r#"```sql
 > select make_array(1, 2, 3, 4, 5);
 +----------------------------------------------------------+

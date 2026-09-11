@@ -51,6 +51,7 @@ use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{
     AggregateFunction, AggregateFunctionParams, NullTreatment, physical_name,
 };
+use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{AggregateUDF, Expr, ReversedUDAF, SetMonotonicity};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
@@ -286,13 +287,10 @@ impl AggregateExprBuilder {
             return_field = output_metadata.add_to_field_ref(return_field);
         }
         let is_nullable = fun.is_nullable();
-        let name = match alias {
-            None => {
-                return internal_err!(
-                    "AggregateExprBuilder::alias must be provided prior to calling build"
-                );
-            }
-            Some(alias) => alias,
+        let Some(name) = alias else {
+            return internal_err!(
+                "AggregateExprBuilder::alias must be provided prior to calling build"
+            );
         };
 
         let human_display =
@@ -423,6 +421,7 @@ pub struct LoweredAggregateBuilder<'a> {
     logical_input_schema: &'a DFSchema,
     physical_input_schema: &'a Schema,
     execution_props: &'a ExecutionProps,
+    planning_ctx: &'a PhysicalPlanningContext,
 }
 
 impl<'a> LoweredAggregateBuilder<'a> {
@@ -430,12 +429,17 @@ impl<'a> LoweredAggregateBuilder<'a> {
     ///
     /// `logical_input_schema` is used to resolve logical expressions such as
     /// columns, while `physical_input_schema` is the input schema used by the
-    /// physical aggregate expression.
+    /// physical aggregate expression. `planning_ctx` is used when creating
+    /// physical expressions that reference uncorrelated scalar subqueries.
+    /// Callers creating physical aggregates outside of physical planning should
+    /// pass `&PhysicalPlanningContext::default()`, in which case converting a
+    /// scalar-subquery expression returns a planning error.
     pub fn new(
         expr: &'a Expr,
         logical_input_schema: &'a DFSchema,
         physical_input_schema: &'a Schema,
         execution_props: &'a ExecutionProps,
+        planning_ctx: &'a PhysicalPlanningContext,
     ) -> Self {
         Self {
             expr,
@@ -446,6 +450,7 @@ impl<'a> LoweredAggregateBuilder<'a> {
             logical_input_schema,
             physical_input_schema,
             execution_props,
+            planning_ctx,
         }
     }
 
@@ -484,6 +489,7 @@ impl<'a> LoweredAggregateBuilder<'a> {
             logical_input_schema,
             physical_input_schema,
             execution_props,
+            planning_ctx,
         } = self;
 
         let (name, human_display, output_metadata, expr) = lower_aggregate_display(
@@ -515,16 +521,29 @@ impl<'a> LoweredAggregateBuilder<'a> {
             physical_name(&expr)?
         };
 
-        let physical_args =
-            create_physical_exprs(args, logical_input_schema, execution_props)?;
+        let physical_args = create_physical_exprs(
+            args,
+            logical_input_schema,
+            execution_props,
+            planning_ctx,
+        )?;
         let filter = filter
             .as_ref()
             .map(|filter| {
-                create_physical_expr(filter, logical_input_schema, execution_props)
+                create_physical_expr(
+                    filter,
+                    logical_input_schema,
+                    execution_props,
+                    planning_ctx,
+                )
             })
             .transpose()?;
-        let order_bys =
-            create_physical_sort_exprs(order_by, logical_input_schema, execution_props)?;
+        let order_bys = create_physical_sort_exprs(
+            order_by,
+            logical_input_schema,
+            execution_props,
+            planning_ctx,
+        )?;
         let ignore_nulls = null_treatment.unwrap_or(NullTreatment::RespectNulls)
             == NullTreatment::IgnoreNulls;
 
@@ -914,24 +933,44 @@ impl AggregateFunctionExpr {
     /// For aggregates that do not support calculation in reverse,
     /// returns None (which is the default value).
     pub fn reverse_expr(&self) -> Option<AggregateFunctionExpr> {
+        self.reverse_expr_inner(false)
+    }
+
+    /// Same as [`Self::reverse_expr`], but the output `name` is always carried
+    /// over unchanged.
+    ///
+    /// Window execs derive their output schema from `WindowExpr::field()`, which
+    /// for aggregate-backed window expressions is this expression's `name`. If
+    /// reversal renamed it, the rebuilt window exec would expose a differently
+    /// named column while parent plan nodes still reference the old one. This
+    /// mirrors `WindowUDFExpr::reverse_expr`, which preserves its name for the
+    /// same reason. `AggregateExec`, by contrast, pins its schema at
+    /// construction, so it can use [`Self::reverse_expr`] and let the name
+    /// reflect the function actually being evaluated.
+    pub(crate) fn reverse_expr_preserving_name(&self) -> Option<AggregateFunctionExpr> {
+        self.reverse_expr_inner(true)
+    }
+
+    fn reverse_expr_inner(&self, preserve_name: bool) -> Option<AggregateFunctionExpr> {
         match self.fun.reverse_udf() {
             ReversedUDAF::NotSupported => None,
             ReversedUDAF::Identical => Some(self.clone()),
             ReversedUDAF::Reversed(reverse_udf) => {
-                let was_aliased = self.human_display_alias().is_some();
+                let keep_name = preserve_name || self.human_display_alias().is_some();
                 let mut name = self.name().to_string();
                 let mut human_display = self.human_display.clone();
                 // Reversing display follows two paths:
-                // - aliased display keeps the output `name` unchanged and rewrites only
-                //   the lowered expression in `human_display`.
+                // - aliased display (or an explicit request to keep the name) keeps
+                //   the output `name` unchanged and rewrites only the lowered
+                //   expression in `human_display`.
                 // - non-aliased display rewrites the canonical `name`, and rewrites
                 //   `human_display` only when present.
                 // If the function is changed, we need to reverse order_by clause as well
                 // i.e. First(a order by b asc null first) -> Last(a order by b desc null last)
-                if !was_aliased && self.fun().name() != reverse_udf.name() {
+                if !keep_name && self.fun().name() != reverse_udf.name() {
                     replace_order_by_clause(&mut name);
                 }
-                if !was_aliased {
+                if !keep_name {
                     replace_fn_name_clause(
                         &mut name,
                         self.fun.name(),
@@ -1162,6 +1201,7 @@ mod tests {
             &logical_schema,
             &schema,
             &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
         )
         .build()?;
 
@@ -1185,6 +1225,7 @@ mod tests {
             &logical_schema,
             &schema,
             &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
         )
         .with_human_display(expr.human_display().to_string())
         .build()?;

@@ -65,3 +65,7 @@ rand = { workspace = true }
 [[bench]]
 harness = false
 name = "compare_nested"
+
+[[bench]]
+harness = false
+name = "arrow_bytes_map"

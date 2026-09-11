@@ -30,13 +30,14 @@ use sqlparser::ast::{
 use sqlparser::ast::{Query, Visit, Visitor};
 
 use datafusion_common::{
-    DFSchema, Diagnostic, Result, ScalarValue, Span, internal_datafusion_err,
+    DFSchema, Diagnostic, HashMap, Result, ScalarValue, Span, internal_datafusion_err,
     internal_err, not_impl_err, plan_err,
 };
 
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::SetQuantifier;
 use datafusion_expr::expr::{InList, WildcardOptions};
+use datafusion_expr::utils::{find_window_exprs, window_function_not_allowed_err};
 use datafusion_expr::{
     Between, BinaryExpr, Cast, Expr, ExprSchemable, GetFieldAccess, Like, Literal,
     Operator, TryCast, lit, when,
@@ -57,6 +58,12 @@ mod substring;
 mod unary_op;
 mod value;
 
+/// Returns `None` if `expr` is not a NULL literal, and `Some(span)` where
+/// `span` is the literal's span, if it has one.
+#[expect(
+    clippy::option_option,
+    reason = "The two levels mean different things, see above"
+)]
 fn null_value_span(expr: &SQLExpr) -> Option<Option<Span>> {
     if let SQLExpr::Value(ValueWithSpan {
         value: Value::Null,
@@ -131,10 +138,106 @@ impl<S: ContextProvider> Visitor for NullEqualityPredicateVisitor<'_, '_, S> {
     }
 }
 
+/// Finds the location of the first window function call in a SQL expression.
+/// An identifier that is an alias of a `SELECT` expression containing a window
+/// function call counts as well, since aliases are resolved before the window
+/// function check (`HAVING total > 0` where `total` is `sum(x) OVER ()`).
+/// Subqueries are skipped: window functions are legal there.
+struct WindowFunctionSpanVisitor<'a, 'b, S: ContextProvider> {
+    sql_to_rel: &'a SqlToRel<'b, S>,
+    aliases: &'a HashMap<String, Expr>,
+    subquery_depth: usize,
+    span: Option<sqlparser::tokenizer::Span>,
+}
+
+impl<S: ContextProvider> Visitor for WindowFunctionSpanVisitor<'_, '_, S> {
+    type Break = ();
+
+    fn pre_visit_query(&mut self, _query: &Query) -> ControlFlow<Self::Break> {
+        self.subquery_depth += 1;
+        ControlFlow::Continue(())
+    }
+
+    fn post_visit_query(&mut self, _query: &Query) -> ControlFlow<Self::Break> {
+        self.subquery_depth -= 1;
+        ControlFlow::Continue(())
+    }
+
+    fn pre_visit_expr(&mut self, expr: &SQLExpr) -> ControlFlow<Self::Break> {
+        if self.subquery_depth > 0 {
+            return ControlFlow::Continue(());
+        }
+        let found = match expr {
+            SQLExpr::Function(function) => function.over.is_some(),
+            SQLExpr::Identifier(ident) => {
+                let name = self.sql_to_rel.ident_normalizer.normalize(ident.clone());
+                self.aliases
+                    .get(&name)
+                    .is_some_and(|aliased| !find_window_exprs([aliased]).is_empty())
+            }
+            _ => false,
+        };
+        if found {
+            self.span = Some(expr.span());
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    }
+}
+
+/// Help for a window function in `WHERE` or `HAVING`: `QUALIFY` is the clause
+/// that filters on window function results.
+pub(crate) const QUALIFY_HELP: &str = "Move the condition that uses this window function to a QUALIFY clause, which is evaluated after window functions are computed";
+
+/// Returns an error if `expr`, planned from a clause where window functions
+/// cannot be evaluated, contains a window function call. `clause` names it in
+/// the message, `help` says how to rewrite the query and `span` is the location
+/// of the call in the SQL text, see [`SqlToRel::window_function_span`].
+///
+/// The physical planner rejects such expressions in every position, but
+/// without a span or a clause-specific hint. This check exists to give a
+/// better error for the common mistakes.
+pub(crate) fn reject_window_functions(
+    expr: &Expr,
+    clause: &str,
+    help: &str,
+    span: Option<Span>,
+) -> Result<()> {
+    match find_window_exprs([expr]).into_iter().next() {
+        None => Ok(()),
+        Some(window) => Err(window_function_not_allowed_err(&window, clause, span, help)),
+    }
+}
+
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(crate) fn warn_on_null_equality_predicate(&self, predicate: &SQLExpr) {
         let mut visitor = NullEqualityPredicateVisitor::new(self);
         let _ = predicate.visit(&mut visitor);
+    }
+
+    /// The location in the SQL text of the first window function call in
+    /// `expr`, or of the first identifier that is an alias (in `aliases`) of a
+    /// `SELECT` expression containing one. Falls back to the location of the
+    /// whole of `expr`, and returns `None` only if the parser recorded no
+    /// spans.
+    ///
+    /// Used to point the [`Diagnostic`] for a window function in `WHERE` or
+    /// `HAVING` at the offending call, which the planned [`Expr`] cannot do:
+    /// only columns carry spans there.
+    pub(crate) fn window_function_span(
+        &self,
+        expr: &SQLExpr,
+        aliases: &HashMap<String, Expr>,
+    ) -> Option<Span> {
+        let mut visitor = WindowFunctionSpanVisitor {
+            sql_to_rel: self,
+            aliases,
+            subquery_depth: 0,
+            span: None,
+        };
+        let _ = expr.visit(&mut visitor);
+        Span::try_from_sqlparser_span(visitor.span.unwrap_or_else(|| expr.span()))
     }
 
     pub(crate) fn sql_expr_to_logical_expr_with_alias(
@@ -387,11 +490,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 value,
                 uses_odbc_syntax: _,
             }) => {
-                let value = match value.into_string() {
-                    Some(value) => value,
-                    None => {
-                        return plan_err!("Typed literal requires a string payload");
-                    }
+                let Some(value) = value.into_string() else {
+                    return plan_err!("Typed literal requires a string payload");
                 };
 
                 Ok(Expr::Cast(Cast::new_from_field(
@@ -1008,10 +1108,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
-        let pattern_type = pattern.get_type(schema)?;
-        if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
-            return plan_err!("Invalid pattern in SIMILAR TO expression");
-        }
         let escape_char = match escape_char.map(|v| v.value) {
             Some(Value::SingleQuotedString(char)) if char.len() == 1 => {
                 Some(char.chars().next().unwrap())
@@ -1596,5 +1692,33 @@ mod tests {
             .unwrap();
 
         assert!(matches!(expr, Expr::Alias(_)));
+    }
+
+    #[test]
+    fn test_parse_numbers_with_underscores() {
+        use datafusion_common::ScalarValue::*;
+
+        let context_provider = TestContextProvider::new();
+        let sql_to_rel = SqlToRel::new(&context_provider);
+
+        // (input, positive result, negative result)
+        let test_cases = [
+            ("1_000", Int64(Some(1000)), Int64(Some(-1000))),
+            ("100_000", Int64(Some(100000)), Int64(Some(-100000))),
+            ("1_2_3_4", Int64(Some(1234)), Int64(Some(-1234))),
+            ("0_0", Int64(Some(0)), Int64(Some(-0))),
+            ("1_23.4_56", Float64(Some(123.456)), Float64(Some(-123.456))),
+        ];
+
+        for (literal, out_positive, out_negative) in test_cases {
+            assert_eq!(
+                sql_to_rel.parse_sql_number(literal, false).unwrap(),
+                Expr::Literal(out_positive, None)
+            );
+            assert_eq!(
+                sql_to_rel.parse_sql_number(literal, true).unwrap(),
+                Expr::Literal(out_negative, None)
+            );
+        }
     }
 }

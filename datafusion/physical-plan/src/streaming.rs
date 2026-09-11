@@ -30,11 +30,16 @@ use crate::projection::{
     ProjectionExec, all_alias_free_columns, new_projections_for_columns, update_ordering,
 };
 use crate::stream::RecordBatchStreamAdapter;
-use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
+use crate::{
+    ChildrenPropertiesMode, ExecutionPlan, Partitioning, ReplaceChildrenOptions,
+    SendableRecordBatchStream,
+};
 
 use arrow::datatypes::{Schema, SchemaRef};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, internal_err, plan_err};
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::projection::ProjectionMapping;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
@@ -76,7 +81,7 @@ impl StreamingTableExec {
     pub fn try_new(
         schema: SchemaRef,
         partitions: Vec<Arc<dyn PartitionStream>>,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         projected_output_ordering: impl IntoIterator<Item = LexOrdering>,
         infinite: bool,
         limit: Option<usize>,
@@ -107,7 +112,7 @@ impl StreamingTableExec {
         Ok(Self {
             partitions,
             projected_schema,
-            projection: projection.cloned().map(Into::into),
+            projection: projection.map(|p| p.to_vec().into()),
             projected_output_ordering,
             infinite,
             limit,
@@ -271,15 +276,33 @@ impl ExecutionPlan for StreamingTableExec {
         vec![]
     }
 
-    fn with_new_children(
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if children.is_empty() {
             Ok(self)
         } else {
             internal_err!("Children cannot be replaced in {self:?}")
         }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -452,7 +475,7 @@ mod test {
             StreamingTableExec::try_new(
                 self.schema.unwrap(),
                 self.partitions,
-                self.projection.as_ref(),
+                self.projection.as_deref(),
                 self.projected_output_ordering,
                 self.infinite,
                 self.limit,

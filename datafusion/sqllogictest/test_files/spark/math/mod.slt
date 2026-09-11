@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -142,7 +142,7 @@ SELECT MOD(2.5::decimal(3,1), 1.2::decimal(2,1)) as mod_decimal_1;
 query R
 SELECT MOD(10.0::decimal(3,1), 3.0::decimal(2,1)) as mod_decimal_2;
 ----
-1
+1.0
 
 # Division by zero returns NULL in legacy mode (ANSI off)
 query I
@@ -160,6 +160,18 @@ SELECT MOD(10.5::float8, 0.0::float8) as mod_div_zero_float;
 ----
 NULL
 
+# A negative zero divisor counts as zero and returns NULL in legacy mode
+query R
+SELECT MOD(10.5::float8, -0.0::float8) as mod_div_zero_neg_float;
+----
+NULL
+
+# A NULL dividend evaluates to NULL regardless of the divisor
+query I
+SELECT MOD(NULL::int, 0::int) as mod_null_dividend_legacy;
+----
+NULL
+
 # Division by zero errors in ANSI mode
 statement ok
 set datafusion.execution.enable_ansi_mode = true;
@@ -169,6 +181,25 @@ SELECT MOD(10::int, 0::int);
 
 statement error DataFusion error: Arrow error: Divide by zero error
 SELECT MOD(-7::int, 0::int);
+
+# A zero divisor of any numeric type raises, including floating point
+statement error DataFusion error: Arrow error: Divide by zero error
+SELECT MOD(10.5::float8, 0.0::float8);
+
+# A negative zero divisor counts as zero and raises
+statement error DataFusion error: Arrow error: Divide by zero error
+SELECT MOD(10.5::float8, -0.0::float8);
+
+# A NULL dividend short-circuits to NULL before the divisor is validated
+query I
+SELECT MOD(NULL::int, 0::int) as mod_null_dividend_ansi;
+----
+NULL
+
+query R
+SELECT MOD(NULL::float8, 0.0::float8) as mod_null_dividend_ansi_float;
+----
+NULL
 
 statement ok
 set datafusion.execution.enable_ansi_mode = false;

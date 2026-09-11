@@ -164,7 +164,7 @@ contributions. Kudos to [@2010YOUY01] for the initial implementation.
 ## Documentation Examples
 
 We use Rust [doctest] to verify examples from the documentation are correct and
-up-to-date. These tests are run as part of our CI and you can run them them
+up-to-date. These tests are run as part of our CI and you can run them
 locally with the following command:
 
 ```shell

@@ -90,14 +90,17 @@ impl ScalarUDFImpl for BitmapCount {
     }
 }
 
-fn binary_count_ones(opt: Option<&[u8]>) -> Option<i64> {
-    opt.map(|value| value.iter().map(|b| b.count_ones() as i64).sum())
+fn binary_count_ones(value: &[u8]) -> i64 {
+    value.iter().map(|b| b.count_ones() as i64).sum()
 }
 
 macro_rules! downcast_and_count_ones {
     ($input_array:expr, $array_type:ident) => {{
         let arr = downcast_arg!($input_array, $array_type);
-        Ok(arr.iter().map(binary_count_ones).collect::<Int64Array>())
+        Ok(arr
+            .iter()
+            .map(|v| v.map(binary_count_ones))
+            .collect::<Int64Array>())
     }};
 }
 
@@ -107,7 +110,7 @@ macro_rules! downcast_dict_and_count_ones {
         let array = dict_array.downcast_dict::<BinaryArray>().unwrap();
         Ok(array
             .into_iter()
-            .map(binary_count_ones)
+            .map(|v| v.map(binary_count_ones))
             .collect::<Int64Array>())
     }};
 }

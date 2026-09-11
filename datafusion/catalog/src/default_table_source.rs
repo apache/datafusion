@@ -118,7 +118,7 @@ fn preserves_table_type() {
         async fn scan(
             &self,
             _: &dyn crate::Session,
-            _: Option<&Vec<usize>>,
+            _: Option<&[usize]>,
             _: &[Expr],
             _: Option<usize>,
         ) -> Result<Arc<dyn datafusion_physical_plan::ExecutionPlan>, DataFusionError>
