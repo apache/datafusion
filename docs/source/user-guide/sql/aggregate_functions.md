@@ -1104,6 +1104,7 @@ _Alias of [stddev](#stddev)._
 - [approx_median](#approx_median)
 - [approx_percentile_cont](#approx_percentile_cont)
 - [approx_percentile_cont_with_weight](#approx_percentile_cont_with_weight)
+- [approx_top_k](#approx_top_k)
 
 ### `approx_distinct`
 
@@ -1241,4 +1242,32 @@ An alternative syntax is also supported:
 +----------------------------------------------------------------------+
 | 78.5                                                                 |
 +----------------------------------------------------------------------+
+```
+
+### `approx_top_k`
+
+Returns the approximate most frequent (top-k) values with their estimated counts as a list of `{value, count}` structs. Values are ranked by estimated count, with lower-error estimates preferred when counts tie.
+
+Because the aggregate uses bounded memory, `count` is an upper-bound estimate. Within one summary it is exact for a value that was tracked for the whole scan; distributed merging may add an omission bound from partitions where that value was not tracked. Values whose frequency is far from the top-k boundary are the ones reported reliably; ties and near-ties may be resolved arbitrarily.
+
+NULL values are skipped; an empty or all-NULL input returns an empty list `[]`. For float columns, -0.0 and +0.0 are treated as the same value, while different NaN representations are tracked separately.
+
+```sql
+approx_top_k(expression, k)
+```
+
+#### Arguments
+
+- **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **k**: The number of top elements to return. Must be a literal integer between 1 and 10,000.
+
+#### Example
+
+```sql
+> SELECT approx_top_k(column_name, 3) FROM table_name;
++-----------------------------------------------------------------------------+
+| approx_top_k(column_name,Int64(3))                                          |
++-----------------------------------------------------------------------------+
+| [{value: foo, count: 3}, {value: bar, count: 2}, {value: baz, count: 1}]    |
++-----------------------------------------------------------------------------+
 ```
