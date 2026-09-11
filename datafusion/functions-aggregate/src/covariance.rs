@@ -132,14 +132,14 @@ impl AggregateUDFImpl for CovarianceSample {
 
 #[user_doc(
     doc_section(label = "Statistical Functions"),
-    description = "Returns the sample covariance of a set of number pairs.",
-    syntax_example = "covar_samp(expression1, expression2)",
+    description = "Returns the population covariance of a set of number pairs.",
+    syntax_example = "covar_pop(expression1, expression2)",
     sql_example = r#"```sql
-> SELECT covar_samp(column1, column2) FROM table_name;
+> SELECT covar_pop(column1, column2) FROM table_name;
 +-----------------------------------+
-| covar_samp(column1, column2)      |
+| covar_pop(column1, column2)       |
 +-----------------------------------+
-| 8.25                              |
+| 7.63333333333                     |
 +-----------------------------------+
 ```"#,
     standard_argument(name = "expression1", prefix = "First"),

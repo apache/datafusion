@@ -1050,11 +1050,9 @@ impl MetricValue {
             Self::SpilledRows(_) => 12,
             Self::CurrentMemoryUsage(_) => 13,
             Self::Count { name, .. } => match name.as_ref() {
-                // This Parquet page-index metric is a plain Count because it
-                // records pages that skipped page-index evaluation, not a
-                // pruned/matched pair. Keep it grouped with the other
+                // Keep lazy Parquet pruning counters grouped with the other
                 // page-index pruning metrics in EXPLAIN output.
-                "page_index_pages_skipped_by_fully_matched" => 8,
+                "page_index_pages_skipped_by_fully_matched" | "limit_pruned_rows" => 8,
                 _ => 14,
             },
             Self::PeakMemoryUsage { .. } => 13,

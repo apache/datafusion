@@ -1193,6 +1193,21 @@ fn keys_match(
     null_equality: NullEquality,
 ) -> Result<bool> {
     debug_assert!(left_arrays.iter().all(|a| a.len() == 1));
+    if left_arrays
+        .iter()
+        .any(|array| array.data_type().is_floating())
+    {
+        // The scalar comparator's partial_cmp panics on NaN. Match the merge
+        // scan's floating-point equality, including its signed-zero handling.
+        let right_keys = slice_keys(right_arrays, 0);
+        return Ok(JoinKeyComparator::new(
+            left_arrays,
+            &right_keys,
+            sort_options,
+            null_equality,
+        )?
+        .is_equal(0, 0));
+    }
     let cmp = compare_join_arrays(
         left_arrays,
         0,

@@ -180,7 +180,7 @@ impl ScalarUDFImpl for RegexpLikeFunc {
             return true;
         }
 
-        let pattern = match flags {
+        let pattern = match flags.filter(|flags| !flags.is_empty()) {
             Some(flags) => Cow::Owned(format!("(?{flags}){pattern}")),
             None => Cow::Borrowed(pattern),
         };
@@ -308,10 +308,11 @@ pub fn regexp_like(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args.len() {
         2 => handle_regexp_like(&args[0], &args[1], None),
         3 => {
-            let flags = match args[2].data_type() {
-                Utf8 => args[2].as_string::<i32>(),
+            let flags = super::normalize_empty_flags(&args[2])?;
+            let flags = match flags.data_type() {
+                Utf8 => flags.as_string::<i32>(),
                 LargeUtf8 => {
-                    let large_string_array = args[2].as_string::<i64>();
+                    let large_string_array = flags.as_string::<i64>();
                     let string_vec: Vec<Option<&str>> = (0..large_string_array.len())
                         .map(|i| {
                             if large_string_array.is_null(i) {
@@ -325,7 +326,7 @@ pub fn regexp_like(args: &[ArrayRef]) -> Result<ArrayRef> {
                     &GenericStringArray::<i32>::from(string_vec)
                 }
                 _ => {
-                    let string_view_array = args[2].as_string_view();
+                    let string_view_array = flags.as_string_view();
                     let string_vec: Vec<Option<String>> = (0..string_view_array.len())
                         .map(|i| {
                             if string_view_array.is_null(i) {
@@ -374,6 +375,7 @@ fn regexp_like_array_scalar(
     let Some(pattern) = pattern else {
         return Ok(Arc::new(BooleanArray::new_null(values.len())));
     };
+    let flags = flags.filter(|flags| !flags.is_empty());
     let array = match values.data_type() {
         Utf8 => {
             let array = values.as_string::<i32>();
@@ -412,7 +414,7 @@ fn regexp_like_scalar(
 
     let value = value.unwrap();
     let pattern = pattern.unwrap();
-    let pattern = match flags {
+    let pattern = match flags.filter(|flags| !flags.is_empty()) {
         Some(flagz) => format!("(?{flagz}){pattern}"),
         None => pattern.to_string(),
     };
@@ -679,6 +681,7 @@ mod tests {
 
         assert!(should_evaluate(args("^a+$", None)));
         assert!(!should_evaluate(args("a{5}{5}{5}{5}{5}{5}", None)));
+        assert!(!should_evaluate(args("a{5}{5}{5}{5}{5}{5}", Some(""))));
         assert!(!should_evaluate(args("a{5}{5}{5}{5}{5}{5}", Some("m"))));
 
         let null_value = vec![

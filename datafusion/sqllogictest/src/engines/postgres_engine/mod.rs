@@ -377,7 +377,7 @@ fn cell_to_string(row: &SimpleQueryRow, column_type: &Type, idx: usize) -> Strin
         (&Type::INT4, Some(value)) => value.parse::<i32>().unwrap().to_string(),
         (&Type::INT8, Some(value)) => value.parse::<i64>().unwrap().to_string(),
         (&Type::NUMERIC, Some(value)) => {
-            decimal_to_str(BigDecimal::from_str(value).unwrap())
+            decimal_to_str(&BigDecimal::from_str(value).unwrap())
         }
         // Parse date/time strings explicitly to avoid locale-specific formatting.
         (&Type::DATE, Some(value)) => NaiveDate::parse_from_str(value, "%Y-%m-%d")
