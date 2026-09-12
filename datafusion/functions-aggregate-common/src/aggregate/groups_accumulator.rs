@@ -222,7 +222,6 @@ impl GroupsAccumulatorAdapter {
         group_indices: &[usize],
         opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
-        time_grouped_update: bool,
         f: F,
     ) -> Result<()>
     where
@@ -272,16 +271,36 @@ impl GroupsAccumulatorAdapter {
         let values = take_arrays(values, &batch_indices, None)?;
         let opt_filter = get_filter_at_indices(opt_filter, &batch_indices)?;
 
-        let grouped_update_metric = if time_grouped_update {
-            self.grouped_update_metric.get().and_then(Clone::clone)
-        } else {
-            None
-        };
+        let grouped_update_metric =
+            self.grouped_update_metric.get().and_then(Clone::clone);
 
         let mut sizes_pre = 0;
         let mut sizes_post = 0;
         let mut aggregate_duration = Duration::ZERO;
         let result: Result<()> = (|| {
+            if grouped_update_metric.is_none() {
+                // Keep the pre-metrics single-pass path for accumulators that
+                // do not expose an aggregate-owned submetric.
+                for (&group_idx, offsets) in
+                    groups_with_rows.iter().zip(offsets.windows(2))
+                {
+                    sizes_pre += self.states[group_idx].size();
+                    let values_to_accumulate = slice_and_maybe_filter(
+                        &values,
+                        opt_filter.as_ref().map(|f| f.as_boolean()),
+                        offsets,
+                    )?;
+                    f(
+                        self.states[group_idx].accumulator.as_mut(),
+                        &values_to_accumulate,
+                    )?;
+                    let state = &mut self.states[group_idx];
+                    state.indices.clear();
+                    sizes_post += state.size();
+                }
+                return Ok(());
+            }
+
             // Keep preparation bounded to avoid retaining one filtered array per
             // group. Time only accumulator invocation: slicing and filtering
             // are adapter work, not aggregate-owned subphase work.
@@ -385,7 +404,6 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
             group_indices,
             opt_filter,
             total_num_groups,
-            true,
             |accumulator, values_to_accumulate| {
                 accumulator.update_batch_grouped(values_to_accumulate)
             },
@@ -488,7 +506,6 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
             group_indices,
             None,
             total_num_groups,
-            true,
             |accumulator, values_to_accumulate| {
                 accumulator.merge_batch_grouped(values_to_accumulate)
             },
