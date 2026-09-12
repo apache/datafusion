@@ -849,17 +849,19 @@ impl PhysicalExpr for RangeExpr {
         &self,
         ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
     ) -> Result<Option<protobuf::PhysicalExprNode>> {
+        // Destructure exhaustively (no `..`) so that a newly added field is a
+        // compile error here instead of being silently left out of the proto.
+        let Self { on_columns, router } = self;
+
         // Encode the raw ordered children: rebuilding a `LexOrdering` would
         // deduplicate equivalent children after dynamic-filter remapping.
-        let sort_exprs = self
-            .on_columns
+        let sort_exprs = on_columns
             .iter()
-            .zip(self.router.sort_options())
+            .zip(router.sort_options())
             .map(|(expr, options)| PhysicalSortExpr::new(Arc::clone(expr), *options))
             .collect::<Vec<_>>();
         let sort_expr = sort_exprs_try_to_proto(&sort_exprs, ctx)?;
-        let split_point = self
-            .router
+        let split_point = router
             .split_points()
             .iter()
             .map(|split_point| {
@@ -896,14 +898,20 @@ impl RangeExpr {
         else {
             return internal_err!("PhysicalExprNode is not a RangeExpr");
         };
-        let sort_exprs = sort_exprs_try_from_proto(&range_expr.sort_expr, ctx)?;
+        // Destructure exhaustively (no `..`) so that a newly added proto field
+        // is a compile error here instead of being silently ignored.
+        let protobuf::PhysicalRangeExprNode {
+            sort_expr,
+            split_point,
+        } = range_expr;
+
+        let sort_exprs = sort_exprs_try_from_proto(sort_expr, ctx)?;
         let (on_columns, sort_options): (Vec<PhysicalExprRef>, Vec<SortOptions>) =
             sort_exprs
                 .into_iter()
                 .map(|sort_expr| (sort_expr.expr, sort_expr.options))
                 .unzip();
-        let split_points = range_expr
-            .split_point
+        let split_points = split_point
             .iter()
             .map(|split_point| {
                 let values = split_point
