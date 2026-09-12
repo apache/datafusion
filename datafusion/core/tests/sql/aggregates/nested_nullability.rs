@@ -31,25 +31,27 @@
 //!
 //! [`Schema::contains`]: arrow::datatypes::Schema::contains
 
-use std::sync::Arc;
+use std::{num::NonZeroUsize, sync::Arc};
 
 use arrow::array::{BooleanArray, RecordBatch, StructArray, UInt32Array};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion::datasource::MemTable;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
-use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::expressions::col;
+use datafusion::physical_plan::{ExecutionPlan, displayable};
 use datafusion::prelude::*;
-use datafusion_common::Result;
+use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::TaskContext;
-use datafusion_execution::memory_pool::FairSpillPool;
+use datafusion_execution::memory_pool::{FairSpillPool, TrackConsumersPool};
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_functions_aggregate::array_agg::array_agg_udaf;
+
+use crate::helper::plan_metrics::{plan_spill_count, plan_spilled_bytes};
 
 /// Returns the fields of the struct column `b`: a single `colA Boolean`.
 ///
@@ -89,6 +91,10 @@ struct AggregateBatchesTest {
     /// If set, the context uses a [`FairSpillPool`] of this size (and a small
     /// batch size) so the aggregation is forced to spill.
     memory_limit: Option<usize>,
+    /// If set, fixes aggregate parallelism for deterministic memory pressure.
+    target_partitions: Option<usize>,
+    /// If set, test native DISTINCT aggregation rather than its group-by rewrite.
+    disable_single_distinct_to_groupby: bool,
 }
 
 impl AggregateBatchesTest {
@@ -96,6 +102,8 @@ impl AggregateBatchesTest {
         Self {
             num_rows: 100,
             memory_limit: None,
+            target_partitions: None,
+            disable_single_distinct_to_groupby: false,
         }
     }
 
@@ -106,6 +114,16 @@ impl AggregateBatchesTest {
 
     fn with_memory_limit(mut self, memory_limit: usize) -> Self {
         self.memory_limit = Some(memory_limit);
+        self
+    }
+
+    fn with_target_partitions(mut self, target_partitions: usize) -> Self {
+        self.target_partitions = Some(target_partitions);
+        self
+    }
+
+    fn without_single_distinct_to_groupby(mut self) -> Self {
+        self.disable_single_distinct_to_groupby = true;
         self
     }
 
@@ -138,22 +156,55 @@ impl AggregateBatchesTest {
 
         let ctx = match self.memory_limit {
             Some(limit) => {
+                // Include live consumers and peaks in any memory-pool failure.
+                // The FairSpillPool limit alone does not identify which concurrent
+                // spillable reservations divided its per-consumer allocation.
+                let memory_pool = TrackConsumersPool::new(
+                    FairSpillPool::new(limit),
+                    NonZeroUsize::new(10).unwrap(),
+                );
                 let runtime = RuntimeEnvBuilder::new()
-                    .with_memory_pool(Arc::new(FairSpillPool::new(limit)))
+                    .with_memory_pool(Arc::new(memory_pool))
                     .build_arc()?;
-                SessionContext::new_with_config_rt(
-                    SessionConfig::new().with_batch_size(100),
-                    runtime,
-                )
+                let mut config = SessionConfig::new().with_batch_size(100).set(
+                    "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
+                    &ScalarValue::Float64(Some(1.0)),
+                );
+                if let Some(target_partitions) = self.target_partitions {
+                    config = config.with_target_partitions(target_partitions);
+                }
+                SessionContext::new_with_config_rt(config, runtime)
             }
             None => SessionContext::new(),
         };
         ctx.register_table("t", Arc::new(table))?;
+        if self.disable_single_distinct_to_groupby {
+            assert!(ctx.remove_optimizer_rule("single_distinct_aggregation_to_group_by"));
+        }
 
-        let result = ctx.sql(sql).await?.collect().await?;
+        let plan = ctx.sql(sql).await?.create_physical_plan().await?;
+        if self.disable_single_distinct_to_groupby {
+            let plan = displayable(plan.as_ref()).indent(true).to_string();
+            assert_eq!(
+                plan.matches("AggregateExec").count(),
+                1,
+                "expected native DISTINCT aggregation:\n{plan}"
+            );
+        }
+        let result = collect(Arc::clone(&plan), ctx.task_ctx()).await?;
 
         let total_rows: usize = result.iter().map(|batch| batch.num_rows()).sum();
         assert_eq!(total_rows, self.num_rows as usize);
+        if self.memory_limit.is_some() {
+            assert!(
+                plan_spill_count(plan.as_ref()) > 0,
+                "expected aggregation to spill"
+            );
+            assert!(
+                plan_spilled_bytes(plan.as_ref()) > 0,
+                "expected aggregation to spill bytes"
+            );
+        }
         Ok(())
     }
 }
@@ -176,7 +227,7 @@ async fn array_agg_distinct_struct_from_stricter_batches() -> Result<()> {
 async fn array_agg_struct_from_stricter_batches_with_spilling() -> Result<()> {
     AggregateBatchesTest::new()
         .with_num_rows(10_000)
-        .with_memory_limit(4_000_000)
+        .with_memory_limit(1_000_000)
         .run("SELECT a, array_agg(b) FROM t GROUP BY a")
         .await
 }
@@ -185,7 +236,10 @@ async fn array_agg_struct_from_stricter_batches_with_spilling() -> Result<()> {
 async fn array_agg_distinct_struct_from_stricter_batches_with_spilling() -> Result<()> {
     AggregateBatchesTest::new()
         .with_num_rows(10_000)
-        .with_memory_limit(4_000_000)
+        // One partition keeps the native aggregate's memory pressure deterministic.
+        .with_target_partitions(1)
+        .without_single_distinct_to_groupby()
+        .with_memory_limit(1_000_000)
         .run("SELECT a, array_agg(DISTINCT b) FROM t GROUP BY a")
         .await
 }
