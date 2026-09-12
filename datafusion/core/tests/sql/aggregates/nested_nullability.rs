@@ -31,7 +31,7 @@
 //!
 //! [`Schema::contains`]: arrow::datatypes::Schema::contains
 
-use std::sync::Arc;
+use std::{num::NonZeroUsize, sync::Arc};
 
 use arrow::array::{BooleanArray, RecordBatch, StructArray, UInt32Array};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
@@ -47,7 +47,7 @@ use datafusion::physical_plan::expressions::col;
 use datafusion::prelude::*;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::TaskContext;
-use datafusion_execution::memory_pool::FairSpillPool;
+use datafusion_execution::memory_pool::{FairSpillPool, TrackConsumersPool};
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_functions_aggregate::array_agg::array_agg_udaf;
 
@@ -148,8 +148,15 @@ impl AggregateBatchesTest {
 
         let ctx = match self.memory_limit {
             Some(limit) => {
+                // Include live consumers and peaks in any memory-pool failure.
+                // The FairSpillPool limit alone does not identify which concurrent
+                // spillable reservations divided its per-consumer allocation.
+                let memory_pool = TrackConsumersPool::new(
+                    FairSpillPool::new(limit),
+                    NonZeroUsize::new(10).unwrap(),
+                );
                 let runtime = RuntimeEnvBuilder::new()
-                    .with_memory_pool(Arc::new(FairSpillPool::new(limit)))
+                    .with_memory_pool(Arc::new(memory_pool))
                     .build_arc()?;
                 let mut config = SessionConfig::new().with_batch_size(100).set(
                     "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
