@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Final aggregate stream for ordered partial-state input.
+//! Final aggregate stream for partial-state input with group-completion
+//! guarantees.
 
 use std::ops::ControlFlow;
 use std::sync::Arc;
@@ -35,16 +36,17 @@ use super::AggregateExec;
 use super::aggregate_hash_table::{
     FinalMarker, OrderedAggregateTable, OrderedAggregateTableMetrics,
 };
+use super::order::GroupCompletionMode;
 use crate::aggregates::AggregateMode;
 use crate::metrics::{BaselineMetrics, RecordOutput, SpillMetrics};
 use crate::sorts::IncrementalSortIterator;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::spill_manager::SpillManager;
 use crate::stream::EmptyRecordBatchStream;
-use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream};
+use crate::{RecordBatchStream, SendableRecordBatchStream};
 
-/// Final aggregate stream for `InputOrderMode::Sorted` and
-/// `InputOrderMode::PartiallySorted`.
+/// Final aggregate stream for [`GroupCompletionMode::Partial`] and
+/// [`GroupCompletionMode::Full`].
 ///
 /// See comments at [`super::ordered_partial_stream::OrderedPartialAggregateStream`] for details.
 ///
@@ -52,7 +54,7 @@ use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream};
 ///
 /// This section is only for implementation notes, for background, see [`super::ordered_partial_stream::OrderedPartialAggregateStream`]
 ///
-/// For partially sorted input, spilling works as follows:
+/// For partial group completion, spilling works as follows:
 ///
 /// - Reserve the table footprint plus one `u32` sort index per buffered group. The
 ///   extra index array is used in later sorting before spilling.
@@ -70,8 +72,8 @@ pub(crate) struct OrderedFinalAggregateStream {
     state: Option<OrderedFinalAggregateState>,
 }
 
-/// Spill configuration and accumulated runs for partially ordered final
-/// aggregation.
+/// Spill configuration and accumulated runs for final aggregation with partial
+/// group completion.
 ///
 /// Each spill event drains all currently buffered groups, sorts their intermediate
 /// states by the full group key, and writes them to one spill file. All files are
@@ -132,14 +134,16 @@ impl OrderedFinalSpillContext {
         context: &Arc<TaskContext>,
         partition: usize,
         batch_size: usize,
-        input_order_mode: &InputOrderMode,
+        group_completion_mode: &GroupCompletionMode,
         spill_schema: &SchemaRef,
         spill_metrics: SpillMetrics,
     ) -> Result<Self> {
         let group_schema = agg.group_by.group_schema(spill_schema)?;
         let output_ordering = agg.cache.output_ordering();
-        let InputOrderMode::PartiallySorted(order_indices) = input_order_mode else {
-            return internal_err!("Ordered final spill requires partially ordered input");
+        let GroupCompletionMode::Partial(order_indices) = group_completion_mode else {
+            return internal_err!(
+                "Ordered final spill requires partial group completion"
+            );
         };
         let spill_indices = order_indices.iter().copied().chain(
             (0..group_schema.fields().len()).filter(|idx| !order_indices.contains(idx)),
@@ -249,7 +253,7 @@ impl OrderedFinalSpillContext {
             &context,
             partition,
             merged,
-            &InputOrderMode::Sorted,
+            &GroupCompletionMode::Full,
             baseline_metrics.clone(),
             metrics,
             None,
@@ -269,10 +273,10 @@ impl OrderedFinalAggregateStream {
             agg.mode,
             AggregateMode::Final | AggregateMode::FinalPartitioned
         ));
-        debug_assert_ne!(agg.input_order_mode, InputOrderMode::Linear);
+        debug_assert_ne!(agg.group_completion_mode, GroupCompletionMode::None);
 
         let input = agg.input.execute(partition, Arc::clone(context))?;
-        Self::new_with_input(agg, context, partition, input, &agg.input_order_mode)
+        Self::new_with_input(agg, context, partition, input, &agg.group_completion_mode)
     }
 
     pub(in crate::aggregates) fn new_with_input(
@@ -280,7 +284,7 @@ impl OrderedFinalAggregateStream {
         context: &Arc<TaskContext>,
         partition: usize,
         input: SendableRecordBatchStream,
-        input_order_mode: &InputOrderMode,
+        group_completion_mode: &GroupCompletionMode,
     ) -> Result<Self> {
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let metrics = OrderedAggregateTableMetrics::new(agg, partition);
@@ -299,7 +303,7 @@ impl OrderedFinalAggregateStream {
             context,
             partition,
             input,
-            input_order_mode,
+            group_completion_mode,
             baseline_metrics,
             metrics,
             Some(spill_metrics),
@@ -319,7 +323,7 @@ impl OrderedFinalAggregateStream {
         context: &Arc<TaskContext>,
         partition: usize,
         input: SendableRecordBatchStream,
-        input_order_mode: &InputOrderMode,
+        group_completion_mode: &GroupCompletionMode,
         baseline_metrics: BaselineMetrics,
         metrics: OrderedAggregateTableMetrics,
         spill_metrics: Option<SpillMetrics>,
@@ -329,13 +333,13 @@ impl OrderedFinalAggregateStream {
             agg.mode,
             AggregateMode::Final | AggregateMode::FinalPartitioned
         ));
-        debug_assert_ne!(*input_order_mode, InputOrderMode::Linear);
+        debug_assert_ne!(*group_completion_mode, GroupCompletionMode::None);
 
         let schema = Arc::clone(&agg.schema);
         let input_schema = input.schema();
         let batch_size = context.session_config().batch_size();
 
-        let can_spill = matches!(input_order_mode, InputOrderMode::PartiallySorted(_))
+        let can_spill = matches!(group_completion_mode, GroupCompletionMode::Partial(_))
             && context.runtime_env().disk_manager.tmp_files_enabled();
         let spill_context = if can_spill {
             let Some(spill_metrics) = spill_metrics else {
@@ -346,7 +350,7 @@ impl OrderedFinalAggregateStream {
                 context,
                 partition,
                 batch_size,
-                input_order_mode,
+                group_completion_mode,
                 &input_schema,
                 spill_metrics,
             )?))
@@ -354,12 +358,12 @@ impl OrderedFinalAggregateStream {
             None
         };
 
-        let table = OrderedAggregateTable::<FinalMarker>::new_with_input_order(
+        let table = OrderedAggregateTable::<FinalMarker>::new_with_group_completion(
             agg,
             &input_schema,
             Arc::clone(&schema),
             batch_size,
-            input_order_mode,
+            group_completion_mode,
             metrics,
         )?;
         Ok(Self {
