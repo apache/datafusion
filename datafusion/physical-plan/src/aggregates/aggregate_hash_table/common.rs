@@ -366,9 +366,16 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         let batch = RecordBatch::try_new(state_schema, output)?;
         debug_assert!(batch.num_rows() > 0);
 
-        // `emit(EmitTo::All)` resets accumulator state. Explicitly shrink the
-        // key/index buffers too so the memory reservation can be released
-        // before the batch is sorted for spilling.
+        // State emission should reset accumulators, but spill recovery must
+        // release every emitted allocation even for an accumulator that retains
+        // capacity. Rebuild the accumulator set before returning the state batch.
+        state.accumulators = state
+            .accumulators
+            .iter()
+            .map(HashAggregateAccumulator::empty_like)
+            .collect::<Result<_>>()?;
+        // Explicitly shrink key/index buffers too so the memory reservation can
+        // be released before the batch is sorted for spilling.
         state.group_values.clear_shrink(0);
         state.batch_group_indices.clear();
         state.batch_group_indices.shrink_to_fit();

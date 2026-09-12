@@ -341,9 +341,17 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         let batch = RecordBatch::try_new(Arc::clone(&self.state_schema), output)?;
         debug_assert!(batch.num_rows() > 0);
 
-        // `emit(EmitTo::All)` resets accumulator state. Explicitly shrink the
-        // key/index buffers too so the memory reservation can be released
-        // before the batch is passed downstream or sorted for spilling.
+        // State emission should reset accumulators, but spill recovery must
+        // release every emitted allocation even for an accumulator that retains
+        // capacity. Rebuild the accumulator set before returning the state batch.
+        self.buffer.accumulators = self
+            .buffer
+            .accumulators
+            .iter()
+            .map(AggregateAccumulator::empty_like)
+            .collect::<Result<_>>()?;
+        // Explicitly shrink key/index buffers too so the memory reservation can
+        // be released before the batch is passed downstream or sorted for spilling.
         self.buffer.group_values.clear_shrink(0);
         self.buffer.group_indices.clear();
         self.buffer.group_indices.shrink_to_fit();
