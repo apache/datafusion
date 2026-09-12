@@ -560,10 +560,33 @@ impl ExecutionPlan for AsOfJoinExec {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
 
-        let left = ctx.encode_child(&self.left)?;
-        let right = ctx.encode_child(&self.right)?;
-        let on = self
-            .on
+        // Destructure exhaustively (no `..`) so that a newly added field is a
+        // compile error here instead of being silently left out of the proto.
+        let Self {
+            left,
+            right,
+            on,
+            match_condition,
+            projection,
+            // derived from the children's schemas by `try_new` on decode
+            join_schema: _,
+            // derived from the children's schemas by `try_new` on decode
+            column_indices: _,
+            // runtime metrics, not part of the plan
+            metrics: _,
+            // recomputed from `on` and `match_condition.op` by `try_new`
+            left_ordering: _,
+            // recomputed from `on` and `match_condition.op` by `try_new`
+            right_ordering: _,
+            // right input collected at execution time, not part of the plan
+            right_fut: _,
+            // recomputed by `try_new` on decode
+            cache: _,
+        } = self;
+
+        let left = ctx.encode_child(left)?;
+        let right = ctx.encode_child(right)?;
+        let on = on
             .iter()
             .map(|(left, right)| {
                 Ok(protobuf::JoinOn {
@@ -572,7 +595,7 @@ impl ExecutionPlan for AsOfJoinExec {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let match_operator = match self.match_condition.op {
+        let match_operator = match match_condition.op {
             Operator::Lt => protobuf::AsOfMatchOperator::Lt,
             Operator::LtEq => protobuf::AsOfMatchOperator::LtEq,
             Operator::Gt => protobuf::AsOfMatchOperator::Gt,
@@ -591,17 +614,13 @@ impl ExecutionPlan for AsOfJoinExec {
                         left: Some(Box::new(left)),
                         right: Some(Box::new(right)),
                         on,
-                        left_match_expr: Some(
-                            ctx.encode_expr(&self.match_condition.left)?,
-                        ),
-                        right_match_expr: Some(
-                            ctx.encode_expr(&self.match_condition.right)?,
-                        ),
+                        left_match_expr: Some(ctx.encode_expr(&match_condition.left)?),
+                        right_match_expr: Some(ctx.encode_expr(&match_condition.right)?),
                         match_operator: match_operator.into(),
                         // Proto3 `repeated` cannot distinguish `None` from
                         // `Some(vec![])`; preserve the empty projection with
                         // the invalid column-index sentinel used by hash join.
-                        projection: match self.projection.as_ref() {
+                        projection: match projection.as_ref() {
                             None => Vec::new(),
                             Some(projection) if projection.is_empty() => vec![u32::MAX],
                             Some(projection) => {
@@ -629,17 +648,24 @@ impl AsOfJoinExec {
             protobuf::physical_plan_node::PhysicalPlanType::AsOfJoin,
             "AsOfJoinExec",
         );
-        let left =
-            ctx.decode_required_child(asof_join.left.as_deref(), "AsOfJoinExec", "left")?;
-        let right = ctx.decode_required_child(
-            asof_join.right.as_deref(),
-            "AsOfJoinExec",
-            "right",
-        )?;
+        // Destructure exhaustively (no `..`) so that a newly added proto field
+        // is a compile error here instead of being silently ignored.
+        let protobuf::AsOfJoinExecNode {
+            left,
+            right,
+            on,
+            left_match_expr,
+            right_match_expr,
+            match_operator,
+            projection,
+        } = &**asof_join;
+
+        let left = ctx.decode_required_child(left.as_deref(), "AsOfJoinExec", "left")?;
+        let right =
+            ctx.decode_required_child(right.as_deref(), "AsOfJoinExec", "right")?;
         let left_schema = left.schema();
         let right_schema = right.schema();
-        let on = asof_join
-            .on
+        let on = on
             .iter()
             .map(|pair| {
                 let left = ctx.decode_required_expr(
@@ -658,26 +684,24 @@ impl AsOfJoinExec {
             })
             .collect::<Result<_>>()?;
         let left_match = ctx.decode_required_expr(
-            asof_join.left_match_expr.as_ref(),
+            left_match_expr.as_ref(),
             left_schema.as_ref(),
             "AsOfJoinExec",
             "left_match_expr",
         )?;
         let right_match = ctx.decode_required_expr(
-            asof_join.right_match_expr.as_ref(),
+            right_match_expr.as_ref(),
             right_schema.as_ref(),
             "AsOfJoinExec",
             "right_match_expr",
         )?;
-        let match_operator = protobuf::AsOfMatchOperator::try_from(
-            asof_join.match_operator,
-        )
-        .map_err(|_| {
-            datafusion_common::internal_datafusion_err!(
-                "AsOfJoinExec: unknown AsOfMatchOperator {}",
-                asof_join.match_operator
-            )
-        })?;
+        let match_operator = protobuf::AsOfMatchOperator::try_from(*match_operator)
+            .map_err(|_| {
+                datafusion_common::internal_datafusion_err!(
+                    "AsOfJoinExec: unknown AsOfMatchOperator {}",
+                    match_operator
+                )
+            })?;
         let op = match match_operator {
             protobuf::AsOfMatchOperator::Lt => Operator::Lt,
             protobuf::AsOfMatchOperator::LtEq => Operator::LtEq,
@@ -689,7 +713,7 @@ impl AsOfJoinExec {
         };
 
         // Preserve the empty-projection sentinel written by `try_to_proto`.
-        let projection = match asof_join.projection.as_slice() {
+        let projection = match projection.as_slice() {
             [] => None,
             [u32::MAX] => Some(Vec::new()),
             indices => Some(indices.iter().map(|index| *index as usize).collect()),
