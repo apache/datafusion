@@ -1143,9 +1143,10 @@ message PhysicalBinaryExprNode {
   PhysicalExprNode l = 1;
   PhysicalExprNode r = 2;
   string op = 3;
-  // Linearized operands for chains of the same operator (e.g. a AND b AND c).
+  // Linearized operands for chains of the same operator and overflow policy.
   // When present, `l` and `r` are ignored and `operands` holds the flattened list.
   repeated PhysicalExprNode operands = 4;
+  bool fail_on_overflow = 5;
 }
 
 message PhysicalDateTimeIntervalExprNode {

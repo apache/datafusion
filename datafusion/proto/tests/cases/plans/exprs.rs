@@ -286,6 +286,97 @@ fn roundtrip_call_null_scalar_struct_dict() -> Result<()> {
     roundtrip_test(filter)
 }
 
+#[test]
+fn roundtrip_binary_expr_overflow() -> Result<()> {
+    use arrow::record_batch::RecordBatch;
+    use datafusion_proto::bytes::{physical_plan_from_bytes, physical_plan_to_bytes};
+
+    let schema = Arc::new(Schema::empty());
+    let batch = RecordBatch::new_empty(Arc::clone(&schema));
+    for inner_checked in [false, true] {
+        for outer_checked in [false, true] {
+            // Overflow occurs in the inner addition. A different outer policy
+            // must not overwrite it when the encoder linearizes the chain.
+            let inner = Arc::new(
+                BinaryExpr::new(lit(i32::MAX), Operator::Plus, lit(1i32))
+                    .with_fail_on_overflow(inner_checked),
+            );
+            let expr: Arc<dyn PhysicalExpr> = Arc::new(
+                BinaryExpr::new(inner, Operator::Plus, lit(0i32))
+                    .with_fail_on_overflow(outer_checked),
+            );
+            let plan = Arc::new(ProjectionExec::try_new(
+                vec![(Arc::clone(&expr), "result".to_string())],
+                Arc::new(EmptyExec::new(Arc::clone(&schema))),
+            )?);
+            let bytes = physical_plan_to_bytes(plan)?;
+            let decoded =
+                physical_plan_from_bytes(&bytes, &SessionContext::new().task_ctx())?;
+            let decoded = decoded.downcast_ref::<ProjectionExec>().unwrap();
+            for expression in [&expr, &decoded.expr()[0].expr] {
+                let result = expression.evaluate(&batch);
+                if inner_checked {
+                    assert!(result.unwrap_err().to_string().contains("overflow"));
+                } else {
+                    assert_eq!(
+                        result?.into_array(1)?.as_ref(),
+                        ScalarValue::Int32(Some(i32::MIN)).to_array()?.as_ref()
+                    );
+                }
+            }
+            assert!(expr.eq(&decoded.expr()[0].expr));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "json")]
+fn roundtrip_binary_expr_overflow_legacy() -> Result<()> {
+    use arrow::record_batch::RecordBatch;
+
+    let schema = Schema::empty();
+    let batch = RecordBatch::new_empty(Arc::new(schema.clone()));
+    let codec = DefaultPhysicalExtensionCodec {};
+    let converter = DefaultPhysicalProtoConverter {};
+    let task_ctx = SessionContext::new().task_ctx();
+    let decode_ctx = PhysicalPlanDecodeContext::new(&task_ctx, &codec);
+    // An older message has l/r operands and no overflow policy field.
+    let mut json = serde_json::json!({
+        "binaryExpr": {
+            "l": converter.physical_expr_to_proto(&lit(i32::MAX), &codec)?,
+            "r": converter.physical_expr_to_proto(&lit(1i32), &codec)?,
+            "op": "Plus"
+        }
+    });
+    for checked in [false, true] {
+        if checked {
+            json["binaryExpr"]["failOnOverflow"] = true.into();
+        }
+        let proto: protobuf::PhysicalExprNode =
+            serde_json::from_value(json.clone()).unwrap();
+        let decoded = converter.proto_to_physical_expr(&proto, &schema, &decode_ctx)?;
+        let result = decoded.evaluate(&batch);
+        if checked {
+            assert!(result.unwrap_err().to_string().contains("overflow"));
+        } else {
+            assert_eq!(
+                result?.into_array(1)?.as_ref(),
+                ScalarValue::Int32(Some(i32::MIN)).to_array()?.as_ref()
+            );
+        }
+        let encoded = converter.physical_expr_to_proto(&decoded, &codec)?;
+        let json = serde_json::to_value(encoded).unwrap();
+        assert_eq!(
+            json["binaryExpr"]["failOnOverflow"]
+                .as_bool()
+                .unwrap_or(false),
+            checked
+        );
+    }
+    Ok(())
+}
+
 /// Test that a chain of the same operator (a AND b AND c) is linearized
 /// and roundtrips correctly.
 #[test]
