@@ -792,6 +792,17 @@ fn plan_delete() {
     );
 }
 
+#[rstest]
+#[case("delete from person limit 1")]
+#[case("delete from person where id = 1 limit 1")]
+fn plan_delete_rejects_limit(#[case] sql: &str) {
+    let err = logical_plan(sql).expect_err("DELETE LIMIT should be rejected");
+    assert_eq!(
+        err.strip_backtrace(),
+        "This feature is not implemented: Delete-limit clause not supported"
+    );
+}
+
 #[test]
 fn plan_delete_quoted_identifier_case_sensitive() {
     let sql =
