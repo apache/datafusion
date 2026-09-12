@@ -1980,6 +1980,44 @@ SELECT '2000-01-01T00:00:00'::timestamp - '2010-01-01T00:00:00'::timestamp;
 ----
 -3653 days 0 hours 0 mins 0.000000000 secs
 
+# Subtracting a timezone-naive timestamp from a timezone-aware one reads the
+# naive operand in the aware operand's time zone at every time unit, as `=`
+# does. At equal units arrow can subtract the raw values directly, which used to
+# skip coercion and read the naive operand as UTC, so the answer depended on the
+# time unit of the aware operand.
+statement ok
+CREATE TABLE mixed_tz_minus AS SELECT
+  arrow_cast('2024-11-01T00:00:00-04:00', 'Timestamp(Nanosecond, Some("America/New_York"))') AS ts_tz_ns,
+  arrow_cast('2024-11-01T00:00:00-04:00', 'Timestamp(Millisecond, Some("America/New_York"))') AS ts_tz_ms,
+  '2024-11-01T00:00:00'::timestamp AS ts;
+
+# postgresql / duckdb (session time zone America/New_York): 00:00:00, 00:00:00, true
+query ??B
+SELECT ts_tz_ns - ts, ts_tz_ms - ts, ts_tz_ns = ts FROM mixed_tz_minus;
+----
+0 days 0 hours 0 mins 0.000000000 secs 0 days 0 hours 0 mins 0.000000000 secs true
+
+query ??
+SELECT ts - ts_tz_ns, ts - ts_tz_ms FROM mixed_tz_minus;
+----
+0 days 0 hours 0 mins 0.000000000 secs 0 days 0 hours 0 mins 0.000000000 secs
+
+statement ok
+SET datafusion.explain.logical_plan_only = true
+
+query TT
+EXPLAIN SELECT ts_tz_ns - ts FROM mixed_tz_minus;
+----
+logical_plan
+01)Projection: mixed_tz_minus.ts_tz_ns - CAST(mixed_tz_minus.ts AS Timestamp(ns, "America/New_York"))
+02)--TableScan: mixed_tz_minus projection=[ts_tz_ns, ts]
+
+statement ok
+SET datafusion.explain.logical_plan_only = false
+
+statement ok
+DROP TABLE mixed_tz_minus
+
 # Interval - Timestamp => error
 query error Cannot coerce arithmetic expression Interval\(MonthDayNano\) - Timestamp\(ns\) to valid types
 SELECT i - ts1 from FOO;
