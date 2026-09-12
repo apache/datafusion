@@ -49,10 +49,17 @@ fn make_settings() -> Settings {
 const MINIO_ROOT_USER: &str = "TEST-DataFusionLogin";
 const MINIO_ROOT_PASSWORD: &str = "TEST-DataFusionPassword";
 
+/// Registry override for the image pinned by `testcontainers-modules`.
+///
+/// MinIO withdrew `minio/minio` from Docker Hub on 2026-09-11. quay.io still
+/// serves the same tag, so only the registry changes here. An unblock, not a
+/// fix: see <https://github.com/apache/datafusion/issues/25215>.
+const MINIO_IMAGE_NAME: &str = "quay.io/minio/minio";
+
 /// How many times to try bringing up the MinIO container before failing.
 ///
-/// Both the Docker Hub image pull and the `mc` calls that provision the bucket
-/// fail intermittently on CI with transient errors such as
+/// Both the image pull and the `mc` calls that provision the bucket fail
+/// intermittently on CI with transient errors such as
 /// `bytes remaining on stream`. Retrying is much cheaper than a flaky run.
 const MINIO_SETUP_ATTEMPTS: u32 = 3;
 
@@ -67,8 +74,8 @@ const MINIO_SETUP_TIMEOUT: Duration = Duration::from_mins(3);
 /// Docker failures.
 ///
 /// Returns `None` when the test should be skipped, that is when
-/// `TEST_STORAGE_INTEGRATION` is unset or Docker Hub is rate limiting the image
-/// pull. Panics if the container cannot be started for any other reason.
+/// `TEST_STORAGE_INTEGRATION` is unset or the registry is rate limiting the
+/// image pull. Panics if the container cannot be started for any other reason.
 async fn start_minio_or_skip() -> Option<ContainerAsync<minio::MinIO>> {
     if env::var("TEST_STORAGE_INTEGRATION").is_err() {
         eprintln!("Skipping external storages integration tests");
@@ -85,7 +92,7 @@ async fn start_minio_or_skip() -> Option<ContainerAsync<minio::MinIO>> {
     }
 }
 
-/// A Docker Hub pull rate limit does not clear up within a test run, so the
+/// A registry pull rate limit does not clear up within a test run, so the
 /// affected tests are skipped rather than retried.
 fn is_docker_pull_rate_limit(error: &str) -> bool {
     error.contains("toomanyrequests")
@@ -158,6 +165,7 @@ async fn start_minio_container() -> Result<ContainerAsync<minio::MinIO>, String>
         .expect("Failed to get absolute path for test data");
 
     minio::MinIO::default()
+        .with_name(MINIO_IMAGE_NAME)
         .with_env_var("MINIO_ROOT_USER", MINIO_ROOT_USER)
         .with_env_var("MINIO_ROOT_PASSWORD", MINIO_ROOT_PASSWORD)
         .with_mount(Mount::bind_mount(
@@ -232,10 +240,22 @@ fn minio_image_matches_ci_prepull() {
     };
 
     let image = minio::MinIO::default();
-    let image_ref = format!("{}:{}", image.name(), image.tag());
+
+    // The override only redirects the registry, so it would silently stop
+    // tracking upstream if the crate ever pinned a different image.
+    assert!(
+        MINIO_IMAGE_NAME.ends_with(&format!("/{}", image.name())),
+        "`testcontainers-modules` now uses `{}`, which MINIO_IMAGE_NAME \
+         (`{MINIO_IMAGE_NAME}`) no longer mirrors.",
+        image.name()
+    );
+
+    // Match the assignment: `minio/minio:<tag>` is a substring of the quay
+    // reference and would pass either way.
+    let image_ref = format!("{MINIO_IMAGE_NAME}:{}", image.tag());
 
     assert!(
-        contents.contains(&image_ref),
+        contents.contains(&format!("MINIO_IMAGE: {image_ref}")),
         "{} does not pre-pull `{image_ref}`. Update MINIO_IMAGE in the \
          `Pre-pull MinIO image` step to match the image used by the tests.",
         workflow.display()
