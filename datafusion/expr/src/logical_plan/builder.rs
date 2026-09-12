@@ -37,6 +37,7 @@ use crate::logical_plan::{
     Union, Unnest, Values, Window,
 };
 use crate::select_expr::SelectExpr;
+use crate::type_coercion::session_time_zone::cast_to_with_session_time_zone;
 use crate::utils::{
     can_hash, check_all_columns_from_schema, columnize_expr, compare_sort_expr,
     expand_qualified_wildcard, expand_wildcard, expr_to_columns,
@@ -210,27 +211,12 @@ impl LogicalPlanBuilder {
     /// so it's usually better to override the default names with a table alias list.
     ///
     /// If the values include params/binders such as $1, $2, $3, etc, then the `param_data_types` should be provided.
+    ///
+    /// Timezone-naive timestamps are read in the zone of the column type they
+    /// are cast to. Use [`Self::values_with_session_time_zone`] to read them in
+    /// `datafusion.execution.time_zone` instead.
     pub fn values(values: Vec<Vec<Expr>>) -> Result<Self> {
-        if values.is_empty() {
-            return plan_err!("Values list cannot be empty");
-        }
-        let n_cols = values[0].len();
-        if n_cols == 0 {
-            return plan_err!("Values list cannot be zero length");
-        }
-        for (i, row) in values.iter().enumerate() {
-            if row.len() != n_cols {
-                return plan_err!(
-                    "Inconsistent data length across values list: got {} values in row {} but expected {}",
-                    row.len(),
-                    i,
-                    n_cols
-                );
-            }
-        }
-
-        // Infer from data itself
-        Self::infer_data(values)
+        Self::values_with_session_time_zone(values, None, None)
     }
 
     /// Create a values list based relation, and the schema is inferred from data itself or table schema if provided, consuming
@@ -242,14 +228,45 @@ impl LogicalPlanBuilder {
     /// so it's usually better to override the default names with a table alias list.
     ///
     /// If the values include params/binders such as $1, $2, $3, etc, then the `param_data_types` should be provided.
+    ///
+    /// Timezone-naive timestamps are read in the zone of the column type they
+    /// are cast to. Use [`Self::values_with_session_time_zone`] to read them in
+    /// `datafusion.execution.time_zone` instead.
     pub fn values_with_schema(
         values: Vec<Vec<Expr>>,
         schema: &DFSchemaRef,
     ) -> Result<Self> {
+        Self::values_with_session_time_zone(values, Some(schema.as_ref()), None)
+    }
+
+    /// Create a values list based relation, reading a timezone-naive timestamp
+    /// in `session_time_zone` wherever a cast this function inserts makes one
+    /// timezone-aware.
+    ///
+    /// The column types are taken from `schema` when it is `Some`
+    /// ([`Self::values_with_schema`]) and inferred from the values themselves
+    /// when it is `None` ([`Self::values`]).
+    ///
+    /// `session_time_zone` is `datafusion.execution.time_zone`; see
+    /// [`cast_to_with_session_time_zone`] for exactly what changes. Passing
+    /// `None` gives the plan DataFusion produced before the session time zone
+    /// existed.
+    ///
+    /// Only the casts inserted here are affected. A cell that already has its
+    /// column's type is left untouched, so a cast the *user* wrote — `AT TIME
+    /// ZONE`, `arrow_cast` — keeps arrow's semantics.
+    pub fn values_with_session_time_zone(
+        values: Vec<Vec<Expr>>,
+        schema: Option<&DFSchema>,
+        session_time_zone: Option<&str>,
+    ) -> Result<Self> {
         if values.is_empty() {
             return plan_err!("Values list cannot be empty");
         }
-        let n_cols = schema.fields().len();
+        let n_cols = match schema {
+            Some(schema) => schema.fields().len(),
+            None => values[0].len(),
+        };
         if n_cols == 0 {
             return plan_err!("Values list cannot be zero length");
         }
@@ -264,13 +281,20 @@ impl LogicalPlanBuilder {
             }
         }
 
-        // Check the type of value against the schema
-        Self::infer_values_from_schema(values, schema)
+        match schema {
+            // Check the type of value against the schema
+            Some(schema) => {
+                Self::infer_values_from_schema(values, schema, session_time_zone)
+            }
+            // Infer from data itself
+            None => Self::infer_data(values, session_time_zone),
+        }
     }
 
     fn infer_values_from_schema(
         values: Vec<Vec<Expr>>,
         schema: &DFSchema,
+        session_time_zone: Option<&str>,
     ) -> Result<Self> {
         let n_cols = values[0].len();
         let mut fields = ValuesFields::new();
@@ -294,10 +318,13 @@ impl LogicalPlanBuilder {
             fields.push(field_type.to_owned(), field_nullable);
         }
 
-        Self::infer_inner(values, fields, schema)
+        Self::infer_inner(values, fields, schema, session_time_zone)
     }
 
-    fn infer_data(values: Vec<Vec<Expr>>) -> Result<Self> {
+    fn infer_data(
+        values: Vec<Vec<Expr>>,
+        session_time_zone: Option<&str>,
+    ) -> Result<Self> {
         let n_cols = values[0].len();
         let schema = DFSchema::empty();
         let mut fields = ValuesFields::new();
@@ -351,13 +378,14 @@ impl LogicalPlanBuilder {
             fields.push_with_metadata(data_type, nullable, common_metadata);
         }
 
-        Self::infer_inner(values, fields, &schema)
+        Self::infer_inner(values, fields, &schema, session_time_zone)
     }
 
     fn infer_inner(
         mut values: Vec<Vec<Expr>>,
         fields: ValuesFields,
         schema: &DFSchema,
+        session_time_zone: Option<&str>,
     ) -> Result<Self> {
         let fields = fields.into_fields();
         // wrap cast if data type is not same as common type.
@@ -369,7 +397,12 @@ impl LogicalPlanBuilder {
                         metadata.clone(),
                     );
                 } else {
-                    row[j] = std::mem::take(&mut row[j]).cast_to(field_type, schema)?;
+                    row[j] = cast_to_with_session_time_zone(
+                        std::mem::take(&mut row[j]),
+                        field_type,
+                        schema,
+                        session_time_zone,
+                    )?;
                 }
             }
         }

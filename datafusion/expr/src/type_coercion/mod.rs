@@ -36,6 +36,7 @@ pub mod aggregates {
 }
 pub mod functions;
 pub mod other;
+pub mod session_time_zone;
 
 pub use datafusion_expr_common::type_coercion::binary;
 

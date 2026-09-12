@@ -719,6 +719,34 @@ fn plan_insert_no_target_columns() {
     );
 }
 
+/// The builder casts the naive cell to the column type it infers, so that cast
+/// reads the wall clock in the session time zone. The `AT TIME ZONE` cell
+/// already *has* that type, is therefore not cast at all, and keeps arrow's
+/// semantics.
+#[test]
+fn plan_values_in_session_time_zone() {
+    let sql = "VALUES ('2024-11-01T00:00:00'::timestamp), \
+        ('2024-11-01T00:00:00'::timestamp AT TIME ZONE 'America/New_York')";
+    let mut config_options = datafusion_common::config::ConfigOptions::new();
+    config_options.execution.time_zone = Some("+08:00".to_string());
+    let plan = logical_plan_with_config(sql, config_options).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"Values: (CAST(CAST(CAST(Utf8("2024-11-01T00:00:00") AS Timestamp(ns)) AS Timestamp(ns, "+08:00")) AS Timestamp(ns, "America/New_York"))), (CAST(CAST(Utf8("2024-11-01T00:00:00") AS Timestamp(ns)) AS Timestamp(ns, "America/New_York")))"#
+    );
+}
+
+#[test]
+fn plan_values_without_session_time_zone() {
+    let sql = "VALUES ('2024-11-01T00:00:00'::timestamp), \
+        ('2024-11-01T00:00:00'::timestamp AT TIME ZONE 'America/New_York')";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"Values: (CAST(CAST(Utf8("2024-11-01T00:00:00") AS Timestamp(ns)) AS Timestamp(ns, "America/New_York"))), (CAST(CAST(Utf8("2024-11-01T00:00:00") AS Timestamp(ns)) AS Timestamp(ns, "America/New_York")))"#
+    );
+}
+
 #[rstest]
 #[case::duplicate_columns(
     "INSERT INTO test_decimal (id, price, price) VALUES (1, 2, 3), (4, 5, 6)",

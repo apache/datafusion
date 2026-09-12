@@ -24,6 +24,7 @@ use std::sync::Arc;
 
 use crate::expr::{Alias, Sort, Unnest};
 use crate::logical_plan::Projection;
+use crate::type_coercion::session_time_zone::cast_to_with_session_time_zone;
 use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
 
 use datafusion_common::TableReference;
@@ -221,20 +222,46 @@ pub fn strip_outer_reference(expr: Expr) -> Expr {
 
 /// Returns plan with expressions coerced to types compatible with
 /// schema types
+///
+/// Timezone-naive timestamps are read in the zone of the type they are coerced
+/// to. Use [`coerce_plan_expr_for_schema_with_session_time_zone`] to read them
+/// in `datafusion.execution.time_zone` instead.
 pub fn coerce_plan_expr_for_schema(
     plan: LogicalPlan,
     schema: &DFSchema,
 ) -> Result<LogicalPlan> {
+    coerce_plan_expr_for_schema_with_session_time_zone(plan, schema, None)
+}
+
+/// Returns plan with expressions coerced to types compatible with schema types,
+/// reading a timezone-naive timestamp in `session_time_zone` wherever a cast
+/// this function inserts makes one timezone-aware.
+///
+/// `session_time_zone` is `datafusion.execution.time_zone`; see
+/// [`cast_to_with_session_time_zone`] for exactly what changes. Passing `None`
+/// is [`coerce_plan_expr_for_schema`]: every plan is then byte-identical to the
+/// one DataFusion produced before the session time zone existed.
+///
+/// Only the casts inserted here are affected. An expression that already has
+/// the target type is returned untouched, so a cast the *user* wrote — `AT TIME
+/// ZONE`, `arrow_cast` — keeps arrow's semantics.
+pub fn coerce_plan_expr_for_schema_with_session_time_zone(
+    plan: LogicalPlan,
+    schema: &DFSchema,
+    session_time_zone: Option<&str>,
+) -> Result<LogicalPlan> {
     match plan {
         // special case Projection to avoid adding multiple projections
         LogicalPlan::Projection(Projection { expr, input, .. }) => {
-            let new_exprs = coerce_exprs_for_schema(expr, input.schema(), schema)?;
+            let new_exprs =
+                coerce_exprs_for_schema(expr, input.schema(), schema, session_time_zone)?;
             let projection = Projection::try_new(new_exprs, input)?;
             Ok(LogicalPlan::Projection(projection))
         }
         _ => {
             let exprs: Vec<Expr> = plan.schema().iter().map(Expr::from).collect();
-            let new_exprs = coerce_exprs_for_schema(exprs, plan.schema(), schema)?;
+            let new_exprs =
+                coerce_exprs_for_schema(exprs, plan.schema(), schema, session_time_zone)?;
             let add_project = new_exprs.iter().any(|expr| expr.try_as_col().is_none());
             if add_project {
                 let projection = Projection::try_new(new_exprs, Arc::new(plan))?;
@@ -250,6 +277,7 @@ fn coerce_exprs_for_schema(
     exprs: Vec<Expr>,
     src_schema: &DFSchema,
     dst_schema: &DFSchema,
+    session_time_zone: Option<&str>,
 ) -> Result<Vec<Expr>> {
     exprs
         .into_iter()
@@ -259,7 +287,13 @@ fn coerce_exprs_for_schema(
             if new_type != &expr.get_type(src_schema)? {
                 match expr {
                     Expr::Alias(Alias { expr, name, .. }) => {
-                        Ok(expr.cast_to(new_type, src_schema)?.alias(name))
+                        Ok(cast_to_with_session_time_zone(
+                            *expr,
+                            new_type,
+                            src_schema,
+                            session_time_zone,
+                        )?
+                        .alias(name))
                     }
                     #[expect(deprecated)]
                     Expr::Wildcard { .. } => Ok(expr),
@@ -270,9 +304,20 @@ fn coerce_exprs_for_schema(
                             // (see: https://github.com/apache/datafusion/issues/18818)
                             Expr::Column(ref column) => {
                                 let name = column.name().to_owned();
-                                Ok(expr.cast_to(new_type, src_schema)?.alias(name))
+                                Ok(cast_to_with_session_time_zone(
+                                    expr,
+                                    new_type,
+                                    src_schema,
+                                    session_time_zone,
+                                )?
+                                .alias(name))
                             }
-                            _ => Ok(expr.cast_to(new_type, src_schema)?),
+                            _ => cast_to_with_session_time_zone(
+                                expr,
+                                new_type,
+                                src_schema,
+                                session_time_zone,
+                            ),
                         }
                     }
                 }

@@ -17,6 +17,7 @@
 
 use arrow::array::{
     ArrayRef, Int64Array, RecordBatch, StringArray, StructArray,
+    TimestampNanosecondArray,
     builder::{ListBuilder, StringBuilder},
 };
 use arrow::datatypes::{DataType, Field};
@@ -361,6 +362,43 @@ async fn test_create_physical_expr_coercion() {
     create_simplified_expr_test(
         lit("202410").eq(col("i")),
         "i@1 = CAST(202410 AS Int64)",
+    );
+}
+
+/// `SessionContext::create_physical_expr` coerces the way SQL planning does, so
+/// a timezone-naive timestamp is read in `datafusion.execution.time_zone`.
+#[test]
+fn test_create_physical_expr_timestamp_subtraction_uses_session_timezone() {
+    // 2024-11-01T04:00:00Z, which is 2024-11-01T00:00:00 in New York.
+    let timestamp_tz = Arc::new(
+        TimestampNanosecondArray::from(vec![1_730_433_600_000_000_000])
+            .with_timezone("America/New_York"),
+    ) as ArrayRef;
+    // The same wall clock reading, with no zone attached. Read in +08:00 it is
+    // 2024-10-31T16:00:00Z, twelve hours before `timestamp_tz`.
+    let timestamp = Arc::new(TimestampNanosecondArray::from(vec![
+        1_730_419_200_000_000_000,
+    ])) as ArrayRef;
+    let batch = RecordBatch::try_from_iter(vec![
+        ("timestamp_tz", timestamp_tz),
+        ("timestamp", timestamp),
+    ])
+    .unwrap();
+    let df_schema = DFSchema::try_from(batch.schema()).unwrap();
+
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.time_zone = Some("+08:00".to_string());
+    let ctx = SessionContext::new_with_config(config);
+
+    let physical_expr = ctx
+        .create_physical_expr(col("timestamp_tz") - col("timestamp"), &df_schema)
+        .unwrap();
+    let result = physical_expr.evaluate(&batch).unwrap();
+    let result = ScalarValue::try_from_array(&result.into_array(1).unwrap(), 0).unwrap();
+
+    assert_eq!(
+        result,
+        ScalarValue::DurationNanosecond(Some(12 * 3_600 * 1_000_000_000))
     );
 }
 

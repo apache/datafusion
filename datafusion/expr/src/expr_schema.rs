@@ -26,6 +26,7 @@ use crate::expr::{FieldMetadata, LambdaVariable};
 use crate::higher_order_function::HigherOrderReturnFieldArgs;
 use crate::type_coercion::functions::value_fields_with_higher_order_udf_and_lambdas;
 use crate::type_coercion::functions::{UDFCoercionExt, fields_with_udf};
+use crate::type_coercion::session_time_zone::cast_to_with_session_time_zone;
 use crate::udf::ReturnFieldArgs;
 use crate::{
     LogicalPlan, Operator, Projection, Subquery, WindowFunctionDefinition, utils,
@@ -822,7 +823,30 @@ fn scalar_subquery_nullable(subquery: &Subquery) -> bool {
 ///    new projection with the casted expression.
 /// 2. **Non-projection plan**: If the subquery isn't a projection, it adds a projection to the plan
 ///    with the casted first column.
+///
+/// A timezone-naive timestamp is read in the zone of `cast_to_type`. Use
+/// [`cast_subquery_with_session_time_zone`] to read it in
+/// `datafusion.execution.time_zone` instead.
 pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subquery> {
+    cast_subquery_with_session_time_zone(subquery, cast_to_type, None)
+}
+
+/// [`cast_subquery`], reading a timezone-naive timestamp in
+/// `session_time_zone` if the cast it inserts makes one timezone-aware.
+///
+/// `session_time_zone` is `datafusion.execution.time_zone`; see
+/// [`cast_to_with_session_time_zone`] for exactly what changes. Passing `None`
+/// is [`cast_subquery`]: the subquery is then byte-identical to the one
+/// DataFusion produced before the session time zone existed.
+///
+/// Only the cast inserted here is affected. A subquery whose projected
+/// expression already has `cast_to_type` is returned untouched, so a cast the
+/// *user* wrote — `AT TIME ZONE`, `arrow_cast` — keeps arrow's semantics.
+pub fn cast_subquery_with_session_time_zone(
+    subquery: Subquery,
+    cast_to_type: &DataType,
+    session_time_zone: Option<&str>,
+) -> Result<Subquery> {
     if subquery.subquery.schema().field(0).data_type() == cast_to_type {
         return Ok(subquery);
     }
@@ -830,17 +854,24 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
     let plan = subquery.subquery.as_ref();
     let new_plan = match plan {
         LogicalPlan::Projection(projection) => {
-            let cast_expr = projection.expr[0]
-                .clone()
-                .cast_to(cast_to_type, projection.input.schema())?;
+            let cast_expr = cast_to_with_session_time_zone(
+                projection.expr[0].clone(),
+                cast_to_type,
+                projection.input.schema().as_ref(),
+                session_time_zone,
+            )?;
             LogicalPlan::Projection(Projection::try_new(
                 vec![cast_expr],
                 Arc::clone(&projection.input),
             )?)
         }
         _ => {
-            let cast_expr = Expr::Column(Column::from(plan.schema().qualified_field(0)))
-                .cast_to(cast_to_type, subquery.subquery.schema())?;
+            let cast_expr = cast_to_with_session_time_zone(
+                Expr::Column(Column::from(plan.schema().qualified_field(0))),
+                cast_to_type,
+                subquery.subquery.schema().as_ref(),
+                session_time_zone,
+            )?;
             LogicalPlan::Projection(Projection::try_new(
                 vec![cast_expr],
                 subquery.subquery,
