@@ -872,15 +872,39 @@ fn project_column_statistics_through_expr(
         return inner_stats;
     }
 
+    let min_value = inner_stats
+        .min_value
+        .cast_to(target_type)
+        .unwrap_or(Precision::Absent);
+    let max_value = inner_stats
+        .max_value
+        .cast_to(target_type)
+        .unwrap_or(Precision::Absent);
+    let source_type = inner_stats
+        .min_value
+        .get_value()
+        .or_else(|| inner_stats.max_value.get_value())
+        .map(ScalarValue::data_type);
+    // Copy extrema only for casts that preserve order and cannot discard values
+    // or fail within the input domain. Copying string endpoints into a numeric
+    // domain, for example, does not bound the converted column. Merely casting
+    // a failing endpoint to NULL also cannot establish the remaining extrema.
+    let preserves_values = source_type.is_some_and(|source_type| {
+        CastExpr::check_bigger_cast(target_type, &source_type)
+            || (source_type.is_integer() && target_type.is_integer()
+                && matches!(
+                    (&inner_stats.min_value, &inner_stats.max_value, &min_value, &max_value),
+                    (Precision::Exact(lower), Precision::Exact(upper), Precision::Exact(min), Precision::Exact(max))
+                        if !lower.is_null() && !upper.is_null() && !min.is_null() && !max.is_null()
+                ))
+    });
+    if !preserves_values {
+        return ColumnStatistics::new_unknown();
+    }
+
     ColumnStatistics {
-        min_value: inner_stats
-            .min_value
-            .cast_to(target_type)
-            .unwrap_or(Precision::Absent),
-        max_value: inner_stats
-            .max_value
-            .cast_to(target_type)
-            .unwrap_or(Precision::Absent),
+        min_value,
+        max_value,
         null_count: inner_stats.null_count,
         distinct_count: inner_stats.distinct_count,
         sum_value: Precision::Absent,
@@ -2246,6 +2270,85 @@ pub(crate) mod tests {
             }
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_statistics_non_monotonic_cast() -> Result<()> {
+        let input_schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
+        let mut stats = Statistics::new_unknown(&input_schema);
+        stats.num_rows = Precision::Exact(3);
+        stats.column_statistics[0].min_value = Precision::Exact(ScalarValue::from("1"));
+        stats.column_statistics[0].max_value = Precision::Exact(ScalarValue::from("2"));
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new(
+            Arc::new(Column::new("a", 0)),
+            DataType::Int32,
+            None,
+        ));
+        let projection = ProjectionExprs::new(vec![ProjectionExpr {
+            expr: Arc::clone(&expr),
+            alias: "x".to_string(),
+        }]);
+        let out = projection
+            .project_statistics(stats, &projection.project_schema(&input_schema)?)?;
+        let batch = RecordBatch::try_new(
+            Arc::new(input_schema),
+            vec![Arc::new(arrow::array::StringArray::from(vec![
+                "1", "100", "2",
+            ]))],
+        )?;
+        let actual = expr.evaluate(&batch)?.into_array(3)?;
+        assert_eq!(out.column_statistics[0].max_value, Precision::Absent);
+        assert_eq!(out.column_statistics[0].min_value, Precision::Absent);
+        assert_eq!(
+            ScalarValue::try_from_array(&actual, 1)?,
+            ScalarValue::Int32(Some(100))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_statistics_narrowing_cast_requires_safe_bounds() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        for (lower, upper, exact, safe) in [
+            (-100, 100, true, true),
+            (-200, 100, true, false),
+            (-100, 200, true, false),
+            (-100, 100, false, false),
+        ] {
+            let precision = |v| {
+                if exact {
+                    Precision::Exact(ScalarValue::Int32(Some(v)))
+                } else {
+                    Precision::Inexact(ScalarValue::Int32(Some(v)))
+                }
+            };
+            let mut stats = Statistics::new_unknown(&schema);
+            stats.column_statistics[0].min_value = precision(lower);
+            stats.column_statistics[0].max_value = precision(upper);
+            let projection = ProjectionExprs::new(vec![ProjectionExpr::new(
+                Arc::new(CastExpr::new(
+                    Arc::new(Column::new("a", 0)),
+                    DataType::Int8,
+                    None,
+                )),
+                "x",
+            )]);
+            let output = projection
+                .project_statistics(stats, &projection.project_schema(&schema)?)?;
+            if safe {
+                assert_eq!(
+                    output.column_statistics[0].min_value,
+                    Precision::Exact(ScalarValue::Int8(Some(-100)))
+                );
+                assert_eq!(
+                    output.column_statistics[0].max_value,
+                    Precision::Exact(ScalarValue::Int8(Some(100)))
+                );
+            } else {
+                assert_eq!(output.column_statistics[0], ColumnStatistics::new_unknown());
+            }
+        }
         Ok(())
     }
 
