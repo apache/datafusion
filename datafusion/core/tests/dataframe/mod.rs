@@ -207,6 +207,23 @@ async fn with_column_window_functions() -> DataFusionResult<()> {
 }
 
 #[tokio::test]
+async fn duplicated_window_functions_can_be_executed() -> Result<()> {
+    let wexpr = datafusion::functions_window::row_number::row_number_udwf().call(vec![]);
+
+    let plan = LogicalPlanBuilder::empty(true)
+        .window(vec![wexpr.clone(), wexpr.alias("aliased")])?
+        .build()?;
+
+    let ctx = SessionContext::new();
+
+    let collected = DataFrame::new(ctx.state(), plan).collect().await?;
+
+    assert_eq!(collected.iter().map(|b| b.num_rows()).sum::<usize>(), 1);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_coalesce_schema() -> Result<()> {
     let ctx = SessionContext::new();
 
@@ -1319,6 +1336,69 @@ async fn window_aggregates_with_filter() -> Result<()> {
     Ok(())
 }
 
+// Test issue: https://github.com/apache/datafusion/issues/24884
+//
+// When the physical optimizer reverses a window expression to avoid an extra
+// sort, the reversed expression must keep its output field name. Otherwise the
+// window exec's schema changes while the parent projection still references the
+// old column name, and planning fails.
+//
+// Note this only asserts on planning: executing the plan currently hits a
+// separate gap (missing `retract_batch` on the reversed sliding frame), tracked
+// by https://github.com/apache/datafusion/issues/24885. Once that is fixed, this
+// test can be extended to collect results.
+#[tokio::test]
+async fn window_reversal_preserves_output_field_names() -> Result<()> {
+    fn last_value_over(ascending: bool) -> Expr {
+        Expr::from(WindowFunction::new(
+            datafusion_functions_aggregate::first_last::last_value_udaf(),
+            vec![col("v")],
+        ))
+        .order_by(vec![col("t").sort(ascending, false)])
+        .build()
+        .unwrap()
+    }
+
+    // `t` must be non-nullable for the ordering equivalence that makes the
+    // optimizer reverse the second window instead of adding a second sort.
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("t", DataType::Int64, false),
+        Field::new("v", DataType::Int64, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int64Array::from(vec![1, 2])),
+            Arc::new(Int64Array::from(vec![None, Some(10)])),
+        ],
+    )?;
+
+    let ctx = SessionContext::new();
+    let df = ctx
+        .read_batch(batch)?
+        .with_column("asc_win", last_value_over(true))?
+        .with_column("desc_win", last_value_over(false))?;
+
+    let logical_schema = df.schema().clone();
+    // Planning used to fail here with an internal error from `EnsureRequirements`.
+    let physical_plan = df.create_physical_plan().await?;
+
+    let physical_names = physical_plan
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .collect::<Vec<_>>();
+    let logical_names = logical_schema
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .collect::<Vec<_>>();
+    assert_eq!(physical_names, logical_names);
+
+    Ok(())
+}
+
 // Test issue: https://github.com/apache/datafusion/issues/10346
 #[tokio::test]
 async fn test_select_over_aggregate_schema() -> Result<()> {
@@ -1501,6 +1581,75 @@ async fn join() -> Result<()> {
     assert_eq!(100, left_rows.iter().map(|x| x.num_rows()).sum::<usize>());
     assert_eq!(100, right_rows.iter().map(|x| x.num_rows()).sum::<usize>());
     assert_eq!(2008, join_rows.iter().map(|x| x.num_rows()).sum::<usize>());
+    Ok(())
+}
+
+#[tokio::test]
+async fn join_asof() -> Result<()> {
+    let ctx = SessionContext::new();
+    let left = ctx
+        .read_batch(record_batch!(
+            ("symbol", Utf8, ["A", "A", "B"]),
+            ("ts", Int64, [1, 4, 2]),
+            ("trade_id", Int32, [1, 2, 3])
+        )?)?
+        .alias("trades")?;
+    let right = ctx
+        .read_batch(record_batch!(
+            ("symbol", Utf8, ["A", "A", "B"]),
+            ("ts", Int64, [2, 4, 1]),
+            ("price", Int32, [20, 40, 101])
+        )?)?
+        .alias("prices")?;
+
+    let results = left
+        .clone()
+        .join_asof(
+            right.clone(),
+            Some(col("trades.symbol").eq(col("prices.symbol"))),
+            col("trades.ts").gt_eq(col("prices.ts")),
+        )?
+        .select(vec![col("trade_id"), col("price")])?
+        .sort(vec![col("trade_id").sort(true, true)])?
+        .collect()
+        .await?;
+
+    assert_batches_eq!(
+        [
+            "+----------+-------+",
+            "| trade_id | price |",
+            "+----------+-------+",
+            "| 1        |       |",
+            "| 2        | 40    |",
+            "| 3        | 101   |",
+            "+----------+-------+",
+        ],
+        &results
+    );
+
+    let results = left
+        .join_asof_using(
+            right,
+            vec![datafusion_common::Column::from_name("symbol")],
+            col("trades.ts").gt_eq(col("prices.ts")),
+        )?
+        .select(vec![col("symbol"), col("trade_id"), col("price")])?
+        .sort(vec![col("trade_id").sort(true, true)])?
+        .collect()
+        .await?;
+
+    assert_batches_eq!(
+        [
+            "+--------+----------+-------+",
+            "| symbol | trade_id | price |",
+            "+--------+----------+-------+",
+            "| A      | 1        |       |",
+            "| A      | 2        | 40    |",
+            "| B      | 3        | 101   |",
+            "+--------+----------+-------+",
+        ],
+        &results
+    );
     Ok(())
 }
 
@@ -5251,6 +5400,25 @@ async fn consecutive_projection_same_schema() -> Result<()> {
     "
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn window_function_in_group_by_is_rejected() -> Result<()> {
+    // https://github.com/apache/datafusion/issues/4610
+    //
+    // The SQL planner rejects this placement itself, but the DataFrame API
+    // has no such check, so the physical planner's backstop is what reports it
+    let err = test_table()
+        .await?
+        .aggregate(vec![row_number()], vec![count(col("c1"))])?
+        .collect()
+        .await
+        .expect_err("a window function cannot be a grouping expression");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Window function 'row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING' is not supported in this position. Window functions are supported in the SELECT list, ORDER BY, DISTINCT ON and QUALIFY"
+    );
     Ok(())
 }
 

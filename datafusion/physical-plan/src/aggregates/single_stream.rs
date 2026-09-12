@@ -16,11 +16,6 @@
 // under the License.
 
 //! Single-stage hash aggregation stream implementation.
-//!
-//! This stream is part of the incremental migration from
-//! [`crate::aggregates::grouped_hash_stream::GroupedHashAggregateStream`].
-//!
-//! See issue for details: <https://github.com/apache/datafusion/issues/22710>
 
 use std::ops::ControlFlow;
 use std::sync::Arc;
@@ -72,6 +67,14 @@ use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream};
 ///
 /// This stream implements the complete aggregation without a partial/final
 /// split. It consumes raw input rows and emits final aggregate values.
+///
+/// # Grouping Sets
+///
+/// `GROUPING SETS`, `CUBE` and `ROLLUP` are expanded while consuming raw input:
+/// every grouping set of an input batch is evaluated and interned into the same
+/// hash table, the same way [`super::hash_stream::PartialHashAggregateStream`]
+/// does it. When spilling, the expanded keys are sorted and replayed as a plain
+/// group by.
 ///
 /// # Spilling
 ///

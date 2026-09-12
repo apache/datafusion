@@ -343,12 +343,9 @@ fn branchless_values<T>(array: &PrimitiveArray<T>) -> ScalarBuffer<BranchlessNat
 where
     T: BranchlessFilterType,
 {
-    let data = array.to_data();
-    ScalarBuffer::<BranchlessNative<T>>::new(
-        data.buffers()[0].clone(),
-        data.offset(),
-        data.len(),
-    )
+    let values = array.values();
+    // `values.inner()` already reflects any slice applied to the array.
+    ScalarBuffer::<BranchlessNative<T>>::new(values.inner().clone(), 0, values.len())
 }
 
 #[cfg(test)]

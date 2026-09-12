@@ -64,7 +64,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@46910bf61b41721b0579f237e186afb35477007a  # v2.3.0
+      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -152,7 +152,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@46910bf61b41721b0579f237e186afb35477007a  # v2.3.0
+      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -183,7 +183,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@46910bf61b41721b0579f237e186afb35477007a  # v2.3.0
+      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -204,7 +204,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@46910bf61b41721b0579f237e186afb35477007a  # v2.3.0
+      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -334,7 +334,7 @@ jobs:
       volumes:
         - /usr/local:/host/usr/local
     steps:
-      - uses: runs-on/action@46910bf61b41721b0579f237e186afb35477007a  # v2.3.0
+      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
@@ -346,7 +346,7 @@ jobs:
       - name: Install llvm-tools-preview
         run: rustup component add llvm-tools-preview
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@742a3317eac7bd62f91cd888b4eead5e784ba833  # v2.87.1
+        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c  # v2.87.6
         with:
           tool: cargo-llvm-cov
       - name: Rust Dependency Cache
@@ -383,7 +383,7 @@ jobs:
     needs: linux-build-lib
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     steps:
-      - uses: runs-on/action@46910bf61b41721b0579f237e186afb35477007a  # v2.3.0
+      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
@@ -395,6 +395,21 @@ jobs:
         with:
           save-if: false # set in linux-test
           shared-key: "amd-ci"
+      # The storage integration tests start MinIO containers. Pulling the image
+      # once up front keeps the pull off the critical path of the tests, which
+      # would otherwise pull it several times concurrently and occasionally fail
+      # with transient Docker transport errors. The tests retry the pull
+      # themselves, so a failure here is only a warning.
+      #
+      # MINIO_IMAGE must match the image used by the `minio` module of the
+      # `testcontainers-modules` crate. The `minio_image_matches_ci_prepull`
+      # test in `datafusion-cli/tests/cli_integration.rs` fails if it drifts.
+      - name: Pre-pull MinIO image
+        env:
+          MINIO_IMAGE: minio/minio:RELEASE.2025-02-28T09-55-16Z
+        run: |
+          ci/scripts/retry timeout 120 docker pull "$MINIO_IMAGE" \
+            || echo "::warning::Could not pre-pull $MINIO_IMAGE, the tests will pull it themselves"
       - name: Run tests (excluding doctests)
         env:
           RUST_BACKTRACE: 1
@@ -415,7 +430,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@46910bf61b41721b0579f237e186afb35477007a  # v2.3.0
+      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
@@ -446,7 +461,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@46910bf61b41721b0579f237e186afb35477007a  # v2.3.0
+      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
@@ -468,7 +483,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@46910bf61b41721b0579f237e186afb35477007a  # v2.3.0
+      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -491,7 +506,7 @@ jobs:
               sudo apt-get update -qq
               sudo apt-get install -y -qq clang
           - name: Setup wasm-pack
-            uses: taiki-e/install-action@742a3317eac7bd62f91cd888b4eead5e784ba833  # v2.87.1
+            uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c  # v2.87.6
             with:
               tool: wasm-pack
       - name: Run tests with headless mode
@@ -510,7 +525,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@46910bf61b41721b0579f237e186afb35477007a  # v2.3.0
+      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
@@ -556,7 +571,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: runs-on/action@46910bf61b41721b0579f237e186afb35477007a  # v2.3.0
+      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
@@ -579,7 +594,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@46910bf61b41721b0579f237e186afb35477007a  # v2.3.0
+      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
@@ -681,7 +696,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@46910bf61b41721b0579f237e186afb35477007a  # v2.3.0
+      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
@@ -717,7 +732,7 @@ jobs:
         with:
           rust-version: stable
       - name: Install taplo
-        uses: taiki-e/install-action@742a3317eac7bd62f91cd888b4eead5e784ba833  # v2.87.1
+        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c  # v2.87.6
         with:
           tool: taplo-cli@0.9
       # if you encounter an error, try running 'taplo format' to fix the formatting automatically.
@@ -731,7 +746,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@46910bf61b41721b0579f237e186afb35477007a  # v2.3.0
+      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
@@ -802,7 +817,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
-        uses: taiki-e/install-action@742a3317eac7bd62f91cd888b4eead5e784ba833  # v2.87.1
+        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c  # v2.87.6
         with:
           tool: cargo-msrv
 
