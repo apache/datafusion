@@ -30,7 +30,7 @@ use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{Exists, InSubquery, SetComparison};
 use datafusion_expr::expr_rewriter::replace_col;
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
-use datafusion_expr::{ColumnarValue, Expr, logical_plan::LogicalPlan};
+use datafusion_expr::{ColumnarValue, Expr, WriteOp, logical_plan::LogicalPlan};
 use datafusion_physical_expr::create_physical_expr;
 use log::{debug, trace};
 use std::sync::Arc;
@@ -38,6 +38,17 @@ use std::sync::Arc;
 /// Re-export of `NamesPreserver` for backwards compatibility,
 /// as it was initially placed here and then moved elsewhere.
 pub use datafusion_expr::expr_rewriter::NamePreserver;
+
+/// Return the expression schema for a MERGE DML node.
+pub(crate) fn merge_into_schema(plan: &LogicalPlan) -> Result<Option<DFSchema>> {
+    let LogicalPlan::Dml(dml) = plan else {
+        return Ok(None);
+    };
+    let WriteOp::MergeInto(_) = &dml.op else {
+        return Ok(None);
+    };
+    dml.merge_schema().map(Some)
+}
 
 /// Invokes `f` with the index, within `schema`, of every column referenced by
 /// `expr` — including columns reached through a correlated subquery's outer

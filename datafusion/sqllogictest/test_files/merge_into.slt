@@ -44,6 +44,15 @@ insert into source values (2, 'xxxx', true);
 statement ok
 insert into source values (4, 'yyyy', false);
 
+statement ok
+create table "Target"(id int);
+
+statement ok
+create schema "CaseSchema";
+
+statement ok
+create table "CaseSchema"."Target"(id int);
+
 
 ##########
 # Logical planning
@@ -75,7 +84,7 @@ physical_plan_error
 02)caused by
 03)This feature is not implemented: MERGE INTO not supported for Base table
 
-# Aliased target and source: alias is canonicalized to the table name
+# Aliased target and source preserve their visible qualifiers
 query TT
 explain merge into target as t using source as s on t.id = s.id
 when matched and s.is_active then update set val = s.val
@@ -160,6 +169,11 @@ statement error DataFusion error: type_coercion\ncaused by\nError during plannin
 merge into target using source on target.id = source.id
 when matched and 'yes' then delete;
 
+# NULL conditions coerce to boolean and reach the provider
+statement error DataFusion error: MERGE INTO operation on table 'target'\ncaused by\nThis feature is not implemented: MERGE INTO not supported for Base table
+merge into target using source on null
+when matched and null then delete;
+
 ##########
 # Planning errors: invalid structure
 ##########
@@ -203,18 +217,206 @@ merge into target as t using source as s on t.id = s.id
 when matched then update set s.val = 'x';
 
 ##########
-# Planning errors: qualifier and alias handling
+# Qualifier and alias handling
 ##########
 
-# Source alias may not collide with the target table name when the target is aliased
-statement error DataFusion error: Error during planning: MERGE source may not use the target table name 'target' as a qualifier while the target is aliased as 't'; use a different source alias
+# A source alias may equal the target table name when the target has another alias
+statement error DataFusion error: MERGE INTO operation on table 'target'\ncaused by\nThis feature is not implemented: MERGE INTO not supported for Base table
 merge into target as t using source as target on t.id = target.id
 when matched then delete;
 
-# Subqueries correlated to the target alias are not supported yet
-statement error DataFusion error: This feature is not implemented: MERGE subqueries correlated to target alias 't' are not supported
+# Qualified and quoted target names preserve their aliases
+statement error DataFusion error: MERGE INTO operation on table 'public.target'\ncaused by\nThis feature is not implemented: MERGE INTO not supported for Base table
+merge into public.target as t using source as target on t.id = target.id
+when matched then delete;
+
+statement error DataFusion error: MERGE INTO operation on table 'datafusion.public.target'\ncaused by\nThis feature is not implemented: MERGE INTO not supported for Base table
+merge into datafusion.public.target as t using source as target on t.id = target.id
+when matched then delete;
+
+statement error DataFusion error: MERGE INTO operation on table 'Target'\ncaused by\nThis feature is not implemented: MERGE INTO not supported for Base table
+merge into "Target" as t using source as target on t.id = target.id
+when matched then delete;
+
+statement error DataFusion error: MERGE INTO operation on table 'CaseSchema.Target'\ncaused by\nThis feature is not implemented: MERGE INTO not supported for Base table
+merge into "CaseSchema"."Target" as t using source as target on t.id = target.id
+when matched then delete;
+
+# Alias normalization and case sensitivity
+statement error DataFusion error: MERGE INTO operation on table 'target'\ncaused by\nThis feature is not implemented: MERGE INTO not supported for Base table
+merge into target as T using source as target on t.id = target.id
+when matched then delete;
+
+statement error DataFusion error: MERGE INTO operation on table 'target'\ncaused by\nThis feature is not implemented: MERGE INTO not supported for Base table
+merge into target as "T" using source as target on "T".id = target.id
+when matched then delete;
+
+statement error DataFusion error: MERGE INTO operation on table 'target'\ncaused by\nThis feature is not implemented: MERGE INTO not supported for Base table
+merge into target as "public.target" using source as target on "public.target".id = target.id
+when matched then delete;
+
+# Derived sources and self-MERGE keep distinct qualifiers
+statement error DataFusion error: MERGE INTO operation on table 'target'\ncaused by\nThis feature is not implemented: MERGE INTO not supported for Base table
+merge into target as t using (select id from source) as target on true
+when matched then delete;
+
+statement error DataFusion error: MERGE INTO operation on table 'target'\ncaused by\nThis feature is not implemented: MERGE INTO not supported for Base table
+merge into target as t using target as source_target on true
+when matched then delete;
+
+# An unaliased quoted target remains its visible qualifier
+statement error DataFusion error: MERGE INTO operation on table 'Target'\ncaused by\nThis feature is not implemented: MERGE INTO not supported for Base table
+merge into "Target" using source as s on "Target".id = s.id
+when matched then delete;
+
+statement error DataFusion error: MERGE INTO operation on table 'CaseSchema.Target'\ncaused by\nThis feature is not implemented: MERGE INTO not supported for Base table
+merge into "CaseSchema"."Target" using source as s on "CaseSchema"."Target".id = s.id
+when matched then delete;
+
+# The source may not collide with the visible target qualifier
+statement error DataFusion error: Error during planning: MERGE target qualifier 't' conflicts with a source qualifier
+merge into target as t using source as t on true
+when matched then delete;
+
+statement error DataFusion error: Error during planning: MERGE target qualifier 't' conflicts with a source qualifier
+merge into target as t using source as T on true
+when matched then delete;
+
+statement error DataFusion error: Error during planning: MERGE target qualifier 'T' conflicts with a source qualifier
+merge into target as "T" using source as "T" on true
+when matched then delete;
+
+statement error DataFusion error: Error during planning: MERGE target qualifier 't' conflicts with a source qualifier
+merge into target as t using (select id as source_id from source) as t on true
+when matched then delete;
+
+statement error DataFusion error: Error during planning: MERGE target qualifier 'public.target' conflicts with a source qualifier
+merge into public.target using source as target on true
+when matched then delete;
+
+statement error DataFusion error: Error during planning: MERGE target qualifier 'datafusion.public.target' conflicts with a source qualifier
+merge into datafusion.public.target using source as target on true
+when matched then delete;
+
+##########
+# Correlated subqueries and alias scopes
+##########
+
+# Direct target correlation
+statement error DataFusion error: MERGE INTO operation on table 'target'\ncaused by\nThis feature is not implemented: MERGE INTO not supported for Base table
 merge into target as t using source as s
 on exists (select 1 from source x where x.id = t.id)
+when matched then delete;
+
+statement error DataFusion error: MERGE INTO operation on table 'target'\ncaused by\nThis feature is not implemented: MERGE INTO not supported for Base table
+merge into target as t using source as s
+on t.id in (select x.id from source x where x.id = t.id)
+when matched then delete;
+
+statement error DataFusion error: MERGE INTO operation on table 'target'\ncaused by\nThis feature is not implemented: MERGE INTO not supported for Base table
+merge into target as t using source as s
+on t.id = any (select x.id from source x where x.id = t.id)
+when matched then delete;
+
+statement error DataFusion error: MERGE INTO operation on table 'target'\ncaused by\nThis feature is not implemented: MERGE INTO not supported for Base table
+merge into target as t using source as s
+on t.id = all (select x.id from source x where x.id = t.id)
+when matched then delete;
+
+statement error DataFusion error: MERGE INTO operation on table 'target'\ncaused by\nThis feature is not implemented: MERGE INTO not supported for Base table
+merge into target as t using source as s
+on t.id = (select max(x.id) from source x where x.id = t.id)
+when matched then delete;
+
+# Deep target correlation and lateral scopes
+statement error DataFusion error: MERGE INTO operation on table 'target'\ncaused by\nThis feature is not implemented: MERGE INTO not supported for Base table
+merge into target as t using source as s
+on exists (
+  select 1 from source q
+  where exists (select 1 from source x where x.id = t.id)
+)
+when matched then delete;
+
+statement error DataFusion error: MERGE INTO operation on table 'target'\ncaused by\nThis feature is not implemented: MERGE INTO not supported for Base table
+merge into target as t using source as s
+on exists (
+  select 1 from source q
+  cross join lateral (select t.id) l
+)
+when matched then delete;
+
+statement error DataFusion error: MERGE INTO operation on table 'target'\ncaused by\nThis feature is not implemented: MERGE INTO not supported for Base table
+merge into target as t using source as s
+on exists (
+  select 1 from source q cross join (
+    source x cross join lateral (select t.id) l
+  )
+)
+when matched then delete;
+
+# Source correlation and uncorrelated subqueries remain supported
+statement error DataFusion error: MERGE INTO operation on table 'target'\ncaused by\nThis feature is not implemented: MERGE INTO not supported for Base table
+merge into target as t using source as s
+on exists (select 1 from source x where x.id = s.id)
+when matched then delete;
+
+statement error DataFusion error: MERGE INTO operation on table 'target'\ncaused by\nThis feature is not implemented: MERGE INTO not supported for Base table
+merge into target as t using source as s
+on t.id = any (select id from source)
+when matched then delete;
+
+# Inner aliases may shadow the target alias
+statement error DataFusion error: MERGE INTO operation on table 'target'\ncaused by\nThis feature is not implemented: MERGE INTO not supported for Base table
+merge into target as t using source as s
+on exists (
+  select 1 from source t
+  where exists (select 1 from source x where x.id = t.id)
+)
+when matched then delete;
+
+statement error DataFusion error: MERGE INTO operation on table 'target'\ncaused by\nThis feature is not implemented: MERGE INTO not supported for Base table
+merge into target as t using source as s
+on exists (
+  select exists (select 1 from source x where x.id = t.id)
+  from source t
+)
+when matched then delete;
+
+statement error DataFusion error: MERGE INTO operation on table 'target'\ncaused by\nThis feature is not implemented: MERGE INTO not supported for Base table
+merge into target as t using source as s
+on exists (
+  select 1 from source t
+  where exists (
+    select 1 from source q
+    where exists (select 1 from source x where x.id = t.id)
+  )
+)
+when matched then delete;
+
+statement error DataFusion error: MERGE INTO operation on table 'target'\ncaused by\nThis feature is not implemented: MERGE INTO not supported for Base table
+merge into target as t using source as s
+on exists (
+  select 1 from source t
+  cross join lateral (select t.id) l
+)
+when matched then delete;
+
+statement error DataFusion error: MERGE INTO operation on table 'target'\ncaused by\nThis feature is not implemented: MERGE INTO not supported for Base table
+merge into target as t using source as s
+on exists (
+  select 1 from source t cross join (
+    source x cross join lateral (select t.id) l
+  )
+)
+when matched then delete;
+
+# LIMIT expressions use an empty scope; this correlated scalar placement remains unsupported
+statement error DataFusion error: Invalid \(non-executable\) plan after Analyzer\ncaused by\nError during planning: Correlated scalar subquery can only be used in Projection, Filter, Aggregate and MERGE DML plan nodes
+merge into target as t using source as s
+on exists (
+  select t.id from source t
+  limit (select t.id from source x limit 1)
+)
 when matched then delete;
 
 ##########
@@ -240,6 +442,15 @@ when not matched then insert (id) values (source.id) where source.is_active;
 statement error DataFusion error: This feature is not implemented: MERGE INSERT ROW is not supported
 merge into target using source on target.id = source.id
 when not matched then insert row;
+
+statement ok
+drop table "Target";
+
+statement ok
+drop table "CaseSchema"."Target";
+
+statement ok
+drop schema "CaseSchema";
 
 statement ok
 drop table target;
