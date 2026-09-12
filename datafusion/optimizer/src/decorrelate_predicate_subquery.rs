@@ -17,7 +17,6 @@
 
 //! [`DecorrelatePredicateSubquery`] converts `IN`/`EXISTS` subquery predicates to `SEMI`/`ANTI` joins
 use std::collections::BTreeSet;
-use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::decorrelate::PullUpCorrelatedExpr;
@@ -28,17 +27,14 @@ use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{
-    Column, DFSchemaRef, ExprSchema, NullEquality, Result, assert_or_internal_err,
-    plan_err,
-};
+use datafusion_common::{Column, NullEquality, Result, assert_or_internal_err, plan_err};
 use datafusion_expr::expr::{Exists, InSubquery};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::{conjunction, expr_to_columns, split_conjunction_owned};
 use datafusion_expr::{
-    BinaryExpr, Expr, Filter, LogicalPlan, LogicalPlanBuilder, Operator, exists,
-    in_subquery, lit, not, not_exists, not_in_subquery,
+    BinaryExpr, Expr, ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder, Operator,
+    exists, in_subquery, lit, not, not_exists, not_in_subquery,
 };
 
 use log::debug;
@@ -322,39 +318,6 @@ fn mark_join(
     )
 }
 
-/// Check if join keys in the join filter may contain NULL values
-///
-/// Returns true if any join key column is nullable on either side.
-/// This is used to optimize null-aware anti joins: if all join keys are non-nullable,
-/// we can use a regular anti join instead of the more expensive null-aware variant.
-fn join_keys_may_be_null(
-    join_filter: &Expr,
-    left_schema: &DFSchemaRef,
-    right_schema: &DFSchemaRef,
-) -> Result<bool> {
-    // Extract columns from the join filter
-    let mut columns = std::collections::HashSet::new();
-    expr_to_columns(join_filter, &mut columns)?;
-
-    // Check if any column is nullable
-    for col in columns {
-        // Check in left schema
-        if let Ok(field) = left_schema.field_from_column(&col)
-            && field.as_ref().is_nullable()
-        {
-            return Ok(true);
-        }
-        // Check in right schema
-        if let Ok(field) = right_schema.field_from_column(&col)
-            && field.as_ref().is_nullable()
-        {
-            return Ok(true);
-        }
-    }
-
-    Ok(false)
-}
-
 fn build_join(
     left: &LogicalPlan,
     subquery: &LogicalPlan,
@@ -374,155 +337,106 @@ fn build_join(
     let sub_query_alias = LogicalPlanBuilder::from(new_plan)
         .alias(alias.to_string())?
         .build()?;
-    let mut all_correlated_cols = BTreeSet::new();
-    pull_up
+    let all_correlated_cols = pull_up
         .correlated_subquery_cols_map
         .values()
-        .for_each(|cols| all_correlated_cols.extend(cols.clone()));
+        .flat_map(|cols| cols.iter().cloned())
+        .collect::<BTreeSet<_>>();
 
-    // alias the join filter
-    let join_filter_opt = conjunction(pull_up.join_filters)
-        .map_or(Ok(None), |filter| {
-            replace_qualified_name(filter, &all_correlated_cols, &alias).map(Some)
-        })?;
+    let has_correlation = !pull_up.join_filters.is_empty();
+    let correlation_filter = conjunction(pull_up.join_filters)
+        .map(|filter| replace_qualified_name(filter, &all_correlated_cols, &alias))
+        .transpose()?
+        .unwrap_or_else(|| lit(true));
 
-    let join_filter = match (join_filter_opt, in_predicate_opt.cloned()) {
-        (
-            Some(join_filter),
-            Some(Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: Operator::Eq,
-                right,
-            })),
-        ) => {
-            let right_col = create_col_from_scalar_expr(&right, alias)?;
-            let in_predicate = Expr::eq(left.deref().clone(), Expr::Column(right_col));
-            in_predicate.and(join_filter)
+    let (join_filter, membership_nullable) = match in_predicate_opt {
+        Some(Expr::BinaryExpr(BinaryExpr {
+            left: outer,
+            op: Operator::Eq,
+            right: inner,
+        })) => {
+            let inner = Expr::Column(create_col_from_scalar_expr(inner, alias)?);
+            let membership_nullable =
+                matches!(join_type, JoinType::LeftAnti | JoinType::LeftMark)
+                    && (outer.nullable(left.schema())?
+                        || inner.nullable(sub_query_alias.schema())?);
+            let predicate = outer.as_ref().clone().eq(inner);
+            let join_filter = if has_correlation {
+                predicate.and(correlation_filter)
+            } else {
+                predicate
+            };
+            (join_filter, membership_nullable)
         }
-        (Some(join_filter), _) => join_filter,
-        (
-            _,
-            Some(Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: Operator::Eq,
-                right,
-            })),
-        ) => {
-            let right_col = create_col_from_scalar_expr(&right, alias)?;
-
-            Expr::eq(left.deref().clone(), Expr::Column(right_col))
-        }
-        (None, None) => lit(true),
+        None => (correlation_filter, false),
         _ => return Ok(None),
     };
 
-    if matches!(join_type, JoinType::LeftMark | JoinType::RightMark) {
-        let right_schema = sub_query_alias.schema();
+    let (right, null_aware) =
+        if matches!(join_type, JoinType::LeftMark | JoinType::RightMark) {
+            let right_schema = sub_query_alias.schema();
 
-        // Gather all columns needed for the join filter + predicates
-        let mut needed = std::collections::HashSet::new();
-        expr_to_columns(&join_filter, &mut needed)?;
-        if let Some(in_pred) = in_predicate_opt {
-            expr_to_columns(in_pred, &mut needed)?;
-        }
+            // Gather all columns needed for the join filter + predicates
+            let mut needed = std::collections::HashSet::new();
+            expr_to_columns(&join_filter, &mut needed)?;
+            if let Some(in_pred) = in_predicate_opt {
+                expr_to_columns(in_pred, &mut needed)?;
+            }
 
-        // Keep only columns that actually belong to the RIGHT child, and sort by their
-        // position in the right schema for deterministic order.
-        let mut right_cols_idx_and_col: Vec<(usize, Column)> = needed
-            .into_iter()
-            .filter_map(|c| right_schema.index_of_column(&c).ok().map(|idx| (idx, c)))
-            .collect();
+            // Keep only columns that actually belong to the RIGHT child, and sort by their
+            // position in the right schema for deterministic order.
+            let mut right_cols_idx_and_col: Vec<(usize, Column)> = needed
+                .into_iter()
+                .filter_map(|c| right_schema.index_of_column(&c).ok().map(|idx| (idx, c)))
+                .collect();
 
-        right_cols_idx_and_col.sort_by_key(|(idx, _)| *idx);
+            right_cols_idx_and_col.sort_by_key(|(idx, _)| *idx);
 
-        let right_proj_exprs: Vec<Expr> = right_cols_idx_and_col
-            .into_iter()
-            .map(|(_, c)| Expr::Column(c))
-            .collect();
+            let right_proj_exprs: Vec<Expr> = right_cols_idx_and_col
+                .into_iter()
+                .map(|(_, c)| Expr::Column(c))
+                .collect();
 
-        let right_projected = if !right_proj_exprs.is_empty() {
-            LogicalPlanBuilder::from(sub_query_alias.clone())
-                .project(right_proj_exprs)?
-                .build()?
-        } else {
-            // Degenerate case: no right columns referenced by the predicate(s)
-            sub_query_alias.clone()
-        };
+            let right_projected = if !right_proj_exprs.is_empty() {
+                LogicalPlanBuilder::from(sub_query_alias)
+                    .project(right_proj_exprs)?
+                    .build()?
+            } else {
+                // Degenerate case: no right columns referenced by the predicate(s)
+                sub_query_alias
+            };
 
-        let mark_filter_is_hashable_only =
-            if join_type == JoinType::LeftMark && in_predicate_opt.is_some() {
-                let (_, residual_filter) = split_eq_and_noneq_join_predicate(
-                    join_filter.clone(),
-                    left.schema(),
-                    right_projected.schema(),
-                )?;
-                residual_filter.is_none()
+            let null_aware = if join_type == JoinType::LeftMark && membership_nullable {
+                let (equijoin_predicates, residual_filter) =
+                    split_eq_and_noneq_join_predicate(
+                        join_filter.clone(),
+                        left.schema(),
+                        right_projected.schema(),
+                    )?;
+
+                !equijoin_predicates.is_empty() && residual_filter.is_none()
             } else {
                 false
             };
 
-        // For scalar NOT IN mark joins, propagate null-aware semantics into the
-        // nullable mark column when the predicate can be implemented by hash keys.
-        // Non-equality correlated filters stay on the legacy path because hash join
-        // execution cannot mark UNKNOWN candidates for residual predicates.
-        let null_aware = join_type == JoinType::LeftMark
-            && in_predicate_opt.is_some()
-            && mark_filter_is_hashable_only
-            && join_keys_may_be_null(
-                &join_filter,
-                left.schema(),
-                right_projected.schema(),
-            )?;
-
-        let new_plan = LogicalPlanBuilder::from(left.clone())
-            .join_detailed_with_options(
-                right_projected,
-                join_type,
-                (Vec::<Column>::new(), Vec::<Column>::new()),
-                Some(join_filter),
-                NullEquality::NullEqualsNothing,
-                null_aware,
-            )?
-            .build()?;
-
-        debug!(
-            "predicate subquery optimized:\n{}",
-            new_plan.display_indent()
-        );
-
-        return Ok(Some(new_plan));
-    }
-
-    // Determine if this should be a null-aware anti join
-    // Null-aware semantics are only needed for NOT IN subqueries, not NOT EXISTS:
-    // - NOT IN: Uses three-valued logic, requires null-aware handling
-    // - NOT EXISTS: Uses two-valued logic, regular anti join is correct
-    // We can distinguish them: NOT IN has in_predicate_opt, NOT EXISTS does not
-    //
-    // Additionally, if the join keys are non-nullable on both sides, we don't need
-    // null-aware semantics because NULLs cannot exist in the data.
-    let null_aware = join_type == JoinType::LeftAnti
-        && in_predicate_opt.is_some()
-        && join_keys_may_be_null(&join_filter, left.schema(), sub_query_alias.schema())?;
-
-    // join our sub query into the main plan
-    let new_plan = if null_aware {
-        // Use join_detailed_with_options to set null_aware flag
-        LogicalPlanBuilder::from(left.clone())
-            .join_detailed_with_options(
+            (right_projected, null_aware)
+        } else {
+            (
                 sub_query_alias,
-                join_type,
-                (Vec::<Column>::new(), Vec::<Column>::new()), // No equijoin keys, filter-based join
-                Some(join_filter),
-                NullEquality::NullEqualsNothing,
-                true, // null_aware
-            )?
-            .build()?
-    } else {
-        LogicalPlanBuilder::from(left.clone())
-            .join_on(sub_query_alias, join_type, Some(join_filter))?
-            .build()?
-    };
+                join_type == JoinType::LeftAnti && membership_nullable,
+            )
+        };
+
+    let new_plan = LogicalPlanBuilder::from(left.clone())
+        .join_detailed_with_options(
+            right,
+            join_type,
+            (Vec::<Column>::new(), Vec::<Column>::new()),
+            Some(join_filter),
+            NullEquality::NullEqualsNothing,
+            null_aware,
+        )?
+        .build()?;
     debug!(
         "predicate subquery optimized:\n{}",
         new_plan.display_indent()
@@ -765,7 +679,7 @@ mod tests {
             SubqueryAlias: __correlated_sq_2 [o_custkey:Int64]
               Projection: orders.o_custkey [o_custkey:Int64]
                 TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
-        "    
+        "
         )
     }
 
@@ -1268,6 +1182,83 @@ mod tests {
                 TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
         "
         )
+    }
+
+    #[test]
+    fn mark_join_preserves_right_key_nullability_after_projection() -> Result<()> {
+        let left = test_table_scan()?;
+
+        for key_nullable in [false, true] {
+            let right_schema = Schema::new(vec![
+                Field::new("unused", DataType::UInt32, !key_nullable),
+                Field::new("id", DataType::UInt32, key_nullable),
+            ]);
+            let right = table_scan(Some("sq"), &right_schema, None)?.build()?;
+            let in_predicate = col("test.c").eq(col("sq.id"));
+
+            // The non-nullable left key forces the right key's nullability to
+            // determine whether the mark join needs null-aware execution.
+            let plan = build_join(
+                &left,
+                &right,
+                Some(&in_predicate),
+                JoinType::LeftMark,
+                "__correlated_sq_1".to_string(),
+            )?
+            .expect("mark join should be decorrelated");
+            let LogicalPlan::Join(join) = plan else {
+                panic!("expected a mark join");
+            };
+
+            // Dropping the unrelated column moves the key from index 1 to 0.
+            assert_eq!(join.right.schema().fields().len(), 1);
+            let key = join.right.schema().field(0);
+            assert_eq!(key.name(), "id");
+            assert_eq!(key.is_nullable(), key_nullable);
+            assert_eq!(join.join_type, JoinType::LeftMark);
+            assert_eq!(join.null_aware, key_nullable);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn membership_nullability_controls_anti_and_mark_joins() -> Result<()> {
+        let schema = |nullable| {
+            Schema::new(vec![
+                Field::new("id", DataType::Int32, nullable),
+                Field::new("grp", DataType::Int32, true),
+            ])
+        };
+        for (outer_nullable, inner_nullable) in
+            [(false, false), (false, true), (true, false)]
+        {
+            let outer =
+                table_scan(Some("outer_t"), &schema(outer_nullable), None)?.build()?;
+            let inner = table_scan(Some("inner_t"), &schema(inner_nullable), None)?
+                .filter(
+                    (out_ref_col(DataType::Int32, "outer_t.grp") + lit(1))
+                        .eq(col("inner_t.grp")),
+                )?
+                .project(vec![col("inner_t.id")])?
+                .build()?;
+            for join_type in [JoinType::LeftAnti, JoinType::LeftMark] {
+                let plan = build_join(
+                    &outer,
+                    &inner,
+                    Some(&col("outer_t.id").eq(col("inner_t.id"))),
+                    join_type,
+                    "sq".to_string(),
+                )?
+                .expect("membership join should be decorrelated");
+                let LogicalPlan::Join(join) = plan else {
+                    panic!("expected a join");
+                };
+                // Nullable correlation does not make membership nullable.
+                assert_eq!(join.null_aware, outer_nullable || inner_nullable);
+            }
+        }
+        Ok(())
     }
 
     #[test]

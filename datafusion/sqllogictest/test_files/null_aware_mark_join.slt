@@ -131,6 +131,18 @@ WHERE (id NOT IN (SELECT id FROM inner_table_no_null)) IS NULL;
 ----
 e
 
+# COALESCE makes both input keys non-nullable, but NULLIF introduces a NULL
+# for row 'a'. The mark must preserve UNKNOWN for that row.
+query T rowsort
+SELECT value
+FROM (SELECT COALESCE(id, 0) AS id, value FROM outer_table) AS non_null_outer
+WHERE (NULLIF(id, 1) NOT IN (
+  SELECT COALESCE(id, 0) FROM inner_table_no_null
+)) IS NULL;
+----
+a
+
+
 query T rowsort
 SELECT value
 FROM outer_table
@@ -202,6 +214,32 @@ WHERE (id NOT IN (
   WHERE inner_corr_table.grp = outer_corr_all_null_keys.grp
 )) IS FALSE;
 ----
+
+# Non-nullable membership values produce two-valued marks even when the
+# correlation expression is nullable. Group 2 is empty because NULLIF makes
+# its correlation predicate UNKNOWN.
+query T rowsort
+SELECT value
+FROM (SELECT COALESCE(id, 0) AS id, grp, value FROM outer_corr_table) o
+WHERE (id NOT IN (
+  SELECT COALESCE(id, 0) FROM inner_corr_table i
+  WHERE o.grp = NULLIF(i.grp, 2)
+)) IS NULL;
+----
+
+query T rowsort
+SELECT value
+FROM (SELECT COALESCE(id, 0) AS id, grp, value FROM outer_corr_table) o
+WHERE (id NOT IN (
+  SELECT COALESCE(id, 0) FROM inner_corr_table i
+  WHERE o.grp = NULLIF(i.grp, 2)
+)) IS TRUE;
+----
+a
+b
+c
+e
+g
 
 # WHERE EXISTS in a disjunction, the motivating mark join example from
 # "The Complete Story of Joins (in HyPer)" (Neumann, Leis, Kemper; BTW 2017),
