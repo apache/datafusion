@@ -1685,6 +1685,63 @@ async fn simple_window_function() -> Result<()> {
 }
 
 #[tokio::test]
+async fn stacked_windows_with_same_default_name_via_builder() -> Result<()> {
+    // Substrait projections are positional and drop DataFusion's aliases, so the
+    // inherited `rn1` column and the new window both come back under the default
+    // name `row_number() ROWS BETWEEN ...`. The consumer must keep them apart.
+    // See https://github.com/apache/datafusion/issues/23007
+    use datafusion::functions_window::expr_fn::row_number;
+
+    let ctx = create_context().await?;
+    let scan = ctx.table("data").await?.into_optimized_plan()?;
+    let plan = LogicalPlanBuilder::from(scan)
+        .window(vec![row_number().alias("rn1")])?
+        .window(vec![row_number().alias("rn2")])?
+        .build()?;
+
+    let plan2 = substrait_roundtrip(&plan, &ctx).await?;
+    // Compare output fields; qualifiers and functional dependencies
+    // can differ after a Substrait round trip.
+    assert_eq!(plan.schema().as_arrow(), plan2.schema().as_arrow());
+    DataFrame::new(ctx.state(), plan2).show().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn chained_windows_with_same_default_name() -> Result<()> {
+    // SQL form from https://github.com/apache/datafusion/issues/23007. The two
+    // `avg` windows differ only by aliases that Substrait does not carry. As in
+    // roundtrip_self_join, the consumer must synthesize an alias, so the plan
+    // text differs; verify schema and executability instead.
+    let ctx = create_context().await?;
+    let plan = ctx
+        .sql(
+            "SELECT a, b, avg1, avg2 FROM (
+                SELECT a, b, avg1,
+                       row_number() OVER () AS seq2,
+                       avg(b) OVER (PARTITION BY a ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS avg2
+                FROM (
+                    SELECT a, b, avg1 FROM (
+                        SELECT a, b,
+                               row_number() OVER () AS seq1,
+                               avg(b) OVER (PARTITION BY a ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS avg1
+                        FROM data
+                    ) t1 ORDER BY seq1
+                ) t2
+            ) t3 ORDER BY seq2",
+        )
+        .await?
+        .into_optimized_plan()?;
+
+    let plan2 = substrait_roundtrip(&plan, &ctx).await?;
+    // Compare output fields; qualifiers and functional dependencies
+    // can differ after a Substrait round trip.
+    assert_eq!(plan.schema().as_arrow(), plan2.schema().as_arrow());
+    DataFrame::new(ctx.state(), plan2).show().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn window_with_rows() -> Result<()> {
     roundtrip("SELECT sum(b) OVER (PARTITION BY a ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) FROM data;").await?;
     roundtrip("SELECT sum(b) OVER (PARTITION BY a ROWS BETWEEN CURRENT ROW AND 2 FOLLOWING) FROM data;").await?;
