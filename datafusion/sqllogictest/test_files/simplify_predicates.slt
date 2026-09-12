@@ -84,21 +84,78 @@ EXPLAIN SELECT * FROM test_data WHERE int_col = 7 AND int_col = 6;
 ----
 logical_plan EmptyRelation: rows=0
 
-# TODO: x = 7 AND x < 2 should simplify to false
+# x = 7 AND x < 2 should simplify to false
 query TT
 EXPLAIN SELECT * FROM test_data WHERE int_col = 7 AND int_col < 2;
 ----
-logical_plan
-01)Filter: test_data.int_col = Int32(7) AND test_data.int_col < Int32(2)
-02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
+logical_plan EmptyRelation: rows=0
 
-
-# TODO: x = 7 AND x > 5 should simplify to x = 7
+# x = 7 AND x > 5 should simplify to x = 7
 query TT
 EXPLAIN SELECT * FROM test_data WHERE int_col = 7 AND int_col > 5;
 ----
 logical_plan
-01)Filter: test_data.int_col = Int32(7) AND test_data.int_col > Int32(5)
+01)Filter: test_data.int_col = Int32(7)
+02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
+
+# x = 7 AND x != 7 should simplify to false
+query TT
+EXPLAIN SELECT * FROM test_data WHERE int_col = 7 AND int_col != 7;
+----
+logical_plan EmptyRelation: rows=0
+
+# x > 10 AND x < 5 should simplify to false
+query TT
+EXPLAIN SELECT * FROM test_data WHERE int_col > 10 AND int_col < 5;
+----
+logical_plan EmptyRelation: rows=0
+
+# x > 5 AND x < 5 should simplify to false, as a strict bound excludes the shared value
+query TT
+EXPLAIN SELECT * FROM test_data WHERE int_col > 5 AND int_col < 5;
+----
+logical_plan EmptyRelation: rows=0
+
+# x >= 5 AND x < 5 should simplify to false
+query TT
+EXPLAIN SELECT * FROM test_data WHERE int_col >= 5 AND int_col < 5;
+----
+logical_plan EmptyRelation: rows=0
+
+# x > 5 AND x <= 5 should simplify to false
+query TT
+EXPLAIN SELECT * FROM test_data WHERE int_col > 5 AND int_col <= 5;
+----
+logical_plan EmptyRelation: rows=0
+
+# x >= 5 AND x <= 5 should simplify to x = 5 rather than to false, as both bounds admit 5
+query TT
+EXPLAIN SELECT * FROM test_data WHERE int_col >= 5 AND int_col <= 5;
+----
+logical_plan
+01)Filter: test_data.int_col = Int32(5)
+02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
+
+# Contradicting predicates on one column discard the predicates on every other column
+query TT
+EXPLAIN SELECT * FROM test_data WHERE float_col > 0 AND int_col > 10 AND int_col < 5;
+----
+logical_plan EmptyRelation: rows=0
+
+# x > 10 AND x != 5 should simplify to x > 10, as the bound already excludes 5
+query TT
+EXPLAIN SELECT * FROM test_data WHERE int_col > 10 AND int_col != 5;
+----
+logical_plan
+01)Filter: test_data.int_col > Int32(10)
+02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
+
+# x > 1 AND x != 5 should be preserved, as 5 is within the bound
+query TT
+EXPLAIN SELECT * FROM test_data WHERE int_col > 1 AND int_col != 5;
+----
+logical_plan
+01)Filter: test_data.int_col > Int32(1) AND test_data.int_col != Int32(5)
 02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
 
 # str_col > 'apple' AND str_col > 'banana' should simplify to str_col > 'banana'

@@ -24,17 +24,22 @@
 //! this module specifically targets predicate optimization by handling containment relationships.
 //! For example, it can simplify `x > 5 AND x > 6` to just `x > 6`, as the latter condition
 //! encompasses the former, resulting in fewer checks during query execution.
+//! Conjunctions that no value can satisfy, such as `x > 6 AND x < 5`, are replaced with
+//! `false` so that later rules can prune the plan they filter.
 
-use datafusion_common::{Column, Result, ScalarValue};
-use datafusion_expr::{BinaryExpr, Expr, Operator};
+use super::utils::{is_false, is_null};
+use datafusion_common::{Column, Result, ScalarValue, internal_err};
+use datafusion_expr::{BinaryExpr, Expr, Operator, lit};
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 /// Simplifies a list of predicates by removing redundancies.
 ///
 /// This function takes a vector of predicate expressions and groups them by the column they reference.
-/// Predicates that reference a single column and are comparison operations (e.g., >, >=, <, <=, =)
+/// Predicates that reference a single column and are comparison operations (e.g., >, >=, <, <=, =, !=)
 /// are analyzed to remove redundant conditions. For instance, `x > 5 AND x > 6` is simplified to
-/// `x > 6`. Other predicates that do not fit this pattern are retained as-is.
+/// `x > 6`. Predicates that contradict each other, such as `x > 6 AND x < 5`, reduce the whole
+/// conjunction to `false`. Other predicates that do not fit this pattern are retained as-is.
 ///
 /// # Arguments
 /// * `predicates` - A vector of `Expr` representing the predicates to simplify.
@@ -61,7 +66,9 @@ pub fn simplify_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
                         | Operator::Lt
                         | Operator::LtEq
                         | Operator::Eq
-                ) =>
+                        | Operator::NotEq
+                ) && !is_null(&left)
+                    && !is_null(&right) =>
             {
                 if let (Some(col), Some(_)) =
                     (extract_column_from_expr(&left), right.as_literal())
@@ -101,6 +108,9 @@ pub fn simplify_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
     let mut result = other_predicates;
     for (_, preds) in column_predicates {
         let simplified = simplify_column_predicates(preds)?;
+        if simplified.iter().any(is_false) {
+            return Ok(always_false());
+        }
         result.extend(simplified);
     }
 
@@ -111,9 +121,14 @@ pub fn simplify_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
 ///
 /// This function processes a list of predicates that all reference the same column and
 /// simplifies them based on their operators. It groups predicates into greater-than (>, >=),
-/// less-than (<, <=), and equality (=) categories, then selects the most restrictive condition
-/// in each category to reduce redundancy. For example, among `x > 5` and `x > 6`, only `x > 6`
-/// is retained as it is more restrictive.
+/// less-than (<, <=), equality (=) and inequality (!=) categories, then selects the most
+/// restrictive condition in each category to reduce redundancy. For example, among `x > 5`
+/// and `x > 6`, only `x > 6` is retained as it is more restrictive.
+///
+/// The reduced conditions are then compared with each other. An equality subsumes every
+/// other condition it satisfies, an inequality is dropped once a bound already excludes its
+/// value, and conditions that cannot hold at the same time, such as `x > 6 AND x < 5`,
+/// reduce the whole list to a single `false` literal.
 ///
 /// # Arguments
 /// * `predicates` - A vector of `Expr` representing predicates for a single column.
@@ -129,6 +144,7 @@ fn simplify_column_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
     let mut greater_predicates = Vec::new(); // Combines > and >=
     let mut less_predicates = Vec::new(); // Combines < and <=
     let mut eq_predicates = Vec::new();
+    let mut not_eq_predicates = Vec::new();
 
     for pred in predicates {
         match &pred {
@@ -136,49 +152,137 @@ fn simplify_column_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
                 Operator::Gt | Operator::GtEq => greater_predicates.push(pred),
                 Operator::Lt | Operator::LtEq => less_predicates.push(pred),
                 Operator::Eq => eq_predicates.push(pred),
+                Operator::NotEq => not_eq_predicates.push(pred),
                 _ => unreachable!("Unexpected operator: {}", op),
             },
             _ => unreachable!("Unexpected predicate {}", pred.to_string()),
         }
     }
 
+    // Reduce each direction to its most restrictive bound: the highest value for the
+    // greater-than-style predicates and the lowest value for the less-than-style ones.
+    let lower_bound = find_most_restrictive_predicate(&greater_predicates, true)?;
+    let upper_bound = find_most_restrictive_predicate(&less_predicates, false)?;
+
+    if let Some(eq_predicate) = eq_predicates.pop() {
+        let (_, value) = op_and_literal(&eq_predicate)?;
+
+        // An equality pins the column to a single value, so it subsumes every other
+        // predicate on that column: either the value satisfies them, which makes them
+        // redundant, or it does not and no row can pass the conjunction.
+        if !satisfies_all(
+            value,
+            eq_predicates
+                .iter()
+                .chain(not_eq_predicates.iter())
+                .chain(lower_bound.iter())
+                .chain(upper_bound.iter()),
+        )? {
+            return Ok(always_false());
+        }
+        return Ok(vec![eq_predicate]);
+    }
+
+    // Bounds that leave no room for any value cannot be satisfied together
+    if let (Some(lower), Some(upper)) = (&lower_bound, &upper_bound)
+        && is_empty_range(lower, upper)?
+    {
+        return Ok(always_false());
+    }
+
+    // An inequality is redundant once a bound already excludes the value it rules out
     let mut result = Vec::new();
-
-    if !eq_predicates.is_empty() {
-        // If there are many equality predicates, we can only keep one if they are all the same
-        if eq_predicates.len() == 1
-            || eq_predicates.iter().all(|e| e == &eq_predicates[0])
-        {
-            result.push(eq_predicates.pop().unwrap());
-        } else {
-            // If they are not the same, add a false predicate
-            result.push(Expr::Literal(ScalarValue::Boolean(Some(false)), None));
+    for not_eq_predicate in not_eq_predicates {
+        let (_, value) = op_and_literal(&not_eq_predicate)?;
+        if satisfies_all(value, lower_bound.iter().chain(upper_bound.iter()))? {
+            result.push(not_eq_predicate);
         }
     }
 
-    // Handle all greater-than-style predicates (keep the most restrictive - highest value)
-    if !greater_predicates.is_empty() {
-        if let Some(most_restrictive) =
-            find_most_restrictive_predicate(&greater_predicates, true)?
-        {
-            result.push(most_restrictive);
-        } else {
-            result.extend(greater_predicates);
-        }
-    }
-
-    // Handle all less-than-style predicates (keep the most restrictive - lowest value)
-    if !less_predicates.is_empty() {
-        if let Some(most_restrictive) =
-            find_most_restrictive_predicate(&less_predicates, false)?
-        {
-            result.push(most_restrictive);
-        } else {
-            result.extend(less_predicates);
-        }
-    }
+    result.extend(lower_bound);
+    result.extend(upper_bound);
 
     Ok(result)
+}
+
+/// Determines whether a lower and an upper bound leave no value that satisfies both.
+///
+/// For example `x > 5 AND x < 3` can never be true, and neither can `x > 1 AND x < 1`
+/// because both comparisons are strict. `x >= 1 AND x <= 1` on the other hand is
+/// satisfied by `x = 1`.
+///
+/// # Arguments
+/// * `lower` - A predicate using `>` or `>=`.
+/// * `upper` - A predicate using `<` or `<=`.
+///
+/// # Returns
+/// A `Result` containing `true` if the two bounds contradict each other.
+fn is_empty_range(lower: &Expr, upper: &Expr) -> Result<bool> {
+    let (lower_op, lower_value) = op_and_literal(lower)?;
+    let (upper_op, upper_value) = op_and_literal(upper)?;
+
+    Ok(match lower_value.try_cmp(upper_value)? {
+        Ordering::Less => false,
+        Ordering::Greater => true,
+        Ordering::Equal => lower_op == Operator::Gt || upper_op == Operator::Lt,
+    })
+}
+
+/// Determines whether a row whose column equals `value` passes all of `predicates`.
+///
+/// # Arguments
+/// * `value` - The literal the column is known to be equal to.
+/// * `predicates` - Predicates on that same column, each of the form `column <op> literal`.
+///
+/// # Returns
+/// A `Result` containing `false` as soon as one of the predicates rejects `value`.
+fn satisfies_all<'a>(
+    value: &ScalarValue,
+    predicates: impl IntoIterator<Item = &'a Expr>,
+) -> Result<bool> {
+    for predicate in predicates {
+        let (op, bound) = op_and_literal(predicate)?;
+        let ordering = value.try_cmp(bound)?;
+        let satisfied = match op {
+            Operator::Gt => ordering == Ordering::Greater,
+            Operator::GtEq => ordering != Ordering::Less,
+            Operator::Lt => ordering == Ordering::Less,
+            Operator::LtEq => ordering != Ordering::Greater,
+            Operator::Eq => ordering == Ordering::Equal,
+            Operator::NotEq => ordering != Ordering::Equal,
+            _ => return internal_err!("Unexpected operator: {op}"),
+        };
+        if !satisfied {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
+}
+
+/// Extracts the operator and the literal of a `column <op> literal` predicate.
+///
+/// [`simplify_predicates`] normalizes the predicates it groups by column so that the
+/// literal is always the right operand, so any other shape is an internal error.
+///
+/// # Arguments
+/// * `predicate` - A reference to an `Expr` to destructure.
+///
+/// # Returns
+/// A `Result` holding the operator and the literal the predicate compares against.
+fn op_and_literal(predicate: &Expr) -> Result<(Operator, &ScalarValue)> {
+    if let Expr::BinaryExpr(BinaryExpr { op, right, .. }) = predicate
+        && let Some(literal) = right.as_literal()
+    {
+        Ok((*op, literal))
+    } else {
+        internal_err!("Unexpected predicate {predicate}")
+    }
+}
+
+/// Builds the predicate list of a conjunction that no row can satisfy.
+fn always_false() -> Vec<Expr> {
+    vec![lit(false)]
 }
 
 /// Finds the most restrictive predicate from a list based on literal values.
@@ -218,13 +322,11 @@ fn find_most_restrictive_predicate(
                 if let Some(current_best) = best_value {
                     let comparison = scalar.try_cmp(current_best)?;
                     let is_better = if find_greater {
-                        comparison == std::cmp::Ordering::Greater
-                            || (comparison == std::cmp::Ordering::Equal
-                                && op == &Operator::Gt)
+                        comparison == Ordering::Greater
+                            || (comparison == Ordering::Equal && op == &Operator::Gt)
                     } else {
-                        comparison == std::cmp::Ordering::Less
-                            || (comparison == std::cmp::Ordering::Equal
-                                && op == &Operator::Lt)
+                        comparison == Ordering::Less
+                            || (comparison == Ordering::Equal && op == &Operator::Lt)
                     };
 
                     if is_better {
@@ -369,5 +471,135 @@ mod tests {
             }) if left == &Box::new(col("b")) && right == &Box::new(lit(20i32)))
         });
         assert!(has_b_predicate, "Should have b > 20 predicate");
+    }
+
+    #[test]
+    fn test_equality_subsumes_predicates_it_satisfies() {
+        // The value a is pinned to passes every other predicate, so only a = 5 is left
+        for predicates in [
+            vec![
+                col("a").eq(lit(5i32)),
+                col("a").gt(lit(3i32)),
+                col("a").lt_eq(lit(5i32)),
+                col("a").not_eq(lit(6i32)),
+            ],
+            vec![col("a").eq(lit(5i32)), col("a").gt_eq(lit(5i32))],
+        ] {
+            let result = simplify_predicates(predicates.clone()).unwrap();
+
+            assert_eq!(result, vec![col("a").eq(lit(5i32))], "for {predicates:?}");
+        }
+    }
+
+    #[test]
+    fn test_equality_rejected_by_another_predicate_is_unsatisfiable() {
+        // Each of these pins a to a value that the other predicate excludes
+        for predicates in [
+            vec![col("a").eq(lit(5i32)), col("a").eq(lit(6i32))],
+            vec![col("a").eq(lit(5i32)), col("a").not_eq(lit(5i32))],
+            vec![col("a").eq(lit(5i32)), col("a").gt(lit(5i32))],
+            vec![col("a").eq(lit(5i32)), col("a").gt_eq(lit(6i32))],
+            vec![col("a").eq(lit(5i32)), col("a").lt(lit(3i32))],
+            vec![col("a").eq(lit(5i32)), col("a").lt_eq(lit(3i32))],
+        ] {
+            let result = simplify_predicates(predicates.clone()).unwrap();
+
+            assert_eq!(result, vec![lit(false)], "for {predicates:?}");
+        }
+    }
+
+    #[test]
+    fn test_disjoint_bounds_are_unsatisfiable() {
+        // The strict bounds exclude the value they share, so none of these can hold
+        for predicates in [
+            vec![col("a").gt(lit(5i32)), col("a").lt(lit(3i32))],
+            vec![col("a").gt(lit(1i32)), col("a").lt(lit(1i32))],
+            vec![col("a").gt_eq(lit(1i32)), col("a").lt(lit(1i32))],
+            vec![col("a").gt(lit(1i32)), col("a").lt_eq(lit(1i32))],
+        ] {
+            let result = simplify_predicates(predicates.clone()).unwrap();
+
+            assert_eq!(result, vec![lit(false)], "for {predicates:?}");
+        }
+    }
+
+    #[test]
+    fn test_satisfiable_bounds_are_kept() {
+        // The second case only leaves a = 1, but both bounds are inclusive so it holds
+        for predicates in [
+            vec![col("a").gt(lit(1i32)), col("a").lt(lit(9i32))],
+            vec![col("a").gt_eq(lit(1i32)), col("a").lt_eq(lit(1i32))],
+        ] {
+            let result = simplify_predicates(predicates.clone()).unwrap();
+
+            assert_eq!(result, predicates, "for {predicates:?}");
+        }
+    }
+
+    #[test]
+    fn test_unsatisfiable_column_discards_other_predicates() {
+        // Nothing can make the conjunction true once one column contradicts itself
+        let predicates = vec![
+            col("b").gt(lit(0i32)),
+            col("a").gt(lit(5i32)),
+            col("a").lt(lit(3i32)),
+        ];
+
+        let result = simplify_predicates(predicates).unwrap();
+
+        assert_eq!(result, vec![lit(false)]);
+    }
+
+    #[test]
+    fn test_not_eq_excluded_by_a_bound_is_removed() {
+        // a > 10 already rules out a = 5
+        let predicates = vec![col("a").gt(lit(10i32)), col("a").not_eq(lit(5i32))];
+
+        let result = simplify_predicates(predicates).unwrap();
+
+        assert_eq!(result, vec![col("a").gt(lit(10i32))]);
+    }
+
+    #[test]
+    fn test_not_eq_inside_the_bounds_is_kept() {
+        // 5 is within a > 1, so the inequality still filters rows
+        let predicates = vec![col("a").gt(lit(1i32)), col("a").not_eq(lit(5i32))];
+
+        let result = simplify_predicates(predicates).unwrap();
+
+        assert_eq!(
+            result,
+            vec![col("a").not_eq(lit(5i32)), col("a").gt(lit(1i32))]
+        );
+    }
+
+    #[test]
+    fn test_null_comparisons_are_left_alone() {
+        // Comparisons with NULL are never true, so they carry no bound to reason
+        // about. Treating NULL as an ordinary value would drop `a > NULL` for being
+        // less restrictive than `a > 5`, or drop `a != NULL` for being excluded by
+        // `a > 5`, and either would let rows through that must be filtered out.
+        for predicates in [
+            vec![
+                col("a").gt(lit(ScalarValue::Int32(None))),
+                col("a").gt(lit(5i32)),
+            ],
+            vec![
+                col("a").not_eq(lit(ScalarValue::Int32(None))),
+                col("a").gt(lit(5i32)),
+            ],
+            vec![
+                col("a").gt(lit(ScalarValue::Int32(None))),
+                col("a").lt(lit(3i32)),
+            ],
+            vec![
+                col("a").gt(lit(ScalarValue::Int32(None))),
+                col("a").lt(lit(ScalarValue::Int32(None))),
+            ],
+        ] {
+            let result = simplify_predicates(predicates.clone()).unwrap();
+
+            assert_eq!(result, predicates, "for {predicates:?}");
+        }
     }
 }
