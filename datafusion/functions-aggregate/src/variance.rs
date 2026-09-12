@@ -26,6 +26,7 @@ use arrow::{
 };
 use datafusion_common::cast::{as_float64_array, as_uint64_array};
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::DistinctHandling;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, GroupSelection, GroupsAccumulator,
     Signature, Volatility,
@@ -150,6 +151,11 @@ impl AggregateUDFImpl for VarianceSample {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // The accumulator rejects `DISTINCT` with `not_impl_err!`.
+        DistinctHandling::Unsupported
+    }
 }
 
 #[user_doc(
@@ -251,6 +257,11 @@ impl AggregateUDFImpl for VariancePopulation {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // The accumulator rejects `DISTINCT` with `not_impl_err!`.
+        DistinctHandling::Unsupported
     }
 }
 

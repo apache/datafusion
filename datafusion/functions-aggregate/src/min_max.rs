@@ -45,6 +45,7 @@ use arrow::datatypes::{
 use crate::min_max::min_max_bytes::MinMaxBytesAccumulator;
 use crate::min_max::min_max_struct::MinMaxStructAccumulator;
 use datafusion_common::ScalarValue;
+use datafusion_expr::DistinctHandling;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, SetMonotonicity, Signature, Volatility,
     function::AccumulatorArgs,
@@ -399,6 +400,11 @@ impl AggregateUDFImpl for Max {
         // the same as new values are seen.
         SetMonotonicity::Increasing
     }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // `MAX` is idempotent: duplicates cannot change the maximum.
+        DistinctHandling::Ignored
+    }
 }
 
 #[derive(Debug)]
@@ -693,6 +699,11 @@ impl AggregateUDFImpl for Min {
         // `MIN` is monotonically decreasing as it always decreases or stays
         // the same as new values are seen.
         SetMonotonicity::Decreasing
+    }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // `MIN` is idempotent: duplicates cannot change the minimum.
+        DistinctHandling::Ignored
     }
 }
 

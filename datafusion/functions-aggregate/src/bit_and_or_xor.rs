@@ -31,6 +31,7 @@ use datafusion_common::hash_utils::RandomState;
 
 use datafusion_common::cast::as_list_array;
 use datafusion_common::{Result, ScalarValue, not_impl_err};
+use datafusion_expr::DistinctHandling;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -317,6 +318,18 @@ impl AggregateUDFImpl for BitwiseOperation {
 
     fn documentation(&self) -> Option<&Documentation> {
         Some(self.documentation)
+    }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        match self.operation {
+            // Bitwise AND/OR are idempotent: duplicates cannot change the
+            // result, so building a per-group `HashSet` buys nothing.
+            BitwiseOperationType::And | BitwiseOperationType::Or => {
+                DistinctHandling::Ignored
+            }
+            // XOR cancels duplicate pairs, so `DISTINCT` is meaningful.
+            BitwiseOperationType::Xor => DistinctHandling::Honored,
+        }
     }
 }
 

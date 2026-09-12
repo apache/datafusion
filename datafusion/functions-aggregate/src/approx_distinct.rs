@@ -38,6 +38,7 @@ use datafusion_common::{
     DataFusionError, Result, downcast_value, internal_datafusion_err, internal_err,
     not_impl_err,
 };
+use datafusion_expr::DistinctHandling;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -869,6 +870,11 @@ impl AggregateUDFImpl for ApproxDistinct {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // Updating an HLL register with a value already seen is a no-op.
+        DistinctHandling::Ignored
     }
 }
 
