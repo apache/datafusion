@@ -36,8 +36,8 @@ use datafusion_physical_expr::{
 };
 use datafusion_physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
-    LikeExpr, Literal, NegativeExpr, NotExpr, SqlSimilarToPattern, TryCastExpr,
-    UnKnownColumn,
+    LikeExpr, Literal, NegativeExpr, NormalizeFloatZeroExpr, NotExpr,
+    SqlSimilarToPattern, TryCastExpr, UnKnownColumn,
 };
 use datafusion_physical_plan::joins::HashExpr;
 use datafusion_physical_plan::proto::ExecutionPlanDecodeCtx;
@@ -288,6 +288,9 @@ pub fn parse_physical_expr_with_converter(
         ExprType::IsNotNullExpr(_) => IsNotNullExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::NotExpr(_) => NotExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::Negative(_) => NegativeExpr::try_from_proto(proto, &decode_ctx)?,
+        ExprType::NormalizeFloatZero(_) => {
+            NormalizeFloatZeroExpr::try_from_proto(proto, &decode_ctx)?
+        }
         ExprType::InList(_) => InListExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::Case(_) => CaseExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::Cast(_) => CastExpr::try_from_proto(proto, &decode_ctx)?,

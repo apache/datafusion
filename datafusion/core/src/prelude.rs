@@ -34,7 +34,7 @@ pub use crate::execution::options::{
 
 pub use datafusion_common::Column;
 pub use datafusion_expr::{
-    Expr,
+    AsOfMatch, Expr, Operator,
     expr_fn::*,
     lit, lit_timestamp_nano,
     logical_plan::{JoinType, Partitioning},
