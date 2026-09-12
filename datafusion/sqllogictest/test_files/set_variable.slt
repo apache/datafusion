@@ -704,13 +704,13 @@ SET datafusion.runtime.memory_limit = NULL
 statement error DataFusion error: Error during planning: Unsupported value Null
 SET datafusion.runtime.list_files_cache_ttl = NULL
 
-statement error DataFusion error: Error during planning: Duration should not be empty or blank for 'datafusion.runtime.list_files_cache_ttl'
+statement error DataFusion error: Error during planning: Duration should not be empty or blank when setting 'datafusion.runtime.list_files_cache_ttl'
 SET datafusion.runtime.list_files_cache_ttl = ' '
 
 statement ok
 SET datafusion.runtime.list_files_cache_ttl = '18446744073709551615s'
 
-statement error DataFusion error: Error during planning: Failed to parse number from duration '18446744073709551616s' for 'datafusion.runtime.list_files_cache_ttl'
+statement error DataFusion error: Error during planning: Failed to parse number from duration '18446744073709551616s' when setting 'datafusion.runtime.list_files_cache_ttl'
 SET datafusion.runtime.list_files_cache_ttl = '18446744073709551616s'
 
 statement ok

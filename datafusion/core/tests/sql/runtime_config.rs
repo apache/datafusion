@@ -158,9 +158,10 @@ async fn test_invalid_memory_limit_when_unit_is_invalid() {
     assert!(result.is_err());
     let error_message = result.unwrap_err().to_string();
     assert!(
-        error_message
-            .contains("Unsupported unit 'X' in 'datafusion.runtime.memory_limit'")
+        error_message.contains("Unsupported unit 'X' in limit '100X'")
             && error_message.contains("Unit must be one of: 'K', 'M', 'G'")
+            && error_message.contains("when setting 'datafusion.runtime.memory_limit'"),
+        "{error_message}"
     );
 }
 
@@ -174,9 +175,12 @@ async fn test_invalid_memory_limit_when_limit_is_not_numeric() {
 
     assert!(result.is_err());
     let error_message = result.unwrap_err().to_string();
-    assert!(error_message.contains(
-        "Failed to parse number from 'datafusion.runtime.memory_limit', limit 'invalid_memory_limit'"
-    ));
+    assert!(
+        error_message
+            .contains("Failed to parse number from limit 'invalid_memory_limit'")
+            && error_message.contains("when setting 'datafusion.runtime.memory_limit'"),
+        "{error_message}"
+    );
 }
 
 #[tokio::test]
