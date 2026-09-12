@@ -510,7 +510,7 @@ cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span
 </div>
 <p><code class="docutils literal notranslate"><span class="pre">sqllogictests</span></code> may be less convenient for new contributors who are familiar with writing <code class="docutils literal notranslate"><span class="pre">.rs</span></code> tests as they require learning another tool. However, <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> based tests are much easier to develop and maintain as they 1) do not require a slow recompile/link cycle and 2) can be automatically updated.</p>
 <p>Like similar systems such as <a class="reference external" href="https://duckdb.org/dev/testing">DuckDB</a>, DataFusion has chosen to trade off a slightly higher barrier to contribution for longer term maintainability.</p>
-<p>DataFusion has integrated <a class="reference external" href="https://sqlite.org/sqllogictest/doc/trunk/about.wiki">sqlite’s test suite</a> as a supplemental test suite that is run whenever a PR is merged into DataFusion. To run it manually please refer to the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md#running-tests-sqlite">README</a> file for instructions.</p>
+<p>DataFusion runs <a class="reference external" href="https://sqlite.org/sqllogictest/doc/trunk/about.wiki">sqlite’s test suite</a> in the merge queue before merging PRs into <code class="docutils literal notranslate"><span class="pre">main</span></code>. For local instructions, see <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md#running-tests-sqlite">Running Tests: sqlite</a>.</p>
 </section>
 <section id="snapshot-testing-cargo-insta">
 <h2>Snapshot testing (<code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">insta</span></code>)<a class="headerlink" href="#snapshot-testing-cargo-insta" title="Link to this heading">#</a></h2>
@@ -524,13 +524,12 @@ cargo<span class="w"> </span>insta<span class="w"> </span>review
 </section>
 <section id="extended-tests">
 <h2>Extended Tests<a class="headerlink" href="#extended-tests" title="Link to this heading">#</a></h2>
-<p>In addition to the standard CI test suite that is run on all PRs prior to merge,
-DataFusion has “extended” tests (defined in <a class="reference external" href="https://github.com/apache/datafusion/blob/main/.github/workflows/extended.yml">extended.yml</a>) that are run on each
-commit to <code class="docutils literal notranslate"><span class="pre">main</span></code>. These tests rarely fail but take significantly longer to run
-than the standard test suite and add important test coverage such as ensuring
-correctness when there are hash collisions and running the relevant portions of
-the entire <a class="reference external" href="https://www.sqlite.org/sqllogictest/dir?ci=tip">sqlite test suite</a>. You can run the extended tests
-locally by following the <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest#running-tests-sqlite">instructions in the documentation</a>.</p>
+<p>DataFusion has extended tests (defined in <a class="reference external" href="https://github.com/apache/datafusion/blob/main/.github/workflows/extended.yml">extended.yml</a>) that take significantly
+longer to run than the standard suite. They provide additional correctness
+coverage and must pass in the merge queue before a PR merges into <code class="docutils literal notranslate"><span class="pre">main</span></code>.</p>
+<p>To conserve CI resources, these tests do not run on ordinary PR updates. They
+also run on pushes to release branches (<code class="docutils literal notranslate"><span class="pre">branch-*</span></code>). You can run them manually.</p>
+<p>For local SQLite test instructions, see the <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest#running-tests-sqlite">instructions in the documentation</a>.</p>
 </section>
 <section id="rust-integration-tests">
 <h2>Rust Integration Tests<a class="headerlink" href="#rust-integration-tests" title="Link to this heading">#</a></h2>
