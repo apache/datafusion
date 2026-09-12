@@ -1865,6 +1865,12 @@ pub struct PhysicalExtensionExprNode {
     pub expr: ::prost::alloc::vec::Vec<u8>,
     #[prost(message, repeated, tag = "2")]
     pub inputs: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    /// Optional type discriminator naming the extension expression, e.g.
+    /// "my_crate.MyExpr". When present and registered in the session's
+    /// PhysicalExprDecoderRegistry, decoding is routed to that registered
+    /// decoder; otherwise it falls back to PhysicalExtensionCodec::try_decode_expr.
+    #[prost(string, optional, tag = "3")]
+    pub expr_name: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalHashExprNode {

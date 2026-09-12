@@ -58,6 +58,7 @@
 //!
 //! [`ExecutionPlan`]: crate::ExecutionPlan
 
+use std::any::Any;
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
@@ -363,6 +364,10 @@ impl PhysicalExprDecode for ExecutionPlanDecodeCtx<'_> {
         schema: &Schema,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         self.decode_expr(node, schema)
+    }
+
+    fn task_ctx(&self) -> Option<&(dyn Any + Send + Sync)> {
+        Some(ExecutionPlanDecodeCtx::task_ctx(self))
     }
 }
 

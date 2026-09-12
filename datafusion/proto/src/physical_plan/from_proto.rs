@@ -46,6 +46,7 @@ use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_fi
 use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
 use datafusion_proto_common::common::proto_error;
 
+use super::expr_registry::lookup_physical_expr_decoder;
 use super::{
     ConverterPlanDecoder, DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
     PhysicalPlanDecodeContext, PhysicalProtoConverterExtension,
@@ -366,16 +367,42 @@ pub fn parse_physical_expr_with_converter(
             SqlSimilarToPattern::try_from_proto(proto, &decode_ctx)?
         }
         ExprType::Extension(extension) => {
-            let inputs: Vec<Arc<dyn PhysicalExpr>> = extension
-                .inputs
-                .iter()
-                .map(|e| proto_converter.proto_to_physical_expr(e, input_schema, ctx))
-                .collect::<Result<_>>()?;
-            ctx.codec().try_decode_expr(
-                extension.expr.as_slice(),
-                &inputs,
-                &decode_ctx,
-            )? as _
+            // An extension expression that named itself on the wire decodes
+            // through the session's registry. Anything else — no name, or a
+            // name this session has no decoder for — takes the codec path,
+            // which is also every node written before `expr_name` existed.
+            let registered = extension.expr_name.as_deref().and_then(|expr_name| {
+                lookup_physical_expr_decoder(ctx.task_ctx(), expr_name)
+            });
+            match registered {
+                Some(decode) => decode(proto, &decode_ctx)?,
+                None => {
+                    let inputs: Vec<Arc<dyn PhysicalExpr>> = extension
+                        .inputs
+                        .iter()
+                        .map(|e| {
+                            proto_converter.proto_to_physical_expr(e, input_schema, ctx)
+                        })
+                        .collect::<Result<_>>()?;
+                    let decoded = ctx.codec().try_decode_expr(
+                        extension.expr.as_slice(),
+                        &inputs,
+                        &decode_ctx,
+                    );
+                    // A node that named itself and then failed the codec is
+                    // overwhelmingly a missing registration, but the codec's
+                    // error cannot say so — it never saw the name. Say it here.
+                    match (decoded, extension.expr_name.as_deref()) {
+                        (Ok(expr), _) => expr as _,
+                        (Err(e), Some(expr_name)) => {
+                            return Err(e.context(format!(
+                                "extension expression '{expr_name}' has no decoder registered in this session, and the PhysicalExtensionCodec could not decode it either. Register it on the session with `SessionConfig::with_physical_expr::<T>()`, where `T::EXPR_NAME` is '{expr_name}'"
+                            )));
+                        }
+                        (Err(e), None) => return Err(e),
+                    }
+                }
+            }
         }
         ExprType::Lambda(_) => LambdaExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::LambdaVariable(_) => {
@@ -498,5 +525,9 @@ impl datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprD
     ) -> Result<Arc<dyn PhysicalExpr>> {
         self.proto_converter
             .proto_to_physical_expr(node, schema, self.ctx)
+    }
+
+    fn task_ctx(&self) -> Option<&(dyn std::any::Any + Send + Sync)> {
+        Some(self.ctx.task_ctx())
     }
 }
