@@ -584,11 +584,13 @@ where
 ///
 /// # Examples
 ///
+/// ```text
 /// generic_append_and_prepend(
 ///     [1, 2, 3], 4, append => [1, 2, 3, 4]
 ///     5, [6, 7, 8], prepend => [5, 6, 7, 8]
 ///     NULL, 4, append => [4]
 /// )
+/// ```
 fn generic_append_and_prepend<O: OffsetSizeTrait>(
     list_array: &GenericListArray<O>,
     element_array: &ArrayRef,
