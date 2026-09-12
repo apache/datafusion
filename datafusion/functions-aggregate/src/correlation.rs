@@ -31,6 +31,7 @@ use arrow::{
     array::ArrayRef,
     datatypes::{DataType, Field},
 };
+use datafusion_expr::DistinctHandling;
 use datafusion_expr::{EmitTo, GroupSelection, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate_multiple;
 use log::debug;
@@ -144,6 +145,13 @@ impl AggregateUDFImpl for Correlation {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         debug!("GroupsAccumulator is created for aggregate function `corr(c1, c2)`");
         Ok(Box::new(CorrelationGroupsAccumulator::new()))
+    }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // Duplicate-sensitive, but the accumulator does not read
+        // `is_distinct` and today silently returns the non-distinct answer.
+        // The tag records the intent; enforcement is a follow-up change.
+        DistinctHandling::Unsupported
     }
 }
 

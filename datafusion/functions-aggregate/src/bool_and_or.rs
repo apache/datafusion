@@ -29,6 +29,7 @@ use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::internal_err;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_common::{downcast_value, not_impl_err};
+use datafusion_expr::DistinctHandling;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{
@@ -183,6 +184,11 @@ impl AggregateUDFImpl for BoolAnd {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // Boolean AND/OR are idempotent: duplicates cannot change the result.
+        DistinctHandling::Ignored
+    }
 }
 
 #[derive(Debug, Default)]
@@ -312,6 +318,11 @@ impl AggregateUDFImpl for BoolOr {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // Boolean AND/OR are idempotent: duplicates cannot change the result.
+        DistinctHandling::Ignored
     }
 }
 

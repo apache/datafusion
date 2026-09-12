@@ -20,6 +20,7 @@
 use arrow::datatypes::Field;
 use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::{Result, not_impl_err};
+use datafusion_expr::DistinctHandling;
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::utils::format_state_name;
@@ -109,5 +110,12 @@ impl AggregateUDFImpl for Grouping {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // Duplicate-sensitive, but the accumulator does not read
+        // `is_distinct` and today silently returns the non-distinct answer.
+        // The tag records the intent; enforcement is a follow-up change.
+        DistinctHandling::Unsupported
     }
 }
