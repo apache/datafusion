@@ -660,6 +660,22 @@ mod tests {
     }
 
     #[test]
+    fn partition_keys_reject_dictionary_null_keys() {
+        let column = DictionaryArray::<Int32Type>::try_new(
+            Int32Array::from(vec![Some(0), None]),
+            Arc::new(StringArray::from(vec!["a"])),
+        )
+        .unwrap();
+        let partition_by = vec![("p".to_string(), column.data_type().clone())];
+        let batch = partition_batch(Arc::new(column));
+        let err = compute_partition_keys_by_row(&batch, &partition_by).unwrap_err();
+        assert_eq!(
+            err.strip_backtrace(),
+            "Execution error: NULL values are not supported for partition column 'p'"
+        );
+    }
+
+    #[test]
     fn partition_keys_accept_unused_dictionary_null_values() {
         let column = dictionary_with_null_value().slice(0, 1);
         let partition_by = vec![("p".to_string(), column.data_type().clone())];
