@@ -200,3 +200,31 @@ SELECT * FROM test_delete_in;
 
 statement ok
 DROP TABLE test_delete_in;
+
+# Test that EXPLAIN DELETE prints the plan and deletes nothing.
+# Regression test for https://github.com/apache/datafusion/issues/24656:
+# the delete used to run while the physical plan was built.
+statement ok
+CREATE TABLE test_delete_explain AS VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+statement ok
+EXPLAIN DELETE FROM test_delete_explain WHERE column1 > 1;
+
+query IT rowsort
+SELECT * FROM test_delete_explain;
+----
+1 a
+2 b
+3 c
+
+# EXPLAIN ANALYZE runs the plan, so it does delete, and it deletes once.
+statement ok
+EXPLAIN ANALYZE DELETE FROM test_delete_explain WHERE column1 > 1;
+
+query IT rowsort
+SELECT * FROM test_delete_explain;
+----
+1 a
+
+statement ok
+DROP TABLE test_delete_explain;
