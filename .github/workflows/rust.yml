@@ -401,12 +401,13 @@ jobs:
       # with transient Docker transport errors. The tests retry the pull
       # themselves, so a failure here is only a warning.
       #
-      # MINIO_IMAGE must match the image used by the `minio` module of the
-      # `testcontainers-modules` crate. The `minio_image_matches_ci_prepull`
-      # test in `datafusion-cli/tests/cli_integration.rs` fails if it drifts.
+      # MINIO_IMAGE must match what the tests start: the tag comes from the
+      # `minio` module of `testcontainers-modules`, the registry from
+      # MINIO_IMAGE_NAME in `datafusion-cli/tests/cli_integration.rs`. The
+      # `minio_image_matches_ci_prepull` test fails if either drifts.
       - name: Pre-pull MinIO image
         env:
-          MINIO_IMAGE: minio/minio:RELEASE.2025-02-28T09-55-16Z
+          MINIO_IMAGE: quay.io/minio/minio:RELEASE.2025-02-28T09-55-16Z
         run: |
           ci/scripts/retry timeout 120 docker pull "$MINIO_IMAGE" \
             || echo "::warning::Could not pre-pull $MINIO_IMAGE, the tests will pull it themselves"

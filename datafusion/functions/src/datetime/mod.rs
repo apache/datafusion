@@ -47,12 +47,12 @@ make_udf_function!(date_part::DatePartFunc, date_part);
 make_udf_function!(date_trunc::DateTruncFunc, date_trunc);
 make_udf_function!(make_date::MakeDateFunc, make_date);
 make_udf_function!(make_time::MakeTimeFunc, make_time);
-make_udf_function!(from_unixtime::FromUnixtimeFunc, from_unixtime);
 make_udf_function!(to_char::ToCharFunc, to_char);
 make_udf_function!(to_date::ToDateFunc, to_date);
 make_udf_function!(to_local_time::ToLocalTimeFunc, to_local_time);
 make_udf_function!(to_time::ToTimeFunc, to_time);
 make_udf_function!(to_unixtime::ToUnixtimeFunc, to_unixtime);
+make_udf_function_with_config!(from_unixtime::FromUnixtimeFunc, from_unixtime);
 make_udf_function_with_config!(to_timestamp::ToTimestampFunc, to_timestamp);
 make_udf_function_with_config!(
     to_timestamp::ToTimestampSecondsFunc,
@@ -79,8 +79,8 @@ pub mod expr_fn {
         "returns current UTC time as a Time64 value",
     ),(
         from_unixtime,
-        "converts an integer to RFC3339 timestamp format string",
-        unixtime
+        "converts an integer of epoch seconds to a second-precision timestamp",
+        @config unixtime
     ),(
         date_bin,
         "coerces an arbitrary timestamp to the start of the nearest specified interval",
@@ -281,7 +281,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         date_bin(),
         date_part(),
         date_trunc(),
-        from_unixtime(),
+        from_unixtime(&config),
         make_date(),
         make_time(),
         now(&config),
