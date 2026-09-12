@@ -714,31 +714,72 @@ mod tests {
 
     #[test]
     fn correlation_scalar_and_grouped_states_are_compatible() -> Result<()> {
-        let values: Vec<ArrayRef> = vec![
-            Arc::new(Float64Array::from(vec![1e9, 1e9 + 7.0, 1e9 + 15.0])),
-            Arc::new(Float64Array::from(vec![3.0, 10.0, 18.0])),
+        let partitions: Vec<Vec<ArrayRef>> = vec![
+            vec![
+                Arc::new(Float64Array::from(vec![1.0, 2.0])),
+                Arc::new(Float64Array::from(vec![3.0, 10.0])),
+            ],
+            vec![
+                Arc::new(Float64Array::from(vec![4.0, 7.0, 11.0, 16.0])),
+                Arc::new(Float64Array::from(vec![2.0, 14.0, 5.0, 20.0])),
+            ],
         ];
-        let mut scalar = CorrelationAccumulator::try_new()?;
-        scalar.update_batch(&values)?;
-        let ScalarValue::Float64(Some(expected)) = scalar.evaluate()? else {
+
+        let mut direct = CorrelationAccumulator::try_new()?;
+        for partition in &partitions {
+            direct.update_batch(partition)?;
+        }
+        let ScalarValue::Float64(Some(expected)) = direct.evaluate()? else {
             panic!("expected a non-null correlation");
         };
-        let state = scalar
-            .state()?
-            .iter()
-            .map(|value| value.to_array_of_size(1))
-            .collect::<Result<Vec<_>>>()?;
-        let mut grouped = CorrelationGroupsAccumulator::new();
-        grouped.merge_batch(&state, &[0], 1)?;
-        let result = grouped.evaluate(EmitTo::All)?;
+
+        let mut scalar_states = Vec::with_capacity(partitions.len());
+        for partition in &partitions {
+            let mut scalar = CorrelationAccumulator::try_new()?;
+            scalar.update_batch(partition)?;
+            let scalar_state = scalar
+                .state()?
+                .into_iter()
+                .map(|value| value.to_array_of_size(1))
+                .collect::<Result<Vec<_>>>()?;
+
+            let mut grouped = CorrelationGroupsAccumulator::new();
+            let group_indices = vec![0; partition[0].len()];
+            grouped.update_batch(partition, &group_indices, None, 1)?;
+            let grouped_state = grouped.state(EmitTo::All)?;
+
+            assert_eq!(
+                scalar_state[0].as_primitive::<UInt64Type>(),
+                grouped_state[0].as_primitive::<UInt64Type>()
+            );
+            for index in 1..6 {
+                assert_eq!(
+                    scalar_state[index].as_primitive::<Float64Type>(),
+                    grouped_state[index].as_primitive::<Float64Type>()
+                );
+            }
+
+            scalar_states.push(scalar_state);
+        }
+
+        let mut grouped_from_scalar = CorrelationGroupsAccumulator::new();
+        for state in &scalar_states {
+            grouped_from_scalar.merge_batch(state, &[0], 1)?;
+        }
+        let result = grouped_from_scalar.evaluate(EmitTo::All)?;
         let result = result.as_primitive::<Float64Type>();
         assert_eq!(result.null_count(), 0);
         assert!((result.value(0) - expected).abs() < 1e-12);
 
-        grouped.update_batch(&values, &[0, 0, 0], None, 1)?;
-        let mut scalar = CorrelationAccumulator::try_new()?;
-        scalar.merge_batch(&grouped.state(EmitTo::All)?)?;
-        let ScalarValue::Float64(Some(result)) = scalar.evaluate()? else {
+        let mut scalar_from_grouped = CorrelationAccumulator::try_new()?;
+        for partition in &partitions {
+            let mut grouped = CorrelationGroupsAccumulator::new();
+            let group_indices = vec![0; partition[0].len()];
+            grouped.update_batch(partition, &group_indices, None, 1)?;
+            let state = grouped.state(EmitTo::All)?;
+            scalar_from_grouped.merge_batch(&state)?;
+        }
+        let ScalarValue::Float64(Some(result)) = scalar_from_grouped.evaluate()? else {
             panic!("expected a non-null correlation");
         };
         assert!((result - expected).abs() < 1e-12);
