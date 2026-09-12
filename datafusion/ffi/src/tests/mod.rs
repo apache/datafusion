@@ -31,6 +31,7 @@ use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{Expr, TableType, col, lit};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::execution_plan::{EvaluationType, SchedulingType};
 use sync_provider::create_sync_table_provider;
 use udf_udaf_udwf::{
     create_ffi_abs_func, create_ffi_first_value_func, create_ffi_random_func,
@@ -179,7 +180,12 @@ extern "C" fn construct_table_provider_factory(
 pub(crate) extern "C" fn create_empty_exec() -> FFI_ExecutionPlan {
     let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
 
-    let plan = Arc::new(EmptyExec::new(schema));
+    // Nondefault properties expose information lost when crossing the library boundary.
+    let plan = Arc::new(
+        EmptyExec::new(schema)
+            .with_scheduling_type(SchedulingType::Cooperative)
+            .with_evaluation_type(EvaluationType::Eager),
+    );
     FFI_ExecutionPlan::new(plan, None)
 }
 

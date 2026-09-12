@@ -21,6 +21,7 @@ mod tests {
     use arrow::datatypes::Schema;
     use arrow_schema::DataType;
     use datafusion_common::DataFusionError;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::tree_node::TreeNodeRecursion;
     use datafusion_ffi::execution_plan::{
         ExecutionPlanPrivateData, FFI_ExecutionPlan, ForeignExecutionPlan,
@@ -28,11 +29,33 @@ mod tests {
     };
     use datafusion_ffi::tests::utils::{get_byte_metrics_exec, get_module};
     use datafusion_physical_expr_common::metrics::{MetricCategory, MetricValue};
+    use datafusion_physical_optimizer::{
+        PhysicalOptimizerRule, ensure_coop::EnsureCooperative,
+    };
     use datafusion_physical_plan::execution_plan::InvariantLevel;
+    use datafusion_physical_plan::execution_plan::{EvaluationType, SchedulingType};
     use datafusion_physical_plan::{
         ChildrenPropertiesMode, ExecutionPlan, ReplaceChildrenOptions,
     };
     use std::sync::Arc;
+
+    #[test]
+    fn test_ffi_execution_plan_properties_cross_library() -> Result<(), DataFusionError> {
+        let module = get_module()?;
+        let ffi_plan = (module.create_empty_exec)();
+        let plan: Arc<dyn ExecutionPlan> = (&ffi_plan).try_into()?;
+        assert!(plan.is::<ForeignExecutionPlan>());
+        assert_eq!(
+            plan.properties().scheduling_type,
+            SchedulingType::Cooperative
+        );
+        assert_eq!(plan.properties().evaluation_type, EvaluationType::Eager);
+
+        // An already cooperative foreign leaf must not gain a redundant wrapper.
+        let optimized = EnsureCooperative::new().optimize(plan, &ConfigOptions::new())?;
+        assert!(optimized.is::<ForeignExecutionPlan>());
+        Ok(())
+    }
 
     #[test]
     #[expect(deprecated)]
