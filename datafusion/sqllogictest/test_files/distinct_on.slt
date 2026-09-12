@@ -425,3 +425,25 @@ FROM t GROUP BY a, b ORDER BY a, total DESC;
 ----
 x 1 30
 y 2 30
+
+# Regression: the inner projection built by the UNNEST rewrite is deduplicated
+# by schema name, and `Expr::schema_name` hides casts at *every* depth. The
+# DISTINCT ON key `1 + 1` and the ORDER BY key `CAST(1 AS BIGINT) + 1` share
+# the same schema name, and both land in that one inner projection, so only one
+# of them may be pushed or the projection gets duplicate field names.
+query II
+SELECT DISTINCT ON (1 + 1)
+    UNNEST([1, 2]) AS item,
+    COUNT(*) OVER () AS n
+ORDER BY CAST(1 AS BIGINT) + 1;
+----
+1 1
+
+# Same, via TRY_CAST.
+query II
+SELECT DISTINCT ON (1 + 1)
+    UNNEST([1, 2]) AS item,
+    COUNT(*) OVER () AS n
+ORDER BY TRY_CAST(1 AS BIGINT) + 1;
+----
+1 1
