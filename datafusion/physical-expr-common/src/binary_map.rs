@@ -511,21 +511,15 @@ where
             else {
                 // Check if the value is already present in the set
                 let entry = self.map.find_mut(hash, |header| {
-                    // Compare the value only when the hashes match and the
-                    // existing entry is itself a long value. The length check
-                    // is what makes reading the buffer below sound: a short
-                    // entry keeps its bytes inlined in `offset_or_inline`
-                    // rather than an offset, so on a hash collision between a
-                    // short and a long value, `header.range()` would be built
-                    // from those bytes and point outside the buffer.
+                    // Without the length test, a short entry colliding on
+                    // `hash` builds `range()` from its inlined bytes and
+                    // reads past the buffer: memory safety, not just a
+                    // wasted comparison.
                     if header.hash != hash || header.len != value_len {
                         return false;
                     }
-                    // Need to compare the bytes in the buffer
-                    // SAFETY: `header` is a long entry of exactly `value_len`
-                    // bytes, so `offset_or_inline` is an offset into `buffer`
-                    // and the whole range was appended before the entry was
-                    // inserted. The buffer is only ever appended to.
+                    // SAFETY: a long entry, so `offset_or_inline` indexes the
+                    // append-only `buffer`, written before the insert.
                     let existing_value =
                         unsafe { self.buffer.get_unchecked(header.range()) };
                     value == existing_value
