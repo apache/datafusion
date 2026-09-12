@@ -4392,7 +4392,7 @@ impl ScalarValue {
     pub fn cast_to_with_options(
         &self,
         target_type: &DataType,
-        cast_options: &CastOptions<'static>,
+        cast_options: &CastOptions<'_>,
     ) -> Result<Self> {
         let source_type = self.data_type();
 

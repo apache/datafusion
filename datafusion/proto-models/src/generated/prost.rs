@@ -1846,6 +1846,10 @@ pub struct PhysicalTryCastNode {
     pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
     #[prost(message, optional, tag = "2")]
     pub arrow_type: ::core::option::Option<super::datafusion_common::ArrowType>,
+    /// Present only for an explicit target. Absent nodes retain the legacy
+    /// type-only behavior, inheriting metadata from the input expression.
+    #[prost(message, optional, tag = "3")]
+    pub target_field: ::core::option::Option<super::datafusion_common::Field>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalCastNode {
@@ -1853,6 +1857,43 @@ pub struct PhysicalCastNode {
     pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
     #[prost(message, optional, tag = "2")]
     pub arrow_type: ::core::option::Option<super::datafusion_common::ArrowType>,
+    /// Present only for an explicit target. Absent nodes retain the legacy
+    /// type-only behavior, inheriting metadata and nullability from the input.
+    #[prost(message, optional, tag = "3")]
+    pub target_field: ::core::option::Option<super::datafusion_common::Field>,
+    /// Absent means DataFusion's default cast options.
+    #[prost(message, optional, tag = "4")]
+    pub cast_options: ::core::option::Option<PhysicalCastOptions>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PhysicalCastOptions {
+    #[prost(bool, tag = "1")]
+    pub safe: bool,
+    #[prost(message, optional, tag = "2")]
+    pub format_options: ::core::option::Option<PhysicalFormatOptions>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PhysicalFormatOptions {
+    #[prost(bool, tag = "1")]
+    pub safe: bool,
+    #[prost(string, tag = "2")]
+    pub null: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "3")]
+    pub date_format: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "4")]
+    pub datetime_format: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "5")]
+    pub timestamp_format: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "6")]
+    pub timestamp_tz_format: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "7")]
+    pub time_format: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(enumeration = "PhysicalDurationFormat", tag = "8")]
+    pub duration_format: i32,
+    #[prost(bool, tag = "9")]
+    pub types_info: bool,
+    #[prost(bool, tag = "10")]
+    pub quoted_strings: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalNegativeNode {
@@ -2860,6 +2901,32 @@ impl InsertOp {
             "Append" => Some(Self::Append),
             "Overwrite" => Some(Self::Overwrite),
             "Replace" => Some(Self::Replace),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum PhysicalDurationFormat {
+    Iso8601 = 0,
+    Pretty = 1,
+}
+impl PhysicalDurationFormat {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Iso8601 => "PHYSICAL_DURATION_FORMAT_ISO8601",
+            Self::Pretty => "PHYSICAL_DURATION_FORMAT_PRETTY",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "PHYSICAL_DURATION_FORMAT_ISO8601" => Some(Self::Iso8601),
+            "PHYSICAL_DURATION_FORMAT_PRETTY" => Some(Self::Pretty),
             _ => None,
         }
     }
