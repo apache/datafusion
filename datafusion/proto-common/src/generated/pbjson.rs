@@ -2309,6 +2309,15 @@ impl serde::Serialize for CsvWriterOptions {
         if self.ignore_trailing_whitespace {
             len += 1;
         }
+        if self.compression_level.is_some() {
+            len += 1;
+        }
+        if !self.timestamp_tz_format.is_empty() {
+            len += 1;
+        }
+        if !self.terminator.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.CsvWriterOptions", len)?;
         if self.compression != 0 {
             let v = CompressionTypeVariant::try_from(self.compression)
@@ -2356,6 +2365,17 @@ impl serde::Serialize for CsvWriterOptions {
         if self.ignore_trailing_whitespace {
             struct_ser.serialize_field("ignoreTrailingWhitespace", &self.ignore_trailing_whitespace)?;
         }
+        if let Some(v) = self.compression_level.as_ref() {
+            struct_ser.serialize_field("compressionLevel", v)?;
+        }
+        if !self.timestamp_tz_format.is_empty() {
+            struct_ser.serialize_field("timestampTzFormat", &self.timestamp_tz_format)?;
+        }
+        if !self.terminator.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("terminator", pbjson::private::base64::encode(&self.terminator).as_str())?;
+        }
         struct_ser.end()
     }
 }
@@ -2390,6 +2410,11 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
             "ignoreLeadingWhitespace",
             "ignore_trailing_whitespace",
             "ignoreTrailingWhitespace",
+            "compression_level",
+            "compressionLevel",
+            "timestamp_tz_format",
+            "timestampTzFormat",
+            "terminator",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -2408,6 +2433,9 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
             QuoteStyle,
             IgnoreLeadingWhitespace,
             IgnoreTrailingWhitespace,
+            CompressionLevel,
+            TimestampTzFormat,
+            Terminator,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -2443,6 +2471,9 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                             "quoteStyle" | "quote_style" => Ok(GeneratedField::QuoteStyle),
                             "ignoreLeadingWhitespace" | "ignore_leading_whitespace" => Ok(GeneratedField::IgnoreLeadingWhitespace),
                             "ignoreTrailingWhitespace" | "ignore_trailing_whitespace" => Ok(GeneratedField::IgnoreTrailingWhitespace),
+                            "compressionLevel" | "compression_level" => Ok(GeneratedField::CompressionLevel),
+                            "timestampTzFormat" | "timestamp_tz_format" => Ok(GeneratedField::TimestampTzFormat),
+                            "terminator" => Ok(GeneratedField::Terminator),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -2476,6 +2507,9 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                 let mut quote_style__ = None;
                 let mut ignore_leading_whitespace__ = None;
                 let mut ignore_trailing_whitespace__ = None;
+                let mut compression_level__ = None;
+                let mut timestamp_tz_format__ = None;
+                let mut terminator__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Compression => {
@@ -2562,6 +2596,28 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                             }
                             ignore_trailing_whitespace__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::CompressionLevel => {
+                            if compression_level__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("compressionLevel"));
+                            }
+                            compression_level__ =
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
+                        GeneratedField::TimestampTzFormat => {
+                            if timestamp_tz_format__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("timestampTzFormat"));
+                            }
+                            timestamp_tz_format__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Terminator => {
+                            if terminator__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("terminator"));
+                            }
+                            terminator__ =
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
                     }
                 }
                 Ok(CsvWriterOptions {
@@ -2579,6 +2635,9 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                     quote_style: quote_style__.unwrap_or_default(),
                     ignore_leading_whitespace: ignore_leading_whitespace__.unwrap_or_default(),
                     ignore_trailing_whitespace: ignore_trailing_whitespace__.unwrap_or_default(),
+                    compression_level: compression_level__,
+                    timestamp_tz_format: timestamp_tz_format__.unwrap_or_default(),
+                    terminator: terminator__.unwrap_or_default(),
                 })
             }
         }

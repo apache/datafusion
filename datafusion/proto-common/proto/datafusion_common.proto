@@ -471,6 +471,12 @@ message CsvWriterOptions {
   bool ignore_leading_whitespace = 13;
   // Whether to ignore trailing whitespace in string values
   bool ignore_trailing_whitespace = 14;
+  // Optional compression level
+  optional uint32 compression_level = 15;
+  // Optional timestamp format for timestamp with timezone arrays
+  string timestamp_tz_format = 16;
+  // Optional line terminator. Empty defaults to LF; valid values are one byte or CRLF
+  bytes terminator = 17;
 }
 
 // Options controlling CSV format
