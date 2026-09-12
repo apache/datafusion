@@ -73,7 +73,7 @@ jobs:
       - name: Rust Dependency Cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
         with:
-          shared-key: "amd-ci-check" # this job uses it's own cache becase check has a separate cache and we need it to be fast as it blocks other jobs
+          shared-key: "amd-ci-check" # Keep cargo check artifacts separate from test builds.
           save-if: ${{ github.ref_name == 'main' }}
       - name: Prepare cargo build
         # `--locked` asserts that Cargo.lock is up to date with the manifest.
@@ -95,6 +95,11 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        with:
+          save-if: false # The workspace and functions checks save this cache on main.
+          shared-key: "amd-ci-check"
       - name: Check datafusion-common (default features)
         run: cargo xtask ci step check datafusion-common default
       #
@@ -158,6 +163,11 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        with:
+          save-if: false # The workspace and functions checks save this cache on main.
+          shared-key: "amd-ci-check"
       - name: Check datafusion-proto (default features)
         run: cargo xtask ci step check datafusion-proto default
       #
@@ -189,6 +199,11 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        with:
+          save-if: false # The workspace and functions checks save this cache on main.
+          shared-key: "amd-ci-check"
       - name: Check datafusion-ffi (no-default-features)
         run: cargo xtask ci step check datafusion-ffi no-default
 
@@ -275,6 +290,12 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        with:
+          # Warm GitHub's cache when linux-build-lib saves to Runs-On.
+          save-if: ${{ github.ref_name == 'main' }}
+          shared-key: "amd-ci-check"
       - name: Check datafusion-functions (default features)
         run: cargo xtask ci step check datafusion-functions default
       #
@@ -314,6 +335,11 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        with:
+          save-if: false # The workspace and functions checks save this cache on main.
+          shared-key: "amd-ci-check"
       - name: Check datafusion-spark (default features)
         run: cargo check --profile ci --all-targets -p datafusion-spark
       #
