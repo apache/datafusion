@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::mem::size_of;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray};
@@ -29,6 +28,7 @@ use datafusion_expr_common::groups_accumulator::{
 };
 
 use super::accumulate::NullState;
+use super::blocks::BlockedVec;
 
 /// An accumulator that implements a single operation over
 /// [`ArrowPrimitiveType`] where the accumulated state is the same as
@@ -46,7 +46,7 @@ where
     F: Fn(&mut T::Native, T::Native) + Send + Sync + 'static,
 {
     /// values per group, stored as the native type
-    values: Vec<T::Native>,
+    values: BlockedVec<T::Native>,
 
     /// The output type (needed for Decimal precision and scale)
     data_type: DataType,
@@ -68,7 +68,7 @@ where
 {
     pub fn new(data_type: &DataType, prim_fn: F) -> Self {
         Self {
-            values: vec![],
+            values: BlockedVec::new(),
             data_type: data_type.clone(),
             null_state: NullState::new(),
             starting_value: T::default_value(),
@@ -102,23 +102,45 @@ where
         self.values.resize(total_num_groups, self.starting_value);
 
         // NullState dispatches / handles tracking nulls and groups that saw no values
-        self.null_state.accumulate(
-            group_indices,
-            values,
-            opt_filter,
-            total_num_groups,
-            |group_index, new_value| {
-                // SAFETY: group_index is guaranteed to be in bounds
-                let value = unsafe { self.values.get_unchecked_mut(group_index) };
-                (self.prim_fn)(value, new_value);
-            },
-        );
+        if let Some(values_block) = self.values.as_single_block_mut() {
+            self.null_state.accumulate(
+                group_indices,
+                values,
+                opt_filter,
+                total_num_groups,
+                |group_index, new_value| {
+                    // SAFETY: group_index is guaranteed to be in bounds
+                    let value = unsafe { values_block.get_unchecked_mut(group_index) };
+                    (self.prim_fn)(value, new_value);
+                },
+            );
+        } else {
+            // Several blocks: resolve each chunk's addresses ahead of its
+            // update loop so the loop's cache misses stay independent.
+            let resolver = self.values.address_resolver();
+            self.null_state.accumulate_resolved(
+                group_indices,
+                values,
+                opt_filter,
+                total_num_groups,
+                |groups, addrs| resolver.resolve(groups, addrs),
+                |value, _, new_value| {
+                    // SAFETY: `resolve` returned the address of a live
+                    // element, and the resolver borrows the blocks for the
+                    // whole call.
+                    (self.prim_fn)(unsafe { &mut *value }, new_value);
+                },
+            );
+        }
 
         Ok(())
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let values = emit_to.take_needed(&mut self.values);
+        let values = match emit_to {
+            EmitTo::All => self.values.take_all(),
+            EmitTo::First(n) => self.values.take_first(n),
+        };
         let nulls = self.null_state.build(emit_to);
         let values = PrimitiveArray::<T>::new(values.into(), nulls) // no copy
             .with_data_type(self.data_type.clone());
@@ -127,8 +149,10 @@ where
 
     fn evaluate_preserving(&mut self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
         selection.validate_num_groups(self.values.len())?;
-        let values: Vec<T::Native> =
-            selection.iter().map(|index| self.values[index]).collect();
+        let values: Vec<T::Native> = selection
+            .iter()
+            .map(|index| *self.values.get(index))
+            .collect();
         let nulls = self.null_state.build_preserving(selection)?;
         let values = PrimitiveArray::<T>::new(values.into(), nulls)
             .with_data_type(self.data_type.clone());
@@ -217,15 +241,63 @@ where
         Ok(vec![Arc::new(state_values)])
     }
     fn size(&self) -> usize {
-        self.values.capacity() * size_of::<T::Native>() + self.null_state.size()
+        self.values.allocated_size() + self.null_state.size()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::Int64Array;
+    use arrow::array::{Array, Int64Array};
     use arrow::datatypes::Int64Type;
+
+    /// Groups that span several blocks are updated through resolved
+    /// addresses and emitted in group order, with and without nulls and
+    /// filters, and for both emit modes.
+    #[test]
+    fn multi_block_groups_update_and_emit_in_order() -> Result<()> {
+        const BLOCK: usize = BlockedVec::<i64>::BLOCK_LEN;
+        let total = BLOCK + 5;
+        let mut accumulator = PrimitiveGroupsAccumulator::<Int64Type, _>::new(
+            &DataType::Int64,
+            |current, value| *current += value,
+        );
+        // Rows alternate between the two blocks; row 3 is null and row 5 is
+        // filtered out, so groups 1 and 3 never see a value.
+        let groups = vec![0, BLOCK, BLOCK + 4, 1, 0, 3, BLOCK + 4];
+        let values: ArrayRef = Arc::new(Int64Array::from(vec![
+            Some(1),
+            Some(2),
+            Some(3),
+            None,
+            Some(4),
+            Some(5),
+            Some(6),
+        ]));
+        let filter = BooleanArray::from(vec![true, true, true, true, true, false, true]);
+        accumulator.update_batch(&[values], &groups, Some(&filter), total)?;
+
+        let all = accumulator.evaluate_preserving(GroupSelection::all(total))?;
+        let all = all.as_primitive::<Int64Type>();
+        assert_eq!(all.len(), total);
+        assert_eq!(all.value(0), 5);
+        assert!(all.is_null(1));
+        assert!(all.is_null(3));
+        assert_eq!(all.value(BLOCK), 2);
+        assert_eq!(all.value(BLOCK + 4), 9);
+        assert_eq!(all.null_count(), total - 3);
+
+        // First(n) across the block boundary keeps the rest addressable.
+        let first = accumulator.evaluate(EmitTo::First(BLOCK + 1))?;
+        let first = first.as_primitive::<Int64Type>();
+        assert_eq!(first.len(), BLOCK + 1);
+        assert_eq!(first.value(BLOCK), 2);
+        let rest = accumulator.evaluate(EmitTo::All)?;
+        let rest = rest.as_primitive::<Int64Type>();
+        assert_eq!(rest.len(), 4);
+        assert_eq!(rest.value(3), 9);
+        Ok(())
+    }
 
     #[test]
     fn preserving_reads_do_not_change_accumulator_state() -> Result<()> {

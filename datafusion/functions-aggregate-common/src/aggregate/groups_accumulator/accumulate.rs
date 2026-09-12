@@ -212,6 +212,46 @@ impl NullState {
         });
     }
 
+    /// [`Self::accumulate`] for state that is not addressed by group index
+    /// directly: `resolve` turns a chunk of group indices into the addresses
+    /// of their state and `value_fn(addr, group_index, value)` updates
+    /// through them. See [`accumulate_resolved`].
+    pub fn accumulate_resolved<T, S, R, F>(
+        &mut self,
+        group_indices: &[usize],
+        values: &PrimitiveArray<T>,
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+        resolve: R,
+        mut value_fn: F,
+    ) where
+        T: ArrowPrimitiveType + Send,
+        R: FnMut(&[usize], &mut [*mut S]),
+        F: FnMut(*mut S, usize, T::Native),
+    {
+        if opt_filter.is_none()
+            && values.null_count() == 0
+            && let SeenValues::All { num_values } = &mut self.seen_values
+            && new_groups_are_dense(group_indices, *num_values, total_num_groups)
+        {
+            accumulate_resolved(group_indices, values, None, resolve, value_fn);
+            *num_values = total_num_groups;
+            return;
+        }
+
+        let seen_values = self.seen_values.get_builder(total_num_groups);
+        accumulate_resolved(
+            group_indices,
+            values,
+            opt_filter,
+            resolve,
+            |addr, group_index, value| {
+                seen_values.set_bit(group_index, true);
+                value_fn(addr, group_index, value);
+            },
+        );
+    }
+
     /// Invokes `value_fn(group_index, value)` for each non null, non
     /// filtered value in `values`, while tracking which groups have
     /// seen null inputs and which groups have seen any inputs, for
@@ -580,6 +620,141 @@ pub fn accumulate_multiple<T, F>(
     }
 }
 
+/// Rows per address-resolution chunk of [`accumulate_resolved`]: small
+/// enough that a chunk's group indices, input values and resolved addresses
+/// all stay in L1 while the update loop runs over them, and that the cache
+/// lines the resolve pass prefetches are still there when the loop reaches
+/// them.
+pub const RESOLVE_CHUNK: usize = 256;
+
+/// [`accumulate`] for state that is not addressed by group index directly.
+///
+/// Rows are processed in chunks of [`RESOLVE_CHUNK`]. For each chunk,
+/// `resolve(group_indices, addrs)` first fills `addrs[i]` with the address
+/// of the state of `group_indices[i]`; the update loop then walks the
+/// resolved addresses, calling `value_fn(addr, group_index, value)` for every
+/// non null, non filtered row, exactly as [`accumulate`] calls its
+/// `value_fn(group_index, value)`.
+///
+/// The two passes keep the update loop's memory accesses independent of one
+/// another. State kept in blocks (see `BlockedVec`) would otherwise be
+/// reached through `blocks[g >> SHIFT][g & MASK]`, where the block pointer
+/// has to load before the state access can be issued, and that dependency
+/// serializes cache misses a flat `values[g]` loop overlaps; at high
+/// cardinality the loop is bound by exactly that memory-level parallelism.
+///
+/// `value_fn` receives raw pointers: `resolve` must return pointers that stay
+/// valid for the whole call, and the caller dereferences them.
+pub fn accumulate_resolved<T, S, R, F>(
+    group_indices: &[usize],
+    values: &PrimitiveArray<T>,
+    opt_filter: Option<&BooleanArray>,
+    mut resolve: R,
+    mut value_fn: F,
+) where
+    T: ArrowPrimitiveType + Send,
+    R: FnMut(&[usize], &mut [*mut S]),
+    F: FnMut(*mut S, usize, T::Native),
+{
+    let data: &[T::Native] = values.values();
+    assert_eq!(data.len(), group_indices.len());
+    if let Some(filter) = opt_filter {
+        assert_eq!(filter.len(), group_indices.len());
+    }
+    let mut addrs = [std::ptr::null_mut::<S>(); RESOLVE_CHUNK];
+
+    let chunks = group_indices
+        .chunks(RESOLVE_CHUNK)
+        .zip(data.chunks(RESOLVE_CHUNK));
+    for (chunk, (groups, data)) in chunks.enumerate() {
+        let first_row = chunk * RESOLVE_CHUNK;
+        let addrs = &mut addrs[..groups.len()];
+        resolve(groups, addrs);
+        let addrs = &*addrs;
+        let rows = addrs.iter().zip(groups).zip(data);
+
+        match (values.null_count() > 0, opt_filter) {
+            // no nulls, no filter
+            (false, None) => {
+                rows.for_each(|((&addr, &group_index), &new_value)| {
+                    value_fn(addr, group_index, new_value)
+                });
+            }
+            // nulls, no filter: 64 rows per validity word, as in `accumulate`
+            (true, None) => {
+                let nulls = values
+                    .nulls()
+                    .unwrap()
+                    .inner()
+                    .slice(first_row, groups.len());
+                let bit_chunks = nulls.bit_chunks();
+                let addr_chunks = addrs.chunks_exact(64);
+                let group_chunks = groups.chunks_exact(64);
+                let data_chunks = data.chunks_exact(64);
+                let addr_remainder = addr_chunks.remainder();
+                let group_remainder = group_chunks.remainder();
+                let data_remainder = data_chunks.remainder();
+
+                addr_chunks
+                    .zip(group_chunks)
+                    .zip(data_chunks)
+                    .zip(bit_chunks.iter())
+                    .for_each(|(((addrs, groups), data), mask)| {
+                        let mut index_mask = 1;
+                        addrs.iter().zip(groups).zip(data).for_each(
+                            |((&addr, &group_index), &new_value)| {
+                                if (mask & index_mask) != 0 {
+                                    value_fn(addr, group_index, new_value);
+                                }
+                                index_mask <<= 1;
+                            },
+                        )
+                    });
+
+                let remainder_bits = bit_chunks.remainder_bits();
+                addr_remainder
+                    .iter()
+                    .zip(group_remainder)
+                    .zip(data_remainder)
+                    .enumerate()
+                    .for_each(|(i, ((&addr, &group_index), &new_value))| {
+                        if remainder_bits & (1 << i) != 0 {
+                            value_fn(addr, group_index, new_value);
+                        }
+                    });
+            }
+            // no nulls, but a filter
+            (false, Some(filter)) => {
+                let filter = filter.slice(first_row, groups.len());
+                rows.zip(filter.iter()).for_each(
+                    |(((&addr, &group_index), &new_value), filter_value)| {
+                        if filter_value == Some(true) {
+                            value_fn(addr, group_index, new_value);
+                        }
+                    },
+                );
+            }
+            // both null values and filters
+            (true, Some(filter)) => {
+                let filter = filter.slice(first_row, groups.len());
+                let values = values.slice(first_row, groups.len());
+                addrs
+                    .iter()
+                    .zip(groups)
+                    .zip(values.iter())
+                    .zip(filter.iter())
+                    .for_each(|(((&addr, &group_index), new_value), filter_value)| {
+                        if filter_value == Some(true)
+                            && let Some(new_value) = new_value
+                        {
+                            value_fn(addr, group_index, new_value)
+                        }
+                    });
+            }
+        }
+    }
+}
+
 /// This function is called to update the accumulator state per row
 /// when the value is not needed (e.g. COUNT)
 ///
@@ -761,6 +936,62 @@ mod test {
             filter,
         }
         .run()
+    }
+
+    /// `accumulate_resolved` visits exactly the rows `accumulate` visits, in
+    /// the same order, for every null/filter combination and chunk boundary.
+    #[test]
+    fn accumulate_resolved_matches_accumulate() {
+        let len = 3 * RESOLVE_CHUNK + 77;
+        let group_indices: Vec<usize> = (0..len).map(|i| (i * 7919) % 1000).collect();
+        let values_no_nulls = UInt32Array::from_iter_values((0..len).map(|i| i as u32));
+        let values_with_nulls = UInt32Array::from_iter(
+            (0..len).map(|i| if i % 3 == 0 { None } else { Some(i as u32) }),
+        );
+        let filter = BooleanArray::from_iter((0..len).map(|i| match i % 5 {
+            0 => None,
+            1 => Some(false),
+            _ => Some(true),
+        }));
+        let mut state = vec![0u64; 1000];
+
+        for values in [&values_no_nulls, &values_with_nulls] {
+            for opt_filter in [None, Some(&filter)] {
+                let mut expected = vec![];
+                super::accumulate(&group_indices, values, opt_filter, |g, v| {
+                    expected.push((g, v))
+                });
+                let mut actual = vec![];
+                accumulate_resolved(
+                    &group_indices,
+                    values,
+                    opt_filter,
+                    |groups, addrs| {
+                        for (addr, &g) in addrs.iter_mut().zip(groups) {
+                            *addr = &raw mut state[g];
+                        }
+                    },
+                    |addr, g, v| {
+                        // SAFETY: `addr` points into `state`, which outlives the call
+                        unsafe { *addr += 1 };
+                        actual.push((g, v));
+                    },
+                );
+                assert_eq!(actual, expected);
+            }
+        }
+        assert_eq!(
+            state.iter().sum::<u64>() as usize,
+            4 * len - {
+                // rows skipped: nulls in two runs, filter in two runs, both in one
+                let nulls = values_with_nulls.null_count();
+                let filtered = filter.iter().filter(|f| *f != Some(true)).count();
+                let both = (0..len)
+                    .filter(|&i| i % 3 == 0 || !filter.value(i) || filter.is_null(i))
+                    .count();
+                nulls + filtered + both
+            }
+        );
     }
 
     #[test]

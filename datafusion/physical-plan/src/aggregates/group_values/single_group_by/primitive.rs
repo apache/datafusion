@@ -24,9 +24,8 @@ use arrow::array::{
 use arrow::datatypes::{DataType, i256};
 use datafusion_common::Result;
 use datafusion_common::hash_utils::RandomState;
-use datafusion_common::utils::split_vec_min_alloc;
-use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::{EmitTo, GroupSelection};
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::blocks::BlockedVec;
 use half::f16;
 use hashbrown::hash_table::HashTable;
 #[cfg(not(feature = "force_hash_collisions"))]
@@ -106,17 +105,15 @@ pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
     /// Stores `(group_index, value)` under the hash of the value.
     ///
     /// The value is kept in the entry so a probe compares against the
-    /// bucket it already loaded and never reads `values`: one cache miss
-    /// per row less than looking the group's value up by index. Rehashing
-    /// recomputes hashes from the stored values, which for primitives is
-    /// cheaper than the wider entry a stored hash would need (see
-    /// <https://github.com/apache/datafusion/issues/15961> for why the hash
-    /// used to be stored).
+    /// bucket it already loaded and never reads `values`, which is one
+    /// cache miss per row less than looking the group's value up by index
+    /// (and what lets `values` live in blocks at no cost to the probe).
+    /// Rehashing recomputes hashes from the stored values.
     map: HashTable<(usize, T::Native)>,
     /// The group index of the null value if any
     null_group: Option<usize>,
     /// The values for each group index
-    values: Vec<T::Native>,
+    values: BlockedVec<T::Native>,
     /// The random state used to generate hashes
     random_state: RandomState,
 }
@@ -127,7 +124,7 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
         Self {
             data_type,
             map: HashTable::with_capacity(128),
-            values: Vec::with_capacity(128),
+            values: BlockedVec::with_capacity(128),
             null_group: None,
             random_state: crate::aggregates::AGGREGATION_HASH_SEED,
         }
@@ -210,7 +207,7 @@ where
         let array: PrimitiveArray<T> = match emit_to {
             EmitTo::All => {
                 self.map.clear();
-                build_primitive(std::mem::take(&mut self.values), self.null_group.take())
+                build_primitive(self.values.take_all(), self.null_group.take())
             }
             EmitTo::First(n) => {
                 self.map.retain(|entry| {
@@ -234,7 +231,7 @@ where
                     Some(_) => self.null_group.take(),
                     None => None,
                 };
-                build_primitive(split_vec_min_alloc(&mut self.values, n), null_group)
+                build_primitive(self.values.take_first(n), null_group)
             }
         };
 
@@ -246,8 +243,10 @@ where
         selection: GroupSelection<'_>,
     ) -> Result<Vec<ArrayRef>> {
         selection.validate_num_groups(self.values.len())?;
-        let values: Vec<T::Native> =
-            selection.iter().map(|index| self.values[index]).collect();
+        let values: Vec<T::Native> = selection
+            .iter()
+            .map(|index| *self.values.get(index))
+            .collect();
         let nulls = if let Some(null_group) = self.null_group {
             let mut nulls = NullBufferBuilder::new(values.len());
             for index in selection.iter() {
@@ -282,7 +281,7 @@ where
 mod tests {
     use super::*;
     use arrow::array::types::Int32Type;
-    use arrow::array::{ArrayRef, Int32Array};
+    use arrow::array::{Array, ArrayRef, Int32Array};
     use arrow::datatypes::DataType;
     use datafusion_expr::EmitTo;
     use std::sync::Arc;
@@ -305,7 +304,7 @@ mod tests {
         let arr: ArrayRef = Arc::new(Int32Array::from_iter_values(0..20i32));
         let mut groups = vec![];
         gv.intern(&[arr], &mut groups)?;
-        let capacity_before = gv.values.capacity(); // 128
+        let capacity_before = gv.values.allocated_size(); // 128 values
 
         // n=4, n*2=8 <= len=20 -> drain branch
         let emitted = gv.emit(EmitTo::First(4))?;
@@ -315,13 +314,57 @@ mod tests {
         // `self.values` must retain its original large allocation.
         // Old split_off+swap left it with a fresh small allocation (~16).
         assert_eq!(
-            gv.values.capacity(),
+            gv.values.allocated_size(),
             capacity_before,
             "self.values capacity {} should equal original {} after small First(n) emit",
-            gv.values.capacity(),
+            gv.values.allocated_size(),
             capacity_before,
         );
 
+        Ok(())
+    }
+
+    /// Values interned past one block are found again, emitted in group
+    /// order, and `First(n)` across the block boundary renumbers the rest.
+    #[test]
+    fn intern_and_emit_across_blocks() -> Result<()> {
+        const BLOCK: usize = BlockedVec::<i32>::BLOCK_LEN;
+        let mut gv = GroupValuesPrimitive::<Int32Type>::new(DataType::Int32);
+        let n = BLOCK + 3;
+        let mut groups = vec![];
+        let arr: ArrayRef = Arc::new(Int32Array::from_iter_values(0..n as i32));
+        gv.intern(&[arr], &mut groups)?;
+        assert_eq!(groups, (0..n).collect::<Vec<_>>());
+        assert_eq!(gv.values.num_blocks(), 2);
+
+        // Re-interning finds every existing group without adding any.
+        let again: ArrayRef =
+            Arc::new(Int32Array::from(vec![Some(BLOCK as i32), None, Some(0)]));
+        gv.intern(&[again], &mut groups)?;
+        assert_eq!(groups, vec![BLOCK, n, 0]);
+        assert_eq!(gv.len(), n + 1);
+
+        let first = gv.emit(EmitTo::First(BLOCK + 1))?;
+        assert_eq!(first[0].len(), BLOCK + 1);
+        assert_eq!(
+            first[0].as_primitive::<Int32Type>().value(BLOCK),
+            BLOCK as i32
+        );
+
+        // The null group and the value `BLOCK + 2` were renumbered down.
+        gv.intern(
+            &[Arc::new(Int32Array::from(vec![
+                None,
+                Some(BLOCK as i32 + 2),
+            ]))],
+            &mut groups,
+        )?;
+        assert_eq!(groups, vec![2, 1]);
+        let rest = gv.emit(EmitTo::All)?;
+        let rest = rest[0].as_primitive::<Int32Type>();
+        assert_eq!(rest.len(), 3);
+        assert_eq!(rest.value(1), BLOCK as i32 + 2);
+        assert!(rest.is_null(2));
         Ok(())
     }
 }
