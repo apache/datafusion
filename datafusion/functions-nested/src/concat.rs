@@ -572,7 +572,8 @@ where
 ///
 /// This function takes a ListArray, an ArrayRef, a FieldRef, and a boolean flag
 /// indicating whether to append or prepend the elements. It returns a `Result<ArrayRef>`
-/// representing the resulting ListArray after the operation.
+/// representing the resulting ListArray after the operation. A NULL list is
+/// treated as an empty list, so its result holds only the element.
 ///
 /// # Arguments
 ///
@@ -586,6 +587,7 @@ where
 /// generic_append_and_prepend(
 ///     [1, 2, 3], 4, append => [1, 2, 3, 4]
 ///     5, [6, 7, 8], prepend => [5, 6, 7, 8]
+///     NULL, 4, append => [4]
 /// )
 fn generic_append_and_prepend<O: OffsetSizeTrait>(
     list_array: &GenericListArray<O>,
@@ -612,8 +614,14 @@ where
     let element_index = 1;
 
     for (row_index, offset_window) in list_array.offsets().windows(2).enumerate() {
-        let start = offset_window[0].to_usize().unwrap();
-        let end = offset_window[1].to_usize().unwrap();
+        let (start, end) = if list_array.is_null(row_index) {
+            (0, 0)
+        } else {
+            (
+                offset_window[0].to_usize().unwrap(),
+                offset_window[1].to_usize().unwrap(),
+            )
+        };
         if is_append {
             mutable.try_extend(values_index, start, end)?;
             mutable.try_extend(element_index, row_index, row_index + 1)?;
