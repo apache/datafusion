@@ -154,6 +154,7 @@ async fn row_count_demuxer(
     let exec_options = &context.session_config().options().execution;
 
     let max_rows_per_file = exec_options.soft_max_rows_per_output_file.get();
+    let max_bytes_per_file = exec_options.soft_max_bytes_per_output_file.get();
     let max_buffered_batches = exec_options.max_buffered_batches_per_output_file.get();
     let minimum_parallel_files = exec_options.minimum_parallel_output_files.get();
     let mut part_idx = 0;
@@ -163,6 +164,7 @@ async fn row_count_demuxer(
 
     let mut next_send_steam = 0;
     let mut row_counts = Vec::with_capacity(minimum_parallel_files);
+    let mut bytes_counts = Vec::with_capacity(minimum_parallel_files);
 
     // Overrides if single_file_output is set
     let minimum_parallel_files = if single_file_output {
@@ -177,6 +179,12 @@ async fn row_count_demuxer(
         max_rows_per_file
     };
 
+    let max_bytes_per_file = if single_file_output {
+        usize::MAX
+    } else {
+        max_bytes_per_file
+    };
+
     if single_file_output {
         // ensure we have one file open, even when the input stream is empty
         open_file_streams.push(create_new_file_stream(
@@ -189,6 +197,7 @@ async fn row_count_demuxer(
             &mut tx,
         )?);
         row_counts.push(0);
+        bytes_counts.push(0);
         part_idx += 1;
     }
 
@@ -209,9 +218,13 @@ async fn row_count_demuxer(
                 &mut tx,
             )?);
             row_counts.push(0);
+            bytes_counts.push(0);
             part_idx += 1;
-        } else if row_counts[next_send_steam] >= max_rows_per_file {
+        } else if row_counts[next_send_steam] >= max_rows_per_file
+            || bytes_counts[next_send_steam] >= max_bytes_per_file
+        {
             row_counts[next_send_steam] = 0;
+            bytes_counts[next_send_steam] = 0;
             open_file_streams[next_send_steam] = create_new_file_stream(
                 &base_output_path,
                 &write_id,
@@ -224,6 +237,7 @@ async fn row_count_demuxer(
             part_idx += 1;
         }
         row_counts[next_send_steam] += rb.num_rows();
+        bytes_counts[next_send_steam] += rb.get_array_memory_size();
         open_file_streams[next_send_steam]
             .send(rb)
             .await

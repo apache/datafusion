@@ -722,6 +722,10 @@ mod tests {
             "10".into(),
         );
         config_map.insert(
+            "datafusion.execution.soft_max_bytes_per_output_file".into(),
+            "10".into(),
+        );
+        config_map.insert(
             "datafusion.execution.parquet.compression".into(),
             "zstd(5)".into(),
         );
@@ -1719,16 +1723,20 @@ mod tests {
     #[tokio::test]
     async fn test_insert_into_parameterized() -> Result<()> {
         let test_cases = vec![
-            // (file_format, batch_size, soft_max_rows, expected_files)
-            ("json", 10, 10, 2),
-            ("csv", 10, 10, 2),
+            // (file_format, batch_size, soft_max_rows, soft_max_bytes, expected_files)
+            ("json", 10, 10, 1000, 2),
+            ("csv", 10, 10, 1000, 2),
             #[cfg(feature = "parquet")]
-            ("parquet", 10, 10, 2),
+            ("parquet", 10, 20, 1000, 1),
             #[cfg(feature = "parquet")]
-            ("parquet", 20, 20, 1),
+            ("parquet", 10, 10, 1000, 2),
+            #[cfg(feature = "parquet")]
+            ("parquet", 10, 20, 100, 2),
         ];
 
-        for (format, batch_size, soft_max_rows, expected_files) in test_cases {
+        for (format, batch_size, soft_max_rows, soft_max_bytes, expected_files) in
+            test_cases
+        {
             println!(
                 "Testing insert with format: {format}, batch_size: {batch_size}, expected files: {expected_files}"
             );
@@ -1738,9 +1746,18 @@ mod tests {
                 "datafusion.execution.batch_size".into(),
                 batch_size.to_string(),
             );
+            // Isolate soft-limit rotation from the initial parallel-writer fan-out.
+            config_map.insert(
+                "datafusion.execution.minimum_parallel_output_files".into(),
+                "1".into(),
+            );
             config_map.insert(
                 "datafusion.execution.soft_max_rows_per_output_file".into(),
                 soft_max_rows.to_string(),
+            );
+            config_map.insert(
+                "datafusion.execution.soft_max_bytes_per_output_file".into(),
+                soft_max_bytes.to_string(),
             );
 
             let file_extension = match format {
