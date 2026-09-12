@@ -1,0 +1,160 @@
+{
+  "relations": [
+    {
+      "root": {
+        "input": {
+          "set": {
+            "inputs": [
+              {
+                "read": {
+                  "common": {
+                    "direct": {}
+                  },
+                  "baseSchema": {
+                    "names": [
+                      "a",
+                      "b",
+                      "c",
+                      "d"
+                    ],
+                    "struct": {
+                      "types": [
+                        {
+                          "i64": {
+                            "nullability": "NULLABILITY_NULLABLE"
+                          }
+                        },
+                        {
+                          "i64": {
+                            "nullability": "NULLABILITY_NULLABLE"
+                          }
+                        },
+                        {
+                          "i64": {
+                            "nullability": "NULLABILITY_NULLABLE"
+                          }
+                        },
+                        {
+                          "i64": {
+                            "nullability": "NULLABILITY_NULLABLE"
+                          }
+                        }
+                      ],
+                      "nullability": "NULLABILITY_REQUIRED"
+                    }
+                  },
+                  "namedTable": {
+                    "names": [
+                      "data"
+                    ]
+                  }
+                }
+              },
+              {
+                "read": {
+                  "common": {
+                    "direct": {}
+                  },
+                  "baseSchema": {
+                    "names": [
+                      "a",
+                      "b",
+                      "c",
+                      "d"
+                    ],
+                    "struct": {
+                      "types": [
+                        {
+                          "i64": {
+                            "nullability": "NULLABILITY_REQUIRED"
+                          }
+                        },
+                        {
+                          "i64": {
+                            "nullability": "NULLABILITY_REQUIRED"
+                          }
+                        },
+                        {
+                          "i64": {
+                            "nullability": "NULLABILITY_NULLABLE"
+                          }
+                        },
+                        {
+                          "i64": {
+                            "nullability": "NULLABILITY_NULLABLE"
+                          }
+                        }
+                      ],
+                      "nullability": "NULLABILITY_REQUIRED"
+                    }
+                  },
+                  "namedTable": {
+                    "names": [
+                      "data2"
+                    ]
+                  }
+                }
+              },
+              {
+                "read": {
+                  "common": {
+                    "direct": {}
+                  },
+                  "baseSchema": {
+                    "names": [
+                      "a",
+                      "b",
+                      "c",
+                      "d"
+                    ],
+                    "struct": {
+                      "types": [
+                        {
+                          "i64": {
+                            "nullability": "NULLABILITY_REQUIRED"
+                          }
+                        },
+                        {
+                          "i64": {
+                            "nullability": "NULLABILITY_NULLABLE"
+                          }
+                        },
+                        {
+                          "i64": {
+                            "nullability": "NULLABILITY_REQUIRED"
+                          }
+                        },
+                        {
+                          "i64": {
+                            "nullability": "NULLABILITY_NULLABLE"
+                          }
+                        }
+                      ],
+                      "nullability": "NULLABILITY_REQUIRED"
+                    }
+                  },
+                  "namedTable": {
+                    "names": [
+                      "data3"
+                    ]
+                  }
+                }
+              }
+            ],
+            "op": "SET_OP_INTERSECTION_MULTISET"
+          }
+        },
+        "names": [
+          "a",
+          "b",
+          "c",
+          "d"
+        ]
+      }
+    }
+  ],
+  "version": {
+    "minorNumber": 54,
+    "producer": "datafusion-test"
+  }
+}

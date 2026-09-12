@@ -230,6 +230,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn intersect_nullability() -> Result<()> {
+        // Substrait's set operation rules derive an intersection's nullability from
+        // every input, not only the primary one. Each plan below intersects three
+        // tables carrying the same four columns, with these nullabilities
+        // (`?` marks a nullable column):
+        //
+        //   primary     a? b? c? d?
+        //   secondary   a  b  c? d?
+        //   secondary   a  b? c  d?
+        for (file, expected) in [
+            // Nullable in the primary input and in at least one secondary input.
+            ("intersect_primary_mixed_nullability", "a, b?, c?, d?"),
+            // Required as soon as any input requires it.
+            ("intersect_multiset_mixed_nullability", "a, b, c, d?"),
+            ("intersect_multiset_all_mixed_nullability", "a, b, c, d?"),
+        ] {
+            let proto_plan =
+                read_json(&format!("tests/testdata/test_plans/{file}.substrait.json"));
+            let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+            let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+            let nullability = plan
+                .schema()
+                .fields()
+                .iter()
+                .map(|field| {
+                    format!(
+                        "{}{}",
+                        field.name(),
+                        if field.is_nullable() { "?" } else { "" }
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            assert_eq!(nullability, expected, "nullability of {file}");
+
+            // Trigger execution to ensure plan validity
+            DataFrame::new(ctx.state(), plan).show().await?;
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn multilayer_aggregate() -> Result<()> {
         let proto_plan =
             read_json("tests/testdata/test_plans/multilayer_aggregate.substrait.json");
