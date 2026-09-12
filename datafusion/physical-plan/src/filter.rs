@@ -2310,6 +2310,17 @@ mod tests {
                 )),
             )),
         ));
+        // i32::MIN also satisfies this predicate because subtracting 5 wraps.
+        // A mathematical lower bound of 5 would exclude a valid input value.
+        let batch = RecordBatch::try_new(
+            input.schema(),
+            vec![Arc::new(arrow::array::Int32Array::from(vec![i32::MIN]))],
+        )?;
+        let result = predicate.evaluate(&batch)?.into_array(1)?;
+        assert_eq!(
+            result.as_ref(),
+            &arrow::array::BooleanArray::from(vec![true])
+        );
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
         let filter_statistics =
@@ -2322,7 +2333,7 @@ mod tests {
                 // `a <= 10` rejects nulls, so `a` has no surviving nulls even
                 // though the input statistics are entirely unknown.
                 null_count: Precision::Exact(0),
-                min_value: Precision::Inexact(ScalarValue::Int32(Some(5))),
+                min_value: Precision::Absent,
                 max_value: Precision::Inexact(ScalarValue::Int32(Some(10))),
                 sum_value: Precision::Absent,
                 distinct_count: Precision::Absent,

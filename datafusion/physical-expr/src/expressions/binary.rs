@@ -122,6 +122,23 @@ impl BinaryExpr {
         &self.op
     }
 
+    /// Mathematical intervals do not cover values produced by wrapping arithmetic.
+    fn integer_arithmetic_may_wrap(
+        &self,
+        left: &Interval,
+        right: &Interval,
+        result: &Interval,
+    ) -> bool {
+        !self.fail_on_overflow
+            && result.data_type().is_integer()
+            && matches!(
+                self.op,
+                Operator::Plus | Operator::Minus | Operator::Multiply
+            )
+            && (result.is_unbounded()
+                || unsigned_subtraction_may_underflow(self.op, left, right, result))
+    }
+
     /// Wrapping on overflow breaks monotonicity (e.g. the sum of two
     /// ascending `UInt8` columns can wrap back to small values), so the
     /// derived ordering is kept only when overflow is impossible. `time ±
@@ -700,7 +717,12 @@ impl PhysicalExpr for BinaryExpr {
         let left_interval = children[0];
         let right_interval = children[1];
         // Calculate current node's interval:
-        apply_operator(&self.op, left_interval, right_interval)
+        let result = apply_operator(&self.op, left_interval, right_interval)?;
+        if self.integer_arithmetic_may_wrap(left_interval, right_interval, &result) {
+            Interval::make_unbounded(&result.data_type())
+        } else {
+            Ok(result)
+        }
     }
 
     fn propagate_constraints(
@@ -711,6 +733,37 @@ impl PhysicalExpr for BinaryExpr {
         // Get children intervals.
         let left_interval = children[0];
         let right_interval = children[1];
+
+        if left_interval.data_type().is_integer()
+            && right_interval.data_type().is_integer()
+            && matches!(
+                self.op,
+                Operator::Plus | Operator::Minus | Operator::Multiply | Operator::Divide
+            )
+        {
+            // Integer division truncates: a / 2 = 1 permits both 2 and 3.
+            // Wrapping arithmetic is likewise not invertible over mathematical
+            // intervals. Keep the input domains rather than exclude valid rows.
+            let contains_zero = |range: &Interval| -> Result<bool> {
+                Ok(range.contains(&Interval::make_zero(&range.data_type())?)?
+                    == Interval::TRUE)
+            };
+            // If an operand can be zero, a zero product does not constrain
+            // the other operand. Dividing the parent interval loses that case.
+            let zero_product = self.op == Operator::Multiply
+                && contains_zero(interval)?
+                && (contains_zero(left_interval)? || contains_zero(right_interval)?);
+            if self.op == Operator::Divide
+                || zero_product
+                || self.integer_arithmetic_may_wrap(
+                    left_interval,
+                    right_interval,
+                    &apply_operator(&self.op, left_interval, right_interval)?,
+                )
+            {
+                return Ok(Some(vec![]));
+            }
+        }
 
         if self.op.eq(&Operator::And) {
             if interval.eq(&Interval::TRUE) {
@@ -6351,6 +6404,119 @@ mod tests {
                 "OR pre-selection must match Kleene OR for d = {d:?}"
             );
         }
+    }
+
+    #[test]
+    fn test_integer_interval_propagation_covers_runtime_values() -> Result<()> {
+        // Enumerate small domains and both ends of Int8, including zero divisors,
+        // truncation, signed overflow and checked arithmetic. Every successful
+        // runtime evaluation must remain possible after interval propagation.
+        let domains = [
+            (-3i8, 3i8),
+            (0, 1),
+            (1, 3),
+            (-3, -1),
+            (-128, -127),
+            (126, 127),
+        ];
+        for checked in [false, true] {
+            for op in [
+                Operator::Plus,
+                Operator::Minus,
+                Operator::Multiply,
+                Operator::Divide,
+            ] {
+                let expr = BinaryExpr::new(lit(0i8), op, lit(0i8))
+                    .with_fail_on_overflow(checked);
+                for (lo, hi) in domains {
+                    for (rlo, rhi) in
+                        domains.into_iter().chain([(-1, -1), (0, 0), (2, 2)])
+                    {
+                        let left = Interval::make(Some(lo), Some(hi))?;
+                        let right = Interval::make(Some(rlo), Some(rhi))?;
+                        let bounds = expr.evaluate_bounds(&[&left, &right])?;
+                        for a in lo..=hi {
+                            for b in rlo..=rhi {
+                                let result = match (op, checked) {
+                                    (Operator::Plus, false) => Some(a.wrapping_add(b)),
+                                    (Operator::Minus, false) => Some(a.wrapping_sub(b)),
+                                    (Operator::Multiply, false) => {
+                                        Some(a.wrapping_mul(b))
+                                    }
+                                    (Operator::Plus, true) => a.checked_add(b),
+                                    (Operator::Minus, true) => a.checked_sub(b),
+                                    (Operator::Multiply, true) => a.checked_mul(b),
+                                    (Operator::Divide, _) => a.checked_div(b),
+                                    _ => unreachable!(),
+                                };
+                                let Some(result) = result else {
+                                    continue;
+                                };
+                                let result = Interval::make(Some(result), Some(result))?;
+                                assert_eq!(
+                                    bounds.contains(&result)?,
+                                    Interval::TRUE,
+                                    "forward {a} {op} {b}, checked={checked}, bounds={bounds:?}"
+                                );
+                                let propagated = expr
+                                    .propagate_constraints(&result, &[&left, &right])?;
+                                let propagated = propagated
+                                    .expect("successful runtime result must be feasible");
+                                if !propagated.is_empty() {
+                                    assert_eq!(
+                                        propagated[0].contains(&Interval::make(
+                                            Some(a),
+                                            Some(a)
+                                        )?)?,
+                                        Interval::TRUE,
+                                        "left input excluded for {a} {op} {b}, checked={checked}: {propagated:?}"
+                                    );
+                                    assert_eq!(
+                                        propagated[1].contains(&Interval::make(
+                                            Some(b),
+                                            Some(b)
+                                        )?)?,
+                                        Interval::TRUE,
+                                        "right input excluded for {a} {op} {b}, checked={checked}: {propagated:?}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_unsigned_subtraction_interval_underflow() -> Result<()> {
+        let expr = BinaryExpr::new(lit(0u8), Operator::Minus, lit(1u8));
+        let left = Interval::make(Some(0u8), Some(2u8))?;
+        let right = Interval::make(Some(1u8), Some(1u8))?;
+        let wrapped = Interval::make(Some(255u8), Some(255u8))?;
+        assert_eq!(
+            expr.evaluate_bounds(&[&left, &right])?.contains(&wrapped)?,
+            Interval::TRUE
+        );
+        assert_eq!(
+            expr.propagate_constraints(&wrapped, &[&left, &right])?,
+            Some(vec![])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_safe_integer_multiplication_still_propagates() -> Result<()> {
+        let expr = BinaryExpr::new(lit(0i32), Operator::Multiply, lit(2i32));
+        let left = Interval::make(Some(0i32), Some(10i32))?;
+        let right = Interval::make(Some(2i32), Some(2i32))?;
+        let parent = Interval::make(Some(4i32), Some(4i32))?;
+        assert_eq!(
+            expr.propagate_constraints(&parent, &[&left, &right])?,
+            Some(vec![Interval::make(Some(2i32), Some(2i32))?, right])
+        );
+        Ok(())
     }
 
     #[test]
