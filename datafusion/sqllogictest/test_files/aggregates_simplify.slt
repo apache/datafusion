@@ -536,7 +536,8 @@ physical_plan
 07)------------AggregateExec: mode=Partial, gby=[g@0 as g, v@1 as alias1], aggr=[]
 08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
 
-# Mixed: only the duplicate-insensitive aggregate loses its DISTINCT
+# Mixed: a node that still needs one DISTINCT keeps all of them, so this rule
+# cannot change which plans SingleDistinctToGroupBy rewrites
 query III
 SELECT g, min(DISTINCT v), sum(DISTINCT v) FROM distinct_simplify_t GROUP BY g ORDER BY g;
 ----
@@ -547,12 +548,12 @@ query TT
 EXPLAIN SELECT g, min(DISTINCT v), sum(DISTINCT v) FROM distinct_simplify_t GROUP BY g;
 ----
 logical_plan
-01)Aggregate: groupBy=[[distinct_simplify_t.g]], aggr=[[min(distinct_simplify_t.v) AS min(DISTINCT distinct_simplify_t.v), sum(DISTINCT CAST(distinct_simplify_t.v AS Int64))]]
+01)Aggregate: groupBy=[[distinct_simplify_t.g]], aggr=[[min(DISTINCT distinct_simplify_t.v), sum(DISTINCT CAST(distinct_simplify_t.v AS Int64))]]
 02)--TableScan: distinct_simplify_t projection=[g, v]
 physical_plan
-01)AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[min(distinct_simplify_t.v) as min(DISTINCT distinct_simplify_t.v), sum(DISTINCT distinct_simplify_t.v)]
+01)AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[min(DISTINCT distinct_simplify_t.v), sum(DISTINCT distinct_simplify_t.v)]
 02)--RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=1
-03)----AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[min(distinct_simplify_t.v) as min(DISTINCT distinct_simplify_t.v), sum(DISTINCT distinct_simplify_t.v)]
+03)----AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[min(DISTINCT distinct_simplify_t.v), sum(DISTINCT distinct_simplify_t.v)]
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # FILTER is applied before deduplication, so it survives the rewrite

@@ -948,10 +948,13 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// How this function treats the `DISTINCT` modifier.
     ///
     /// Return [`DistinctHandling::Ignored`] for duplicate-insensitive
-    /// functions so that `f(DISTINCT x)` is planned as `f(x)`, and
-    /// [`DistinctHandling::Unsupported`] if the accumulator does not
-    /// read `is_distinct`, so that `DISTINCT` is rejected at planning
-    /// time rather than silently ignored.
+    /// functions so that `f(DISTINCT x)` is planned as `f(x)`.
+    ///
+    /// Return [`DistinctHandling::Unsupported`] if the accumulator neither
+    /// reads `is_distinct` nor is reached only after the planner has already
+    /// deduplicated the input. Nothing reads this variant yet: rejecting such
+    /// queries at planning time, rather than silently returning the
+    /// non-distinct answer, is a follow-up change.
     fn distinct_handling(&self) -> DistinctHandling {
         DistinctHandling::Honored
     }
@@ -1743,11 +1746,15 @@ pub enum DistinctHandling {
     /// The result is the same with or without `DISTINCT`, so the planner
     /// is free to drop it. `min`, `max`, `bool_and`, `bit_or`, ...
     Ignored,
-    /// The accumulator honours `AccumulatorArgs::is_distinct` and
-    /// deduplicates its input. `count`, `sum`, `avg`, `array_agg`, ...
+    /// `DISTINCT` is applied, so the planner must leave it alone. Either the
+    /// accumulator reads `AccumulatorArgs::is_distinct` and deduplicates its
+    /// input (`count`, `sum`, `avg`, `array_agg`, ...), or the planner does it
+    /// first by rewriting the aggregate into a group by (`stddev`, `var_samp`,
+    /// `approx_median`, ...). This is the default.
     Honored,
-    /// The accumulator does not implement `DISTINCT`. Planning
-    /// `f(DISTINCT ...)` is an error. `corr`, `regr_*`, `nth_value`, ...
+    /// The accumulator does not implement `DISTINCT` and nothing deduplicates
+    /// the input for it, so `f(DISTINCT ...)` either errors or silently
+    /// returns the non-distinct answer. `corr`, `regr_*`, `nth_value`, ...
     Unsupported,
 }
 
