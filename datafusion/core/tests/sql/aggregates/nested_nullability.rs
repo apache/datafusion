@@ -45,7 +45,7 @@ use datafusion::physical_plan::aggregates::{
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::expressions::col;
 use datafusion::prelude::*;
-use datafusion_common::Result;
+use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::FairSpillPool;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
@@ -144,7 +144,12 @@ impl AggregateBatchesTest {
                     .with_memory_pool(Arc::new(FairSpillPool::new(limit)))
                     .build_arc()?;
                 SessionContext::new_with_config_rt(
-                    SessionConfig::new().with_batch_size(100),
+                    SessionConfig::new()
+                        .with_batch_size(100)
+                        .set(
+                            "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
+                            &ScalarValue::Float64(Some(1.0)),
+                        ),
                     runtime,
                 )
             }
@@ -198,7 +203,7 @@ async fn array_agg_struct_from_stricter_batches_with_spilling() -> Result<()> {
 async fn array_agg_distinct_struct_from_stricter_batches_with_spilling() -> Result<()> {
     AggregateBatchesTest::new()
         .with_num_rows(10_000)
-        .with_memory_limit(4_256_000)
+        .with_memory_limit(1_000_000)
         .run("SELECT a, array_agg(DISTINCT b) FROM t GROUP BY a")
         .await
 }
