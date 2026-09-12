@@ -15,23 +15,24 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# String extrema do not bound the numeric values after a CAST. These aggregates
-# must not be replaced with casts of the Parquet string min/max statistics.
-# The test context creates two row groups: [1, 2, 3] with statistics,
-# and [100, 200, 300] without statistics. Verify the actual rows as well
-# as the aggregates, which must not use the first group's bounds as
-# exact statistics for the entire file.
+# The test context writes two row groups using the Rust writer API:
+# ["a", "b"] with statistics, and two 8192-character strings without statistics.
+# This models the missing bounds produced by writers that omit oversized extrema.
+
+# Verify that the long values are present in the actual data.
 query I
-SELECT a FROM missing_bounds ORDER BY a;
+SELECT LENGTH(a) FROM missing_bounds ORDER BY a;
 ----
 1
-2
-3
-100
-200
-300
+1
+8192
+8192
 
+# The first group's maximum must not be treated as the entire file's maximum.
 query II
-SELECT MIN(a), MAX(a) FROM missing_bounds;
+SELECT LENGTH(MIN(a)), LENGTH(MAX(a)) FROM missing_bounds;
 ----
-1 300
+1 8192
+
+statement ok
+DROP TABLE missing_bounds;

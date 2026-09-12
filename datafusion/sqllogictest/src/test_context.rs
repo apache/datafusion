@@ -418,67 +418,65 @@ pub async fn register_partition_table(test_ctx: &mut TestContext) {
         .unwrap();
 }
 
-/// Generate a real Parquet file whose second row group has no statistics.
+/// Write row groups with different statistics settings using the public writer API.
 async fn register_parquet_missing_bounds(test_ctx: &mut TestContext) {
-    use datafusion::parquet::arrow::ArrowWriter;
-    use datafusion::parquet::file::metadata::{
-        ParquetMetaDataReader, ParquetMetaDataWriter,
-    };
+    use datafusion::parquet::column::writer::ColumnWriterImpl;
+    use datafusion::parquet::data_type::{ByteArray, ByteArrayType};
     use datafusion::parquet::file::properties::{EnabledStatistics, WriterProperties};
-    use datafusion::parquet::file::writer::TrackedWrite;
+    use datafusion::parquet::file::writer::{
+        SerializedFileWriter, SerializedPageWriter, TrackedWrite,
+    };
+    use datafusion::parquet::schema::parser::parse_message_type;
 
     test_ctx.enable_testdir();
     let path = test_ctx.testdir_path().join("missing_bounds.parquet");
-    let batch = RecordBatch::try_from_iter([(
-        "a",
-        Arc::new(Int32Array::from(vec![1, 2, 3, 100, 200, 300])) as ArrayRef,
-    )])
-    .unwrap();
-    let properties = WriterProperties::builder()
-        .set_max_row_group_row_count(Some(3))
-        .set_statistics_enabled(EnabledStatistics::Chunk)
-        .build();
-    let mut writer = ArrowWriter::try_new(
+    let column_path = test_ctx.testdir_path().join("column.pages");
+    let schema = Arc::new(
+        parse_message_type("message schema { REQUIRED BINARY a (UTF8); }").unwrap(),
+    );
+    let mut writer = SerializedFileWriter::new(
         File::create(&path).unwrap(),
-        batch.schema(),
-        Some(properties),
+        schema,
+        Arc::new(WriterProperties::default()),
     )
     .unwrap();
-    writer.write(&batch).unwrap();
+    let long_value = "z".repeat(8192);
+    for (values, statistics) in [
+        (["a", "b"], EnabledStatistics::Chunk),
+        (
+            [long_value.as_str(), long_value.as_str()],
+            EnabledStatistics::None,
+        ),
+    ] {
+        // parquet-rs truncates long extrema rather than omitting them. Disable
+        // statistics for the second chunk to exercise the missing-bound case
+        // produced naturally by writers such as PyArrow, without editing metadata.
+        let properties = Arc::new(
+            WriterProperties::builder()
+                .set_statistics_enabled(statistics)
+                .build(),
+        );
+        let mut buffer = TrackedWrite::new(File::create(&column_path).unwrap());
+        let mut column = ColumnWriterImpl::<ByteArrayType>::new(
+            writer.schema_descr().column(0),
+            properties,
+            Box::new(SerializedPageWriter::new(&mut buffer)),
+        );
+        let values = values.map(ByteArray::from);
+        column.write_batch(&values, None, None).unwrap();
+        let result = column.close().unwrap();
+        assert_eq!(
+            result.metadata.statistics().is_some(),
+            statistics == EnabledStatistics::Chunk
+        );
+        drop(buffer);
+        let mut group = writer.next_row_group().unwrap();
+        group
+            .append_column(&File::open(&column_path).unwrap(), result)
+            .unwrap();
+        group.close().unwrap();
+    }
     writer.close().unwrap();
-
-    let metadata = ParquetMetaDataReader::new()
-        .parse_and_finish(&File::open(&path).unwrap())
-        .unwrap();
-    assert_eq!(metadata.num_row_groups(), 2);
-    let mut groups = metadata.row_groups().to_vec();
-    let column = groups[1]
-        .column(0)
-        .clone()
-        .into_builder()
-        .clear_statistics()
-        .build()
-        .unwrap();
-    groups[1] = groups[1]
-        .clone()
-        .into_builder()
-        .set_column_metadata(vec![column])
-        .build()
-        .unwrap();
-    let metadata = metadata.into_builder().set_row_groups(groups).build();
-
-    // Replace only the footer, preserving the data pages and their offsets.
-    let original = std::fs::read(&path).unwrap();
-    let end = original.len() - 8;
-    let metadata_len = u32::from_le_bytes(original[end..end + 4].try_into().unwrap());
-    let mut tracked = TrackedWrite::new(File::create(&path).unwrap());
-    tracked
-        .write_all(&original[..end - metadata_len as usize])
-        .unwrap();
-    ParquetMetaDataWriter::new_with_tracked(tracked, &metadata)
-        .finish()
-        .unwrap();
-
     test_ctx
         .ctx
         .register_parquet(
