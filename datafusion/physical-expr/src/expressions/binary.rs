@@ -745,8 +745,7 @@ impl PhysicalExpr for BinaryExpr {
             // Wrapping arithmetic is likewise not invertible over mathematical
             // intervals. Keep the input domains rather than exclude valid rows.
             let contains_zero = |range: &Interval| -> Result<bool> {
-                Ok(range.contains(&Interval::make_zero(&range.data_type())?)?
-                    == Interval::TRUE)
+                range.contains_value(ScalarValue::new_zero(&range.data_type())?)
             };
             // If an operand can be zero, a zero product does not constrain
             // the other operand. Dividing the parent interval loses that case.
@@ -885,7 +884,7 @@ impl PhysicalExpr for BinaryExpr {
         let (r_order, r_range) = (children[1].sort_properties, &children[1].range);
         match self.op() {
             Operator::Plus => {
-                let range = l_range.add(r_range)?;
+                let range = self.evaluate_bounds(&[l_range, r_range])?;
                 Ok(ExprProperties {
                     sort_properties: self.arithmetic_sort_properties(
                         l_order.add(&r_order),
@@ -899,7 +898,7 @@ impl PhysicalExpr for BinaryExpr {
                 })
             }
             Operator::Minus => {
-                let range = l_range.sub(r_range)?;
+                let range = self.evaluate_bounds(&[l_range, r_range])?;
                 Ok(ExprProperties {
                     sort_properties: self.arithmetic_sort_properties(
                         l_order.sub(&r_order),
@@ -6435,6 +6434,15 @@ mod tests {
                         let left = Interval::make(Some(lo), Some(hi))?;
                         let right = Interval::make(Some(rlo), Some(rhi))?;
                         let bounds = expr.evaluate_bounds(&[&left, &right])?;
+                        if matches!(op, Operator::Plus | Operator::Minus) {
+                            let children = [left.clone(), right.clone()].map(|range| {
+                                ExprProperties {
+                                    range,
+                                    ..ExprProperties::new_unknown()
+                                }
+                            });
+                            assert_eq!(expr.get_properties(&children)?.range, bounds);
+                        }
                         for a in lo..=hi {
                             for b in rlo..=rhi {
                                 let result = match (op, checked) {
@@ -6503,6 +6511,52 @@ mod tests {
             expr.propagate_constraints(&wrapped, &[&left, &right])?,
             Some(vec![])
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_nested_wrapping_arithmetic_properties() -> Result<()> {
+        let difference = Arc::new(BinaryExpr::new(lit(0u8), Operator::Minus, lit(1u8)));
+        let singleton = |value: u8| ExprProperties {
+            sort_properties: SortProperties::Singleton,
+            range: Interval::make(Some(value), Some(value)).unwrap(),
+            ..ExprProperties::new_unknown()
+        };
+        let difference_props =
+            difference.get_properties(&[singleton(0), singleton(1)])?;
+        assert_eq!(difference_props.sort_properties, SortProperties::Singleton);
+        assert!(
+            difference_props
+                .range
+                .contains_value(ScalarValue::UInt8(Some(255)))?
+        );
+
+        // The inner constant wraps to 255. An incorrect range of [0, 0]
+        // would let the outer addition claim to preserve ascending order.
+        let expr =
+            BinaryExpr::new(Arc::new(Column::new("a", 0)), Operator::Plus, difference);
+        let properties = expr.get_properties(&[
+            ExprProperties {
+                sort_properties: SortProperties::Ordered(SortOptions::default()),
+                range: Interval::make(Some(0u8), Some(1u8))?,
+                ..ExprProperties::new_unknown()
+            },
+            difference_props,
+        ])?;
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("a", DataType::UInt8, false)])),
+            vec![Arc::new(UInt8Array::from(vec![0, 1]))],
+        )?;
+        let actual = expr.evaluate(&batch)?.into_array(2)?;
+        assert_eq!(actual.as_ref(), &UInt8Array::from(vec![255, 0]));
+        assert_eq!(properties.sort_properties, SortProperties::Unordered);
+        for value in [0u8, 255] {
+            assert!(
+                properties
+                    .range
+                    .contains_value(ScalarValue::UInt8(Some(value)))?
+            );
+        }
         Ok(())
     }
 
