@@ -3502,8 +3502,9 @@ mod tests {
         )];
 
         let task_ctx = if spill {
-            // adjust the max memory size to have the partial aggregate result for spill mode.
-            new_spill_ctx(4, 1_000)
+            // Smaller than the complete grouping-set state. Partial early
+            // emission must materialize and release state incrementally.
+            new_spill_ctx(4, 500)
         } else {
             Arc::new(TaskContext::default())
         };
@@ -3521,6 +3522,14 @@ mod tests {
             collect(partial_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
 
         if spill {
+            let early_emit_count = partial_aggregate
+                .metrics()
+                .unwrap()
+                .sum_by_name("early_emit_count")
+                .unwrap()
+                .as_usize();
+            assert!(early_emit_count > 0);
+
             // In spill mode, we test with the limited memory, if the mem usage exceeds,
             // we trigger the early emit rule, which turns out the partial aggregate result.
             allow_duplicates! {

@@ -21,6 +21,7 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, assert_eq_or_internal_err};
+use datafusion_expr::EmitTo;
 
 use crate::aggregates::group_values::{AccumulatorPhase, new_group_values};
 use crate::aggregates::order::GroupOrdering;
@@ -103,6 +104,65 @@ impl AggregateHashTable<PartialMarker> {
             }),
             _mode: PhantomData,
         })
+    }
+
+    /// Starts a bounded-memory drain of partial aggregate states.
+    pub(in crate::aggregates) fn start_early_emit(&mut self) {
+        self.start_outputting();
+    }
+
+    /// Emits at most one output batch while releasing its groups from the table.
+    ///
+    /// Unlike terminal output, this must not materialize all states: early
+    /// emission can be triggered precisely because the complete state does not
+    /// fit in the memory pool. Once drained, rebuild an empty table so raw input
+    /// aggregation can resume.
+    pub(in crate::aggregates) fn next_early_emit_batch(
+        &mut self,
+    ) -> Result<Option<RecordBatch>> {
+        let state_schema = Arc::clone(&self.state_schema);
+        let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
+        let group_by_metrics = self.group_by_metrics.clone();
+        let AggregateHashTableState::Outputting(mut state) =
+            std::mem::replace(&mut self.state, AggregateHashTableState::Done)
+        else {
+            return Ok(None);
+        };
+
+        let emit_to = EmitTo::First(self.batch_size.min(state.group_values.len()));
+        let columns = group_by_metrics.time_emitting(|| {
+            let mut columns = state.group_values.emit(emit_to)?;
+            for (idx, acc) in state.accumulators.iter_mut().enumerate() {
+                columns.extend(accumulator_metrics.time(
+                    idx,
+                    AccumulatorPhase::State,
+                    || acc.state(emit_to),
+                )?);
+            }
+            Ok::<_, datafusion_common::DataFusionError>(columns)
+        })?;
+        let batch = RecordBatch::try_new(state_schema, columns)?;
+        debug_assert!(batch.num_rows() > 0);
+
+        if state.group_values.is_empty() {
+            let group_schema = state.group_by.group_schema(&self.input_schema)?;
+            let group_values = new_group_values(group_schema, &GroupOrdering::None)?;
+            let accumulators = state
+                .accumulators
+                .iter()
+                .map(HashAggregateAccumulator::empty_like)
+                .collect::<Result<Vec<_>>>()?;
+            self.state = AggregateHashTableState::Building(AggregateHashTableBuffer {
+                group_by: state.group_by,
+                group_values,
+                batch_group_indices: Vec::new(),
+                accumulators,
+            });
+        } else {
+            self.state = AggregateHashTableState::Outputting(state);
+        }
+
+        Ok(Some(batch))
     }
 
     /// Partial aggregation consumes raw input rows and updates the table's
