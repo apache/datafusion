@@ -4222,30 +4222,32 @@ EXPLAIN SELECT SUM(DISTINCT CAST(x AS DOUBLE)), MAX(DISTINCT x) FROM t1 GROUP BY
 ----
 logical_plan
 01)Projection: sum(DISTINCT t1.x), max(DISTINCT t1.x)
-02)--Aggregate: groupBy=[[t1.y]], aggr=[[sum(DISTINCT CAST(t1.x AS Float64)), max(t1.x) AS max(DISTINCT t1.x)]]
+02)--Aggregate: groupBy=[[t1.y]], aggr=[[sum(DISTINCT CAST(t1.x AS Float64)), max(DISTINCT t1.x)]]
 03)----TableScan: t1 projection=[x, y]
 physical_plan
 01)ProjectionExec: expr=[sum(DISTINCT t1.x)@1 as sum(DISTINCT t1.x), max(DISTINCT t1.x)@2 as max(DISTINCT t1.x)]
-02)--AggregateExec: mode=FinalPartitioned, gby=[y@0 as y], aggr=[sum(DISTINCT t1.x), max(t1.x) as max(DISTINCT t1.x)]
+02)--AggregateExec: mode=FinalPartitioned, gby=[y@0 as y], aggr=[sum(DISTINCT t1.x), max(DISTINCT t1.x)]
 03)----RepartitionExec: partitioning=Hash([y@0], 8), input_partitions=1
-04)------AggregateExec: mode=Partial, gby=[y@1 as y], aggr=[sum(DISTINCT t1.x), max(t1.x) as max(DISTINCT t1.x)]
+04)------AggregateExec: mode=Partial, gby=[y@1 as y], aggr=[sum(DISTINCT t1.x), max(DISTINCT t1.x)]
 05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
 EXPLAIN SELECT SUM(DISTINCT CAST(x AS DOUBLE)), MAX(DISTINCT CAST(x AS DOUBLE)) FROM t1 GROUP BY y;
 ----
 logical_plan
-01)Projection: sum(DISTINCT t1.x), max(DISTINCT t1.x)
-02)--Aggregate: groupBy=[[t1.y]], aggr=[[sum(DISTINCT __common_expr_1 AS t1.x), max(__common_expr_1) AS max(DISTINCT t1.x)]]
-03)----Projection: CAST(t1.x AS Float64) AS __common_expr_1, t1.y
+01)Projection: sum(alias1) AS sum(DISTINCT t1.x), max(alias1) AS max(DISTINCT t1.x)
+02)--Aggregate: groupBy=[[t1.y]], aggr=[[sum(alias1), max(alias1)]]
+03)----Aggregate: groupBy=[[t1.y, CAST(t1.x AS Float64) AS alias1]], aggr=[[]]
 04)------TableScan: t1 projection=[x, y]
 physical_plan
-01)ProjectionExec: expr=[sum(DISTINCT t1.x)@1 as sum(DISTINCT t1.x), max(DISTINCT t1.x)@2 as max(DISTINCT t1.x)]
-02)--AggregateExec: mode=FinalPartitioned, gby=[y@0 as y], aggr=[sum(DISTINCT t1.x), max(__common_expr_1) as max(DISTINCT t1.x)]
-03)----RepartitionExec: partitioning=Hash([y@0], 8), input_partitions=1
-04)------AggregateExec: mode=Partial, gby=[y@1 as y], aggr=[sum(DISTINCT t1.x), max(__common_expr_1) as max(DISTINCT t1.x)]
-05)--------ProjectionExec: expr=[CAST(x@0 AS Float64) as __common_expr_1, y@1 as y]
-06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[sum(alias1)@1 as sum(DISTINCT t1.x), max(alias1)@2 as max(DISTINCT t1.x)]
+02)--AggregateExec: mode=FinalPartitioned, gby=[y@0 as y], aggr=[sum(alias1), max(alias1)]
+03)----RepartitionExec: partitioning=Hash([y@0], 8), input_partitions=8
+04)------AggregateExec: mode=Partial, gby=[y@0 as y], aggr=[sum(alias1), max(alias1)]
+05)--------AggregateExec: mode=FinalPartitioned, gby=[y@0 as y, alias1@1 as alias1], aggr=[]
+06)----------RepartitionExec: partitioning=Hash([y@0, alias1@1], 8), input_partitions=1
+07)------------AggregateExec: mode=Partial, gby=[y@1 as y, CAST(x@0 AS Float64) as alias1], aggr=[]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # create an unbounded table that contains ordered timestamp.
 statement ok
@@ -4430,16 +4432,22 @@ EXPLAIN SELECT c1, count(distinct c2), min(distinct c2), sum(c3), max(c4) FROM a
 ----
 logical_plan
 01)Sort: aggregate_test_100.c1 ASC NULLS LAST
-02)--Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[count(DISTINCT aggregate_test_100.c2), min(aggregate_test_100.c2) AS min(DISTINCT aggregate_test_100.c2), sum(CAST(aggregate_test_100.c3 AS Int64)), max(aggregate_test_100.c4)]]
-03)----TableScan: aggregate_test_100 projection=[c1, c2, c3, c4]
+02)--Projection: aggregate_test_100.c1, count(alias1) AS count(DISTINCT aggregate_test_100.c2), min(alias1) AS min(DISTINCT aggregate_test_100.c2), sum(alias2) AS sum(aggregate_test_100.c3), max(alias3) AS max(aggregate_test_100.c4)
+03)----Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[count(alias1), min(alias1), sum(alias2), max(alias3)]]
+04)------Aggregate: groupBy=[[aggregate_test_100.c1, aggregate_test_100.c2 AS alias1]], aggr=[[sum(CAST(aggregate_test_100.c3 AS Int64)) AS alias2, max(aggregate_test_100.c4) AS alias3]]
+05)--------TableScan: aggregate_test_100 projection=[c1, c2, c3, c4]
 physical_plan
 01)SortPreservingMergeExec: [c1@0 ASC NULLS LAST]
-02)--SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[count(DISTINCT aggregate_test_100.c2), min(aggregate_test_100.c2) as min(DISTINCT aggregate_test_100.c2), sum(aggregate_test_100.c3), max(aggregate_test_100.c4)]
-04)------RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8
-05)--------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[count(DISTINCT aggregate_test_100.c2), min(aggregate_test_100.c2) as min(DISTINCT aggregate_test_100.c2), sum(aggregate_test_100.c3), max(aggregate_test_100.c4)]
-06)----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3, c4], file_type=csv, has_header=true
+02)--ProjectionExec: expr=[c1@0 as c1, count(alias1)@1 as count(DISTINCT aggregate_test_100.c2), min(alias1)@2 as min(DISTINCT aggregate_test_100.c2), sum(alias2)@3 as sum(aggregate_test_100.c3), max(alias3)@4 as max(aggregate_test_100.c4)]
+03)----SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[true]
+04)------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[count(alias1), min(alias1), sum(alias2), max(alias3)]
+05)--------RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8
+06)----------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[count(alias1), min(alias1), sum(alias2), max(alias3)]
+07)------------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1, alias1@1 as alias1], aggr=[sum(aggregate_test_100.c3) as alias2, max(aggregate_test_100.c4) as alias3]
+08)--------------RepartitionExec: partitioning=Hash([c1@0, alias1@1], 8), input_partitions=8
+09)----------------AggregateExec: mode=Partial, gby=[c1@0 as c1, c2@1 as alias1], aggr=[sum(aggregate_test_100.c3) as alias2, max(aggregate_test_100.c4) as alias3]
+10)------------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+11)--------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3, c4], file_type=csv, has_header=true
 
 query II
 SELECT c2, count(distinct c3) FILTER (WHERE c1 != 'a') FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;

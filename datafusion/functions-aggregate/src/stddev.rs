@@ -27,7 +27,6 @@ use arrow::datatypes::FieldRef;
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
 use datafusion_common::ScalarValue;
 use datafusion_common::{Result, internal_err, not_impl_err};
-use datafusion_expr::DistinctHandling;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -142,10 +141,10 @@ impl AggregateUDFImpl for Stddev {
         self.doc()
     }
 
-    fn distinct_handling(&self) -> DistinctHandling {
-        // The accumulator rejects `DISTINCT` with `not_impl_err!`.
-        DistinctHandling::Unsupported
-    }
+    // Left at the default `Honored`. The accumulator rejects `DISTINCT` with
+    // `not_impl_err!`, but this takes a single argument, so
+    // `SingleDistinctToGroupBy` deduplicates the input before the accumulator
+    // ever sees it and `f(DISTINCT x)` returns the right answer today.
 }
 
 make_udaf_expr_and_func!(
@@ -247,10 +246,10 @@ impl AggregateUDFImpl for StddevPop {
         self.doc()
     }
 
-    fn distinct_handling(&self) -> DistinctHandling {
-        // The accumulator rejects `DISTINCT` with `not_impl_err!`.
-        DistinctHandling::Unsupported
-    }
+    // Left at the default `Honored`. The accumulator rejects `DISTINCT` with
+    // `not_impl_err!`, but this takes a single argument, so
+    // `SingleDistinctToGroupBy` deduplicates the input before the accumulator
+    // ever sees it and `f(DISTINCT x)` returns the right answer today.
 }
 
 /// An accumulator to compute the average
