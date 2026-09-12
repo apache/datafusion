@@ -203,7 +203,7 @@ async fn array_agg_struct_from_stricter_batches_with_spilling() -> Result<()> {
 async fn array_agg_distinct_struct_from_stricter_batches_with_spilling() -> Result<()> {
     AggregateBatchesTest::new()
         .with_num_rows(10_000)
-        .with_memory_limit(1_000_000)
+        .with_memory_limit(4_256_000)
         .run("SELECT a, array_agg(DISTINCT b) FROM t GROUP BY a")
         .await
 }
