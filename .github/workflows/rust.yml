@@ -115,6 +115,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
+      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -315,14 +316,14 @@ jobs:
         with:
           rust-version: stable
       - name: Check datafusion-spark (default features)
-        run: cargo check --profile ci --all-targets -p datafusion-spark
+        run: cargo xtask ci step check datafusion-spark default
       #
       # Note: Only check libraries (not --all-targets) to cover end user APIs
       #
       - name: Check datafusion-spark (no-default-features)
-        run: cargo check --profile ci --no-default-features -p datafusion-spark
+        run: cargo xtask ci step check datafusion-spark no-default
       - name: Check datafusion-spark (core)
-        run: cargo check --profile ci --no-default-features -p datafusion-spark --features=core
+        run: cargo xtask ci step check datafusion-spark core
 
   # Library and integration tests
   linux-test:
