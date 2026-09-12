@@ -35,6 +35,12 @@ use tokio::runtime::Runtime;
 
 const LIMIT: usize = 10;
 
+const LARGE_LIMIT: usize = 50000;
+
+const PARTITIONS: i32 = 10;
+
+const SAMPLES: i32 = 1_000_000;
+
 /// Create deterministic data for DISTINCT benchmarks with predictable trace_ids
 /// This ensures consistent results across benchmark runs
 fn make_distinct_data(
@@ -80,7 +86,7 @@ fn create_context(
     asc: bool,
     use_topk: bool,
     use_view: bool,
-) -> Result<SessionContext> {
+) -> SessionContext {
     let (schema, parts) = make_data(partition_cnt, sample_cnt, asc, use_view).unwrap();
     let mem_table = Arc::new(MemTable::try_new(schema, parts).unwrap());
 
@@ -89,9 +95,9 @@ fn create_context(
     let opts = cfg.options_mut();
     opts.optimizer.enable_topk_aggregation = use_topk;
     let ctx = SessionContext::new_with_config(cfg);
-    let _ = ctx.register_table("traces", mem_table)?;
+    ctx.register_table("traces", mem_table).unwrap();
 
-    Ok(ctx)
+    ctx
 }
 
 fn create_context_distinct(
@@ -113,32 +119,41 @@ fn create_context_distinct(
     Ok(ctx)
 }
 
-fn run(rt: &Runtime, ctx: SessionContext, limit: usize, use_topk: bool, asc: bool) {
-    black_box(rt.block_on(async { aggregate(ctx, limit, use_topk, asc).await })).unwrap();
+fn run(
+    rt: &Runtime,
+    ctx: &SessionContext,
+    limit: usize,
+    use_topk: bool,
+) -> Vec<RecordBatch> {
+    black_box(rt.block_on(async { aggregate(ctx, limit, use_topk).await })).unwrap()
 }
 
-fn run_string(rt: &Runtime, ctx: SessionContext, limit: usize, use_topk: bool) {
+fn run_string(
+    rt: &Runtime,
+    ctx: &SessionContext,
+    limit: usize,
+    use_topk: bool,
+) -> Vec<RecordBatch> {
     black_box(rt.block_on(async { aggregate_string(ctx, limit, use_topk).await }))
-        .unwrap();
+        .unwrap()
 }
 
 fn run_distinct(
     rt: &Runtime,
-    ctx: SessionContext,
+    ctx: &SessionContext,
     limit: usize,
     use_topk: bool,
     asc: bool,
-) {
+) -> Vec<RecordBatch> {
     black_box(rt.block_on(async { aggregate_distinct(ctx, limit, use_topk, asc).await }))
-        .unwrap();
+        .unwrap()
 }
 
 async fn aggregate(
-    ctx: SessionContext,
+    ctx: &SessionContext,
     limit: usize,
     use_topk: bool,
-    asc: bool,
-) -> Result<()> {
+) -> Result<Vec<RecordBatch>> {
     let sql = format!(
         "select max(timestamp_ms) from traces group by trace_id order by max(timestamp_ms) desc limit {limit};"
     );
@@ -151,11 +166,17 @@ async fn aggregate(
     );
 
     let batches = collect(plan, ctx.task_ctx()).await?;
+    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), limit);
+
+    Ok(batches)
+}
+
+fn validate_aggregate(batches: &[RecordBatch], asc: bool) -> Result<()> {
     assert_eq!(batches.len(), 1);
     let batch = batches.first().unwrap();
     assert_eq!(batch.num_rows(), LIMIT);
 
-    let actual = format!("{}", pretty_format_batches(&batches)?).to_lowercase();
+    let actual = pretty_format_batches(batches)?.to_string().to_lowercase();
     let expected_asc = r#"
 +--------------------------+
 | max(traces.timestamp_ms) |
@@ -184,7 +205,7 @@ async fn aggregate(
 /// This tests grouping by a numeric column (timestamp_ms) and aggregating
 /// a string column (trace_id) with Utf8 or Utf8View data types.
 async fn aggregate_string(
-    ctx: SessionContext,
+    ctx: &SessionContext,
     limit: usize,
     use_topk: bool,
 ) -> Result<Vec<RecordBatch>> {
@@ -200,19 +221,17 @@ async fn aggregate_string(
     );
 
     let batches = collect(plan, ctx.task_ctx()).await?;
-    assert_eq!(batches.len(), 1);
-    let batch = batches.first().unwrap();
-    assert_eq!(batch.num_rows(), LIMIT);
+    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), limit);
 
     Ok(batches)
 }
 
 async fn aggregate_distinct(
-    ctx: SessionContext,
+    ctx: &SessionContext,
     limit: usize,
     use_topk: bool,
     asc: bool,
-) -> Result<()> {
+) -> Result<Vec<RecordBatch>> {
     let order_direction = if asc { "asc" } else { "desc" };
     let sql = format!(
         "select id from traces group by id order by id {order_direction} limit {limit};"
@@ -225,11 +244,17 @@ async fn aggregate_distinct(
         use_topk
     );
     let batches = collect(plan, ctx.task_ctx()).await?;
+    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), limit);
+
+    Ok(batches)
+}
+
+fn validate_aggregate_distinct(batches: &[RecordBatch], asc: bool) -> Result<()> {
     assert_eq!(batches.len(), 1);
     let batch = batches.first().unwrap();
     assert_eq!(batch.num_rows(), LIMIT);
 
-    let actual = format!("{}", pretty_format_batches(&batches)?).to_lowercase();
+    let actual = pretty_format_batches(batches)?.to_string().to_lowercase();
 
     let expected_asc = r#"
 +----+
@@ -300,14 +325,12 @@ struct StringCase {
 
 fn assert_utf8_utf8view_match(
     rt: &Runtime,
-    partitions: i32,
-    samples: i32,
+    ctx_utf8: &SessionContext,
+    ctx_view: &SessionContext,
     limit: usize,
     asc: bool,
     use_topk: bool,
 ) {
-    let ctx_utf8 = create_context(partitions, samples, asc, use_topk, false).unwrap();
-    let ctx_view = create_context(partitions, samples, asc, use_topk, true).unwrap();
     let batches_utf8 = rt
         .block_on(aggregate_string(ctx_utf8, limit, use_topk))
         .unwrap();
@@ -326,11 +349,17 @@ fn assert_string_results_match(
     rt: &Runtime,
     partitions: i32,
     samples: i32,
-    limit: usize,
+    limits: &[usize],
 ) {
     for asc in [false, true] {
         for use_topk in [false, true] {
-            assert_utf8_utf8view_match(rt, partitions, samples, limit, asc, use_topk);
+            let ctx_utf8 = create_context(partitions, samples, asc, use_topk, false);
+            let ctx_view = create_context(partitions, samples, asc, use_topk, true);
+            for &limit in limits {
+                assert_utf8_utf8view_match(
+                    rt, &ctx_utf8, &ctx_view, limit, asc, use_topk,
+                );
+            }
         }
     }
 }
@@ -341,21 +370,20 @@ fn assert_string_results_match(
 )]
 fn criterion_benchmark(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
-    let limit = LIMIT;
-    let partitions = 10;
-    let samples = 1_000_000;
+    let partitions = PARTITIONS;
+    let samples = SAMPLES;
     let total_rows = partitions * samples;
 
     // Numeric aggregate benchmarks
     let numeric_cases = &[
         BenchCase {
-            name_tpl: "aggregate {rows} time-series rows",
+            name_tpl: "k={limit} aggregate {rows} time-series rows",
             asc: false,
             use_topk: false,
             use_view: false,
         },
         BenchCase {
-            name_tpl: "aggregate {rows} worst-case rows",
+            name_tpl: "k={limit} aggregate {rows} worst-case rows",
             asc: true,
             use_topk: false,
             use_view: false,
@@ -386,19 +414,25 @@ fn criterion_benchmark(c: &mut Criterion) {
         },
     ];
     for case in numeric_cases {
-        let name = case
-            .name_tpl
-            .replace("{rows}", &total_rows.to_string())
-            .replace("{limit}", &limit.to_string());
         let ctx =
-            create_context(partitions, samples, case.asc, case.use_topk, case.use_view)
-                .unwrap();
+            create_context(partitions, samples, case.asc, case.use_topk, case.use_view);
+
+        let name = case.name_tpl.replace("{rows}", &total_rows.to_string());
         c.bench_function(&name, |b| {
-            b.iter(|| run(&rt, ctx.clone(), limit, case.use_topk, case.asc))
+            b.iter(|| {
+                let batches = run(&rt, &ctx, LIMIT, case.use_topk);
+                validate_aggregate(&batches, case.asc).unwrap();
+                batches
+            })
+        });
+
+        let name = case.name_tpl.replace("{rows}", &total_rows.to_string());
+        c.bench_function(&name, |b| {
+            b.iter(|| run(&rt, &ctx, LARGE_LIMIT, case.use_topk))
         });
     }
 
-    assert_string_results_match(&rt, partitions, samples, limit);
+    assert_string_results_match(&rt, partitions, samples, &[LIMIT, LARGE_LIMIT]);
 
     let string_cases = &[
         StringCase {
@@ -449,19 +483,23 @@ fn criterion_benchmark(c: &mut Criterion) {
             "time-series"
         };
         let type_label = if case.use_view { "Utf8View" } else { "Utf8" };
-        let name = if case.use_topk {
-            format!(
-                "top k={limit} string aggregate {total_rows} {scenario} rows [{type_label}]"
-            )
-        } else {
-            format!("string aggregate {total_rows} {scenario} rows [{type_label}]")
-        };
         let ctx =
-            create_context(partitions, samples, case.asc, case.use_topk, case.use_view)
-                .unwrap();
-        c.bench_function(&name, |b| {
-            b.iter(|| run_string(&rt, ctx.clone(), limit, case.use_topk))
-        });
+            create_context(partitions, samples, case.asc, case.use_topk, case.use_view);
+
+        for limit in [LIMIT, LARGE_LIMIT] {
+            let name = if case.use_topk {
+                format!(
+                    "top k={limit} string aggregate {total_rows} {scenario} rows [{type_label}]"
+                )
+            } else {
+                format!(
+                    "k={limit} string aggregate {total_rows} {scenario} rows [{type_label}]"
+                )
+            };
+            c.bench_function(&name, |b| {
+                b.iter(|| run_string(&rt, &ctx, limit, case.use_topk))
+            });
+        }
     }
 
     // DISTINCT benchmarks
@@ -470,9 +508,21 @@ fn criterion_benchmark(c: &mut Criterion) {
         let topk_label = if use_topk { "TopK" } else { "no TopK" };
         for asc in [false, true] {
             let dir = if asc { "asc" } else { "desc" };
-            let name = format!("distinct {total_rows} rows {dir} [{topk_label}]");
+            let name =
+                format!("top k={LIMIT} distinct {total_rows} rows {dir} [{topk_label}]");
             c.bench_function(&name, |b| {
-                b.iter(|| run_distinct(&rt, ctx.clone(), limit, use_topk, asc))
+                b.iter(|| {
+                    let batches = run_distinct(&rt, &ctx, LIMIT, use_topk, asc);
+                    validate_aggregate_distinct(&batches, asc).unwrap();
+                    batches
+                })
+            });
+
+            let name = format!(
+                "top k={LARGE_LIMIT} distinct {total_rows} rows {dir} [{topk_label}]"
+            );
+            c.bench_function(&name, |b| {
+                b.iter(|| run_distinct(&rt, &ctx, LARGE_LIMIT, use_topk, asc))
             });
         }
     }
