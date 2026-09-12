@@ -1,0 +1,704 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+###
+## Differential coverage for timestamps WITH TIME ZONE.
+##
+## Only queries where DataFusion and PostgreSQL genuinely agree live here.
+## Anything the two engines answer differently is deliberately left out, so a
+## failure in this file means a real regression rather than a known divergence.
+##
+## Two constraints shape this file:
+##
+##  1. The Postgres runner has no renderer for the `timestamptz` wire type, so
+##     no query may *return* a tz-aware value. Every result is projected down
+##     to a type both engines render identically: a tz-naive `timestamp`, a
+##     `bigint`, a `boolean` or `text`.
+##
+##  2. PostgreSQL resolves a bare `timestamp` and renders a `timestamptz` using
+##     its session `TimeZone`, while DataFusion uses the time zone carried by
+##     the value itself. The two only coincide when the session zone is set to
+##     the column's zone, so each block below sets both engines' session zone
+##     explicitly and builds its table in that same zone.
+###
+
+###
+## Block A: both engines on UTC
+###
+
+onlyif postgres
+statement ok
+SET TimeZone = 'UTC';
+
+skipif postgres
+statement ok
+SET datafusion.execution.time_zone = '+00:00';
+
+# An explicit offset in a string literal is honoured, and the value normalizes
+# to the same instant in both engines.
+query P
+SELECT ('2024-07-01 12:00:00+05:30'::timestamptz)::timestamp
+----
+2024-07-01T06:30:00
+
+query P
+SELECT ('2024-07-01 12:00:00Z'::timestamptz)::timestamp
+----
+2024-07-01T12:00:00
+
+query P
+SELECT ('2024-07-01 12:00:00-07:00'::timestamptz)::timestamp
+----
+2024-07-01T19:00:00
+
+# A bare wall clock is resolved in the session zone (UTC here) by both engines
+query P
+SELECT ('2024-07-01 12:00:00'::timestamptz)::timestamp
+----
+2024-07-01T12:00:00
+
+# `timestamp AT TIME ZONE zone` reinterprets a naive wall clock as being in
+# `zone`. Both engines agree on the resulting instant.
+query P
+SELECT (TIMESTAMP '2024-07-01 12:00:00' AT TIME ZONE 'America/Denver')::timestamp
+----
+2024-07-01T18:00:00
+
+query P
+SELECT (TIMESTAMP '2024-01-15 12:00:00' AT TIME ZONE 'America/Denver')::timestamp
+----
+2024-01-15T19:00:00
+
+query P
+SELECT (TIMESTAMP '2024-07-01 12:00:00' AT TIME ZONE 'Asia/Kolkata')::timestamp
+----
+2024-07-01T06:30:00
+
+query P
+SELECT (TIMESTAMP '2024-07-01 12:00:00' AT TIME ZONE 'Europe/Brussels')::timestamp
+----
+2024-07-01T10:00:00
+
+# Comparison between two tz-aware values is by instant
+query B
+SELECT '2024-07-01 12:00:00Z'::timestamptz = '2024-07-01 17:30:00+05:30'::timestamptz
+----
+true
+
+query B
+SELECT '2024-07-01 12:00:00Z'::timestamptz > '2024-07-01 06:00:00Z'::timestamptz
+----
+true
+
+query B
+SELECT '2024-01-15 12:00:00-07:00'::timestamptz = '2024-01-15 19:00:00Z'::timestamptz
+----
+true
+
+# Winter and summer readings of the same wall clock in a DST zone are a
+# different number of hours from UTC.
+#
+# Both sides are cast to `timestamp` before the subtraction, so the interval
+# arithmetic runs on plain wall clocks. The casts are required. Without them the
+# engines disagree about which zone `- INTERVAL '168 days'` uses: DataFusion
+# applies calendar units in the value's own zone (America/Denver) and returns
+# true, but PostgreSQL applies them in the session zone and returns false
+# whenever that zone is not America/Denver.
+query B
+SELECT (TIMESTAMP '2024-01-15 12:00:00' AT TIME ZONE 'America/Denver')::timestamp
+     = (TIMESTAMP '2024-07-01 12:00:00' AT TIME ZONE 'America/Denver')::timestamp - INTERVAL '168 days'
+----
+false
+
+###
+## Table columns (not const folded literals)
+###
+
+onlyif postgres
+statement ok
+CREATE TABLE tstz_utc (id int, ts timestamptz);
+
+onlyif postgres
+statement ok
+INSERT INTO tstz_utc VALUES
+  (1, '2024-07-01T00:00:00Z'),
+  (2, '2024-07-01T06:00:00Z'),
+  (3, '2024-07-01T12:00:00Z'),
+  (3, '2024-07-01T12:00:00Z'),
+  (4, '2024-07-01T18:00:00Z');
+
+skipif postgres
+statement ok
+CREATE TABLE tstz_utc AS
+SELECT column1 AS id, column2::timestamptz AS ts
+FROM (VALUES
+  (1, '2024-07-01T00:00:00Z'),
+  (2, '2024-07-01T06:00:00Z'),
+  (3, '2024-07-01T12:00:00Z'),
+  (3, '2024-07-01T12:00:00Z'),
+  (4, '2024-07-01T18:00:00Z'));
+
+query IP
+SELECT id, ts::timestamp FROM tstz_utc ORDER BY 2, 1
+----
+1 2024-07-01T00:00:00
+2 2024-07-01T06:00:00
+3 2024-07-01T12:00:00
+3 2024-07-01T12:00:00
+4 2024-07-01T18:00:00
+
+query P
+SELECT DISTINCT ts::timestamp FROM tstz_utc ORDER BY 1
+----
+2024-07-01T00:00:00
+2024-07-01T06:00:00
+2024-07-01T12:00:00
+2024-07-01T18:00:00
+
+query I
+SELECT count(DISTINCT ts) FROM tstz_utc
+----
+4
+
+query PP
+SELECT min(ts)::timestamp, max(ts)::timestamp FROM tstz_utc
+----
+2024-07-01T00:00:00 2024-07-01T18:00:00
+
+query IPP
+SELECT id, min(ts)::timestamp, max(ts)::timestamp FROM tstz_utc GROUP BY id ORDER BY id
+----
+1 2024-07-01T00:00:00 2024-07-01T00:00:00
+2 2024-07-01T06:00:00 2024-07-01T06:00:00
+3 2024-07-01T12:00:00 2024-07-01T12:00:00
+4 2024-07-01T18:00:00 2024-07-01T18:00:00
+
+query PI
+SELECT ts::timestamp, count(*) FROM tstz_utc GROUP BY 1 ORDER BY 1
+----
+2024-07-01T00:00:00 1
+2024-07-01T06:00:00 1
+2024-07-01T12:00:00 2
+2024-07-01T18:00:00 1
+
+query P
+SELECT ts::timestamp FROM tstz_utc ORDER BY 1 DESC LIMIT 2
+----
+2024-07-01T18:00:00
+2024-07-01T12:00:00
+
+# Filtering a tz-aware column with a tz-aware literal
+query P
+SELECT ts::timestamp FROM tstz_utc WHERE ts = '2024-07-01T12:00:00Z'::timestamptz ORDER BY 1
+----
+2024-07-01T12:00:00
+2024-07-01T12:00:00
+
+query P
+SELECT ts::timestamp FROM tstz_utc WHERE ts > '2024-07-01T06:00:00Z'::timestamptz ORDER BY 1
+----
+2024-07-01T12:00:00
+2024-07-01T12:00:00
+2024-07-01T18:00:00
+
+query P
+SELECT ts::timestamp FROM tstz_utc
+WHERE ts BETWEEN '2024-07-01T06:00:00Z'::timestamptz AND '2024-07-01T12:00:00Z'::timestamptz
+ORDER BY 1
+----
+2024-07-01T06:00:00
+2024-07-01T12:00:00
+2024-07-01T12:00:00
+
+# Filtering with a literal written in a different offset: the comparison is by
+# instant, so the same rows come back.
+query P
+SELECT ts::timestamp FROM tstz_utc WHERE ts = '2024-07-01T05:00:00-07:00'::timestamptz ORDER BY 1
+----
+2024-07-01T12:00:00
+2024-07-01T12:00:00
+
+# Self join on a tz-aware key
+query I
+SELECT count(*) FROM tstz_utc l JOIN tstz_utc r ON l.ts = r.ts
+----
+7
+
+query PP
+SELECT l.ts::timestamp, r.ts::timestamp
+FROM tstz_utc l JOIN tstz_utc r ON l.ts = r.ts + INTERVAL '6 hours'
+ORDER BY 1, 2
+----
+2024-07-01T06:00:00 2024-07-01T00:00:00
+2024-07-01T12:00:00 2024-07-01T06:00:00
+2024-07-01T12:00:00 2024-07-01T06:00:00
+2024-07-01T18:00:00 2024-07-01T12:00:00
+2024-07-01T18:00:00 2024-07-01T12:00:00
+
+# UNION over tz-aware branches
+query P
+SELECT x::timestamp FROM (
+  SELECT ts AS x FROM tstz_utc WHERE id = 1
+  UNION
+  SELECT ts AS x FROM tstz_utc WHERE id = 4
+) u ORDER BY 1
+----
+2024-07-01T00:00:00
+2024-07-01T18:00:00
+
+# COALESCE and CASE over tz-aware values
+query P
+SELECT coalesce(NULL::timestamptz, '2024-07-01T00:00:00Z'::timestamptz)::timestamp
+----
+2024-07-01T00:00:00
+
+query P
+SELECT (CASE WHEN true THEN '2024-07-01T00:00:00Z'::timestamptz
+             ELSE '2024-07-01T06:00:00Z'::timestamptz END)::timestamp
+----
+2024-07-01T00:00:00
+
+query P
+SELECT greatest('2024-07-01T00:00:00Z'::timestamptz, '2024-07-01T06:00:00Z'::timestamptz)::timestamp
+----
+2024-07-01T06:00:00
+
+query P
+SELECT least('2024-07-01T00:00:00Z'::timestamptz, '2024-07-01T06:00:00Z'::timestamptz)::timestamp
+----
+2024-07-01T00:00:00
+
+###
+## date_part on a tz-aware column, read in the session zone (UTC)
+###
+
+query I
+SELECT date_part('epoch', ts)::bigint FROM tstz_utc ORDER BY 1
+----
+1719792000
+1719813600
+1719835200
+1719835200
+1719856800
+
+query I
+SELECT date_part('hour', ts)::bigint FROM tstz_utc ORDER BY 1
+----
+0
+6
+12
+12
+18
+
+query III
+SELECT date_part('year', ts)::bigint, date_part('month', ts)::bigint, date_part('day', ts)::bigint
+FROM tstz_utc WHERE id = 1
+----
+2024 7 1
+
+query II
+SELECT date_part('doy', ts)::bigint, date_part('dow', ts)::bigint FROM tstz_utc WHERE id = 1
+----
+183 1
+
+query I
+SELECT extract(hour FROM ts)::bigint FROM tstz_utc WHERE id = 4
+----
+18
+
+query I
+SELECT extract(epoch FROM ts)::bigint FROM tstz_utc WHERE id = 1
+----
+1719792000
+
+query I
+SELECT date_part('epoch', ts)::bigint FROM tstz_utc WHERE id = 4
+----
+1719856800
+
+# PostgreSQL's `to_timestamp(double)` and DataFusion's integer overload both
+# interpret the argument as a Unix epoch second count.
+query P
+SELECT to_timestamp(1719792000)::timestamp
+----
+2024-07-01T00:00:00
+
+query P
+SELECT to_timestamp(0)::timestamp
+----
+1970-01-01T00:00:00
+
+###
+## date_bin on a tz-aware column. PostgreSQL requires the origin argument, so
+## both engines are given one explicitly.
+###
+
+query P
+SELECT date_bin(INTERVAL '1 day', ts, '1970-01-01T00:00:00Z'::timestamptz)::timestamp
+FROM tstz_utc WHERE id = 4
+----
+2024-07-01T00:00:00
+
+query P
+SELECT date_bin(INTERVAL '6 hours', ts, '1970-01-01T00:00:00Z'::timestamptz)::timestamp
+FROM tstz_utc WHERE id = 2
+----
+2024-07-01T06:00:00
+
+query P
+SELECT date_bin(INTERVAL '1 hour', ts, '2024-01-01T00:30:00Z'::timestamptz)::timestamp
+FROM tstz_utc WHERE id = 3 LIMIT 1
+----
+2024-07-01T11:30:00
+
+###
+## Interval arithmetic on a tz-aware column. Under UTC there is no DST, so
+## '1 day' and '24 hours' agree in both engines.
+###
+
+query PP
+SELECT (ts + INTERVAL '1 day')::timestamp, (ts + INTERVAL '24 hours')::timestamp
+FROM tstz_utc WHERE id = 1
+----
+2024-07-02T00:00:00 2024-07-02T00:00:00
+
+query PP
+SELECT (ts - INTERVAL '1 day')::timestamp, (ts - INTERVAL '24 hours')::timestamp
+FROM tstz_utc WHERE id = 4
+----
+2024-06-30T18:00:00 2024-06-30T18:00:00
+
+query P
+SELECT (ts + INTERVAL '1 month')::timestamp FROM tstz_utc WHERE id = 1
+----
+2024-08-01T00:00:00
+
+query P
+SELECT (ts + INTERVAL '90 minutes')::timestamp FROM tstz_utc WHERE id = 2
+----
+2024-07-01T07:30:00
+
+query B
+SELECT ts + INTERVAL '1 day' = ts + INTERVAL '24 hours' FROM tstz_utc WHERE id = 1
+----
+true
+
+###
+## Block B: both engines on America/Denver
+##
+## The table is rebuilt so that DataFusion's column carries the Denver zone,
+## which is what makes DataFusion's value-scoped rules line up with
+## PostgreSQL's session-scoped ones.
+###
+
+onlyif postgres
+statement ok
+SET TimeZone = 'America/Denver';
+
+skipif postgres
+statement ok
+SET datafusion.execution.time_zone = 'America/Denver';
+
+onlyif postgres
+statement ok
+CREATE TABLE tstz_den (id int, ts timestamptz);
+
+onlyif postgres
+statement ok
+INSERT INTO tstz_den VALUES
+  (1, '2024-03-09T19:00:00Z'),
+  (2, '2024-11-02T18:00:00Z'),
+  (3, '2024-01-15T19:00:00Z'),
+  (4, '2024-07-01T18:00:00Z');
+
+skipif postgres
+statement ok
+CREATE TABLE tstz_den AS
+SELECT column1 AS id, column2::timestamptz AS ts
+FROM (VALUES
+  (1, '2024-03-09T19:00:00Z'),
+  (2, '2024-11-02T18:00:00Z'),
+  (3, '2024-01-15T19:00:00Z'),
+  (4, '2024-07-01T18:00:00Z'));
+
+# Local wall clock readings, via date_part so that nothing tz-aware is returned
+query IIII
+SELECT id,
+       date_part('year', ts)::bigint,
+       date_part('day', ts)::bigint,
+       date_part('hour', ts)::bigint
+FROM tstz_den ORDER BY id
+----
+1 2024 9 12
+2 2024 2 12
+3 2024 15 12
+4 2024 1 12
+
+query I
+SELECT date_part('epoch', ts)::bigint FROM tstz_den ORDER BY 1
+----
+1705345200
+1710010800
+1719856800
+1730570400
+
+# The offset differs between January (MST, -07:00) and July (MDT, -06:00). So
+# two instants with different UTC hours (19:00Z for id 3, 18:00Z for id 4) read
+# as the same local hour, 12.
+query I
+SELECT date_part('hour', ts)::bigint FROM tstz_den WHERE id = 3
+UNION ALL
+SELECT date_part('hour', ts)::bigint FROM tstz_den WHERE id = 4
+----
+12
+12
+
+###
+## DST: '1 day' keeps the local wall clock across a transition, '24 hours'
+## adds exactly 24 hours of elapsed time. Row 1 is 2024-03-09 12:00 MST, one
+## day before spring forward; row 2 is 2024-11-02 12:00 MDT, one day before
+## fall back.
+###
+
+query III
+SELECT id,
+       date_part('hour', ts + INTERVAL '1 day')::bigint,
+       date_part('hour', ts + INTERVAL '24 hours')::bigint
+FROM tstz_den WHERE id IN (1, 2) ORDER BY id
+----
+1 12 13
+2 12 11
+
+query III
+SELECT id,
+       date_part('epoch', ts + INTERVAL '1 day')::bigint,
+       date_part('epoch', ts + INTERVAL '24 hours')::bigint
+FROM tstz_den WHERE id IN (1, 2) ORDER BY id
+----
+1 1710093600 1710097200
+2 1730660400 1730656800
+
+query IB
+SELECT id, ts + INTERVAL '1 day' = ts + INTERVAL '24 hours'
+FROM tstz_den WHERE id IN (1, 2) ORDER BY id
+----
+1 false
+2 false
+
+# Subtraction back across the same two transitions
+query III
+SELECT id,
+       date_part('hour', ts + INTERVAL '1 day' - INTERVAL '1 day')::bigint,
+       date_part('hour', ts + INTERVAL '1 day' - INTERVAL '24 hours')::bigint
+FROM tstz_den WHERE id IN (1, 2) ORDER BY id
+----
+1 12 11
+2 12 13
+
+# Adding an hour walks into the repeated hour rather than over it
+query I
+SELECT date_part('epoch', '2024-11-03T07:30:00Z'::timestamptz + INTERVAL '1 hour')::bigint
+----
+1730622600
+
+query I
+SELECT date_part('hour', '2024-11-03T07:30:00Z'::timestamptz + INTERVAL '1 hour')::bigint
+----
+1
+
+# Both occurrences of 01:30 read as hour 1 locally but are an hour apart
+query II
+SELECT date_part('hour', '2024-11-03T07:30:00Z'::timestamptz)::bigint,
+       date_part('hour', '2024-11-03T08:30:00Z'::timestamptz)::bigint
+----
+1 1
+
+query I
+SELECT (date_part('epoch', '2024-11-03T08:30:00Z'::timestamptz)
+        - date_part('epoch', '2024-11-03T07:30:00Z'::timestamptz))::bigint
+----
+3600
+
+###
+## date_trunc and date_bin on a Denver column, compared as instants so that
+## nothing tz-aware is returned. date_trunc lands on local midnight in both
+## engines; date_bin lands on the origin-relative UTC boundary in both.
+###
+
+query I
+SELECT date_part('epoch', date_trunc('day', ts))::bigint FROM tstz_den ORDER BY 1
+----
+1705302000
+1709967600
+1719813600
+1730527200
+
+query I
+SELECT date_part('epoch', date_trunc('month', ts))::bigint FROM tstz_den ORDER BY 1
+----
+1704092400
+1709276400
+1719813600
+1730440800
+
+query I
+SELECT date_part('epoch', date_trunc('hour', ts))::bigint FROM tstz_den ORDER BY 1
+----
+1705345200
+1710010800
+1719856800
+1730570400
+
+query I
+SELECT date_part('hour', date_trunc('day', ts))::bigint FROM tstz_den ORDER BY 1
+----
+0
+0
+0
+0
+
+query I
+SELECT date_part('epoch', date_bin(INTERVAL '1 day', ts, '1970-01-01T00:00:00Z'::timestamptz))::bigint
+FROM tstz_den ORDER BY 1
+----
+1705276800
+1709942400
+1719792000
+1730505600
+
+# Calendar interval arithmetic across the spring-forward boundary
+query I
+SELECT date_part('epoch', ts + INTERVAL '1 week')::bigint FROM tstz_den WHERE id = 1
+----
+1710612000
+
+query I
+SELECT date_part('epoch', ts + INTERVAL '1 month')::bigint FROM tstz_den WHERE id = 1
+----
+1712685600
+
+query I
+SELECT date_part('epoch', ts + INTERVAL '1 year')::bigint FROM tstz_den WHERE id = 1
+----
+1741543200
+
+# Crossing the fall-back boundary: adding one calendar day to 01:30 MDT lands
+# on 01:30 MST, which is 25 hours of elapsed time later.
+query I
+SELECT date_part('epoch', '2024-11-03T07:30:00Z'::timestamptz + INTERVAL '1 day')::bigint
+----
+1730709000
+
+query I
+SELECT (date_part('epoch', '2024-11-03T07:30:00Z'::timestamptz + INTERVAL '1 day')
+        - date_part('epoch', '2024-11-03T07:30:00Z'::timestamptz))::bigint
+----
+90000
+
+# Ordering and aggregation are by instant, not by local wall clock
+query I
+SELECT date_part('epoch', min(ts))::bigint FROM tstz_den
+----
+1705345200
+
+query I
+SELECT date_part('epoch', max(ts))::bigint FROM tstz_den
+----
+1730570400
+
+query I
+SELECT id FROM tstz_den ORDER BY ts LIMIT 1
+----
+3
+
+query B
+SELECT min(ts) < max(ts) FROM tstz_den
+----
+true
+
+###
+## Block C: a zone with a half hour offset and a zone with no DST
+###
+
+onlyif postgres
+statement ok
+SET TimeZone = 'Asia/Kolkata';
+
+skipif postgres
+statement ok
+SET datafusion.execution.time_zone = 'Asia/Kolkata';
+
+query II
+SELECT date_part('hour', '2024-07-01T12:00:00Z'::timestamptz)::bigint,
+       date_part('minute', '2024-07-01T12:00:00Z'::timestamptz)::bigint
+----
+17 30
+
+query I
+SELECT date_part('epoch', '2024-07-01T12:00:00Z'::timestamptz)::bigint
+----
+1719835200
+
+query II
+SELECT date_part('hour', '2024-01-15T12:00:00Z'::timestamptz)::bigint,
+       date_part('hour', '2024-07-01T12:00:00Z'::timestamptz)::bigint
+----
+17 17
+
+onlyif postgres
+statement ok
+SET TimeZone = 'America/Phoenix';
+
+skipif postgres
+statement ok
+SET datafusion.execution.time_zone = 'America/Phoenix';
+
+# Phoenix does not observe DST, so January and July read the same local hour
+query II
+SELECT date_part('hour', '2024-01-15T12:00:00Z'::timestamptz)::bigint,
+       date_part('hour', '2024-07-01T12:00:00Z'::timestamptz)::bigint
+----
+5 5
+
+query I
+SELECT date_part('hour', '2024-07-01T12:00:00Z'::timestamptz + INTERVAL '1 day')::bigint
+----
+5
+
+query B
+SELECT '2024-07-01T12:00:00Z'::timestamptz + INTERVAL '1 day'
+     = '2024-07-01T12:00:00Z'::timestamptz + INTERVAL '24 hours'
+----
+true
+
+###
+## Cleanup
+###
+
+statement ok
+DROP TABLE tstz_utc
+
+statement ok
+DROP TABLE tstz_den
+
+onlyif postgres
+statement ok
+SET TimeZone = 'UTC';
+
+skipif postgres
+statement ok
+RESET datafusion.execution.time_zone
