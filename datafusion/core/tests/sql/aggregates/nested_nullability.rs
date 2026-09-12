@@ -38,12 +38,12 @@ use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion::datasource::MemTable;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
-use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::expressions::col;
+use datafusion::physical_plan::{ExecutionPlan, displayable};
 use datafusion::prelude::*;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::TaskContext;
@@ -93,6 +93,8 @@ struct AggregateBatchesTest {
     memory_limit: Option<usize>,
     /// If set, fixes aggregate parallelism for deterministic memory pressure.
     target_partitions: Option<usize>,
+    /// If set, test native DISTINCT aggregation rather than its group-by rewrite.
+    disable_single_distinct_to_groupby: bool,
 }
 
 impl AggregateBatchesTest {
@@ -101,6 +103,7 @@ impl AggregateBatchesTest {
             num_rows: 100,
             memory_limit: None,
             target_partitions: None,
+            disable_single_distinct_to_groupby: false,
         }
     }
 
@@ -116,6 +119,11 @@ impl AggregateBatchesTest {
 
     fn with_target_partitions(mut self, target_partitions: usize) -> Self {
         self.target_partitions = Some(target_partitions);
+        self
+    }
+
+    fn without_single_distinct_to_groupby(mut self) -> Self {
+        self.disable_single_distinct_to_groupby = true;
         self
     }
 
@@ -170,8 +178,19 @@ impl AggregateBatchesTest {
             None => SessionContext::new(),
         };
         ctx.register_table("t", Arc::new(table))?;
+        if self.disable_single_distinct_to_groupby {
+            assert!(ctx.remove_optimizer_rule("single_distinct_aggregation_to_group_by"));
+        }
 
         let plan = ctx.sql(sql).await?.create_physical_plan().await?;
+        if self.disable_single_distinct_to_groupby {
+            let plan = displayable(plan.as_ref()).indent(true).to_string();
+            assert_eq!(
+                plan.matches("AggregateExec").count(),
+                1,
+                "expected native DISTINCT aggregation:\n{plan}"
+            );
+        }
         let result = collect(Arc::clone(&plan), ctx.task_ctx()).await?;
 
         let total_rows: usize = result.iter().map(|batch| batch.num_rows()).sum();
@@ -217,9 +236,9 @@ async fn array_agg_struct_from_stricter_batches_with_spilling() -> Result<()> {
 async fn array_agg_distinct_struct_from_stricter_batches_with_spilling() -> Result<()> {
     AggregateBatchesTest::new()
         .with_num_rows(10_000)
-        // One partition avoids scheduler-dependent competition between partial
-        // and final aggregates while retaining the aggregate spill path.
+        // One partition keeps the native aggregate's memory pressure deterministic.
         .with_target_partitions(1)
+        .without_single_distinct_to_groupby()
         .with_memory_limit(1_000_000)
         .run("SELECT a, array_agg(DISTINCT b) FROM t GROUP BY a")
         .await
