@@ -520,7 +520,6 @@ fn byte_array_order_guard_follows_parquet_type_not_arrow_representation() {
             column_orders: metadata.column_orders().map(Vec::as_slice),
             row_group_metadatas: file.metadata.row_groups().iter().collect(),
             arrow_schema: &schema,
-            missing_null_counts_as_zero: true,
         };
         for values in [stats.min_values(&column), stats.max_values(&column)] {
             let values = values.unwrap();

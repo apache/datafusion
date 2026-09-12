@@ -551,6 +551,10 @@ impl<'a> DFParquetMetadata<'a> {
                         file_metadata.schema_descr(),
                     ) {
                         Ok(stats_converter) => {
+                            // An omitted count must not become an exact zero in
+                            // file statistics used for pruning and aggregates.
+                            let stats_converter =
+                                stats_converter.with_missing_null_counts_as_zero(false);
                             let parquet_index = stats_converter.parquet_column_index();
                             if parquet_index.is_some_and(|index| {
                                 has_untrusted_min_max_order(
@@ -1364,6 +1368,43 @@ mod tests {
             );
 
             ParquetMetaData::new(file_meta, row_groups)
+        }
+
+        #[test]
+        fn test_statistics_preserve_missing_null_counts() {
+            let schema_descr = create_schema_descr(1);
+            let arrow_schema = create_arrow_schema(1);
+            for (null_counts, expected) in [
+                (vec![None], Precision::Absent),
+                (vec![Some(0), None], Precision::Inexact(0)),
+                (vec![Some(2), None], Precision::Inexact(2)),
+                (vec![Some(0), Some(0)], Precision::Exact(0)),
+            ] {
+                let row_groups = null_counts
+                    .into_iter()
+                    .map(|null_count| {
+                        create_row_group_with_stats(
+                            &schema_descr,
+                            vec![Some(ParquetStatistics::int32(
+                                Some(1),
+                                Some(10),
+                                None,
+                                null_count,
+                                false,
+                            ))],
+                            10,
+                        )
+                    })
+                    .collect();
+                let metadata =
+                    create_parquet_metadata(Arc::clone(&schema_descr), row_groups);
+                let statistics = DFParquetMetadata::statistics_from_parquet_metadata(
+                    &metadata,
+                    &arrow_schema,
+                )
+                .unwrap();
+                assert_eq!(statistics.column_statistics[0].null_count, expected);
+            }
         }
 
         #[test]
