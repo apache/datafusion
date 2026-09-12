@@ -130,6 +130,9 @@ pub struct FFI_ScalarUDF {
             udf: &Self,
             config: FFI_ConfigOptions,
         ) -> FFI_Result<FFI_Option<FFI_ScalarUDF>>,
+
+    /// FFI equivalent to [`ScalarUDFImpl::is_strict`].
+    pub is_strict: unsafe extern "C" fn(udf: &Self) -> bool,
 }
 
 unsafe impl Send for FFI_ScalarUDF {}
@@ -191,6 +194,10 @@ unsafe extern "C" fn placement_fn_wrapper(
         .collect::<Vec<_>>();
 
     udf.inner().placement(&args).into()
+}
+
+unsafe extern "C" fn is_strict_fn_wrapper(udf: &FFI_ScalarUDF) -> bool {
+    udf.inner().is_strict()
 }
 
 unsafe extern "C" fn preserves_lex_ordering_fn_wrapper(
@@ -321,6 +328,7 @@ impl From<Arc<ScalarUDF>> for FFI_ScalarUDF {
             library_marker_id: crate::get_library_marker_id,
             preserves_lex_ordering: preserves_lex_ordering_fn_wrapper,
             with_updated_config: with_updated_config_fn_wrapper,
+            is_strict: is_strict_fn_wrapper,
         }
     }
 }
@@ -502,6 +510,10 @@ impl ScalarUDFImpl for ForeignScalarUDF {
         self.udf.short_circuits
     }
 
+    fn is_strict(&self) -> bool {
+        unsafe { (self.udf.is_strict)(&self.udf) }
+    }
+
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         unsafe {
             let arg_types = vec_datatype_to_rvec_wrapped(arg_types)?;
@@ -574,6 +586,10 @@ mod tests {
 
         fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
             internal_err!("placement_udf is not meant to be invoked")
+        }
+
+        fn is_strict(&self) -> bool {
+            true
         }
 
         fn placement(&self, args: &[ExpressionPlacement]) -> ExpressionPlacement {
@@ -663,6 +679,7 @@ mod tests {
         ffi_udf.library_marker_id = crate::mock_foreign_marker_id;
         let foreign_udf: Arc<dyn ScalarUDFImpl> = (&ffi_udf).into();
         assert!(foreign_udf.is::<ForeignScalarUDF>());
+        assert!(foreign_udf.is_strict());
 
         // Without the plumbing the override is dropped and every call is
         // KeepInPlace. The three cases also check the arguments survive the

@@ -100,6 +100,8 @@ mod tests {
         let ffi_placement_func = (module.create_placement_udf)();
         let foreign_func: Arc<dyn ScalarUDFImpl> = (&ffi_placement_func).into();
 
+        assert!(foreign_func.is_strict());
+
         // The override pushes to the leaves only for (Column, Literal), so these
         // also check the arguments cross the boundary in order.
         assert_eq!(
