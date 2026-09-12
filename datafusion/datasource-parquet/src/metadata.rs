@@ -820,9 +820,7 @@ fn summarize_bound<A: Accumulator>(
         *acc = None;
         return Ok(None);
     }
-    let Some(acc) = acc.as_mut() else {
-        return Ok(None);
-    };
+    let acc = acc.as_mut().expect("caller checked accumulator is present");
     acc.update_batch(&[Arc::clone(values)])?;
 
     Ok(
