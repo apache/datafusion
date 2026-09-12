@@ -511,12 +511,21 @@ where
             else {
                 // Check if the value is already present in the set
                 let entry = self.map.find_mut(hash, |header| {
-                    // compare value if hashes match
-                    if header.hash != hash {
+                    // Compare the value only when the hashes match and the
+                    // existing entry is itself a long value. The length check
+                    // is what makes reading the buffer below sound: a short
+                    // entry keeps its bytes inlined in `offset_or_inline`
+                    // rather than an offset, so on a hash collision between a
+                    // short and a long value, `header.range()` would be built
+                    // from those bytes and point outside the buffer.
+                    if header.hash != hash || header.len != value_len {
                         return false;
                     }
                     // Need to compare the bytes in the buffer
-                    // SAFETY: buffer is only appended to, and we correctly inserted values and offsets
+                    // SAFETY: `header` is a long entry of exactly `value_len`
+                    // bytes, so `offset_or_inline` is an offset into `buffer`
+                    // and the whole range was appended before the entry was
+                    // inserted. The buffer is only ever appended to.
                     let existing_value =
                         unsafe { self.buffer.get_unchecked(header.range()) };
                     value == existing_value
@@ -1101,6 +1110,64 @@ mod tests {
                 Some("foobarbaz"),
             ],
         );
+    }
+
+    /// A short value and a long value whose hashes collide must not be confused,
+    /// whichever of them is inserted first.
+    ///
+    /// A short value keeps its bytes inlined in the entry's `offset_or_inline`
+    /// field, while a long one keeps an offset into the value buffer there. An
+    /// entry is only examined when its hash matches, so the length has to be
+    /// compared before that field is interpreted at all. Each direction fails
+    /// differently without that check, and each case below is chosen to make it
+    /// actually fail rather than get away with it:
+    ///
+    /// * long value looked up against a short entry: `header.range()` is built
+    ///   out of the inlined bytes, so `"ab"` (0x6162) sends the read tens of
+    ///   kilobytes past the end of the buffer;
+    /// * short value looked up against a long entry: the inlined bytes are
+    ///   compared against that entry's offset, so a single NUL byte (inlined as
+    ///   0) matches the long value stored at offset 0 and the two distinct
+    ///   values collapse into one.
+    ///
+    /// `force_hash_collisions` makes every value collide, which is the only way
+    /// to reach either path deterministically.
+    #[cfg(feature = "force_hash_collisions")]
+    #[test]
+    fn short_and_long_values_with_colliding_hashes() {
+        let long = "a value too long to be inlined";
+        assert!(long.len() > SHORT_VALUE_LEN);
+
+        for [first, second] in [[long, "\0"], ["ab", long]] {
+            assert!(first.len() <= SHORT_VALUE_LEN || second.len() <= SHORT_VALUE_LEN);
+            // The second value is the one looked up against an entry of the
+            // other kind; the repeats must match their own entry.
+            let values: ArrayRef = Arc::new(StringArray::from(vec![
+                Some(first),
+                Some(second),
+                Some(first),
+                Some(second),
+            ]));
+
+            let mut map = ArrowBytesMap::<i32, usize>::new(OutputType::Utf8);
+            let mut inserted = vec![];
+            let mut payloads = 0;
+            map.insert_if_new(
+                &values,
+                |value| {
+                    inserted.push(value.expect("no nulls in this test").to_vec());
+                    payloads += 1;
+                    payloads
+                },
+                |_| {},
+            );
+
+            assert_eq!(
+                inserted,
+                vec![first.as_bytes().to_vec(), second.as_bytes().to_vec()],
+                "inserting {first:?} then {second:?}"
+            );
+        }
     }
 
     // asserts that the set contains the expected strings, in the same order
