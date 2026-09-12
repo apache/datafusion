@@ -228,6 +228,33 @@ select column1, column2 from validate_partitioned_parquet4 order by column1,colu
 ----
 1 a
 
+# The files written above physically contain the partition column (because
+# keep_partition_by_columns was enabled), so a hive-partitioned table over the
+# whole directory must not end up with that column twice.
+# See https://github.com/apache/datafusion/issues/17420
+statement ok
+CREATE EXTERNAL TABLE validate_partitioned_parquet4_hive STORED AS PARQUET
+LOCATION 'test_files/scratch/copy/partitioned_table4/' PARTITIONED BY (column1);
+
+query TT
+select column1, column2 from validate_partitioned_parquet4_hive order by column1, column2;
+----
+1 a
+2 b
+3 c
+
+# Same directory, but letting the factory infer the hive partitions from the path
+statement ok
+CREATE EXTERNAL TABLE validate_partitioned_parquet4_inferred STORED AS PARQUET
+LOCATION 'test_files/scratch/copy/partitioned_table4/';
+
+query TT
+select column1, column2 from validate_partitioned_parquet4_inferred order by column1, column2;
+----
+1 a
+2 b
+3 c
+
 # Copy more files to directory via query
 query I
 COPY (select * from source_table UNION ALL select * from source_table) to 'test_files/scratch/copy/table/' STORED AS PARQUET;
