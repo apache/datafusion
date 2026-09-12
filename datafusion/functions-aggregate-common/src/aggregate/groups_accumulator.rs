@@ -102,6 +102,10 @@ pub struct GroupsAccumulatorAdapter {
     /// bottleneck in earlier implementations when there were many
     /// distinct groups.
     allocation_bytes: usize,
+
+    /// The portion of [`Self::allocation_bytes`] that is the scratch
+    /// [`AccumulatorState::indices`] capacity held by [`Self::states`].
+    indices_allocation_bytes: usize,
 }
 
 struct AccumulatorState {
@@ -139,6 +143,7 @@ impl GroupsAccumulatorAdapter {
             factory: Box::new(factory),
             states: vec![],
             allocation_bytes: 0,
+            indices_allocation_bytes: 0,
         }
     }
 
@@ -221,8 +226,12 @@ impl GroupsAccumulatorAdapter {
         let mut offsets = vec![0];
 
         let mut offset_so_far = 0;
+        let mut indices_allocation_bytes = 0;
         for (group_index, state) in self.states.iter_mut().enumerate() {
             let indices = &state.indices;
+            // this pass already visits every group, so totalling the scratch
+            // capacity here costs a field read rather than a `size()` call
+            indices_allocation_bytes += indices.allocated_size();
             if indices.is_empty() {
                 continue;
             }
@@ -233,6 +242,13 @@ impl GroupsAccumulatorAdapter {
             offsets.push(offset_so_far);
         }
         let batch_indices = batch_indices.into();
+
+        // The push loop above is the only place `indices` grows. Charge the
+        // growth since the previous batch here: the pre/post deltas below
+        // observe the identical capacity on both sides, because `f` does not
+        // touch `indices` and the `clear()` after it retains the capacity.
+        self.adjust_allocation(self.indices_allocation_bytes, indices_allocation_bytes);
+        self.indices_allocation_bytes = indices_allocation_bytes;
 
         // reorder the values and opt_filter by batch_indices so that
         // all values for each group are contiguous, then invoke the
@@ -284,6 +300,18 @@ impl GroupsAccumulatorAdapter {
         self.allocation_bytes = self.allocation_bytes.saturating_sub(size)
     }
 
+    /// Release the allocation held by a state that is being emitted.
+    ///
+    /// [`AccumulatorState::size`] covers the scratch `indices` capacity, so
+    /// this also drops it from [`Self::indices_allocation_bytes`] to keep that
+    /// running total equal to the capacity still held by [`Self::states`].
+    fn free_state_allocation(&mut self, state: &AccumulatorState) {
+        self.free_allocation(state.size());
+        self.indices_allocation_bytes = self
+            .indices_allocation_bytes
+            .saturating_sub(state.indices.allocated_size());
+    }
+
     /// Adjusts the allocation for something that started with
     /// start_size and now has new_size avoiding overflow
     ///
@@ -325,7 +353,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         let results: Vec<ScalarValue> = states
             .into_iter()
             .map(|mut state| {
-                self.free_allocation(state.size());
+                self.free_state_allocation(&state);
                 state.accumulator.evaluate()
             })
             .collect::<Result<_>>()?;
@@ -375,7 +403,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         let mut results: Vec<Vec<ScalarValue>> = vec![];
 
         for mut state in states {
-            self.free_allocation(state.size());
+            self.free_state_allocation(&state);
             let accumulator_state = state.accumulator.state()?;
             results.resize_with(accumulator_state.len(), Vec::new);
             for (idx, state_val) in accumulator_state.into_iter().enumerate() {
