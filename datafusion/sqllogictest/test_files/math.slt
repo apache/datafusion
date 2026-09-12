@@ -1233,6 +1233,25 @@ physical_plan
 01)ProjectionExec: expr=[log(column1@0, 1) as l1, log(column1@0, column1@0) as la, 1 as p0, power(column1@0, log(column1@0, column2@1)) as pl]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
+query RR
+SELECT power(2.0, log(2.0, a)), power(b, log(b, a))
+FROM (VALUES (-3.0::double, 2.0::double)) t(a, b);
+----
+NaN NaN
+
+query I
+SELECT count(*) FROM (VALUES (-3.0::double)) t(a)
+WHERE power(2.0, log(2.0, a)) = -3.0;
+----
+0
+
+query R rowsort
+SELECT power(2.0, log(2.0, a))
+FROM (VALUES (4.0::double), (NULL::double)) t(a);
+----
+4
+NULL
+
 # Float 16/32/64 for log
 query RT
 SELECT log(2.5, arrow_cast(10.9, 'Float16')), arrow_typeof(log(2.5, arrow_cast(10.9, 'Float16')));
