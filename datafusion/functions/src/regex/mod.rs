@@ -30,6 +30,7 @@ pub mod regexpinstr;
 pub mod regexplike;
 pub mod regexpmatch;
 pub mod regexpreplace;
+pub mod regexpsplittoarray;
 
 /// Arrow's regex kernels treat null flags as no flags, but reject empty flags.
 /// Normalize empty strings without copying the string buffers.
@@ -45,6 +46,10 @@ make_udf_function!(regexpinstr::RegexpInstrFunc, regexp_instr);
 make_udf_function!(regexpmatch::RegexpMatchFunc, regexp_match);
 make_udf_function!(regexplike::RegexpLikeFunc, regexp_like);
 make_udf_function!(regexpreplace::RegexpReplaceFunc, regexp_replace);
+make_udf_function!(
+    regexpsplittoarray::RegexpSplitToArrayFunc,
+    regexp_split_to_array
+);
 
 pub mod expr_fn {
     use datafusion_expr::Expr;
@@ -65,6 +70,15 @@ pub mod expr_fn {
             args.push(flags);
         }
         super::regexp_count().call(args)
+    }
+
+    /// Splits a string into an array using a regular-expression delimiter.
+    pub fn regexp_split_to_array(values: Expr, regex: Expr, flags: Option<Expr>) -> Expr {
+        let mut args = vec![values, regex];
+        if let Some(flags) = flags {
+            args.push(flags);
+        }
+        super::regexp_split_to_array().call(args)
     }
 
     /// Returns a list of regular expression matches in a string.
@@ -136,6 +150,7 @@ pub fn functions() -> Vec<Arc<datafusion_expr::ScalarUDF>> {
         regexp_instr(),
         regexp_like(),
         regexp_replace(),
+        regexp_split_to_array(),
     ]
 }
 
