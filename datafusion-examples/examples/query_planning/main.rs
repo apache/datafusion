@@ -21,7 +21,7 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example query_planning -- [all|analyzer_rule|expr_api|optimizer_rule|parse_sql_expr|plan_to_sql|planner_api|pruning|thread_pools]
+//! cargo run --example query_planning -- [all|analyzer_rule|expr_api|optimizer_rule|parse_sql_expr|plan_to_sql|planner_api|pruning|streaming_shared_subplan|thread_pools]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
@@ -48,6 +48,9 @@
 //! - `pruning`
 //!   (file: pruning.rs, desc: Use pruning to skip irrelevant files)
 //!
+//! - `streaming_shared_subplan`
+//!   (file: streaming_shared_subplan.rs, desc: Stream one subplan into multiple consumers)
+//!
 //! - `thread_pools`
 //!   (file: thread_pools.rs, desc: Configure custom thread pools for DataFusion execution)
 
@@ -58,6 +61,7 @@ mod parse_sql_expr;
 mod plan_to_sql;
 mod planner_api;
 mod pruning;
+mod streaming_shared_subplan;
 mod thread_pools;
 
 use datafusion::error::{DataFusionError, Result};
@@ -75,6 +79,7 @@ enum ExampleKind {
     PlanToSql,
     PlannerApi,
     Pruning,
+    StreamingSharedSubplan,
     ThreadPools,
 }
 
@@ -100,6 +105,9 @@ impl ExampleKind {
             ExampleKind::PlanToSql => plan_to_sql::plan_to_sql_examples().await?,
             ExampleKind::PlannerApi => planner_api::planner_api().await?,
             ExampleKind::Pruning => pruning::pruning()?,
+            ExampleKind::StreamingSharedSubplan => {
+                streaming_shared_subplan::streaming_shared_subplan().await?
+            }
             ExampleKind::ThreadPools => thread_pools::thread_pools().await?,
         }
         Ok(())
