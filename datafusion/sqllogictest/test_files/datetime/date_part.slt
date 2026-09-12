@@ -1898,3 +1898,42 @@ SELECT count(*) FROM year_bound WHERE EXTRACT(YEAR FROM ts) >= 1678;
 
 statement ok
 DROP VIEW year_bound;
+
+# Lima skipped midnight on 1994-01-01.
+statement ok
+CREATE TABLE year_bound_lima AS
+SELECT
+  arrow_cast(ts, 'Timestamp(Second, Some("America/Lima"))') AS ts_sec,
+  arrow_cast(ts, 'Timestamp(Millisecond, Some("America/Lima"))') AS ts_milli,
+  arrow_cast(ts, 'Timestamp(Microsecond, Some("America/Lima"))') AS ts_micro,
+  arrow_cast(ts, 'Timestamp(Nanosecond, Some("America/Lima"))') AS ts_nano
+FROM (VALUES
+  (NULL),
+  ('1994-01-01T04:59:59Z'),
+  ('1994-01-01T05:00:00Z')) AS input(ts);
+
+query PBBBB
+SELECT ts_nano,
+       EXTRACT(YEAR FROM ts_sec) = 1994,
+       EXTRACT(YEAR FROM ts_milli) = 1994,
+       EXTRACT(YEAR FROM ts_micro) = 1994,
+       EXTRACT(YEAR FROM ts_nano) = 1994
+FROM year_bound_lima
+ORDER BY ts_nano NULLS FIRST;
+----
+NULL NULL NULL NULL NULL
+1993-12-31T23:59:59-05:00 false false false false
+1994-01-01T01:00:00-04:00 true true true true
+
+query P
+SELECT ts_nano FROM year_bound_lima WHERE EXTRACT(YEAR FROM ts_nano) = 1994;
+----
+1994-01-01T01:00:00-04:00
+
+query I
+SELECT count(*) FROM year_bound_lima WHERE EXTRACT(YEAR FROM ts_nano) = 1993;
+----
+1
+
+statement ok
+DROP TABLE year_bound_lima;
