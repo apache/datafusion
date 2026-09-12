@@ -91,6 +91,8 @@ struct AggregateBatchesTest {
     /// If set, the context uses a [`FairSpillPool`] of this size (and a small
     /// batch size) so the aggregation is forced to spill.
     memory_limit: Option<usize>,
+    /// If set, fixes aggregate parallelism for deterministic memory pressure.
+    target_partitions: Option<usize>,
 }
 
 impl AggregateBatchesTest {
@@ -98,6 +100,7 @@ impl AggregateBatchesTest {
         Self {
             num_rows: 100,
             memory_limit: None,
+            target_partitions: None,
         }
     }
 
@@ -108,6 +111,11 @@ impl AggregateBatchesTest {
 
     fn with_memory_limit(mut self, memory_limit: usize) -> Self {
         self.memory_limit = Some(memory_limit);
+        self
+    }
+
+    fn with_target_partitions(mut self, target_partitions: usize) -> Self {
+        self.target_partitions = Some(target_partitions);
         self
     }
 
@@ -143,15 +151,14 @@ impl AggregateBatchesTest {
                 let runtime = RuntimeEnvBuilder::new()
                     .with_memory_pool(Arc::new(FairSpillPool::new(limit)))
                     .build_arc()?;
-                SessionContext::new_with_config_rt(
-                    SessionConfig::new()
-                        .with_batch_size(100)
-                        .set(
-                            "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
-                            &ScalarValue::Float64(Some(1.0)),
-                        ),
-                    runtime,
-                )
+                let mut config = SessionConfig::new().with_batch_size(100).set(
+                    "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
+                    &ScalarValue::Float64(Some(1.0)),
+                );
+                if let Some(target_partitions) = self.target_partitions {
+                    config = config.with_target_partitions(target_partitions);
+                }
+                SessionContext::new_with_config_rt(config, runtime)
             }
             None => SessionContext::new(),
         };
@@ -203,7 +210,10 @@ async fn array_agg_struct_from_stricter_batches_with_spilling() -> Result<()> {
 async fn array_agg_distinct_struct_from_stricter_batches_with_spilling() -> Result<()> {
     AggregateBatchesTest::new()
         .with_num_rows(10_000)
-        .with_memory_limit(4_256_000)
+        // One partition avoids scheduler-dependent competition between partial
+        // and final aggregates while retaining the aggregate spill path.
+        .with_target_partitions(1)
+        .with_memory_limit(1_000_000)
         .run("SELECT a, array_agg(DISTINCT b) FROM t GROUP BY a")
         .await
 }
