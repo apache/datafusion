@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::aggregate_function::validate_aggregation_phase;
 use crate::logical_plan::consumer::{
     SubstraitConsumer, from_substrait_func_args, from_substrait_rex_vec,
     from_substrait_sorts, substrait_fun_name,
@@ -39,6 +40,7 @@ pub async fn from_window_function(
     window: &WindowFunction,
     input_schema: &DFSchema,
 ) -> datafusion::common::Result<Expr> {
+    validate_aggregation_phase(window.phase)?;
     let Some(fn_signature) = consumer
         .get_extensions()
         .functions

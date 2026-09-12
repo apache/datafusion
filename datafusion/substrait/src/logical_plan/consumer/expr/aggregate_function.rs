@@ -18,11 +18,25 @@
 use crate::logical_plan::consumer::{
     SubstraitConsumer, from_substrait_func_args, substrait_fun_name,
 };
-use datafusion::common::{DFSchema, ScalarValue, not_impl_datafusion_err, plan_err};
+use datafusion::common::{
+    DFSchema, ScalarValue, not_impl_datafusion_err, not_impl_err, plan_datafusion_err,
+    plan_err,
+};
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{Expr, SortExpr, expr};
 use std::sync::Arc;
-use substrait::proto::AggregateFunction;
+use substrait::proto::{AggregateFunction, AggregationPhase};
+
+pub(super) fn validate_aggregation_phase(phase: i32) -> datafusion::common::Result<()> {
+    match AggregationPhase::try_from(phase)
+        .map_err(|e| plan_datafusion_err!("Invalid aggregation phase {phase}: {e}"))?
+    {
+        // Logical plans represent complete calls. Keep accepting unspecified phases
+        // for compatibility with existing DataFusion aggregate and window producers.
+        AggregationPhase::Unspecified | AggregationPhase::InitialToResult => Ok(()),
+        phase => not_impl_err!("Unsupported aggregation phase: {}", phase.as_str_name()),
+    }
+}
 
 /// Convert Substrait AggregateFunction to DataFusion Expr
 pub async fn from_substrait_agg_func(
@@ -33,6 +47,7 @@ pub async fn from_substrait_agg_func(
     order_by: Vec<SortExpr>,
     distinct: bool,
 ) -> datafusion::common::Result<Arc<Expr>> {
+    validate_aggregation_phase(f.phase)?;
     let Some(fn_signature) = consumer
         .get_extensions()
         .functions
