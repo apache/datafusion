@@ -105,7 +105,11 @@ fn encode_human_display_alias(human_display: &str, alias: &str) -> String {
 #[cfg(test)]
 mod file_scan_config_serde {
     use super::*;
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::{DataType, Field, SchemaRef};
+    use datafusion::physical_expr_adapter::{
+        DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter,
+        PhysicalExprAdapterFactory,
+    };
     use datafusion_common::{Constraint, Constraints, ScalarValue, Statistics};
     use datafusion_datasource::file::FileSource;
     use datafusion_datasource::file_compression_type::FileCompressionType;
@@ -143,6 +147,28 @@ mod file_scan_config_serde {
                 table_schema,
                 projection,
             }
+        }
+    }
+
+    #[derive(Debug)]
+    struct SerdeTestExprAdapter;
+
+    impl PhysicalExprAdapter for SerdeTestExprAdapter {
+        fn rewrite(&self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
+            Ok(expr)
+        }
+    }
+
+    #[derive(Debug)]
+    struct SerdeTestExprAdapterFactory;
+
+    impl PhysicalExprAdapterFactory for SerdeTestExprAdapterFactory {
+        fn create(
+            &self,
+            _logical_file_schema: SchemaRef,
+            _physical_file_schema: SchemaRef,
+        ) -> Result<Arc<dyn PhysicalExprAdapter>> {
+            Ok(Arc::new(SerdeTestExprAdapter))
         }
     }
 
@@ -371,6 +397,55 @@ mod file_scan_config_serde {
         assert!(decoded.file_groups[0].files()[1].arrow_schema.is_none());
         assert_eq!(decoded.file_compression_type, FileCompressionType::GZIP);
 
+        Ok(())
+    }
+
+    #[test]
+    fn new_file_scan_config_serde_preserves_explicit_order_flag() -> Result<()> {
+        let serde = FileScanSerdeHarness::new();
+
+        let preserve_without_ordering = FileScanConfigBuilder::from(test_config(None))
+            .with_output_ordering(vec![])
+            .with_preserve_order(true)
+            .build();
+        let encoded = serde.encode(&preserve_without_ordering)?;
+        assert_eq!(encoded.preserve_order, Some(true));
+        let decoded = serde.decode(&encoded)?;
+        assert!(decoded.preserve_order);
+        assert!(decoded.output_ordering.is_empty());
+
+        let mut do_not_preserve_with_ordering = test_config(None);
+        do_not_preserve_with_ordering.preserve_order = false;
+        assert!(!do_not_preserve_with_ordering.output_ordering.is_empty());
+        let mut encoded = serde.encode(&do_not_preserve_with_ordering)?;
+        assert_eq!(encoded.preserve_order, Some(false));
+        assert!(!serde.decode(&encoded)?.preserve_order);
+
+        // Older payloads had no flag and derived it from the ordering.
+        encoded.preserve_order = None;
+        assert!(serde.decode(&encoded)?.preserve_order);
+        Ok(())
+    }
+
+    #[test]
+    fn new_file_scan_config_encode_handles_expr_adapter_factories() -> Result<()> {
+        let serde = FileScanSerdeHarness::new();
+        let default_config = FileScanConfigBuilder::from(test_config(None))
+            .with_expr_adapter(Some(Arc::new(DefaultPhysicalExprAdapterFactory)))
+            .build();
+        let encoded = serde.encode(&default_config)?;
+        assert!(serde.decode(&encoded)?.expr_adapter_factory.is_none());
+
+        let custom_config = FileScanConfigBuilder::from(test_config(None))
+            .with_expr_adapter(Some(Arc::new(SerdeTestExprAdapterFactory)))
+            .build();
+        let err = serde
+            .encode(&custom_config)
+            .expect_err("custom expression adapter must not be dropped");
+        assert!(
+            err.to_string().contains("expr_adapter_factory"),
+            "unexpected error: {err}"
+        );
         Ok(())
     }
 
