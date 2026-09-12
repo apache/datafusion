@@ -164,6 +164,7 @@ nlj:                    Benchmark for simple nested loop joins, testing various 
 hj:                     Benchmark for simple hash joins, testing various join scenarios
 smj:                    Benchmark for simple sort merge joins, testing various join scenarios
 dict:                   Benchmark for dictionary-encoded group-by scenarios
+array_agg_distinct:     1000K-group, two-row-per-group array_agg(DISTINCT) benchmark
 compile_profile:        Compile and execute TPC-H across selected Cargo profiles, reporting timing and binary size
 
 
@@ -650,6 +651,9 @@ main() {
                     ;;
                 dict)
                     run_dict
+                    ;;
+                array_agg_distinct)
+                    run_array_agg_distinct
                     ;;
                 compile_profile)
                     run_compile_profile "${PROFILE_ARGS[@]}"
@@ -1663,6 +1667,14 @@ run_dict() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running dict benchmark..."
     debug_run $CARGO_COMMAND --bin dfbench -- dict --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Runs the data-free high-cardinality array_agg(DISTINCT) SQL benchmark.
+run_array_agg_distinct() {
+    echo "Running array_agg_distinct benchmark..."
+    debug_run env BENCH_NAME=array_agg_distinct \
+      ${QUERY:+BENCH_QUERY="${QUERY}"} \
+      bash -c "$SQL_CARGO_COMMAND"
 }
 
 
