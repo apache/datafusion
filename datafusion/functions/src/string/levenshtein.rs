@@ -121,6 +121,113 @@ impl ScalarUDFImpl for LevenshteinFunc {
     }
 }
 
+/// Longest pattern, in bytes, that the bit-parallel path can encode in a single
+/// machine word. That path is ASCII-only, so this is a character count too.
+const MYERS_MAX_PATTERN_LEN: usize = u64::BITS as usize;
+
+/// Pattern length up to which resetting the match table character by character
+/// beats zeroing the whole of it. Above this, a vectorized fill is cheaper than
+/// the scattered stores.
+const MYERS_SPARSE_RESET_LEN: usize = 32;
+
+/// Scratch space reused across rows so that no single row has to allocate.
+struct LevenshteinScratch {
+    /// Dynamic-programming row for the character-wise fallback.
+    cache: Vec<usize>,
+    /// Bitmask of the positions at which each ASCII character occurs in the
+    /// Myers pattern. Characters absent from the pattern match nowhere, hence 0.
+    /// Left all-zero between rows so that each row can fill it in directly.
+    peq: [u64; 128],
+}
+
+impl LevenshteinScratch {
+    fn new() -> Self {
+        Self {
+            cache: Vec::new(),
+            peq: [0; 128],
+        }
+    }
+}
+
+/// Levenshtein distance between `a` and `b`.
+///
+/// Uses Myers' bit-parallel algorithm when both inputs are ASCII and the shorter
+/// one fits in a single 64-bit word, which computes a whole column of the
+/// dynamic-programming matrix per text character instead of one cell at a time.
+/// Longer or non-ASCII inputs fall back to the character-wise implementation and
+/// stay quadratic.
+#[inline]
+fn levenshtein_distance(a: &str, b: &str, scratch: &mut LevenshteinScratch) -> usize {
+    // The distance is symmetric, so the shorter side can always be the pattern.
+    let (pattern, text) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+
+    if pattern.len() <= MYERS_MAX_PATTERN_LEN && pattern.is_ascii() && text.is_ascii() {
+        myers_distance(pattern.as_bytes(), text.as_bytes(), &mut scratch.peq)
+    } else {
+        // The fallback sizes its buffer from the second argument, so give it the
+        // shorter side.
+        datafusion_strsim::levenshtein_with_buffer(text, pattern, &mut scratch.cache)
+    }
+}
+
+/// Myers' bit-parallel Levenshtein distance. Both inputs must be ASCII and
+/// `pattern` must be at most [`MYERS_MAX_PATTERN_LEN`] bytes long.
+///
+/// `vp`/`vn` hold the vertical deltas (+1 / -1) of the current matrix column as
+/// bitmasks, one bit per pattern character, and `score` tracks the value of that
+/// column's last cell.
+///
+/// `peq` must be all-zero on entry and is left all-zero on return.
+fn myers_distance(pattern: &[u8], text: &[u8], peq: &mut [u64; 128]) -> usize {
+    debug_assert!(pattern.is_ascii() && text.is_ascii());
+    debug_assert!(pattern.len() <= MYERS_MAX_PATTERN_LEN);
+    debug_assert!(peq.iter().all(|&mask| mask == 0));
+
+    let m = pattern.len();
+    if m == 0 {
+        return text.len();
+    }
+
+    for (i, &c) in pattern.iter().enumerate() {
+        peq[c as usize] |= 1 << i;
+    }
+
+    let last_bit = 1u64 << (m - 1);
+    let mut vp = u64::MAX;
+    let mut vn = 0u64;
+    let mut score = m;
+
+    for &c in text {
+        let eq = peq[c as usize];
+        let x = eq | vn;
+        let d0 = (vp.wrapping_add(x & vp) ^ vp) | x;
+        let hn = vp & d0;
+        let hp = vn | !(vp | d0);
+
+        if hp & last_bit != 0 {
+            score += 1;
+        } else if hn & last_bit != 0 {
+            score -= 1;
+        }
+
+        let hp = (hp << 1) | 1;
+        let hn = hn << 1;
+        vp = hn | !(d0 | hp);
+        vn = hp & d0;
+    }
+
+    // Restore the all-zero invariant for the next row.
+    if m <= MYERS_SPARSE_RESET_LEN {
+        for &c in pattern {
+            peq[c as usize] = 0;
+        }
+    } else {
+        peq.fill(0);
+    }
+
+    score
+}
+
 ///Returns the Levenshtein distance between the two given strings.
 /// LEVENSHTEIN('kitten', 'sitting') = 3
 fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -147,17 +254,16 @@ fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 let str1_array = as_string_view_array(&str1)?;
                 let str2_array = as_string_view_array(&str2)?;
 
-                // Reusable buffer to avoid allocating for each row
-                let mut cache = Vec::new();
+                // Reusable scratch space to avoid allocating for each row
+                let mut scratch = LevenshteinScratch::new();
 
                 let result = str1_array
                     .iter()
                     .zip(str2_array.iter())
                     .map(|(string1, string2)| match (string1, string2) {
                         (Some(string1), Some(string2)) => {
-                            Some(datafusion_strsim::levenshtein_with_buffer(
-                                string1, string2, &mut cache,
-                            ) as i32)
+                            Some(levenshtein_distance(string1, string2, &mut scratch)
+                                as i32)
                         }
                         _ => None,
                     })
@@ -168,17 +274,16 @@ fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 let str1_array = as_generic_string_array::<T>(&str1)?;
                 let str2_array = as_generic_string_array::<T>(&str2)?;
 
-                // Reusable buffer to avoid allocating for each row
-                let mut cache = Vec::new();
+                // Reusable scratch space to avoid allocating for each row
+                let mut scratch = LevenshteinScratch::new();
 
                 let result = str1_array
                     .iter()
                     .zip(str2_array.iter())
                     .map(|(string1, string2)| match (string1, string2) {
                         (Some(string1), Some(string2)) => {
-                            Some(datafusion_strsim::levenshtein_with_buffer(
-                                string1, string2, &mut cache,
-                            ) as i32)
+                            Some(levenshtein_distance(string1, string2, &mut scratch)
+                                as i32)
                         }
                         _ => None,
                     })
@@ -189,17 +294,16 @@ fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 let str1_array = as_generic_string_array::<T>(&str1)?;
                 let str2_array = as_generic_string_array::<T>(&str2)?;
 
-                // Reusable buffer to avoid allocating for each row
-                let mut cache = Vec::new();
+                // Reusable scratch space to avoid allocating for each row
+                let mut scratch = LevenshteinScratch::new();
 
                 let result = str1_array
                     .iter()
                     .zip(str2_array.iter())
                     .map(|(string1, string2)| match (string1, string2) {
                         (Some(string1), Some(string2)) => {
-                            Some(datafusion_strsim::levenshtein_with_buffer(
-                                string1, string2, &mut cache,
-                            ) as i64)
+                            Some(levenshtein_distance(string1, string2, &mut scratch)
+                                as i64)
                         }
                         _ => None,
                     })
@@ -240,5 +344,67 @@ mod tests {
         assert_eq!(&expected, result);
 
         Ok(())
+    }
+
+    /// The bit-parallel path must agree with the reference implementation for
+    /// every input it accepts, including empty strings and pattern lengths at
+    /// the 64-character word boundary.
+    #[test]
+    fn myers_matches_reference() {
+        let alphabets: [&[u8]; 3] = [b"ab", b"abcdefg", b"kitensg -0"];
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let mut scratch = LevenshteinScratch::new();
+
+        for alphabet in alphabets {
+            for len1 in [0usize, 1, 2, 5, 16, 63, 64, 65, 100] {
+                for len2 in [0usize, 1, 3, 8, 32, 64, 65, 120] {
+                    for _ in 0..8 {
+                        let make = |n: usize, next: &mut dyn FnMut() -> u64| {
+                            (0..n)
+                                .map(|_| {
+                                    alphabet[(next() % alphabet.len() as u64) as usize]
+                                        as char
+                                })
+                                .collect::<String>()
+                        };
+                        let a = make(len1, &mut next);
+                        let b = make(len2, &mut next);
+                        assert_eq!(
+                            levenshtein_distance(&a, &b, &mut scratch),
+                            datafusion_strsim::levenshtein(&a, &b),
+                            "levenshtein({a:?}, {b:?})"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn myers_known_distances() {
+        let mut scratch = LevenshteinScratch::new();
+        for (a, b, expected) in [
+            ("kitten", "sitting", 3),
+            ("", "", 0),
+            ("", "abc", 3),
+            ("abc", "", 3),
+            ("abc", "abc", 0),
+            ("flaw", "lawn", 2),
+            // Non-ASCII falls back to the character-wise implementation.
+            ("café", "cafe", 1),
+            ("😀abc", "abc", 1),
+        ] {
+            assert_eq!(
+                levenshtein_distance(a, b, &mut scratch),
+                expected,
+                "{a} {b}"
+            );
+        }
     }
 }
