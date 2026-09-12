@@ -48,7 +48,7 @@ use datafusion_expr::logical_plan::DdlStatement;
 use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
-    Analyze, CreateCatalog, CreateCatalogSchema,
+    Analyze, Cast, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateFunction, CreateFunctionBody,
     CreateIndex as PlanCreateIndex, CreateMemoryTable, CreateView, Deallocate,
     DescribeTable, DmlStatement, DropCatalogSchema, DropFunction, DropTable, DropView,
@@ -2954,6 +2954,25 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             Expr::Literal(ScalarValue::Null, None)
                         })
                         .cast_to(target_field.data_type(), &DFSchema::empty())?,
+                };
+                let (_, expr_field) = expr.to_field(source.schema())?;
+                // A storage-type cast alone does not apply extension metadata from the
+                // table schema when the source and target storage types are identical.
+                let expr = if target_field.extension_type_name().is_none()
+                    || expr_field.metadata() == target_field.metadata()
+                {
+                    expr
+                } else {
+                    match expr {
+                        Expr::Cast(cast) => Expr::Cast(Cast::new_from_field(
+                            cast.expr,
+                            Arc::clone(target_field),
+                        )),
+                        expr => Expr::Cast(Cast::new_from_field(
+                            Box::new(expr),
+                            Arc::clone(target_field),
+                        )),
+                    }
                 };
                 Ok(expr.alias(target_field.name()))
             })

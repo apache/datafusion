@@ -174,6 +174,20 @@ impl ContextProvider for MockContextProvider {
                 Field::new("first_name", DataType::Utf8, false),
                 Field::new("last_name", DataType::Utf8, false),
             ])),
+            "person_with_binary_id" => Ok(Schema::new(vec![
+                Field::new("id", DataType::FixedSizeBinary(16), false),
+                Field::new("first_name", DataType::Utf8, false),
+                Field::new("last_name", DataType::Utf8, false),
+            ])),
+            "string_with_extension" => Ok(Schema::new(vec![
+                Field::new("value", DataType::Utf8, false).with_metadata(
+                    [(
+                        "ARROW:extension:name".to_string(),
+                        "example.string".to_string(),
+                    )]
+                    .into(),
+                ),
+            ])),
             "orders" => Ok(Schema::new(vec![
                 Field::new("order_id", DataType::UInt32, false),
                 Field::new("o_orderkey", DataType::UInt32, false),
@@ -212,6 +226,20 @@ impl ContextProvider for MockContextProvider {
                         true,
                     ))),
                     false,
+                ),
+            ])),
+            "array_with_field_metadata" => Ok(Schema::new(vec![
+                Field::new(
+                    "left",
+                    DataType::List(Arc::new(
+                        Field::new_list_field(DataType::Int64, true).with_metadata(
+                            [("PARQUET:field_id".to_string(), "2".to_string())].into(),
+                        ),
+                    )),
+                    false,
+                )
+                .with_metadata(
+                    [("PARQUET:field_id".to_string(), "1".to_string())].into(),
                 ),
             ])),
             "lineitem" => Ok(Schema::new(vec![
