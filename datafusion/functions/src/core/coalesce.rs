@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::utils::unanimous_metadata;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{Result, exec_err, internal_err, plan_err};
 use datafusion_expr::binary::try_type_union_resolution;
@@ -86,7 +87,12 @@ impl ScalarUDFImpl for CoalesceFunc {
             .find_or_first(|d| !d.is_null())
             .unwrap()
             .clone();
-        Ok(Field::new(self.name(), return_type, nullable).into())
+        // Propagate field metadata (e.g. Arrow extension types) only when the
+        // arguments that can supply a value agree on it.
+        let metadata = unanimous_metadata(args.arg_fields.iter().map(|f| f.as_ref()));
+        Ok(Field::new(self.name(), return_type, nullable)
+            .with_metadata(metadata)
+            .into())
     }
 
     fn simplify(
@@ -144,5 +150,99 @@ impl ScalarUDFImpl for CoalesceFunc {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    const EXTENSION_KEY: &str = "ARROW:extension:name";
+
+    fn field(name: &str, dt: DataType, nullable: bool) -> FieldRef {
+        Arc::new(Field::new(name, dt, nullable))
+    }
+
+    fn ext_field(name: &str, dt: DataType, extension_name: &str) -> FieldRef {
+        Arc::new(Field::new(name, dt, true).with_metadata(HashMap::from([(
+            EXTENSION_KEY.to_string(),
+            extension_name.to_string(),
+        )])))
+    }
+
+    fn return_field(arg_fields: &[FieldRef]) -> FieldRef {
+        let scalars = vec![None; arg_fields.len()];
+        CoalesceFunc::new()
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields,
+                scalar_arguments: &scalars,
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn propagates_metadata_when_arguments_agree() {
+        let ret = return_field(&[
+            ext_field("a", DataType::Binary, "geoarrow.wkb"),
+            ext_field("b", DataType::Binary, "geoarrow.wkb"),
+        ]);
+        assert_eq!(ret.data_type(), &DataType::Binary);
+        assert!(ret.is_nullable());
+        assert_eq!(
+            ret.metadata().get(EXTENSION_KEY).map(String::as_str),
+            Some("geoarrow.wkb")
+        );
+    }
+
+    #[test]
+    fn null_literal_argument_does_not_block_metadata() {
+        // An untyped NULL argument carries no metadata but cannot contribute
+        // a typed value either, so it does not participate in the agreement.
+        let ret = return_field(&[
+            field("null", DataType::Null, true),
+            ext_field("b", DataType::Binary, "geoarrow.wkb"),
+        ]);
+        assert_eq!(ret.data_type(), &DataType::Binary);
+        assert_eq!(
+            ret.metadata().get(EXTENSION_KEY).map(String::as_str),
+            Some("geoarrow.wkb")
+        );
+    }
+
+    #[test]
+    fn drops_metadata_when_arguments_disagree() {
+        let ret = return_field(&[
+            ext_field("a", DataType::Binary, "geoarrow.wkb"),
+            field("plain", DataType::Binary, true),
+        ]);
+        assert_eq!(ret.data_type(), &DataType::Binary);
+        assert!(ret.metadata().is_empty());
+    }
+
+    #[test]
+    fn no_metadata_when_all_arguments_are_null() {
+        let ret = return_field(&[
+            field("a", DataType::Null, true),
+            field("b", DataType::Null, true),
+        ]);
+        assert_eq!(ret.data_type(), &DataType::Null);
+        assert!(ret.metadata().is_empty());
+    }
+
+    #[test]
+    fn nullability_is_unchanged_by_metadata_propagation() {
+        let ret = return_field(&[
+            ext_field("a", DataType::Binary, "geoarrow.wkb"),
+            Arc::new(Field::new("b", DataType::Binary, false).with_metadata(
+                HashMap::from([(EXTENSION_KEY.to_string(), "geoarrow.wkb".to_string())]),
+            )),
+        ]);
+        assert!(!ret.is_nullable());
+        assert_eq!(
+            ret.metadata().get(EXTENSION_KEY).map(String::as_str),
+            Some("geoarrow.wkb")
+        );
     }
 }
