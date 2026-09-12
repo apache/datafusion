@@ -20,6 +20,7 @@ use std::ops::{Add, Sub};
 use std::str::FromStr;
 use std::sync::Arc;
 
+use crate::datetime::common::parse_tz;
 use arrow::array::temporal_conversions::{
     MICROSECONDS, MILLISECONDS, NANOSECONDS, as_datetime_with_timezone,
 };
@@ -858,14 +859,6 @@ fn general_date_trunc(
         },
     };
     Ok(result)
-}
-
-fn parse_tz(tz: Option<&Arc<str>>) -> Result<Option<Tz>> {
-    tz.map(|tz| {
-        Tz::from_str(tz)
-            .map_err(|op| exec_datafusion_err!("failed on timezone {tz}: {op:?}"))
-    })
-    .transpose()
 }
 
 #[cfg(test)]
