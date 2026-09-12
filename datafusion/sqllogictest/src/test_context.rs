@@ -148,6 +148,9 @@ impl TestContext {
 
         let file_name = relative_path.file_name().unwrap().to_str().unwrap();
         match file_name {
+            "parquet_missing_bounds.slt" => {
+                register_parquet_missing_bounds(&mut test_ctx).await;
+            }
             "cte.slt" => {
                 info!("Registering strict schema provider for CTE tests");
                 register_strict_schema_provider(test_ctx.session_ctx());
@@ -410,6 +413,78 @@ pub async fn register_partition_table(test_ctx: &mut TestContext) {
             "test_partition_table",
             test_ctx.testdir_path().to_str().unwrap(),
             CsvReadOptions::new().schema(&schema),
+        )
+        .await
+        .unwrap();
+}
+
+/// Generate a real Parquet file whose second row group has no statistics.
+async fn register_parquet_missing_bounds(test_ctx: &mut TestContext) {
+    use datafusion::parquet::arrow::ArrowWriter;
+    use datafusion::parquet::file::metadata::{
+        ParquetMetaDataReader, ParquetMetaDataWriter,
+    };
+    use datafusion::parquet::file::properties::{EnabledStatistics, WriterProperties};
+    use datafusion::parquet::file::writer::TrackedWrite;
+
+    test_ctx.enable_testdir();
+    let path = test_ctx.testdir_path().join("missing_bounds.parquet");
+    let batch = RecordBatch::try_from_iter([(
+        "a",
+        Arc::new(Int32Array::from(vec![1, 2, 3, 100, 200, 300])) as ArrayRef,
+    )])
+    .unwrap();
+    let properties = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(3))
+        .set_statistics_enabled(EnabledStatistics::Chunk)
+        .build();
+    let mut writer = ArrowWriter::try_new(
+        File::create(&path).unwrap(),
+        batch.schema(),
+        Some(properties),
+    )
+    .unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+
+    let metadata = ParquetMetaDataReader::new()
+        .parse_and_finish(&File::open(&path).unwrap())
+        .unwrap();
+    assert_eq!(metadata.num_row_groups(), 2);
+    let mut groups = metadata.row_groups().to_vec();
+    let column = groups[1]
+        .column(0)
+        .clone()
+        .into_builder()
+        .clear_statistics()
+        .build()
+        .unwrap();
+    groups[1] = groups[1]
+        .clone()
+        .into_builder()
+        .set_column_metadata(vec![column])
+        .build()
+        .unwrap();
+    let metadata = metadata.into_builder().set_row_groups(groups).build();
+
+    // Replace only the footer, preserving the data pages and their offsets.
+    let original = std::fs::read(&path).unwrap();
+    let end = original.len() - 8;
+    let metadata_len = u32::from_le_bytes(original[end..end + 4].try_into().unwrap());
+    let mut tracked = TrackedWrite::new(File::create(&path).unwrap());
+    tracked
+        .write_all(&original[..end - metadata_len as usize])
+        .unwrap();
+    ParquetMetaDataWriter::new_with_tracked(tracked, &metadata)
+        .finish()
+        .unwrap();
+
+    test_ctx
+        .ctx
+        .register_parquet(
+            "missing_bounds",
+            path.to_str().unwrap(),
+            ParquetReadOptions::default(),
         )
         .await
         .unwrap();
