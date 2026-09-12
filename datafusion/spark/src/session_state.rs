@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use datafusion::execution::SessionStateBuilder;
 
+use crate::function::array::arrays_zip_rewrite::SparkArraysZipRewrite;
 use crate::planner::SparkFunctionPlanner;
 use crate::{
     all_default_aggregate_functions, all_default_scalar_functions,
@@ -80,6 +81,10 @@ impl SessionStateBuilderSpark for SessionStateBuilder {
                     .into_iter()
                     .map(|f| (f.name().to_string(), f)),
             );
+
+        self.analyzer_rules()
+            .get_or_insert_with(Vec::new)
+            .push(Arc::new(SparkArraysZipRewrite));
 
         self
     }
