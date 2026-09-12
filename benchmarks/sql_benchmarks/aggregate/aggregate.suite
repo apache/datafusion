@@ -1,0 +1,23 @@
+description = "Focused aggregate function benchmarks"
+
+query_pattern = "q{QUERY_ID_PADDED}.benchmark"
+
+[[options]]
+name = "rows"
+short = "r"
+env = "AGGREGATE_ROWS"
+default = "1000000"
+values = ["1000000", "..."]
+help = "Sets the number of rows in generated aggregate datasets."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- aggregate --subgroup array_agg --query 1"
+description = "Run the ordered ARRAY_AGG benchmark."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- aggregate --subgroup array_agg --query 2"
+description = "Run the conflicting-order ARRAY_AGG benchmark."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- aggregate --subgroup string_agg --query 1"
+description = "Run the ordered STRING_AGG benchmark."

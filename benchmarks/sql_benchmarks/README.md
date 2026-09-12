@@ -29,6 +29,7 @@ in the community:
 
 | Benchmark Suite       | Description                                                        |
 |-----------------------|--------------------------------------------------------------------|
+| `aggregate`           | Aggregate function benchmarks                                      |
 | `clickbench`          | ClickBench benchmark                                               |
 | `clickbench extended` | 12 additional, more complex queries against the Clickbench dataset |
 | `clickbench_sorted`   | ClickBench benchmark using a pre-sorted hits file.                 |
@@ -169,6 +170,7 @@ Some benchmarks use custom environment variables as outlined below:
 | BENCH_SORTED                 | Used in the sort_tpch benchmark to indicate whether the lineitem table should be sorted.                                 | false         |
 | SORTED_BY                    | Used in the clickbench_sorted benchmark to indicate the column to sort by.                                               | `EventTime`   |
 | SORTED_ORDER                 | Used in the clickbench_sorted benchmark to indicate the sort order of the column.                                        | `ASC`         |
+| AGGREGATE_ROWS               | Used in the aggregate benchmark to size the generated aggregate datasets.                                                | `1000000`     |
 | PRED_ROWS                    | Used in the predicate_eval benchmark to size the synthetic table (the `scale` subgroup overrides this per query), and in the parquet_row_filter_skip benchmark to size the generated Parquet datasets (default `10000000` there). | `1000000`     |
 | PRED_FILL                    | Used in the predicate_eval benchmark as the string-column width knob (filler chars per marker).                          | `30`          |
 | RG_SIZE                      | Used in the parquet_row_filter_skip benchmark as the Parquet `max_row_group_size` for the generated datasets.            | `1000000`     |

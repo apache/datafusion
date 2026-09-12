@@ -1,0 +1,6 @@
+subgroup array_agg
+
+template sql_benchmarks/aggregate/aggregate.benchmark.template
+SUBGROUP=array_agg
+QPAD=01
+NAME=Q01_array_agg_ordered
