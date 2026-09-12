@@ -16249,6 +16249,9 @@ impl serde::Serialize for ParquetScanExecNode {
         if self.reverse_row_groups {
             len += 1;
         }
+        if self.metadata_size_hint.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.ParquetScanExecNode", len)?;
         if let Some(v) = self.base_conf.as_ref() {
             struct_ser.serialize_field("baseConf", v)?;
@@ -16264,6 +16267,11 @@ impl serde::Serialize for ParquetScanExecNode {
         }
         if self.reverse_row_groups {
             struct_ser.serialize_field("reverseRowGroups", &self.reverse_row_groups)?;
+        }
+        if let Some(v) = self.metadata_size_hint.as_ref() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("metadataSizeHint", ToString::to_string(&v).as_str())?;
         }
         struct_ser.end()
     }
@@ -16284,6 +16292,8 @@ impl<'de> serde::Deserialize<'de> for ParquetScanExecNode {
             "sortOrderForReorder",
             "reverse_row_groups",
             "reverseRowGroups",
+            "metadata_size_hint",
+            "metadataSizeHint",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -16293,6 +16303,7 @@ impl<'de> serde::Deserialize<'de> for ParquetScanExecNode {
             ParquetOptions,
             SortOrderForReorder,
             ReverseRowGroups,
+            MetadataSizeHint,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -16319,6 +16330,7 @@ impl<'de> serde::Deserialize<'de> for ParquetScanExecNode {
                             "parquetOptions" | "parquet_options" => Ok(GeneratedField::ParquetOptions),
                             "sortOrderForReorder" | "sort_order_for_reorder" => Ok(GeneratedField::SortOrderForReorder),
                             "reverseRowGroups" | "reverse_row_groups" => Ok(GeneratedField::ReverseRowGroups),
+                            "metadataSizeHint" | "metadata_size_hint" => Ok(GeneratedField::MetadataSizeHint),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -16343,6 +16355,7 @@ impl<'de> serde::Deserialize<'de> for ParquetScanExecNode {
                 let mut parquet_options__ = None;
                 let mut sort_order_for_reorder__ = None;
                 let mut reverse_row_groups__ = None;
+                let mut metadata_size_hint__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::BaseConf => {
@@ -16375,6 +16388,14 @@ impl<'de> serde::Deserialize<'de> for ParquetScanExecNode {
                             }
                             reverse_row_groups__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::MetadataSizeHint => {
+                            if metadata_size_hint__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("metadataSizeHint"));
+                            }
+                            metadata_size_hint__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
                     }
                 }
                 Ok(ParquetScanExecNode {
@@ -16383,6 +16404,7 @@ impl<'de> serde::Deserialize<'de> for ParquetScanExecNode {
                     parquet_options: parquet_options__,
                     sort_order_for_reorder: sort_order_for_reorder__,
                     reverse_row_groups: reverse_row_groups__.unwrap_or_default(),
+                    metadata_size_hint: metadata_size_hint__,
                 })
             }
         }
@@ -16403,12 +16425,18 @@ impl serde::Serialize for ParquetSink {
         if self.parquet_options.is_some() {
             len += 1;
         }
+        if self.sorting_columns.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.ParquetSink", len)?;
         if let Some(v) = self.config.as_ref() {
             struct_ser.serialize_field("config", v)?;
         }
         if let Some(v) = self.parquet_options.as_ref() {
             struct_ser.serialize_field("parquetOptions", v)?;
+        }
+        if let Some(v) = self.sorting_columns.as_ref() {
+            struct_ser.serialize_field("sortingColumns", v)?;
         }
         struct_ser.end()
     }
@@ -16423,12 +16451,15 @@ impl<'de> serde::Deserialize<'de> for ParquetSink {
             "config",
             "parquet_options",
             "parquetOptions",
+            "sorting_columns",
+            "sortingColumns",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Config,
             ParquetOptions,
+            SortingColumns,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -16452,6 +16483,7 @@ impl<'de> serde::Deserialize<'de> for ParquetSink {
                         match value {
                             "config" => Ok(GeneratedField::Config),
                             "parquetOptions" | "parquet_options" => Ok(GeneratedField::ParquetOptions),
+                            "sortingColumns" | "sorting_columns" => Ok(GeneratedField::SortingColumns),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -16473,6 +16505,7 @@ impl<'de> serde::Deserialize<'de> for ParquetSink {
             {
                 let mut config__ = None;
                 let mut parquet_options__ = None;
+                let mut sorting_columns__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Config => {
@@ -16487,11 +16520,18 @@ impl<'de> serde::Deserialize<'de> for ParquetSink {
                             }
                             parquet_options__ = map_.next_value()?;
                         }
+                        GeneratedField::SortingColumns => {
+                            if sorting_columns__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("sortingColumns"));
+                            }
+                            sorting_columns__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(ParquetSink {
                     config: config__,
                     parquet_options: parquet_options__,
+                    sorting_columns: sorting_columns__,
                 })
             }
         }
@@ -16640,6 +16680,226 @@ impl<'de> serde::Deserialize<'de> for ParquetSinkExecNode {
             }
         }
         deserializer.deserialize_struct("datafusion.ParquetSinkExecNode", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for ParquetSortingColumn {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.column_idx != 0 {
+            len += 1;
+        }
+        if self.descending {
+            len += 1;
+        }
+        if self.nulls_first {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.ParquetSortingColumn", len)?;
+        if self.column_idx != 0 {
+            struct_ser.serialize_field("columnIdx", &self.column_idx)?;
+        }
+        if self.descending {
+            struct_ser.serialize_field("descending", &self.descending)?;
+        }
+        if self.nulls_first {
+            struct_ser.serialize_field("nullsFirst", &self.nulls_first)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ParquetSortingColumn {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "column_idx",
+            "columnIdx",
+            "descending",
+            "nulls_first",
+            "nullsFirst",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            ColumnIdx,
+            Descending,
+            NullsFirst,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "columnIdx" | "column_idx" => Ok(GeneratedField::ColumnIdx),
+                            "descending" => Ok(GeneratedField::Descending),
+                            "nullsFirst" | "nulls_first" => Ok(GeneratedField::NullsFirst),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ParquetSortingColumn;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.ParquetSortingColumn")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ParquetSortingColumn, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut column_idx__ = None;
+                let mut descending__ = None;
+                let mut nulls_first__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::ColumnIdx => {
+                            if column_idx__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("columnIdx"));
+                            }
+                            column_idx__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Descending => {
+                            if descending__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("descending"));
+                            }
+                            descending__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::NullsFirst => {
+                            if nulls_first__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nullsFirst"));
+                            }
+                            nulls_first__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(ParquetSortingColumn {
+                    column_idx: column_idx__.unwrap_or_default(),
+                    descending: descending__.unwrap_or_default(),
+                    nulls_first: nulls_first__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.ParquetSortingColumn", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for ParquetSortingColumns {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.columns.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.ParquetSortingColumns", len)?;
+        if !self.columns.is_empty() {
+            struct_ser.serialize_field("columns", &self.columns)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ParquetSortingColumns {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "columns",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Columns,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "columns" => Ok(GeneratedField::Columns),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ParquetSortingColumns;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.ParquetSortingColumns")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ParquetSortingColumns, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut columns__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Columns => {
+                            if columns__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("columns"));
+                            }
+                            columns__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(ParquetSortingColumns {
+                    columns: columns__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.ParquetSortingColumns", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for PartialTableReference {

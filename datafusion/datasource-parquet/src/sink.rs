@@ -423,6 +423,18 @@ impl DataSink for ParquetSink {
         use datafusion_proto_models::protobuf;
         use protobuf::physical_plan_node::PhysicalPlanType;
 
+        // Keep the active hook exhaustive while centralizing field mapping in
+        // the exhaustive `TryFrom<&ParquetSink>` below.
+        let Self {
+            config: _,
+            parquet_options: _,
+            // Runtime output state, not part of the plan.
+            written: _,
+            sorting_columns: _,
+            // Runtime metrics are recreated on decode.
+            metrics: _,
+        } = self;
+
         let input = ctx.encode_child(exec.input())?;
         let sort_order = exec.encode_sort_order(ctx)?;
         let sink = protobuf::ParquetSink::try_from(self)?;
@@ -443,9 +455,43 @@ impl TryFrom<&ParquetSink> for datafusion_proto_models::protobuf::ParquetSink {
     type Error = DataFusionError;
 
     fn try_from(value: &ParquetSink) -> Result<Self> {
+        use datafusion_proto_models::protobuf;
+
+        let ParquetSink {
+            config,
+            parquet_options,
+            // Runtime output state, not part of the plan.
+            written: _,
+            sorting_columns,
+            // Runtime metrics are recreated on decode.
+            metrics: _,
+        } = value;
+        let sorting_columns =
+            sorting_columns
+                .as_ref()
+                .map(|columns| protobuf::ParquetSortingColumns {
+                    columns: columns
+                        .iter()
+                        .map(
+                            |&SortingColumn {
+                                 column_idx,
+                                 descending,
+                                 nulls_first,
+                             }| {
+                                protobuf::ParquetSortingColumn {
+                                    column_idx,
+                                    descending,
+                                    nulls_first,
+                                }
+                            },
+                        )
+                        .collect(),
+                });
+
         Ok(Self {
-            config: Some(value.config().try_into()?),
-            parquet_options: Some(value.parquet_options().try_into()?),
+            config: Some(config.try_into()?),
+            parquet_options: Some(parquet_options.try_into()?),
+            sorting_columns,
         })
     }
 }
@@ -455,14 +501,19 @@ impl TryFrom<&datafusion_proto_models::protobuf::ParquetSink> for ParquetSink {
     type Error = DataFusionError;
 
     fn try_from(value: &datafusion_proto_models::protobuf::ParquetSink) -> Result<Self> {
-        let config =
-            FileSinkConfig::try_from(value.config.as_ref().ok_or_else(|| {
-                datafusion_common::internal_datafusion_err!(
-                    "ParquetSink is missing required field 'config'"
-                )
-            })?)?;
-        let parquet_options = value
-            .parquet_options
+        use datafusion_proto_models::protobuf;
+
+        let protobuf::ParquetSink {
+            config,
+            parquet_options,
+            sorting_columns,
+        } = value;
+        let config = FileSinkConfig::try_from(config.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "ParquetSink is missing required field 'config'"
+            )
+        })?)?;
+        let parquet_options = parquet_options
             .as_ref()
             .ok_or_else(|| {
                 datafusion_common::internal_datafusion_err!(
@@ -470,8 +521,26 @@ impl TryFrom<&datafusion_proto_models::protobuf::ParquetSink> for ParquetSink {
                 )
             })?
             .try_into()?;
+        let sorting_columns = sorting_columns.as_ref().map(
+            |protobuf::ParquetSortingColumns { columns }| {
+                columns
+                    .iter()
+                    .map(
+                        |&protobuf::ParquetSortingColumn {
+                             column_idx,
+                             descending,
+                             nulls_first,
+                         }| SortingColumn {
+                            column_idx,
+                            descending,
+                            nulls_first,
+                        },
+                    )
+                    .collect()
+            },
+        );
 
-        Ok(Self::new(config, parquet_options))
+        Ok(Self::new(config, parquet_options).with_sorting_columns(sorting_columns))
     }
 }
 
@@ -489,19 +558,23 @@ impl ParquetSink {
             protobuf::physical_plan_node::PhysicalPlanType::ParquetSink,
             "ParquetSink",
         );
-        let input = ctx.decode_required_child(
-            sink_node.input.as_deref(),
-            "ParquetSinkExecNode",
-            "input",
-        )?;
-        let proto_sink = sink_node.sink.as_ref().ok_or_else(|| {
+        let protobuf::ParquetSinkExecNode {
+            input,
+            sink,
+            // Recomputed by `DataSinkExec::new`.
+            sink_schema: _,
+            sort_order,
+        } = sink_node.as_ref();
+        let input =
+            ctx.decode_required_child(input.as_deref(), "ParquetSinkExecNode", "input")?;
+        let proto_sink = sink.as_ref().ok_or_else(|| {
             datafusion_common::internal_datafusion_err!(
                 "ParquetSinkExecNode is missing required field 'sink'"
             )
         })?;
         let data_sink = ParquetSink::try_from(proto_sink)?;
         let sort_order = DataSinkExec::decode_sort_order(
-            sink_node.sort_order.as_ref(),
+            sort_order.as_ref(),
             ctx,
             input.schema().as_ref(),
         )?;

@@ -965,9 +965,25 @@ message CsvSinkExecNode {
   PhysicalSortExprNodeCollection sort_order = 4;
 }
 
+message ParquetSortingColumn {
+  // Zero-based ordinal of the leaf column in the Parquet schema.
+  int32 column_idx = 1;
+  // Whether the column is sorted in descending order.
+  bool descending = 2;
+  // Whether nulls sort before non-null values.
+  bool nulls_first = 3;
+}
+
+message ParquetSortingColumns {
+  // The wrapper preserves the distinction between no sorting metadata and an empty list.
+  repeated ParquetSortingColumn columns = 1;
+}
+
 message ParquetSink {
   FileSinkConfig config = 1;
   datafusion_common.TableParquetOptions parquet_options = 2;
+  // Sorting-column metadata to write to each Parquet row group.
+  ParquetSortingColumns sorting_columns = 3;
 }
 
 message ParquetSinkExecNode {
@@ -1287,6 +1303,9 @@ message ParquetScanExecNode {
   PhysicalSortExprNodeCollection sort_order_for_reorder = 5;
 
   bool reverse_row_groups = 6;
+
+  // Source-specific footer prefetch size. Absent means no hint.
+  optional uint64 metadata_size_hint = 7;
 }
 
 message CsvScanExecNode {

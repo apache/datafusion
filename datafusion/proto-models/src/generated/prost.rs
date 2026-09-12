@@ -1503,6 +1503,24 @@ pub struct CsvSinkExecNode {
     #[prost(message, optional, tag = "4")]
     pub sort_order: ::core::option::Option<PhysicalSortExprNodeCollection>,
 }
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ParquetSortingColumn {
+    /// Zero-based ordinal of the leaf column in the Parquet schema.
+    #[prost(int32, tag = "1")]
+    pub column_idx: i32,
+    /// Whether the column is sorted in descending order.
+    #[prost(bool, tag = "2")]
+    pub descending: bool,
+    /// Whether nulls sort before non-null values.
+    #[prost(bool, tag = "3")]
+    pub nulls_first: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ParquetSortingColumns {
+    /// The wrapper preserves the distinction between no sorting metadata and an empty list.
+    #[prost(message, repeated, tag = "1")]
+    pub columns: ::prost::alloc::vec::Vec<ParquetSortingColumn>,
+}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ParquetSink {
     #[prost(message, optional, tag = "1")]
@@ -1511,6 +1529,9 @@ pub struct ParquetSink {
     pub parquet_options: ::core::option::Option<
         super::datafusion_common::TableParquetOptions,
     >,
+    /// Sorting-column metadata to write to each Parquet row group.
+    #[prost(message, optional, tag = "3")]
+    pub sorting_columns: ::core::option::Option<ParquetSortingColumns>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ParquetSinkExecNode {
@@ -1978,6 +1999,9 @@ pub struct ParquetScanExecNode {
     pub sort_order_for_reorder: ::core::option::Option<PhysicalSortExprNodeCollection>,
     #[prost(bool, tag = "6")]
     pub reverse_row_groups: bool,
+    /// Source-specific footer prefetch size. Absent means no hint.
+    #[prost(uint64, optional, tag = "7")]
+    pub metadata_size_hint: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CsvScanExecNode {
