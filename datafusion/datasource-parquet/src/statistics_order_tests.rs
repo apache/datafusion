@@ -15,12 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Regression tests for interpreting Parquet byte-array statistics orders.
+//! Regression tests for Parquet bounds that do not follow Arrow's comparison order.
 
 use std::io::Write;
+use std::ops::Not;
 use std::sync::Arc;
 
-use arrow::array::{BooleanArray, record_batch};
+use arrow::array::{BooleanArray, Int32Array, RecordBatch, StringArray, record_batch};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use bytes::Bytes;
 use datafusion_common::pruning::{PrunableStatistics, PruningStatistics};
@@ -66,6 +67,102 @@ struct TestFile {
 }
 
 impl TestFile {
+    fn floating(data_type: &DataType) -> Self {
+        // The payloads remain distinct even after conversion to Float16.
+        let nan = f64::from_bits(0x7ff8_2000_0000_0000);
+        let other_nan = f64::from_bits(0x7ff8_4000_0000_0000);
+        let values = [
+            Some(1.0),
+            Some(nan),
+            Some(1.0),
+            Some(other_nan),
+            Some(1.0),
+            Some(-nan),
+            Some(1.0),
+            Some(-other_nan),
+            Some(1.0),
+            Some(nan),
+            None,
+            Some(-nan),
+            None,
+            None,
+            None,
+            None,
+        ]
+        .into_iter()
+        .map(|value| ScalarValue::Float64(value).cast_to(data_type).unwrap())
+        .collect::<Vec<_>>();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("f", data_type.clone(), true),
+            Field::new("n", DataType::Int32, false),
+            Field::new("s", DataType::Utf8, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                ScalarValue::iter_to_array(values.clone()).unwrap(),
+                Arc::new(Int32Array::from_iter_values(0..16)),
+                Arc::new(StringArray::from_iter_values(
+                    ["a", "b", "c", "d"].into_iter().flat_map(|s| [s; 4]),
+                )),
+            ],
+        )
+        .unwrap();
+        let properties = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(4))
+            .set_data_page_row_count_limit(2)
+            .set_write_batch_size(2)
+            .set_dictionary_enabled(false)
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .build();
+        let mut bytes = Vec::new();
+        let mut writer =
+            ArrowWriter::try_new(&mut bytes, Arc::clone(&schema), Some(properties))
+                .unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let bytes = Bytes::from(bytes);
+        let metadata = Arc::new(read_metadata(&bytes));
+        assert_eq!(metadata.num_row_groups(), 4);
+        let finite_bound = match data_type {
+            DataType::Float16 => vec![0x00, 0x3c],
+            DataType::Float32 => 1.0_f32.to_le_bytes().to_vec(),
+            DataType::Float64 => 1.0_f64.to_le_bytes().to_vec(),
+            _ => unreachable!(),
+        };
+        for group in metadata.row_groups().iter().take(3) {
+            let stats = group.column(0).statistics().unwrap();
+            assert_eq!(stats.min_bytes_opt().unwrap(), finite_bound);
+            assert_eq!(stats.max_bytes_opt().unwrap(), finite_bound);
+        }
+        for group in metadata.offset_index().unwrap() {
+            assert_eq!(group[0].page_locations.len(), 2);
+        }
+
+        // Verify the actual data pages preserve the signed NaN payloads and
+        // nulls. ScalarValue equality compares floating-point bit patterns.
+        let decoded = ParquetRecordBatchReaderBuilder::try_new(bytes.clone())
+            .unwrap()
+            .build()
+            .unwrap()
+            .flat_map(|batch| {
+                let batch = batch.unwrap();
+                (0..batch.num_rows())
+                    .map(|row| {
+                        ScalarValue::try_from_array(batch.column(0).as_ref(), row)
+                            .unwrap()
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(decoded, values);
+        Self {
+            bytes,
+            schema,
+            metadata,
+        }
+    }
+
     fn new(order: StatisticsOrder) -> Self {
         let batch = record_batch!(
             (
@@ -309,6 +406,197 @@ fn metrics() -> ParquetFileMetrics {
         "statistics-order.parquet",
         &ExecutionPlanMetricsSet::new(),
     )
+}
+
+fn assert_float_pruning(
+    file: &TestFile,
+    expr: &Expr,
+    max_in_list_size: usize,
+    expected: usize,
+) {
+    let physical = logical2physical(expr, &file.schema);
+    let predicate = PruningPredicateBuilder::new()
+        .with_file_schema(Arc::clone(&file.schema))
+        .with_max_in_list_size(max_in_list_size)
+        .try_build(Arc::clone(&physical))
+        .unwrap();
+    let context = format!(
+        "type={}, cap={max_in_list_size}, expr={expr}",
+        file.schema.field(0).data_type()
+    );
+    let all = ParquetAccessPlan::new_all(file.metadata.num_row_groups());
+    // Always evaluate the physical residual against the original, unpruned
+    // bytes. Pruning layers must not establish each other's expected result.
+    assert_eq!(
+        file.matching_rows(&physical, all.clone()),
+        expected,
+        "{context}"
+    );
+    if expected > 0 {
+        assert!(file.file_matches(&predicate), "file: {context}");
+    }
+    let row_groups = file.row_group_plan(&predicate);
+    assert_eq!(
+        file.matching_rows(&physical, row_groups.clone()),
+        expected,
+        "row groups: {context}"
+    );
+    for index in row_groups.row_group_indexes() {
+        if row_groups.is_fully_matched(index) {
+            let mut group = ParquetAccessPlan::new_none(file.metadata.num_row_groups());
+            group.scan(index);
+            assert_eq!(
+                file.matching_rows(&physical, group),
+                file.metadata.row_group(index).num_rows() as usize,
+                "fully matched row group {index}: {context}",
+            );
+        }
+    }
+    // Use the opener's configured cap and start the page-only path with all
+    // row groups, so file/row-group guards cannot mask unsafe page bounds.
+    let pages = crate::opener::build_page_pruning_predicate(
+        &physical,
+        &file.schema,
+        max_in_list_size,
+    );
+    for (label, plan) in [("pages", all), ("row groups and pages", row_groups)] {
+        let plan = pages.prune_plan_with_page_index(
+            plan,
+            &file.schema,
+            file.metadata.file_metadata().schema_descr(),
+            &file.metadata,
+            &metrics(),
+        );
+        assert_eq!(
+            file.matching_rows(&physical, plan),
+            expected,
+            "{label}: {context}"
+        );
+    }
+}
+
+#[test]
+fn floating_nan_in_lists_preserve_rows_at_every_pruning_level() {
+    for data_type in [DataType::Float16, DataType::Float32, DataType::Float64] {
+        let file = TestFile::floating(&data_type);
+        let value = |value| lit(ScalarValue::Float64(value).cast_to(&data_type).unwrap());
+        let nan = f64::from_bits(0x7ff8_2000_0000_0000);
+        for cap in [0, MAX_IN_LIST_SIZE, MAX_IN_LIST_SIZE + 1, 1024] {
+            for size in [2, MAX_IN_LIST_SIZE + 1] {
+                for nan in [nan, -nan] {
+                    let mut values = (2..=size)
+                        .map(|v| value(Some(v as f64)))
+                        .collect::<Vec<_>>();
+                    values.push(value(Some(nan)));
+                    assert_float_pruning(
+                        &file,
+                        &col("f").in_list(values.clone(), false),
+                        cap,
+                        2,
+                    );
+                    values[0] = value(None);
+                    assert_float_pruning(&file, &col("f").in_list(values, false), cap, 2);
+                }
+                // The footer/page bounds are [1, 1], but NaNs still satisfy
+                // NOT IN (1, ...). Adding NULL makes all nonmatches unknown.
+                let mut values = (1..=size)
+                    .map(|v| value(Some(v as f64)))
+                    .collect::<Vec<_>>();
+                assert_float_pruning(
+                    &file,
+                    &col("f").in_list(values.clone(), true),
+                    cap,
+                    6,
+                );
+                values[1] = value(None);
+                assert_float_pruning(&file, &col("f").in_list(values, true), cap, 0);
+            }
+        }
+    }
+}
+
+#[test]
+fn floating_nan_comparisons_do_not_prune_or_fully_match_finite_bounds() {
+    for data_type in [DataType::Float16, DataType::Float32, DataType::Float64] {
+        let file = TestFile::floating(&data_type);
+        let value = |v| lit(ScalarValue::Float64(Some(v)).cast_to(&data_type).unwrap());
+        let nan = f64::from_bits(0x7ff8_2000_0000_0000);
+        for (expr, expected) in [
+            (col("f").eq(value(1.0)), 5),
+            (col("f").not_eq(value(1.0)), 6),
+            (col("f").lt(value(1.0)), 3),
+            (col("f").gt(value(1.0)), 3),
+            (col("f").lt_eq(value(1.0)), 8),
+            (col("f").gt_eq(value(1.0)), 8),
+            (col("f").eq(value(nan)), 2),
+            (col("f").eq(value(-nan)), 2),
+            (col("f").eq(value(1.0)).not(), 6),
+            (col("f").lt_eq(value(1.0)).not(), 3),
+            (col("f").eq(value(nan)).or(col("f").eq(value(-nan))), 4),
+        ] {
+            assert_float_pruning(&file, &expr, MAX_IN_LIST_SIZE, expected);
+        }
+    }
+}
+
+#[test]
+fn floating_bounds_keep_null_counts_and_other_column_statistics() {
+    for data_type in [DataType::Float16, DataType::Float32, DataType::Float64] {
+        let file = TestFile::floating(&data_type);
+        let statistics = file.statistics();
+        let float = &statistics.column_statistics[0];
+        assert_eq!(float.min_value, Precision::Absent);
+        assert_eq!(float.max_value, Precision::Absent);
+        assert_eq!(float.null_count, Precision::Exact(5));
+        assert_eq!(
+            statistics.column_statistics[1].min_value,
+            Precision::Exact(ScalarValue::Int32(Some(0)))
+        );
+        assert_eq!(
+            statistics.column_statistics[1].max_value,
+            Precision::Exact(ScalarValue::Int32(Some(15)))
+        );
+        assert_eq!(
+            statistics.column_statistics[2].min_value,
+            Precision::Exact(ScalarValue::Utf8(Some("a".into())))
+        );
+        assert_eq!(
+            statistics.column_statistics[2].max_value,
+            Precision::Exact(ScalarValue::Utf8(Some("d".into())))
+        );
+
+        for (expr, groups, expected) in [
+            (col("f").is_null(), vec![2, 3], 5),
+            (col("f").is_not_null(), vec![0, 1, 2], 11),
+            (
+                col("f").eq(lit(ScalarValue::Float64(Some(1.0))
+                    .cast_to(&data_type)
+                    .unwrap())),
+                vec![0, 1, 2],
+                5,
+            ),
+        ] {
+            let (physical, predicate) = file.predicate(&expr);
+            assert_eq!(file.row_group_plan(&predicate).row_group_indexes(), groups);
+            let pages = file.page_plan(&physical, ParquetAccessPlan::new_all(4));
+            assert_eq!(pages.row_group_indexes(), groups);
+            assert_eq!(file.matching_rows(&physical, pages), expected);
+        }
+        for expr in [col("n").eq(lit(99)), col("s").eq(lit("z"))] {
+            let (physical, predicate) = file.predicate(&expr);
+            assert!(!file.file_matches(&predicate));
+            assert!(
+                file.row_group_plan(&predicate)
+                    .row_group_indexes()
+                    .is_empty()
+            );
+            assert!(
+                file.page_plan(&physical, ParquetAccessPlan::new_all(4))
+                    .row_group_indexes()
+                    .is_empty()
+            );
+        }
+    }
 }
 
 #[test]
