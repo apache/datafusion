@@ -1,0 +1,82 @@
+# IN subqueries in projection use SQL three-valued logic.
+
+query BB
+WITH empty AS (SELECT 10 WHERE false)
+SELECT
+    NULL IN (SELECT * FROM empty),
+    NULL NOT IN (SELECT * FROM empty)
+FROM (SELECT 1) t;
+----
+false true
+
+query B
+SELECT 'a' IN (SELECT column1 FROM VALUES ('b'), ('c'), ('d'));
+----
+false
+
+query BBBB
+WITH vals AS (SELECT * FROM (VALUES (1), (2), (NULL)) AS t(x))
+SELECT
+    1 IN (SELECT x FROM vals) AS found,
+    3 IN (SELECT x FROM vals) AS unknown,
+    3 NOT IN (SELECT x FROM vals) AS not_unknown,
+    NULL IN (SELECT x FROM vals) AS null_unknown;
+----
+true NULL NULL NULL
+
+query BB
+WITH vals AS (SELECT * FROM (VALUES (1), (2)) AS t(x))
+SELECT
+    EXISTS (SELECT x FROM vals WHERE x = 2),
+    NOT EXISTS (SELECT x FROM vals WHERE x = 3);
+----
+true true
+
+# Correlated IN distinguishes a match, a miss, a NULL-containing result,
+# and an empty result independently for each outer row.
+query IB rowsort
+WITH
+outer_values AS (
+    SELECT * FROM (VALUES (1), (2), (3), (4)) AS t(x)
+),
+inner_values AS (
+    SELECT * FROM (VALUES (1, 1), (2, 9), (3, NULL)) AS t(group_id, value)
+)
+SELECT
+    o.x,
+    o.x IN (
+        SELECT i.value
+        FROM inner_values i
+        WHERE i.group_id = o.x
+    )
+FROM outer_values o;
+----
+1 true
+2 false
+3 NULL
+4 false
+
+# Correlated NOT IN exercises the projection-specific negation path for a
+# match, miss, inner NULL, empty result, and NULL outer value.
+query IB rowsort
+WITH
+outer_values AS (
+    SELECT * FROM (VALUES (1, 1), (2, 2), (3, 3), (4, 4), (5, NULL)) AS t(group_id, probe)
+),
+inner_values AS (
+    SELECT * FROM (VALUES (1, 1), (2, 9), (3, NULL), (5, 9)) AS t(group_id, value)
+)
+SELECT
+    o.group_id,
+    o.probe NOT IN (
+        SELECT i.value
+        FROM inner_values i
+        WHERE i.group_id = o.group_id
+    )
+FROM outer_values o;
+----
+1 false
+2 true
+3 NULL
+4 true
+5 NULL
