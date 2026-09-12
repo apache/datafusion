@@ -4311,6 +4311,10 @@ SELECT column1 FROM t_utc WHERE column1 < '2024-02-01T00:00:00' AT TIME ZONE 'Am
 query P
 SELECT column1 FROM t_europe WHERE column1 = '2024-01-31T16:00:01' AT TIME ZONE 'America/Los_Angeles';
 ----
+
+query P
+SELECT column1 FROM t_europe WHERE column1 = '2024-01-31T15:00:01' AT TIME ZONE 'America/Los_Angeles';
+----
 2024-02-01T00:00:01+01:00
 
 query P
@@ -5539,3 +5543,75 @@ query P
 SELECT date_bin(NULL, TIMESTAMP '2023-01-01 12:30:00', TIMESTAMP '2023-01-01 12:00:00')
 ----
 NULL
+
+# Issue 25095: Optimizer incorrectly unwrapping timestamp cast when session timezone is not UTC
+statement ok
+set datafusion.execution.time_zone = 'Asia/Singapore';
+
+statement ok
+create table t_25095 as select TIMESTAMP '2024-11-01T00:00:00' as ts;
+
+statement ok
+create table u_25095 as select '2024-10-31T16:00:00Z'::timestamptz as tstz;
+
+# 2024-11-01 00:00 in Singapore is 2024-10-31 16:00 UTC
+query I
+select count(*) from t_25095 where ts::timestamptz = '2024-10-31T16:00:00Z'::timestamptz;
+----
+1
+
+query I
+select count(*) from t_25095 where ts::timestamptz = '2024-11-01T00:00:00Z'::timestamptz;
+----
+0
+
+# the same rewrite occurs for an implicit coercion
+query I
+select count(*) from t_25095 where ts = '2024-10-31T16:00:00Z'::timestamptz;
+----
+1
+
+# control: a column against a column, thus the optimizer unwraps nothing
+query I
+select count(*) from t_25095, u_25095 where t_25095.ts::timestamptz = u_25095.tstz;
+----
+1
+
+# A timezone-aware column against a timezone-naive literal
+query I
+select count(*) from u_25095 where tstz = TIMESTAMP '2024-11-01T00:00:00';
+----
+1
+
+# Set session timezone back to UTC and demonstrate that the cast IS unwrapped
+statement ok
+set datafusion.execution.time_zone = 'UTC';
+
+# The explain output should show that the cast 	s::timestamptz has been removed
+# because we allow unwrap_cast_in_comparison for UTC offsets
+query TT
+EXPLAIN select count(*) from t_25095 where ts::timestamptz = '2024-11-01T00:00:00Z'::timestamptz;
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----Projection: 
+04)------Filter: t_25095.ts = TimestampNanosecond(1730419200000000000, None)
+05)--------TableScan: t_25095 projection=[ts]
+physical_plan
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
+02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------FilterExec: ts@0 = 1730419200000000000, projection=[]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table t_25095;
+
+statement ok
+drop table u_25095;
+
+statement ok
+RESET datafusion.execution.time_zone;

@@ -113,6 +113,16 @@ fn is_date_type(data_type: &DataType) -> bool {
 /// `Date64` carrying sub-day milliseconds would lose them. This is not a licence to
 /// drop them - [`try_cast_numeric_literal`] returns `None` for a `Date64` value not
 /// divisible by 86_400_000, so an inexact `Date64` -> `Date32` fold never happens.
+///
+/// **Timezone Shifts:**
+/// Conversions between timezone-naive and timezone-aware timestamps are
+/// mathematically bijective (shifting the physical value by the timezone offset),
+/// rather than many-to-one lossy. However, we return `true` here to block unwrapping
+/// as an intentionally conservative guard. If we returned `false`, `unwrap_cast_in_comparison`
+/// would strip the cast but fail to shift the underlying literal, returning incorrect
+/// query results. (A robust alternative would be to allow the unwrap and shift the literal,
+/// preserving pushdown and pruning.) Only UTC-equivalent timezones (where the shift is
+/// exactly zero) are allowed to bypass this guard.
 fn is_lossy_temporal_cast(from_type: &DataType, to_type: &DataType) -> bool {
     if from_type == to_type {
         return false;
@@ -120,8 +130,35 @@ fn is_lossy_temporal_cast(from_type: &DataType, to_type: &DataType) -> bool {
     if is_date_type(from_type) && is_date_type(to_type) {
         return false;
     }
+    if let (DataType::Timestamp(_, from_tz), DataType::Timestamp(_, to_tz)) =
+        (from_type, to_type)
+    {
+        match (from_tz, to_tz) {
+            (Some(tz), None) | (None, Some(tz))
+                if !is_zero_offset_timezone(tz.as_ref()) =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+    }
     (is_date_type(from_type) && to_type.is_temporal())
         || (is_date_type(to_type) && from_type.is_temporal())
+}
+
+/// Returns true if the timezone is known to have a fixed zero offset from UTC.
+///
+/// This is used to determine if a cast between a timezone-aware and timezone-naive
+/// timestamp is lossy. If the timezone is strictly UTC-equivalent, the cast is
+/// a lossless re-labeling of the integer value.
+fn is_zero_offset_timezone(tz: &str) -> bool {
+    match tz {
+        // Standard UTC identifiers
+        "UTC" | "Etc/UTC" | "GMT" | "Etc/GMT" | "Greenwich" | "Z" => true,
+        // Common fixed offset zero strings parsed by Arrow
+        "+00:00" | "-00:00" | "+0:00" | "-0:00" => true,
+        _ => false,
+    }
 }
 
 /// Returns true when casting a timestamp from `from_type` to `to_type` loses
@@ -996,6 +1033,31 @@ mod tests {
         let ts = DataType::Timestamp(TimeUnit::Millisecond, None);
         assert!(is_lossy_temporal_cast(&DataType::Date32, &ts));
         assert!(is_lossy_temporal_cast(&ts, &DataType::Date32));
+    }
+
+    #[test]
+    fn test_is_lossy_temporal_cast_timestamp_tz() {
+        let ts_naive = DataType::Timestamp(TimeUnit::Millisecond, None);
+        let ts_utc = DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into()));
+        let ts_etc_utc =
+            DataType::Timestamp(TimeUnit::Millisecond, Some("Etc/UTC".into()));
+        let ts_gmt = DataType::Timestamp(TimeUnit::Millisecond, Some("GMT".into()));
+        let ts_sgt =
+            DataType::Timestamp(TimeUnit::Millisecond, Some("Asia/Singapore".into()));
+
+        // Naive <-> UTC is NOT lossy (UTC offset is 0, so literal cast is exact)
+        assert!(!is_lossy_temporal_cast(&ts_naive, &ts_utc));
+        assert!(!is_lossy_temporal_cast(&ts_utc, &ts_naive));
+        assert!(!is_lossy_temporal_cast(&ts_naive, &ts_etc_utc));
+        assert!(!is_lossy_temporal_cast(&ts_naive, &ts_gmt));
+
+        // Naive <-> Non-UTC is lossy because it ignores session timezone
+        assert!(is_lossy_temporal_cast(&ts_naive, &ts_sgt));
+        assert!(is_lossy_temporal_cast(&ts_sgt, &ts_naive));
+
+        // Tz-aware <-> Tz-aware is not lossy (both are UTC under the hood)
+        assert!(!is_lossy_temporal_cast(&ts_utc, &ts_sgt));
+        assert!(!is_lossy_temporal_cast(&ts_sgt, &ts_utc));
     }
 
     #[test]

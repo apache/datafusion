@@ -29,7 +29,8 @@ runs:
       shell: bash
       run: |
         RETRY=("ci/scripts/retry" timeout 120)
-        "${RETRY[@]}" apt-get update
+        rm -f /etc/apt/sources.list.d/google-chrome.list
+        "${RETRY[@]}" apt-get update || true
         "${RETRY[@]}" apt-get install -y protobuf-compiler
     - name: Setup Rust toolchain
       shell: bash
@@ -60,3 +61,5 @@ runs:
         rm -rf /host/usr/local/lib/android || true
         echo "Disk space after cleanup:"
         df -h
+
+

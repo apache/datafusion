@@ -68,7 +68,8 @@ jobs:
               rustup toolchain install
           - name: Install Protobuf Compiler
             run: |
-              sudo apt-get update
+              sudo rm -f /etc/apt/sources.list.d/google-chrome.list
+              sudo apt-get update || true
               sudo apt-get install -y protobuf-compiler
       # For debugging, test binaries can be large.
       - name: Show available disk space
@@ -140,7 +141,8 @@ jobs:
           # Don't use setup-builder to avoid configuring RUST_BACKTRACE which is expensive
           - name: Install protobuf compiler
             run: |
-              apt-get update && apt-get install -y protobuf-compiler
+              apt-get update || true
+              apt-get install -y protobuf-compiler
       - name: Run sqllogictest
         run: |
           cargo test --features backtrace,parquet_encryption --profile ci-optimized --test sqllogictests -- --include-sqlite

@@ -504,7 +504,8 @@ jobs:
               rustup target add wasm32-unknown-unknown
           - name: Install dependencies
             run: |
-              sudo apt-get update -qq
+              sudo rm -f /etc/apt/sources.list.d/google-chrome.list
+              sudo apt-get update -qq || true
               sudo apt-get install -y -qq clang
           - name: Setup wasm-pack
             uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c  # v2.87.6
