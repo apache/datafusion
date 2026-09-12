@@ -595,6 +595,22 @@ pub mod tests {
             self
         }
 
+        pub fn with_scheduling_type(
+            mut self,
+            scheduling_type: datafusion_physical_plan::execution_plan::SchedulingType,
+        ) -> Self {
+            Arc::make_mut(&mut self.props).scheduling_type = scheduling_type;
+            self
+        }
+
+        pub fn with_evaluation_type(
+            mut self,
+            evaluation_type: datafusion_physical_plan::execution_plan::EvaluationType,
+        ) -> Self {
+            Arc::make_mut(&mut self.props).evaluation_type = evaluation_type;
+            self
+        }
+
         pub fn with_statistics(mut self, statistics: Statistics) -> Self {
             self.statistics = Some(statistics);
             self
