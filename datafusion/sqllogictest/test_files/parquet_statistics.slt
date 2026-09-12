@@ -186,6 +186,39 @@ physical_plan
 statement ok
 DROP TABLE typed_table;
 
+######
+# Aggregate statistics through casts
+######
+
+# String extrema do not bound the numeric values after a CAST. These aggregates
+# must not be replaced with casts of the Parquet string min/max statistics.
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+COPY (SELECT * FROM (VALUES ('1'), ('100'), ('2')) AS t(a))
+TO 'test_files/scratch/parquet_statistics/cast_strings.parquet' STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE cast_stats_strings STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_statistics/cast_strings.parquet';
+
+query II
+SELECT MIN(CAST(a AS INT)), MAX(CAST(a AS INT)) FROM cast_stats_strings;
+----
+1 100
+
+query II
+SELECT MIN(CAST(a AS BIGINT)), MAX(CAST(a AS BIGINT)) FROM cast_stats_strings;
+----
+1 100
+
+statement ok
+DROP TABLE cast_stats_strings;
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
 # Config reset
 statement ok
 RESET datafusion.execution.collect_statistics;
