@@ -120,6 +120,15 @@ impl CountRollup {
     }
 }
 
+fn unalias_aggregate(expr: &Expr) -> &Expr {
+    match expr {
+        Expr::Alias(alias) if matches!(*alias.expr, Expr::AggregateFunction(_)) => {
+            &alias.expr
+        }
+        _ => expr,
+    }
+}
+
 /// Check whether all aggregate exprs are distinct on a single field.
 fn is_single_distinct_agg(
     aggr_expr: &[Expr],
@@ -141,7 +150,7 @@ fn is_single_distinct_agg(
                     order_by,
                     null_treatment: _,
                 },
-        }) = expr
+        }) = unalias_aggregate(expr)
         {
             if filter.is_some() || !order_by.is_empty() {
                 return Ok(false);
@@ -301,6 +310,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 // zero that `sum` reports as NULL over an empty input.
                 let (outer_aggr_exprs, outer_proj_exprs): (Vec<Expr>, Vec<Expr>) = aggr_expr
                     .into_iter()
+                    .map(|aggr_expr| aggr_expr.unalias())
                     .map(|aggr_expr| match aggr_expr {
                         Expr::AggregateFunction(AggregateFunction {
                             func,
@@ -321,7 +331,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                 );
                                 let arg = args.swap_remove(0);
 
-                                if group_fields_set.insert(arg.schema_name().to_string())
+                                  if group_fields_set.insert(arg.schema_name().to_string())
                                 {
                                     inner_group_exprs
                                         .push(arg.alias(SINGLE_DISTINCT_ALIAS));

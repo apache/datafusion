@@ -46,8 +46,9 @@ use crate::min_max::min_max_bytes::MinMaxBytesAccumulator;
 use crate::min_max::min_max_struct::MinMaxStructAccumulator;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, SetMonotonicity, Signature, Volatility,
-    function::AccumulatorArgs,
+    Accumulator, AggregateUDFImpl, Documentation, Expr, SetMonotonicity, Signature,
+    Volatility,
+    function::{AccumulatorArgs, AggregateFunctionSimplification},
 };
 use datafusion_expr::{GroupsAccumulator, StatisticsArgs};
 use datafusion_macros::user_doc;
@@ -683,6 +684,14 @@ impl AggregateUDFImpl for Min {
 
     fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
         datafusion_expr::ReversedUDAF::Identical
+    }
+
+    fn simplify(&self) -> Option<AggregateFunctionSimplification> {
+        // `min(DISTINCT x)` is identical to `min(x)`, therefore drop DISTINCT.
+        Some(Box::new(|mut aggregate_function, _info| {
+            aggregate_function.params.distinct = false;
+            Ok(Expr::AggregateFunction(aggregate_function))
+        }))
     }
 
     fn documentation(&self) -> Option<&Documentation> {
