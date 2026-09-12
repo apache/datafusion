@@ -1,0 +1,46 @@
+# ORDER BY ALL expands computed expressions and aliases in select-list order.
+statement ok
+set datafusion.sql_parser.dialect = 'DuckDB';
+
+query II
+SELECT column1 + 1 AS computed, length(column2) AS text_length
+FROM (VALUES (2, 'x'), (1, 'zzz'), (1, 'a')) AS t(column1, column2)
+ORDER BY ALL;
+----
+2 1
+2 3
+3 1
+
+# Direction and null ordering apply to every expanded sort key.
+query IT
+SELECT column1 + 1 AS computed, column2 AS label
+FROM (VALUES (2, 'b'), (NULL, 'n'), (1, 'a')) AS t(column1, column2)
+ORDER BY ALL DESC NULLS FIRST;
+----
+NULL n
+3 b
+2 a
+
+# ORDER BY ALL also applies to the output columns of a set operation.
+query IT
+SELECT 2 AS x, 'b' AS y
+UNION ALL SELECT 1, 'z'
+UNION ALL SELECT 1, 'a'
+ORDER BY ALL;
+----
+1 a
+1 z
+2 b
+
+# Aggregate outputs are sorted by their projected positions too.
+query II
+SELECT column1 AS value, count(*) AS occurrences
+FROM (VALUES (2), (1), (1)) AS t(column1)
+GROUP BY column1
+ORDER BY ALL DESC;
+----
+2 1
+1 2
+
+statement ok
+set datafusion.sql_parser.dialect = 'Generic';
