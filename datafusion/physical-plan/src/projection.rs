@@ -673,13 +673,17 @@ impl ExecutionPlan for ProjectionExec {
             metrics: _,
             // Derived plan properties, recomputed on decode.
             cache: _,
-            // Derived metadata comparison, recomputed with the projector.
-            overrides_metadata: _,
+            overrides_metadata,
         } = self;
         let projection_exprs = projector.projection().as_ref();
         let input = ctx.encode_child(input)?;
         let expr = ctx.encode_expressions(projection_exprs.iter().map(|p| &p.expr))?;
         let expr_name = projection_exprs.iter().map(|p| p.alias.clone()).collect();
+        let schema = if *overrides_metadata {
+            Some(projector.output_schema().as_ref().try_into()?)
+        } else {
+            None
+        };
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Projection(Box::new(
@@ -687,6 +691,7 @@ impl ExecutionPlan for ProjectionExec {
                         input: Some(Box::new(input)),
                         expr,
                         expr_name,
+                        schema,
                     },
                 )),
             ),
@@ -722,6 +727,7 @@ impl ProjectionExec {
             input,
             expr,
             expr_name,
+            schema,
         } = &**projection;
         let input =
             ctx.decode_required_child(input.as_deref(), "ProjectionExec", "input")?;
@@ -736,7 +742,15 @@ impl ProjectionExec {
                 })
             })
             .collect::<Result<Vec<ProjectionExpr>>>()?;
-        Ok(Arc::new(ProjectionExec::try_new(exprs, input)?))
+        let projection = match schema {
+            Some(schema) => ProjectionExec::try_new_with_schema_metadata(
+                exprs,
+                input,
+                &Schema::try_from(schema)?,
+            )?,
+            None => ProjectionExec::try_new(exprs, input)?,
+        };
+        Ok(Arc::new(projection))
     }
 }
 

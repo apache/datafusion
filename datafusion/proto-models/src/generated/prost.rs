@@ -2204,6 +2204,11 @@ pub struct ProjectionExecNode {
     pub expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
     #[prost(string, repeated, tag = "3")]
     pub expr_name: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Only field and schema metadata are used; output types are derived from expr.
+    /// Absent when metadata can be derived from the expressions and input, including
+    /// plans encoded before this field existed.
+    #[prost(message, optional, tag = "4")]
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PartiallySortedInputOrderMode {
