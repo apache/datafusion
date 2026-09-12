@@ -4353,6 +4353,120 @@ fn columns(schema: &Schema) -> Vec<String> {
     schema.fields().iter().map(|f| f.name().clone()).collect()
 }
 
+// Floating-point key groups must compare consistently within and across batches.
+#[rstest::rstest]
+#[tokio::test]
+async fn join_float_key_batch_boundaries(
+    #[values(DataType::Float16, DataType::Float32, DataType::Float64)] key_type: DataType,
+    #[values(LeftMark, RightMark, LeftSemi, RightSemi, LeftAnti, RightAnti)]
+    join_type: JoinType,
+    #[values(NullEquality::NullEqualsNothing, NullEquality::NullEqualsNull)]
+    null_equality: NullEquality,
+    #[values(false, true)] descending: bool,
+    #[values(1, 2)] input_batch_size: usize,
+) -> Result<()> {
+    let input = |unmatched_key| -> Result<Arc<dyn ExecutionPlan>> {
+        let mut keys = vec![
+            None,
+            Some(f64::NEG_INFINITY),
+            Some(-0.0),
+            Some(0.0),
+            Some(unmatched_key),
+            Some(f64::INFINITY),
+            Some(f64::NAN),
+            Some(f64::NAN),
+            Some(f64::NAN),
+        ];
+        let mut ids: Vec<i32> = (0..keys.len() as i32).collect();
+        if descending {
+            keys.reverse();
+            ids.reverse();
+        }
+        let batch = RecordBatch::try_from_iter(vec![
+            (
+                "id",
+                Arc::new(Int32Array::from(ids)) as arrow::array::ArrayRef,
+            ),
+            (
+                "key",
+                arrow::compute::cast(&arrow::array::Float64Array::from(keys), &key_type)?,
+            ),
+        ])?;
+        Ok(build_table_from_batches(
+            (0..batch.num_rows())
+                .step_by(input_batch_size)
+                .map(|offset| {
+                    batch.slice(offset, input_batch_size.min(batch.num_rows() - offset))
+                })
+                .collect(),
+        ))
+    };
+    let on: JoinOn = vec![(
+        Arc::new(Column::new("key", 1)),
+        Arc::new(Column::new("key", 1)),
+    )];
+    let (_, output) = join_collect_with_options(
+        input(1.0)?,
+        input(2.0)?,
+        on,
+        join_type,
+        vec![SortOptions {
+            descending,
+            nulls_first: !descending,
+        }],
+        null_equality,
+    )
+    .await?;
+
+    let is_mark = matches!(join_type, LeftMark | RightMark);
+    let is_anti = matches!(join_type, LeftAnti | RightAnti);
+    let mut expected: Vec<_> = (0..9)
+        .map(|id| {
+            let matched =
+                id != 4 && (id != 0 || null_equality == NullEquality::NullEqualsNull);
+            (id, matched)
+        })
+        .filter(|(_, matched)| is_mark || *matched != is_anti)
+        .collect();
+    if descending {
+        expected.reverse();
+    }
+    let mut ids = vec![];
+    let mut marks = vec![];
+    for batch in output {
+        assert_eq!(batch.schema().field(1).data_type(), &key_type);
+        ids.extend_from_slice(
+            batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .values(),
+        );
+        if is_mark {
+            marks.extend(
+                batch
+                    .column(2)
+                    .as_any()
+                    .downcast_ref::<BooleanArray>()
+                    .unwrap()
+                    .iter(),
+            );
+        }
+    }
+    assert_eq!(ids, expected.iter().map(|(id, _)| *id).collect::<Vec<_>>());
+    if is_mark {
+        assert_eq!(
+            marks,
+            expected
+                .iter()
+                .map(|(_, matched)| Some(*matched))
+                .collect::<Vec<_>>()
+        );
+    }
+    Ok(())
+}
+
 // ==================== BitwiseSortMergeJoinStream direct tests ====================
 //
 // These tests construct a BitwiseSortMergeJoinStream directly (bypassing exec)
