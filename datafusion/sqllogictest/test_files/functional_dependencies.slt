@@ -297,6 +297,52 @@ statement ok
 drop table t_probe;
 
 ##########
+## Unnest
+##########
+
+# Unnesting a list turns one row into several, so the key of the input no
+# longer identifies a row of the output. Trusting it here made the join below
+# a semi join, which dropped the repeated rows.
+statement ok
+CREATE TABLE t_list (k INT, vals INT[], PRIMARY KEY (k)) AS VALUES (1, [10, 20, 30]), (2, [40]);
+
+statement ok
+CREATE TABLE t_join (k INT) AS VALUES (1), (2);
+
+query II
+SELECT u.k, u.v FROM (SELECT k, unnest(vals) AS v FROM t_list) u
+JOIN t_join j ON u.k = j.k
+ORDER BY u.k, u.v;
+----
+1 10
+1 20
+1 30
+2 40
+
+# Unnesting a struct keeps one row per input row, so the key still holds.
+statement ok
+CREATE TABLE t_struct (k INT, s STRUCT<a INT, b INT>, PRIMARY KEY (k)) AS VALUES (1, {'a': 1, 'b': 2}), (2, {'a': 3, 'b': 4});
+
+query TT
+EXPLAIN SELECT DISTINCT k FROM (SELECT k, unnest(s) FROM t_struct) t;
+----
+logical_plan
+01)SubqueryAlias: t
+02)--Projection: t_struct.k
+03)----Unnest: lists[] structs[__unnest_placeholder(t_struct.s)]
+04)------Projection: t_struct.k, t_struct.s AS __unnest_placeholder(t_struct.s)
+05)--------TableScan: t_struct projection=[k, s]
+
+statement ok
+drop table t_list;
+
+statement ok
+drop table t_join;
+
+statement ok
+drop table t_struct;
+
+##########
 ## Cleanup
 ##########
 
