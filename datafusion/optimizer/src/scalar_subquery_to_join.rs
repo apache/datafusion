@@ -120,10 +120,10 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 );
 
                 // iterate through all subqueries in predicate, turning each into a left join
-                let mut cur_input = filter.input.as_ref().clone();
+                let mut cur_input = Arc::clone(&filter.input);
                 for (subquery, alias) in subqueries {
                     if let Some((optimized_subquery, compensation_exprs)) =
-                        build_join(&subquery, &cur_input, &alias)?
+                        build_join(subquery, cur_input, &alias)?
                     {
                         if !compensation_exprs.is_empty() {
                             rewrite_expr = rewrite_expr
@@ -141,7 +141,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                         }
                         cur_input = optimized_subquery;
                     } else {
-                        // if we can't handle all of the subqueries then bail for now
+                        // if we can't handle all the subqueries then bail for now
                         return Ok(Transformed::no(LogicalPlan::Filter(filter)));
                     }
                 }
@@ -188,11 +188,12 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                     !all_subqueries.is_empty(),
                     "Expected subqueries not found in projection"
                 );
+
                 // iterate through all subqueries in predicate, turning each into a left join
-                let mut cur_input = projection.input.as_ref().clone();
+                let mut cur_input = Arc::clone(&projection.input);
                 for (subquery, alias) in all_subqueries {
                     if let Some((optimized_subquery, compensation_exprs)) =
-                        build_join(&subquery, &cur_input, &alias)?
+                        build_join(subquery, cur_input, &alias)?
                     {
                         cur_input = optimized_subquery;
                         if !compensation_exprs.is_empty()
@@ -214,7 +215,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                             rewrite_exprs[idx] = new_expr;
                         }
                     } else {
-                        // if we can't handle all of the subqueries then bail for now
+                        // if we can't handle all the subqueries then bail for now
                         return Ok(Transformed::no(LogicalPlan::Projection(projection)));
                     }
                 }
@@ -290,10 +291,10 @@ impl TreeNodeRewriter for ExtractScalarSubQuery<'_> {
                     .subquery
                     .head_output_expr()?
                     .map_or(plan_err!("single expression required."), Ok)?;
-                let subqry_alias = self.alias_gen.next("__scalar_sq");
+                let subquery_alias = self.alias_gen.next("__scalar_sq");
                 let col =
-                    create_col_from_scalar_expr(&scalar_expr, subqry_alias.clone())?;
-                self.sub_query_info.push((subquery, subqry_alias));
+                    create_col_from_scalar_expr(&scalar_expr, subquery_alias.clone())?;
+                self.sub_query_info.push((subquery, subquery_alias));
                 Ok(Transformed::new(
                     Expr::Column(col),
                     true,
@@ -342,17 +343,18 @@ impl TreeNodeRewriter for ExtractScalarSubQuery<'_> {
 /// column to its `CASE WHEN __always_true IS NULL THEN ... END` compensation
 /// expression, which the caller must substitute into any expression that
 /// references those columns.
+#[expect(clippy::type_complexity)]
 fn build_join(
-    subquery: &Subquery,
-    outer_input: &LogicalPlan,
+    subquery: Subquery,
+    outer_input: Arc<LogicalPlan>,
     subquery_alias: &str,
-) -> Result<Option<(LogicalPlan, HashMap<Column, Expr>)>> {
+) -> Result<Option<(Arc<LogicalPlan>, HashMap<Column, Expr>)>> {
     // `build_join` also handles uncorrelated scalar subqueries (as a left
     // join with `Boolean(true)`) when the
     // `enable_physical_uncorrelated_scalar_subquery` option is disabled.
-    let subquery_plan = subquery.subquery.as_ref();
+    let subquery_plan = Arc::unwrap_or_clone(subquery.subquery);
     let mut pull_up = PullUpCorrelatedExpr::new().with_need_handle_count_bug(true);
-    let decorrelated_subquery = subquery_plan.clone().rewrite(&mut pull_up).data()?;
+    let decorrelated_subquery = subquery_plan.rewrite(&mut pull_up).data()?;
     if !pull_up.can_pull_up {
         return Ok(None);
     }
@@ -363,7 +365,7 @@ fn build_join(
         .cloned();
     let aliased_subquery = LogicalPlanBuilder::from(decorrelated_subquery)
         .alias(subquery_alias.to_string())?
-        .build()?;
+        .build_arc()?;
 
     let all_correlated_cols: BTreeSet<Column> = pull_up
         .correlated_subquery_cols_map
@@ -386,9 +388,9 @@ fn build_join(
     // columns.
     let join_filter = join_filter_opt.or_else(|| Some(lit(true)));
 
-    let new_plan = LogicalPlanBuilder::from(outer_input.clone())
+    let new_plan = LogicalPlanBuilder::from(outer_input)
         .join_on(aliased_subquery, JoinType::Left, join_filter)?
-        .build()?;
+        .build_arc()?;
 
     // Add count-bug compensation for each of the subquery's projected
     // expressions that yield non-NULL values on empty input. We wrap each
