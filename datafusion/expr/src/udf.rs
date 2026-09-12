@@ -1053,6 +1053,12 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// the path traverses structs; this does not describe runtime Map lookups or
     /// repeated List elements. Return `None` when these guarantees do not hold.
     ///
+    /// Schema adapters may rebuild the function with the file's physical field
+    /// types and cast its output to the logical field type. The extraction
+    /// guarantees above must hold for any physical types the function accepts.
+    /// If its signature or return field inference rejects those types, the
+    /// adapter preserves the source struct cast.
+    ///
     /// This is independent of [`Self::placement`], which describes where an
     /// expression should execute rather than which field it reads.
     fn struct_field_access(

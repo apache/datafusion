@@ -850,6 +850,11 @@ impl datafusion_expr::ScalarUDFImpl for FieldAt {
         &self,
         mut args: datafusion_expr::ScalarFunctionArgs,
     ) -> datafusion_common::Result<datafusion_expr::ColumnarValue> {
+        if let datafusion_expr::TypeSignature::Exact(types) =
+            &self.signature.type_signature
+        {
+            assert_eq!(args.args[1].data_type(), types[1]);
+        }
         args.args.swap(0, 1);
         args.arg_fields.swap(0, 1);
         datafusion_functions::core::get_field().invoke_with_args(args)
@@ -953,7 +958,7 @@ async fn custom_struct_accessor_pushdown_and_schema_adaptation() {
             true,
         ),
     ]);
-    for evolved in [false, true] {
+    for (evolved, exact_signature) in [(false, false), (true, false), (true, true)] {
         for declare_access in [false, true] {
             for pushdown in [false, true] {
                 let mut config = SessionConfig::new().with_target_partitions(1);
@@ -962,7 +967,21 @@ async fn custom_struct_accessor_pushdown_and_schema_adaptation() {
                 ctx.register_udf(
                     ScalarUDF::from(FieldAt {
                         declare_access,
-                        signature: Signature::any(2, Volatility::Immutable),
+                        signature: if exact_signature {
+                            Signature::exact(
+                                vec![
+                                    DataType::Utf8,
+                                    evolved_schema
+                                        .field_with_name("s")
+                                        .unwrap()
+                                        .data_type()
+                                        .clone(),
+                                ],
+                                Volatility::Immutable,
+                            )
+                        } else {
+                            Signature::any(2, Volatility::Immutable)
+                        },
                     })
                     .with_aliases(["alias_field_at"]),
                 );
@@ -979,6 +998,10 @@ async fn custom_struct_accessor_pushdown_and_schema_adaptation() {
                     "field_at('value', field_at('deep', s)) > 5",
                     "field_at('dotted.name', s) > 5",
                 ] {
+                    // The exact signature accepts only the outer logical struct.
+                    if exact_signature && predicate.contains("'deep'") {
+                        continue;
+                    }
                     let plan = ctx
                         .sql(&format!("SELECT id FROM t WHERE {predicate} ORDER BY id"))
                         .await
@@ -995,7 +1018,7 @@ async fn custom_struct_accessor_pushdown_and_schema_adaptation() {
                     assert_eq!(
                         get_value(&metrics, "pushdown_rows_pruned"),
                         if pushdown && declare_access { 3 } else { 0 },
-                        "evolved={evolved}, capability={declare_access}, pushdown={pushdown}, {predicate}\n{}",
+                        "evolved={evolved}, exact_signature={exact_signature}, capability={declare_access}, pushdown={pushdown}, {predicate}\n{}",
                         displayable(plan.as_ref()).indent(false)
                     );
                 }

@@ -562,12 +562,17 @@ impl DefaultPhysicalExprAdapterRewriter {
         // recomputed from the physical field type.
         let mut args = get_field_expr.args().to_vec();
         args[access.source_arg] = Arc::clone(inner);
-        let extracted = Arc::new(ScalarFunctionExpr::try_new(
+        // A custom accessor may reject the physical field types. Keep the
+        // original struct cast when the accessor cannot be rebuilt without it.
+        let Ok(extracted) = ScalarFunctionExpr::try_new(
             Arc::new(get_field_expr.fun().clone()),
             args,
             &self.physical_file_schema,
             Arc::new(get_field_expr.config_options().clone()),
-        )?) as Arc<dyn PhysicalExpr>;
+        ) else {
+            return Ok(None);
+        };
+        let extracted = Arc::new(extracted) as Arc<dyn PhysicalExpr>;
 
         // get_field inherits nullability from every parent along the path.
         // Its complete return field can differ even when the leaf fields match.
