@@ -30,8 +30,8 @@ use crate::error::{
 };
 use crate::{Result, ScalarValue};
 use arrow::array::{
-    Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray, OffsetSizeTrait,
-    cast::AsArray,
+    Array, ArrayData, ArrayRef, FixedSizeListArray, LargeListArray, ListArray,
+    OffsetSizeTrait, cast::AsArray,
 };
 use arrow::array::{
     ArrowPrimitiveType, BooleanArray, Datum, GenericListArray, Int32Array, Int64Array,
@@ -591,9 +591,7 @@ impl SingleRowListArrayBuilder {
 
     /// Build a single element [`ListArray`]
     pub fn build_list_array(self) -> ListArray {
-        let (field, arr) = self.into_field_and_arr();
-        let offsets = OffsetBuffer::from_lengths([arr.len()]);
-        ListArray::new(field, offsets, arr, None)
+        self.build_generic_list_array()
     }
 
     /// Build a single element [`ListArray`] and wrap as [`ScalarValue::List`]
@@ -603,9 +601,31 @@ impl SingleRowListArrayBuilder {
 
     /// Build a single element [`LargeListArray`]
     pub fn build_large_list_array(self) -> LargeListArray {
+        self.build_generic_list_array()
+    }
+
+    fn build_generic_list_array<OffsetSize: OffsetSizeTrait>(
+        self,
+    ) -> GenericListArray<OffsetSize> {
         let (field, arr) = self.into_field_and_arr();
         let offsets = OffsetBuffer::from_lengths([arr.len()]);
-        LargeListArray::new(field, offsets, arr, None)
+
+        // `is_nullable` is conservative for encoded arrays and can be true
+        // even when the array contains no logical nulls. In that case the
+        // generic constructor rejects a valid non-nullable list child.
+        if !field.is_nullable() && arr.is_nullable() && arr.logical_null_count() == 0 {
+            let data = ArrayData::builder(
+                GenericListArray::<OffsetSize>::DATA_TYPE_CONSTRUCTOR(field),
+            )
+            .len(1)
+            .add_buffer(offsets.into_inner().into_inner())
+            .add_child_data(arr.to_data())
+            .build()
+            .expect("single-row list array should contain valid data");
+            return GenericListArray::from(data);
+        }
+
+        GenericListArray::new(field, offsets, arr, None)
     }
 
     /// Build a single element [`LargeListArray`] and wrap as [`ScalarValue::LargeList`]
@@ -1503,9 +1523,9 @@ mod tests {
     use super::*;
     use crate::ScalarValue::Null;
     use arrow::{
-        array::{Float64Array, Int32Array},
+        array::{DictionaryArray, Float64Array, Int8Array, Int32Array, StringArray},
         buffer::NullBuffer,
-        datatypes::Int32Type,
+        datatypes::{Int8Type, Int32Type},
     };
     #[cfg(feature = "sql")]
     use sqlparser::ast::Ident;
@@ -1532,6 +1552,34 @@ mod tests {
         } else {
             assert!(max.is_err());
         }
+    }
+
+    #[test]
+    fn single_row_list_builder_handles_conservatively_nullable_values() {
+        let keys = Int8Array::from(vec![0, 0]);
+        let dictionary_values = Arc::new(StringArray::from(vec![Some("a"), None]));
+        let values = Arc::new(
+            DictionaryArray::<Int8Type>::try_new(keys, dictionary_values).unwrap(),
+        ) as ArrayRef;
+
+        assert_eq!(values.logical_null_count(), 0);
+        assert!(values.is_nullable());
+
+        let list = SingleRowListArrayBuilder::new(Arc::clone(&values))
+            .with_nullable(false)
+            .build_list_array();
+        list.to_data().validate_full().unwrap();
+
+        let value = ScalarValue::try_from_array(&list, 0).unwrap();
+        assert_eq!(value.data_type(), list.data_type().clone());
+
+        let list = SingleRowListArrayBuilder::new(values)
+            .with_nullable(false)
+            .build_large_list_array();
+        list.to_data().validate_full().unwrap();
+
+        let value = ScalarValue::try_from_array(&list, 0).unwrap();
+        assert_eq!(value.data_type(), list.data_type().clone());
     }
 
     #[test]
