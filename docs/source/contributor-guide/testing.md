@@ -127,18 +127,15 @@ cargo insta review
 
 ## Extended Tests
 
-DataFusion runs the extended tests in [extended.yml] in the merge queue before
-merging into `main`. All three jobs must pass: Rust tests with `extended_tests`,
-forced hash-collision tests, and the [sqlite test suite].
+DataFusion has extended tests (defined in [extended.yml]) that take significantly
+longer to run than the standard suite. They provide additional correctness
+coverage and must pass in the merge queue before a PR merges into `main`.
 
-On ordinary PR updates, GitHub reports these jobs as skipped to conserve CI
-resources. These skipped checks allow the PR to enter the merge queue, where the
-jobs run against the combined merge-group commit. The workflow also runs on
-pushes to release branches (`branch-*`) and through manual dispatch.
+To conserve CI resources, these tests do not run on ordinary PR updates. They
+also run on pushes to release branches (`branch-*`). You can run them manually.
 
 For local SQLite test instructions, see the [instructions in the documentation].
 
-[sqlite test suite]: https://www.sqlite.org/sqllogictest/dir?ci=tip
 [instructions in the documentation]: https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest#running-tests-sqlite
 [extended.yml]: https://github.com/apache/datafusion/blob/main/.github/workflows/extended.yml
 
