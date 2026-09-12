@@ -2507,7 +2507,7 @@ mod tests {
     use super::*;
     use crate::test::test_table_scan_with_name;
     use arrow::{
-        array::{BooleanArray, Float32Array, Float64Array, Int32Array, StructArray},
+        array::{BooleanArray, Float64Array, Int32Array, StructArray},
         datatypes::{FieldRef, Fields},
     };
     use datafusion_common::{DFSchemaRef, ToDFSchema, assert_contains};
@@ -4999,24 +4999,21 @@ mod tests {
 
     #[test]
     fn simplify_inlist_signed_zero() -> Result<()> {
-        for (data_type, values, positive, negative, one, two) in [
-            (
-                DataType::Float32,
-                Arc::new(Float32Array::from(vec![0.0, -0.0])) as arrow::array::ArrayRef,
-                lit(0.0f32),
-                lit(-0.0f32),
-                lit(1.0f32),
-                lit(2.0f32),
-            ),
-            (
-                DataType::Float64,
-                Arc::new(Float64Array::from(vec![0.0, -0.0])) as arrow::array::ArrayRef,
-                lit(0.0f64),
-                lit(-0.0f64),
-                lit(1.0f64),
-                lit(2.0f64),
-            ),
-        ] {
+        for data_type in [DataType::Float16, DataType::Float32, DataType::Float64] {
+            let values =
+                arrow::compute::cast(&Float64Array::from(vec![0.0, -0.0]), &data_type)?;
+            let literals = |values: &[f64]| {
+                values
+                    .iter()
+                    .map(|&value| {
+                        ScalarValue::Float64(Some(value))
+                            .cast_to(&data_type)
+                            .map(lit)
+                    })
+                    .collect::<Result<Vec<_>>>()
+            };
+            let left_list = literals(&[0.0, 1.0, 2.0, 3.0])?;
+            let right_list = literals(&[-0.0, 4.0, 5.0, 6.0])?;
             let schema = Arc::new(Schema::new(vec![Field::new("x", data_type, false)]));
             let batch = RecordBatch::try_new(schema, vec![values])?;
             let schema = batch.schema().to_dfschema_ref()?;
@@ -5024,29 +5021,38 @@ mod tests {
                 SimplifyContext::builder()
                     .with_schema(Arc::clone(&schema))
                     .build(),
-            );
-            let left =
-                |negated| in_list(col("x"), vec![positive.clone(), one.clone()], negated);
-            let right =
-                |negated| in_list(col("x"), vec![negative.clone(), two.clone()], negated);
-            for (expr, expected) in [
-                (left(false).and(right(false)), vec![true, true]),
-                (left(false).and(right(true)), vec![false, false]),
-                (left(true).or(right(true)), vec![false, false]),
-            ] {
-                // Short lists are expanded to SQL comparisons, where both zero
-                // representations compare equal. Set reduction must not run first.
-                let expr = simplifier.coerce(expr, &schema)?;
-                let simplified = simplifier.simplify(expr)?;
-                let actual = create_physical_expr(
-                    &simplified,
-                    &schema,
-                    &ExecutionProps::new(),
-                    &PhysicalPlanningContext::default(),
-                )?
-                .evaluate(&batch)?
-                .into_array(batch.num_rows())?;
-                assert_eq!(actual.as_boolean(), &BooleanArray::from(expected));
+            )
+            .with_canonicalize(false);
+            // Cover both inlined comparisons and lists that reach the set rewrites.
+            assert!(left_list.len() > THRESHOLD_INLINE_INLIST);
+            assert!(right_list.len() > THRESHOLD_INLINE_INLIST);
+            for list_len in [2, left_list.len()] {
+                let left =
+                    |negated| in_list(col("x"), left_list[..list_len].to_vec(), negated);
+                let right =
+                    |negated| in_list(col("x"), right_list[..list_len].to_vec(), negated);
+                for (expr, expected) in [
+                    (left(false).and(right(false)), vec![true, true]),
+                    (left(false).and(right(true)), vec![false, false]),
+                    (left(true).and(right(false)), vec![false, false]),
+                    (left(true).or(right(true)), vec![false, false]),
+                ] {
+                    let simplified = simplifier.simplify(expr.clone())?;
+                    if list_len > THRESHOLD_INLINE_INLIST {
+                        // Floating-point literals must bypass structural set rewrites.
+                        assert_eq!(simplified, expr);
+                    } else {
+                        let actual = create_physical_expr(
+                            &simplified,
+                            &schema,
+                            &ExecutionProps::new(),
+                            &PhysicalPlanningContext::default(),
+                        )?
+                        .evaluate(&batch)?
+                        .into_array(batch.num_rows())?;
+                        assert_eq!(actual.as_boolean(), &BooleanArray::from(expected));
+                    }
+                }
             }
         }
         Ok(())
