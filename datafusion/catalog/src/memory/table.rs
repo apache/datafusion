@@ -17,7 +17,7 @@
 
 //! [`MemTable`] for querying `Vec<RecordBatch>` by DataFusion.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::future::ready;
 use std::sync::Arc;
@@ -27,17 +27,23 @@ use crate::TableProvider;
 use arrow::array::{
     Array, ArrayRef, BooleanArray, RecordBatch as ArrowRecordBatch, UInt64Array,
 };
+use arrow::compute::concat_batches;
 use arrow::compute::kernels::zip::zip;
-use arrow::compute::{and, filter_record_batch};
+use arrow::compute::{and, cast, filter_record_batch};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::TreeNodeRecursion;
-use datafusion_common::{Constraints, DFSchema, SchemaExt, not_impl_err, plan_err};
+use datafusion_common::{
+    Column, Constraints, DFSchema, DFSchemaRef, DataFusionError, ScalarValue, SchemaExt,
+    exec_err, not_impl_err, plan_err,
+};
 use datafusion_datasource::memory::{MemSink, MemorySourceConfig};
 use datafusion_datasource::sink::DataSinkExec;
 use datafusion_datasource::source::DataSourceExec;
-use datafusion_expr::dml::InsertOp;
+use datafusion_expr::dml::{
+    InsertOp, MergeIntoAction, MergeIntoClause, MergeIntoClauseKind,
+};
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{Expr, SortExpr, TableType};
 use datafusion_physical_expr::{
@@ -47,7 +53,7 @@ use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
-    PhysicalExpr, PlanProperties, ReplaceChildrenOptions, collect_partitioned,
+    PhysicalExpr, PlanProperties, ReplaceChildrenOptions, collect, collect_partitioned,
 };
 use datafusion_session::Session;
 
@@ -268,6 +274,22 @@ impl TableProvider for MemTable {
         Self: 'async_trait,
     {
         self.update_boxed(state, assignments, filters)
+    }
+
+    fn merge_into<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
+        source: Arc<dyn ExecutionPlan>,
+        merge_schema: DFSchemaRef,
+        on: Expr,
+        clauses: Vec<MergeIntoClause>,
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.merge_into_boxed(state, source, merge_schema, on, clauses)
     }
 }
 
@@ -534,7 +556,7 @@ impl MemTable {
                     let column_name = field.name();
                     let original_column =
                         batch.column_by_name(column_name).ok_or_else(|| {
-                            datafusion_common::DataFusionError::Internal(format!(
+                            DataFusionError::Internal(format!(
                                 "Column '{column_name}' not found in batch"
                             ))
                         })?;
@@ -571,6 +593,603 @@ impl MemTable {
 
         Ok(Arc::new(DmlResultExec::new(total_updated)))
     }
+
+    fn merge_into_boxed<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        source: Arc<dyn ExecutionPlan>,
+        merge_schema: DFSchemaRef,
+        on: Expr,
+        clauses: Vec<MergeIntoClause>,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(self.merge_into_inner(state, source, merge_schema, on, clauses))
+    }
+
+    async fn merge_into_inner(
+        &self,
+        state: &dyn Session,
+        source: Arc<dyn ExecutionPlan>,
+        merge_schema: DFSchemaRef,
+        on: Expr,
+        clauses: Vec<MergeIntoClause>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let target_num_cols = self.schema.fields().len();
+        let target_schema_ref = Arc::clone(&self.schema);
+
+        // Helper to extract equi-join column indices from `on`
+        let equi_keys = extract_equi_join_keys(&on, &merge_schema, target_num_cols)?;
+        let target_key_indices: Vec<usize> = equi_keys.iter().map(|(t, _)| *t).collect();
+        let source_key_indices: Vec<usize> = equi_keys.iter().map(|(_, s)| *s).collect();
+
+        // Collect source batches
+        let source_batches = collect(source, state.task_ctx()).await?;
+        let total_source_rows: usize = source_batches.iter().map(|b| b.num_rows()).sum();
+        if total_source_rows == 0 {
+            return Ok(Arc::new(DmlResultExec::new(0)));
+        }
+
+        // Lock all partitions in global ascending order to avoid deadlock
+        let mut partitions = Vec::with_capacity(self.batches.len());
+        for p in &self.batches {
+            partitions.push(p.write().await);
+        }
+
+        *self.sort_order.lock() = vec![];
+
+        // Build target hash index across all partitions:
+        // Key -> (partition_idx, batch_idx, row_idx)
+        let mut target_key_map: HashMap<Vec<ScalarValue>, (usize, usize, usize)> =
+            HashMap::new();
+        for (p_idx, partition) in partitions.iter().enumerate() {
+            for (b_idx, batch) in partition.iter().enumerate() {
+                for r_idx in 0..batch.num_rows() {
+                    let key = target_key_indices
+                        .iter()
+                        .map(|&col_idx| {
+                            ScalarValue::try_from_array(batch.column(col_idx), r_idx)
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+
+                    // NULL in any conflict key column never conflicts
+                    if key.iter().any(|v| v.is_null()) {
+                        continue;
+                    }
+
+                    if target_key_map
+                        .insert(key.clone(), (p_idx, b_idx, r_idx))
+                        .is_some()
+                    {
+                        return exec_err!(
+                            "Table contains duplicate rows for conflict key '{key:?}', but ON CONFLICT requires unique keys"
+                        );
+                    }
+                }
+            }
+        }
+
+        // Find WHEN MATCHED, WHEN NOT MATCHED, and WHEN NOT MATCHED BY SOURCE clauses
+        let matched_clause = clauses
+            .iter()
+            .find(|c| c.kind == MergeIntoClauseKind::Matched);
+        let not_matched_clause = clauses.iter().find(|c| {
+            c.kind == MergeIntoClauseKind::NotMatched
+                || c.kind == MergeIntoClauseKind::NotMatchedByTarget
+        });
+        let not_matched_by_source_clause = clauses
+            .iter()
+            .find(|c| c.kind == MergeIntoClauseKind::NotMatchedBySource);
+
+        let has_update = matched_clause
+            .is_some_and(|c| matches!(c.action, MergeIntoAction::Update(_)));
+        let mut seen_incoming_keys = HashSet::new();
+
+        let mut matched_target_rows = HashSet::new();
+        let mut row_updates: HashMap<(usize, usize, usize), Vec<(String, ScalarValue)>> =
+            HashMap::new();
+        let mut row_deletions: HashSet<(usize, usize, usize)> = HashSet::new();
+        let mut rows_to_insert: Vec<RecordBatch> = Vec::new();
+        let mut affected_count: u64 = 0;
+
+        for source_batch in &source_batches {
+            if source_batch.num_rows() == 0 {
+                continue;
+            }
+
+            for s_r_idx in 0..source_batch.num_rows() {
+                let source_key = source_key_indices
+                    .iter()
+                    .map(|&col_idx| {
+                        ScalarValue::try_from_array(source_batch.column(col_idx), s_r_idx)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let has_null_key = source_key.iter().any(|v| v.is_null());
+
+                if !has_null_key {
+                    if has_update {
+                        if !seen_incoming_keys.insert(source_key.clone()) {
+                            return exec_err!(
+                                "ON CONFLICT DO UPDATE command cannot affect row a second time"
+                            );
+                        }
+                    } else {
+                        // DO NOTHING: coalesce intra-batch duplicates that don't match target
+                        if !target_key_map.contains_key(&source_key)
+                            && !seen_incoming_keys.insert(source_key.clone())
+                        {
+                            continue;
+                        }
+                    }
+                }
+
+                let target_match = if has_null_key {
+                    None
+                } else {
+                    target_key_map.get(&source_key).copied()
+                };
+
+                if let Some(target_loc) = target_match {
+                    let already_matched = !matched_target_rows.insert(target_loc);
+                    if already_matched && matched_clause.is_some() {
+                        return exec_err!(
+                            "ON CONFLICT DO UPDATE command cannot affect row a second time"
+                        );
+                    }
+
+                    if let Some(clause) = matched_clause {
+                        let (p_idx, b_idx, r_idx) = target_loc;
+                        let target_batch = &partitions[p_idx][b_idx];
+
+                        let combined_batch = create_combined_row_batch(
+                            &merge_schema,
+                            target_batch,
+                            r_idx,
+                            source_batch,
+                            s_r_idx,
+                        )?;
+
+                        let predicate_passed = match &clause.predicate {
+                            Some(pred) => {
+                                let phys_pred = create_physical_expr(
+                                    pred,
+                                    &merge_schema,
+                                    state.execution_props(),
+                                    &PhysicalPlanningContext::default(),
+                                )?;
+                                let result = phys_pred.evaluate(&combined_batch)?;
+                                let arr = result.into_array(1)?;
+                                let bool_arr = arr
+                                    .as_any()
+                                    .downcast_ref::<BooleanArray>()
+                                    .ok_or_else(|| {
+                                        DataFusionError::Internal(
+                                            "Predicate did not evaluate to boolean"
+                                                .to_string(),
+                                        )
+                                    })?;
+                                bool_arr.value(0) && !bool_arr.is_null(0)
+                            }
+                            None => true,
+                        };
+
+                        if predicate_passed {
+                            match &clause.action {
+                                MergeIntoAction::Update(assignments) => {
+                                    let mut new_vals =
+                                        Vec::with_capacity(assignments.len());
+                                    for (col_name, expr) in assignments {
+                                        let phys_expr = create_physical_expr(
+                                            expr,
+                                            &merge_schema,
+                                            state.execution_props(),
+                                            &PhysicalPlanningContext::default(),
+                                        )?;
+                                        let res = phys_expr.evaluate(&combined_batch)?;
+                                        let val = res.into_array(1)?;
+                                        let sv = ScalarValue::try_from_array(&val, 0)?;
+                                        new_vals.push((col_name.clone(), sv));
+                                    }
+                                    row_updates.insert(target_loc, new_vals);
+                                    affected_count += 1;
+                                }
+                                MergeIntoAction::Delete => {
+                                    row_deletions.insert(target_loc);
+                                    affected_count += 1;
+                                }
+                                MergeIntoAction::Insert { .. } => {}
+                            }
+                        }
+                    }
+                } else if let Some(clause) = not_matched_clause
+                    && let MergeIntoAction::Insert { columns, values } = &clause.action
+                {
+                    let not_matched_batch = create_not_matched_row_batch(
+                        &merge_schema,
+                        &target_schema_ref,
+                        source_batch,
+                        s_r_idx,
+                    )?;
+
+                    let predicate_passed = match &clause.predicate {
+                        Some(pred) => {
+                            let phys_pred = create_physical_expr(
+                                pred,
+                                &merge_schema,
+                                state.execution_props(),
+                                &PhysicalPlanningContext::default(),
+                            )?;
+                            let result = phys_pred.evaluate(&not_matched_batch)?;
+                            let arr = result.into_array(1)?;
+                            let bool_arr = arr
+                                .as_any()
+                                .downcast_ref::<BooleanArray>()
+                                .ok_or_else(|| {
+                                    DataFusionError::Internal(
+                                        "Predicate did not evaluate to boolean"
+                                            .to_string(),
+                                    )
+                                })?;
+                            bool_arr.value(0) && !bool_arr.is_null(0)
+                        }
+                        None => true,
+                    };
+
+                    if predicate_passed {
+                        let insert_col_names: Vec<String> = if columns.is_empty() {
+                            target_schema_ref
+                                .fields()
+                                .iter()
+                                .map(|f| f.name().clone())
+                                .collect()
+                        } else {
+                            columns.clone()
+                        };
+
+                        let mut evaluated_cols = HashMap::with_capacity(values.len());
+                        for (col_name, expr) in insert_col_names.iter().zip(values.iter())
+                        {
+                            let phys_expr = create_physical_expr(
+                                expr,
+                                &merge_schema,
+                                state.execution_props(),
+                                &PhysicalPlanningContext::default(),
+                            )?;
+                            let res = phys_expr.evaluate(&not_matched_batch)?;
+                            let arr = res.into_array(1)?;
+                            evaluated_cols.insert(col_name.clone(), arr);
+                        }
+
+                        let mut row_cols = Vec::with_capacity(target_num_cols);
+                        for field in target_schema_ref.fields() {
+                            if let Some(arr) = evaluated_cols.remove(field.name()) {
+                                let target_type = field.data_type();
+                                let casted_arr = if arr.data_type() == target_type {
+                                    arr
+                                } else {
+                                    cast(&arr, target_type)?
+                                };
+                                row_cols.push(casted_arr);
+                            } else {
+                                row_cols.push(arrow::array::new_null_array(
+                                    field.data_type(),
+                                    1,
+                                ));
+                            }
+                        }
+
+                        let projected_row = RecordBatch::try_new(
+                            Arc::clone(&target_schema_ref),
+                            row_cols,
+                        )?;
+                        rows_to_insert.push(projected_row);
+                        affected_count += 1;
+                    }
+                }
+            }
+        }
+
+        // Handle WHEN NOT MATCHED BY SOURCE clauses
+        if let Some(clause) = not_matched_by_source_clause {
+            for (p_idx, partition) in partitions.iter().enumerate() {
+                for (b_idx, batch) in partition.iter().enumerate() {
+                    for r_idx in 0..batch.num_rows() {
+                        let target_loc = (p_idx, b_idx, r_idx);
+                        if !matched_target_rows.contains(&target_loc) {
+                            let mut combined_batch = None;
+                            let predicate_passed = match &clause.predicate {
+                                Some(pred) => {
+                                    let cb = create_combined_row_batch_with_null_source(
+                                        &merge_schema,
+                                        batch,
+                                        r_idx,
+                                    )?;
+                                    let phys_pred = create_physical_expr(
+                                        pred,
+                                        &merge_schema,
+                                        state.execution_props(),
+                                        &PhysicalPlanningContext::default(),
+                                    )?;
+                                    let result = phys_pred.evaluate(&cb)?;
+                                    let arr = result.into_array(1)?;
+                                    let bool_arr = arr
+                                        .as_any()
+                                        .downcast_ref::<BooleanArray>()
+                                        .ok_or_else(|| {
+                                            DataFusionError::Internal(
+                                                "Predicate did not evaluate to boolean"
+                                                    .to_string(),
+                                            )
+                                        })?;
+                                    let passed =
+                                        bool_arr.value(0) && !bool_arr.is_null(0);
+                                    combined_batch = Some(cb);
+                                    passed
+                                }
+                                None => true,
+                            };
+
+                            if predicate_passed {
+                                match &clause.action {
+                                    MergeIntoAction::Delete => {
+                                        row_deletions.insert(target_loc);
+                                        affected_count += 1;
+                                    }
+                                    MergeIntoAction::Update(assignments) => {
+                                        let cb = match combined_batch {
+                                            Some(cb) => cb,
+                                            None => {
+                                                create_combined_row_batch_with_null_source(
+                                                    &merge_schema,
+                                                    batch,
+                                                    r_idx,
+                                                )?
+                                            }
+                                        };
+                                        let mut new_vals =
+                                            Vec::with_capacity(assignments.len());
+                                        for (col_name, expr) in assignments {
+                                            let phys_expr = create_physical_expr(
+                                                expr,
+                                                &merge_schema,
+                                                state.execution_props(),
+                                                &PhysicalPlanningContext::default(),
+                                            )?;
+                                            let res = phys_expr.evaluate(&cb)?;
+                                            let val = res.into_array(1)?;
+                                            let sv =
+                                                ScalarValue::try_from_array(&val, 0)?;
+                                            new_vals.push((col_name.clone(), sv));
+                                        }
+                                        row_updates.insert(target_loc, new_vals);
+                                        affected_count += 1;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Apply updates and deletions to partitions
+        for (p_idx, partition) in partitions.iter_mut().enumerate() {
+            let mut new_partition = Vec::with_capacity(partition.len());
+
+            for (b_idx, batch) in partition.iter().enumerate() {
+                let updates_for_batch: HashMap<usize, &Vec<(String, ScalarValue)>> =
+                    row_updates
+                        .iter()
+                        .filter_map(|(&(p, b, r), vals)| {
+                            if p == p_idx && b == b_idx {
+                                Some((r, vals))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+
+                let deletions_for_batch: HashSet<usize> = row_deletions
+                    .iter()
+                    .filter_map(|&(p, b, r)| {
+                        if p == p_idx && b == b_idx {
+                            Some(r)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                if updates_for_batch.is_empty() && deletions_for_batch.is_empty() {
+                    new_partition.push(batch.clone());
+                    continue;
+                }
+
+                let remaining_rows: Vec<usize> = (0..batch.num_rows())
+                    .filter(|r| !deletions_for_batch.contains(r))
+                    .collect();
+
+                if remaining_rows.is_empty() {
+                    continue;
+                }
+
+                let mut new_columns = Vec::with_capacity(batch.num_columns());
+                for (col_idx, field) in target_schema_ref.fields().iter().enumerate() {
+                    let col_name = field.name();
+                    let orig_col = batch.column(col_idx);
+
+                    let mut new_scalars = Vec::with_capacity(remaining_rows.len());
+                    for &r_idx in &remaining_rows {
+                        if let Some(vals) = updates_for_batch.get(&r_idx) {
+                            if let Some((_, new_sv)) =
+                                vals.iter().find(|(name, _)| name == col_name)
+                            {
+                                new_scalars.push(new_sv.clone());
+                            } else {
+                                new_scalars
+                                    .push(ScalarValue::try_from_array(orig_col, r_idx)?);
+                            }
+                        } else {
+                            new_scalars
+                                .push(ScalarValue::try_from_array(orig_col, r_idx)?);
+                        }
+                    }
+                    let new_col = ScalarValue::iter_to_array(new_scalars)?;
+                    new_columns.push(new_col);
+                }
+                new_partition.push(ArrowRecordBatch::try_new(
+                    Arc::clone(&target_schema_ref),
+                    new_columns,
+                )?);
+            }
+
+            **partition = new_partition;
+        }
+
+        // Append rows_to_insert to partition 0
+        if !rows_to_insert.is_empty() {
+            let combined_inserts = concat_batches(&target_schema_ref, &rows_to_insert)?;
+            if partitions.is_empty() {
+                return not_impl_err!("MemTable has no partitions");
+            }
+            partitions[0].push(combined_inserts);
+        }
+
+        Ok(Arc::new(DmlResultExec::new(affected_count)))
+    }
+}
+
+fn create_combined_row_batch(
+    merge_schema: &DFSchema,
+    target_batch: &RecordBatch,
+    target_row_idx: usize,
+    source_batch: &RecordBatch,
+    source_row_idx: usize,
+) -> Result<RecordBatch> {
+    let mut columns = Vec::with_capacity(merge_schema.fields().len());
+    for col in target_batch.columns() {
+        columns.push(col.slice(target_row_idx, 1));
+    }
+    for col in source_batch.columns() {
+        columns.push(col.slice(source_row_idx, 1));
+    }
+    let arrow_schema = Arc::new(merge_schema.as_arrow().clone());
+    Ok(RecordBatch::try_new(arrow_schema, columns)?)
+}
+
+fn create_not_matched_row_batch(
+    merge_schema: &DFSchema,
+    target_schema: &SchemaRef,
+    source_batch: &RecordBatch,
+    source_row_idx: usize,
+) -> Result<RecordBatch> {
+    let mut columns = Vec::with_capacity(merge_schema.fields().len());
+    for field in target_schema.fields() {
+        columns.push(arrow::array::new_null_array(field.data_type(), 1));
+    }
+    for col in source_batch.columns() {
+        columns.push(col.slice(source_row_idx, 1));
+    }
+    let arrow_schema = Arc::new(merge_schema.as_arrow().clone());
+    Ok(RecordBatch::try_new(arrow_schema, columns)?)
+}
+
+fn create_combined_row_batch_with_null_source(
+    merge_schema: &DFSchema,
+    target_batch: &RecordBatch,
+    target_row_idx: usize,
+) -> Result<RecordBatch> {
+    let mut columns = Vec::with_capacity(merge_schema.fields().len());
+    for col in target_batch.columns() {
+        columns.push(col.slice(target_row_idx, 1));
+    }
+    let target_num_cols = target_batch.num_columns();
+    for field in &merge_schema.fields()[target_num_cols..] {
+        columns.push(arrow::array::new_null_array(field.data_type(), 1));
+    }
+    let arrow_schema = Arc::new(merge_schema.as_arrow().clone());
+    Ok(RecordBatch::try_new(arrow_schema, columns)?)
+}
+
+fn extract_equi_join_keys(
+    on: &Expr,
+    merge_schema: &DFSchema,
+    target_num_cols: usize,
+) -> Result<Vec<(usize, usize)>> {
+    let mut pairs = Vec::new();
+    collect_equi_keys(on, merge_schema, target_num_cols, &mut pairs)?;
+    if pairs.is_empty() {
+        return not_impl_err!(
+            "MERGE INTO not supported for Base table: requires at least one equi-join condition in ON clause"
+        );
+    }
+    Ok(pairs)
+}
+
+/// Extracts a column reference from an expression, unwrapping aliases and casts.
+///
+/// Note: Unwrapping `Expr::Cast` assumes type-coercion casts inserted by the DataFusion planner
+/// preserve equi-join uniqueness semantics (e.g. natural type widening). A lossy or non-injective
+/// cast in a general MERGE ON condition could map distinct source values to the same key.
+fn extract_column(expr: &Expr) -> Option<&Column> {
+    match expr {
+        Expr::Column(c) => Some(c),
+        Expr::Alias(datafusion_expr::expr::Alias { expr: inner, .. }) => {
+            extract_column(inner.as_ref())
+        }
+        Expr::Cast(datafusion_expr::Cast { expr: inner, .. }) => {
+            extract_column(inner.as_ref())
+        }
+        _ => None,
+    }
+}
+
+fn collect_equi_keys(
+    expr: &Expr,
+    merge_schema: &DFSchema,
+    target_num_cols: usize,
+    pairs: &mut Vec<(usize, usize)>,
+) -> Result<()> {
+    match expr {
+        Expr::Alias(datafusion_expr::expr::Alias { expr: inner, .. }) => {
+            collect_equi_keys(inner.as_ref(), merge_schema, target_num_cols, pairs)
+        }
+        Expr::BinaryExpr(datafusion_expr::BinaryExpr { left, op, right }) => match op {
+            datafusion_expr::Operator::And => {
+                collect_equi_keys(left.as_ref(), merge_schema, target_num_cols, pairs)?;
+                collect_equi_keys(right.as_ref(), merge_schema, target_num_cols, pairs)?;
+                Ok(())
+            }
+            datafusion_expr::Operator::Eq => {
+                let left_col = extract_column(left.as_ref());
+                let right_col = extract_column(right.as_ref());
+                if let (Some(c1), Some(c2)) = (left_col, right_col) {
+                    let idx1 = merge_schema.index_of_column(c1)?;
+                    let idx2 = merge_schema.index_of_column(c2)?;
+                    if idx1 < target_num_cols && idx2 >= target_num_cols {
+                        pairs.push((idx1, idx2 - target_num_cols));
+                        Ok(())
+                    } else if idx2 < target_num_cols && idx1 >= target_num_cols {
+                        pairs.push((idx2, idx1 - target_num_cols));
+                        Ok(())
+                    } else {
+                        not_impl_err!(
+                            "MERGE INTO not supported for Base table: ON equality condition must compare a target column with a source column: {expr}"
+                        )
+                    }
+                } else {
+                    not_impl_err!(
+                        "MERGE INTO not supported for Base table: requires column equality conditions in ON clause, found: {expr}"
+                    )
+                }
+            }
+            _ => not_impl_err!(
+                "MERGE INTO not supported for Base table: only supports AND and EQ in ON condition, found: {expr}"
+            ),
+        },
+        _ => not_impl_err!(
+            "MERGE INTO not supported for Base table: requires binary equality expressions in ON condition, found: {expr}"
+        ),
+    }
 }
 
 /// Evaluate filter expressions against a batch and return a combined boolean mask.
@@ -602,7 +1221,7 @@ fn evaluate_filters_to_mask(
             .as_any()
             .downcast_ref::<BooleanArray>()
             .ok_or_else(|| {
-                datafusion_common::DataFusionError::Internal(
+                DataFusionError::Internal(
                     "Filter did not evaluate to boolean".to_string(),
                 )
             })?

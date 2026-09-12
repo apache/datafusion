@@ -719,6 +719,37 @@ fn plan_insert_no_target_columns() {
     );
 }
 
+#[test]
+fn plan_insert_on_conflict_do_nothing() {
+    let sql =
+        "INSERT INTO test_decimal (id, price) VALUES (1, 2) ON CONFLICT (id) DO NOTHING";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Dml: op=[MergeInto] table=[test_decimal]
+      SubqueryAlias: excluded
+        Projection: column1 AS id, column2 AS price
+          Values: (CAST(Int64(1) AS Int32), CAST(Int64(2) AS Decimal128(10, 2)))
+    "
+    );
+}
+
+#[test]
+fn plan_insert_on_conflict_do_update() {
+    let sql = "INSERT INTO test_decimal (id, price) VALUES (1, 2) ON CONFLICT (id) DO UPDATE SET price = EXCLUDED.price";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Dml: op=[MergeInto] table=[test_decimal]
+      SubqueryAlias: excluded
+        Projection: column1 AS id, column2 AS price
+          Values: (CAST(Int64(1) AS Int32), CAST(Int64(2) AS Decimal128(10, 2)))
+    "
+    );
+}
+
 #[rstest]
 #[case::duplicate_columns(
     "INSERT INTO test_decimal (id, price, price) VALUES (1, 2, 3), (4, 5, 6)",
@@ -745,10 +776,81 @@ fn plan_insert_no_target_columns() {
     "INSERT INTO person (id, first_name, last_name) VALUES ($id, $first_name, $last_name)",
     "Error during planning: Can't parse placeholder: $id"
 )]
+#[case::on_conflict_with_overwrite(
+    "INSERT OVERWRITE test_decimal (id, price) VALUES (1, 2) ON CONFLICT (id) DO NOTHING",
+    "Error during planning: INSERT OVERWRITE cannot be combined with ON CONFLICT clause"
+)]
+#[case::on_conflict_on_constraint(
+    "INSERT INTO test_decimal (id, price) VALUES (1, 2) ON CONFLICT ON CONSTRAINT some_constraint DO NOTHING",
+    "This feature is not implemented: ON CONFLICT ON CONSTRAINT is not supported because table constraints do not store constraint names"
+)]
+#[case::on_conflict_nonexistent_column(
+    "INSERT INTO test_decimal (id, price) VALUES (1, 2) ON CONFLICT (nonexistent) DO NOTHING",
+    "Schema error: No field named nonexistent.\nValid fields are id, price."
+)]
+#[case::on_conflict_do_update_without_target(
+    "INSERT INTO test_decimal (id, price) VALUES (1, 2) ON CONFLICT DO UPDATE SET price = 10",
+    "Error during planning: ON CONFLICT DO UPDATE requires a conflict target specification"
+)]
+#[case::on_conflict_duplicate_assignment(
+    "INSERT INTO test_decimal (id, price) VALUES (1, 2) ON CONFLICT (id) DO UPDATE SET price = 10, price = 20",
+    "Error during planning: Duplicate column 'price' in ON CONFLICT DO UPDATE"
+)]
+#[case::on_conflict_constraint_mismatch(
+    "INSERT INTO table_with_pk (id, name) VALUES (1, 'a') ON CONFLICT (name) DO NOTHING",
+    "Error during planning: There is no unique or exclusion constraint matching the ON CONFLICT specification"
+)]
 #[test]
 fn test_insert_schema_errors(#[case] sql: &str, #[case] error: &str) {
     let err = logical_plan(sql).unwrap_err();
     assert_eq!(err.strip_backtrace(), error)
+}
+
+#[test]
+fn plan_insert_on_conflict_with_matching_pk() {
+    let sql = "INSERT INTO table_with_pk (id, name) VALUES (1, 'a') ON CONFLICT (id) DO NOTHING";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Dml: op=[MergeInto] table=[table_with_pk]
+      SubqueryAlias: excluded
+        Projection: column1 AS id, column2 AS name
+          Values: (CAST(Int64(1) AS Int32), Utf8("a"))
+    "#
+    );
+}
+
+#[test]
+fn plan_insert_on_conflict_unqualified_multi_constraints() {
+    // Unqualified ON CONFLICT DO NOTHING infers the target from the first constraint (PrimaryKey(id))
+    let sql = "INSERT INTO table_with_multi_constraints (id, email, name) VALUES (1, 'a@b.com', 'a') ON CONFLICT DO NOTHING";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Dml: op=[MergeInto] table=[table_with_multi_constraints]
+      SubqueryAlias: excluded
+        Projection: column1 AS id, column2 AS email, column3 AS name
+          Values: (CAST(Int64(1) AS Int32), Utf8("a@b.com"), Utf8("a"))
+    "#
+    );
+}
+
+#[test]
+fn plan_insert_on_conflict_explicit_second_constraint() {
+    // Explicit target on the second constraint (Unique(email)) matches and plans successfully
+    let sql = "INSERT INTO table_with_multi_constraints (id, email, name) VALUES (1, 'a@b.com', 'a') ON CONFLICT (email) DO NOTHING";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Dml: op=[MergeInto] table=[table_with_multi_constraints]
+      SubqueryAlias: excluded
+        Projection: column1 AS id, column2 AS email, column3 AS name
+          Values: (CAST(Int64(1) AS Int32), Utf8("a@b.com"), Utf8("a"))
+    "#
+    );
 }
 
 #[test]

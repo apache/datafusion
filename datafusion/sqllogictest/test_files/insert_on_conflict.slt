@@ -1,0 +1,181 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## INSERT ... ON CONFLICT Tests
+##########
+
+statement ok
+create table users(id int, name varchar, score int);
+
+# 1. Basic insert
+statement ok
+insert into users values (1, 'Alice', 100), (2, 'Bob', 200);
+
+query ITI rowsort
+select * from users;
+----
+1 Alice 100
+2 Bob 200
+
+# 2. ON CONFLICT DO NOTHING: conflicting row skipped, non-conflicting inserted
+statement ok
+insert into users values (2, 'Robert', 250), (3, 'Charlie', 300)
+on conflict (id) do nothing;
+
+query ITI rowsort
+select * from users;
+----
+1 Alice 100
+2 Bob 200
+3 Charlie 300
+
+# 3. ON CONFLICT DO UPDATE: conflicting row updated, non-conflicting inserted
+statement ok
+insert into users values (1, 'Alicia', 150), (4, 'David', 400)
+on conflict (id) do update set name = excluded.name, score = excluded.score;
+
+query ITI rowsort
+select * from users;
+----
+1 Alicia 150
+2 Bob 200
+3 Charlie 300
+4 David 400
+
+# 4. ON CONFLICT DO UPDATE with WHERE clause
+# Update only if excluded score is higher than current score
+statement ok
+insert into users values (1, 'Alicia Low', 50)
+on conflict (id) do update set name = excluded.name, score = excluded.score
+where excluded.score > users.score;
+
+query ITI rowsort
+select * from users;
+----
+1 Alicia 150
+2 Bob 200
+3 Charlie 300
+4 David 400
+
+# 5. NULL conflict keys never conflict (NULL != NULL)
+statement ok
+insert into users values (null, 'Null1', 10), (null, 'Null2', 20)
+on conflict (id) do nothing;
+
+query ITI rowsort
+select * from users;
+----
+1 Alicia 150
+2 Bob 200
+3 Charlie 300
+4 David 400
+NULL Null1 10
+NULL Null2 20
+
+# 6. Intra-batch duplicate keys: DO UPDATE must fail
+statement error ON CONFLICT DO UPDATE command cannot affect row a second time
+insert into users values (10, 'Dup1', 100), (10, 'Dup2', 200)
+on conflict (id) do update set name = excluded.name;
+
+# 7. Intra-batch duplicate keys: DO NOTHING coalesces/deduplicates
+statement ok
+insert into users values (10, 'First', 100), (10, 'Second', 200)
+on conflict (id) do nothing;
+
+query ITI rowsort
+select * from users where id = 10;
+----
+10 First 100
+
+# Pre-existing duplicate key hit twice in DO NOTHING: silently skips both
+statement ok
+insert into users values (10, 'Third', 300), (10, 'Fourth', 400)
+on conflict (id) do nothing;
+
+query ITI rowsort
+select * from users where id = 10;
+----
+10 First 100
+
+# Pre-existing duplicate key hit twice in DO UPDATE: errors as row cannot be affected second time
+statement error ON CONFLICT DO UPDATE command cannot affect row a second time
+insert into users values (10, 'Update1', 1), (10, 'Update2', 2)
+on conflict (id) do update set name = excluded.name;
+
+# Clean up users table
+statement ok
+drop table users;
+
+# 8. Composite conflict keys (multi-column)
+statement ok
+create table composite_t(a int, b int, val varchar);
+
+statement ok
+insert into composite_t values (1, 10, 'first'), (1, 20, 'second');
+
+statement ok
+insert into composite_t values (1, 10, 'updated'), (2, 10, 'third')
+on conflict (a, b) do update set val = excluded.val;
+
+query IIT rowsort
+select * from composite_t;
+----
+1 10 updated
+1 20 second
+2 10 third
+
+statement ok
+drop table composite_t;
+
+# 9. Runtime duplicate key detection on unconstrained table
+statement ok
+create table unconstrained_dups(id int, val varchar);
+
+statement ok
+insert into unconstrained_dups values (1, 'first'), (1, 'duplicate');
+
+statement error Table contains duplicate rows for conflict key
+insert into unconstrained_dups values (1, 'incoming')
+on conflict (id) do nothing;
+
+statement ok
+drop table unconstrained_dups;
+
+# 10. Planning errors: Mutual exclusivity and validation
+
+statement ok
+create table err_t(id int, val varchar);
+
+# Cannot combine with INSERT OVERWRITE
+statement error INSERT OVERWRITE cannot be combined with ON CONFLICT clause
+insert overwrite err_t values (1, 'a') on conflict (id) do nothing;
+
+# Target table aliased as excluded
+statement error DataFusion error: SQL error: ParserError\("Expected: SELECT, VALUES, or a subquery in the query body, found: as at Line: 1, Column: 19"\)
+insert into err_t as excluded values (1, 'a') on conflict (id) do nothing;
+
+# Non-existent conflict column
+statement error Schema error: No field named nonexistent
+insert into err_t values (1, 'a') on conflict (nonexistent) do nothing;
+
+# Duplicate column in DO UPDATE
+statement error Duplicate column 'val' in ON CONFLICT DO UPDATE
+insert into err_t values (1, 'a') on conflict (id) do update set val = 'x', val = 'y';
+
+statement ok
+drop table err_t;
