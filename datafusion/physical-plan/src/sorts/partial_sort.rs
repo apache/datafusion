@@ -1414,6 +1414,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_partial_sort_cross_batch_null_nan_prefixes() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("prefix", DataType::Float64, true),
+            Field::new("suffix", DataType::Int32, false),
+        ]));
+        let task_ctx = Arc::new(TaskContext::default());
+
+        for (descending, nulls_first) in
+            [(false, false), (false, true), (true, false), (true, true)]
+        {
+            let options = SortOptions {
+                descending,
+                nulls_first,
+            };
+            let mut prefixes = vec![Some(1.0), Some(2.0), Some(f64::NAN)];
+            if descending {
+                prefixes.reverse();
+            }
+            if nulls_first {
+                prefixes.insert(0, None);
+            } else {
+                prefixes.push(None);
+            }
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Float64Array::from(
+                        prefixes
+                            .into_iter()
+                            .flat_map(|prefix| [prefix; 4])
+                            .collect::<Vec<_>>(),
+                    )),
+                    Arc::new(Int32Array::from([4, 3, 2, 1].repeat(4))),
+                ],
+            )?;
+            // Each prefix occurs both within and across batches, with suffix
+            // values requiring reordering across the batch boundaries.
+            let batches = (0..batch.num_rows())
+                .step_by(3)
+                .map(|offset| batch.slice(offset, 3.min(batch.num_rows() - offset)))
+                .collect::<Vec<_>>();
+            let input: Arc<dyn ExecutionPlan> =
+                TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
+            let ordering: LexOrdering = [
+                PhysicalSortExpr {
+                    expr: col("prefix", &schema)?,
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: col("suffix", &schema)?,
+                    options: SortOptions::default(),
+                },
+            ]
+            .into();
+            let partial_sort = Arc::new(PartialSortExec::new(
+                ordering.clone(),
+                Arc::clone(&input),
+                1,
+            ));
+            let full_sort = Arc::new(SortExec::new(ordering, input));
+            let actual = collect(partial_sort, Arc::clone(&task_ctx)).await?;
+            let expected = collect(full_sort, Arc::clone(&task_ctx)).await?;
+            assert_eq!(
+                batches_to_string(&actual),
+                batches_to_string(&expected),
+                "prefix sort options: {options:?}",
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_lex_sort_by_float() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let schema = Arc::new(Schema::new(vec![
