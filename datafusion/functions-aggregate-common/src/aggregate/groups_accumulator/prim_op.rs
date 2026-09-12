@@ -163,6 +163,10 @@ where
         true
     }
 
+    fn block_len(&self) -> Option<usize> {
+        Some(BlockedVec::<T::Native>::BLOCK_LEN)
+    }
+
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         self.evaluate(emit_to).map(|arr| vec![arr])
     }

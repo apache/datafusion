@@ -116,6 +116,21 @@ pub trait GroupValues: Send {
     /// Emits the group values
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>>;
 
+    /// Number of groups per storage block, if the values are kept in blocks;
+    /// see [`Self::emit_block`].
+    fn block_len(&self) -> Option<usize> {
+        None
+    }
+
+    /// Emits the first [`Self::block_len`] groups (all remaining ones if
+    /// fewer), renumbering the rest down as `EmitTo::First` does, and drops
+    /// the lookup index: no [`Self::intern`] may follow. Unlike
+    /// `emit(EmitTo::First(n))`, which keeps the index usable by renumbering
+    /// every entry, this costs O(block).
+    fn emit_block(&mut self) -> Result<Vec<ArrayRef>> {
+        not_impl_err!("Block emission is not implemented")
+    }
+
     /// Materializes selected group values without changing the stored values or
     /// their group indices.
     ///

@@ -255,6 +255,17 @@ pub trait GroupsAccumulator: Send + std::any::Any {
         not_impl_err!("Preserving grouped evaluation is not implemented")
     }
 
+    /// Number of groups per storage block, if the state is kept in blocks.
+    ///
+    /// When `Some(n)`, [`Self::evaluate`] and [`Self::state`] with
+    /// `EmitTo::First(n)` cost O(n) rather than O(remaining groups): the
+    /// first block is handed over whole and the rest keeps its layout. Hash
+    /// aggregation uses this to emit and free its output one block at a
+    /// time instead of materializing every group at once.
+    fn block_len(&self) -> Option<usize> {
+        None
+    }
+
     /// Returns `true` if [`Self::evaluate_preserving`] is implemented.
     fn supports_evaluate_preserving(&self) -> bool {
         false

@@ -131,6 +131,21 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
     }
 }
 
+fn build_primitive<T: ArrowPrimitiveType>(
+    values: Vec<T::Native>,
+    null_idx: Option<usize>,
+) -> PrimitiveArray<T> {
+    let nulls = null_idx.map(|null_idx| {
+        let mut buffer = NullBufferBuilder::new(values.len());
+        buffer.append_n_non_nulls(null_idx);
+        buffer.append_null();
+        buffer.append_n_non_nulls(values.len() - null_idx - 1);
+        // NOTE: The inner builder must be constructed as there is at least one null
+        buffer.finish().unwrap()
+    });
+    PrimitiveArray::<T>::new(values.into(), nulls)
+}
+
 impl<T: ArrowPrimitiveType> GroupValues for GroupValuesPrimitive<T>
 where
     T::Native: HashValue,
@@ -189,21 +204,6 @@ where
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        fn build_primitive<T: ArrowPrimitiveType>(
-            values: Vec<T::Native>,
-            null_idx: Option<usize>,
-        ) -> PrimitiveArray<T> {
-            let nulls = null_idx.map(|null_idx| {
-                let mut buffer = NullBufferBuilder::new(values.len());
-                buffer.append_n_non_nulls(null_idx);
-                buffer.append_null();
-                buffer.append_n_non_nulls(values.len() - null_idx - 1);
-                // NOTE: The inner builder must be constructed as there is at least one null
-                buffer.finish().unwrap()
-            });
-            PrimitiveArray::<T>::new(values.into(), nulls)
-        }
-
         let array: PrimitiveArray<T> = match emit_to {
             EmitTo::All => {
                 self.map.clear();
@@ -235,6 +235,27 @@ where
             }
         };
 
+        Ok(vec![Arc::new(array.with_data_type(self.data_type.clone()))])
+    }
+
+    fn block_len(&self) -> Option<usize> {
+        Some(BlockedVec::<T::Native>::BLOCK_LEN)
+    }
+
+    fn emit_block(&mut self) -> Result<Vec<ArrayRef>> {
+        // Output only from here on: the index is dropped, not renumbered.
+        self.map.clear();
+        self.map.shrink_to(0, |_| 0);
+        let n = self.values.len().min(BlockedVec::<T::Native>::BLOCK_LEN);
+        let null_group = match &mut self.null_group {
+            Some(v) if *v >= n => {
+                *v -= n;
+                None
+            }
+            Some(_) => self.null_group.take(),
+            None => None,
+        };
+        let array = build_primitive::<T>(self.values.take_first(n), null_group);
         Ok(vec![Arc::new(array.with_data_type(self.data_type.clone()))])
     }
 
@@ -321,6 +342,41 @@ mod tests {
             capacity_before,
         );
 
+        Ok(())
+    }
+
+    /// `emit_block` hands over one block at a time in group order, keeps the
+    /// null group's position right across blocks, and frees the index.
+    #[test]
+    fn emit_block_walks_the_blocks_in_order() -> Result<()> {
+        const BLOCK: usize = BlockedVec::<i32>::BLOCK_LEN;
+        let mut gv = GroupValuesPrimitive::<Int32Type>::new(DataType::Int32);
+        let n = BLOCK + 3;
+        let mut groups = vec![];
+        let arr: ArrayRef = Arc::new(Int32Array::from_iter_values(0..n as i32));
+        gv.intern(&[arr], &mut groups)?;
+        gv.intern(
+            &[Arc::new(Int32Array::from(vec![None::<i32>]))],
+            &mut groups,
+        )?;
+        assert_eq!(groups, vec![n]);
+        assert_eq!(gv.block_len(), Some(BLOCK));
+        let size_before = gv.size();
+
+        let first = gv.emit_block()?;
+        let first = first[0].as_primitive::<Int32Type>();
+        assert_eq!(first.len(), BLOCK);
+        assert_eq!(first.null_count(), 0);
+        assert_eq!(first.value(BLOCK - 1), BLOCK as i32 - 1);
+        assert_eq!(gv.len(), 4);
+        assert!(gv.size() < size_before / 2, "index and block freed");
+
+        let rest = gv.emit_block()?;
+        let rest = rest[0].as_primitive::<Int32Type>();
+        assert_eq!(rest.len(), 4);
+        assert_eq!(rest.value(0), BLOCK as i32);
+        assert!(rest.is_null(3));
+        assert!(gv.is_empty());
         Ok(())
     }
 

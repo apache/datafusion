@@ -170,6 +170,14 @@ impl<T, const SHIFT: u32> BlockedVec<T, SHIFT> {
     /// Takes the first `n` elements, shifting the rest down so the element
     /// at `n` becomes element `0`.
     pub fn take_first(&mut self, n: usize) -> Vec<T> {
+        if n == self.len {
+            return self.take_all();
+        }
+        if self.blocks.len() > 1 && n == Self::BLOCK_LEN {
+            // A whole first block is moved out; the rest is already packed.
+            self.len -= n;
+            return self.blocks.remove(0);
+        }
         if self.blocks.len() <= 1 {
             let taken = match self.blocks.first_mut() {
                 Some(block) => split_vec_min_alloc(block, n),
@@ -356,6 +364,27 @@ mod tests {
         assert!(
             v.allocated_size() < (BlockedVec::<u64>::BLOCK_LEN + 8) * size_of::<u64>()
         );
+    }
+
+    #[test]
+    fn take_first_block_moves_it_without_copying() {
+        let mut v = Small::new();
+        for i in 0..10u32 {
+            v.push(i);
+        }
+        let before = v.allocated_size();
+        let first = v.take_first(Small::BLOCK_LEN);
+        assert_eq!(first, vec![0, 1, 2, 3]);
+        assert_eq!(v.len(), 6);
+        assert_eq!(contents(&v), vec![4, 5, 6, 7, 8, 9]);
+        assert_eq!(
+            v.allocated_size(),
+            before - first.capacity() * size_of::<u32>()
+        );
+        // The last, partial block is handed over whole as well.
+        assert_eq!(v.take_first(4), vec![4, 5, 6, 7]);
+        assert_eq!(v.take_first(2), vec![8, 9]);
+        assert!(v.is_empty());
     }
 
     #[test]
