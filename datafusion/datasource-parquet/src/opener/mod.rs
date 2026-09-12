@@ -464,7 +464,24 @@ struct PreparedParquetOpen {
     /// True when substituting the columns `constant_columns_from_stats`
     /// proved constant for this file is on its own enough to collapse the
     /// predicate to a constant no row can satisfy — see `prune_row_groups`.
+    ///
+    /// Provisional until `prepare_filters` has the physical file schema: see
+    /// `stats_constant_columns_in_predicate`.
     stats_prove_unsatisfiable: bool,
+    /// The stats-derived constant columns the predicate actually references,
+    /// recorded only when `stats_prove_unsatisfiable` is set.
+    ///
+    /// Collected file statistics cannot distinguish a column that is
+    /// physically absent from the Parquet file from one that is present and
+    /// all NULL: `statistics_from_parquet_metadata` documents that a column
+    /// in the Arrow schema but not the Parquet schema gets
+    /// `Precision::Exact(null)` min/max and an `Exact(num_rows)` null count —
+    /// exactly what a present all-NULL column produces. So an absent column
+    /// can enter the constants as a NULL and collapse the predicate, which
+    /// would prune the very missing-column case this flag exists to leave
+    /// alone. `prepare_filters` clears the flag once the physical schema
+    /// shows whether these columns are really in the file.
+    stats_constant_columns_in_predicate: Vec<String>,
     limit: Option<usize>,
     coerce_int96: Option<TimeUnit>,
     coerce_int96_tz: Option<Arc<str>>,
@@ -808,19 +825,32 @@ impl ParquetMorselizer {
         // and missing-column rewriting below: a predicate can collapse to a
         // constant through either of those too, and only a collapse the
         // file's own statistics produced is proof for `prune_row_groups`.
-        // `collect_columns` is the cheap short-circuit so the simplifier
-        // only runs when a stats-derived constant is actually referenced.
-        let stats_prove_unsatisfiable = !stats_constants.is_empty()
-            && self.predicate.as_ref().is_some_and(|p| {
-                collect_columns(p)
+        // The referenced columns are recorded alongside the flag because this
+        // is also too early to know whether they exist in the file at all —
+        // `prepare_filters` re-checks them against the physical file schema.
+        let stats_referenced: Vec<String> =
+            match (&self.predicate, stats_constants.is_empty()) {
+                (Some(predicate), false) => collect_columns(predicate)
                     .iter()
-                    .any(|c| stats_constants.contains_key(c.name()))
-                    && stats_alone_unsatisfiable(
-                        p,
-                        &stats_constants,
-                        self.table_schema.table_schema(),
-                    )
+                    .filter(|c| stats_constants.contains_key(c.name()))
+                    .map(|c| c.name().to_string())
+                    .collect(),
+                _ => Vec::new(),
+            };
+        // `stats_referenced` is the cheap short-circuit so the simplifier only
+        // runs when a stats-derived constant is actually referenced.
+        let stats_prove_unsatisfiable = !stats_referenced.is_empty()
+            && self.predicate.as_ref().is_some_and(|p| {
+                stats_alone_unsatisfiable(
+                    p,
+                    &stats_constants,
+                    self.table_schema.table_schema(),
+                )
             });
+        let stats_constant_columns_in_predicate = match stats_prove_unsatisfiable {
+            true => stats_referenced,
+            false => Vec::new(),
+        };
         literal_columns.extend(stats_constants);
 
         let mut projection = self.projection.clone();
@@ -892,6 +922,7 @@ impl ParquetMorselizer {
             enable_bloom_filter: self.enable_bloom_filter,
             enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
             stats_prove_unsatisfiable,
+            stats_constant_columns_in_predicate,
             limit: self.limit,
             coerce_int96: self.coerce_int96,
             coerce_int96_tz: self.coerce_int96_tz.clone(),
@@ -1097,6 +1128,24 @@ impl MetadataLoadedParquetOpen {
                 .try_map_exprs(|p| simplifier.simplify(rewriter.rewrite(p)?))?;
         }
         prepared.physical_file_schema = Arc::clone(&physical_file_schema);
+
+        // The physical schema is only known here, so this is the first point
+        // that can tell a stats-derived NULL constant for a column genuinely
+        // present in the file from one synthesized for a column the file does
+        // not have (see `stats_constant_columns_in_predicate`). Withdraw the
+        // proof if any referenced column turns out to be absent: pruning on a
+        // synthesized NULL would skip the missing-column case this flag is
+        // meant to leave alone, and a custom `PhysicalExprAdapter` may fill a
+        // missing column with a non-NULL default, so the skip could drop rows
+        // that default would have matched.
+        if prepared.stats_prove_unsatisfiable
+            && prepared
+                .stats_constant_columns_in_predicate
+                .iter()
+                .any(|name| physical_file_schema.field_with_name(name).is_err())
+        {
+            prepared.stats_prove_unsatisfiable = false;
+        }
 
         // Build predicates for this specific file
         let pruning_predicate = build_pruning_predicates(
@@ -1963,6 +2012,7 @@ async fn load_page_index<T: AsyncFileReader>(
 mod test {
     use super::*;
     use super::{ConstantColumns, ParquetMorselizer, constant_columns_from_stats};
+    use crate::metadata::DFParquetMetadata;
     use crate::{
         CachedParquetFileReaderFactory, DefaultParquetFileReaderFactory,
         ParquetFileReaderFactory, ParquetRowSelection, RowGroupAccess,
@@ -2581,6 +2631,43 @@ mod test {
         batch: RecordBatch,
     ) -> usize {
         write_parquet_batches(store, filename, vec![batch], None).await
+    }
+
+    /// Write `batch` and return the statistics a collecting `ListingTable`
+    /// would attach for `logical_file_schema`, produced by the same
+    /// `statistics_from_parquet_metadata` the read path uses.
+    ///
+    /// Tests about schema evolution have to go through this rather than
+    /// hand-build `Statistics`: the shape that function synthesizes for a
+    /// logical column the file does not physically contain is the whole
+    /// subject, so a hand-built approximation can silently stop matching it.
+    async fn write_parquet_with_collected_statistics(
+        store: Arc<dyn ObjectStore>,
+        filename: &str,
+        batch: RecordBatch,
+        logical_file_schema: &SchemaRef,
+    ) -> (usize, Statistics) {
+        use parquet::file::metadata::ParquetMetaDataReader;
+
+        let mut out = BytesMut::new().writer();
+        {
+            let mut writer =
+                ArrowWriter::try_new(&mut out, batch.schema(), None).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+        let data = out.into_inner().freeze();
+        let data_len = data.len();
+        let metadata = ParquetMetaDataReader::new()
+            .parse_and_finish(&data)
+            .unwrap();
+        let statistics = DFParquetMetadata::statistics_from_parquet_metadata(
+            &metadata,
+            logical_file_schema,
+        )
+        .unwrap();
+        store.put(&Path::from(filename), data.into()).await.unwrap();
+        (data_len, statistics)
     }
 
     /// Write multiple batches to a parquet file with optional writer properties
@@ -3263,33 +3350,48 @@ mod test {
         // A stats-derived constant appearing in the predicate is not proof
         // that the statistics are what made it unsatisfiable. Here `a = 1`
         // is proven true by statistics and folds away, and the collapse to
-        // NULL comes entirely from the missing-column adapter folding
-        // `b = 2`. That is the schema-evolution path, which deliberately
-        // scans and row-filters rather than pruning, so the statistics
-        // branch must not fire.
+        // NULL comes from `b = 2` — a column this file does not have. That
+        // is the schema-evolution path, which deliberately scans and
+        // row-filters rather than pruning, so the statistics branch must not
+        // fire.
+        //
+        // The statistics come from `statistics_from_parquet_metadata` rather
+        // than being hand-built, because the shape that matters is the one it
+        // synthesizes for a missing column: `Exact(null)` min/max and an
+        // `Exact(num_rows)` null count, indistinguishable from a present
+        // all-NULL column. Hand-building anything weaker (leaving `b`
+        // unknown, say) stops `b` from ever becoming a constant, and the test
+        // then passes without exercising this path at all.
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
 
         // The file has only `a`; `b` is in the table schema but missing
         // from this file.
         let batch = record_batch!(("a", Int32, vec![Some(1), Some(1), Some(1)])).unwrap();
-        let data_size =
-            write_parquet(Arc::clone(&store), "file.parquet", batch.clone()).await;
         let physical_schema = batch.schema();
-        let mut file = PartitionedFile::new(
-            "file.parquet".to_string(),
-            u64::try_from(data_size).unwrap(),
-        );
         let logical_file_schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, true),
         ]));
-        let mut statistics = Statistics::new_unknown(&logical_file_schema);
-        statistics.num_rows = Precision::Exact(3);
-        statistics.column_statistics[0].null_count = Precision::Exact(0);
-        statistics.column_statistics[0].min_value =
-            Precision::Exact(ScalarValue::Int32(Some(1)));
-        statistics.column_statistics[0].max_value =
-            Precision::Exact(ScalarValue::Int32(Some(1)));
+        let (data_size, statistics) = write_parquet_with_collected_statistics(
+            Arc::clone(&store),
+            "file.parquet",
+            batch,
+            &logical_file_schema,
+        )
+        .await;
+        let mut file = PartitionedFile::new(
+            "file.parquet".to_string(),
+            u64::try_from(data_size).unwrap(),
+        );
+        // Assert the premise instead of trusting it: if collection ever stops
+        // representing the absent `b` as an all-NULL column, this test is no
+        // longer covering the case it is named for and should say so loudly.
+        assert_eq!(
+            statistics.column_statistics[1].null_count,
+            Precision::Exact(3),
+            "collection must still report the absent column as all NULL for \
+             this test to exercise the missing-column path"
+        );
         file.statistics = Some(Arc::new(statistics));
         let table_schema_for_opener =
             TableSchemaBuilder::from(&logical_file_schema).build();
@@ -3321,6 +3423,75 @@ mod test {
         );
         // Guard against the file schema drifting: `b` really is absent.
         assert!(physical_schema.field_with_name("b").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_prune_when_present_all_null_column_collapses_mixed_predicate() {
+        // The mirror of the test above, and the reason its fix cannot simply
+        // be "never trust a NULL constant". Identical predicate, identical
+        // statistics source, one difference: `b` is physically in the file
+        // and genuinely all NULL. The collapse is then real proof about this
+        // file's contents, so the row group must still be pruned.
+        //
+        // Collected statistics describe these two files identically — an
+        // `Exact(null)` min/max and an `Exact(num_rows)` null count for `b`
+        // either way — which is exactly why the decision has to wait for the
+        // physical file schema.
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let batch = record_batch!(
+            ("a", Int32, vec![Some(1), Some(1), Some(1)]),
+            ("b", Int32, vec![None::<i32>, None, None])
+        )
+        .unwrap();
+        let physical_schema = batch.schema();
+        let logical_file_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, true),
+        ]));
+        let (data_size, statistics) = write_parquet_with_collected_statistics(
+            Arc::clone(&store),
+            "file.parquet",
+            batch,
+            &logical_file_schema,
+        )
+        .await;
+        let mut file = PartitionedFile::new(
+            "file.parquet".to_string(),
+            u64::try_from(data_size).unwrap(),
+        );
+        assert_eq!(
+            statistics.column_statistics[1].null_count,
+            Precision::Exact(3),
+            "the present `b` must collect as all NULL, so that it is \
+             indistinguishable from the absent `b` in the test above"
+        );
+        file.statistics = Some(Arc::new(statistics));
+        let table_schema_for_opener =
+            TableSchemaBuilder::from(&logical_file_schema).build();
+
+        let metrics = ExecutionPlanMetricsSet::new();
+        let expr = col("a").eq(lit(1)).and(col("b").eq(lit(2)));
+        let predicate = logical2physical(&expr, &logical_file_schema);
+        let opener = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_table_schema(table_schema_for_opener)
+            .with_projection_indices(&[0])
+            .with_predicate(predicate)
+            .with_row_group_stats_pruning(true)
+            .with_metrics(metrics.clone())
+            .build();
+        let stream = open_file(&opener, file).await.unwrap();
+        let (_, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(num_rows, 0);
+        assert_eq!(
+            pruned_row_groups_statistics(&metrics),
+            1,
+            "the all-NULL column is really in the file: the statistics do \
+             prove the predicate unsatisfiable and must prune"
+        );
+        // Guard against the file schema drifting: `b` really is present.
+        assert!(physical_schema.field_with_name("b").is_ok());
     }
 
     #[tokio::test]
