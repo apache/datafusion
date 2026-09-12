@@ -2409,6 +2409,79 @@ ORDER BY a, b, d;
 1 3 4
 1 3 4
 
+# Multiple prefix groups complete in one batch. PartialSortExec sorts each
+# suffix independently and materializes the result through the multi-group path.
+statement ok
+set datafusion.execution.batch_size = 128;
+
+query IIII
+SELECT a, b, c, d
+FROM annotated_data_infinite2
+ORDER BY a, b, d, c
+LIMIT 8;
+----
+0 0 0 0
+0 0 2 0
+0 0 3 0
+0 0 6 0
+0 0 20 0
+0 0 22 0
+0 0 23 0
+0 0 4 1
+
+# One prefix group spans three input batches before the next prefix completes it.
+statement ok
+set datafusion.execution.batch_size = 10;
+
+query IIII
+SELECT a, b, c, d
+FROM annotated_data_infinite2
+ORDER BY a, b, d, c
+LIMIT 6;
+----
+0 0 0 0
+0 0 2 0
+0 0 3 0
+0 0 6 0
+0 0 20 0
+0 0 22 0
+
+# The first prefix continues in the second batch, which also completes another
+# prefix. The limit spans prefix groups and exercises the multi-source path.
+statement ok
+set datafusion.execution.batch_size = 40;
+
+query IIII
+SELECT a, b, c, d
+FROM annotated_data_infinite2
+WHERE c BETWEEN 20 AND 79
+ORDER BY a, b, d, c
+LIMIT 20;
+----
+0 0 20 0
+0 0 22 0
+0 0 23 0
+0 0 21 3
+0 0 24 4
+0 1 25 0
+0 1 27 0
+0 1 35 0
+0 1 38 0
+0 1 45 0
+0 1 46 0
+0 1 28 1
+0 1 29 1
+0 1 36 1
+0 1 39 1
+0 1 40 1
+0 1 47 1
+0 1 48 1
+0 1 26 2
+0 1 32 2
+
+statement ok
+reset datafusion.execution.batch_size;
+
 statement ok
 drop table annotated_data_infinite2;
 
