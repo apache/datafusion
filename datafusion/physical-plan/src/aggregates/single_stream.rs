@@ -88,6 +88,34 @@ use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream};
 ///    into an ordered streaming aggregation, which ensures bounded memory usage and
 ///    evaluates the final result.
 ///    - [`OrderedFinalAggregateStream`] is reused for the streaming aggregation.
+///
+/// # Optimization: DISTINCT LIMIT Soft Limit
+///
+/// When the input has only one partition or the input is already partitioned,
+/// unordered distinct queries such as:
+///
+/// ```sql
+/// SELECT DISTINCT x FROM t LIMIT 10;
+/// ```
+///
+/// are optimized into a single-stage aggregate like:
+///
+/// ```txt
+/// LimitExec, limit=10
+/// --AggregateExec(Single), group_by=[x], aggr=[], soft_limit=10
+/// ---- Scan(t)
+/// ```
+///
+/// After each input batch, the stream checks whether the soft limit has been
+/// reached. If so, it emits the accumulated groups and stops reading input.
+///
+/// This early termination is skipped after spilling has occurred to keep the
+/// spill and replay path simple. In that case, the stream consumes the remaining
+/// input and merges all spill runs before producing output.
+///
+/// This operator does not guarantee an exact limit because a single batch can
+/// cross the threshold. The downstream limit operator enforces the exact result
+/// size.
 pub(crate) struct SingleHashAggregateStream {
     /// Output schema: group columns followed by final aggregate value columns.
     schema: SchemaRef,
@@ -105,8 +133,8 @@ pub(crate) struct SingleHashAggregateStream {
     /// state for emitting output batches.
     state: Option<SingleHashAggregateState>,
 
-    /// When set, there are no aggregate expressions: AggregateExec routes
-    /// limited non-DISTINCT aggregates to a different stream.
+    /// See the "Optimization: DISTINCT LIMIT Soft Limit" section in
+    /// [`SingleHashAggregateStream`] for details.
     group_values_soft_limit: Option<usize>,
 }
 
@@ -454,23 +482,16 @@ impl SingleHashAggregateStream {
                     return Self::break_with_err(e);
                 }
 
-                // Soft limit optimization:
-                //
-                // Stop reading input once the in-memory table contains enough distinct
-                // groups to satisfy the soft limit.
-                //
-                // When a limit is present, AggregateExec routes only unordered,
-                // unfiltered DISTINCT aggregates to this stream.
-                //
-                // With no aggregate expressions, additional input can only match existing
-                // groups or add new ones; it cannot change any existing group's output.
-                // Since there is no ordering requirement and we already have enough
-                // distinct groups, we can finish reading as if the input were exhausted.
-                //
-                // Reuse the input-exhausted transition to merge any existing spills
-                // before producing output. The downstream limit operator enforces
-                // the exact output row count.
-                if self.hit_soft_group_limit(&hash_table) {
+                // Soft group limits are usually small and rarely coincide with
+                // spilling. Once spilling has occurred, skip this optimization to
+                // make the internal logic simpler.
+                let spilled = spill_context
+                    .as_ref()
+                    .is_some_and(|context| context.has_spills());
+
+                // See the "Optimization: DISTINCT LIMIT Soft Limit" section in
+                // `SingleHashAggregateStream` for details.
+                if self.hit_soft_group_limit(&hash_table) && !spilled {
                     return self
                         .close_input_and_prepare_output(hash_table, spill_context);
                 }
@@ -777,7 +798,8 @@ impl Stream for SingleHashAggregateStream {
     ///      The table cannot reserve enough memory. Move all current states into
     ///      one fully group-key-sorted spill run.
     ///   -> ProducingOutput
-    ///      Input was exhausted without spilling. Start outputting final values.
+    ///      Input was exhausted without spilling, or the distinct soft limit was
+    ///      reached before spilling. Start outputting final values.
     ///   -> PreparingMergeInput
     ///      Input was exhausted after spilling. Spill the last in-memory run and
     ///      construct the ordered input used to merge all spill files.
