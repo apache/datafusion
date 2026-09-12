@@ -1125,22 +1125,80 @@ async fn create_scalar_function_from_sql_statement() -> Result<()> {
     "#;
     assert!(ctx.sql(bad_definition_sql).await.is_err());
 
-    // FIXME: Definitions with invalid placeholders are allowed, fail at runtime
+    // Definitions with invalid placeholders are rejected at definition time
     let bad_expression_sql = r#"
     CREATE FUNCTION better_add(DOUBLE, DOUBLE)
         RETURNS DOUBLE
         RETURN $1 + $3
     "#;
-    assert!(ctx.sql(bad_expression_sql).await.is_ok());
-
     let err = ctx
-        .sql("select better_add(2.0, 2.0)")
-        .await?
-        .collect()
+        .sql(bad_expression_sql)
         .await
-        .expect_err("unknown placeholder");
-    let expected = "Optimizer rule 'simplify_expressions' failed\ncaused by\nExecution error: Invalid placeholder, out of range: $3";
+        .expect_err("invalid placeholder");
+    let expected = "Error during planning: Invalid placeholder, out of range: $3";
     assert!(expected.starts_with(&err.strip_backtrace()));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_scalar_function_from_sql_statement_invalid_placeholders() -> Result<()> {
+    let function_factory = Arc::new(CustomFunctionFactory::default());
+    let ctx = SessionContext::new().with_function_factory(function_factory.clone());
+
+    // Out of range positional placeholder in the body of a function declared
+    // with positional arguments
+    let sql = r#"
+    CREATE FUNCTION bad_placeholder_pos(DOUBLE, DOUBLE)
+        RETURNS DOUBLE
+        RETURN $1 + $3
+    "#;
+    let err = ctx.sql(sql).await.expect_err("out of range placeholder");
+    let expected = "Error during planning: Invalid placeholder, out of range: $3";
+    assert!(expected.starts_with(&err.strip_backtrace()));
+
+    // Out of range positional placeholder in the body of a function declared
+    // with named arguments
+    let sql = r#"
+    CREATE FUNCTION bad_placeholder_named(a DOUBLE, b DOUBLE)
+        RETURNS DOUBLE
+        RETURN $a + $3
+    "#;
+    let err = ctx.sql(sql).await.expect_err("out of range placeholder");
+    let expected = "Error during planning: Invalid placeholder, out of range: $3";
+    assert!(expected.starts_with(&err.strip_backtrace()));
+
+    // Placeholder in the body of a function declared with no arguments
+    let sql = r#"
+    CREATE FUNCTION bad_placeholder_zero_args()
+        RETURNS DOUBLE
+        RETURN $1
+    "#;
+    let err = ctx.sql(sql).await.expect_err("out of range placeholder");
+    let expected = "Error during planning: Invalid placeholder, out of range: $1";
+    assert!(expected.starts_with(&err.strip_backtrace()));
+
+    // Named placeholder in the body of a function declared with no arguments
+    let sql = r#"
+    CREATE FUNCTION bad_placeholder_unknown_name()
+        RETURNS DOUBLE
+        RETURN $a
+    "#;
+    let err = ctx.sql(sql).await.expect_err("unknown placeholder");
+    let expected = "Error during planning: Unknown placeholder: $a";
+    assert!(expected.starts_with(&err.strip_backtrace()));
+
+    // Valid bodies must still be accepted
+    let sql = r#"
+    CREATE FUNCTION good_placeholder(DOUBLE, DOUBLE)
+        RETURNS DOUBLE
+        RETURN $1 + $2
+    "#;
+    assert!(ctx.sql(sql).await.is_ok());
+
+    // A function without a body has no placeholders to validate
+    let sql = "CREATE FUNCTION no_body() RETURNS DOUBLE";
+    ctx.state().create_logical_plan(sql).await?;
 
     Ok(())
 }
