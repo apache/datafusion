@@ -1099,7 +1099,9 @@ fn coerce_frame_bound(
     }
 }
 
-fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
+/// The type that RANGE frame offsets are coerced to for an ORDER BY column of
+/// `col_type`, or `None` if the type does not support RANGE frames.
+fn extract_window_frame_target_type(col_type: &DataType) -> Option<DataType> {
     if col_type.is_numeric()
         || col_type.is_string()
         || col_type.is_binary()
@@ -1114,16 +1116,54 @@ fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
                 | DataType::Time64(_)
         )
     {
-        Ok(col_type.clone())
+        Some(col_type.clone())
     } else if is_datetime(col_type) {
-        Ok(DataType::Interval(IntervalUnit::MonthDayNano))
+        Some(DataType::Interval(IntervalUnit::MonthDayNano))
     } else if let DataType::Dictionary(_, value_type) = col_type {
         extract_window_frame_target_type(value_type)
     } else if let DataType::RunEndEncoded(_, value_type) = col_type {
         extract_window_frame_target_type(value_type.data_type())
     } else {
-        internal_err!("Cannot run range queries on datatype: {col_type}")
+        None
     }
+}
+
+/// Whether a free RANGE frame (all bounds `UNBOUNDED` or `CURRENT ROW`) can
+/// run over an ORDER BY column of `col_type` even though the type has no
+/// arithmetic for finite offsets.
+///
+/// Such a frame only compares rows to find peers, so the type must compare
+/// the same way in the RANGE peer check (`ScalarValue::partial_cmp`) as in
+/// the sort that produced the input order. That holds for durations and
+/// intervals; it does not for structs and maps, whose `ScalarValue`
+/// comparison differs from the sorter's, so they stay unsupported.
+fn supports_free_range_frame(col_type: &DataType) -> bool {
+    match col_type {
+        DataType::Duration(_) | DataType::Interval(_) => true,
+        DataType::Dictionary(_, value_type) => supports_free_range_frame(value_type),
+        DataType::RunEndEncoded(_, value_type) => {
+            supports_free_range_frame(value_type.data_type())
+        }
+        _ => false,
+    }
+}
+
+/// Errors if any ORDER BY expression has a type not supported in a free RANGE frame.
+fn check_free_range_order_by_types(
+    expressions: &[Sort],
+    schema: &DFSchema,
+) -> Result<()> {
+    for sort in expressions {
+        let t = sort.expr.get_type(schema)?;
+        if extract_window_frame_target_type(&t).is_none()
+            && !supports_free_range_frame(&t)
+        {
+            return plan_err!(
+                "RANGE window frames are not supported for ORDER BY type {t}"
+            );
+        }
+    }
+    Ok(())
 }
 
 // Coerces the given `window_frame` to use appropriate natural types.
@@ -1141,7 +1181,21 @@ fn coerce_window_frame(
                 .map(|s| s.expr.get_type(schema))
                 .transpose()?;
             if let Some(col_type) = current_types {
-                let target_type = extract_window_frame_target_type(&col_type)?;
+                let target_type = match extract_window_frame_target_type(&col_type) {
+                    Some(target_type) => target_type,
+                    // A free range frame has no offsets to coerce, so ORDER BY
+                    // types without arithmetic are fine as long as their peer
+                    // comparison is sound (see `supports_free_range_frame`).
+                    None if window_frame.free_range() => {
+                        check_free_range_order_by_types(expressions, schema)?;
+                        return Ok(window_frame);
+                    }
+                    None => {
+                        return plan_err!(
+                            "RANGE window frames are not supported for ORDER BY type {col_type}"
+                        );
+                    }
+                };
                 // A finite offset bound (e.g. `5 PRECEDING`) is computed as
                 // `current_value ± offset`, so it is only meaningful for target
                 // types that support arithmetic. Other orderable target types can
