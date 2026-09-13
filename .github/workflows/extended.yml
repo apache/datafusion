@@ -15,6 +15,14 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# Each test command below is implemented with `cargo xtask` so developers can
+# run the same suite locally. Append `--explain` to print the underlying
+# `cargo test` invocation without running it. Job setup, the clean working tree
+# check, and `cargo clean` remain in this workflow.
+#
+# See `xtask/README.md` for details about DataFusion's `xtask` tooling.
+# Track progress at https://github.com/apache/datafusion/issues/24487.
+
 name: Datafusion extended tests
 
 concurrency:
@@ -75,22 +83,7 @@ jobs:
         run: |
           df -h
       - name: Run tests (excluding doctests)
-        env:
-          RUST_BACKTRACE: 1
-          # Run more random scenarios of the spill pool fuzzer than the
-          # default suite does (about a minute).
-          DATAFUSION_SPILL_POOL_FUZZ_ITERATIONS: 1000
-        run: |
-          cargo test \
-            --profile ci \
-            --exclude datafusion-examples \
-            --exclude datafusion-benchmarks \
-            --exclude datafusion-cli \
-            --workspace \
-            --lib \
-            --tests \
-            --bins \
-            --features avro,json,backtrace,extended_tests,recursive_protection,parquet_encryption
+        run: cargo xtask ci step test extended
       - parallel:
           - name: Verify Working Directory Clean
             run: git diff --exit-code
@@ -118,8 +111,8 @@ jobs:
           rust-version: stable
       - name: Run tests
         run: |
+          cargo xtask ci step test hash-collisions
           cd datafusion
-          cargo test  --profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --exclude datafusion-sqllogictest --exclude datafusion-cli --workspace --lib --tests --features=force_hash_collisions,avro
           cargo clean
 
   sqllogictest-sqlite:
@@ -142,5 +135,4 @@ jobs:
             run: |
               apt-get update && apt-get install -y protobuf-compiler
       - name: Run sqllogictest
-        run: |
-          cargo test --features backtrace,parquet_encryption --profile ci-optimized --test sqllogictests -- --include-sqlite
+        run: cargo xtask ci step test sqlite
