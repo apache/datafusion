@@ -31,7 +31,9 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{Column, Result, ScalarValue, assert_or_internal_err, plan_err};
-use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
+use datafusion_expr::expr_rewriter::{
+    create_col_from_scalar_expr, strip_outer_reference,
+};
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, lit, not, when};
@@ -376,7 +378,9 @@ fn build_join(
     // so re-qualify them with the subquery alias.
     let join_filter_opt =
         conjunction(pull_up.join_filters).map_or(Ok(None), |filter| {
-            replace_qualified_name(filter, &all_correlated_cols, subquery_alias).map(Some)
+            replace_qualified_name(filter, &all_correlated_cols, subquery_alias)
+                .map(strip_outer_reference)
+                .map(Some)
         })?;
 
     // When pull-up did not extract any usable join keys (a correlated subquery

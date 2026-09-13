@@ -23,6 +23,7 @@ use crate::decorrelate::{PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR};
 use crate::optimizer::ApplyOrder;
 use crate::utils::evaluates_to_null;
 use crate::{OptimizerConfig, OptimizerRule};
+use datafusion_expr::expr_rewriter::strip_outer_reference;
 use datafusion_expr::{Expr, Join, expr};
 
 use datafusion_common::tree_node::{
@@ -152,6 +153,8 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
         } else {
             (rewritten_subquery, correlation_filter, original_join_filter)
         };
+
+    let correlation_filter = correlation_filter.map(strip_outer_reference);
 
     // For LEFT lateral joins, verify that all column references in the
     // correlation filter are resolvable within the join's left and right

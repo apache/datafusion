@@ -33,7 +33,9 @@ use datafusion_common::{
     plan_err,
 };
 use datafusion_expr::expr::{Exists, InSubquery};
-use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
+use datafusion_expr::expr_rewriter::{
+    create_col_from_scalar_expr, strip_outer_reference,
+};
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::{conjunction, expr_to_columns, split_conjunction_owned};
 use datafusion_expr::{
@@ -381,9 +383,11 @@ fn build_join(
         .for_each(|cols| all_correlated_cols.extend(cols.clone()));
 
     // alias the join filter
-    let join_filter_opt = conjunction(pull_up.join_filters)
-        .map_or(Ok(None), |filter| {
-            replace_qualified_name(filter, &all_correlated_cols, &alias).map(Some)
+    let join_filter_opt =
+        conjunction(pull_up.join_filters).map_or(Ok(None), |filter| {
+            replace_qualified_name(filter, &all_correlated_cols, &alias)
+                .map(strip_outer_reference)
+                .map(Some)
         })?;
 
     let join_filter = match (join_filter_opt, in_predicate_opt.cloned()) {
@@ -765,7 +769,7 @@ mod tests {
             SubqueryAlias: __correlated_sq_2 [o_custkey:Int64]
               Projection: orders.o_custkey [o_custkey:Int64]
                 TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
-        "    
+        "
         )
     }
 

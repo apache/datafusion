@@ -22,7 +22,6 @@ use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 
 use crate::expr::{Alias, Sort, WildcardOptions, WindowFunctionParams};
-use crate::expr_rewriter::strip_outer_reference;
 use crate::{
     BinaryExpr, Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan, Operator, and,
 };
@@ -1435,7 +1434,7 @@ pub fn find_join_exprs(exprs: Vec<&Expr>) -> Result<(Vec<Expr>, Vec<Expr>)> {
         if filter.contains_outer() {
             if !matches!(filter, Expr::BinaryExpr(BinaryExpr{ left, op: Operator::Eq, right }) if left.eq(right))
             {
-                joins.push(strip_outer_reference((*filter).clone()));
+                joins.push((*filter).clone());
             }
         } else {
             others.push((*filter).clone());

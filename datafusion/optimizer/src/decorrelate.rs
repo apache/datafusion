@@ -29,6 +29,7 @@ use datafusion_common::{
     Column, DFSchemaRef, HashMap, Result, ScalarValue, assert_or_internal_err, plan_err,
 };
 use datafusion_expr::expr::Alias;
+use datafusion_expr::expr_rewriter::strip_outer_reference;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{
     collect_subquery_cols, conjunction, find_join_exprs, split_conjunction,
@@ -496,6 +497,7 @@ fn remove_duplicated_filter(
 
     Ok(filters
         .into_iter()
+        .map(strip_outer_reference)
         .filter(|filter| {
             if filter == in_predicate {
                 return false;
