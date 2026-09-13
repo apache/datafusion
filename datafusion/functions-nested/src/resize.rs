@@ -24,14 +24,16 @@ use arrow::array::{
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType;
-use arrow::datatypes::{ArrowNativeType, Field};
+use arrow::datatypes::Field;
 use arrow::datatypes::{
     DataType::{LargeList, List},
     FieldRef,
 };
 use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};
 use datafusion_common::utils::ListCoercion;
-use datafusion_common::{Result, ScalarValue, exec_err, internal_datafusion_err};
+use datafusion_common::{
+    Result, ScalarValue, exec_datafusion_err, exec_err, internal_datafusion_err,
+};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
     ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
@@ -186,6 +188,13 @@ fn array_resize_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
+fn resize_count(count_array: &Int64Array, idx: usize) -> Result<usize> {
+    let c = count_array.value(idx);
+    usize::try_from(c).map_err(|_| {
+        exec_datafusion_err!("array_resize: size must not be negative, got {c}")
+    })
+}
+
 /// array_resize keep the original array and append the default element to the end
 fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
     array: &GenericListArray<O>,
@@ -206,9 +215,7 @@ fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
         if array.is_null(row_index) || count_array.is_null(row_index) {
             continue;
         }
-        let target_count = count_array.value(row_index).to_usize().ok_or_else(|| {
-            internal_datafusion_err!("array_resize: failed to convert size to usize")
-        })?;
+        let target_count = resize_count(count_array, row_index)?;
         output_values_len =
             output_values_len.checked_add(target_count).ok_or_else(|| {
                 internal_datafusion_err!("array_resize: output size overflow")
@@ -324,9 +331,7 @@ where
         }
         null_builder.append_non_null();
 
-        let count = count_array.value(row_index).to_usize().ok_or_else(|| {
-            internal_datafusion_err!("array_resize: failed to convert size to usize")
-        })?;
+        let count = resize_count(count_array, row_index)?;
         let count = O::usize_as(count);
         let start = offset_window[0];
         if start + count > offset_window[1] {
