@@ -113,9 +113,10 @@ impl AggregateUDFImpl for Grouping {
     }
 
     fn distinct_handling(&self) -> DistinctHandling {
-        // Duplicate-sensitive, but the accumulator does not read
-        // `is_distinct` and today silently returns the non-distinct answer.
-        // The tag records the intent; enforcement is a follow-up change.
-        DistinctHandling::Unsupported
+        // The result depends only on which grouping set a row belongs to, not
+        // on how many rows share a value, so duplicates cannot change it.
+        // `ResolveGroupingFunction` replaces the call before execution either
+        // way, which is why the accumulator above is never built.
+        DistinctHandling::Ignored
     }
 }

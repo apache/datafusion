@@ -1742,6 +1742,7 @@ pub enum SetMonotonicity {
 /// idempotent (its state forms a semilattice): f(S ⊎ S) = f(S), so
 /// removing duplicates from the input cannot change the result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DistinctHandling {
     /// The result is the same with or without `DISTINCT`, so the planner
     /// is free to drop it. `min`, `max`, `bool_and`, `bit_or`, ...
