@@ -75,7 +75,7 @@ use datafusion_physical_expr_common::sort_expr::{
 use datafusion_proto_models::protobuf;
 
 use crate::filter_pushdown::{
-    ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
 use crate::joins::SeededRandomState;
@@ -2003,14 +2003,7 @@ impl ExecutionPlan for RepartitionExec {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
-        // Repartition changes row placement, not column positions. Preserve
-        // indices so a nested join's same-named columns remain distinct.
-        Ok(FilterDescription::new().with_child(
-            ChildFilterDescription::from_child_preserving_indices(
-                &parent_filters,
-                self.input(),
-            )?,
-        ))
+        FilterDescription::from_children(parent_filters, &self.children())
     }
 
     fn handle_child_pushdown_result(

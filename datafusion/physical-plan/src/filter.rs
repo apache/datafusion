@@ -55,7 +55,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, internal_err, plan_err, project_schema,
 };
@@ -66,7 +66,7 @@ use datafusion_physical_expr::expressions::{
     BinaryExpr, Column, InListExpr, IsNotNullExpr, Literal, lit,
 };
 use datafusion_physical_expr::intervals::utils::check_support;
-use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
+use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
     AcrossPartitions, AnalysisContext, ConstExpr, ExprBoundaries, PhysicalExpr, analyze,
     conjunction, split_conjunction,
@@ -314,6 +314,26 @@ impl FilterExec {
     /// The default selectivity
     pub fn default_selectivity(&self) -> u8 {
         self.default_selectivity
+    }
+
+    /// Describe which parent filters (in this node's output coordinates) can
+    /// be forwarded to the input, remapped into input coordinates.
+    ///
+    /// With an embedded projection the output position `i` reads input column
+    /// `projection[i]`; without one the positions are identical. Mapping by
+    /// position keeps same-named input columns distinct.
+    fn parent_filters_for_input(
+        &self,
+        parent_filters: &[Arc<dyn PhysicalExpr>],
+    ) -> Result<ChildFilterDescription> {
+        match self.projection.as_ref() {
+            Some(projection) => ChildFilterDescription::from_child_with_column_mapping(
+                parent_filters,
+                projection.iter().copied().enumerate().collect(),
+                self.input(),
+            ),
+            None => ChildFilterDescription::from_child(parent_filters, self.input()),
+        }
     }
 
     /// Projection
@@ -698,12 +718,12 @@ impl ExecutionPlan for FilterExec {
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
         if phase != FilterPushdownPhase::Pre {
-            let child =
-                ChildFilterDescription::from_child(&parent_filters, self.input())?;
+            let child = self.parent_filters_for_input(&parent_filters)?;
             return Ok(FilterDescription::new().with_child(child));
         }
 
-        let child = ChildFilterDescription::from_child(&parent_filters, self.input())?
+        let child = self
+            .parent_filters_for_input(&parent_filters)?
             .with_self_filters(
                 split_conjunction(&self.predicate)
                     .into_iter()
@@ -735,12 +755,31 @@ impl ExecutionPlan for FilterExec {
 
         // If this FilterExec has a projection, the unsupported parent filters
         // are in the output schema (after projection) coordinates. We need to
-        // remap them to the input schema coordinates before combining with self filters.
-        if self.projection.is_some() {
+        // remap them to the input schema coordinates before combining with self
+        // filters. Map by position through the projection: the input may
+        // contain several columns with the same name.
+        if let Some(projection) = self.projection.as_ref() {
             let input_schema = self.input().schema();
             unsupported_parent_filters = unsupported_parent_filters
                 .into_iter()
-                .map(|expr| reassign_expr_columns(expr, &input_schema))
+                .map(|expr| {
+                    expr.transform_down(|expr| {
+                        if let Some(column) = expr.downcast_ref::<Column>() {
+                            let Some(&index) = projection.get(column.index()) else {
+                                return internal_err!(
+                                    "Parent filter column {column} is not in the FilterExec projection {projection:?}"
+                                );
+                            };
+                            let field = input_schema.field(index);
+                            return Ok(Transformed::yes(Arc::new(Column::new(
+                                field.name(),
+                                index,
+                            ))));
+                        }
+                        Ok(Transformed::no(expr))
+                    })
+                    .map(|transformed| transformed.data)
+                })
                 .collect::<Result<Vec<_>>>()?;
         }
 

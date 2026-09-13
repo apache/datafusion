@@ -1819,15 +1819,14 @@ impl ExecutionPlan for HashJoinExec {
         // 1. `lr_is_preserved` gates whether a side is eligible at all.
         // 2. For each filter, we check that all column references belong to the
         //    target child (using `column_indices` to map output column positions
-        //    to join sides). This is critical for correctness: name-based matching
-        //    alone (as done by `ChildFilterDescription::from_child`) can incorrectly
-        //    push filters when different join sides have columns with the same name
-        //    (e.g. nested mark joins both producing "mark" columns).
+        //    to join sides). Columns are mapped by position, never by name:
+        //    different join sides, or a nested join on one side, can produce
+        //    columns with the same name (e.g. nested mark joins both producing
+        //    "mark" columns, or several `id` columns).
         let (left_preserved, right_preserved) = lr_is_preserved(self.join_type);
 
         // Map each output position to its input position, accounting for the
-        // join's projection. Looking up child columns by name is ambiguous when
-        // a nested join produces multiple fields with the same name.
+        // join's projection.
         let column_indices: Vec<ColumnIndex> = match self.projection.as_ref() {
             Some(projection) => projection
                 .iter()

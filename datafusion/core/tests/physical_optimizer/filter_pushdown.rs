@@ -1634,6 +1634,124 @@ fn test_repartition_filter_pushdown_preserves_duplicate_column_indices() {
     }
 }
 
+/// Schema with two same-named columns, as produced by a nested join.
+fn duplicate_id_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("id", DataType::Utf8, false),
+    ]))
+}
+
+fn id_eq_x(index: usize) -> Arc<dyn PhysicalExpr> {
+    Arc::new(BinaryExpr::new(
+        Arc::new(Column::new("id", index)),
+        Operator::Eq,
+        Arc::new(Literal::new(ScalarValue::from("x"))),
+    ))
+}
+
+/// A filter with an embedded projection must map a parent predicate through
+/// the projection by position, in both physical pushdown phases.
+#[test]
+fn test_filter_with_projection_pushdown_preserves_duplicate_column_indices() {
+    use datafusion_physical_plan::filter_pushdown::{FilterPushdownPhase, PushedDown};
+
+    let input = TestScanBuilder::new(duplicate_id_schema()).build();
+    let filter = FilterExecBuilder::new(id_eq_x(0), input)
+        .apply_projection(Some(vec![1, 0]))
+        .unwrap()
+        .build()
+        .unwrap();
+    for phase in [FilterPushdownPhase::Pre, FilterPushdownPhase::Post] {
+        let filters = filter
+            .gather_filters_for_pushdown(
+                phase,
+                vec![id_eq_x(0), id_eq_x(1)],
+                &ConfigOptions::default(),
+            )
+            .unwrap()
+            .parent_filters();
+        assert_eq!(filters.len(), 1);
+        assert!(
+            matches!(filters[0][0].discriminant, PushedDown::Yes),
+            "{phase}"
+        );
+        assert!(
+            matches!(filters[0][1].discriminant, PushedDown::Yes),
+            "{phase}"
+        );
+        assert_eq!(filters[0][0].predicate.to_string(), "id@1 = x", "{phase}");
+        assert_eq!(filters[0][1].predicate.to_string(), "id@0 = x", "{phase}");
+    }
+}
+
+/// A projection whose outputs share an alias must expand a parent predicate
+/// to the expression at that output position, not the first same-named one.
+#[test]
+fn test_projection_pushdown_preserves_duplicate_aliases() {
+    use datafusion_physical_plan::filter_pushdown::{FilterPushdownPhase, PushedDown};
+
+    let input = TestScanBuilder::new(duplicate_id_schema()).build();
+    let projection = ProjectionExec::try_new(
+        vec![
+            (Arc::new(Column::new("id", 1)) as _, "id".to_string()),
+            (Arc::new(Column::new("id", 0)) as _, "id".to_string()),
+        ],
+        input,
+    )
+    .unwrap();
+    let filters = projection
+        .gather_filters_for_pushdown(
+            FilterPushdownPhase::Pre,
+            vec![id_eq_x(0), id_eq_x(1), id_eq_x(2)],
+            &ConfigOptions::default(),
+        )
+        .unwrap()
+        .parent_filters();
+    assert_eq!(filters.len(), 1);
+    assert!(matches!(filters[0][0].discriminant, PushedDown::Yes));
+    assert!(matches!(filters[0][1].discriminant, PushedDown::Yes));
+    assert!(matches!(filters[0][2].discriminant, PushedDown::No));
+    assert_eq!(filters[0][0].predicate.to_string(), "id@1 = x");
+    assert_eq!(filters[0][1].predicate.to_string(), "id@0 = x");
+}
+
+/// An aggregate grouping on two same-named columns must map a parent
+/// predicate on a grouping output to the input column that grouping reads.
+#[test]
+fn test_aggregate_pushdown_preserves_duplicate_grouping_columns() {
+    use datafusion_physical_plan::filter_pushdown::{FilterPushdownPhase, PushedDown};
+
+    let schema = duplicate_id_schema();
+    let input = TestScanBuilder::new(Arc::clone(&schema)).build();
+    let group_by = PhysicalGroupBy::new_single(vec![
+        (Arc::new(Column::new("id", 1)) as _, "id".to_string()),
+        (Arc::new(Column::new("id", 0)) as _, "id".to_string()),
+    ]);
+    let aggregate = AggregateExec::try_new(
+        AggregateMode::Partial,
+        group_by,
+        vec![],
+        vec![],
+        input,
+        schema,
+    )
+    .unwrap();
+    let filters = aggregate
+        .gather_filters_for_pushdown(
+            FilterPushdownPhase::Pre,
+            vec![id_eq_x(0), id_eq_x(1)],
+            &ConfigOptions::default(),
+        )
+        .unwrap()
+        .parent_filters();
+    assert_eq!(filters.len(), 1);
+    assert!(matches!(filters[0][0].discriminant, PushedDown::Yes));
+    assert!(matches!(filters[0][1].discriminant, PushedDown::Yes));
+    assert_eq!(filters[0][0].predicate.to_string(), "id@1 = x");
+    assert_eq!(filters[0][1].predicate.to_string(), "id@0 = x");
+}
+
 /// A join's output projection must map to child positions even when a child
 /// contains multiple columns with the same name.
 #[test]

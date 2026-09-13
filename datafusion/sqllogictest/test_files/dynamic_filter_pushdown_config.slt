@@ -906,18 +906,11 @@ statement ok
 RESET datafusion.execution.parquet.max_row_group_size;
 
 # Regression for https://github.com/apache/datafusion/issues/25244.
-# Keep both a.id and b.id in the nested join output. A dynamic filter on b.id
-# must not be remapped by name to a.id, which has a different value. LEFT JOINs
-# preserve this join tree through logical optimization.
-statement ok
-SET datafusion.execution.target_partitions = 1;
-
-statement ok
-SET datafusion.execution.collect_statistics = true;
-
-statement ok
-SET datafusion.execution.parquet.schema_force_view_types = false;
-
+# Pushing a join dynamic filter through operators whose schema contains
+# duplicate column names must map columns by position, not by name. Each
+# query below keeps both a.id and b.id (and sometimes c.id) in the probe-side
+# output; with dynamic filtering enabled the filter on b.id must not be
+# redirected to a.id, which holds a different value and would drop the row.
 statement ok
 SET datafusion.optimizer.join_reordering = false;
 
@@ -945,9 +938,12 @@ CREATE EXTERNAL TABLE issue_25244_b
 STORED AS PARQUET
 LOCATION 'test_files/scratch/dynamic_filter_pushdown_config/issue_25244_b.parquet';
 
+# Expected results, with join dynamic filtering disabled.
 statement ok
 SET datafusion.optimizer.enable_join_dynamic_filter_pushdown = false;
 
+# 1. Nested joins, with a RepartitionExec between them at four partitions.
+#    LEFT JOINs keep this join tree through logical optimization.
 query TTTT
 SELECT s.id AS sid, a.id AS aid, b.id AS bid, c.id AS cid
 FROM issue_25244_b s
@@ -959,9 +955,51 @@ ON s.id = b.id;
 ----
 x1 a1 x1 x1
 
+# 2. A FilterExec with an embedded projection.
+query TTT
+SELECT s.id AS sid, a.id AS aid, b.id AS bid
+FROM issue_25244_b s
+JOIN (
+    SELECT a.id, b.id
+    FROM issue_25244_a a LEFT JOIN issue_25244_b b ON a.ty = b.id
+    WHERE (a.ty || '!') IS DISTINCT FROM b.id
+)
+ON s.id = b.id;
+----
+x1 a1 x1
+
+# 3. A ProjectionExec whose output has two columns aliased `id`.
+query TTTT
+SELECT s.id AS sid, a.id AS aid, b.id AS bid, tag
+FROM issue_25244_a s
+JOIN (
+    SELECT a.id, b.id, a.ty || '!' AS tag
+    FROM issue_25244_a a JOIN issue_25244_b b ON a.ty = b.id
+)
+ON s.id = a.id;
+----
+a1 a1 x1 x1!
+
+# 4. An AggregateExec grouping on two same-named columns.
+query TTT
+SELECT s.id AS sid, a.id AS aid, b.id AS bid
+FROM issue_25244_b s
+JOIN (
+    SELECT a.id, b.id
+    FROM issue_25244_a a LEFT JOIN issue_25244_b b ON a.ty = b.id
+    GROUP BY a.id, b.id
+)
+ON s.id = b.id;
+----
+x1 a1 x1
+
+# The same queries must return the same rows with join dynamic filtering
+# enabled.
 statement ok
 SET datafusion.optimizer.enable_join_dynamic_filter_pushdown = true;
 
+# 1. Nested joins, with a RepartitionExec between them at four partitions.
+#    LEFT JOINs keep this join tree through logical optimization.
 query TTTT
 SELECT s.id AS sid, a.id AS aid, b.id AS bid, c.id AS cid
 FROM issue_25244_b s
@@ -973,54 +1011,49 @@ ON s.id = b.id;
 ----
 x1 a1 x1 x1
 
-# Parallel execution inserts RepartitionExec above the nested joins. It must
-# preserve the second id's position when forwarding the dynamic filter.
-statement ok
-SET datafusion.execution.target_partitions = 4;
-
-statement ok
-SET datafusion.optimizer.enable_join_dynamic_filter_pushdown = false;
-
-query TTTT
-SELECT s.id AS sid, a.id AS aid, b.id AS bid, c.id AS cid
+# 2. A FilterExec with an embedded projection.
+query TTT
+SELECT s.id AS sid, a.id AS aid, b.id AS bid
 FROM issue_25244_b s
 JOIN (
-    (issue_25244_a a LEFT JOIN issue_25244_b b ON a.ty = b.id)
-    LEFT JOIN issue_25244_b c ON b.id = c.id
+    SELECT a.id, b.id
+    FROM issue_25244_a a LEFT JOIN issue_25244_b b ON a.ty = b.id
+    WHERE (a.ty || '!') IS DISTINCT FROM b.id
 )
 ON s.id = b.id;
 ----
-x1 a1 x1 x1
+x1 a1 x1
 
-statement ok
-SET datafusion.optimizer.enable_join_dynamic_filter_pushdown = true;
-
+# 3. A ProjectionExec whose output has two columns aliased `id`.
 query TTTT
-SELECT s.id AS sid, a.id AS aid, b.id AS bid, c.id AS cid
+SELECT s.id AS sid, a.id AS aid, b.id AS bid, tag
+FROM issue_25244_a s
+JOIN (
+    SELECT a.id, b.id, a.ty || '!' AS tag
+    FROM issue_25244_a a JOIN issue_25244_b b ON a.ty = b.id
+)
+ON s.id = a.id;
+----
+a1 a1 x1 x1!
+
+# 4. An AggregateExec grouping on two same-named columns.
+query TTT
+SELECT s.id AS sid, a.id AS aid, b.id AS bid
 FROM issue_25244_b s
 JOIN (
-    (issue_25244_a a LEFT JOIN issue_25244_b b ON a.ty = b.id)
-    LEFT JOIN issue_25244_b c ON b.id = c.id
+    SELECT a.id, b.id
+    FROM issue_25244_a a LEFT JOIN issue_25244_b b ON a.ty = b.id
+    GROUP BY a.id, b.id
 )
 ON s.id = b.id;
 ----
-x1 a1 x1 x1
+x1 a1 x1
 
 statement ok
 DROP TABLE issue_25244_a;
 
 statement ok
 DROP TABLE issue_25244_b;
-
-# The SLT runner uses four target partitions.
-statement ok
-SET datafusion.execution.target_partitions = 4;
-
-statement ok
-RESET datafusion.execution.collect_statistics;
-
-statement ok
-RESET datafusion.execution.parquet.schema_force_view_types;
 
 statement ok
 RESET datafusion.optimizer.join_reordering;

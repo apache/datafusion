@@ -315,46 +315,58 @@ pub struct ChildFilterDescription {
 /// Validates and remaps filter column references to a target schema in one step.
 ///
 /// When pushing filters from a parent to a child node, we need to:
-/// 1. Verify that all columns referenced by the filter exist in the target
-/// 2. Remap column indices to match the target schema
+/// 1. Verify that every column referenced by the filter is reachable in the child
+/// 2. Remap column indices to match the child schema
 ///
-/// Use an explicit positional mapping when the parent can reorder columns or
-/// the child can contain duplicate names, such as when pushing through a join.
-pub(crate) enum FilterRemapper {
-    ByName {
-        child_schema: SchemaRef,
-        /// Reachable column indices in the parent schema.
-        allowed_indices: HashSet<usize>,
-    },
-    ByIndex {
-        child_schema: SchemaRef,
-        /// Parent output index to child input index. Missing entries cannot
-        /// be pushed to this child.
-        column_mapping: HashMap<usize, usize>,
-    },
+/// Columns are always resolved by position, never by name: a child schema can
+/// contain several fields with the same name (for example the output of nested
+/// joins), so a name lookup could silently redirect a predicate to the wrong
+/// column.
+pub(crate) struct FilterRemapper {
+    /// The target schema to remap column indices into.
+    child_schema: SchemaRef,
+    /// Parent output index to child input index. `None` maps every parent
+    /// index to the same child index, for nodes that preserve their input
+    /// schema. Parent columns absent from an explicit mapping cannot be
+    /// pushed to this child.
+    column_mapping: Option<HashMap<usize, usize>>,
 }
 
 impl FilterRemapper {
-    /// Create a remapper that accepts any column whose index falls within
-    /// `0..child_schema.len()` and whose name exists in the target schema.
-    pub(crate) fn new(child_schema: SchemaRef) -> Self {
-        let allowed_indices = (0..child_schema.fields().len()).collect();
-        Self::ByName {
+    /// Create a remapper for a node whose output has the same column positions
+    /// as `child_schema`. Each column is resolved to the same index, provided
+    /// the child field at that position has the same name.
+    pub(crate) fn identity(child_schema: SchemaRef) -> Self {
+        Self {
             child_schema,
-            allowed_indices,
+            column_mapping: None,
         }
     }
 
-    /// Create a name-based remapper that only accepts columns at the given
-    /// parent indices.
-    fn with_allowed_indices(
+    /// Create a remapper with an explicit parent-output to child-input mapping.
+    fn with_column_mapping(
         child_schema: SchemaRef,
-        allowed_indices: HashSet<usize>,
+        column_mapping: HashMap<usize, usize>,
     ) -> Self {
-        Self::ByName {
+        Self {
             child_schema,
-            allowed_indices,
+            column_mapping: Some(column_mapping),
         }
+    }
+
+    /// Resolve a parent column to its position in the child schema.
+    fn remap_column(&self, col: &Column) -> Option<Column> {
+        let index = match &self.column_mapping {
+            None => col.index(),
+            Some(mapping) => *mapping.get(&col.index())?,
+        };
+        let field = self.child_schema.fields().get(index)?;
+        // With an identity mapping the parent and child names must agree;
+        // a mismatch means the caller does not actually preserve positions.
+        if self.column_mapping.is_none() && field.name() != col.name() {
+            return None;
+        }
+        Some(Column::new(field.name(), index))
     }
 
     /// Try to remap a filter's column references to the target schema.
@@ -367,26 +379,7 @@ impl FilterRemapper {
         let mut all_valid = true;
         let transformed = Arc::clone(filter).transform_down(|expr| {
             if let Some(col) = expr.downcast_ref::<Column>() {
-                let remapped = match self {
-                    Self::ByName {
-                        child_schema,
-                        allowed_indices,
-                    } => allowed_indices
-                        .contains(&col.index())
-                        .then(|| child_schema.index_of(col.name()).ok())
-                        .flatten()
-                        .map(|index| Column::new(col.name(), index)),
-                    Self::ByIndex {
-                        child_schema,
-                        column_mapping,
-                    } => column_mapping.get(&col.index()).and_then(|&index| {
-                        child_schema
-                            .fields()
-                            .get(index)
-                            .map(|field| Column::new(field.name(), index))
-                    }),
-                };
-                if let Some(remapped) = remapped {
+                if let Some(remapped) = self.remap_column(col) {
                     Ok(Transformed::yes(Arc::new(remapped)))
                 } else {
                     all_valid = false;
@@ -402,69 +395,54 @@ impl FilterRemapper {
 }
 
 impl ChildFilterDescription {
-    /// Build a child filter description by analyzing which parent filters can be pushed to a specific child.
+    /// Build a child filter description for a node whose output has the same
+    /// column positions as `child`, such as a filter, sort or repartition.
     ///
-    /// This method performs column analysis to determine which filters can be pushed down:
-    /// - If all columns referenced by a filter exist in the child's schema, it can be pushed down
-    /// - Otherwise, it cannot be pushed down to that child
+    /// Every column referenced by a filter is resolved at the same index in the
+    /// child schema, so same-named columns stay distinct. A filter is only
+    /// pushed down when all of its columns resolve. Nodes that project or
+    /// reorder columns must use [`Self::from_child_with_column_mapping`].
     ///
     /// See [`FilterDescription::from_children`] for more details
     pub fn from_child(
         parent_filters: &[Arc<dyn PhysicalExpr>],
         child: &Arc<dyn crate::ExecutionPlan>,
     ) -> Result<Self> {
-        // Building the remapper indexes every column of the child's schema, so
-        // with no filters to remap it is pure cost for the empty description
-        // `remap_filters` would return anyway. On a wide schema, and once per
-        // child, that is worth not paying.
         if parent_filters.is_empty() {
             return Ok(Self::empty());
         }
-        let remapper = FilterRemapper::new(child.schema());
+        let remapper = FilterRemapper::identity(child.schema());
         Self::remap_filters(parent_filters, &remapper)
     }
 
-    /// Forward parent filters through a node that preserves column positions.
-    /// Columns are resolved at the same index in the child schema, even if
-    /// multiple fields share a name. Nodes that project or reorder columns
-    /// must instead provide an explicit mapping.
-    pub fn from_child_preserving_indices(
-        parent_filters: &[Arc<dyn PhysicalExpr>],
-        child: &Arc<dyn crate::ExecutionPlan>,
-    ) -> Result<Self> {
-        if parent_filters.is_empty() {
-            return Ok(Self::empty());
-        }
-        let column_mapping = (0..child.schema().fields().len())
-            .map(|index| (index, index))
-            .collect();
-        Self::from_child_with_column_mapping(parent_filters, column_mapping, child)
-    }
-
-    /// Like [`Self::from_child`], but restricts which parent-level columns are
-    /// considered reachable through this child. All columns in a filter must
-    /// appear in `allowed_indices`; their child positions are resolved by name.
+    /// Like [`Self::from_child`], but only forwards filters whose columns all
+    /// appear in `allowed_indices`.
     ///
-    /// Use [`Self::from_child_with_column_mapping`] when the child can contain
-    /// duplicate names or when column identity must be preserved across a join.
+    /// Columns are resolved at the same position in the child schema. Earlier
+    /// versions resolved them by name, which is ambiguous when the child has
+    /// duplicate field names. Nodes whose output positions differ from the
+    /// child's must use [`Self::from_child_with_column_mapping`] instead.
+    #[deprecated(
+        since = "55.0.0",
+        note = "use `from_child` or `from_child_with_column_mapping`"
+    )]
     pub fn from_child_with_allowed_indices(
         parent_filters: &[Arc<dyn PhysicalExpr>],
         allowed_indices: HashSet<usize>,
         child: &Arc<dyn crate::ExecutionPlan>,
     ) -> Result<Self> {
-        // See [`Self::from_child`]: nothing to remap, nothing to index.
-        if parent_filters.is_empty() {
-            return Ok(Self::empty());
-        }
-        let remapper =
-            FilterRemapper::with_allowed_indices(child.schema(), allowed_indices);
-        Self::remap_filters(parent_filters, &remapper)
+        let column_mapping = allowed_indices.into_iter().map(|i| (i, i)).collect();
+        Self::from_child_with_column_mapping(parent_filters, column_mapping, child)
     }
 
     /// Remap parent filters using an explicit parent-output to child-input
     /// column mapping. Columns absent from the mapping cannot be pushed down.
-    /// Unlike name-based remapping, this preserves column identity when a child
-    /// has duplicate field names, and supports differently named join keys.
+    ///
+    /// Joins, aggregates and filters with an embedded projection use this:
+    /// their output positions differ from the child's, and a child can contain
+    /// duplicate field names, so positions cannot be recovered from names.
+    /// Join keys may also be mapped to a differently named column on the
+    /// other side.
     pub fn from_child_with_column_mapping(
         parent_filters: &[Arc<dyn PhysicalExpr>],
         column_mapping: HashMap<usize, usize>,
@@ -473,10 +451,8 @@ impl ChildFilterDescription {
         if parent_filters.is_empty() {
             return Ok(Self::empty());
         }
-        let remapper = FilterRemapper::ByIndex {
-            child_schema: child.schema(),
-            column_mapping,
-        };
+        let remapper =
+            FilterRemapper::with_column_mapping(child.schema(), column_mapping);
         Self::remap_filters(parent_filters, &remapper)
     }
 
