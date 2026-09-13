@@ -277,11 +277,9 @@ impl VectorizedOperationBuffers {
     }
 
     fn clear_shrink(&mut self, num_rows: usize) {
-        self.append_row_indices.clear();
+        self.clear();
         self.append_row_indices.shrink_to(num_rows);
-        self.equal_to_row_indices.clear();
         self.equal_to_row_indices.shrink_to(num_rows);
-        self.equal_to_group_indices.clear();
         self.equal_to_group_indices.shrink_to(num_rows);
         // `BooleanBufferBuilder` has no `shrink_to`; `finish` replaces its
         // backing buffer with an empty one. Rebuild capacity for the requested
