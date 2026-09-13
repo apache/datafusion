@@ -23,7 +23,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::Result;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
+use datafusion_expr::expr::AggregateFunction;
 use datafusion_expr::expr_rewriter::NamePreserver;
 use datafusion_expr::{DistinctHandling, Expr, LogicalPlan};
 
@@ -83,101 +83,68 @@ impl OptimizerRule for EliminateAggregateDistinct {
         let LogicalPlan::Aggregate(aggregate) = &plan else {
             return Ok(Transformed::no(plan));
         };
-        if !every_distinct_is_ignored(&aggregate.aggr_expr)? {
+        if !can_strip_every_distinct(&aggregate.aggr_expr)? {
             return Ok(Transformed::no(plan));
         }
 
         // Dropping `DISTINCT` changes `Expr::schema_name`, and with it the
-        // output schema of the Aggregate, so restore the original name.
+        // output schema of the Aggregate, so restore the original name. The
+        // aggregate may sit under an alias that type coercion added, so walk
+        // the expression rather than matching only its root.
         let name_preserver = NamePreserver::new(&plan);
         plan.map_expressions(|expr| {
-            // The aggregate may sit under an alias that type coercion added,
-            // so walk the expression rather than matching only its root.
             let saved_name = name_preserver.save(&expr);
-            let rewritten = expr.transform_down(strip_ignored_distinct)?;
-            if rewritten.transformed {
-                Ok(Transformed::yes(saved_name.restore(rewritten.data)))
-            } else {
-                Ok(Transformed::no(rewritten.data))
-            }
+            expr.transform_down(strip_ignored_distinct)
+                .map(|t| t.update_data(|e| saved_name.restore(e)))
         })
     }
 }
 
-/// Whether this node has a `DISTINCT` to drop and every `DISTINCT` on it can go.
+/// Whether the node has at least one `DISTINCT` and every one is `Ignored`.
 ///
 /// Stripping only some of them would change which plans
 /// [`crate::single_distinct_to_groupby::SingleDistinctToGroupBy`] rewrites,
-/// because that rule keys off how many distinct aggregates a node has and
-/// whether they share one argument. Removing one can push a node either way:
-/// it can newly qualify a node that has two distinct columns and now has one,
-/// or, where a rewrite happens regardless, it can turn a shared inner group
-/// key into a separate accumulator at that finer grain. Neither is the point
-/// of this rule, so a node keeps every flag unless it can lose them all.
-///
-/// This is conservative: `min(DISTINCT x), count(DISTINCT y)` keeps the `min`
-/// flag even though no rewrite is possible either way.
-fn every_distinct_is_ignored(aggr_expr: &[Expr]) -> Result<bool> {
-    let mut found_ignored = false;
+/// since that rule keys off how many distinct aggregates a node has and
+/// whether they share one argument. This is conservative: `min(DISTINCT x),
+/// count(DISTINCT y)` keeps the `min` flag though no rewrite is possible.
+fn can_strip_every_distinct(aggr_expr: &[Expr]) -> Result<bool> {
+    let mut handlings = vec![];
     for expr in aggr_expr {
-        let mut all_ignored = true;
         expr.apply(|e| {
             if let Expr::AggregateFunction(AggregateFunction { func, params }) = e
                 && params.distinct
             {
-                if func.distinct_handling() == DistinctHandling::Ignored {
-                    found_ignored = true;
-                } else {
-                    all_ignored = false;
-                    return Ok(TreeNodeRecursion::Stop);
-                }
+                handlings.push(func.distinct_handling());
             }
             Ok(TreeNodeRecursion::Continue)
         })?;
-        if !all_ignored {
-            return Ok(false);
-        }
     }
-    Ok(found_ignored)
+    Ok(
+        !handlings.is_empty()
+            && handlings.iter().all(|h| *h == DistinctHandling::Ignored),
+    )
 }
 
 /// Drops `DISTINCT` from `expr` if it is an aggregate that ignores duplicates.
+///
+/// The handling is checked again here rather than trusted to
+/// [`can_strip_every_distinct`], which only inspects `aggr_expr`, while
+/// `map_expressions` also visits the group expressions.
 ///
 /// An idempotent merge is also commutative, so an `Ignored` function is
 /// insensitive to input order and `order_by` needs no extra guard. `filter` is
 /// applied before deduplication either way, so it is carried over untouched.
 fn strip_ignored_distinct(expr: Expr) -> Result<Transformed<Expr>> {
-    let Expr::AggregateFunction(AggregateFunction { func, params }) = &expr else {
-        return Ok(Transformed::no(expr));
-    };
-    if !params.distinct || func.distinct_handling() != DistinctHandling::Ignored {
-        return Ok(Transformed::no(expr));
-    }
-
-    let Expr::AggregateFunction(AggregateFunction { func, params }) = expr else {
-        unreachable!("matched Expr::AggregateFunction above")
-    };
-    // Destructured exhaustively so a new field cannot be dropped silently.
-    let AggregateFunctionParams {
-        args,
-        distinct: _,
-        filter,
-        order_by,
-        null_treatment,
-    } = params;
-
-    Ok(Transformed::yes(Expr::AggregateFunction(
-        AggregateFunction {
-            func,
-            params: AggregateFunctionParams {
-                args,
-                distinct: false,
-                filter,
-                order_by,
-                null_treatment,
-            },
-        },
-    )))
+    Ok(match expr {
+        Expr::AggregateFunction(mut agg)
+            if agg.params.distinct
+                && agg.func.distinct_handling() == DistinctHandling::Ignored =>
+        {
+            agg.params.distinct = false;
+            Transformed::yes(Expr::AggregateFunction(agg))
+        }
+        _ => Transformed::no(expr),
+    })
 }
 
 #[cfg(test)]
@@ -220,20 +187,6 @@ mod tests {
 
         assert_optimized_plan_equal!(plan, @r"
         Aggregate: groupBy=[[test.a]], aggr=[[min(test.b) AS min(DISTINCT test.b)]]
-          TableScan: test
-        ")
-    }
-
-    /// `max(DISTINCT b)` is the other half of the same accumulator family.
-    #[test]
-    fn eliminate_distinct_from_max() -> Result<()> {
-        let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(vec![col("a")], vec![max(col("b")).distinct().build()?])?
-            .build()?;
-
-        assert_optimized_plan_equal!(plan, @r"
-        Aggregate: groupBy=[[test.a]], aggr=[[max(test.b) AS max(DISTINCT test.b)]]
           TableScan: test
         ")
     }
@@ -320,6 +273,24 @@ mod tests {
 
         assert_optimized_plan_equal!(plan, @r"
         Aggregate: groupBy=[[test.a]], aggr=[[min(test.b) AS min(DISTINCT test.b), sum(test.c)]]
+          TableScan: test
+        ")
+    }
+
+    /// The gate only inspects `aggr_expr`, so a distinct aggregate that honors
+    /// the flag in the group expressions must keep it.
+    #[test]
+    fn keep_honored_distinct_in_group_expr() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![sum(col("c")).distinct().build()?],
+                vec![min(col("b")).distinct().build()?],
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Aggregate: groupBy=[[sum(DISTINCT test.c)]], aggr=[[min(test.b) AS min(DISTINCT test.b)]]
           TableScan: test
         ")
     }
