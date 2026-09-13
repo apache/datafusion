@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -732,6 +732,25 @@ statement error DataFusion error: Error during planning: Duration has overflowed
 SET datafusion.runtime.list_files_cache_ttl = '1m18446744073709551556s'
 
 # Set invalid value and ensures error
+statement ok
+SET datafusion.execution.parquet.statistics_enabled = 'CHUNK'
+
+query TT
+SHOW datafusion.execution.parquet.statistics_enabled
+----
+datafusion.execution.parquet.statistics_enabled chunk
+
+statement error
+SET datafusion.execution.parquet.statistics_enabled = 'invalid'
+----
+DataFusion error: Error setting config datafusion.execution.parquet.statistics_enabled
+caused by
+Invalid or Unsupported Configuration: Invalid parquet statistics setting: invalid. Expected one of: none, chunk, page
+
+
+statement ok
+RESET datafusion.execution.parquet.statistics_enabled
+
 statement error DataFusion error: Error setting config datafusion\.execution\.batch_size\ncaused by\nInvalid or Unsupported Configuration: value must be greater than 0
 SET datafusion.execution.batch_size = 0
 

@@ -372,28 +372,27 @@ impl Unparser<'_> {
                 escape_char,
                 case_insensitive,
             }) => {
+                let negated = *negated;
+                let expr = Box::new(self.expr_to_sql_inner(expr)?);
+                let pattern = Box::new(self.expr_to_sql_inner(pattern)?);
+                let escape_char = escape_char.map(|c| {
+                    Box::new(ast::Expr::Value(SingleQuotedString(c.to_string()).into()))
+                });
+
                 if *case_insensitive {
                     Ok(ast::Expr::ILike {
-                        negated: *negated,
-                        expr: Box::new(self.expr_to_sql_inner(expr)?),
-                        pattern: Box::new(self.expr_to_sql_inner(pattern)?),
-                        escape_char: escape_char.map(|c| {
-                            Box::new(ast::Expr::Value(
-                                SingleQuotedString(c.to_string()).into(),
-                            ))
-                        }),
+                        negated,
+                        expr,
+                        pattern,
+                        escape_char,
                         any: false,
                     })
                 } else {
                     Ok(ast::Expr::Like {
-                        negated: *negated,
-                        expr: Box::new(self.expr_to_sql_inner(expr)?),
-                        pattern: Box::new(self.expr_to_sql_inner(pattern)?),
-                        escape_char: escape_char.map(|c| {
-                            Box::new(ast::Expr::Value(
-                                SingleQuotedString(c.to_string()).into(),
-                            ))
-                        }),
+                        negated,
+                        expr,
+                        pattern,
+                        escape_char,
                         any: false,
                     })
                 }
@@ -2936,10 +2935,16 @@ mod tests {
                 "EXTRACT(MONTH FROM x)",
             ),
             (
+                DateFieldExtractStyle::Extract,
+                "MONS",
+                "EXTRACT(MONTH FROM x)",
+            ),
+            (
                 DateFieldExtractStyle::Strftime,
                 "MONTH",
                 "strftime('%m', x)",
             ),
+            (DateFieldExtractStyle::Strftime, "YRS", "strftime('%Y', x)"),
             (
                 DateFieldExtractStyle::DatePart,
                 "DAY",
@@ -3474,7 +3479,7 @@ mod tests {
         ] {
             let unparser = Unparser::new(dialect.as_ref());
             let expr = Expr::ScalarFunction(ScalarFunction {
-                func: Arc::new(ScalarUDF::from(FromUnixtimeFunc::new())),
+                func: Arc::new(ScalarUDF::from(FromUnixtimeFunc::default())),
                 args: vec![col("date_col")],
             });
 

@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -77,6 +77,26 @@ query T
 SELECT regexp_replace('foobarbaz', 'b..', 'X');
 ----
 fooXbaz
+
+# An empty flags string behaves like no flags at all, as it does for the other
+# regexp functions. `gg` leaves an empty flags string once `g` is stripped.
+query T
+SELECT regexp_replace('foobarbaz', 'b..', 'X', '');
+----
+fooXbaz
+
+query T
+SELECT regexp_replace('foobarbaz', 'b..', 'X', 'gg');
+----
+fooXX
+
+query TI
+SELECT
+    regexp_replace('foobarbaz', 'b..', 'X', flags),
+    regexp_count('foobarbaz', 'b..', 1, flags)
+FROM (VALUES ('')) t(flags);
+----
+fooXbaz 2
 
 query T
 SELECT regexp_replace('foobarbaz', 'b(..)', 'X\\1Y', 'g');

@@ -583,6 +583,8 @@ pub struct EmptyMessage {}
 pub struct JsonWriterOptions {
     #[prost(enumeration = "CompressionTypeVariant", tag = "1")]
     pub compression: i32,
+    #[prost(uint32, optional, tag = "2")]
+    pub compression_level: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CsvWriterOptions {
