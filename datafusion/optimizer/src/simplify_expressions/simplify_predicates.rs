@@ -68,7 +68,11 @@ pub fn simplify_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
                         | Operator::Eq
                         | Operator::NotEq
                 ) && !is_null(&left)
-                    && !is_null(&right) =>
+                    && !is_null(&right)
+                    && right
+                        .as_literal()
+                        .or_else(|| left.as_literal())
+                        .is_some_and(|literal| !literal.data_type().is_nested()) =>
             {
                 if let (Some(col), Some(_)) =
                     (extract_column_from_expr(&left), right.as_literal())
@@ -107,7 +111,12 @@ pub fn simplify_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
     // Process each column's predicates to remove redundancies
     let mut result = other_predicates;
     for (_, preds) in column_predicates {
-        let simplified = simplify_column_predicates(preds)?;
+        // Literals of one column that cannot be ordered against each other carry no
+        // information we can use, so keep the predicates as they were written
+        let simplified = match simplify_column_predicates(preds.clone()) {
+            Ok(simplified) => simplified,
+            Err(_) => preds,
+        };
         if simplified.iter().any(is_false) {
             return Ok(always_false());
         }

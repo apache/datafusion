@@ -327,3 +327,26 @@ apple
 query T
 SELECT name FROM fruit WHERE name = 'apple' AND 'banana' = name;
 ----
+
+# A nested literal orders its own NULLs differently from the comparison kernels, so
+# the bounds it carries are not the ones the plan is evaluated against and it must be
+# left alone. Both conjuncts hold for the row below.
+
+statement ok
+CREATE TABLE list_with_null AS SELECT make_array(arrow_cast(NULL, 'Int64')) AS c;
+
+query ?
+SELECT c FROM list_with_null
+WHERE c = make_array(arrow_cast(NULL, 'Int64'))
+  AND c < make_array(arrow_cast(1, 'Int64'));
+----
+[NULL]
+
+statement ok
+CREATE TABLE struct_with_null AS SELECT named_struct('a', arrow_cast(2, 'Int32'), 'b', 1) AS c;
+
+query ?
+SELECT c FROM struct_with_null
+WHERE c = named_struct('a', arrow_cast(NULL, 'Int32'), 'b', 1)
+  AND c = named_struct('a', arrow_cast(2, 'Int32'), 'b', 1);
+----
