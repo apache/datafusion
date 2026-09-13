@@ -25,4 +25,5 @@ mod inlist_builder;
 mod partitioned_hash_eval;
 mod probe_completion;
 mod shared_bounds;
+mod sort_merge_fallback;
 mod stream;
