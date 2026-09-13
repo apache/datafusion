@@ -151,10 +151,8 @@ impl AggregateUDFImpl for VarianceSample {
         self.doc()
     }
 
-    // Left at the default `Honored`. The accumulator rejects `DISTINCT` with
-    // `not_impl_err!`, but this takes a single argument, so
-    // `SingleDistinctToGroupBy` deduplicates the input before the accumulator
-    // ever sees it and `f(DISTINCT x)` returns the right answer today.
+    // Left at the default `Honored`: `DistinctVarianceAccumulator`
+    // deduplicates the input when `is_distinct` is set.
 }
 
 #[user_doc(
@@ -258,10 +256,8 @@ impl AggregateUDFImpl for VariancePopulation {
         self.doc()
     }
 
-    // Left at the default `Honored`. The accumulator rejects `DISTINCT` with
-    // `not_impl_err!`, but this takes a single argument, so
-    // `SingleDistinctToGroupBy` deduplicates the input before the accumulator
-    // ever sees it and `f(DISTINCT x)` returns the right answer today.
+    // Left at the default `Honored`: `DistinctVarianceAccumulator`
+    // deduplicates the input when `is_distinct` is set.
 }
 
 /// An accumulator to compute variance
