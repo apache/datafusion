@@ -1980,6 +1980,298 @@ SELECT '2000-01-01T00:00:00'::timestamp - '2010-01-01T00:00:00'::timestamp;
 ----
 -3653 days 0 hours 0 mins 0.000000000 secs
 
+##########
+## Timezone-naive timestamps and the session time zone
+##
+## A timezone-naive timestamp is a wall clock reading. Converting one to a
+## timezone-aware timestamp has to pick a zone to read that wall clock in, and
+## wherever DataFusion inserts the conversion itself it reads it in
+## `datafusion.execution.time_zone`, as PostgreSQL and DuckDB do. Explicit
+## conversions (`AT TIME ZONE`, `arrow_cast`) are unaffected.
+##########
+
+statement ok
+SET TIME ZONE = '+08'
+
+# https://github.com/apache/datafusion/issues/13212
+# postgresql / duckdb: 08:00:00
+query ?
+SELECT '2024-11-01T00:00:00+00:00'::timestamptz - '2024-11-01T00:00:00'::timestamp;
+----
+0 days 8 hours 0 mins 0.000000000 secs
+
+# postgresql / duckdb: -08:00:00
+query ?
+SELECT '2024-11-01T00:00:00'::timestamp - '2024-11-01T00:00:00+00:00'::timestamptz;
+----
+0 days -8 hours 0 mins 0.000000000 secs
+
+# the same, over columns rather than literals
+query ??
+WITH timestamps(ts_tz, ts) AS (
+  VALUES ('2024-11-01T00:00:00+00:00'::timestamptz, '2024-11-01T00:00:00'::timestamp)
+)
+SELECT ts_tz - ts, ts - ts_tz FROM timestamps;
+----
+0 days 8 hours 0 mins 0.000000000 secs 0 days -8 hours 0 mins 0.000000000 secs
+
+# ... and over scalar subqueries
+query ??
+WITH timestamps(ts_tz, ts) AS (
+  VALUES ('2024-11-01T00:00:00+00:00'::timestamptz, '2024-11-01T00:00:00'::timestamp)
+)
+SELECT
+  (SELECT ts_tz FROM timestamps) - (SELECT ts FROM timestamps),
+  (SELECT ts FROM timestamps) - (SELECT ts_tz FROM timestamps);
+----
+0 days 8 hours 0 mins 0.000000000 secs 0 days -8 hours 0 mins 0.000000000 secs
+
+# `ts_tz` is 2024-11-01T04:00:00Z. `ts` reads as 2024-10-31T16:00:00Z, twelve
+# hours earlier, because the session time zone is +08 and not New York.
+statement ok
+CREATE TABLE timestamps AS SELECT
+  arrow_cast('2024-11-01T00:00:00-04:00', 'Timestamp(Nanosecond, Some("America/New_York"))') AS ts_tz,
+  '2024-11-01T00:00:00'::timestamp AS ts;
+
+query TT
+SELECT arrow_typeof(ts_tz), arrow_typeof(ts) FROM timestamps;
+----
+Timestamp(ns, "America/New_York") Timestamp(ns)
+
+query BBBBBB??
+SELECT
+  ts_tz = ts,
+  ts_tz > ts,
+  ts_tz IN (ts),
+  ts_tz BETWEEN ts AND ts,
+  ts_tz BETWEEN ts_tz AND ts,
+  CASE ts_tz WHEN ts THEN true ELSE false END,
+  ts_tz - ts,
+  ts - ts_tz
+FROM timestamps;
+----
+false true false false false false 0 days 12 hours 0 mins 0.000000000 secs 0 days -12 hours 0 mins 0.000000000 secs
+
+# nested naive timestamps are read in the session time zone too
+query BBB
+SELECT
+  arrow_cast(ts_tz, 'Dictionary(Int32, Timestamp(Nanosecond, Some("America/New_York")))') = ts,
+  arrow_cast(ts_tz, 'RunEndEncoded("run_ends": non-null Int32, "values": Timestamp(Nanosecond, Some("America/New_York")))') = ts,
+  make_array(ts_tz) = make_array(ts)
+FROM timestamps;
+----
+false false false
+
+query I
+SELECT count(*) FROM timestamps WHERE ts_tz IN (SELECT ts FROM timestamps);
+----
+0
+
+query I
+SELECT count(*) FROM timestamps WHERE ts_tz = ANY (SELECT ts FROM timestamps);
+----
+0
+
+query I
+SELECT count(*) FROM timestamps a JOIN timestamps b ON a.ts_tz = b.ts;
+----
+0
+
+# postgresql / duckdb: 2024-10-31 12:00:00-04, 2024-11-01 00:00:00-04
+query PP
+SELECT
+  CASE WHEN true THEN ts ELSE ts_tz END,
+  CASE WHEN false THEN ts ELSE ts_tz END
+FROM timestamps;
+----
+2024-10-31T12:00:00-04:00 2024-11-01T00:00:00-04:00
+
+# postgresql / duckdb: 2024-10-31 12:00:00-04
+query P
+SELECT coalesce(ts, ts_tz) FROM timestamps;
+----
+2024-10-31T12:00:00-04:00
+
+query P rowsort
+SELECT ts FROM timestamps UNION ALL SELECT ts_tz FROM timestamps;
+----
+2024-10-31T12:00:00-04:00
+2024-11-01T00:00:00-04:00
+
+query PP
+SELECT least(ts, ts_tz), greatest(ts, ts_tz) FROM timestamps;
+----
+2024-10-31T12:00:00-04:00 2024-11-01T00:00:00-04:00
+
+query B
+SELECT nullif(ts, ts_tz) IS NULL FROM timestamps;
+----
+false
+
+query ?
+SELECT make_array(ts, ts_tz) FROM timestamps;
+----
+[2024-10-31T12:00:00-04:00, 2024-11-01T00:00:00-04:00]
+
+query B
+SELECT array_has(make_array(ts_tz), ts) FROM timestamps;
+----
+false
+
+query I
+SELECT array_position(make_array(ts_tz), ts) FROM timestamps;
+----
+NULL
+
+query P
+SELECT nvl2(ts, ts, ts_tz) FROM timestamps;
+----
+2024-10-31T12:00:00-04:00
+
+query P rowsort
+VALUES ('2024-11-01T00:00:00'::timestamp), (arrow_cast('2024-11-01T00:00:00-04:00', 'Timestamp(Nanosecond, Some("America/New_York"))'));
+----
+2024-10-31T12:00:00-04:00
+2024-11-01T00:00:00-04:00
+
+statement ok
+CREATE TABLE new_york AS SELECT ts_tz FROM timestamps WHERE false;
+
+statement ok
+INSERT INTO new_york VALUES ('2024-11-01T00:00:00'::timestamp);
+
+query P
+SELECT ts_tz FROM new_york;
+----
+2024-10-31T12:00:00-04:00
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+# the inner cast reads the wall clock in the session time zone; the outer cast
+# only relabels it as the coerced type
+query TT
+EXPLAIN SELECT ts_tz - ts FROM timestamps;
+----
+logical_plan
+01)Projection: timestamps.ts_tz - CAST(CAST(timestamps.ts AS Timestamp(ns, "+08")) AS Timestamp(ns, "America/New_York"))
+02)--TableScan: timestamps projection=[ts_tz, ts]
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+# both casts survive the optimizer: `simplify_expressions` must not collapse
+# them into the single cast that reads the wall clock in New York
+query TT
+EXPLAIN FORMAT indent SELECT ts_tz = ts FROM timestamps;
+----
+logical_plan
+01)Projection: timestamps.ts_tz = CAST(CAST(timestamps.ts AS Timestamp(ns, "+08")) AS Timestamp(ns, "America/New_York"))
+02)--TableScan: timestamps projection=[ts_tz, ts]
+physical_plan
+01)ProjectionExec: expr=[ts_tz@0 = CAST(CAST(ts@1 AS Timestamp(ns, "+08")) AS Timestamp(ns, "America/New_York")) as timestamps.ts_tz = timestamps.ts]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# a named session time zone follows its daylight saving rules
+statement ok
+SET TIME ZONE = 'America/New_York'
+
+# postgresql / duckdb: -05:00:00 (EST)
+query ?
+SELECT '2024-01-15T00:00:00+00:00'::timestamptz - '2024-01-15T00:00:00'::timestamp;
+----
+0 days -5 hours 0 mins 0.000000000 secs
+
+# postgresql / duckdb: -04:00:00 (EDT)
+query ?
+SELECT '2024-07-15T00:00:00+00:00'::timestamptz - '2024-07-15T00:00:00'::timestamp;
+----
+0 days -4 hours 0 mins 0.000000000 secs
+
+# With no session time zone (the default) the naive operand is read in the zone
+# of the aware operand, so the two are the same instant here.
+statement ok
+RESET datafusion.execution.time_zone
+
+query ??
+SELECT ts_tz - ts, ts - ts_tz FROM timestamps;
+----
+0 days 0 hours 0 mins 0.000000000 secs 0 days 0 hours 0 mins 0.000000000 secs
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+query TT
+EXPLAIN SELECT ts_tz - ts FROM timestamps;
+----
+logical_plan
+01)Projection: timestamps.ts_tz - CAST(timestamps.ts AS Timestamp(ns, "America/New_York"))
+02)--TableScan: timestamps projection=[ts_tz, ts]
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+# explicit conversions keep arrow's semantics whatever the session time zone is
+statement ok
+SET TIME ZONE = '+08'
+
+query P
+SELECT '2024-11-01T00:00:00'::timestamp AT TIME ZONE 'America/New_York';
+----
+2024-11-01T00:00:00-04:00
+
+query P
+SELECT arrow_cast('2024-11-01T00:00:00'::timestamp, 'Timestamp(Nanosecond, Some("America/New_York"))');
+----
+2024-11-01T00:00:00-04:00
+
+# An explicit `AT TIME ZONE` at the top of a `UNION` branch, a subquery
+# projection, a `VALUES` cell or a view is not rewritten either: it already has
+# the type it is being aligned to, so nothing casts it and there is no inserted
+# cast to read in the session time zone.
+query P rowsort
+SELECT ts AT TIME ZONE 'America/New_York' FROM timestamps UNION ALL SELECT ts_tz FROM timestamps;
+----
+2024-11-01T00:00:00-04:00
+2024-11-01T00:00:00-04:00
+
+query I
+SELECT count(*) FROM timestamps WHERE ts_tz IN (SELECT ts AT TIME ZONE 'America/New_York' FROM timestamps);
+----
+1
+
+query I
+SELECT count(*) FROM timestamps WHERE ts_tz = ANY (SELECT ts AT TIME ZONE 'America/New_York' FROM timestamps);
+----
+1
+
+query P rowsort
+VALUES ('2024-11-01T00:00:00'::timestamp AT TIME ZONE 'America/New_York'), (arrow_cast('2024-11-01T00:00:00-04:00', 'Timestamp(Nanosecond, Some("America/New_York"))'));
+----
+2024-11-01T00:00:00-04:00
+2024-11-01T00:00:00-04:00
+
+statement ok
+CREATE VIEW new_york_view AS SELECT ts AT TIME ZONE 'America/New_York' AS x FROM timestamps;
+
+query P
+SELECT x FROM new_york_view;
+----
+2024-11-01T00:00:00-04:00
+
+statement ok
+DROP VIEW new_york_view;
+
+statement ok
+RESET datafusion.execution.time_zone
+
+statement ok
+DROP TABLE timestamps;
+
+statement ok
+DROP TABLE new_york;
+
+
 # Interval - Timestamp => error
 query error Cannot coerce arithmetic expression Interval\(MonthDayNano\) - Timestamp\(ns\) to valid types
 SELECT i - ts1 from FOO;
@@ -2059,11 +2351,13 @@ SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 20:10:00Z', TIMESTAMPTZ '2020-0
 ----
 2022-01-02T00:00:00+07:00
 
-# coerce TIMESTAMP to TIMESTAMPTZ
+# coerce TIMESTAMP to TIMESTAMPTZ: the naive origin is read in the session time
+# zone, as PostgreSQL and DuckDB read it
+# postgresql: 2022-01-02 00:00:00+07
 query P
 SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 20:10:00Z', TIMESTAMP '2020-01-01')
 ----
-2022-01-01T07:00:00+07:00
+2022-01-02T00:00:00+07:00
 
 # postgresql: 1
 query I

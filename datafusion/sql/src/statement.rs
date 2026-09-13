@@ -46,15 +46,16 @@ use datafusion_expr::dml::{
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::DdlStatement;
 use datafusion_expr::logical_plan::builder::project;
+use datafusion_expr::type_coercion::session_time_zone::cast_to_with_session_time_zone;
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     Analyze, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateFunction, CreateFunctionBody,
     CreateIndex as PlanCreateIndex, CreateMemoryTable, CreateView, Deallocate,
     DescribeTable, DmlStatement, DropCatalogSchema, DropFunction, DropTable, DropView,
-    EmptyRelation, Execute, Explain, ExplainFormat, Expr, ExprSchemable, Filter,
-    LogicalPlan, LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare,
-    ResetVariable, SetVariable, SortExpr, Statement as PlanStatement, ToStringifiedPlan,
+    EmptyRelation, Execute, Explain, ExplainFormat, Expr, Filter, LogicalPlan,
+    LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare, ResetVariable,
+    SetVariable, SortExpr, Statement as PlanStatement, ToStringifiedPlan,
     TransactionAccessMode, TransactionConclusion, TransactionEnd,
     TransactionIsolationLevel, TransactionStart, Volatility, WriteOp, cast,
 };
@@ -2390,7 +2391,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 .or_else(|| Some(Arc::clone(field)));
                         }
                         // Cast to target column type, if necessary
-                        expr.cast_to(field.data_type(), source.schema())?
+                        cast_to_with_session_time_zone(
+                            expr,
+                            field.data_type(),
+                            source.schema(),
+                            self.context_provider
+                                .options()
+                                .execution
+                                .time_zone
+                                .as_deref(),
+                        )?
                     }
                     None => {
                         // If the target table has an alias, use it to qualify the column name
@@ -2935,25 +2945,37 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             plan_err!("Column count doesn't match insert query!")?;
         }
 
+        let session_time_zone = self
+            .context_provider
+            .options()
+            .execution
+            .time_zone
+            .as_deref();
         let exprs = value_indices
             .into_iter()
             .enumerate()
             .map(|(i, value_index)| {
                 let target_field = table_schema.field(i);
                 let expr = match value_index {
-                    Some(v) => {
-                        Expr::Column(Column::from(source.schema().qualified_field(v)))
-                            .cast_to(target_field.data_type(), source.schema())?
-                    }
+                    Some(v) => cast_to_with_session_time_zone(
+                        Expr::Column(Column::from(source.schema().qualified_field(v))),
+                        target_field.data_type(),
+                        source.schema(),
+                        session_time_zone,
+                    )?,
                     // The value is not specified. Fill in the default value for the column.
-                    None => table_source
-                        .get_column_default(target_field.name())
-                        .cloned()
-                        .unwrap_or_else(|| {
-                            // If there is no default for the column, then the default is NULL
-                            Expr::Literal(ScalarValue::Null, None)
-                        })
-                        .cast_to(target_field.data_type(), &DFSchema::empty())?,
+                    None => cast_to_with_session_time_zone(
+                        table_source
+                            .get_column_default(target_field.name())
+                            .cloned()
+                            .unwrap_or_else(|| {
+                                // If there is no default for the column, then the default is NULL
+                                Expr::Literal(ScalarValue::Null, None)
+                            }),
+                        target_field.data_type(),
+                        &DFSchema::empty(),
+                        session_time_zone,
+                    )?,
                 };
                 Ok(expr.alias(target_field.name()))
             })

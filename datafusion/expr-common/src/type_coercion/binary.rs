@@ -285,6 +285,34 @@ impl<'a> BinaryTypeCoercer<'a> {
             return Ok(Signature { lhs, rhs, ret });
         }
         Plus | Minus | Multiply | Divide | Modulo  =>  {
+            // `Timestamp(u, Some(tz)) - Timestamp(u, None)` at *equal* units is
+            // the one mixed timezone-aware/naive pair arrow can subtract
+            // directly, so the `self.get_result` probe below would accept it
+            // and no cast would be inserted: arrow then subtracts the raw
+            // values, i.e. reads the naive operand as UTC. Every other unit
+            // pairing falls through to `temporal_coercion_strict_timezone`
+            // below and reads the naive operand in the aware operand's zone,
+            // as comparisons already do. Coerce here so that all unit pairings
+            // agree.
+            if self.op == &Minus
+                && matches!(
+                    (lhs, rhs),
+                    (Timestamp(_, Some(_)), Timestamp(_, None))
+                        | (Timestamp(_, None), Timestamp(_, Some(_)))
+                )
+                && let Some(coerced) = temporal_coercion_strict_timezone(lhs, rhs)
+            {
+                let ret = self.get_result(&coerced, &coerced).map_err(|e| {
+                    plan_datafusion_err!(
+                        "Cannot get result type for temporal operation {coerced} {} {coerced}: {e}", self.op
+                    )
+                })?;
+                return Ok(Signature {
+                    lhs: coerced.clone(),
+                    rhs: coerced,
+                    ret,
+                });
+            }
             if let Ok(ret) = self.get_result(lhs, rhs) {
 
                 // Temporal arithmetic, e.g. Date32 + Interval

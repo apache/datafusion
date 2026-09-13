@@ -940,7 +940,7 @@ config_namespace! {
 
         /// The default time zone
         ///
-        /// Some functions, e.g. `now` return timestamps in this time zone
+        /// Some functions, e.g. `now`, return timestamps in this time zone. It is also the time zone a timezone-naive timestamp is read in when it is implicitly converted to a timezone-aware one, for example in comparisons, arithmetic, `UNION`, `CASE`, function arguments, `VALUES` and `INSERT`. Explicit conversions (`AT TIME ZONE`, `arrow_cast`) are unaffected.
         pub time_zone: Option<String>, default = None
 
         /// Parquet options
