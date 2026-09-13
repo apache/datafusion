@@ -1752,6 +1752,97 @@ fn test_aggregate_pushdown_preserves_duplicate_grouping_columns() {
     assert_eq!(filters[0][1].predicate.to_string(), "id@0 = x");
 }
 
+/// A semi join key that is not a plain column cannot be mapped to the other
+/// side, so a filter on that output key only reaches the emitted side.
+#[test]
+fn test_hashjoin_parent_filter_pushdown_semi_join_expression_key() {
+    use datafusion_physical_expr::expressions::CastExpr;
+    use datafusion_physical_plan::filter_pushdown::{FilterPushdownPhase, PushedDown};
+
+    let schema = duplicate_id_schema();
+    let key = || Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>;
+    let cast_key =
+        || Arc::new(CastExpr::new(key(), DataType::Utf8, None)) as Arc<dyn PhysicalExpr>;
+    for on in [(cast_key(), key()), (key(), cast_key())] {
+        let join = HashJoinExec::try_new(
+            TestScanBuilder::new(Arc::clone(&schema)).build(),
+            TestScanBuilder::new(Arc::clone(&schema)).build(),
+            vec![on],
+            None,
+            &JoinType::LeftSemi,
+            None,
+            PartitionMode::Partitioned,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap();
+        let filters = join
+            .gather_filters_for_pushdown(
+                FilterPushdownPhase::Pre,
+                vec![id_eq_x(0)],
+                &ConfigOptions::default(),
+            )
+            .unwrap()
+            .parent_filters();
+        assert!(matches!(filters[0][0].discriminant, PushedDown::Yes));
+        assert!(matches!(filters[1][0].discriminant, PushedDown::No));
+        assert_eq!(filters[0][0].predicate.to_string(), "id@0 = x");
+    }
+}
+
+/// The identity mapping used by schema-preserving nodes rejects a column
+/// whose name differs from the child field at the same position.
+#[test]
+fn test_from_child_rejects_column_name_mismatch() {
+    use datafusion_physical_plan::filter_pushdown::{
+        ChildFilterDescription, FilterDescription, PushedDown,
+    };
+
+    let input = TestScanBuilder::new(duplicate_id_schema()).build();
+    let mismatched: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+        Arc::new(Column::new("other", 0)),
+        Operator::Eq,
+        Arc::new(Literal::new(ScalarValue::from("x"))),
+    ));
+    let child =
+        ChildFilterDescription::from_child(&[mismatched, id_eq_x(0)], &input).unwrap();
+    let filters = FilterDescription::new().with_child(child).parent_filters();
+    assert!(matches!(filters[0][0].discriminant, PushedDown::No));
+    assert!(matches!(filters[0][1].discriminant, PushedDown::Yes));
+}
+
+/// An unsupported parent filter folded back into a projected FilterExec must
+/// reference an output column of the projection.
+#[test]
+fn test_filter_with_projection_rejects_out_of_range_parent_filter() {
+    use datafusion_physical_plan::filter_pushdown::{
+        ChildFilterPushdownResult, ChildPushdownResult, FilterPushdownPhase, PushedDown,
+    };
+
+    let input = TestScanBuilder::new(duplicate_id_schema()).build();
+    let filter = FilterExecBuilder::new(id_eq_x(0), input)
+        .apply_projection(Some(vec![1]))
+        .unwrap()
+        .build()
+        .unwrap();
+    let result = filter.handle_child_pushdown_result(
+        FilterPushdownPhase::Pre,
+        ChildPushdownResult {
+            parent_filters: vec![ChildFilterPushdownResult {
+                filter: id_eq_x(1),
+                child_results: vec![PushedDown::No],
+            }],
+            self_filters: vec![vec![]],
+        },
+        &ConfigOptions::default(),
+    );
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("is not in the FilterExec projection"),
+        "unexpected error: {err}"
+    );
+}
+
 /// The deprecated allowed-indices API resolves columns by position too.
 #[test]
 #[expect(deprecated)]

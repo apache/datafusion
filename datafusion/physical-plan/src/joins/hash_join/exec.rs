@@ -1870,10 +1870,12 @@ impl ExecutionPlan for HashJoinExec {
                 JoinType::LeftSemi => (JoinSide::Left, &mut right_mapping),
                 _ => (JoinSide::Right, &mut left_mapping),
             };
-            for (output_idx, ci) in column_indices.iter().enumerate() {
-                if ci.side == output_side
-                    && let Some(&input_idx) = key_mapping.get(&ci.index)
-                {
+            let emitted = column_indices
+                .iter()
+                .enumerate()
+                .filter(|(_, ci)| ci.side == output_side);
+            for (output_idx, ci) in emitted {
+                if let Some(&input_idx) = key_mapping.get(&ci.index) {
                     other_mapping.insert(output_idx, input_idx);
                 }
             }

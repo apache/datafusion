@@ -717,21 +717,18 @@ impl ExecutionPlan for FilterExec {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
-        if phase != FilterPushdownPhase::Pre {
-            let child = self.parent_filters_for_input(&parent_filters)?;
-            return Ok(FilterDescription::new().with_child(child));
+        let mut child = self.parent_filters_for_input(&parent_filters);
+        if phase == FilterPushdownPhase::Pre {
+            child = child.map(|child| {
+                child.with_self_filters(
+                    split_conjunction(&self.predicate)
+                        .into_iter()
+                        .cloned()
+                        .collect(),
+                )
+            });
         }
-
-        let child = self
-            .parent_filters_for_input(&parent_filters)?
-            .with_self_filters(
-                split_conjunction(&self.predicate)
-                    .into_iter()
-                    .cloned()
-                    .collect(),
-            );
-
-        Ok(FilterDescription::new().with_child(child))
+        child.map(|child| FilterDescription::new().with_child(child))
     }
 
     fn handle_child_pushdown_result(

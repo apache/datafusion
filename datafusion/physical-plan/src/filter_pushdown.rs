@@ -336,7 +336,7 @@ impl FilterRemapper {
     /// Create a remapper for a node whose output has the same column positions
     /// as `child_schema`. Each column is resolved to the same index, provided
     /// the child field at that position has the same name.
-    pub(crate) fn identity(child_schema: SchemaRef) -> Self {
+    pub(crate) fn new(child_schema: SchemaRef) -> Self {
         Self {
             child_schema,
             column_mapping: None,
@@ -411,7 +411,7 @@ impl ChildFilterDescription {
         if parent_filters.is_empty() {
             return Ok(Self::empty());
         }
-        let remapper = FilterRemapper::identity(child.schema());
+        let remapper = FilterRemapper::new(child.schema());
         Self::remap_filters(parent_filters, &remapper)
     }
 
