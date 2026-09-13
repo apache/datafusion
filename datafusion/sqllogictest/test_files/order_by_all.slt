@@ -59,5 +59,28 @@ ORDER BY ALL DESC;
 2 1
 1 2
 
+# Swapped aliases must sort by output positions, not resolve back to input names.
+query II
+SELECT b AS a, a AS b
+FROM (VALUES (2, 1), (1, 2), (1, 1)) AS t(a, b)
+ORDER BY ALL;
+----
+1 1
+1 2
+2 1
+
+# Duplicate output names from a self-join remain unambiguous through ordinals.
+query II
+WITH t(id) AS (VALUES (2), (1))
+SELECT l.id, r.id
+FROM t AS l
+CROSS JOIN t AS r
+ORDER BY ALL;
+----
+1 1
+1 2
+2 1
+2 2
+
 statement ok
 set datafusion.sql_parser.dialect = 'Generic';
