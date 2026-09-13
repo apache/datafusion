@@ -1866,12 +1866,14 @@ impl ExecutionPlan for HashJoinExec {
                     })
                 })
                 .collect();
-            let other_mapping = match self.join_type {
-                JoinType::LeftSemi => &mut right_mapping,
-                _ => &mut left_mapping,
+            let (output_side, other_mapping) = match self.join_type {
+                JoinType::LeftSemi => (JoinSide::Left, &mut right_mapping),
+                _ => (JoinSide::Right, &mut left_mapping),
             };
             for (output_idx, ci) in column_indices.iter().enumerate() {
-                if let Some(&input_idx) = key_mapping.get(&ci.index) {
+                if ci.side == output_side
+                    && let Some(&input_idx) = key_mapping.get(&ci.index)
+                {
                     other_mapping.insert(output_idx, input_idx);
                 }
             }

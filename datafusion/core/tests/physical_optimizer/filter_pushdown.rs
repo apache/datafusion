@@ -1752,6 +1752,28 @@ fn test_aggregate_pushdown_preserves_duplicate_grouping_columns() {
     assert_eq!(filters[0][1].predicate.to_string(), "id@0 = x");
 }
 
+/// The deprecated allowed-indices API resolves columns by position too.
+#[test]
+#[expect(deprecated)]
+fn test_from_child_with_allowed_indices_resolves_by_position() {
+    use datafusion_physical_plan::filter_pushdown::{
+        ChildFilterDescription, FilterDescription, PushedDown,
+    };
+    use std::collections::HashSet;
+
+    let input = TestScanBuilder::new(duplicate_id_schema()).build();
+    let child = ChildFilterDescription::from_child_with_allowed_indices(
+        &[id_eq_x(0), id_eq_x(1)],
+        HashSet::from([1]),
+        &input,
+    )
+    .unwrap();
+    let filters = FilterDescription::new().with_child(child).parent_filters();
+    assert!(matches!(filters[0][0].discriminant, PushedDown::No));
+    assert!(matches!(filters[0][1].discriminant, PushedDown::Yes));
+    assert_eq!(filters[0][1].predicate.to_string(), "id@1 = x");
+}
+
 /// A join's output projection must map to child positions even when a child
 /// contains multiple columns with the same name.
 #[test]
