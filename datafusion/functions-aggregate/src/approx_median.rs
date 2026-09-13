@@ -149,7 +149,8 @@ impl AggregateUDFImpl for ApproxMedian {
     }
 
     // Left at the default `Honored`. The accumulator rejects `DISTINCT` with
-    // `not_impl_err!`, but this takes a single argument, so
-    // `SingleDistinctToGroupBy` deduplicates the input before the accumulator
-    // ever sees it and `f(DISTINCT x)` returns the right answer today.
+    // `not_impl_err!`, so `f(DISTINCT x)` only works when
+    // `SingleDistinctToGroupBy` rewrites the node and deduplicates the input
+    // first. When it cannot, for example beside an `avg`, the query errors
+    // rather than returning the non-distinct answer.
 }

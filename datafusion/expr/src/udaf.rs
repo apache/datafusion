@@ -1748,9 +1748,11 @@ pub enum DistinctHandling {
     Ignored,
     /// `DISTINCT` is applied, so the planner must leave it alone. Either the
     /// accumulator reads `AccumulatorArgs::is_distinct` and deduplicates its
-    /// input (`count`, `sum`, `avg`, `array_agg`, ...), or the planner does it
-    /// first by rewriting the aggregate into a group by (`stddev`, `var_samp`,
-    /// `approx_median`, ...). This is the default.
+    /// input (`count`, `sum`, `avg`, `var_samp`, `array_agg`, ...), or it
+    /// rejects `DISTINCT` and relies on `SingleDistinctToGroupBy` to
+    /// deduplicate the input first (`stddev`, `approx_median`, ...). The latter
+    /// works only when that rewrite applies; otherwise the query errors. This
+    /// is the default.
     Honored,
     /// The accumulator does not implement `DISTINCT` and nothing deduplicates
     /// the input for it, so `f(DISTINCT ...)` either errors or silently
