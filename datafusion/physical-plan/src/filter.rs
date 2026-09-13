@@ -33,7 +33,7 @@ use crate::common::can_project;
 use crate::execution_plan::{CardinalityEffect, replace_children_if_necessary};
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
-    FilterPushdownPropagation, PushedDown,
+    FilterPushdownPropagation, FilterRemapper, PushedDown,
 };
 use crate::limit::LocalLimitExec;
 use crate::metrics::{MetricBuilder, MetricType};
@@ -55,9 +55,10 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
-    DataFusionError, Result, ScalarValue, internal_err, plan_err, project_schema,
+    DataFusionError, Result, ScalarValue, internal_datafusion_err, internal_err,
+    plan_err, project_schema,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
@@ -326,6 +327,9 @@ impl FilterExec {
         &self,
         parent_filters: &[Arc<dyn PhysicalExpr>],
     ) -> Result<ChildFilterDescription> {
+        if parent_filters.is_empty() {
+            return Ok(ChildFilterDescription::empty());
+        }
         match self.projection.as_ref() {
             Some(projection) => ChildFilterDescription::from_child_with_column_mapping(
                 parent_filters,
@@ -755,27 +759,21 @@ impl ExecutionPlan for FilterExec {
         // remap them to the input schema coordinates before combining with self
         // filters. Map by position through the projection: the input may
         // contain several columns with the same name.
-        if let Some(projection) = self.projection.as_ref() {
-            let input_schema = self.input().schema();
+        if let Some(projection) = self.projection.as_ref()
+            && !unsupported_parent_filters.is_empty()
+        {
+            let remapper = FilterRemapper::with_column_mapping(
+                self.input().schema(),
+                projection.iter().copied().enumerate().collect(),
+            );
             unsupported_parent_filters = unsupported_parent_filters
                 .into_iter()
                 .map(|expr| {
-                    expr.transform_down(|expr| {
-                        if let Some(column) = expr.downcast_ref::<Column>() {
-                            let Some(&index) = projection.get(column.index()) else {
-                                return internal_err!(
-                                    "Parent filter column {column} is not in the FilterExec projection {projection:?}"
-                                );
-                            };
-                            let field = input_schema.field(index);
-                            return Ok(Transformed::yes(Arc::new(Column::new(
-                                field.name(),
-                                index,
-                            ))));
-                        }
-                        Ok(Transformed::no(expr))
+                    remapper.try_remap(&expr)?.ok_or_else(|| {
+                        internal_datafusion_err!(
+                            "Parent filter {expr} references a column that is not in the FilterExec projection {projection:?}"
+                        )
                     })
-                    .map(|transformed| transformed.data)
                 })
                 .collect::<Result<Vec<_>>>()?;
         }

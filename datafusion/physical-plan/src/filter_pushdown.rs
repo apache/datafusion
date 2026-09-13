@@ -344,7 +344,7 @@ impl FilterRemapper {
     }
 
     /// Create a remapper with an explicit parent-output to child-input mapping.
-    fn with_column_mapping(
+    pub(crate) fn with_column_mapping(
         child_schema: SchemaRef,
         column_mapping: HashMap<usize, usize>,
     ) -> Self {
@@ -423,8 +423,8 @@ impl ChildFilterDescription {
     /// duplicate field names. Nodes whose output positions differ from the
     /// child's must use [`Self::from_child_with_column_mapping`] instead.
     #[deprecated(
-        since = "55.0.0",
-        note = "use `from_child` or `from_child_with_column_mapping`"
+        since = "56.0.0",
+        note = "columns now resolve by position; use `from_child` for matching schemas or `from_child_with_column_mapping` when positions differ"
     )]
     pub fn from_child_with_allowed_indices(
         parent_filters: &[Arc<dyn PhysicalExpr>],
@@ -477,7 +477,7 @@ impl ChildFilterDescription {
     }
 
     /// A description carrying no filters in either direction.
-    fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self {
             parent_filters: vec![],
             self_filters: vec![],

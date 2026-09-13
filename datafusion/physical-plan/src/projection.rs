@@ -26,7 +26,6 @@ use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, SortOrderPushdownResult, Statistics,
 };
-use crate::column_rewriter::PhysicalColumnRewriter;
 use crate::execution_plan::{CardinalityEffect, replace_children_if_necessary};
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
@@ -304,25 +303,6 @@ impl ProjectionExec {
     fn overrides_metadata(&self) -> bool {
         self.overrides_metadata
     }
-
-    /// Map each output column, by position, to the expression that produces
-    /// it. The result is a map from the aliased `Column` in the parent to the
-    /// original expression. Output aliases are not unique, so this must not
-    /// go through the output schema by name.
-    fn output_column_to_expr(
-        &self,
-    ) -> datafusion_common::HashMap<Column, Arc<dyn PhysicalExpr>> {
-        self.projection_expr()
-            .iter()
-            .enumerate()
-            .map(|(index, projection)| {
-                (
-                    Column::new(&projection.alias, index),
-                    Arc::clone(&projection.expr),
-                )
-            })
-            .collect()
-    }
 }
 
 impl DisplayAs for ProjectionExec {
@@ -541,7 +521,6 @@ impl ExecutionPlan for ProjectionExec {
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
         // expand alias column to original expr in parent filters
-        let output_column_map = self.output_column_to_expr();
         let output_schema = self.schema();
         let remapper = FilterRemapper::new(output_schema);
         let mut child_parent_filters = Vec::with_capacity(parent_filters.len());
@@ -551,8 +530,7 @@ impl ExecutionPlan for ProjectionExec {
             // projection, then replace each one with the expression at that
             // output position.
             if let Some(reassigned) = remapper.try_remap(&filter)? {
-                let mut rewriter = PhysicalColumnRewriter::new(&output_column_map);
-                let rewritten = reassigned.rewrite(&mut rewriter)?.data;
+                let rewritten = self.projection_expr().unproject_expr(&reassigned)?;
                 child_parent_filters.push(PushedDownPredicate::supported(rewritten));
             } else {
                 child_parent_filters.push(PushedDownPredicate::unsupported(filter));
