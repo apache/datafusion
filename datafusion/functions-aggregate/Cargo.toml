@@ -83,6 +83,10 @@ name = "approx_distinct"
 harness = false
 
 [[bench]]
+name = "groups_accumulator_adapter"
+harness = false
+
+[[bench]]
 name = "first_last"
 harness = false
 
