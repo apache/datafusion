@@ -33,6 +33,7 @@ use datafusion_common::{
     plan_err,
 };
 use datafusion_expr::expr::{Alias, GroupingSet};
+use datafusion_expr::expr_rewriter::strip_outer_reference;
 use datafusion_expr::logical_plan::{Join, JoinType};
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{
@@ -1140,6 +1141,7 @@ fn remove_duplicated_filter(
 
     Ok(filters
         .into_iter()
+        .map(strip_outer_reference)
         .filter(|filter| {
             if filter == in_predicate {
                 return false;
