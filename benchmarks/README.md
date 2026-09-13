@@ -964,6 +964,40 @@ Several queries are included to test sort merge joins under various workloads.
 
 ./bench.sh run smj
 ```
+
+## Memory-Limited Join
+
+One join workload through a fixed memory budget (300MB by default), in each configuration a user
+can pick today. `HashJoinExec` cannot spill its build side, so some rows are *expected* to fail
+with `Resources exhausted`: that matrix is the recorded baseline for external hash join work, and
+the benchmark prints each row's outcome next to it and calls out any row that flipped.
+
+| row | role | baseline |
+| --- | --- | --- |
+| 1 | default settings — the planner picks `HashJoinExec` | fails |
+| 2 | the only workaround — `prefer_hash_join=false`, so the sorts (which spill) carry the join | completes |
+| 3a | where the ceiling is — the build side filtered to a size that fits | completes |
+| 3b | just past the ceiling — the same filter, slightly larger | fails |
+| 4 | what the workaround costs when it isn't needed — row 3a forced through `SortMergeJoinExec` | completes, ~3.5x slower than 3a |
+| 5 | control, not a way to run the join — hash *aggregation* through the same budget | completes |
+
+Row 4 divided by row 3a is reported as the "SMJ tax". Both inputs are the same generated relation
+(20M rows, written on the first run and cached under `--path`), so there is no smaller side for the
+planner to swap in. Spill metrics are reported per operator, and `-q` runs a single row.
+
+### Example Run
+
+```bash
+# Data is generated on the first run
+./bench.sh run join_mem
+
+# Or directly, e.g. only the ceiling row, under a different budget
+cargo run --release --bin dfbench -- join-mem --query 3b --memory-limit 512M
+```
+
+The same matrix is asserted at test scale in
+`datafusion/core/tests/memory_limit/join_failure_matrix.rs`.
+
 ## Cancellation
 
 Test performance of cancelling queries.
