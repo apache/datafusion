@@ -48,6 +48,7 @@ use crate::file_format::CsvDecoder;
 use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
+use regex::Regex;
 use tokio::io::AsyncWriteExt;
 
 /// A Config for [`CsvOpener`]
@@ -145,6 +146,11 @@ impl CsvSource {
         self.options.escape
     }
 
+    /// Regex for fields that should be read as NULL
+    pub fn null_regex(&self) -> Option<&str> {
+        self.options.null_regex.as_deref()
+    }
+
     /// Initialize a CsvSource with escape
     pub fn with_escape(&self, escape: Option<u8>) -> Self {
         let mut conf = self.clone();
@@ -181,10 +187,10 @@ impl CsvSource {
 
 impl CsvSource {
     fn open<R: Read>(&self, reader: R) -> Result<csv::Reader<R>> {
-        Ok(self.builder().build(reader)?)
+        Ok(self.builder()?.build(reader)?)
     }
 
-    fn builder(&self) -> csv::ReaderBuilder {
+    fn builder(&self) -> Result<csv::ReaderBuilder> {
         let mut builder =
             csv::ReaderBuilder::new(Arc::clone(self.table_schema.file_schema()))
                 .with_delimiter(self.delimiter())
@@ -205,8 +211,14 @@ impl CsvSource {
         if let Some(comment) = self.comment() {
             builder = builder.with_comment(comment);
         }
+        if let Some(null_regex) = self.null_regex() {
+            let regex = Regex::new(null_regex).map_err(|e| {
+                exec_datafusion_err!("Unable to parse CSV null regex '{null_regex}': {e}")
+            })?;
+            builder = builder.with_null_regex(regex);
+        }
 
-        builder
+        Ok(builder)
     }
 }
 
@@ -448,7 +460,7 @@ impl FileOpener for CsvOpener {
                 .await?
                 .map_err(DataFusionError::from);
 
-                let decoder = config.builder().build_decoder();
+                let decoder = config.builder()?.build_decoder();
                 let input = file_compression_type
                     .convert_stream(aligned_stream.boxed())?
                     .fuse();
@@ -482,7 +494,7 @@ impl FileOpener for CsvOpener {
                         .boxed())
                 }
                 GetResultPayload::Stream(s) => {
-                    let decoder = config.builder().build_decoder();
+                    let decoder = config.builder()?.build_decoder();
                     let s = s.map_err(DataFusionError::from);
                     let input = file_compression_type.convert_stream(s.boxed())?.fuse();
 
@@ -652,5 +664,113 @@ impl CsvSource {
 
         let conf = FileScanConfig::try_from_proto(base_conf, ctx, source)?;
         Ok(DataSourceExec::from_data_source(conf))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{Array, Int64Array, StringArray};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+
+    fn csv_source(schema: SchemaRef, null_regex: Option<&str>) -> CsvSource {
+        let options = CsvOptions {
+            has_header: Some(true),
+            null_regex: null_regex.map(str::to_string),
+            ..CsvOptions::default()
+        };
+        let mut source = CsvSource::new(schema).with_csv_options(options);
+        source.batch_size = Some(1024);
+        source
+    }
+
+    #[test]
+    fn null_regex_nulls_matching_string_values() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+        let source = csv_source(schema, Some("^(NULL|N/A)$"));
+
+        let data = "id,name\n1,alice\n2,N/A\n3,carol\n";
+        let batch = source
+            .open(data.as_bytes())
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+
+        let names = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(names.value(0), "alice");
+        assert!(names.is_null(1), "N/A should be read as NULL");
+        assert_eq!(names.value(2), "carol");
+    }
+
+    #[test]
+    fn null_regex_nulls_matching_values_in_numeric_columns() {
+        // Without the regex this fails to parse rather than producing NULL,
+        // which is the case null_regex exists for.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new("value", DataType::Int64, true),
+        ]));
+        let source = csv_source(schema, Some("^(NULL|N/A)$"));
+
+        let data = "id,value\n1,10\n2,N/A\n3,30\n";
+        let batch = source
+            .open(data.as_bytes())
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+
+        let values = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(values.value(0), 10);
+        assert!(values.is_null(1), "N/A should be read as NULL");
+        assert_eq!(values.value(2), 30);
+    }
+
+    #[test]
+    fn without_null_regex_the_placeholder_is_read_verbatim() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+        let source = csv_source(schema, None);
+
+        let data = "id,name\n1,alice\n2,N/A\n3,carol\n";
+        let batch = source
+            .open(data.as_bytes())
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+
+        let names = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(names.value(1), "N/A");
+    }
+
+    #[test]
+    fn invalid_null_regex_is_reported_as_an_error() {
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+        let source = csv_source(schema, Some("("));
+
+        let err = source.open(b"id\n1\n".as_slice()).unwrap_err();
+        assert!(
+            err.to_string().contains("Unable to parse CSV null regex"),
+            "unexpected error: {err}"
+        );
     }
 }

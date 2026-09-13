@@ -22,6 +22,30 @@ STORED AS CSV
 LOCATION '../core/tests/data/duplicate_header.csv'
 OPTIONS ('format.has_header' 'true');
 
+# null_regex applies to the data, not only to schema inference: a matching
+# field is read as NULL whatever the column's type.
+statement ok
+CREATE EXTERNAL TABLE csv_with_null_regex (
+c1 VARCHAR,
+c2 INT,
+c3 VARCHAR
+) STORED AS CSV
+LOCATION '../core/tests/data/null_regex.csv'
+OPTIONS ('format.null_regex' '^(NULL|N/A)$',
+         'format.has_header' 'true');
+
+query TIT
+select * from csv_with_null_regex;
+----
+id0 10 alpha
+id1 NULL NULL
+id2 30 gamma
+
+query II
+select count(*), count(c2) from csv_with_null_regex;
+----
+3 2
+
 # create_external_table_with_quote_escape
 statement ok
 CREATE EXTERNAL TABLE csv_with_quote (
