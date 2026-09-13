@@ -469,7 +469,7 @@ async fn register_parquet_missing_bounds(test_ctx: &mut TestContext) {
             result.metadata.statistics().is_some(),
             statistics == EnabledStatistics::Chunk
         );
-        drop(buffer);
+        buffer.into_inner().unwrap();
         let mut group = writer.next_row_group().unwrap();
         group
             .append_column(&File::open(&column_path).unwrap(), result)
@@ -477,6 +477,7 @@ async fn register_parquet_missing_bounds(test_ctx: &mut TestContext) {
         group.close().unwrap();
     }
     writer.close().unwrap();
+    std::fs::remove_file(&column_path).unwrap();
     test_ctx
         .ctx
         .register_parquet(

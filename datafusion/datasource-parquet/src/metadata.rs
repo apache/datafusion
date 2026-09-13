@@ -806,10 +806,10 @@ fn summarize_bound<A: Accumulator>(
                         return false;
                     }
                     let column = group.column(column_index);
-let all_null = column
-    .statistics()
-    .and_then(|stats| stats.null_count_opt())
-    .is_some_and(|nulls| nulls == column.num_values() as u64);
+                    let all_null = column
+                        .statistics()
+                        .and_then(|stats| stats.null_count_opt())
+                        .is_some_and(|nulls| nulls == column.num_values() as u64);
                     !all_null
                 })
         })
@@ -817,7 +817,9 @@ let all_null = column
         *acc = None;
         return Ok(None);
     }
-    let Some(acc) = acc.as_mut() else { return Ok(None) };present");
+    let Some(acc) = acc.as_mut() else {
+        return Ok(None);
+    };
     acc.update_batch(&[Arc::clone(values)])?;
 
     Ok(
