@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Compare compact string IN-list pruning with per-value min/max expansion.
+//! Compare string IN-list pruning with per-value min/max expansion.
 //!
 //! Every case raises `max_in_list_size` to the domain size. On a baseline
 //! without compact pruning, `in_list` and `not_in_list` measure the ordinary
@@ -23,15 +23,18 @@
 //! trees of (in)equalities, which produce the same per-value statistics checks
 //! without making the baseline depend on a deeply nested expression.
 //!
-//! The main cases alternate intervals pinned to a domain member with intervals
-//! that span a sparse gap. NULL-containing variants cover the optimized
+//! Small domain sizes make representation threshold changes measurable, and the
+//! evaluation matrix varies the number of statistics containers. The main cases
+//! alternate intervals pinned to a domain member with intervals that span a
+//! sparse gap. NULL-containing variants cover the optimized
 //! filter-semantics paths, including the constant-false `NOT IN` rewrite.
 //! Supplemental `NOT IN` cases measure uniform singleton containers, long bounds,
 //! and long literals that share bounds' prefixes. Bloom filters are not involved.
 //!
 //! Run with `cargo bench -p datafusion-pruning --bench string_in_list_pruning`.
-//! The construction benchmarks reuse their input physical expressions; the
-//! evaluation benchmarks reuse their already-built pruning predicates.
+//! Construction is independent of the statistics batch size, so it varies only
+//! the IN-list domain size. Evaluation varies both the domain size and number
+//! of containers, reusing already-built pruning predicates and statistics.
 
 use std::collections::HashSet;
 use std::hint::black_box;
@@ -44,13 +47,45 @@ use datafusion_common::{Column, ScalarValue};
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr::expressions::{BinaryExpr, col, in_list, lit};
-use datafusion_pruning::{PruningPredicate, PruningPredicateBuilder, PruningStatistics};
+use datafusion_pruning::{
+    MAX_IN_LIST_SIZE, PruningPredicate, PruningPredicateBuilder, PruningStatistics,
+};
 
-const DOMAIN_SIZES: [usize; 4] = [20, 21, 256, 1024];
-const CONTAINERS: usize = 4096;
+const DOMAIN_SIZES: [usize; 9] = [1, 2, 4, 8, 16, 20, 21, 256, 1024];
+const CONTAINER_COUNTS: [usize; 3] = [16, 256, 4096];
+const BASELINE_CONTAINER_COUNT: usize = 4096;
 
 fn value(index: usize) -> String {
     format!("key{index:08}")
+}
+
+/// Maps an interval pair to an evenly distributed position in the full domain.
+///
+/// When there are more pairs than domain values, the full distribution repeats.
+fn sampled_domain_index(
+    pair_index: usize,
+    pair_count: usize,
+    domain_size: usize,
+) -> usize {
+    let sampled_positions = pair_count.min(domain_size);
+    let position = pair_index % sampled_positions;
+    if sampled_positions == 1 {
+        0
+    } else {
+        position * (domain_size - 1) / (sampled_positions - 1)
+    }
+}
+
+fn validate_sampling_distribution() {
+    assert_eq!(
+        (0..8)
+            .map(|pair| sampled_domain_index(pair, 8, 1024))
+            .collect::<Vec<_>>(),
+        vec![0, 146, 292, 438, 584, 730, 876, 1023]
+    );
+    assert_eq!(sampled_domain_index(0, 8, 1), 0);
+    assert_eq!(sampled_domain_index(1024, 2048, 1024), 0);
+    assert_eq!(sampled_domain_index(2047, 2048, 1024), 1023);
 }
 
 fn balanced(expressions: &[PhysicalExprRef], op: Operator) -> PhysicalExprRef {
@@ -102,20 +137,21 @@ struct IntervalStatistics {
 }
 
 impl IntervalStatistics {
-    fn new(domain_size: usize) -> Self {
-        let min = StringViewArray::from_iter_values((0..CONTAINERS).map(|index| {
-            let start = (index / 2 % domain_size) * 10;
+    fn new(domain_size: usize, container_count: usize) -> Self {
+        let pair_count = container_count.div_ceil(2);
+        let min = StringViewArray::from_iter_values((0..container_count).map(|index| {
+            let start = sampled_domain_index(index / 2, pair_count, domain_size) * 10;
             value(start + if index % 2 == 0 { 0 } else { 3 })
         }));
-        let max = StringViewArray::from_iter_values((0..CONTAINERS).map(|index| {
-            let start = (index / 2 % domain_size) * 10;
+        let max = StringViewArray::from_iter_values((0..container_count).map(|index| {
+            let start = sampled_domain_index(index / 2, pair_count, domain_size) * 10;
             value(start + if index % 2 == 0 { 0 } else { 7 })
         }));
         Self {
             min: Arc::new(min),
             max: Arc::new(max),
-            null_counts: Arc::new(UInt64Array::from(vec![0; CONTAINERS])),
-            row_counts: Arc::new(UInt64Array::from(vec![128; CONTAINERS])),
+            null_counts: Arc::new(UInt64Array::from(vec![0; container_count])),
+            row_counts: Arc::new(UInt64Array::from(vec![128; container_count])),
         }
     }
 
@@ -125,14 +161,16 @@ impl IntervalStatistics {
     }
 
     fn singleton(value: &str) -> Self {
-        let min =
-            StringViewArray::from_iter_values(std::iter::repeat_n(value, CONTAINERS));
+        let min = StringViewArray::from_iter_values(std::iter::repeat_n(
+            value,
+            BASELINE_CONTAINER_COUNT,
+        ));
         let max = min.clone();
         Self {
             min: Arc::new(min),
             max: Arc::new(max),
-            null_counts: Arc::new(UInt64Array::from(vec![0; CONTAINERS])),
-            row_counts: Arc::new(UInt64Array::from(vec![128; CONTAINERS])),
+            null_counts: Arc::new(UInt64Array::from(vec![0; BASELINE_CONTAINER_COUNT])),
+            row_counts: Arc::new(UInt64Array::from(vec![128; BASELINE_CONTAINER_COUNT])),
         }
     }
 
@@ -143,14 +181,14 @@ impl IntervalStatistics {
         Self {
             min: Arc::new(StringViewArray::from_iter_values(std::iter::repeat_n(
                 min.as_str(),
-                CONTAINERS,
+                BASELINE_CONTAINER_COUNT,
             ))),
             max: Arc::new(StringViewArray::from_iter_values(std::iter::repeat_n(
                 max.as_str(),
-                CONTAINERS,
+                BASELINE_CONTAINER_COUNT,
             ))),
-            null_counts: Arc::new(UInt64Array::from(vec![0; CONTAINERS])),
-            row_counts: Arc::new(UInt64Array::from(vec![128; CONTAINERS])),
+            null_counts: Arc::new(UInt64Array::from(vec![0; BASELINE_CONTAINER_COUNT])),
+            row_counts: Arc::new(UInt64Array::from(vec![128; BASELINE_CONTAINER_COUNT])),
         }
     }
 }
@@ -165,7 +203,7 @@ impl PruningStatistics for IntervalStatistics {
     }
 
     fn num_containers(&self) -> usize {
-        CONTAINERS
+        self.min.len()
     }
 
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
@@ -200,7 +238,6 @@ struct BenchmarkCase {
     not_in_list_predicate: PruningPredicate,
     not_in_list_with_null_predicate: PruningPredicate,
     expanded_and_predicate: PruningPredicate,
-    statistics: IntervalStatistics,
 }
 
 impl BenchmarkCase {
@@ -250,36 +287,6 @@ impl BenchmarkCase {
                 .to_string()
                 .contains("NOT_IN_SET_MAY_MATCH")
         );
-        let statistics = IntervalStatistics::new(size);
-
-        // Check that every benchmark path does the same useful work, rather
-        // than comparing compact pruning with an always-true fallback.
-        let kept = (0..CONTAINERS)
-            .map(|index| index % 2 == 0)
-            .collect::<Vec<_>>();
-        let negated_kept = kept.iter().map(|keep| !keep).collect::<Vec<_>>();
-        assert_eq!(in_list_predicate.prune(&statistics).unwrap(), kept);
-        assert_eq!(
-            in_list_with_null_predicate.prune(&statistics).unwrap(),
-            kept
-        );
-        assert_eq!(expanded_or_predicate.prune(&statistics).unwrap(), kept);
-        assert_eq!(
-            not_in_list_predicate.prune(&statistics).unwrap(),
-            negated_kept
-        );
-        assert_eq!(
-            expanded_and_predicate.prune(&statistics).unwrap(),
-            negated_kept
-        );
-        assert!(
-            not_in_list_with_null_predicate
-                .prune(&statistics)
-                .unwrap()
-                .iter()
-                .all(|keep| !keep)
-        );
-
         Self {
             size,
             schema,
@@ -295,12 +302,61 @@ impl BenchmarkCase {
             not_in_list_predicate,
             not_in_list_with_null_predicate,
             expanded_and_predicate,
-            statistics,
         }
     }
 }
 
+fn expected_results(container_count: usize) -> Vec<bool> {
+    (0..container_count).map(|index| index % 2 == 0).collect()
+}
+
+fn assert_equivalent_results(case: &BenchmarkCase, statistics: &IntervalStatistics) {
+    let expected = expected_results(statistics.num_containers());
+    assert_eq!(case.in_list_predicate.prune(statistics).unwrap(), expected);
+    assert_eq!(
+        case.expanded_or_predicate.prune(statistics).unwrap(),
+        expected
+    );
+    let negated_expected = expected.iter().map(|keep| !keep).collect::<Vec<_>>();
+    assert_eq!(
+        case.not_in_list_predicate.prune(statistics).unwrap(),
+        negated_expected
+    );
+    assert_eq!(
+        case.expanded_and_predicate.prune(statistics).unwrap(),
+        negated_expected
+    );
+
+    let in_with_null = case.in_list_with_null_predicate.prune(statistics).unwrap();
+    let not_in_with_null = case
+        .not_in_list_with_null_predicate
+        .prune(statistics)
+        .unwrap();
+    if case.size + 1 > MAX_IN_LIST_SIZE {
+        // Compact pruning applies filter semantics: NULL does not change which
+        // rows can satisfy IN, while NOT IN (..., NULL) can never be true.
+        assert_eq!(in_with_null, expected);
+        assert!(not_in_with_null.iter().all(|keep| !keep));
+    } else {
+        // The legacy per-value rewrite keeps UNKNOWN IN results and drops the
+        // NULL term from NOT IN statistics pruning.
+        assert!(in_with_null.iter().all(|keep| *keep));
+        assert_eq!(not_in_with_null, negated_expected);
+    }
+}
+
+fn evaluation_group_name(container_count: usize) -> String {
+    // Keep the original benchmark IDs for the pre-existing 4,096-container
+    // cases so Criterion baselines remain directly comparable.
+    if container_count == BASELINE_CONTAINER_COUNT {
+        "string_in_list_pruning/evaluate".to_string()
+    } else {
+        format!("string_in_list_pruning/evaluate/{container_count}_containers")
+    }
+}
+
 fn criterion_benchmark(criterion: &mut Criterion) {
+    validate_sampling_distribution();
     let cases = DOMAIN_SIZES.map(BenchmarkCase::new);
     let mut construction = criterion.benchmark_group("string_in_list_pruning/construct");
     for case in &cases {
@@ -334,41 +390,50 @@ fn criterion_benchmark(criterion: &mut Criterion) {
     }
     construction.finish();
 
-    let mut evaluation = criterion.benchmark_group("string_in_list_pruning/evaluate");
-    evaluation.throughput(Throughput::Elements(CONTAINERS as u64));
-    for case in &cases {
-        for (name, predicate, list_size) in [
-            ("in_list", &case.in_list_predicate, case.size),
-            (
-                "in_list_with_null",
-                &case.in_list_with_null_predicate,
-                case.size + 1,
-            ),
-            ("expanded_or", &case.expanded_or_predicate, case.size),
-            ("not_in_list", &case.not_in_list_predicate, case.size),
-            (
-                "not_in_list_with_null_constant_false",
-                &case.not_in_list_with_null_predicate,
-                case.size + 1,
-            ),
-            ("expanded_and", &case.expanded_and_predicate, case.size),
-        ] {
-            evaluation.bench_with_input(
-                BenchmarkId::new(name, list_size),
-                predicate,
-                |bencher, predicate| {
-                    bencher.iter(|| {
-                        black_box(predicate.prune(black_box(&case.statistics)).unwrap())
-                    });
-                },
-            );
+    for container_count in CONTAINER_COUNTS {
+        let mut evaluation =
+            criterion.benchmark_group(evaluation_group_name(container_count));
+        evaluation.throughput(Throughput::Elements(container_count as u64));
+        for case in &cases {
+            let statistics = IntervalStatistics::new(case.size, container_count);
+
+            // Check every matrix cell outside the timed loop so all paths do
+            // the same useful work rather than measuring an always-true fallback.
+            assert_equivalent_results(case, &statistics);
+
+            for (name, predicate, list_size) in [
+                ("in_list", &case.in_list_predicate, case.size),
+                (
+                    "in_list_with_null",
+                    &case.in_list_with_null_predicate,
+                    case.size + 1,
+                ),
+                ("expanded_or", &case.expanded_or_predicate, case.size),
+                ("not_in_list", &case.not_in_list_predicate, case.size),
+                (
+                    "not_in_list_with_null_constant_false",
+                    &case.not_in_list_with_null_predicate,
+                    case.size + 1,
+                ),
+                ("expanded_and", &case.expanded_and_predicate, case.size),
+            ] {
+                evaluation.bench_with_input(
+                    BenchmarkId::new(name, list_size),
+                    predicate,
+                    |bencher, predicate| {
+                        bencher.iter(|| {
+                            black_box(predicate.prune(black_box(&statistics)).unwrap())
+                        });
+                    },
+                );
+            }
         }
+        evaluation.finish();
     }
-    evaluation.finish();
 
     let mut distributions =
         criterion.benchmark_group("string_in_list_pruning/not_in_distributions");
-    distributions.throughput(Throughput::Elements(CONTAINERS as u64));
+    distributions.throughput(Throughput::Elements(BASELINE_CONTAINER_COUNT as u64));
     let singleton = IntervalStatistics::uniform_singleton();
     for case in cases.iter().filter(|case| case.size > 20) {
         let compact = case.not_in_list_predicate.prune(&singleton).unwrap();

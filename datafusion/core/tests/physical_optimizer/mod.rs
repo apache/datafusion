@@ -38,6 +38,7 @@ mod replace_with_order_preserving_variants;
 mod sanity_checker;
 #[expect(clippy::needless_pass_by_value)]
 mod test_utils;
+mod update_aggr_exprs;
 mod window_optimize;
 mod window_topn;
 
