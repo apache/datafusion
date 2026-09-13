@@ -221,12 +221,12 @@ impl Accumulator for BoolAndAccumulator {
 
 #[user_doc(
     doc_section(label = "General Functions"),
-    description = "Returns true if all non-null input values are true, otherwise false.",
-    syntax_example = "bool_and(expression)",
+    description = "Returns true if any non-null input value is true, otherwise false.",
+    syntax_example = "bool_or(expression)",
     sql_example = r#"```sql
-> SELECT bool_and(column_name) FROM table_name;
+> SELECT bool_or(column_name) FROM table_name;
 +----------------------------+
-| bool_and(column_name)      |
+| bool_or(column_name)       |
 +----------------------------+
 | true                       |
 +----------------------------+

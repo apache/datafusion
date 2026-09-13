@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -393,29 +393,41 @@ statement ok
 drop table agg_dyn_two_col;
 
 # --- mixed expressions: MIN(a), MAX(a), MAX(b), MIN(c+1) ---
-# Supported aggregates (MIN(a), MAX(a), MAX(b)) should drive a filter;
-# MIN(c+1) is unsupported and must not contribute.
-# Every file shares the same per-file min(a)=1, max(a)=8 and max(b)=12 so the
-# DynamicFilter content is deterministic regardless of publish order (see #22621).
+# MIN(c+1) cannot contribute a dynamic-filter predicate. Ignoring it could prune
+# rows that still improve MIN(c+1), so the aggregate must not produce a filter.
+# Each file starts with a row group that establishes all supported bounds,
+# followed by a row group containing the minimum c. With two rows per batch,
+# the old filter prunes the required rows in both files regardless of which
+# partition runs first.
+
+statement ok
+set datafusion.execution.batch_size = 2;
 
 statement ok
 COPY (
-  SELECT * FROM (VALUES (1, 12, 100), (8, 4, 70)) AS v(a, b, c)
+  SELECT * FROM (VALUES (1, 12, 100), (8, 4, 100), (1, 6, 70), (8, 12, 110)) AS v(a, b, c)
 ) TO 'test_files/scratch/push_down_filter_regression/agg_dyn_mixed/file_0.parquet'
-STORED AS PARQUET;
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' '2');
 
 statement ok
 COPY (
-  SELECT * FROM (VALUES (1, 6, 90), (8, 12, 110)) AS v(a, b, c)
+  SELECT * FROM (VALUES (1, 12, 100), (8, 4, 100), (1, 6, 70), (8, 12, 110)) AS v(a, b, c)
 ) TO 'test_files/scratch/push_down_filter_regression/agg_dyn_mixed/file_1.parquet'
-STORED AS PARQUET;
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' '2');
 
 statement ok
 CREATE EXTERNAL TABLE agg_dyn_mixed (a INT, b INT, c INT)
 STORED AS PARQUET
 LOCATION 'test_files/scratch/push_down_filter_regression/agg_dyn_mixed/';
 
-# -> DynamicFilter [ a < 1 OR a > 8 OR b > 12 ] (MIN(c+1) dropped as unsupported)
+query IIII
+SELECT MIN(a), MAX(a), MAX(b), MIN(c + 1) FROM agg_dyn_mixed;
+----
+1 8 12 71
+
+# No dynamic filter because not every aggregate has a safe predicate.
 query TT
 EXPLAIN ANALYZE SELECT MIN(a), MAX(a), MAX(b), MIN(c + 1) FROM agg_dyn_mixed;
 ----
@@ -423,10 +435,13 @@ Plan with Metrics
 01)AggregateExec: mode=Final, gby=[], aggr=[min(agg_dyn_mixed.a), max(agg_dyn_mixed.a), max(agg_dyn_mixed.b), min(agg_dyn_mixed.c + Int64(1))], metrics=[]
 02)--CoalescePartitionsExec, metrics=[]
 03)----AggregateExec: mode=Partial, gby=[], aggr=[min(agg_dyn_mixed.a), max(agg_dyn_mixed.a), max(agg_dyn_mixed.b), min(agg_dyn_mixed.c + Int64(1))], metrics=[]
-04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn_mixed/file_0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn_mixed/file_1.parquet]]}, projection=[a, b, c], file_type=parquet, predicate=DynamicFilter [ a@0 < 1 OR a@0 > 8 OR b@1 > 12 ], dynamic_rg_pruning=eligible, pruning_predicate=a_null_count@1 != row_count@2 AND a_min@0 < 1 OR a_null_count@1 != row_count@2 AND a_max@3 > 8 OR b_null_count@5 != row_count@2 AND b_max@4 > 12, required_guarantees=[], metrics=[]
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn_mixed/file_0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn_mixed/file_1.parquet]]}, projection=[a, b, c], file_type=parquet, metrics=[]
 
 statement ok
 drop table agg_dyn_mixed;
+
+statement ok
+reset datafusion.execution.batch_size;
 
 # --- all-NULLs input: filter should stay `true` (no meaningful bound) ---
 

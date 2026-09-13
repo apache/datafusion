@@ -1,8 +1,8 @@
--- Sixteen independent integer columns, each uniform on [0,100). The predicate
--- `cN < k` therefore has selectivity ~k%. All columns are equally cheap to
--- evaluate, so only selectivity (not cost) distinguishes orderings here. The
--- multipliers are all coprime to 100, which keeps the residues uniform and the
--- columns mutually decorrelated. PRED_ROWS sizes the table.
+-- Seventeen integer columns: c0..c15 uniform on [0,100), so `cN < k` has
+-- selectivity ~k%, all equally cheap and mutually decorrelated (the multipliers
+-- are coprime to 100); plus `c_sel`, NULL on 10% of rows and uniform on [0,100)
+-- elsewhere, so `c_sel < 5` is true on 4% of rows and NULL on 10% -- a selective
+-- conjunct that is not NULL-free. PRED_ROWS sizes the table.
 CREATE TABLE t AS
 SELECT
   (value * 1)  % 100 AS c0,
@@ -20,5 +20,6 @@ SELECT
   (value * 31) % 100 AS c12,
   (value * 33) % 100 AS c13,
   (value * 37) % 100 AS c14,
-  (value * 39) % 100 AS c15
+  (value * 39) % 100 AS c15,
+  CASE WHEN value % 10 = 0 THEN NULL ELSE (value * 11) % 100 END AS c_sel
 FROM generate_series(1, ${PRED_ROWS:-1000000});

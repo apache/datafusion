@@ -767,3 +767,63 @@ nulls NULL NULL
 # Cleanup
 statement ok
 DROP TABLE in_list_fsb
+
+####
+## Generic ArrayStaticFilter
+####
+
+statement ok
+CREATE TABLE in_list_lists(label VARCHAR, value BIGINT[]) AS VALUES
+  ('match', [1, 2]),
+  ('no_match', [7, 8]),
+  ('nulls', NULL);
+
+# Five element IN lists bypass the short-list rewrite and use ArrayStaticFilter.
+query TBB
+SELECT
+  label,
+  value IN ([1, 2], [3, 4], [5, 6], [9, 10], [11, 12]),
+  value IN (NULL, [1, 2], [3, 4], [5, 6], [9, 10])
+FROM in_list_lists
+ORDER BY label
+----
+match true true
+no_match false NULL
+nulls NULL NULL
+
+statement ok
+DROP TABLE in_list_lists
+
+####
+## Dictionary Flattening
+####
+
+# Five dictionary literals exercise evaluate_list's dictionary flattening path.
+query TBB
+SELECT
+  label,
+  value IN (
+    arrow_cast('a', 'Dictionary(Int8, Utf8)'),
+    arrow_cast('b', 'Dictionary(Int8, Utf8)'),
+    arrow_cast('c', 'Dictionary(Int8, Utf8)'),
+    arrow_cast('d', 'Dictionary(Int8, Utf8)'),
+    arrow_cast('match', 'Dictionary(Int8, Utf8)')
+  ),
+  value NOT IN (
+    arrow_cast('a', 'Dictionary(Int8, Utf8)'),
+    arrow_cast('b', 'Dictionary(Int8, Utf8)'),
+    arrow_cast('c', 'Dictionary(Int8, Utf8)'),
+    arrow_cast('d', 'Dictionary(Int8, Utf8)'),
+    arrow_cast('match', 'Dictionary(Int8, Utf8)')
+  )
+FROM (
+  VALUES
+    ('match', arrow_cast('match', 'Dictionary(Int8, Utf8)')),
+    ('no_match', arrow_cast('no_match', 'Dictionary(Int8, Utf8)')),
+    ('nulls', arrow_cast(NULL, 'Dictionary(Int8, Utf8)'))
+) AS t(label, value)
+ORDER BY label
+----
+match true false
+no_match false true
+nulls NULL NULL
