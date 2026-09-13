@@ -5123,6 +5123,35 @@ ORDER BY tag
 33 11 NULL 33 11 NULL 33 11 NULL B
 
 
+# bit_xor(DISTINCT) with GROUP BY must not use the non-distinct groups
+# accumulator: for tag A, 5 ^ 5 ^ 9 = 9 but 5 ^ 9 = 12. AND and OR are
+# idempotent, so they keep the groups accumulator.
+statement ok
+create table bit_distinct (c SMALLINT, tag varchar) as values
+  (5, 'A'), (5, 'A'), (9, 'A'), (33, 'B'), (33, 'B');
+
+query IIT
+SELECT bit_xor(DISTINCT c), count(c), tag FROM bit_distinct GROUP BY tag ORDER BY tag;
+----
+12 3 A
+33 2 B
+
+query IT
+SELECT bit_xor(DISTINCT c) FILTER (WHERE c > 4), tag FROM bit_distinct GROUP BY tag ORDER BY tag;
+----
+12 A
+33 B
+
+query IIIT
+SELECT bit_and(DISTINCT c), bit_or(DISTINCT c), count(c), tag FROM bit_distinct GROUP BY tag ORDER BY tag;
+----
+1 13 3 A
+33 33 2 B
+
+statement ok
+drop table bit_distinct;
+
+
 # bit_and_i32
 statement ok
 create table t (c int) as values (4), (7), (15);

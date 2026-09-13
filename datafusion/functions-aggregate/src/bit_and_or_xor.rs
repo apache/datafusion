@@ -290,8 +290,9 @@ impl AggregateUDFImpl for BitwiseOperation {
         }
     }
 
-    fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
-        true
+    fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
+        // DISTINCT only changes the result of XOR; AND and OR are idempotent
+        !(args.is_distinct && self.operation == BitwiseOperationType::Xor)
     }
 
     fn create_groups_accumulator(
