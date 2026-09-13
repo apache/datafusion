@@ -862,12 +862,7 @@ impl MaterializingSortMergeJoinStream {
     /// memory they reserve is back in the pool before the final output batches are emitted
     /// rather than when the stream is dropped.
     fn release_inputs(&mut self) {
-        while let Some(buffered_batch) = self.buffered_data.batches.pop_front() {
-            self.free_reservation(&buffered_batch);
-            if matches!(buffered_batch.batch, BufferedBatchState::Spilled(_)) {
-                self.spilled_batch_count -= 1;
-            }
-        }
+        while self.pop_front_buffered_batch().is_some() {}
         self.streamed_buffered_cmp = None;
         self.buffered_equality_cmp = None;
         self.streamed = Box::pin(EmptyRecordBatchStream::new(self.streamed.schema()));
@@ -1107,6 +1102,17 @@ impl MaterializingSortMergeJoinStream {
         }
     }
 
+    /// Dequeue the head buffered batch, releasing its reservation and its share of the
+    /// spilled-batch count. The only way to drop a buffered batch without leaking either.
+    fn pop_front_buffered_batch(&mut self) -> Option<BufferedBatch> {
+        let buffered_batch = self.buffered_data.batches.pop_front()?;
+        self.free_reservation(&buffered_batch);
+        if matches!(buffered_batch.batch, BufferedBatchState::Spilled(_)) {
+            self.spilled_batch_count -= 1;
+        }
+        Some(buffered_batch)
+    }
+
     fn allocate_reservation(&mut self, mut buffered_batch: BufferedBatch) -> Result<()> {
         match self.reservation.try_grow(buffered_batch.size_estimation) {
             Ok(_) => {
@@ -1240,12 +1246,8 @@ impl MaterializingSortMergeJoinStream {
             self.restore_spilled_batches(&needed).await?;
 
             self.freeze_dequeuing_buffered()?;
-            if let Some(mut buffered_batch) = self.buffered_data.batches.pop_front() {
+            if let Some(mut buffered_batch) = self.pop_front_buffered_batch() {
                 self.produce_buffered_not_matched(&mut buffered_batch)?;
-                self.free_reservation(&buffered_batch);
-                if matches!(buffered_batch.batch, BufferedBatchState::Spilled(_)) {
-                    self.spilled_batch_count -= 1;
-                }
                 head_changed = true;
             }
         }
