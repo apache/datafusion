@@ -396,8 +396,6 @@ fn expr_contains_subquery(expr: &Expr) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::ops::Add;
-
     use super::*;
     use crate::OptimizerContext;
     use crate::assert_optimized_plan_eq_snapshot;
@@ -538,14 +536,14 @@ mod tests {
     fn rewrite_union_distinct_matching_computed_projection_below_filter() -> Result<()> {
         let scan = test_table_scan_with_name("prices").unwrap();
         let left_source = LogicalPlanBuilder::from(scan.clone())
-            .project(vec![col("a").add(lit(100)).alias("amount")])
+            .project(vec![(col("a") + lit(100)).alias("amount")])
             .unwrap()
             .alias("prices")
             .unwrap()
             .build()
             .unwrap();
         let right_source = LogicalPlanBuilder::from(scan)
-            .project(vec![col("a").add(lit(100)).alias("amount")])
+            .project(vec![(col("a") + lit(100)).alias("amount")])
             .unwrap()
             .alias("prices")
             .unwrap()
@@ -589,7 +587,7 @@ mod tests {
         for nested in [false, true] {
             let mut source =
                 LogicalPlanBuilder::from(test_table_scan_with_name("t").unwrap())
-                    .project(vec![volatile_expr().add(lit(1.0_f64)).alias("v"), col("a")])
+                    .project(vec![(volatile_expr() + lit(1.0_f64)).alias("v"), col("a")])
                     .unwrap()
                     .alias("x")
                     .unwrap();
@@ -858,13 +856,13 @@ mod tests {
     fn keep_union_distinct_with_computed_projection_below_filter() -> Result<()> {
         let scan = test_table_scan_with_name("prices")?;
         let left = LogicalPlanBuilder::from(scan.clone())
-            .project(vec![col("a").add(lit(100)).alias("amount")])?
+            .project(vec![(col("a") + lit(100)).alias("amount")])?
             .alias("prices")?
             .filter(col("amount").gt(lit(0)))?
             .project(vec![col("amount")])?
             .build()?;
         let right = LogicalPlanBuilder::from(scan)
-            .project(vec![col("a").add(lit(200)).alias("amount")])?
+            .project(vec![(col("a") + lit(200)).alias("amount")])?
             .alias("prices")?
             .filter(col("amount").gt(lit(1)))?
             .project(vec![col("amount")])?
