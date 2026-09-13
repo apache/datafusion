@@ -287,7 +287,6 @@ impl VectorizedOperationBuffers {
         drop(self.equal_to_results.finish());
         self.equal_to_results.append_n(num_rows, false);
         self.equal_to_results.truncate(0);
-        self.remaining_row_indices.clear();
         self.remaining_row_indices.shrink_to(num_rows);
     }
 
