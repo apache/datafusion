@@ -66,7 +66,9 @@ use datafusion_execution::config::SessionConfig;
 use datafusion_execution::disk_manager::{
     DiskManager, DiskManagerBuilder, DiskManagerMode,
 };
-use datafusion_execution::memory_pool::MemoryConsumer;
+use datafusion_execution::memory_pool::{
+    MemoryConsumer, MemoryPool, MemoryReservation, UnboundedMemoryPool,
+};
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_execution::spill_file::{SpillFile, SpillWriter, TempFileFactory};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
@@ -2465,6 +2467,87 @@ async fn overallocation_multi_batch_no_spill() -> Result<()> {
     Ok(())
 }
 
+/// The stream spills its buffered side when it cannot grow, so it has to be
+/// registered as a consumer that can spill. A `FairSpillPool` otherwise treats
+/// it as unspillable: it is left out of the fair share the spillable consumers
+/// split, and may take everything they have not yet claimed, starving the
+/// sorts the join usually runs on top of.
+#[tokio::test]
+async fn stream_registers_as_a_spillable_consumer() -> Result<()> {
+    /// Records how each consumer registered, and otherwise never limits anything.
+    #[derive(Debug, Default)]
+    struct RecordingPool {
+        inner: UnboundedMemoryPool,
+        registered: std::sync::Mutex<Vec<(String, bool)>>,
+    }
+    impl std::fmt::Display for RecordingPool {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "RecordingPool")
+        }
+    }
+    impl MemoryPool for RecordingPool {
+        fn name(&self) -> &str {
+            "RecordingPool"
+        }
+        fn register(&self, consumer: &MemoryConsumer) {
+            self.registered
+                .lock()
+                .unwrap()
+                .push((consumer.name().to_string(), consumer.can_spill()));
+        }
+        fn grow(&self, reservation: &MemoryReservation, additional: usize) {
+            self.inner.grow(reservation, additional)
+        }
+        fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
+            self.inner.shrink(reservation, shrink)
+        }
+        fn try_grow(
+            &self,
+            reservation: &MemoryReservation,
+            additional: usize,
+        ) -> Result<()> {
+            self.inner.try_grow(reservation, additional)
+        }
+        fn reserved(&self) -> usize {
+            self.inner.reserved()
+        }
+    }
+
+    let pool = Arc::new(RecordingPool::default());
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::clone(&pool) as Arc<dyn MemoryPool>)
+        .build_arc()?;
+    let task_ctx = Arc::new(TaskContext::default().with_runtime(runtime));
+
+    let left = build_table(
+        ("a1", &vec![1, 2]),
+        ("b1", &vec![1, 2]),
+        ("c1", &vec![7, 8]),
+    );
+    let right = build_table(
+        ("a2", &vec![1, 2]),
+        ("b2", &vec![1, 2]),
+        ("c2", &vec![9, 10]),
+    );
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+    )];
+    let join = join(left, right, on, Inner)?;
+    common::collect(join.execute(0, task_ctx)?).await?;
+
+    let registered = pool.registered.lock().unwrap();
+    let (_, can_spill) = registered
+        .iter()
+        .find(|(name, _)| name == "SMJStream[0]")
+        .expect("the stream registers a reservation under its own name");
+    assert!(
+        can_spill,
+        "the sort-merge join stream must register as able to spill"
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn overallocation_single_batch_spill() -> Result<()> {
     let left = build_table(
@@ -4477,7 +4560,7 @@ fn test_stream_resources(
     inner_schema: SchemaRef,
     metrics: &ExecutionPlanMetricsSet,
 ) -> (
-    datafusion_execution::memory_pool::MemoryReservation,
+    MemoryReservation,
     SpillManager,
     Arc<datafusion_execution::runtime_env::RuntimeEnv>,
 ) {
