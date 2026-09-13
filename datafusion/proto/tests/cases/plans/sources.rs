@@ -1075,3 +1075,84 @@ fn roundtrip_parquet_exec_range_output_partitioning() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn roundtrip_parquet_exec_range_output_partitioning_dict_split_points() -> Result<()> {
+    let file_schema = Arc::new(Schema::new(vec![Field::new(
+        "col",
+        wrap_partition_type_in_dict(DataType::Utf8),
+        false,
+    )]));
+    let file_source = Arc::new(ParquetSource::new(Arc::clone(&file_schema)));
+    let output_partitioning = Partitioning::Range(RangePartitioning::new(
+        LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::new(Column::new(
+            "col", 0,
+        )))])
+        .unwrap(),
+        vec![SplitPoint::new(vec![wrap_partition_value_in_dict(
+            ScalarValue::from("B"),
+        )])],
+    ));
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![
+                FileGroup::new(vec![PartitionedFile::new(
+                    "/path/to/file-1.parquet".to_string(),
+                    1024,
+                )]),
+                FileGroup::new(vec![PartitionedFile::new(
+                    "/path/to/file-2.parquet".to_string(),
+                    1024,
+                )]),
+            ])
+            .with_output_partitioning(Some(output_partitioning.clone()))
+            .build();
+
+    assert_eq!(
+        roundtrip_file_scan_config(scan_config)?.output_partitioning,
+        Some(output_partitioning)
+    );
+
+    Ok(())
+}
+
+#[test]
+fn roundtrip_parquet_exec_range_output_partitioning_utf8view_split_points() -> Result<()>
+{
+    let file_schema = Arc::new(Schema::new(vec![Field::new(
+        "col",
+        DataType::Utf8View,
+        false,
+    )]));
+    let file_source = Arc::new(ParquetSource::new(Arc::clone(&file_schema)));
+    let output_partitioning = Partitioning::Range(RangePartitioning::new(
+        LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::new(Column::new(
+            "col", 0,
+        )))])
+        .unwrap(),
+        vec![SplitPoint::new(vec![ScalarValue::Utf8View(Some(
+            "B".to_string(),
+        ))])],
+    ));
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![
+                FileGroup::new(vec![PartitionedFile::new(
+                    "/path/to/file-1.parquet".to_string(),
+                    1024,
+                )]),
+                FileGroup::new(vec![PartitionedFile::new(
+                    "/path/to/file-2.parquet".to_string(),
+                    1024,
+                )]),
+            ])
+            .with_output_partitioning(Some(output_partitioning.clone()))
+            .build();
+
+    assert_eq!(
+        roundtrip_file_scan_config(scan_config)?.output_partitioning,
+        Some(output_partitioning)
+    );
+
+    Ok(())
+}

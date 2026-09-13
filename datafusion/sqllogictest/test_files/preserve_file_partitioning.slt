@@ -125,7 +125,7 @@ STORED AS PARQUET;
 1
 
 # Create high-cardinality fact table (5 partitions > 3 target_partitions)
-# For testing partition merging with consistent hashing
+# For testing partition merging into contiguous value ranges
 query I
 COPY (SELECT column1 as timestamp, column2 as value FROM (VALUES
     (TIMESTAMP '2023-01-01T09:00:00', 100.0)
@@ -258,7 +258,7 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[f_dkey@0 as f_dkey, count(Int64(1))@1 as count(*), sum(fact_table.value)@2 as sum(fact_table.value)]
 02)--AggregateExec: mode=SinglePartitioned, gby=[f_dkey@1 as f_dkey], aggr=[count(Int64(1)), sum(fact_table.value)]
-03)----DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=C/data.parquet]]}, projection=[value, f_dkey], output_partitioning=Hash([f_dkey@1], 3), file_type=parquet
+03)----DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=C/data.parquet]]}, projection=[value, f_dkey], output_partitioning=Range([f_dkey@1 ASC], [(B), (C)], 3), file_type=parquet
 
 # Verify results with optimization match results without optimization
 query TIR rowsort
@@ -320,7 +320,7 @@ physical_plan
 01)SortPreservingMergeExec: [f_dkey@0 ASC NULLS LAST]
 02)--ProjectionExec: expr=[f_dkey@0 as f_dkey, count(Int64(1))@1 as count(*), avg(fact_table_ordered.value)@2 as avg(fact_table_ordered.value)]
 03)----AggregateExec: mode=SinglePartitioned, gby=[f_dkey@1 as f_dkey], aggr=[count(Int64(1)), avg(fact_table_ordered.value)], ordering_mode=Sorted
-04)------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=C/data.parquet]]}, projection=[value, f_dkey], output_ordering=[f_dkey@1 ASC NULLS LAST], output_partitioning=Hash([f_dkey@1], 3), file_type=parquet
+04)------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=C/data.parquet]]}, projection=[value, f_dkey], output_ordering=[f_dkey@1 ASC NULLS LAST], output_partitioning=Range([f_dkey@1 ASC], [(B), (C)], 3), file_type=parquet
 
 query TIR
 SELECT f_dkey, count(*), avg(value) FROM fact_table_ordered GROUP BY f_dkey ORDER BY f_dkey;
@@ -418,7 +418,7 @@ physical_plan
 06)----------FilterExec: service@2 = log
 07)------------RepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1
 08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/dimension/data.parquet]]}, projection=[d_dkey, env, service], file_type=parquet, predicate=service@2 = log, pruning_predicate=service_null_count@2 != row_count@3 AND service_min@0 <= log AND log <= service_max@1, required_guarantees=[service in (log)]
-09)--------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=C/data.parquet]]}, projection=[value, f_dkey], output_ordering=[f_dkey@1 ASC NULLS LAST], output_partitioning=Hash([f_dkey@1], 3), file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+09)--------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=C/data.parquet]]}, projection=[value, f_dkey], output_ordering=[f_dkey@1 ASC NULLS LAST], output_partitioning=Range([f_dkey@1 ASC], [(B), (C)], 3), file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 
 query TTTIR rowsort
 SELECT f.f_dkey, MAX(d.env), MAX(d.service), count(*), sum(f.value)
@@ -493,7 +493,7 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[f_dkey@2 as f_dkey, timestamp@0 as timestamp, value@1 as value, row_number() PARTITION BY [fact_table_ordered.f_dkey] ORDER BY [fact_table_ordered.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
 02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [fact_table_ordered.f_dkey] ORDER BY [fact_table_ordered.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [fact_table_ordered.f_dkey] ORDER BY [fact_table_ordered.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=C/data.parquet]]}, projection=[timestamp, value, f_dkey], output_ordering=[f_dkey@2 ASC NULLS LAST, timestamp@0 ASC NULLS LAST], output_partitioning=Hash([f_dkey@2], 3), file_type=parquet
+03)----DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=C/data.parquet]]}, projection=[timestamp, value, f_dkey], output_ordering=[f_dkey@2 ASC NULLS LAST, timestamp@0 ASC NULLS LAST], output_partitioning=Range([f_dkey@2 ASC], [(B), (C)], 3), file_type=parquet
 
 query TPRI rowsort
 SELECT f_dkey, timestamp, value,
@@ -513,8 +513,7 @@ C 2023-01-01T09:00:20 310.2 3
 
 ##########
 # TEST 9: High-Cardinality Partitions (more partitions than target_partitions)
-# Since num_partitions > target_partitions (5 > 3), files are merged using
-# round-robin assignment to ensure exactly target_partitions groups are created.
+# Sorted partition values are cut into contiguous chunks.
 ##########
 
 # First verify results without optimization
@@ -537,7 +536,7 @@ statement ok
 set datafusion.optimizer.preserve_file_partitions = 1;
 
 # Verify the plan uses SinglePartitioned mode with no RepartitionExec
-# The 5 partitions are merged into 3 file groups using round-robin assignment
+# 5 values merge into 3 contiguous groups: [A], [B, C], [D, E]
 query TT
 EXPLAIN SELECT f_dkey, count(*), sum(value) FROM high_cardinality_table GROUP BY f_dkey;
 ----
@@ -548,7 +547,7 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[f_dkey@0 as f_dkey, count(Int64(1))@1 as count(*), sum(high_cardinality_table.value)@2 as sum(high_cardinality_table.value)]
 02)--AggregateExec: mode=SinglePartitioned, gby=[f_dkey@1 as f_dkey], aggr=[count(Int64(1)), sum(high_cardinality_table.value)]
-03)----DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/high_cardinality/f_dkey=A/data.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/high_cardinality/f_dkey=D/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/high_cardinality/f_dkey=B/data.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/high_cardinality/f_dkey=E/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/high_cardinality/f_dkey=C/data.parquet]]}, projection=[value, f_dkey], output_partitioning=Hash([f_dkey@1], 3), file_type=parquet
+03)----DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/high_cardinality/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/high_cardinality/f_dkey=B/data.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/high_cardinality/f_dkey=C/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/high_cardinality/f_dkey=D/data.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/high_cardinality/f_dkey=E/data.parquet]]}, projection=[value, f_dkey], output_partitioning=Range([f_dkey@1 ASC], [(B), (D)], 3), file_type=parquet
 
 # Verify results with optimization match results without optimization
 query TIR rowsort
@@ -658,9 +657,7 @@ C prod 2017.6
 ##########
 # TEST 12: Partitioned Join with Matching Partition Counts - With Optimization
 # Both tables have 3 partitions matching target_partitions=3
-# No RepartitionExec needed for join - partitions already satisfy the requirement
-# Dynamic filter pushdown is disabled in this mode because preserve_file_partitions
-# reports Hash partitioning for Hive-style file groups, which are not hash-routed.
+# Identical split points prove co-partitioning, so no RepartitionExec is needed.
 ##########
 
 statement ok
@@ -685,8 +682,8 @@ physical_plan
 02)--RepartitionExec: partitioning=Hash([f_dkey@0, env@1], 3), input_partitions=3
 03)----AggregateExec: mode=Partial, gby=[f_dkey@1 as f_dkey, env@2 as env], aggr=[sum(f.value)]
 04)------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(d_dkey@1, f_dkey@1)], projection=[value@2, f_dkey@3, env@0]
-05)--------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/dimension_partitioned/d_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/dimension_partitioned/d_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/dimension_partitioned/d_dkey=C/data.parquet]]}, projection=[env, d_dkey], output_partitioning=Hash([d_dkey@1], 3), file_type=parquet
-06)--------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=C/data.parquet]]}, projection=[value, f_dkey], output_partitioning=Hash([f_dkey@1], 3), file_type=parquet
+05)--------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/dimension_partitioned/d_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/dimension_partitioned/d_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/dimension_partitioned/d_dkey=C/data.parquet]]}, projection=[env, d_dkey], output_partitioning=Range([d_dkey@1 ASC], [(B), (C)], 3), file_type=parquet
+06)--------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=C/data.parquet]]}, projection=[value, f_dkey], output_partitioning=Range([f_dkey@1 ASC], [(B), (C)], 3), file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 
 query TTR rowsort
 SELECT f.f_dkey, d.env, sum(f.value)
@@ -722,7 +719,7 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[f_dkey@0 as f_dkey, timestamp@1 as timestamp, count(Int64(1))@2 as count(*), avg(fact_table.value)@3 as avg(fact_table.value)]
 02)--AggregateExec: mode=SinglePartitioned, gby=[f_dkey@2 as f_dkey, timestamp@0 as timestamp], aggr=[count(Int64(1)), avg(fact_table.value)]
-03)----DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=C/data.parquet]]}, projection=[timestamp, value, f_dkey], output_partitioning=Hash([f_dkey@2], 3), file_type=parquet
+03)----DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=C/data.parquet]]}, projection=[timestamp, value, f_dkey], output_partitioning=Range([f_dkey@2 ASC], [(B), (C)], 3), file_type=parquet
 
 query TPIR rowsort
 SELECT f_dkey, timestamp,
@@ -753,6 +750,196 @@ C 2023-01-01T09:12:40 1 250
 C 2023-01-01T09:12:50 1 275.4
 
 ##########
+# TEST 14: Partitioned join, same group count, different partition values
+# fact has {A, B, C}, dimension has {A, C, D}. Split points differ, so the scans are not
+# co-partitioned and one side must be range repartitioned.
+##########
+
+query I
+COPY (SELECT 'dev' as env, 'log' as service)
+TO 'test_files/scratch/preserve_file_partitioning/dimension_skewed/d_dkey=A/data.parquet'
+STORED AS PARQUET;
+----
+1
+
+query I
+COPY (SELECT 'prod' as env, 'log' as service)
+TO 'test_files/scratch/preserve_file_partitioning/dimension_skewed/d_dkey=C/data.parquet'
+STORED AS PARQUET;
+----
+1
+
+query I
+COPY (SELECT 'prod' as env, 'trace' as service)
+TO 'test_files/scratch/preserve_file_partitioning/dimension_skewed/d_dkey=D/data.parquet'
+STORED AS PARQUET;
+----
+1
+
+statement ok
+CREATE EXTERNAL TABLE dimension_table_skewed (env STRING, service STRING)
+STORED AS PARQUET
+PARTITIONED BY (d_dkey STRING)
+LOCATION 'test_files/scratch/preserve_file_partitioning/dimension_skewed/';
+
+statement ok
+set datafusion.execution.target_partitions = 3;
+
+statement ok
+set datafusion.optimizer.preserve_file_partitions = 1;
+
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold = 0;
+
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold_rows = 0;
+
+# Exactly one join input gets a RepartitionExec(Range).
+query TT
+EXPLAIN SELECT f.f_dkey, d.env, sum(f.value)
+FROM fact_table f
+INNER JOIN dimension_table_skewed d ON f.f_dkey = d.d_dkey
+GROUP BY f.f_dkey, d.env;
+----
+logical_plan
+01)Aggregate: groupBy=[[f.f_dkey, d.env]], aggr=[[sum(f.value)]]
+02)--Projection: f.value, f.f_dkey, d.env
+03)----Inner Join: f.f_dkey = d.d_dkey
+04)------SubqueryAlias: f
+05)--------TableScan: fact_table projection=[value, f_dkey]
+06)------SubqueryAlias: d
+07)--------TableScan: dimension_table_skewed projection=[env, d_dkey]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[f_dkey@0 as f_dkey, env@1 as env], aggr=[sum(f.value)]
+02)--RepartitionExec: partitioning=Hash([f_dkey@0, env@1], 3), input_partitions=3
+03)----AggregateExec: mode=Partial, gby=[f_dkey@1 as f_dkey, env@2 as env], aggr=[sum(f.value)]
+04)------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(d_dkey@1, f_dkey@1)], projection=[value@2, f_dkey@3, env@0]
+05)--------RepartitionExec: partitioning=Range([d_dkey@1 ASC], [(B), (C)], 3), input_partitions=3
+06)----------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/dimension_skewed/d_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/dimension_skewed/d_dkey=C/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/dimension_skewed/d_dkey=D/data.parquet]]}, projection=[env, d_dkey], output_partitioning=Range([d_dkey@1 ASC], [(C), (D)], 3), file_type=parquet
+07)--------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=C/data.parquet]]}, projection=[value, f_dkey], output_partitioning=Range([f_dkey@1 ASC], [(B), (C)], 3), file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+
+# Only A and C match.
+query TTR rowsort
+SELECT f.f_dkey, d.env, sum(f.value)
+FROM fact_table f
+INNER JOIN dimension_table_skewed d ON f.f_dkey = d.d_dkey
+GROUP BY f.f_dkey, d.env;
+----
+A dev 772.4
+C prod 2017.6
+
+# Same result with the optimization disabled.
+statement ok
+set datafusion.optimizer.preserve_file_partitions = 0;
+
+query TTR rowsort
+SELECT f.f_dkey, d.env, sum(f.value)
+FROM fact_table f
+INNER JOIN dimension_table_skewed d ON f.f_dkey = d.d_dkey
+GROUP BY f.f_dkey, d.env;
+----
+A dev 772.4
+C prod 2017.6
+
+##########
+# TEST 15: Partitioned join against a non partitioned VALUES input
+# The inserted RepartitionExec reuses the scan's split points, so partition i on both
+# sides covers the same key interval.
+##########
+
+statement ok
+set datafusion.optimizer.preserve_file_partitions = 1;
+
+query TT
+EXPLAIN SELECT f.f_dkey, d.env, sum(f.value)
+FROM fact_table f
+INNER JOIN (VALUES ('A', 'dev'), ('B', 'prod'), ('C', 'prod'), ('Z', 'none')) AS d(d_dkey, env)
+  ON f.f_dkey = d.d_dkey
+GROUP BY f.f_dkey, d.env;
+----
+logical_plan
+01)Aggregate: groupBy=[[f.f_dkey, d.env]], aggr=[[sum(f.value)]]
+02)--Projection: f.value, f.f_dkey, d.env
+03)----Inner Join: f.f_dkey = CAST(d.d_dkey AS Utf8View)
+04)------SubqueryAlias: f
+05)--------TableScan: fact_table projection=[value, f_dkey]
+06)------SubqueryAlias: d
+07)--------Projection: column1 AS d_dkey, column2 AS env
+08)----------Values: (Utf8("A"), Utf8("dev")), (Utf8("B"), Utf8("prod")), (Utf8("C"), Utf8("prod")), (Utf8("Z"), Utf8("none"))
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[f_dkey@0 as f_dkey, env@1 as env], aggr=[sum(f.value)]
+02)--RepartitionExec: partitioning=Hash([f_dkey@0, env@1], 3), input_partitions=3
+03)----AggregateExec: mode=Partial, gby=[f_dkey@1 as f_dkey, env@2 as env], aggr=[sum(f.value)]
+04)------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(CAST(d.d_dkey AS Utf8View)@2, f_dkey@1)], projection=[value@3, f_dkey@4, env@1]
+05)--------RepartitionExec: partitioning=Range([CAST(d.d_dkey AS Utf8View)@2 ASC], [(B), (C)], 3), input_partitions=1
+06)----------ProjectionExec: expr=[column1@0 as d_dkey, column2@1 as env, CAST(column1@0 AS Utf8View) as CAST(d.d_dkey AS Utf8View)]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+08)--------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=C/data.parquet]]}, projection=[value, f_dkey], output_partitioning=Range([f_dkey@1 ASC], [(B), (C)], 3), file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+
+query TTR rowsort
+SELECT f.f_dkey, d.env, sum(f.value)
+FROM fact_table f
+INNER JOIN (VALUES ('A', 'dev'), ('B', 'prod'), ('C', 'prod'), ('Z', 'none')) AS d(d_dkey, env)
+  ON f.f_dkey = d.d_dkey
+GROUP BY f.f_dkey, d.env;
+----
+A dev 772.4
+B prod 614.4
+C prod 2017.6
+
+##########
+# TEST 16: Self join on merged groups keeps every row
+# 5 values merge into [A], [B, C], [D, E], and all must stay routable.
+##########
+
+query TII rowsort
+SELECT a.f_dkey, count(*), count(b.value)
+FROM high_cardinality_table a
+INNER JOIN high_cardinality_table b ON a.f_dkey = b.f_dkey
+GROUP BY a.f_dkey;
+----
+A 1 1
+B 1 1
+C 1 1
+D 1 1
+E 1 1
+
+##########
+# TEST 17: Statistics regrouping drops the Range claim
+# The re-cut groups no longer follow partition values, so no output partitioning is
+# declared, even when the group count is unchanged.
+##########
+
+statement ok
+set datafusion.optimizer.preserve_file_partitions = 1;
+
+statement ok
+set datafusion.execution.split_file_groups_by_statistics = true;
+
+query TT
+EXPLAIN SELECT f_dkey, count(*), avg(value) FROM fact_table_ordered GROUP BY f_dkey ORDER BY f_dkey;
+----
+logical_plan
+01)Sort: fact_table_ordered.f_dkey ASC NULLS LAST
+02)--Projection: fact_table_ordered.f_dkey, count(Int64(1)) AS count(*), avg(fact_table_ordered.value)
+03)----Aggregate: groupBy=[[fact_table_ordered.f_dkey]], aggr=[[count(Int64(1)), avg(fact_table_ordered.value)]]
+04)------TableScan: fact_table_ordered projection=[value, f_dkey]
+physical_plan
+01)SortPreservingMergeExec: [f_dkey@0 ASC NULLS LAST]
+02)--ProjectionExec: expr=[f_dkey@0 as f_dkey, count(Int64(1))@1 as count(*), avg(fact_table_ordered.value)@2 as avg(fact_table_ordered.value)]
+03)----AggregateExec: mode=FinalPartitioned, gby=[f_dkey@0 as f_dkey], aggr=[count(Int64(1)), avg(fact_table_ordered.value)], ordering_mode=Sorted
+04)------RepartitionExec: partitioning=Hash([f_dkey@0], 3), input_partitions=3, preserve_order=true, sort_exprs=f_dkey@0 ASC NULLS LAST
+05)--------AggregateExec: mode=Partial, gby=[f_dkey@1 as f_dkey], aggr=[count(Int64(1)), avg(fact_table_ordered.value)], ordering_mode=Sorted
+06)----------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=C/data.parquet]]}, projection=[value, f_dkey], output_ordering=[f_dkey@1 ASC NULLS LAST], file_type=parquet
+
+query TIR
+SELECT f_dkey, count(*), avg(value) FROM fact_table_ordered GROUP BY f_dkey ORDER BY f_dkey;
+----
+A 7 110.342857142857
+B 7 87.771428571429
+C 7 288.228571428571
+
+##########
 # CLEANUP
 ##########
 
@@ -770,6 +957,9 @@ statement ok
 reset datafusion.optimizer.hash_join_single_partition_threshold_rows;
 
 statement ok
+reset datafusion.execution.split_file_groups_by_statistics;
+
+statement ok
 DROP TABLE fact_table;
 
 statement ok
@@ -780,6 +970,9 @@ DROP TABLE dimension_table;
 
 statement ok
 DROP TABLE dimension_table_partitioned;
+
+statement ok
+DROP TABLE dimension_table_skewed;
 
 statement ok
 DROP TABLE high_cardinality_table;
