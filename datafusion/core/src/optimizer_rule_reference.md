@@ -58,10 +58,11 @@ Rule order matters. The default pipeline may change between releases.
 | 19    | `push_down_filter`                        | Moves filters as early as possible through filter-commutative operators.                                                    |
 | 20    | `single_distinct_aggregation_to_group_by` | Rewrites single-column `DISTINCT` aggregations into two-stage `GROUP BY` plans.                                             |
 | 21    | `eliminate_group_by_constant`             | Removes constant or functionally redundant expressions from `GROUP BY`.                                                     |
-| 22    | `common_sub_expression_eliminate`         | Computes repeated subexpressions once and reuses the result.                                                                |
-| 23    | `extract_leaf_expressions`                | Pulls cheap leaf expressions closer to data sources so later pruning and filter rules can act earlier.                      |
-| 24    | `push_down_leaf_projections`              | Pushes the helper projections created by leaf extraction toward leaf inputs.                                                |
-| 25    | `optimize_projections`                    | Prunes unused columns and removes unnecessary logical projections.                                                          |
+| 22    | `coalesce_first_last`                     | Coalesces peer `first_value` / `last_value` aggregates that share an `ORDER BY` into a single struct aggregate.             |
+| 23    | `common_sub_expression_eliminate`         | Computes repeated subexpressions once and reuses the result.                                                                |
+| 24    | `extract_leaf_expressions`                | Pulls cheap leaf expressions closer to data sources so later pruning and filter rules can act earlier.                      |
+| 25    | `push_down_leaf_projections`              | Pushes the helper projections created by leaf extraction toward leaf inputs.                                                |
+| 26    | `optimize_projections`                    | Prunes unused columns and removes unnecessary logical projections.                                                          |
 
 ### Physical Optimizer Rules
 

@@ -1,0 +1,331 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Data with multiple groups, NULL value cells, and a unique ORDER BY key.
+statement ok
+CREATE TABLE t(p int, a int, b int, o int) AS VALUES
+(1, 10, 100, 1),
+(1, NULL, 200, 2),
+(1, 30, NULL, 3),
+(2, 40, 400, 4),
+(2, 50, 500, 5),
+(3, NULL, NULL, 1);
+
+# Baseline: rule disabled
+statement ok
+set datafusion.optimizer.enable_coalesce_first_last = false;
+
+query IIIII
+SELECT p,
+       first_value(a ORDER BY o ASC) AS fa,
+       first_value(b ORDER BY o ASC) AS fb,
+       last_value(a ORDER BY o ASC) AS la,
+       last_value(b ORDER BY o ASC) AS lb
+FROM t GROUP BY p ORDER BY p;
+----
+1 10 100 30 NULL
+2 40 400 50 500
+3 NULL NULL NULL NULL
+
+# Same query with the rule enabled: results must be identical to the baseline.
+statement ok
+set datafusion.optimizer.enable_coalesce_first_last = true;
+
+query IIIII
+SELECT p,
+       first_value(a ORDER BY o ASC) AS fa,
+       first_value(b ORDER BY o ASC) AS fb,
+       last_value(a ORDER BY o ASC) AS la,
+       last_value(b ORDER BY o ASC) AS lb
+FROM t GROUP BY p ORDER BY p;
+----
+1 10 100 30 NULL
+2 40 400 50 500
+3 NULL NULL NULL NULL
+
+# The coalesced plan scans once: a single struct-valued first_value feeds a
+# projection that unpacks the fields with get_field.
+query TT
+EXPLAIN SELECT p,
+       first_value(a ORDER BY o ASC) AS fa,
+       first_value(b ORDER BY o ASC) AS fb
+FROM t GROUP BY p;
+----
+logical_plan
+01)Projection: t.p, get_field(__coalesce_first_last_1, Utf8("c0")) AS fa, get_field(__coalesce_first_last_1, Utf8("c1")) AS fb
+02)--Aggregate: groupBy=[[t.p]], aggr=[[first_value(named_struct(Utf8("c0"), t.a, Utf8("c1"), t.b)) ORDER BY [t.o ASC NULLS LAST] AS __coalesce_first_last_1]]
+03)----TableScan: t projection=[p, a, b, o]
+physical_plan
+01)ProjectionExec: expr=[p@0 as p, get_field(__coalesce_first_last_1@1, c0) as fa, get_field(__coalesce_first_last_1@1, c1) as fb]
+02)--AggregateExec: mode=FinalPartitioned, gby=[p@0 as p], aggr=[first_value(named_struct(Utf8("c0"), t.a, Utf8("c1"), t.b)) ORDER BY [t.o ASC NULLS LAST] as __coalesce_first_last_1]
+03)----RepartitionExec: partitioning=Hash([p@0], 4), input_partitions=1
+04)------AggregateExec: mode=Partial, gby=[p@0 as p], aggr=[first_value(named_struct(Utf8("c0"), t.a, Utf8("c1"), t.b)) ORDER BY [t.o ASC NULLS LAST] as __coalesce_first_last_1]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Tied ORDER BY keys, with the rule still enabled from above. Each tied row is
+# duplicated whole, so the values hold whichever of the tied rows wins.
+statement ok
+CREATE TABLE ties(p int, a int, b int, o int) AS VALUES
+(1, 10, 100, 1),
+(1, 10, 100, 1),
+(1, 30, 300, 2),
+(1, 30, 300, 2);
+
+query IIIII
+SELECT p,
+       first_value(a ORDER BY o ASC) AS fa,
+       first_value(b ORDER BY o ASC) AS fb,
+       last_value(a ORDER BY o ASC) AS la,
+       last_value(b ORDER BY o ASC) AS lb
+FROM ties GROUP BY p ORDER BY p;
+----
+1 10 100 30 300
+
+# Same rows with the rule off, which also restores the default for the harness.
+statement ok
+set datafusion.optimizer.enable_coalesce_first_last = false;
+
+query IIIII
+SELECT p,
+       first_value(a ORDER BY o ASC) AS fa,
+       first_value(b ORDER BY o ASC) AS fb,
+       last_value(a ORDER BY o ASC) AS la,
+       last_value(b ORDER BY o ASC) AS lb
+FROM ties GROUP BY p ORDER BY p;
+----
+1 10 100 30 300
+
+statement ok
+DROP TABLE ties;
+
+# NULL ORDER BY keys, including a group whose keys are all NULL. Group 2 is
+# duplicated whole so its result does not depend on how the all-NULL tie resolves.
+statement ok
+CREATE TABLE t2(p int, a int, b int, o int) AS VALUES
+(1, 10, 100, NULL),
+(1, 20, 200, 1),
+(1, 30, 300, 2),
+(2, 40, 400, NULL),
+(2, 40, 400, NULL);
+
+query III
+SELECT p,
+       first_value(a ORDER BY o DESC NULLS LAST) AS fa,
+       first_value(b ORDER BY o DESC NULLS LAST) AS fb
+FROM t2 GROUP BY p ORDER BY p;
+----
+1 30 300
+2 40 400
+
+query III
+SELECT p,
+       first_value(a ORDER BY o ASC NULLS FIRST) AS fa,
+       first_value(b ORDER BY o ASC NULLS FIRST) AS fb
+FROM t2 GROUP BY p ORDER BY p;
+----
+1 10 100
+2 40 400
+
+query III
+SELECT p,
+       first_value(a ORDER BY o DESC NULLS FIRST) AS fa,
+       first_value(b ORDER BY o DESC NULLS FIRST) AS fb
+FROM t2 GROUP BY p ORDER BY p;
+----
+1 10 100
+2 40 400
+
+statement ok
+set datafusion.optimizer.enable_coalesce_first_last = true;
+
+query III
+SELECT p,
+       first_value(a ORDER BY o DESC NULLS LAST) AS fa,
+       first_value(b ORDER BY o DESC NULLS LAST) AS fb
+FROM t2 GROUP BY p ORDER BY p;
+----
+1 30 300
+2 40 400
+
+query III
+SELECT p,
+       first_value(a ORDER BY o ASC NULLS FIRST) AS fa,
+       first_value(b ORDER BY o ASC NULLS FIRST) AS fb
+FROM t2 GROUP BY p ORDER BY p;
+----
+1 10 100
+2 40 400
+
+query III
+SELECT p,
+       first_value(a ORDER BY o DESC NULLS FIRST) AS fa,
+       first_value(b ORDER BY o DESC NULLS FIRST) AS fb
+FROM t2 GROUP BY p ORDER BY p;
+----
+1 10 100
+2 40 400
+
+statement ok
+set datafusion.optimizer.enable_coalesce_first_last = false;
+
+statement ok
+DROP TABLE t2;
+
+# Multi-column ORDER BY, where the first key ties and the second key decides.
+statement ok
+CREATE TABLE t4(p int, a int, b int, o1 int, o2 int) AS VALUES
+(1, 10, 100, 1, 1),
+(1, 20, 200, 1, 2),
+(1, 30, 300, 2, 1),
+(2, 40, 400, 5, 1),
+(2, 50, 500, 5, 9);
+
+query III
+SELECT p,
+       first_value(a ORDER BY o1 ASC, o2 DESC) AS fa,
+       first_value(b ORDER BY o1 ASC, o2 DESC) AS fb
+FROM t4 GROUP BY p ORDER BY p;
+----
+1 20 200
+2 50 500
+
+statement ok
+set datafusion.optimizer.enable_coalesce_first_last = true;
+
+query III
+SELECT p,
+       first_value(a ORDER BY o1 ASC, o2 DESC) AS fa,
+       first_value(b ORDER BY o1 ASC, o2 DESC) AS fb
+FROM t4 GROUP BY p ORDER BY p;
+----
+1 20 200
+2 50 500
+
+statement ok
+set datafusion.optimizer.enable_coalesce_first_last = false;
+
+statement ok
+DROP TABLE t4;
+
+# String and struct payloads. Coalescing a struct-typed value nests it inside the
+# named_struct, so the projection unpacks it with get_field over a struct field.
+statement ok
+CREATE TABLE t3(p int, s varchar, st struct<x int, y varchar>, o int) AS VALUES
+(1, 'a', {x: 1, y: 'one'}, 1),
+(1, 'b', {x: 2, y: 'two'}, 2),
+(2, NULL, NULL, 1),
+(2, 'c', {x: 3, y: 'three'}, 2);
+
+query IT?
+SELECT p,
+       first_value(s ORDER BY o ASC) AS fs,
+       first_value(st ORDER BY o ASC) AS fst
+FROM t3 GROUP BY p ORDER BY p;
+----
+1 a {x: 1, y: one}
+2 NULL NULL
+
+statement ok
+set datafusion.optimizer.enable_coalesce_first_last = true;
+
+query IT?
+SELECT p,
+       first_value(s ORDER BY o ASC) AS fs,
+       first_value(st ORDER BY o ASC) AS fst
+FROM t3 GROUP BY p ORDER BY p;
+----
+1 a {x: 1, y: one}
+2 NULL NULL
+
+statement ok
+set datafusion.optimizer.enable_coalesce_first_last = false;
+
+statement ok
+DROP TABLE t3;
+
+# classify() gate: declined paths must stay declined even with the rule on.
+# Group p=1's a is NULL at o=2 and b is NULL at o=3, so DESC hits NULL b first.
+statement ok
+set datafusion.optimizer.enable_coalesce_first_last = true;
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+# IGNORE NULLS can't go through one struct (whole-row null != per-value null),
+# so this must stay two separate first_values, not one struct aggregate.
+query TT
+EXPLAIN SELECT first_value(a ORDER BY o DESC) IGNORE NULLS AS fa,
+               first_value(b ORDER BY o DESC) IGNORE NULLS AS fb
+FROM t WHERE p = 1 GROUP BY p;
+----
+logical_plan
+01)Projection: first_value(t.a) IGNORE NULLS ORDER BY [t.o DESC NULLS FIRST] AS fa, first_value(t.b) IGNORE NULLS ORDER BY [t.o DESC NULLS FIRST] AS fb
+02)--Aggregate: groupBy=[[t.p]], aggr=[[first_value(t.a) IGNORE NULLS ORDER BY [t.o DESC NULLS FIRST], first_value(t.b) IGNORE NULLS ORDER BY [t.o DESC NULLS FIRST]]]
+03)----Filter: t.p = Int32(1)
+04)------TableScan: t projection=[p, a, b, o]
+
+query II
+SELECT first_value(a ORDER BY o DESC) IGNORE NULLS AS fa,
+       first_value(b ORDER BY o DESC) IGNORE NULLS AS fb
+FROM t WHERE p = 1 GROUP BY p;
+----
+30 200
+
+# DISTINCT can't share the single struct scan.
+query TT
+EXPLAIN SELECT first_value(DISTINCT a ORDER BY o DESC) AS fa,
+               first_value(DISTINCT b ORDER BY o DESC) AS fb
+FROM t WHERE p = 1 GROUP BY p;
+----
+logical_plan
+01)Projection: first_value(DISTINCT t.a) ORDER BY [t.o DESC NULLS FIRST] AS fa, first_value(DISTINCT t.b) ORDER BY [t.o DESC NULLS FIRST] AS fb
+02)--Aggregate: groupBy=[[t.p]], aggr=[[first_value(DISTINCT t.a) ORDER BY [t.o DESC NULLS FIRST], first_value(DISTINCT t.b) ORDER BY [t.o DESC NULLS FIRST]]]
+03)----Filter: t.p = Int32(1)
+04)------TableScan: t projection=[p, a, b, o]
+
+# FILTER can't share the single struct scan.
+query TT
+EXPLAIN SELECT first_value(a ORDER BY o DESC) FILTER (WHERE a IS NOT NULL) AS fa,
+               first_value(b ORDER BY o DESC) AS fb
+FROM t WHERE p = 1 GROUP BY p;
+----
+logical_plan
+01)Projection: first_value(t.a) FILTER (WHERE t.a IS NOT NULL) ORDER BY [t.o DESC NULLS FIRST] AS fa, first_value(t.b) ORDER BY [t.o DESC NULLS FIRST] AS fb
+02)--Aggregate: groupBy=[[t.p]], aggr=[[first_value(t.a) FILTER (WHERE t.a IS NOT NULL) ORDER BY [t.o DESC NULLS FIRST], first_value(t.b) ORDER BY [t.o DESC NULLS FIRST]]]
+03)----Filter: t.p = Int32(1)
+04)------TableScan: t projection=[p, a, b, o]
+
+# GROUPING SETS adds a synthetic grouping-id column, so this rule leaves it alone.
+query TT
+EXPLAIN SELECT first_value(a ORDER BY o DESC) AS fa,
+               first_value(b ORDER BY o DESC) AS fb
+FROM t WHERE p = 1 GROUP BY CUBE(p);
+----
+logical_plan
+01)Projection: first_value(t.a) ORDER BY [t.o DESC NULLS FIRST] AS fa, first_value(t.b) ORDER BY [t.o DESC NULLS FIRST] AS fb
+02)--Aggregate: groupBy=[[CUBE (t.p)]], aggr=[[first_value(t.a) ORDER BY [t.o DESC NULLS FIRST], first_value(t.b) ORDER BY [t.o DESC NULLS FIRST]]]
+03)----Filter: t.p = Int32(1)
+04)------TableScan: t projection=[p, a, b, o]
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
+
+statement ok
+set datafusion.optimizer.enable_coalesce_first_last = false;
+
+statement ok
+DROP TABLE t;
