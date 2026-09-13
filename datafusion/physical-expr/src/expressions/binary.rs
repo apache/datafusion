@@ -6410,6 +6410,7 @@ mod tests {
         // Enumerate small domains and both ends of Int8, including zero divisors,
         // truncation, signed overflow and checked arithmetic. Every successful
         // runtime evaluation must remain possible after interval propagation.
+        let batch = RecordBatch::new_empty(Arc::new(Schema::empty()));
         let domains = [
             (-3i8, 3i8),
             (0, 1),
@@ -6448,21 +6449,21 @@ mod tests {
                         }
                         for a in lo..=hi {
                             for b in rlo..=rhi {
-                                let result = match (op, checked) {
-                                    (Operator::Plus, false) => Some(a.wrapping_add(b)),
-                                    (Operator::Minus, false) => Some(a.wrapping_sub(b)),
-                                    (Operator::Multiply, false) => {
-                                        Some(a.wrapping_mul(b))
+                                // Use the execution kernel as the oracle rather than
+                                // duplicating its checked and wrapping arithmetic.
+                                let runtime = BinaryExpr::new(lit(a), op, lit(b))
+                                    .with_fail_on_overflow(checked);
+                                let result = match runtime.evaluate(&batch) {
+                                    Ok(value) => value.into_array(1).unwrap(),
+                                    Err(error) => {
+                                        assert!(
+                                            checked || op == Operator::Divide,
+                                            "wrapping {a} {op} {b} failed: {error}"
+                                        );
+                                        continue;
                                     }
-                                    (Operator::Plus, true) => a.checked_add(b),
-                                    (Operator::Minus, true) => a.checked_sub(b),
-                                    (Operator::Multiply, true) => a.checked_mul(b),
-                                    (Operator::Divide, _) => a.checked_div(b),
-                                    _ => unreachable!(),
                                 };
-                                let Some(result) = result else {
-                                    continue;
-                                };
+                                let result = result.as_primitive::<Int8Type>().value(0);
                                 let result =
                                     Interval::make(Some(result), Some(result)).unwrap();
                                 assert_eq!(
