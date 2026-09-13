@@ -264,15 +264,20 @@ impl InListExpr {
             protobuf::physical_expr_node::ExprType::InList,
             "InList",
         );
+        let protobuf::PhysicalInListNode {
+            expr,
+            list,
+            negated,
+        } = &**node;
 
         let expr =
-            ctx.decode_required_expression(node.expr.as_deref(), "InListExpr", "expr")?;
-        let list = ctx.decode_children_expressions(&node.list)?;
+            ctx.decode_required_expression(expr.as_deref(), "InListExpr", "expr")?;
+        let list = ctx.decode_children_expressions(list)?;
 
         Ok(Arc::new(InListExpr::try_new(
             expr,
             list,
-            node.negated,
+            *negated,
             ctx.schema(),
         )?))
     }
@@ -480,13 +485,21 @@ impl PhysicalExpr for InListExpr {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_proto_models::protobuf;
 
+        let Self {
+            expr,
+            list,
+            negated,
+            // Lookup set rebuilt from `list` by `try_new` on decode.
+            static_filter: _,
+        } = self;
+
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::InList(Box::new(
                 protobuf::PhysicalInListNode {
-                    expr: Some(Box::new(ctx.encode_child(&self.expr)?)),
-                    list: ctx.encode_children_expressions(&self.list)?,
-                    negated: self.negated,
+                    expr: Some(Box::new(ctx.encode_child(expr)?)),
+                    list: ctx.encode_children_expressions(list)?,
+                    negated: *negated,
                 },
             ))),
         }))
@@ -883,7 +896,7 @@ mod tests {
 
     /// Test IN LIST for all string types (Utf8, LargeUtf8, Utf8View).
     ///
-    /// Test data: "a" (in list), "d" (not in list), ["b", "c"] (other list values)
+    /// Test data: "a" (in list), "d" (not in list), `["b", "c"]` (other list values)
     #[test]
     fn in_list_string_types() -> Result<()> {
         let string_data = PrimitiveTestCaseData {
@@ -3961,15 +3974,15 @@ mod proto_tests {
     }
 
     /// An `InListExpr` over a column with one literal value.
-    fn in_list_fixture() -> InListExpr {
+    fn in_list_fixture(negated: bool) -> InListExpr {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
-        InListExpr::try_new(col("a", &schema).unwrap(), vec![lit(1)], false, &schema)
+        InListExpr::try_new(col("a", &schema).unwrap(), vec![lit(1)], negated, &schema)
             .unwrap()
     }
 
     #[test]
     fn try_to_proto_encodes_in_list() {
-        let in_list = in_list_fixture();
+        let in_list = in_list_fixture(false);
         let encoder = StubEncoder::ok();
         let ctx = PhysicalExprEncodeCtx::new(&encoder);
 
@@ -3987,11 +4000,20 @@ mod proto_tests {
         assert!(!in_list_node.negated);
         assert!(in_list_node.expr.is_some());
         assert_eq!(in_list_node.list.len(), 1);
+
+        assert!(matches!(
+            in_list_fixture(true)
+                .try_to_proto(&ctx)
+                .unwrap()
+                .unwrap()
+                .expr_type,
+            Some(physical_expr_node::ExprType::InList(node)) if node.negated
+        ));
     }
 
     #[test]
     fn try_to_proto_propagates_expr_encode_error() {
-        let in_list = in_list_fixture();
+        let in_list = in_list_fixture(false);
         let encoder = StubEncoder::failing_on(1);
         let ctx = PhysicalExprEncodeCtx::new(&encoder);
         let err = in_list.try_to_proto(&ctx).unwrap_err();
@@ -4000,7 +4022,7 @@ mod proto_tests {
 
     #[test]
     fn try_to_proto_propagates_list_encode_error() {
-        let in_list = in_list_fixture();
+        let in_list = in_list_fixture(false);
         // Call 1 is for `expr`, Call 2 is for the first element of `list`
         let encoder = StubEncoder::failing_on(2);
         let ctx = PhysicalExprEncodeCtx::new(&encoder);

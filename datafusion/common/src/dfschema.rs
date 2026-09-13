@@ -19,6 +19,7 @@
 //! fields with optional relation names.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::fmt::Write as _;
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 use std::sync::{Arc, LazyLock};
@@ -949,9 +950,11 @@ fn format_field_with_indent(
 
     match data_type {
         DataType::List(field) => {
-            result.push_str(&format!(
-                "{indent}|-- {field_name}: list (nullable = {nullable_str})\n"
-            ));
+            writeln!(
+                result,
+                "{indent}|-- {field_name}: list (nullable = {nullable_str})"
+            )
+            .ok();
             format_field_with_indent(
                 result,
                 field.name(),
@@ -961,9 +964,11 @@ fn format_field_with_indent(
             );
         }
         DataType::LargeList(field) => {
-            result.push_str(&format!(
-                "{indent}|-- {field_name}: large list (nullable = {nullable_str})\n"
-            ));
+            writeln!(
+                result,
+                "{indent}|-- {field_name}: large list (nullable = {nullable_str})"
+            )
+            .ok();
             format_field_with_indent(
                 result,
                 field.name(),
@@ -973,9 +978,11 @@ fn format_field_with_indent(
             );
         }
         DataType::FixedSizeList(field, _size) => {
-            result.push_str(&format!(
-                "{indent}|-- {field_name}: fixed size list (nullable = {nullable_str})\n"
-            ));
+            writeln!(
+                result,
+                "{indent}|-- {field_name}: fixed size list (nullable = {nullable_str})"
+            )
+            .ok();
             format_field_with_indent(
                 result,
                 field.name(),
@@ -985,9 +992,11 @@ fn format_field_with_indent(
             );
         }
         DataType::Map(field, _) => {
-            result.push_str(&format!(
-                "{indent}|-- {field_name}: map (nullable = {nullable_str})\n"
-            ));
+            writeln!(
+                result,
+                "{indent}|-- {field_name}: map (nullable = {nullable_str})"
+            )
+            .ok();
             if let DataType::Struct(inner_fields) = field.data_type()
                 && inner_fields.len() == 2
             {
@@ -1015,16 +1024,18 @@ fn format_field_with_indent(
                         );
                     }
                     _ => {
-                        result.push_str(&format!("{child_indent}|-- value: {} (nullable = {value_contains_null})\n",
-                                format_simple_data_type(inner_fields[1].data_type())));
+                        writeln!(result, "{child_indent}|-- value: {} (nullable = {value_contains_null})",
+                                format_simple_data_type(inner_fields[1].data_type())).ok();
                     }
                 }
             }
         }
         DataType::Struct(fields) => {
-            result.push_str(&format!(
-                "{indent}|-- {field_name}: struct (nullable = {nullable_str})\n"
-            ));
+            writeln!(
+                result,
+                "{indent}|-- {field_name}: struct (nullable = {nullable_str})"
+            )
+            .ok();
             for struct_field in fields {
                 format_field_with_indent(
                     result,
@@ -1037,9 +1048,11 @@ fn format_field_with_indent(
         }
         _ => {
             let type_str = format_simple_data_type(data_type);
-            result.push_str(&format!(
-                "{indent}|-- {field_name}: {type_str} (nullable = {nullable_str})\n"
-            ));
+            writeln!(
+                result,
+                "{indent}|-- {field_name}: {type_str} (nullable = {nullable_str})"
+            )
+            .ok();
         }
     }
 }

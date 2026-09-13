@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -242,5 +242,31 @@ logical_plan
 02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
 
 
+# x = 'apple' AND 'apple' = x is one condition, not a contradiction
+query TT
+EXPLAIN SELECT * FROM test_data WHERE str_col = 'apple' AND 'apple' = str_col;
+----
+logical_plan
+01)Filter: test_data.str_col = Utf8View("apple")
+02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
+
+# x = 'apple' AND 'banana' = x is still impossible
+query TT
+EXPLAIN SELECT * FROM test_data WHERE str_col = 'apple' AND 'banana' = str_col;
+----
+logical_plan EmptyRelation: rows=0
+
 statement ok
 set datafusion.explain.logical_plan_only=false;
+
+statement ok
+CREATE TABLE fruit (name VARCHAR) AS VALUES ('apple'), ('banana');
+
+query T
+SELECT name FROM fruit WHERE name = 'apple' AND 'apple' = name;
+----
+apple
+
+query T
+SELECT name FROM fruit WHERE name = 'apple' AND 'banana' = name;
+----

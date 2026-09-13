@@ -250,7 +250,7 @@ impl OptimizedRegex {
         // also leave the input unchanged.
         if short_re.captures_read(locs, val).is_none() {
             return Cow::Borrowed(val);
-        };
+        }
 
         // `captures_read` succeeded, so the overall shortened match is present.
         let match_end = locs.get(0).unwrap().1;
@@ -259,7 +259,7 @@ impl OptimizedRegex {
             // regex since it won't match across lines. Fall back to the full
             // regex replacement.
             return self.re.replacen(val, limit, replacement);
-        };
+        }
         // The fast path only applies to `${1}` replacements, so the result is
         // either capture group 1 or the empty string if that group did not match.
         if let Some((start, end)) = locs.get(1) {
@@ -409,19 +409,12 @@ where
                             let replacement = regex_replace_posix_groups(replacement);
 
                             // format flags into rust pattern
-                            let (pattern, replace_all) = if flags == "g" {
-                                (pattern.to_string(), true)
-                            } else if flags.contains('g') {
-                                (
-                                    format!(
-                                        "(?{}){}",
-                                        flags.to_string().replace('g', ""),
-                                        pattern
-                                    ),
-                                    true,
-                                )
+                            let replace_all = flags.contains('g');
+                            let flags = flags.replace('g', "");
+                            let pattern = if flags.is_empty() {
+                                pattern.to_string()
                             } else {
-                                (format!("(?{flags}){pattern}"), false)
+                                format!("(?{flags}){pattern}")
                             };
 
                             // if patterns hashmap already has regexp then use else create and return
@@ -531,11 +524,16 @@ fn regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
     // whether this is a global match (as in replace all) or just a single
     // replace operation.
     let (pattern, limit) = match flags {
-        Some("g") => (pattern.to_string(), 0),
-        Some(flags) => (
-            format!("(?{}){}", flags.to_string().replace('g', ""), pattern),
-            !flags.contains('g') as usize,
-        ),
+        Some(flags) => {
+            let limit = !flags.contains('g') as usize;
+            let flags = flags.replace('g', "");
+            let pattern = if flags.is_empty() {
+                pattern.to_string()
+            } else {
+                format!("(?{flags}){pattern}")
+            };
+            (pattern, limit)
+        }
         None => (pattern.to_string(), 1),
     };
 
@@ -920,6 +918,44 @@ mod tests {
             Arc::new(flags),
         ])
         .unwrap();
+
+        assert_eq!(re.as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_static_pattern_regexp_replace_empty_flags() {
+        // An empty flags string must behave like no flags at all, matching
+        // `compile_regex` in this module, which is used by the other regexp
+        // functions.
+        let values = StringArray::from(vec!["abc"; 3]);
+        let patterns = StringArray::from(vec!["b"; 3]);
+        let replacements = StringArray::from(vec!["X"; 3]);
+        // `gg` collapses to an empty flags string once `g` is stripped.
+        let flags = StringArray::from(vec![Some(""), Some("g"), Some("gg")]);
+        let expected = StringArray::from(vec!["aXc"; 3]);
+
+        let re = regexp_replace_static_pattern_replace::<i32>(&[
+            Arc::new(values),
+            Arc::new(patterns),
+            Arc::new(replacements),
+            Arc::new(flags),
+        ])
+        .unwrap();
+
+        assert_eq!(re.as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_regexp_replace_empty_flags() {
+        let values = StringArray::from(vec!["abc"; 3]);
+        let patterns = StringArray::from(vec!["b"; 3]);
+        let replacements = StringArray::from(vec!["X"; 3]);
+        let flags = StringArray::from(vec![Some(""), Some("g"), Some("gg")]);
+        let expected = StringArray::from(vec!["aXc"; 3]);
+
+        let re =
+            regexp_replace::<i32, _>(&values, &patterns, &replacements, Some(&flags))
+                .unwrap();
 
         assert_eq!(re.as_ref(), &expected);
     }

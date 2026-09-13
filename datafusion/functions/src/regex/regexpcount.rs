@@ -626,7 +626,7 @@ mod tests {
             // utf8
             let v_sv = ScalarValue::Utf8(Some(v.to_string()));
             let regex_sv = ScalarValue::Utf8(Some(regex.to_string()));
-            let expected = expected.get(pos).cloned();
+            let expected = expected.get(pos).copied();
             let re = regexp_count_with_scalar_values(&[v_sv, regex_sv]);
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
@@ -669,7 +669,7 @@ mod tests {
             .zip(start_positions.iter())
             .enumerate()
             .for_each(|(pos, (&value, &start))| {
-                let expected = expected.get(pos).cloned();
+                let expected = expected.get(pos).copied();
                 let start_sv = ScalarValue::Int64(Some(start));
 
                 let re = regexp_count_with_scalar_values(&[
@@ -721,7 +721,7 @@ mod tests {
             let v_sv = ScalarValue::Utf8(Some(v.to_string()));
             let regex_sv = ScalarValue::Utf8(Some(regex.to_string()));
             let start_sv = ScalarValue::Int64(Some(start));
-            let expected = expected.get(pos).cloned();
+            let expected = expected.get(pos).copied();
             let re = regexp_count_with_scalar_values(&[v_sv, regex_sv, start_sv.clone()]);
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
@@ -767,7 +767,7 @@ mod tests {
             let regex_sv = ScalarValue::Utf8(Some(regex.to_string()));
             let start_sv = ScalarValue::Int64(Some(start));
             let flags_sv = ScalarValue::Utf8(Some(flags.to_string()));
-            let expected = expected.get(pos).cloned();
+            let expected = expected.get(pos).copied();
 
             let re = regexp_count_with_scalar_values(&[
                 v_sv,
@@ -882,7 +882,7 @@ mod tests {
             let regex_sv = ScalarValue::Utf8(regex.get(pos).map(|s| (*s).to_string()));
             let start_sv = ScalarValue::Int64(Some(start));
             let flags_sv = ScalarValue::Utf8(flags.get(pos).map(|f| (*f).to_string()));
-            let expected = expected.get(pos).cloned();
+            let expected = expected.get(pos).copied();
             let re = regexp_count_with_scalar_values(&[
                 v_sv,
                 regex_sv,

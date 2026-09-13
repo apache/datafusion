@@ -135,7 +135,7 @@ impl<'a> DependencyEnumerator<'a> {
         // Return its projected version, which is the target_expression.
         if node.dependencies.is_empty() {
             return vec![[target.clone()].into()];
-        };
+        }
 
         node.dependencies
             .iter()

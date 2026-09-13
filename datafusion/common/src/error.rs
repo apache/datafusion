@@ -1311,7 +1311,7 @@ mod test {
         match std::env::var("RUST_BACKTRACE") {
             Ok(val) if val == "1" => {}
             _ => panic!("Environment variable RUST_BACKTRACE must be set to 1"),
-        };
+        }
     }
 
     // To pass the test the environment variable RUST_BACKTRACE should be set to 1 to enforce backtrace

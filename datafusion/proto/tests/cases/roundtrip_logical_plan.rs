@@ -74,8 +74,9 @@ use datafusion_common::format::{
 };
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::{
-    Constraints, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, SplitPoint,
-    TableReference, internal_datafusion_err, internal_err, not_impl_err, plan_err,
+    Column, Constraints, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    SplitPoint, TableReference, internal_datafusion_err, internal_err, not_impl_err,
+    plan_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::CopyTo;
@@ -2693,12 +2694,38 @@ fn roundtrip_cast() {
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
+
+    let field =
+        Field::new("", DataType::Boolean, false).with_metadata(HashMap::from([(
+            String::from("key"),
+            String::from("value"),
+        )]));
+    let test_expr = Expr::Cast(Cast::new_from_field(
+        Box::new(lit(1.0_f32)),
+        Arc::new(field),
+    ));
+
+    let ctx = SessionContext::new();
+    roundtrip_expr_test(test_expr, ctx);
 }
 
 #[test]
 fn roundtrip_try_cast() {
     let test_expr =
         Expr::TryCast(TryCast::new(Box::new(lit(1.0_f32)), DataType::Boolean));
+
+    let ctx = SessionContext::new();
+    roundtrip_expr_test(test_expr, ctx);
+
+    let field =
+        Field::new("", DataType::Boolean, false).with_metadata(HashMap::from([(
+            String::from("key"),
+            String::from("value"),
+        )]));
+    let test_expr = Expr::TryCast(TryCast::new_from_field(
+        Box::new(lit(1.0_f32)),
+        Arc::new(field),
+    ));
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
@@ -3824,6 +3851,39 @@ async fn roundtrip_join_null_equality() -> Result<()> {
     let rt = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{join:?}"), format!("{rt:?}"));
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_asof_join() -> Result<()> {
+    let ctx = SessionContext::new();
+    let left_schema = Arc::new(Schema::new(vec![
+        Field::new("symbol", DataType::Utf8, true),
+        Field::new("ts", DataType::Int64, true),
+        Field::new("id", DataType::Int32, false),
+    ]));
+    let right_schema = Arc::new(Schema::new(vec![
+        Field::new("symbol", DataType::Utf8, true),
+        Field::new("ts", DataType::Int64, true),
+        Field::new("price", DataType::Int32, false),
+    ]));
+    ctx.register_table("trades", Arc::new(EmptyTable::new(left_schema)))?;
+    ctx.register_table("prices", Arc::new(EmptyTable::new(right_schema)))?;
+
+    let left = ctx.table("trades").await?.into_optimized_plan()?;
+    let right = ctx.table("prices").await?.into_optimized_plan()?;
+    for op in [Operator::Lt, Operator::LtEq, Operator::Gt, Operator::GtEq] {
+        let plan = LogicalPlanBuilder::from(left.clone())
+            .asof_join_using(
+                right.clone(),
+                vec![Column::from_name("symbol")],
+                binary_expr(col("trades.ts"), op, col("prices.ts")),
+            )?
+            .build()?;
+        let bytes = logical_plan_to_bytes(&plan)?;
+        let round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+        assert_eq!(format!("{plan:?}"), format!("{round_trip:?}"));
+    }
     Ok(())
 }
 

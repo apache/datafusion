@@ -86,7 +86,7 @@ fn assert_valid_extension_nodes(plan: &LogicalPlan, check: InvariantLevel) -> Re
                         assert_valid_extension_nodes(&subquery.subquery, check)?;
                     }
                     _ => {}
-                };
+                }
                 Ok(TreeNodeRecursion::Continue)
             })
         })
@@ -139,7 +139,7 @@ fn assert_subqueries_are_valid(plan: &LogicalPlan) -> Result<()> {
                         check_subquery_expr(plan, &subquery.subquery, expr)?;
                     }
                     _ => {}
-                };
+                }
                 Ok(TreeNodeRecursion::Continue)
             })
         })

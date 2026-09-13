@@ -72,16 +72,19 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::array::{Array, ArrayRef, RecordBatch, RecordBatchOptions, new_null_array};
+use arrow::array::{
+    Array, ArrayRef, DynComparator, RecordBatch, RecordBatchOptions, make_comparator,
+    new_null_array,
+};
 use arrow::buffer::NullBuffer;
 use arrow::compute::{SortOptions, interleave};
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::memory::RecordBatchMemoryCounter;
-use datafusion_common::utils::normalize_float_zero_scalar;
+use datafusion_common::utils::normalize_float_zero;
 use datafusion_common::{
-    ColumnStatistics, JoinSide, JoinType, NullEquality, Result, ScalarValue, Statistics,
+    ColumnStatistics, JoinSide, JoinType, NullEquality, Result, Statistics,
     assert_eq_or_internal_err, internal_err, plan_err, project_schema,
 };
 use datafusion_execution::TaskContext;
@@ -550,6 +553,180 @@ impl ExecutionPlan for AsOfJoinExec {
             column_statistics,
         }))
     }
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        // Destructure exhaustively (no `..`) so that a newly added field is a
+        // compile error here instead of being silently left out of the proto.
+        let Self {
+            left,
+            right,
+            on,
+            match_condition,
+            projection,
+            // derived from the children's schemas by `try_new` on decode
+            join_schema: _,
+            // derived from the children's schemas by `try_new` on decode
+            column_indices: _,
+            // runtime metrics, not part of the plan
+            metrics: _,
+            // recomputed from `on` and `match_condition.op` by `try_new`
+            left_ordering: _,
+            // recomputed from `on` and `match_condition.op` by `try_new`
+            right_ordering: _,
+            // right input collected at execution time, not part of the plan
+            right_fut: _,
+            // recomputed by `try_new` on decode
+            cache: _,
+        } = self;
+
+        let left = ctx.encode_child(left)?;
+        let right = ctx.encode_child(right)?;
+        let on = on
+            .iter()
+            .map(|(left, right)| {
+                Ok(protobuf::JoinOn {
+                    left: Some(ctx.encode_expr(left)?),
+                    right: Some(ctx.encode_expr(right)?),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let match_operator = match match_condition.op {
+            Operator::Lt => protobuf::AsOfMatchOperator::Lt,
+            Operator::LtEq => protobuf::AsOfMatchOperator::LtEq,
+            Operator::Gt => protobuf::AsOfMatchOperator::Gt,
+            Operator::GtEq => protobuf::AsOfMatchOperator::GtEq,
+            op => {
+                return internal_err!(
+                    "AsOfJoinExec cannot serialize unsupported match operator {op}"
+                );
+            }
+        };
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::AsOfJoin(Box::new(
+                    protobuf::AsOfJoinExecNode {
+                        left: Some(Box::new(left)),
+                        right: Some(Box::new(right)),
+                        on,
+                        left_match_expr: Some(ctx.encode_expr(&match_condition.left)?),
+                        right_match_expr: Some(ctx.encode_expr(&match_condition.right)?),
+                        match_operator: match_operator.into(),
+                        // Proto3 `repeated` cannot distinguish `None` from
+                        // `Some(vec![])`; preserve the empty projection with
+                        // the invalid column-index sentinel used by hash join.
+                        projection: match projection.as_ref() {
+                            None => Vec::new(),
+                            Some(projection) if projection.is_empty() => vec![u32::MAX],
+                            Some(projection) => {
+                                projection.iter().map(|index| *index as u32).collect()
+                            }
+                        },
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl AsOfJoinExec {
+    /// Reconstruct an [`AsOfJoinExec`] from its protobuf representation.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+
+        let asof_join = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::AsOfJoin,
+            "AsOfJoinExec",
+        );
+        // Destructure exhaustively (no `..`) so that a newly added proto field
+        // is a compile error here instead of being silently ignored.
+        let protobuf::AsOfJoinExecNode {
+            left,
+            right,
+            on,
+            left_match_expr,
+            right_match_expr,
+            match_operator,
+            projection,
+        } = &**asof_join;
+
+        let left = ctx.decode_required_child(left.as_deref(), "AsOfJoinExec", "left")?;
+        let right =
+            ctx.decode_required_child(right.as_deref(), "AsOfJoinExec", "right")?;
+        let left_schema = left.schema();
+        let right_schema = right.schema();
+        let on = on
+            .iter()
+            .map(|pair| {
+                let left = ctx.decode_required_expr(
+                    pair.left.as_ref(),
+                    left_schema.as_ref(),
+                    "AsOfJoinExec",
+                    "on.left",
+                )?;
+                let right = ctx.decode_required_expr(
+                    pair.right.as_ref(),
+                    right_schema.as_ref(),
+                    "AsOfJoinExec",
+                    "on.right",
+                )?;
+                Ok((left, right))
+            })
+            .collect::<Result<_>>()?;
+        let left_match = ctx.decode_required_expr(
+            left_match_expr.as_ref(),
+            left_schema.as_ref(),
+            "AsOfJoinExec",
+            "left_match_expr",
+        )?;
+        let right_match = ctx.decode_required_expr(
+            right_match_expr.as_ref(),
+            right_schema.as_ref(),
+            "AsOfJoinExec",
+            "right_match_expr",
+        )?;
+        let match_operator = protobuf::AsOfMatchOperator::try_from(*match_operator)
+            .map_err(|_| {
+                datafusion_common::internal_datafusion_err!(
+                    "AsOfJoinExec: unknown AsOfMatchOperator {}",
+                    match_operator
+                )
+            })?;
+        let op = match match_operator {
+            protobuf::AsOfMatchOperator::Lt => Operator::Lt,
+            protobuf::AsOfMatchOperator::LtEq => Operator::LtEq,
+            protobuf::AsOfMatchOperator::Gt => Operator::Gt,
+            protobuf::AsOfMatchOperator::GtEq => Operator::GtEq,
+            protobuf::AsOfMatchOperator::Unspecified => {
+                return internal_err!("AsOfJoinExec match operator must be specified");
+            }
+        };
+
+        // Preserve the empty-projection sentinel written by `try_to_proto`.
+        let projection = match projection.as_slice() {
+            [] => None,
+            [u32::MAX] => Some(Vec::new()),
+            indices => Some(indices.iter().map(|index| *index as usize).collect()),
+        };
+
+        Ok(Arc::new(Self::try_new(
+            left,
+            right,
+            on,
+            AsOfMatchExpr::new(left_match, op, right_match),
+            projection,
+        )?))
+    }
 }
 
 /// Materialized right input shared by every left output partition.
@@ -630,9 +807,12 @@ struct InputCursor {
     key_arrays: Arc<[ArrayRef]>,
     /// Rows whose equality keys are all non-NULL.
     key_validity: Option<NullBuffer>,
-    /// Evaluated match values for `batch`.
+    /// Evaluated and normalized match values for `batch`.
     match_array: Option<ArrayRef>,
-    /// Monotonic identity of the current key arrays.
+    /// Logical NULLs cached separately so row checks avoid constructing
+    /// `ScalarValue`s and still handle nested representations such as dictionaries.
+    match_validity: Option<NullBuffer>,
+    /// Monotonic identity of the current arrays.
     key_batch_id: usize,
     /// Current row within `batch`.
     row: usize,
@@ -654,6 +834,7 @@ impl InputCursor {
             key_arrays: Arc::from([]),
             key_validity: None,
             match_array: None,
+            match_validity: None,
             key_batch_id: 0,
             row: 0,
             eof: false,
@@ -675,6 +856,7 @@ impl InputCursor {
             self.key_arrays = Arc::from([]);
             self.key_validity = None;
             self.match_array = None;
+            self.match_validity = None;
             self.row = 0;
             if self.eof {
                 return Poll::Ready(Ok(false));
@@ -696,11 +878,15 @@ impl InputCursor {
             self.key_validity =
                 matchable_join_keys(&key_arrays, NullEquality::NullEqualsNothing);
             self.key_arrays = key_arrays.into();
-            self.match_array = Some(
-                self.match_expr
-                    .evaluate(&batch)?
-                    .into_array(batch.num_rows())?,
-            );
+            let match_array = self
+                .match_expr
+                .evaluate(&batch)?
+                .into_array(batch.num_rows())?;
+            self.match_validity = match_array.logical_nulls();
+            // Arrow's comparator distinguishes -0.0 from +0.0, while SQL does
+            // not. Normalizing once here is cheaper than fixing every row-level
+            // comparison and lets the cached comparator use the arrays directly.
+            self.match_array = Some(normalize_float_zero(&match_array));
             self.key_batch_id += 1;
             self.batch = Some(batch);
         }
@@ -712,11 +898,10 @@ impl InputCursor {
             .is_some_and(|validity| validity.is_null(self.row))
     }
 
-    fn match_value(&self) -> Result<ScalarValue> {
-        let array = self.match_array.as_ref().ok_or_else(|| {
-            datafusion_common::internal_datafusion_err!("ASOF match array is missing")
-        })?;
-        ScalarValue::try_from_array(array, self.row).map(normalize_float_zero_scalar)
+    fn match_is_null(&self) -> bool {
+        self.match_validity
+            .as_ref()
+            .is_some_and(|validity| validity.is_null(self.row))
     }
 
     fn batch_row(&self) -> Result<(Arc<RecordBatch>, usize)> {
@@ -851,6 +1036,11 @@ impl PendingRows {
 /// candidate advances from `(A, 2)` to `(A, 6)` without rewinding the right
 /// cursor. Cursors and the candidate survive input batch changes and output
 /// flushes; a change of equality group clears the candidate before reuse.
+///
+/// The hot path avoids materializing scalar values: expressions are evaluated
+/// once per batch, comparators are cached by batch identity, and both cursors
+/// only move forward. Input batches and evaluated arrays remain shared through
+/// `Arc`; output can therefore use a zero-copy slice when its rows are contiguous.
 struct AsOfJoinStream {
     /// Output schema used when pending row references are materialized.
     schema: SchemaRef,
@@ -874,6 +1064,10 @@ struct AsOfJoinStream {
     input_group_comparator: Option<(usize, usize, JoinKeyComparator)>,
     /// Cached comparator for the candidate and current left batches.
     candidate_group_comparator: Option<(usize, usize, JoinKeyComparator)>,
+    /// Cached match-key comparator for the current right and left batches.
+    /// Building it performs type dispatch, so doing so once per batch pair avoids
+    /// repeating that work for every candidate comparison.
+    input_match_comparator: Option<(usize, usize, DynComparator)>,
     /// Left row references accumulated for the next output batch.
     pending_left: PendingRows,
     /// Matched right row references, aligned with `pending_left`.
@@ -918,6 +1112,7 @@ impl AsOfJoinStream {
             group_sort_options,
             input_group_comparator: None,
             candidate_group_comparator: None,
+            input_match_comparator: None,
             batch_size: batch_size.max(1),
             metrics,
         }
@@ -986,6 +1181,50 @@ impl AsOfJoinStream {
         Ok(comparator.compare(candidate.row, self.left.row) != Ordering::Equal)
     }
 
+    /// Compares the current right match value with the current left match value.
+    ///
+    /// This always returns natural ascending order (`right.cmp(left)`), regardless
+    /// of scan direction. [`is_eligible`] interprets that order for the four ASOF
+    /// operators, keeping direction-specific logic out of the comparator cache.
+    fn compare_input_matches(&mut self) -> Result<Ordering> {
+        let _timer = self.metrics.baseline.elapsed_compute().timer();
+        let right_batch_id = self.right.key_batch_id;
+        let left_batch_id = self.left.key_batch_id;
+        if self
+            .input_match_comparator
+            .as_ref()
+            .is_none_or(|(right, left, _)| {
+                *right != right_batch_id || *left != left_batch_id
+            })
+        {
+            let right = self.right.match_array.as_ref().ok_or_else(|| {
+                datafusion_common::internal_datafusion_err!(
+                    "ASOF right match array is missing"
+                )
+            })?;
+            let left = self.left.match_array.as_ref().ok_or_else(|| {
+                datafusion_common::internal_datafusion_err!(
+                    "ASOF left match array is missing"
+                )
+            })?;
+            let comparator = make_comparator(
+                right.as_ref(),
+                left.as_ref(),
+                SortOptions {
+                    descending: false,
+                    nulls_first: true,
+                },
+            )?;
+            self.input_match_comparator =
+                Some((right_batch_id, left_batch_id, comparator));
+        }
+        let (_, _, comparator) = self
+            .input_match_comparator
+            .as_ref()
+            .expect("ASOF input match comparator must be initialized");
+        Ok(comparator(self.right.row, self.left.row))
+    }
+
     /// Produces the next output batch without resetting the merge state.
     ///
     /// Each left row first validates its equality group, then advances the right
@@ -1025,11 +1264,7 @@ impl AsOfJoinStream {
                 return Poll::Ready(None);
             }
 
-            let left_match = {
-                let _timer = self.metrics.baseline.elapsed_compute().timer();
-                self.left.match_value()?
-            };
-            if left_match.is_null() || self.left.group_has_null() {
+            if self.left.match_is_null() || self.left.group_has_null() {
                 self.candidate = None;
                 self.candidate_group_comparator = None;
                 self.push_current_left(None)?;
@@ -1060,13 +1295,11 @@ impl AsOfJoinStream {
                     Ordering::Greater => break,
                     Ordering::Equal => {}
                 }
-                let _timer = self.metrics.baseline.elapsed_compute().timer();
-                let right_match = self.right.match_value()?;
-                if right_match.is_null() {
+                if self.right.match_is_null() {
                     self.right.advance();
                     continue;
                 }
-                if !is_eligible(self.op, &left_match, &right_match)? {
+                if !is_eligible(self.op, self.compare_input_matches()?) {
                     break;
                 }
                 let (batch, row) = self.right.batch_row()?;
@@ -1234,15 +1467,14 @@ fn validate_expr_side(expr: &PhysicalExprRef, schema: &Schema, name: &str) -> Re
     Ok(())
 }
 
-fn is_eligible(op: Operator, left: &ScalarValue, right: &ScalarValue) -> Result<bool> {
-    let ordering = right.try_cmp(left)?;
-    Ok(match op {
-        Operator::Gt => ordering == Ordering::Less,
-        Operator::GtEq => ordering != Ordering::Greater,
-        Operator::Lt => ordering == Ordering::Greater,
-        Operator::LtEq => ordering != Ordering::Less,
+fn is_eligible(op: Operator, right_vs_left: Ordering) -> bool {
+    match op {
+        Operator::Gt => right_vs_left == Ordering::Less,
+        Operator::GtEq => right_vs_left != Ordering::Greater,
+        Operator::Lt => right_vs_left == Ordering::Greater,
+        Operator::LtEq => right_vs_left != Ordering::Less,
         _ => unreachable!("ASOF match operator is validated by try_new"),
-    })
+    }
 }
 
 #[cfg(test)]
@@ -1253,8 +1485,9 @@ mod tests {
     use super::*;
     use crate::collect;
     use crate::test::TestMemoryExec;
-    use arrow::array::{Int32Array, Int64Array, StringArray};
+    use arrow::array::{Float64Array, Int32Array, Int64Array, StringArray};
     use arrow::datatypes::{DataType, Field};
+    use datafusion_common::ScalarValue;
     use datafusion_common::test_util::batches_to_sort_string;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
@@ -1526,6 +1759,51 @@ mod tests {
         | 7  |       |
         +----+-------+
         ");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn floating_match_treats_signed_zero_as_equal() -> Result<()> {
+        let left_batch = RecordBatch::try_from_iter(vec![
+            ("ts", Arc::new(Float64Array::from(vec![0.0])) as ArrayRef),
+            ("id", Arc::new(Int32Array::from(vec![1])) as ArrayRef),
+        ])?;
+        let left_schema = left_batch.schema();
+        let left = TestMemoryExec::try_new_exec(
+            &[vec![left_batch]],
+            Arc::clone(&left_schema),
+            None,
+        )?;
+
+        let right_batch = RecordBatch::try_from_iter(vec![
+            ("ts", Arc::new(Float64Array::from(vec![-0.0])) as ArrayRef),
+            ("price", Arc::new(Int32Array::from(vec![42])) as ArrayRef),
+        ])?;
+        let right_schema = right_batch.schema();
+        let right = TestMemoryExec::try_new_exec(
+            &[vec![right_batch]],
+            Arc::clone(&right_schema),
+            None,
+        )?;
+
+        let exec = Arc::new(AsOfJoinExec::try_new(
+            left,
+            right,
+            vec![],
+            AsOfMatchExpr::new(
+                Arc::new(PhysicalColumn::new("ts", 0)),
+                Operator::Gt,
+                Arc::new(PhysicalColumn::new("ts", 0)),
+            ),
+            Some(vec![1, 3]),
+        )?);
+        let batches = collect(exec, Arc::new(TaskContext::default())).await?;
+        let price = batches[0]
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("price must be Int32");
+        assert!(price.is_null(0));
         Ok(())
     }
 

@@ -670,6 +670,23 @@ impl InterleaveExec {
             can_interleave(inputs.iter()),
             "Not all InterleaveExec children have a consistent hash or range partitioning"
         );
+        Self::try_new_unchecked(inputs)
+    }
+
+    /// Like [`Self::try_new`], but does not require the inputs to be
+    /// interleavable.
+    ///
+    /// Optimizer rules rebuild every parent from its rewritten children while
+    /// walking the plan, so a rewrite that changes a child's partitioning
+    /// (join side swaps, removed repartitions, ...) hands this node children
+    /// that are no longer interleavable before any rule has had the chance to
+    /// repair it. Such a node reports [`Partitioning::UnknownPartitioning`],
+    /// so nothing downstream can rely on a hash layout it does not have, and
+    /// [`ExecutionPlan::check_invariants`] rejects it at
+    /// [`InvariantLevel::Executable`] if it is never repaired. This mirrors
+    /// how unmet distribution requirements are handled for every other
+    /// operator.
+    fn try_new_unchecked(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Result<Self> {
         let schema = union_schema(&inputs)?;
         let inputs = inputs
             .into_iter()
@@ -694,8 +711,23 @@ impl InterleaveExec {
         schema: SchemaRef,
     ) -> Result<PlanProperties> {
         let eq_properties = EquivalenceProperties::new(schema);
-        // Get output partitioning:
-        let output_partitioning = inputs[0].output_partitioning().clone();
+        // Get output partitioning. Only claim the shared hash / range layout
+        // when every input actually has it (see `try_new_unchecked`).
+        let output_partitioning = if can_interleave(inputs.iter()) {
+            inputs[0].output_partitioning().clone()
+        } else {
+            // Non-interleavable inputs need not even agree on a partition
+            // count. Report the largest one: `execute` errors out for a
+            // partition that some input lacks, so an unrepaired node fails
+            // loudly instead of silently dropping the extra partitions of
+            // the widest input.
+            let partition_count = inputs
+                .iter()
+                .map(|input| input.output_partitioning().partition_count())
+                .max()
+                .unwrap_or(0);
+            Partitioning::UnknownPartitioning(partition_count)
+        };
         Ok(PlanProperties::new(
             eq_properties,
             output_partitioning,
@@ -758,14 +790,23 @@ impl ExecutionPlan for InterleaveExec {
                 ..Self::clone(&*self)
             })),
             ChildrenPropertiesMode::Recompute => {
-                // New children are no longer interleavable, which might be a bug of optimization rewrite.
-                assert_or_internal_err!(
-                    can_interleave(children.iter()),
-                    "Can not create InterleaveExec: new children can not be interleaved"
-                );
-                Ok(Arc::new(InterleaveExec::try_new(children)?))
+                // The new children may no longer be interleavable; see
+                // `try_new_unchecked` for why this is not rejected here.
+                Ok(Arc::new(InterleaveExec::try_new_unchecked(children)?))
             }
         }
+    }
+
+    fn check_invariants(&self, check: InvariantLevel) -> Result<()> {
+        check_default_invariants(self, check)?;
+
+        if matches!(check, InvariantLevel::Executable) {
+            assert_or_internal_err!(
+                can_interleave(self.inputs.iter()),
+                "Not all InterleaveExec children have a consistent hash or range partitioning"
+            );
+        }
+        Ok(())
     }
 
     fn with_new_children(
@@ -1749,6 +1790,91 @@ mod tests {
             base,
             Partitioning::Range(RangePartitioning::try_new(ordering, split_points)?),
         )?))
+    }
+
+    #[test]
+    fn test_interleave_rebuild_defers_partitioning_invariant() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("name", DataType::Int32, true)]));
+        let hash = || make_hash_exec(&schema, vec!["name"], 3);
+        let interleave: Arc<dyn ExecutionPlan> =
+            Arc::new(InterleaveExec::try_new(vec![hash()?, hash()?])?);
+        assert!(matches!(
+            interleave.output_partitioning(),
+            Partitioning::Hash(_, 3)
+        ));
+
+        // A rewrite that takes one child's hash partitioning away. The
+        // optimizer's tree walk rebuilds the parent from such children before
+        // any rule can repair it, so the rebuild itself must not fail.
+        let round_robin: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+            hash()?,
+            Partitioning::RoundRobinBatch(3),
+        )?);
+        let rebuilt = interleave.replace_children(
+            vec![hash()?, round_robin],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+
+        // Explicit construction still requires interleavable inputs.
+        let children = rebuilt.children().into_iter().cloned().collect();
+        assert!(InterleaveExec::try_new(children).is_err());
+
+        // The rebuilt node no longer claims a hash layout, is structurally
+        // sound, but is not executable until a distribution pass repairs it.
+        assert!(matches!(
+            rebuilt.output_partitioning(),
+            Partitioning::UnknownPartitioning(3)
+        ));
+        rebuilt.check_invariants(InvariantLevel::Always)?;
+        let err = rebuilt
+            .check_invariants(InvariantLevel::Executable)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains(
+                "Not all InterleaveExec children have a consistent hash or range partitioning"
+            ),
+            "{err}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_interleave_rebuild_reports_widest_partition_count() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("name", DataType::Int32, true)]));
+        let interleave: Arc<dyn ExecutionPlan> =
+            Arc::new(InterleaveExec::try_new(vec![
+                make_hash_exec(&schema, vec!["name"], 3)?,
+                make_hash_exec(&schema, vec!["name"], 3)?,
+            ])?);
+
+        // A rewrite that leaves the children with different partition counts.
+        let rebuilt = interleave.replace_children(
+            vec![
+                make_hash_exec(&schema, vec!["name"], 3)?,
+                make_hash_exec(&schema, vec!["name"], 5)?,
+            ],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+
+        // The widest child decides the reported count, so the partitions only
+        // it has are still visible to callers instead of being dropped.
+        assert!(matches!(
+            rebuilt.output_partitioning(),
+            Partitioning::UnknownPartitioning(5)
+        ));
+        // Executing one of them fails loudly rather than returning no rows.
+        let Err(err) = rebuilt.execute(4, Arc::new(TaskContext::default())) else {
+            panic!("executing a partition the narrow child lacks must fail");
+        };
+        let err = err.to_string();
+        assert!(
+            err.contains("Partition 4 not found in InterleaveExec"),
+            "{err}"
+        );
+        Ok(())
     }
 
     #[test]

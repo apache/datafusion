@@ -987,18 +987,10 @@ mod tests {
 
         let files: Vec<_> = std::fs::read_dir(&path).unwrap().collect();
         assert_eq!(files.len(), 1);
-        assert!(
-            files
-                .last()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .path()
-                .file_name()
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .ends_with(".csv")
+        let file_path = files.last().unwrap().as_ref().unwrap().path();
+        assert_eq!(
+            file_path.extension().and_then(|ext| ext.to_str()),
+            Some("csv")
         );
 
         Ok(())

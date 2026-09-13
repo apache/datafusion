@@ -15,18 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::expr::reject_window_functions;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{
-    Column, DFSchema, Result, not_impl_err, plan_datafusion_err, plan_err,
+    Column, HashMap, Result, not_impl_err, plan_datafusion_err, plan_err,
 };
-use datafusion_expr::utils::split_conjunction_owned;
-use datafusion_expr::{
-    AsOfMatch, BinaryExpr, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, Operator,
-};
+use datafusion_expr::{JoinType, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{
     Join, JoinConstraint, JoinOperator, ObjectName, TableFactor, TableWithJoins,
 };
 use std::collections::HashSet;
+
+const JOIN_ON_HELP: &str =
+    "Compute the window function in a subquery and join on its result";
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(crate) fn plan_table_with_joins(
@@ -128,64 +129,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let join_schema = left.schema().join(right.schema())?;
         let match_condition =
             self.sql_to_expr(sql_match_condition, &join_schema, planner_context)?;
-        let Expr::BinaryExpr(BinaryExpr {
-            left: match_left,
-            op,
-            right: match_right,
-        }) = match_condition
-        else {
-            return plan_err!("ASOF MATCH_CONDITION must be a single comparison");
-        };
-        if !matches!(
-            op,
-            Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq
-        ) {
-            return plan_err!(
-                "ASOF MATCH_CONDITION requires <, <=, >, or >=, found {op}"
-            );
-        }
-        if !expr_owned_by(&match_left, left.schema())
-            || !expr_owned_by(&match_right, right.schema())
-        {
-            return plan_err!(
-                "ASOF MATCH_CONDITION left operand must reference only the left input and right operand only the right input"
-            );
-        }
-        let match_condition = AsOfMatch::new(*match_left, op, *match_right);
 
         match constraint {
             JoinConstraint::On(sql_on) => {
+                let window_span = self.window_function_span(&sql_on, &HashMap::new());
                 let on = self.sql_to_expr(sql_on, &join_schema, planner_context)?;
-                let on = split_conjunction_owned(on)
-                    .into_iter()
-                    .map(|predicate| {
-                        let Expr::BinaryExpr(BinaryExpr {
-                            left: on_left,
-                            op: Operator::Eq,
-                            right: on_right,
-                        }) = predicate
-                        else {
-                            return plan_err!(
-                                "ASOF ON accepts only equality conditions combined with AND"
-                            );
-                        };
-                        if expr_owned_by(&on_left, left.schema())
-                            && expr_owned_by(&on_right, right.schema())
-                        {
-                            Ok((*on_left, *on_right))
-                        } else if expr_owned_by(&on_right, left.schema())
-                            && expr_owned_by(&on_left, right.schema())
-                        {
-                            Ok((*on_right, *on_left))
-                        } else {
-                            plan_err!(
-                                "Each ASOF equality condition must compare one left expression with one right expression"
-                            )
-                        }
-                    })
-                    .collect::<Result<_>>()?;
+                reject_window_functions(&on, "JOIN ON", JOIN_ON_HELP, window_span)?;
                 LogicalPlanBuilder::from(left)
-                    .asof_join(right, on, match_condition)?
+                    .asof_join_on(right, Some(on), match_condition)?
                     .build()
             }
             JoinConstraint::Using(object_names) => {
@@ -218,11 +169,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .build()
             }
             JoinConstraint::None => LogicalPlanBuilder::from(left)
-                .asof_join(right, vec![], match_condition)?
+                .asof_join_on(right, None, match_condition)?
                 .build(),
-            JoinConstraint::Natural => {
-                not_impl_err!("NATURAL ASOF JOIN is not supported")
-            }
+            JoinConstraint::Natural => plan_err!("NATURAL ASOF JOIN is not supported"),
         }
     }
 
@@ -247,7 +196,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let join_schema = left.schema().join(right.schema())?;
                 // parse ON expression
                 self.warn_on_null_equality_predicate(&sql_expr);
+                let window_span = self.window_function_span(&sql_expr, &HashMap::new());
                 let expr = self.sql_to_expr(sql_expr, &join_schema, planner_context)?;
+                // A join condition is evaluated before window functions are
+                // computed, so they may not appear in it
+                reject_window_functions(&expr, "JOIN ON", JOIN_ON_HELP, window_span)?;
                 LogicalPlanBuilder::from(left)
                     .join_on(right, join_type, Some(expr))?
                     .build()
@@ -302,14 +255,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .build(),
         }
     }
-}
-
-fn expr_owned_by(expr: &Expr, schema: &DFSchema) -> bool {
-    let columns = expr.column_refs();
-    !columns.is_empty()
-        && columns
-            .iter()
-            .all(|column| schema.is_column_from_schema(column))
 }
 
 /// Returns `true` if the given [`TableFactor`] is lateral.

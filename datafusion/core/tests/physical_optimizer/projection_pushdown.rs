@@ -812,7 +812,7 @@ fn test_output_req_after_projection() -> Result<()> {
         );
     } else {
         panic!("Expected KeyPartitioned distribution!");
-    };
+    }
 
     Ok(())
 }

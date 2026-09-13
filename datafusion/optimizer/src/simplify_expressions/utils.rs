@@ -17,6 +17,7 @@
 
 //! Utility functions for expression simplification
 
+use datafusion_common::cse::NormalizeEq;
 use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::{
     Case, Expr, Like, Operator,
@@ -26,13 +27,18 @@ use datafusion_expr::{
 
 /// returns true if `needle` is found in a chain of search_op
 /// expressions. Such as: (A AND B) AND C
+///
+/// Equality uses [`NormalizeEq`] so commutative operands (`A = B` vs `B = A`)
+/// are recognized as the same predicate even when the canonicalizer is
+/// disabled, notably for `LogicalPlan::Join` filters (see
+/// <https://github.com/apache/datafusion/pull/8780>).
 fn expr_contains_inner(expr: &Expr, needle: &Expr, search_op: Operator) -> bool {
     match expr {
         Expr::BinaryExpr(BinaryExpr { left, op, right }) if *op == search_op => {
             expr_contains_inner(left, needle, search_op)
                 || expr_contains_inner(right, needle, search_op)
         }
-        _ => expr == needle,
+        _ => expr.normalize_eq(needle),
     }
 }
 
@@ -43,6 +49,12 @@ pub fn expr_contains(expr: &Expr, needle: &Expr, search_op: Operator) -> bool {
 
 /// Deletes all 'needles' or remains one 'needle' that are found in a chain of xor
 /// expressions. Such as: A ^ (A ^ (B ^ A))
+///
+/// Matching uses [`NormalizeEq`] to stay consistent with the [`expr_contains`]
+/// guard on the XOR rules. A structural comparison here would let the guard fire
+/// on operands this function then fails to delete, so the rule would rebuild its
+/// input and still report a transformation, spinning the simplifier until it hits
+/// the cycle limit.
 pub fn delete_xor_in_complex_expr(expr: &Expr, needle: &Expr, is_left: bool) -> Expr {
     /// Deletes recursively 'needles' in a chain of xor expressions
     fn recursive_delete_xor_in_expr(
@@ -56,10 +68,10 @@ pub fn delete_xor_in_complex_expr(expr: &Expr, needle: &Expr, is_left: bool) -> 
             {
                 let left_expr = recursive_delete_xor_in_expr(left, needle, xor_counter);
                 let right_expr = recursive_delete_xor_in_expr(right, needle, xor_counter);
-                if left_expr == *needle {
+                if left_expr.normalize_eq(needle) {
                     *xor_counter += 1;
                     return right_expr;
-                } else if right_expr == *needle {
+                } else if right_expr.normalize_eq(needle) {
                     *xor_counter += 1;
                     return left_expr;
                 }
@@ -76,7 +88,7 @@ pub fn delete_xor_in_complex_expr(expr: &Expr, needle: &Expr, is_left: bool) -> 
 
     let mut xor_counter: i32 = 0;
     let result_expr = recursive_delete_xor_in_expr(expr, needle, &mut xor_counter);
-    if result_expr == *needle {
+    if result_expr.normalize_eq(needle) {
         return needle.clone();
     } else if xor_counter % 2 == 0 {
         if is_left {
