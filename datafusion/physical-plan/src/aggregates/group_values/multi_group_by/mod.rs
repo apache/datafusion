@@ -276,6 +276,23 @@ impl VectorizedOperationBuffers {
         self.remaining_row_indices.clear();
     }
 
+    fn clear_shrink(&mut self, num_rows: usize) {
+        self.append_row_indices.clear();
+        self.append_row_indices.shrink_to(num_rows);
+        self.equal_to_row_indices.clear();
+        self.equal_to_row_indices.shrink_to(num_rows);
+        self.equal_to_group_indices.clear();
+        self.equal_to_group_indices.shrink_to(num_rows);
+        // `BooleanBufferBuilder` has no `shrink_to`; `finish` replaces its
+        // backing buffer with an empty one. Rebuild capacity for the requested
+        // row count, then restore the empty logical state.
+        drop(self.equal_to_results.finish());
+        self.equal_to_results.append_n(num_rows, false);
+        self.equal_to_results.truncate(0);
+        self.remaining_row_indices.clear();
+        self.remaining_row_indices.shrink_to(num_rows);
+    }
+
     fn size(&self) -> usize {
         self.append_row_indices.allocated_size()
             + self.equal_to_row_indices.allocated_size()
@@ -1371,8 +1388,10 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
         // Such structures are only used in `non-streaming` case
         if !STREAMING {
             self.group_index_lists.clear();
+            self.group_index_lists.shrink_to(num_rows);
             self.emit_group_index_list_buffer.clear();
-            self.vectorized_operation_buffers.clear();
+            self.emit_group_index_list_buffer.shrink_to(num_rows);
+            self.vectorized_operation_buffers.clear_shrink(num_rows);
         }
     }
 }
@@ -1561,6 +1580,30 @@ mod tests {
             .truncate(0);
         group_values.emit_group_index_list_buffer.clear();
         assert_eq!(group_values.size(), baseline + scratch_size);
+        Ok(())
+    }
+
+    #[test]
+    fn clear_shrink_releases_vectorized_and_emit_scratch_capacity() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "group",
+            DataType::Int32,
+            false,
+        )]));
+        let mut group_values = GroupValuesColumn::<false>::try_new(schema)?;
+        let baseline = group_values.size();
+        let buffers = &mut group_values.vectorized_operation_buffers;
+        buffers.append_row_indices.push(0);
+        buffers.equal_to_row_indices.push(0);
+        buffers.equal_to_group_indices.push(0);
+        buffers.equal_to_results.append(true);
+        buffers.remaining_row_indices.push(0);
+        group_values.emit_group_index_list_buffer.push(0);
+
+        assert!(group_values.size() > baseline);
+        group_values.clear_shrink(0);
+
+        assert_eq!(group_values.size(), baseline);
         Ok(())
     }
 
