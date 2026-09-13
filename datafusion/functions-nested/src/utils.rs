@@ -327,6 +327,23 @@ pub(crate) fn get_map_entry_field(data_type: &DataType) -> Result<&Fields> {
     }
 }
 
+/// Returns the `(key_field, value_field)` of a `Map` type.
+///
+/// Errors if the type is not a `Map` or its entries struct does not have
+/// exactly two fields.
+pub(crate) fn get_map_key_value_fields(
+    data_type: &DataType,
+) -> Result<(&FieldRef, &FieldRef)> {
+    let fields = get_map_entry_field(data_type)?;
+    if fields.len() != 2 {
+        return internal_err!(
+            "Expected map entries struct with two fields, got {} fields",
+            fields.len()
+        );
+    }
+    Ok((&fields[0], &fields[1]))
+}
+
 /// Shared `coerce_types` impl for array-math UDFs whose kernels expect
 /// `List<Float64>` / `LargeList<Float64>` (e.g. `array_add`, `cosine_distance`,
 /// `inner_product`, `array_normalize`).

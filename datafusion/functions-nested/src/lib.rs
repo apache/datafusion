@@ -85,6 +85,7 @@ pub mod reverse;
 pub mod set_ops;
 pub mod sort;
 pub mod string;
+pub mod transform_values;
 pub mod utils;
 
 use datafusion_common::Result;
@@ -155,6 +156,7 @@ pub mod expr_fn {
     pub use super::sort::array_sort;
     pub use super::string::array_to_string;
     pub use super::string::string_to_array;
+    pub use super::transform_values::transform_values;
 }
 
 /// Return all default nested type functions
@@ -226,6 +228,7 @@ pub fn all_default_higher_order_functions() -> Vec<Arc<HigherOrderUDF>> {
         array_filter::array_filter_higher_order_function(),
         array_first::array_first_higher_order_function(),
         array_transform::array_transform_higher_order_function(),
+        transform_values::transform_values_higher_order_function(),
     ]
 }
 
