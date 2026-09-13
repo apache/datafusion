@@ -16,7 +16,6 @@
 // under the License.
 
 //! DataFusion benchmark runner
-pub mod asof;
 pub mod cancellation;
 pub mod clickbench;
 pub mod dict;

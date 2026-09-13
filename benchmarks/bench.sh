@@ -160,6 +160,7 @@ imdb:                   Join Order Benchmark (JOB) using the IMDB dataset conver
 
 # Micro-Benchmarks (specific operators and features)
 cancellation:           How long cancelling a query takes
+asof_join:              ASOF join workloads varying size, ordering, grouping, match direction, and payload width
 nlj:                    Benchmark for simple nested loop joins, testing various join scenarios
 hj:                     Benchmark for simple hash joins, testing various join scenarios
 smj:                    Benchmark for simple sort merge joins, testing various join scenarios
@@ -268,6 +269,10 @@ main() {
                 parquet_row_filter_skip)
                     # Data is generated inline by the suite's load SQL (COPY).
                     echo "parquet_row_filter_skip: no external data to generate"
+                    ;;
+                asof_join)
+                    # The ordered Parquet case is generated inline by the suite's load SQL.
+                    echo "asof_join: no external data to generate"
                     ;;
                 tpcds)
                     data_tpcds
@@ -479,6 +484,7 @@ main() {
                     run_h2o_join "BIG" "PARQUET" "join"
                     run_imdb
                     run_external_aggr
+                    run_asof_join
                     run_nlj
                     run_hj
                     run_tpcds
@@ -511,6 +517,9 @@ main() {
                     ;;
                 parquet_row_filter_skip)
                     run_parquet_row_filter_skip
+                    ;;
+                asof_join)
+                    run_asof_join
                     ;;
                 tpcds)
                     run_tpcds
@@ -1630,6 +1639,14 @@ run_topk_sorted_tpch() {
     echo "Running sorted topk tpch benchmark..."
 
     $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" --sorted --limit 100 ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Runs the ASOF join benchmark
+run_asof_join() {
+    RESULTS_FILE="${RESULTS_DIR}/asof_join.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running ASOF join benchmark..."
+    debug_run $CARGO_COMMAND --bin benchmark_runner -- asof_join --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Runs the nlj benchmark
