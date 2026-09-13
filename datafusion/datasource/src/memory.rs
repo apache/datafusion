@@ -284,25 +284,38 @@ impl DataSource for MemorySourceConfig {
         use datafusion_physical_expr_common::sort_expr::sort_exprs_try_to_proto;
         use datafusion_proto_models::protobuf;
 
-        let partitions = self
-            .partitions
+        // Exhaustive destructure: adding a field to `MemorySourceConfig`
+        // without deciding how it is serialized is a compile error, not a
+        // silent round-trip gap.
+        let Self {
+            partitions: source_partitions,
+            schema,
+            // Derived from `schema` and `projection` by `try_new` on decode.
+            projected_schema: _,
+            projection: source_projection,
+            sort_information,
+            show_sizes,
+            fetch,
+        } = self;
+
+        let proto_partitions = source_partitions
             .iter()
             .map(|batches| record_batches_to_ipc_bytes(batches))
             .collect::<Result<Vec<_>>>()?;
 
         // Proto3 can't tell `None` from `Some(vec![])`; encode the latter
         // as the `[u32::MAX]` sentinel, matching the join/filter nodes.
-        let projection = match self.projection.as_ref() {
+        let proto_projection = match source_projection.as_ref() {
             None => Vec::new(),
             Some(v) if v.is_empty() => vec![u32::MAX],
             Some(v) => v.iter().map(|x| *x as u32).collect(),
         };
 
-        let mut sort_information = Vec::with_capacity(self.sort_information.len());
-        for ordering in &self.sort_information {
+        let mut proto_sort_information = Vec::with_capacity(sort_information.len());
+        for ordering in sort_information {
             let physical_sort_expr_nodes =
                 sort_exprs_try_to_proto(ordering.iter(), &ctx.expr_ctx())?;
-            sort_information.push(protobuf::PhysicalSortExprNodeCollection {
+            proto_sort_information.push(protobuf::PhysicalSortExprNodeCollection {
                 physical_sort_expr_nodes,
             });
         }
@@ -311,13 +324,12 @@ impl DataSource for MemorySourceConfig {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::MemoryScan(
                     protobuf::MemoryScanExecNode {
-                        partitions,
-                        schema: Some(self.schema.as_ref().try_into()?),
-                        projection,
-                        sort_information,
-                        show_sizes: self.show_sizes,
-                        fetch: self
-                            .fetch
+                        partitions: proto_partitions,
+                        schema: Some(schema.as_ref().try_into()?),
+                        projection: proto_projection,
+                        sort_information: proto_sort_information,
+                        show_sizes: *show_sizes,
+                        fetch: fetch
                             .map(|fetch| {
                                 usize_to_wire(fetch, "MemoryScanExecNode", "fetch")
                             })
@@ -507,23 +519,8 @@ impl MemorySourceConfig {
         mut self,
         mut sort_information: Vec<LexOrdering>,
     ) -> Result<Self> {
-        // All sort expressions must refer to the original schema
-        let fields = self.schema.fields();
-        let ambiguous_column = sort_information
-            .iter()
-            .flat_map(|ordering| ordering.clone())
-            .flat_map(|expr| collect_columns(&expr.expr))
-            .find(|col| {
-                fields
-                    .get(col.index())
-                    .map(|field| field.name() != col.name())
-                    .unwrap_or(true)
-            });
-        assert_or_internal_err!(
-            ambiguous_column.is_none(),
-            "Column {:?} is not found in the original schema of the MemorySourceConfig",
-            ambiguous_column.as_ref().unwrap()
-        );
+        // All sort expressions must refer to the original schema.
+        Self::validate_sort_information(&sort_information, &self.schema, "original")?;
 
         // If there is a projection on the source, we also need to project orderings
         if self.projection.is_some() {
@@ -533,6 +530,30 @@ impl MemorySourceConfig {
 
         self.sort_information = sort_information;
         Ok(self)
+    }
+
+    fn validate_sort_information(
+        sort_information: &[LexOrdering],
+        schema: &Schema,
+        schema_name: &str,
+    ) -> Result<()> {
+        let fields = schema.fields();
+        let ambiguous_column = sort_information
+            .iter()
+            .flat_map(|ordering| ordering.iter())
+            .flat_map(|expr| collect_columns(&expr.expr))
+            .find(|col| {
+                fields
+                    .get(col.index())
+                    .map(|field| field.name() != col.name())
+                    .unwrap_or(true)
+            });
+        assert_or_internal_err!(
+            ambiguous_column.is_none(),
+            "Column {:?} is not found in the {schema_name} schema of the MemorySourceConfig",
+            ambiguous_column.as_ref().unwrap()
+        );
+        Ok(())
     }
 
     /// Arc clone of ref to original schema
@@ -689,7 +710,7 @@ impl MemorySourceConfig {
     ) -> Result<Arc<dyn datafusion_physical_plan::ExecutionPlan>> {
         use datafusion_common::internal_datafusion_err;
         use datafusion_common::utils::usize_from_wire;
-        use datafusion_physical_expr_common::sort_expr::sort_exprs_try_from_proto;
+        use datafusion_physical_expr_common::sort_expr::optional_ordering_try_from_proto;
         use datafusion_proto_models::protobuf;
 
         let scan = datafusion_physical_plan::expect_plan_variant!(
@@ -698,41 +719,61 @@ impl MemorySourceConfig {
             "MemorySourceConfig",
         );
 
-        let partitions = scan
-            .partitions
+        // Destructure exhaustively so a newly added protobuf field must be
+        // handled here instead of being silently ignored.
+        let protobuf::MemoryScanExecNode {
+            partitions: proto_partitions,
+            schema: encoded_schema,
+            projection: proto_projection,
+            sort_information: proto_sort_information,
+            show_sizes,
+            fetch: proto_fetch,
+        } = scan;
+
+        let partitions = proto_partitions
             .iter()
             .map(|buf| record_batches_from_ipc_bytes(buf))
             .collect::<Result<Vec<_>>>()?;
 
-        let proto_schema = scan.schema.as_ref().ok_or_else(|| {
+        let proto_schema = encoded_schema.as_ref().ok_or_else(|| {
             internal_datafusion_err!("schema in MemoryScanExecNode is missing.")
         })?;
-        let schema: SchemaRef = SchemaRef::new(proto_schema.try_into()?);
+        let source_schema: SchemaRef = SchemaRef::new(proto_schema.try_into()?);
 
         // Preserve the empty-projection sentinel written by `try_to_proto`.
-        let projection = match scan.projection.as_slice() {
+        let projection = match proto_projection.as_slice() {
             [] => None,
             [u32::MAX] => Some(Vec::new()),
             indices => Some(indices.iter().map(|i| *i as usize).collect()),
         };
-
-        let mut sort_information = vec![];
-        for ordering in &scan.sort_information {
-            let sort_exprs = sort_exprs_try_from_proto(
-                &ordering.physical_sort_expr_nodes,
-                &ctx.expr_ctx(&schema),
-            )?;
-            sort_information.extend(LexOrdering::new(sort_exprs));
-        }
-
-        let fetch = scan
-            .fetch
+        let fetch = proto_fetch
             .map(|fetch| usize_from_wire(fetch, "MemoryScanExecNode", "fetch"))
             .transpose()?;
-        let source = Self::try_new(&partitions, schema, projection)?
+        let mut source = Self::try_new(&partitions, source_schema, projection)?
             .with_limit(fetch)
-            .with_show_sizes(scan.show_sizes)
-            .try_with_sort_information(sort_information)?;
+            .with_show_sizes(*show_sizes);
+
+        // Stored sort information has already been projected by
+        // `try_with_sort_information`; decode it against that same schema and
+        // do not project it a second time.
+        let mut decoded_sort_information = vec![];
+        for ordering in proto_sort_information {
+            let protobuf::PhysicalSortExprNodeCollection {
+                physical_sort_expr_nodes,
+            } = ordering;
+            if let Some(ordering) = optional_ordering_try_from_proto(
+                physical_sort_expr_nodes,
+                &ctx.expr_ctx(&source.projected_schema),
+            )? {
+                decoded_sort_information.push(ordering);
+            }
+        }
+        Self::validate_sort_information(
+            &decoded_sort_information,
+            &source.projected_schema,
+            "projected",
+        )?;
+        source.sort_information = decoded_sort_information;
 
         Ok(DataSourceExec::from_data_source(source))
     }

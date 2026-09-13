@@ -161,7 +161,7 @@ impl<T> Drop for DistributionSender<T> {
             // During the shutdown of a empty channel, both the sender and the receiver side will be dropped. However we
             // only want to decrement the "empty channels" counter once.
             //
-            // We are within a critical section here, so we we can safely assume that either the last sender or the
+            // We are within a critical section here, so we can safely assume that either the last sender or the
             // receiver (there's only one) will be dropped first.
             //
             // If the last sender is dropped first, `state.data` will still exists and the sender side decrements the

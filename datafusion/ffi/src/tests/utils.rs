@@ -91,6 +91,35 @@ pub fn get_module() -> Result<ForeignLibraryModule> {
     load_module(&find_library()?)
 }
 
+/// Load [`crate::execution_plan::FFI_ExecutionPlan`] from a fresh call to
+/// `datafusion_ffi_test_create_exec_with_byte_metrics`, exported as its own
+/// top-level symbol rather than a [`ForeignLibraryModule`] field precisely so
+/// that adding this test factory never touches that struct's `#[repr(C)]`
+/// layout - see the doc comment on the exported function for the rationale.
+pub fn get_byte_metrics_exec() -> Result<crate::execution_plan::FFI_ExecutionPlan> {
+    let lib_path = find_library()?;
+
+    let lib = unsafe {
+        libloading::Library::new(&lib_path)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+    };
+
+    let create_exec: libloading::Symbol<
+        extern "C" fn() -> crate::execution_plan::FFI_ExecutionPlan,
+    > = unsafe {
+        lib.get(b"datafusion_ffi_test_create_exec_with_byte_metrics")
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+    };
+
+    let plan = create_exec();
+
+    // Leak the library to keep it loaded for the duration of the test
+    #[expect(clippy::mem_forget)]
+    std::mem::forget(lib);
+
+    Ok(plan)
+}
+
 /// Load an independent copy of the integration-test cdylib.
 ///
 /// Copying to a unique path makes the dynamic loader create a separate image
