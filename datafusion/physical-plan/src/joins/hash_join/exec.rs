@@ -3027,6 +3027,25 @@ mod tests {
         }
     }
 
+    #[track_caller]
+    fn assert_ratio_metric(
+        metrics: &MetricsSet,
+        metric_name: &str,
+        expected_part: usize,
+        expected_total: usize,
+    ) {
+        let Some(MetricValue::Ratio { ratio_metrics, .. }) =
+            metrics.sum_by_name(metric_name)
+        else {
+            panic!("should have {metric_name} metrics")
+        };
+        assert_eq!(
+            (ratio_metrics.part(), ratio_metrics.total()),
+            (expected_part, expected_total),
+            "{metric_name} (part, total) mismatch",
+        );
+    }
+
     fn build_schema_and_on() -> Result<(SchemaRef, SchemaRef, JoinOn)> {
         let left_schema = Arc::new(Schema::new(vec![
             Field::new("a1", DataType::Int32, true),
@@ -3073,6 +3092,7 @@ mod tests {
     use datafusion_physical_expr::{
         EquivalenceProperties, PhysicalSortExpr, RangePartitioning, SplitPoint,
     };
+    use datafusion_physical_expr_common::metrics::MetricValue;
     use futures::StreamExt;
     use hashbrown::HashTable;
     use insta::{allow_duplicates, assert_snapshot};
@@ -4077,6 +4097,128 @@ mod tests {
         let batch = build_table_i32(a, b, c);
         let schema = batch.schema();
         TestMemoryExec::try_new_exec(&[vec![batch.clone(), batch]], schema, None).unwrap()
+    }
+
+    /// `probe_hit_rate` and `avg_fanout` must count each probe row once, even
+    /// when a probe batch is processed in several chunks. Every probe row matches
+    /// all 3 build rows, so any `batch_size` below 9 splits the probe batch into
+    /// chunks, and some splits cut a single row's matches across chunks.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn join_probe_metrics_count_each_probe_row_once(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![2, 2, 2]),
+            ("c1", &vec![3, 4, 5]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30]),
+            ("b1", &vec![2, 2, 2]),
+            ("c2", &vec![30, 40, 50]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        )];
+
+        let (columns, batches, metrics) = join_collect(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
+
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches), @r"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b1 | c2 |
+            +----+----+----+----+----+----+
+            | 1  | 2  | 3  | 10 | 2  | 30 |
+            | 2  | 2  | 4  | 10 | 2  | 30 |
+            | 3  | 2  | 5  | 10 | 2  | 30 |
+            | 1  | 2  | 3  | 20 | 2  | 40 |
+            | 2  | 2  | 4  | 20 | 2  | 40 |
+            | 3  | 2  | 5  | 20 | 2  | 40 |
+            | 1  | 2  | 3  | 30 | 2  | 50 |
+            | 2  | 2  | 4  | 30 | 2  | 50 |
+            | 3  | 2  | 5  | 30 | 2  | 50 |
+            +----+----+----+----+----+----+
+            ");
+        }
+
+        assert_join_metrics!(metrics, 9);
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
+        assert_ratio_metric(&metrics, "probe_hit_rate", 3, 3);
+        assert_ratio_metric(&metrics, "avg_fanout", 9, 3);
+
+        Ok(())
+    }
+
+    /// Complements `join_probe_metrics_count_each_probe_row_once`: with unique
+    /// build keys each probe row has at most one match, so chunks always split
+    /// between probe rows. A probe row that starts a new chunk must still be
+    /// counted, even though the lookup offset already points at it.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn join_probe_metrics_count_probe_row_starting_new_chunk(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![4, 5, 6]),
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 25, 30]),
+            ("b1", &vec![4, 4, 4, 40]),
+            ("c2", &vec![70, 80, 85, 90]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        )];
+
+        let (columns, batches, metrics) = join_collect(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
+
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches), @"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b1 | c2 |
+            +----+----+----+----+----+----+
+            | 1  | 4  | 7  | 10 | 4  | 70 |
+            | 1  | 4  | 7  | 20 | 4  | 80 |
+            | 1  | 4  | 7  | 25 | 4  | 85 |
+            +----+----+----+----+----+----+
+            ");
+        }
+
+        assert_join_metrics!(metrics, 3);
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
+        assert_ratio_metric(&metrics, "probe_hit_rate", 3, 4);
+        assert_ratio_metric(&metrics, "avg_fanout", 3, 3);
+
+        Ok(())
     }
 
     #[apply(hash_join_exec_configs)]
