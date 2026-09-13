@@ -634,6 +634,16 @@ ORDER BY sum(value) + sum(value);
 statement error DataFusion error: This feature is not implemented: SORT BY
 select * from t SORT BY time;
 
+## ORDER BY USING <operator> (PostgreSQL) is not supported
+statement ok
+set datafusion.sql_parser.dialect = 'PostgreSQL';
+
+statement error DataFusion error: This feature is not implemented: ORDER BY USING is not supported: <
+select * from t ORDER BY time USING <;
+
+statement ok
+reset datafusion.sql_parser.dialect;
+
 
 # distinct on a column not in the select list should not work
 statement error DataFusion error: Error during planning: For SELECT DISTINCT, ORDER BY expressions t\.time must appear in select list
