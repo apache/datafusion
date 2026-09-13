@@ -44,6 +44,7 @@ impl LimitedDistinctAggregation {
         Self {}
     }
 
+    #[expect(deprecated)]
     fn transform_agg(
         aggr: &AggregateExec,
         limit: usize,

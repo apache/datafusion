@@ -96,7 +96,7 @@ impl GroupedTopKAggregateStream {
             // DISTINCT case: use the group key type and get ordering from limit_order_descending
             // The ordering direction is set by the optimizer when it pushes down the limit
             let desc = aggr
-                .limit_options()
+                .limit_options
                 .and_then(|config| config.descending)
                 .ok_or_else(|| {
                     internal_datafusion_err!(
@@ -342,6 +342,7 @@ mod tests {
     use datafusion_physical_expr::expressions::col;
 
     #[tokio::test]
+    #[expect(deprecated)]
     async fn test_topk_aggregate_argument_metrics() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("k", DataType::UInt32, false),

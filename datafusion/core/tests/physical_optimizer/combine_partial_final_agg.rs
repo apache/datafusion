@@ -234,6 +234,7 @@ fn aggregations_with_group_combined() -> datafusion_common::Result<()> {
 }
 
 #[test]
+#[expect(deprecated)]
 fn aggregations_with_limit_combined() -> datafusion_common::Result<()> {
     let schema = schema();
     let aggr_expr = vec![];

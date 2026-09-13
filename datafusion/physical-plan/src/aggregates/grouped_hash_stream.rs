@@ -639,7 +639,7 @@ impl GroupedHashAggregateStream {
             group_ordering,
             input_done: false,
             spill_state,
-            group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
+            group_values_soft_limit: agg.limit_options.map(|config| config.limit()),
             skip_aggregation_probe,
             reduction_factor,
         })

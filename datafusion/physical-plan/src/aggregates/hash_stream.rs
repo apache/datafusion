@@ -440,7 +440,7 @@ impl PartialHashAggregateStream {
             reduction_factor,
             early_emit_count,
             skip_aggregation_probe,
-            group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
+            group_values_soft_limit: agg.limit_options.map(|config| config.limit()),
             hash_table: Some(hash_table),
         })
     }
@@ -773,7 +773,7 @@ impl FinalHashAggregateStream {
             input,
             baseline_metrics,
             reservation,
-            group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
+            group_values_soft_limit: agg.limit_options.map(|config| config.limit()),
             hash_table: Some(hash_table),
             spill_context,
         })

@@ -927,6 +927,22 @@ impl AggregateExec {
     }
 
     /// Clone this exec, overriding only the limit hint.
+    ///
+    /// This is public for internal use only and should not be treated as a
+    /// public API.
+    ///
+    /// It is marked deprecated so that external callers get a warning, but it
+    /// will not be removed because the physical optimizer depends on it.
+    ///
+    /// It is used by the physical optimizer for certain optimizations. See the
+    /// following rules in `datafusion-physical-optimizer` for details:
+    /// - `topk_aggregation.rs`
+    /// - `limited_distinct_aggregation.rs`
+    /// - `combine_partial_final_agg.rs`
+    #[doc(hidden)]
+    #[deprecated(
+        note = "public for internal use only and not a public API; deprecated only to warn external callers, it will not be removed since the physical optimizer depends on it"
+    )]
     pub fn with_new_limit_options(&self, limit_options: Option<LimitOptions>) -> Self {
         Self {
             limit_options,
@@ -944,6 +960,31 @@ impl AggregateExec {
             input_schema: Arc::clone(&self.input_schema),
             dynamic_filter: self.dynamic_filter.clone(),
         }
+    }
+
+    /// Set the limit options
+    ///
+    /// This is public for internal use only and should not be treated as a
+    /// public API. See [`Self::with_new_limit_options`] for details.
+    #[doc(hidden)]
+    #[deprecated(
+        note = "public for internal use only and not a public API; deprecated only to warn external callers, it will not be removed since the physical optimizer depends on it"
+    )]
+    pub fn with_limit_options(mut self, limit_options: Option<LimitOptions>) -> Self {
+        self.limit_options = limit_options;
+        self
+    }
+
+    /// Get the limit options (if set)
+    ///
+    /// This is public for internal use only and should not be treated as a
+    /// public API. See [`Self::with_new_limit_options`] for details.
+    #[doc(hidden)]
+    #[deprecated(
+        note = "public for internal use only and not a public API; deprecated only to warn external callers, it will not be removed since the physical optimizer depends on it"
+    )]
+    pub fn limit_options(&self) -> Option<LimitOptions> {
+        self.limit_options
     }
 
     pub fn cache(&self) -> &PlanProperties {
@@ -1098,17 +1139,6 @@ impl AggregateExec {
     /// Aggregation mode (full, partial)
     pub fn mode(&self) -> &AggregateMode {
         &self.mode
-    }
-
-    /// Set the limit options for this AggExec
-    pub fn with_limit_options(mut self, limit_options: Option<LimitOptions>) -> Self {
-        self.limit_options = limit_options;
-        self
-    }
-
-    /// Get the limit options (if set)
-    pub fn limit_options(&self) -> Option<LimitOptions> {
-        self.limit_options
     }
 
     /// Grouping expressions
@@ -1375,7 +1405,7 @@ impl AggregateExec {
     /// on an AggregateExec.
     pub fn is_unordered_unfiltered_group_by_distinct(&self) -> bool {
         if self
-            .limit_options()
+            .limit_options
             .and_then(|config| config.descending)
             .is_some()
         {
@@ -2541,6 +2571,7 @@ impl AggregateExec {
     /// Grouping expressions are decoded against the child schema. Aggregate
     /// arguments, ordering, filters, and the dynamic filter are decoded against
     /// the aggregate input schema carried in the protobuf node.
+    #[expect(deprecated)]
     pub fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
@@ -4425,6 +4456,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(deprecated)]
     async fn limited_distinct_aggregate_uses_migrated_hash_streams() -> Result<()> {
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::UInt32, false)]));
@@ -6867,6 +6899,7 @@ mod tests {
         ))
     }
 
+    #[expect(deprecated)]
     fn build_test_aggregate_with_mode(
         schema: &SchemaRef,
         stats: Statistics,
