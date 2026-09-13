@@ -1100,7 +1100,9 @@ fn coerce_frame_bound(
 }
 
 /// The type that RANGE frame offsets are coerced to for an ORDER BY column of
-/// `col_type`, or `None` if the type does not support RANGE frames.
+/// `col_type`, or `None` if there is no offset type to coerce to (the column
+/// type has no arithmetic). `None` does not mean the type is unusable in a
+/// RANGE frame: a free frame has no offsets, see `supports_free_range_frame`.
 fn extract_window_frame_target_type(col_type: &DataType) -> Option<DataType> {
     if col_type.is_numeric()
         || col_type.is_string()
