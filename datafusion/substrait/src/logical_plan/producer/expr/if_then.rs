@@ -17,7 +17,7 @@
 
 use crate::logical_plan::producer::SubstraitProducer;
 use datafusion::common::DFSchemaRef;
-use datafusion::logical_expr::Case;
+use datafusion::logical_expr::{Case, Expr};
 use substrait::proto::Expression;
 use substrait::proto::expression::if_then::IfClause;
 use substrait::proto::expression::{IfThen, RexType};
@@ -32,19 +32,24 @@ pub fn from_case(
         when_then_expr,
         else_expr,
     } = case;
-    let mut ifs: Vec<IfClause> = vec![];
-    // Parse base
-    if let Some(e) = expr {
-        // Base expression exists
+
+    // Substrait's `IfThen` has no notion of a base expression: every `IfClause`
+    // is a standalone boolean condition. A `CASE <base> WHEN <value> THEN ...`
+    // is therefore emitted as `IfClause`s over `<base> = <value>`, the same
+    // desugaring `from_between` applies to `BETWEEN`. DataFusion matches a base
+    // expression with `=` semantics, so this preserves the plan's meaning,
+    // including a `NULL` `<value>` never matching.
+    let mut ifs: Vec<IfClause> = Vec::with_capacity(when_then_expr.len());
+    for (when, then) in when_then_expr {
+        let condition = match expr {
+            Some(base) => {
+                let eq = Expr::eq(*base.clone(), *when.clone());
+                producer.handle_expr(&eq, schema)?
+            }
+            None => producer.handle_expr(when, schema)?,
+        };
         ifs.push(IfClause {
-            r#if: Some(producer.handle_expr(e, schema)?),
-            then: None,
-        });
-    }
-    // Parse `when`s
-    for (r#if, then) in when_then_expr {
-        ifs.push(IfClause {
-            r#if: Some(producer.handle_expr(r#if, schema)?),
+            r#if: Some(condition),
             then: Some(producer.handle_expr(then, schema)?),
         });
     }
