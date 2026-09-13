@@ -30,8 +30,8 @@ use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
-    Column, DFSchemaRef, ExprSchema, NullEquality, Result, ScalarValue,
-    assert_or_internal_err, internal_err, plan_err,
+    Column, DFSchemaRef, ExprSchema, NullEquality, Result, assert_or_internal_err,
+    internal_err, plan_err,
 };
 use datafusion_expr::expr::{Exists, InSubquery};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
@@ -622,29 +622,35 @@ fn build_join_with_count_bug(
         let value_name = create_col_from_scalar_expr(in_right, alias.to_string())?.name;
         let compensation = expr_map.get(&value_name).cloned();
         let value_col = Expr::Column(Column::new(Some(alias), value_name));
-        let compensated_value = match compensation {
-            // Only substitute when the empty-input value isn't NULL itself.
-            // If it is NULL, the unmatched row's raw NULL from the LEFT JOIN
-            // is already the correct value, so no substitution is needed.
+        // A HAVING-failed row means zero subquery rows for that outer row, so
+        // for `IN`-truth purposes it's `false` (no value to match).
+        let having_failed_result = lit(false);
+        // Only substitute the empty-input value when it isn't NULL itself.
+        // If it is NULL, the unmatched row's raw NULL from the LEFT JOIN is
+        // already the correct value, so no substitution is needed.
+        let unmatched_result = match &compensation {
             Some(empty_batch_result)
                 if !evaluates_to_null(
                     empty_batch_result.clone(),
                     empty_batch_result.column_refs(),
                 )? =>
             {
-                let mut builder =
-                    when(indicator_col.clone().is_null(), empty_batch_result);
-                if let Some(when_expr) = &having_arm {
-                    builder = builder.when(when_expr.clone(), lit(ScalarValue::Null));
-                }
-                builder
-                    .otherwise(value_col)?
-                    .rewrite(&mut expr_rewrite)
-                    .data()?
+                in_left.deref().clone().eq(empty_batch_result.clone())
             }
-            _ => value_col,
+            _ => in_left.deref().clone().eq(value_col.clone()),
         };
-        in_left.deref().clone().eq(compensated_value)
+        let matched_result = in_left.deref().clone().eq(value_col);
+        match &having_arm {
+            Some(when_expr) => when(indicator_col.clone().is_null(), unmatched_result)
+                .when(when_expr.clone(), having_failed_result)
+                .otherwise(matched_result)?
+                .rewrite(&mut expr_rewrite)
+                .data()?,
+            None => when(indicator_col.clone().is_null(), unmatched_result)
+                .otherwise(matched_result)?
+                .rewrite(&mut expr_rewrite)
+                .data()?,
+        }
     } else {
         // EXISTS is true by default (the groupless aggregate always
         // produces a row), unless the row has an actual join match whose
