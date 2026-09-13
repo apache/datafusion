@@ -4059,6 +4059,120 @@ SELECT '2000-12-01 04:04:12' AT TIME ZONE 'America/New York';
 statement error
 SELECT '2023-03-12 02:00:00' AT TIME ZONE 'EDT';
 
+##########
+## AT TIME ZONE applied to a timezone-*aware* timestamp
+##
+## https://github.com/apache/datafusion/issues/12218
+##
+## PostgreSQL (and DuckDB) semantics are asymmetric:
+##
+##   * `<tz-naive timestamp> AT TIME ZONE zone` reads the value as a wall clock
+##     in `zone` and returns the matching tz-*aware* instant, and
+##   * `<tz-aware timestamp> AT TIME ZONE zone` returns the wall clock that the
+##     instant has in `zone`, as a tz-*naive* timestamp.
+##
+## Every result below was checked against PostgreSQL 17.
+##########
+
+statement ok
+SET datafusion.execution.time_zone = 'UTC';
+
+statement ok
+CREATE TABLE at_tz_t AS
+SELECT
+  '2024-01-01T12:00:00Z'::timestamptz AS tstz,
+  '2024-01-01 12:00:00'::timestamp AS tsn;
+
+# The tz-naive column is unaffected by this issue: noon-in-Denver is the same
+# instant PostgreSQL reports (`2024-01-01 19:00:00+00`).
+query TP
+SELECT arrow_typeof(tsn AT TIME ZONE 'America/Denver'), tsn AT TIME ZONE 'America/Denver' FROM at_tz_t;
+----
+Timestamp(ns, "America/Denver") 2024-01-01T12:00:00-07:00
+
+# The tz-aware column: PostgreSQL returns `timestamp` (naive) `2024-01-01 05:00:00`.
+query TP
+SELECT arrow_typeof(tstz AT TIME ZONE 'America/Denver'), tstz AT TIME ZONE 'America/Denver' FROM at_tz_t;
+----
+Timestamp(ns) 2024-01-01T05:00:00
+
+# The exact reproducer from #12218. PostgreSQL returns `2024-01-01 05:00:00`.
+query P
+SELECT (tstz AT TIME ZONE 'America/Denver')::timestamp FROM at_tz_t;
+----
+2024-01-01T05:00:00
+
+# Chained. PostgreSQL: `timestamptz` `2024-01-01 04:00:00+00`, i.e. the Denver
+# wall clock (05:00) re-read as a Brussels wall clock.
+query TP
+SELECT
+  arrow_typeof(tstz AT TIME ZONE 'America/Denver' AT TIME ZONE 'Europe/Brussels'),
+  tstz AT TIME ZONE 'America/Denver' AT TIME ZONE 'Europe/Brussels'
+FROM at_tz_t;
+----
+Timestamp(ns, "Europe/Brussels") 2024-01-01T05:00:00+01:00
+
+# Fixed offset. Note DataFusion follows the arrow/ISO-8601 sign convention here
+# (`+05:30` is 5h30m *east* of UTC), while PostgreSQL applies the POSIX
+# convention to offsets spelled as strings. That difference is pre-existing and
+# is not what #12218 is about; only the result *type* changes below.
+query TP
+SELECT arrow_typeof(tstz AT TIME ZONE '+05:30'), tstz AT TIME ZONE '+05:30' FROM at_tz_t;
+----
+Timestamp(ns) 2024-01-01T17:30:00
+
+# `AT TIME ZONE` preserves the precision of its input.
+query T
+SELECT arrow_typeof(arrow_cast('2024-01-01T12:00:00Z', 'Timestamp(Microsecond, Some("UTC"))') AT TIME ZONE 'America/Denver');
+----
+Timestamp(µs)
+
+query T
+SELECT arrow_typeof(arrow_cast('2024-01-01T12:00:00', 'Timestamp(Microsecond, None)') AT TIME ZONE 'America/Denver');
+----
+Timestamp(µs, "America/Denver")
+
+# A real (multi-row) tz-aware column, spanning both DST transitions in
+# America/Denver.
+statement ok
+CREATE TABLE at_tz_dst(ts timestamptz) AS VALUES
+  (arrow_cast('2024-01-01T12:00:00Z', 'Timestamp(Nanosecond, Some("UTC"))')),
+  (arrow_cast('2024-03-10T08:59:00Z', 'Timestamp(Nanosecond, Some("UTC"))')),
+  (arrow_cast('2024-03-10T09:00:00Z', 'Timestamp(Nanosecond, Some("UTC"))')),
+  (arrow_cast('2024-07-01T12:00:00Z', 'Timestamp(Nanosecond, Some("UTC"))')),
+  (arrow_cast('2024-11-03T07:59:00Z', 'Timestamp(Nanosecond, Some("UTC"))')),
+  (arrow_cast('2024-11-03T08:00:00Z', 'Timestamp(Nanosecond, Some("UTC"))'));
+
+query PPT
+SELECT
+  ts,
+  ts AT TIME ZONE 'America/Denver' AS denver,
+  arrow_typeof(ts AT TIME ZONE 'America/Denver') AS denver_type
+FROM at_tz_dst ORDER BY ts;
+----
+2024-01-01T12:00:00Z 2024-01-01T05:00:00 Timestamp(ns)
+2024-03-10T08:59:00Z 2024-03-10T01:59:00 Timestamp(ns)
+2024-03-10T09:00:00Z 2024-03-10T03:00:00 Timestamp(ns)
+2024-07-01T12:00:00Z 2024-07-01T06:00:00 Timestamp(ns)
+2024-11-03T07:59:00Z 2024-11-03T01:59:00 Timestamp(ns)
+2024-11-03T08:00:00Z 2024-11-03T01:00:00 Timestamp(ns)
+
+# `now()` is tz-aware whenever `datafusion.execution.time_zone` is set.
+query T
+SELECT arrow_typeof(now() AT TIME ZONE 'America/Denver');
+----
+Timestamp(ns)
+
+statement ok
+DROP TABLE at_tz_dst;
+
+statement ok
+DROP TABLE at_tz_t;
+
+statement ok
+RESET datafusion.execution.time_zone;
+
+
 # Test current_time without parentheses
 query B
 select current_time = current_time;
@@ -5539,3 +5653,41 @@ query P
 SELECT date_bin(NULL, TIMESTAMP '2023-01-01 12:30:00', TIMESTAMP '2023-01-01 12:00:00')
 ----
 NULL
+
+# KNOWN LIMITATION: `AT TIME ZONE` chooses its behaviour from the type that
+# `Expr::get_type` reports in the SQL planner, which runs BEFORE the type
+# coercion analyzer. For a `CASE` expression, `get_type` reports the type of the
+# first non-null `THEN` arm and ignores coercion. So the two queries below have
+# the same coerced input type, `Timestamp(ns, "UTC")`, but give different
+# results: the first still takes the timezone-naive path and keeps the old
+# aware-in aware-out shape.
+#
+# PostgreSQL gives `2024-01-01 05:00:00` as a naive timestamp for both.
+# A correct fix has to dispatch after coercion. Tracked here so the behaviour is
+# visible rather than silent.
+statement ok
+CREATE TABLE at_tz_case AS
+SELECT arrow_cast('2024-01-01T12:00:00Z', 'Timestamp(Nanosecond, Some("UTC"))') AS aware,
+       arrow_cast('2024-01-01T12:00:00', 'Timestamp(Nanosecond, None)') AS naive,
+       true AS b
+
+# both CASE expressions have the same type
+query TT
+SELECT arrow_typeof(CASE WHEN b THEN naive ELSE aware END),
+       arrow_typeof(CASE WHEN b THEN aware ELSE naive END)
+FROM at_tz_case
+----
+Timestamp(ns, "UTC") Timestamp(ns, "UTC")
+
+# but AT TIME ZONE does not agree on them
+query TPTP
+SELECT arrow_typeof((CASE WHEN b THEN naive ELSE aware END) AT TIME ZONE 'America/Denver'),
+       (CASE WHEN b THEN naive ELSE aware END) AT TIME ZONE 'America/Denver',
+       arrow_typeof((CASE WHEN b THEN aware ELSE naive END) AT TIME ZONE 'America/Denver'),
+       (CASE WHEN b THEN aware ELSE naive END) AT TIME ZONE 'America/Denver'
+FROM at_tz_case
+----
+Timestamp(ns, "America/Denver") 2024-01-01T05:00:00-07:00 Timestamp(ns) 2024-01-01T05:00:00
+
+statement ok
+DROP TABLE at_tz_case
