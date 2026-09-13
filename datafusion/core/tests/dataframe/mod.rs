@@ -7690,10 +7690,10 @@ async fn test_partial_aggregate_state_fields_have_unique_names() -> Result<()> {
         "date",
         "ticker",
         "first_value(value)[first_value]",
-        "first_value(value)[ordering_0_timestamp@0]",
+        "first_value(value)[ordering_0]",
         "first_value(value)[first_value_is_set]",
         "last_value(value)[last_value]",
-        "last_value(value)[ordering_0_timestamp@0]",
+        "last_value(value)[ordering_0]",
         "last_value(value)[last_value_is_set]",
     ];
 

@@ -40,7 +40,9 @@ use datafusion_common::{
     not_impl_err,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
+use datafusion_expr::utils::{
+    AggregateOrderSensitivity, format_state_name, ordering_state_fields,
+};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr, ExprFunctionExt,
     GroupsAccumulator, ReversedUDAF, Signature, SortExpr, Volatility,
@@ -332,12 +334,7 @@ impl AggregateUDFImpl for FirstValue {
             )
             .into(),
         ];
-        fields.extend(args.ordering_fields.iter().enumerate().map(|(idx, field)| {
-            Arc::new(field.as_ref().clone().with_name(format_state_name(
-                args.name,
-                &format!("ordering_{idx}_{}", field.name()),
-            )))
-        }));
+        fields.extend(ordering_state_fields(args.name, args.ordering_fields));
         fields.push(
             Field::new(
                 format_state_name(args.name, "first_value_is_set"),
@@ -1251,12 +1248,7 @@ impl AggregateUDFImpl for LastValue {
             )
             .into(),
         ];
-        fields.extend(args.ordering_fields.iter().enumerate().map(|(idx, field)| {
-            Arc::new(field.as_ref().clone().with_name(format_state_name(
-                args.name,
-                &format!("ordering_{idx}_{}", field.name()),
-            )))
-        }));
+        fields.extend(ordering_state_fields(args.name, args.ordering_fields));
         fields.push(
             Field::new(
                 format_state_name(args.name, "last_value_is_set"),

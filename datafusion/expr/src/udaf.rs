@@ -41,8 +41,7 @@ use crate::function::{
 };
 use crate::groups_accumulator::GroupsAccumulator;
 use crate::udf_eq::UdfEq;
-use crate::utils::AggregateOrderSensitivity;
-use crate::utils::format_state_name;
+use crate::utils::{AggregateOrderSensitivity, format_state_name, ordering_state_fields};
 use crate::{Accumulator, Expr, expr_vec_fmt};
 use crate::{Documentation, Signature};
 
@@ -609,12 +608,7 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
         Ok(fields
             .into_iter()
             .map(Arc::new)
-            .chain(args.ordering_fields.iter().enumerate().map(|(idx, field)| {
-                Arc::new(field.as_ref().clone().with_name(format_state_name(
-                    args.name,
-                    &format!("ordering_{idx}_{}", field.name()),
-                )))
-            }))
+            .chain(ordering_state_fields(args.name, args.ordering_fields))
             .collect())
     }
 
@@ -1899,8 +1893,8 @@ mod test {
             names,
             vec![
                 "my_agg(value)[value]",
-                "my_agg(value)[ordering_0_timestamp@0]",
-                "my_agg(value)[ordering_1_timestamp@0]",
+                "my_agg(value)[ordering_0]",
+                "my_agg(value)[ordering_1]",
             ]
         );
 
