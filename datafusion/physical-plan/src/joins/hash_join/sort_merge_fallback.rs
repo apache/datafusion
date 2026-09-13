@@ -52,6 +52,14 @@
 //! back is not by itself decisive: a single falling-back partition completes
 //! when the budget covers its sorts.
 //!
+//! A join that promises its probe side's ordering never falls back, because a
+//! merge emits join-key order instead. That covers more than inputs with a
+//! declared ordering: the planner pushes an `ORDER BY` on probe-side columns
+//! below an inner or right join precisely because the join keeps that order,
+//! so such queries stay on the in-memory path and still fail under memory
+//! pressure. Re-sorting the merge output to honor the promise is follow-up
+//! work.
+//!
 //! [`HashJoinExec`]: super::HashJoinExec
 //! [`PartitionMode::Partitioned`]: crate::joins::PartitionMode::Partitioned
 

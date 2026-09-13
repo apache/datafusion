@@ -9396,14 +9396,15 @@ mod tests {
 
     /// Two sides of `batches` batches each, with duplicate keys, keys that
     /// only exist on one side, and a non-key column to filter on.
-    fn sort_merge_fallback_inputs(
+    fn sort_merge_fallback_batches(
         batches: usize,
-    ) -> (Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>) {
+    ) -> (Vec<RecordBatch>, Vec<RecordBatch>) {
         let rows_per_batch = 16;
         let side = |modulus: i32, offset: i32, a: &str, b: &str, c: &str| {
-            let batches: Vec<RecordBatch> = (0..batches as i32)
+            (0..batches as i32)
                 .map(|batch| {
                     let start = batch * rows_per_batch;
+                    // ids ascend within and across batches
                     let ids: Vec<i32> = (start..start + rows_per_batch).collect();
                     // keys repeat within and across batches, and each side
                     // has keys the other side lacks
@@ -9412,13 +9413,22 @@ mod tests {
                     let values: Vec<i32> = ids.iter().map(|id| (id * 13) % 17).collect();
                     build_table_i32((a, &ids), (b, &keys), (c, &values))
                 })
-                .collect();
+                .collect::<Vec<RecordBatch>>()
+        };
+        // left keys are 0..47, right keys 5..58
+        (side(47, 0, "a1", "b1", "c1"), side(53, 5, "a2", "b2", "c2"))
+    }
+
+    fn sort_merge_fallback_inputs(
+        batches: usize,
+    ) -> (Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>) {
+        let (left, right) = sort_merge_fallback_batches(batches);
+        let exec = |batches: Vec<RecordBatch>| {
             let schema = batches[0].schema();
             TestMemoryExec::try_new_exec(&[batches], schema, None).unwrap()
                 as Arc<dyn ExecutionPlan>
         };
-        // left keys are 0..47, right keys 5..58
-        (side(47, 0, "a1", "b1", "c1"), side(53, 5, "a2", "b2", "c2"))
+        (exec(left), exec(right))
     }
 
     /// `c1 < c2`, so it references both sides
@@ -9469,6 +9479,22 @@ mod tests {
             TaskContext::default()
                 .with_session_config(session_config)
                 .with_runtime(runtime.build_arc().unwrap()),
+        )
+    }
+
+    /// An unbounded pool with `hash_join_max_build_size` set, so that only the
+    /// cap, or a reason to decline, decides whether a partition falls back.
+    fn sort_merge_fallback_capped_ctx(max_build_size: Option<usize>) -> Arc<TaskContext> {
+        let unlimited = sort_merge_fallback_task_ctx(None, DiskManagerBuilder::default());
+        let mut session_config = unlimited.session_config().clone();
+        session_config
+            .options_mut()
+            .execution
+            .hash_join_max_build_size = max_build_size;
+        Arc::new(
+            TaskContext::default()
+                .with_session_config(session_config)
+                .with_runtime(unlimited.runtime_env()),
         )
     }
 
@@ -9699,6 +9725,88 @@ mod tests {
         Ok(())
     }
 
+    /// The fallback is declined whenever the join promises its probe side's
+    /// ordering, because a merge emits join-key order instead. The promise is
+    /// what matters, not the input: `maintains_input_order` makes it only for
+    /// the join types that emit every row while scanning the probe side, and
+    /// only an ordered probe input turns it into an advertised output ordering.
+    #[tokio::test]
+    async fn sort_merge_fallback_honors_a_promised_probe_ordering() -> Result<()> {
+        let (left, _) = sort_merge_fallback_inputs(32);
+        let (_, right) = sort_merge_fallback_batches(32);
+        let schema = right[0].schema();
+        // `a2` is the probe side's id column, ascending across batches
+        let ordering = datafusion_physical_expr_common::sort_expr::LexOrdering::new([
+            PhysicalSortExpr::new_default(Arc::new(Column::new_with_schema(
+                "a2", &schema,
+            )?)),
+        ])
+        .unwrap();
+        let right = TestMemoryExec::try_new(&[right], schema, None)?
+            .try_with_sort_information(vec![ordering])?;
+        let right: Arc<dyn ExecutionPlan> =
+            Arc::new(TestMemoryExec::update_cache(&Arc::new(right)));
+        let on: JoinOn = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+        )];
+        let join = |join_type: JoinType| {
+            HashJoinExec::try_new(
+                Arc::clone(&left),
+                Arc::clone(&right),
+                on.clone(),
+                None,
+                &join_type,
+                None,
+                PartitionMode::Partitioned,
+                NullEquality::NullEqualsNothing,
+                false,
+            )
+        };
+        // A join that declined up front never registers the counter at all.
+        let fallbacks = |join: &HashJoinExec| {
+            join.metrics()
+                .unwrap()
+                .sum_by_name(SORT_MERGE_FALLBACK_COUNT_METRIC_NAME)
+                .map_or(0, |v| v.as_usize())
+        };
+
+        // An inner join promises the probe order, so under a cap that would
+        // otherwise switch it, it stays a hash join and keeps that order.
+        let inner = join(JoinType::Inner)?;
+        assert!(inner.properties().output_ordering().is_some());
+        let batches = common::collect(
+            inner.execute(0, sort_merge_fallback_capped_ctx(Some(1024)))?,
+        )
+        .await?;
+        let output = concat_batches(&inner.schema(), &batches)?;
+        let ids = output
+            .column_by_name("a2")
+            .unwrap()
+            .as_primitive::<Int32Type>();
+        assert!(
+            ids.values().is_sorted(),
+            "the output must stay in probe order"
+        );
+        assert_eq!(
+            fallbacks(&inner),
+            0,
+            "a promised ordering must stop the fallback"
+        );
+
+        // A left join never promises it, so the same ordered input does not
+        // stop the fallback.
+        let left_join = join(JoinType::Left)?;
+        assert!(left_join.properties().output_ordering().is_none());
+        common::collect(
+            left_join.execute(0, sort_merge_fallback_capped_ctx(Some(1024)))?,
+        )
+        .await?;
+        assert_eq!(fallbacks(&left_join), 1);
+
+        Ok(())
+    }
+
     /// Without disk the join fails as before
     #[tokio::test]
     async fn sort_merge_fallback_needs_disk() -> Result<()> {
@@ -9760,23 +9868,10 @@ mod tests {
                 false,
             )
         };
-        let task_ctx = |max_build_size: Option<usize>| {
-            let unlimited =
-                sort_merge_fallback_task_ctx(None, DiskManagerBuilder::default());
-            let mut session_config = unlimited.session_config().clone();
-            session_config
-                .options_mut()
-                .execution
-                .hash_join_max_build_size = max_build_size;
-            Arc::new(
-                TaskContext::default()
-                    .with_session_config(session_config)
-                    .with_runtime(unlimited.runtime_env()),
-            )
-        };
-
         let in_memory = join()?;
-        let expected = common::collect(in_memory.execute(0, task_ctx(None))?).await?;
+        let expected =
+            common::collect(in_memory.execute(0, sort_merge_fallback_capped_ctx(None))?)
+                .await?;
         assert_eq!(
             in_memory
                 .metrics()
@@ -9787,7 +9882,10 @@ mod tests {
         );
 
         let fallback = join()?;
-        let actual = common::collect(fallback.execute(0, task_ctx(Some(1024)))?).await?;
+        let actual = common::collect(
+            fallback.execute(0, sort_merge_fallback_capped_ctx(Some(1024)))?,
+        )
+        .await?;
         assert_eq!(
             fallback
                 .metrics()

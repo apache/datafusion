@@ -20,8 +20,10 @@
 
 use std::sync::Arc;
 
-use arrow::array::{Int32Array, RecordBatch};
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::array::{AsArray, Int32Array, RecordBatch};
+use arrow::compute::concat_batches;
+use arrow::datatypes::{DataType, Field, Int32Type, Schema};
+use datafusion::physical_plan::displayable;
 use datafusion::prelude::*;
 use datafusion_common::assert_contains;
 use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
@@ -273,4 +275,51 @@ async fn semi_and_anti_joins_fall_back() {
         assert!(!plain.is_empty(), "{sql}");
         assert_eq!(capped, plain, "{sql}");
     }
+}
+
+/// A join that promises its probe side's ordering keeps that promise instead
+/// of falling back. The planner pushes `ORDER BY r.w` below the join because a
+/// hash join emits inner-join rows in probe order, and nothing above it sorts
+/// again, so a merge's join-key order would come out wrong.
+#[tokio::test]
+async fn a_promised_probe_ordering_wins_over_the_fallback() {
+    let sql = "SELECT l.k, r.w FROM l JOIN r ON l.k = r.k ORDER BY r.w";
+    let ctx = context(
+        config().set_usize("datafusion.execution.hash_join_max_build_size", 1024),
+        RuntimeEnvBuilder::new(),
+    );
+    let plan = ctx
+        .sql(sql)
+        .await
+        .unwrap()
+        .create_physical_plan()
+        .await
+        .unwrap();
+    // Guard the premise: the sort must sit below the join, or this would pass
+    // without the join ever having promised anything.
+    let shape = displayable(plan.as_ref()).indent(true).to_string();
+    let join_at = shape.find("HashJoinExec").expect("a hash join");
+    let sort_at = shape.find("SortExec:").expect("a sort");
+    assert!(
+        sort_at > join_at,
+        "the sort should sit below the join:\n{shape}"
+    );
+
+    let batches = datafusion::physical_plan::collect(Arc::clone(&plan), ctx.task_ctx())
+        .await
+        .unwrap();
+    let output = concat_batches(&plan.schema(), &batches).unwrap();
+    let w = output
+        .column_by_name("w")
+        .unwrap()
+        .as_primitive::<Int32Type>();
+    assert!(
+        w.values().is_sorted(),
+        "the output must come out ordered by w"
+    );
+    assert_eq!(
+        plan_metric_sum(plan.as_ref(), "sort_merge_fallback_count"),
+        0,
+        "the join promised the probe order, so it must not have fallen back"
+    );
 }
