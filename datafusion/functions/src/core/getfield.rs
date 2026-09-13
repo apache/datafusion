@@ -18,12 +18,11 @@
 use std::sync::{Arc, OnceLock};
 
 use arrow::array::{
-    Array, BooleanArray, Capacities, MutableArrayData, Scalar, cast::AsArray, make_array,
+    Array, Capacities, MutableArrayData, Scalar, cast::AsArray, make_array,
     make_comparator,
 };
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, FieldRef};
-use arrow_buffer::NullBuffer;
 
 use datafusion_common::cast::{as_map_array, as_struct_array};
 use datafusion_common::{
@@ -100,29 +99,19 @@ impl Default for GetFieldFunc {
     }
 }
 
-/// Process a map array by finding matching keys and extracting corresponding values.
+/// Process a map array with a non-nested key type by comparing the single
+/// lookup key against every map key with the `eq` kernel, then scanning the
+/// result for each row.
 ///
-/// This function handles both simple (scalar) and nested key types by using
-/// appropriate comparison strategies.
+/// `eq` does not support nested types, so list, struct, and map keys go
+/// through [`process_map_with_nested_key`] instead.
 fn process_map_array(
     array: &dyn Array,
     key_array: Arc<dyn Array>,
 ) -> Result<ColumnarValue> {
     let map_array = as_map_array(array)?;
-    let keys = if key_array.data_type().is_nested() {
-        let comparator = make_comparator(
-            map_array.keys().as_ref(),
-            key_array.as_ref(),
-            SortOptions::default(),
-        )?;
-        let len = map_array.keys().len().min(key_array.len());
-        let values = (0..len).map(|i| comparator(i, i).is_eq()).collect();
-        let nulls = NullBuffer::union(map_array.keys().nulls(), key_array.nulls());
-        BooleanArray::new(values, nulls)
-    } else {
-        let be_compared = Scalar::new(key_array);
-        arrow::compute::kernels::cmp::eq(&be_compared, map_array.keys())?
-    };
+    let be_compared = Scalar::new(key_array);
+    let keys = arrow::compute::kernels::cmp::eq(&be_compared, map_array.keys())?;
 
     let original_data = map_array.entries().column(1).to_data();
     let capacity = Capacities::Array(original_data.len());
@@ -219,19 +208,14 @@ fn extract_single_field(base: ColumnarValue, name: ScalarValue) -> Result<Column
                 dict.with_values(Arc::clone(field_col)),
             ))
         }
-        (DataType::Map(_, _), ScalarValue::List(arr), _) => {
-            let key_array: Arc<dyn Array> = arr;
-            process_map_array(&array, key_array)
-        }
-        (DataType::Map(_, _), ScalarValue::Struct(arr), _) => {
-            process_map_array(&array, arr as Arc<dyn Array>)
-        }
-        (DataType::Map(_, _), other, _) => {
-            let data_type = other.data_type();
-            if data_type.is_nested() {
-                process_map_with_nested_key(&array, &other.to_array()?)
+        (DataType::Map(_, _), key, _) => {
+            // The lookup key is a single scalar. `eq` does not support nested
+            // key types, so those are matched with a comparator instead.
+            let key_array = key.to_array()?;
+            if key_array.data_type().is_nested() {
+                process_map_with_nested_key(&array, key_array.as_ref())
             } else {
-                process_map_array(&array, other.to_array()?)
+                process_map_array(&array, key_array)
             }
         }
         (DataType::Struct(_), _, Some(k)) => {
@@ -672,8 +656,11 @@ impl ScalarUDFImpl for GetFieldFunc {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{ArrayRef, Int32Array, StructArray};
-    use arrow::datatypes::Fields;
+    use arrow::array::{
+        ArrayRef, Int32Array, Int32Builder, ListArray, ListBuilder, MapBuilder,
+        StructArray,
+    };
+    use arrow::datatypes::{Fields, Int32Type};
 
     #[test]
     fn test_get_field_utf8view_key() -> Result<()> {
@@ -707,6 +694,41 @@ mod tests {
         let expected = Int32Array::from(vec![Some(1), Some(2), Some(3)]);
 
         assert_eq!(result_array.as_ref(), &expected as &dyn Array);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_field_map_list_key() -> Result<()> {
+        // One map row with two list keys. The lookup key matches the second
+        // entry, so the match is not at the first entry of the row.
+        let mut builder = MapBuilder::new(
+            None,
+            ListBuilder::new(Int32Builder::new()),
+            Int32Builder::new(),
+        );
+        builder.keys().append_value([Some(1), Some(2)]);
+        builder.values().append_value(1);
+        builder.keys().append_value([Some(3), Some(4)]);
+        builder.values().append_value(2);
+        builder.append(true)?;
+        let base = ColumnarValue::Array(Arc::new(builder.finish()));
+
+        let list_key = |values: Vec<i32>| {
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int32Type, _, _>([Some(
+                    values.into_iter().map(Some),
+                )]),
+            ))
+        };
+
+        let result = extract_single_field(base.clone(), list_key(vec![3, 4]))?;
+        let expected = Int32Array::from(vec![Some(2)]);
+        assert_eq!(result.into_array(1)?.as_ref(), &expected as &dyn Array);
+
+        let result = extract_single_field(base, list_key(vec![9, 9]))?;
+        let expected = Int32Array::from(vec![None]);
+        assert_eq!(result.into_array(1)?.as_ref(), &expected as &dyn Array);
 
         Ok(())
     }

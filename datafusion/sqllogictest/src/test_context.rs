@@ -148,6 +148,9 @@ impl TestContext {
 
         let file_name = relative_path.file_name().unwrap().to_str().unwrap();
         match file_name {
+            "parquet_missing_bounds.slt" => {
+                register_parquet_missing_bounds(&mut test_ctx).await;
+            }
             "cte.slt" => {
                 info!("Registering strict schema provider for CTE tests");
                 register_strict_schema_provider(test_ctx.session_ctx());
@@ -410,6 +413,77 @@ pub async fn register_partition_table(test_ctx: &mut TestContext) {
             "test_partition_table",
             test_ctx.testdir_path().to_str().unwrap(),
             CsvReadOptions::new().schema(&schema),
+        )
+        .await
+        .unwrap();
+}
+
+/// Write row groups with different statistics settings using the public writer API.
+async fn register_parquet_missing_bounds(test_ctx: &mut TestContext) {
+    use datafusion::parquet::column::writer::ColumnWriterImpl;
+    use datafusion::parquet::data_type::{ByteArray, ByteArrayType};
+    use datafusion::parquet::file::properties::{EnabledStatistics, WriterProperties};
+    use datafusion::parquet::file::writer::{
+        SerializedFileWriter, SerializedPageWriter, TrackedWrite,
+    };
+    use datafusion::parquet::schema::parser::parse_message_type;
+
+    test_ctx.enable_testdir();
+    let path = test_ctx.testdir_path().join("missing_bounds.parquet");
+    let column_path = test_ctx.testdir_path().join("column.pages");
+    let schema = Arc::new(
+        parse_message_type("message schema { REQUIRED BINARY a (UTF8); }").unwrap(),
+    );
+    let mut writer = SerializedFileWriter::new(
+        File::create(&path).unwrap(),
+        schema,
+        Arc::new(WriterProperties::default()),
+    )
+    .unwrap();
+    let long_value = "z".repeat(8192);
+    for (values, statistics) in [
+        (["a", "b"], EnabledStatistics::Chunk),
+        (
+            [long_value.as_str(), long_value.as_str()],
+            EnabledStatistics::None,
+        ),
+    ] {
+        // parquet-rs truncates long extrema rather than omitting them. Disable
+        // statistics for the second chunk to exercise the missing-bound case
+        // produced naturally by writers such as PyArrow, without editing metadata.
+        let properties = Arc::new(
+            WriterProperties::builder()
+                .set_statistics_enabled(statistics)
+                .build(),
+        );
+        let mut buffer = TrackedWrite::new(File::create(&column_path).unwrap());
+        let mut column = ColumnWriterImpl::<ByteArrayType>::new(
+            writer.schema_descr().column(0),
+            properties,
+            Box::new(SerializedPageWriter::new(&mut buffer)),
+        );
+        let values = values.map(ByteArray::from);
+        column.write_batch(&values, None, None).unwrap();
+        let result = column.close().unwrap();
+        assert_eq!(
+            result.metadata.statistics().is_some(),
+            statistics == EnabledStatistics::Chunk
+        );
+        buffer.into_inner().unwrap();
+        let mut group = writer.next_row_group().unwrap();
+        group
+            .append_column(&File::open(&column_path).unwrap(), result)
+            .unwrap();
+        group.close().unwrap();
+    }
+    writer.close().unwrap();
+    std::fs::remove_file(&column_path).unwrap();
+    test_ctx
+        .ctx
+        .register_parquet(
+            "missing_bounds",
+            path.to_str().unwrap(),
+            ParquetReadOptions::default(),
         )
         .await
         .unwrap();
