@@ -806,13 +806,10 @@ fn summarize_bound<A: Accumulator>(
                         return false;
                     }
                     let column = group.column(column_index);
-                    let all_null = column.num_values() == group.num_rows()
-                        && column
-                            .statistics()
-                            .and_then(|stats| stats.null_count_opt())
-                            .is_some_and(|nulls| {
-                                i64::try_from(nulls).ok() == Some(group.num_rows())
-                            });
+let all_null = column
+    .statistics()
+    .and_then(|stats| stats.null_count_opt())
+    .is_some_and(|nulls| nulls == column.num_values() as u64);
                     !all_null
                 })
         })
@@ -820,7 +817,7 @@ fn summarize_bound<A: Accumulator>(
         *acc = None;
         return Ok(None);
     }
-    let acc = acc.as_mut().expect("caller checked accumulator is present");
+    let Some(acc) = acc.as_mut() else { return Ok(None) };present");
     acc.update_batch(&[Arc::clone(values)])?;
 
     Ok(
