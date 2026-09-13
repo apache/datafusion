@@ -1543,6 +1543,106 @@ mod tests {
         Ok(())
     }
 
+    /// When the group values and every accumulator keep their state in
+    /// blocks, the output is handed over one block at a time: a block's
+    /// state is released as soon as it is emitted instead of the whole
+    /// table staying reserved until the last slice goes out.
+    #[tokio::test]
+    async fn test_single_hash_stream_releases_state_block_by_block() -> Result<()> {
+        use crate::aggregates::single_stream::SingleHashAggregateStream;
+        use arrow::datatypes::Int64Type;
+        use datafusion_functions_aggregate::sum::sum_udaf;
+        use datafusion_functions_aggregate_common::aggregate::groups_accumulator::blocks::BlockedVec;
+
+        const BLOCK: usize = BlockedVec::<i64>::BLOCK_LEN;
+        let batch_size = 8192;
+        // Two blocks, the second one partial; one row per group.
+        let num_groups = BLOCK + 4 * batch_size;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("group_col", DataType::Int64, false),
+            Field::new("value_col", DataType::Int64, false),
+        ]));
+        let batches = (0..num_groups)
+            .step_by(batch_size)
+            .map(|start| {
+                let end = (start + batch_size).min(num_groups);
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(Int64Array::from_iter_values(start as i64..end as i64)),
+                        Arc::new(Int64Array::from(vec![1i64; end - start])),
+                    ],
+                )
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        let runtime = RuntimeEnvBuilder::default().build_arc()?;
+        let mut task_ctx = TaskContext::default().with_runtime(Arc::clone(&runtime));
+        let session_config = task_ctx.session_config().clone().set(
+            "datafusion.execution.batch_size",
+            &datafusion_common::ScalarValue::UInt64(Some(batch_size as u64)),
+        );
+        task_ctx = task_ctx.with_session_config(session_config);
+        let task_ctx = Arc::new(task_ctx);
+
+        let group_expr = vec![(col("group_col", &schema)?, "group_col".to_string())];
+        let aggr_expr = vec![Arc::new(
+            AggregateExprBuilder::new(sum_udaf(), vec![col("value_col", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("sum_value")
+                .build()?,
+        )];
+        let input = TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
+        let aggregate_exec = AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::new_single(group_expr),
+            aggr_expr,
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?;
+        let mut stream = SingleHashAggregateStream::new(&aggregate_exec, &task_ctx, 0)?;
+
+        let mut rows = 0;
+        let mut reserved_during_first_block = None;
+        let mut reserved_during_second_block = None;
+        while let Some(batch) = stream.next().await {
+            let batch = batch?;
+            let keys = batch.column(0).as_primitive::<Int64Type>();
+            let sums = batch.column(1).as_primitive::<Int64Type>();
+            // Group order is kept across the block boundary.
+            assert_eq!(keys.value(0), rows as i64);
+            assert!(sums.iter().all(|sum| sum == Some(1)));
+            rows += batch.num_rows();
+
+            let reserved = runtime.memory_pool.reserved();
+            if reserved_during_first_block.is_none() {
+                reserved_during_first_block = Some(reserved);
+            } else if rows > BLOCK && reserved_during_second_block.is_none() {
+                reserved_during_second_block = Some(reserved);
+            }
+        }
+        assert_eq!(rows, num_groups);
+
+        // While the first block is sliced, its batch and the second block's
+        // state are reserved; once the second block is emitted, only its
+        // (much smaller) batch is.
+        let first = reserved_during_first_block.unwrap();
+        let second = reserved_during_second_block.unwrap();
+        assert!(
+            first >= BLOCK * 2 * size_of::<i64>(),
+            "the first block's batch ({first} bytes) is not reserved"
+        );
+        assert!(
+            second * 4 <= first,
+            "the first block's state was not released: {second} bytes still reserved \
+             after it was drained, {first} during"
+        );
+        assert_eq!(runtime.memory_pool.reserved(), 0);
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_partial_hash_stream_releases_held_batch_after_last_slice() -> Result<()>
     {

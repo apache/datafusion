@@ -265,33 +265,54 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         let batch_size = self.batch_size;
         let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
 
-        let mut output =
+        let group_by_metrics = self.group_by_metrics.clone();
+
+        // `state` is `Some` while groups are handed over one block at a time.
+        let (mut output, state) =
             match std::mem::replace(&mut self.state, AggregateHashTableState::Done) {
                 AggregateHashTableState::Outputting(mut state) => {
                     if state.group_values.is_empty() {
                         return Ok(None);
                     }
+                    if let Some(block_len) = emit_block_len(&state) {
+                        // Every column keeps its state in blocks of the same
+                        // length: emit one block, so its state is freed while
+                        // the rest of the table is still waiting to be drained.
+                        let block = emit_block(
+                            &mut state,
+                            block_len,
+                            materialize_accumulator_fn,
+                            accumulator_phase,
+                            &output_schema,
+                            &accumulator_metrics,
+                            &group_by_metrics,
+                        )?;
+                        (MaterializedAggregateOutput::new(block), Some(state))
+                    } else {
+                        // Accumulator output consumes internal state. Materialize all
+                        // groups once, then slice the materialized batch on later polls.
+                        let emit_to = EmitTo::All;
+                        let columns = group_by_metrics.time_emitting(|| {
+                            let mut columns = state.group_values.emit(emit_to)?;
+                            for (idx, acc) in state.accumulators.iter_mut().enumerate() {
+                                columns.extend(accumulator_metrics.time(
+                                    idx,
+                                    accumulator_phase,
+                                    || materialize_accumulator_fn(acc, emit_to),
+                                )?);
+                            }
+                            Ok::<_, datafusion_common::DataFusionError>(columns)
+                        })?;
 
-                    // Accumulator output consumes internal state. Materialize all
-                    // groups once, then slice the materialized batch on later polls.
-                    let emit_to = EmitTo::All;
-                    let columns = self.group_by_metrics.time_emitting(|| {
-                        let mut columns = state.group_values.emit(emit_to)?;
-                        for (idx, acc) in state.accumulators.iter_mut().enumerate() {
-                            columns.extend(accumulator_metrics.time(
-                                idx,
-                                accumulator_phase,
-                                || materialize_accumulator_fn(acc, emit_to),
-                            )?);
-                        }
-                        Ok::<_, datafusion_common::DataFusionError>(columns)
-                    })?;
-
-                    let batch = RecordBatch::try_new(output_schema, columns)?;
-                    debug_assert!(batch.num_rows() > 0);
-                    MaterializedAggregateOutput::new(batch)
+                        let batch = RecordBatch::try_new(output_schema, columns)?;
+                        debug_assert!(batch.num_rows() > 0);
+                        (MaterializedAggregateOutput::new(batch), None)
+                    }
                 }
-                AggregateHashTableState::OutputtingMaterialized(output) => output,
+                AggregateHashTableState::OutputtingMaterialized(output) => (output, None),
+                AggregateHashTableState::OutputtingBlock { state, block } => {
+                    (block, Some(state))
+                }
                 AggregateHashTableState::Done => return Ok(None),
                 AggregateHashTableState::Building(_) => {
                     return internal_err!(
@@ -301,11 +322,18 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             };
 
         let batch = output.next_batch(batch_size);
-        if output.is_exhausted() {
-            self.state = AggregateHashTableState::Done;
-        } else {
-            self.state = AggregateHashTableState::OutputtingMaterialized(output);
-        }
+        self.state = match (state, output.is_exhausted()) {
+            // The next poll emits the next block.
+            (Some(state), true) if !state.group_values.is_empty() => {
+                AggregateHashTableState::Outputting(state)
+            }
+            (Some(state), false) => AggregateHashTableState::OutputtingBlock {
+                state,
+                block: output,
+            },
+            (None, false) => AggregateHashTableState::OutputtingMaterialized(output),
+            _ => AggregateHashTableState::Done,
+        };
         Ok(batch)
     }
 
@@ -324,6 +352,15 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             }
             AggregateHashTableState::OutputtingMaterialized(output) => {
                 output.memory_size()
+            }
+            AggregateHashTableState::OutputtingBlock { state, block } => {
+                state
+                    .accumulators
+                    .iter()
+                    .map(|acc| acc.accumulator.size())
+                    .sum::<usize>()
+                    + state.group_values.size()
+                    + block.memory_size()
             }
             AggregateHashTableState::Done => 0,
         }
@@ -602,7 +639,52 @@ pub(super) enum AggregateHashTableState {
     /// Note this is a temporary solution until the `GroupValues` issue is solved:
     /// Issue: <https://github.com/apache/datafusion/issues/23178>
     OutputtingMaterialized(MaterializedAggregateOutput),
+    /// One block of groups has been emitted from `state` and is being sliced
+    /// out of `block`; the groups still in `state` follow, a block at a time.
+    /// Only used when every column keeps its state in blocks of one length
+    /// (see [`GroupsAccumulator::block_len`]).
+    OutputtingBlock {
+        state: AggregateHashTableBuffer,
+        block: MaterializedAggregateOutput,
+    },
     Done,
+}
+
+/// The block length shared by the group values and every accumulator, if
+/// they all keep their state in blocks of the same length.
+fn emit_block_len(state: &AggregateHashTableBuffer) -> Option<usize> {
+    let block_len = state.group_values.block_len()?;
+    state
+        .accumulators
+        .iter()
+        .all(|acc| acc.accumulator.block_len() == Some(block_len))
+        .then_some(block_len)
+}
+
+/// Emits the first block of groups (all remaining ones if fewer than
+/// `block_len`) as one batch, freeing their state.
+fn emit_block(
+    state: &mut AggregateHashTableBuffer,
+    block_len: usize,
+    materialize_accumulator_fn: MaterializeAccumulatorFn,
+    accumulator_phase: AccumulatorPhase,
+    output_schema: &SchemaRef,
+    accumulator_metrics: &AggregateAccumulatorMetrics,
+    group_by_metrics: &GroupByMetrics,
+) -> Result<RecordBatch> {
+    let emit_to = EmitTo::First(block_len.min(state.group_values.len()));
+    let columns = group_by_metrics.time_emitting(|| {
+        let mut columns = state.group_values.emit_block()?;
+        for (idx, acc) in state.accumulators.iter_mut().enumerate() {
+            columns.extend(accumulator_metrics.time(idx, accumulator_phase, || {
+                materialize_accumulator_fn(acc, emit_to)
+            })?);
+        }
+        Ok::<_, datafusion_common::DataFusionError>(columns)
+    })?;
+    let batch = RecordBatch::try_new(Arc::clone(output_schema), columns)?;
+    debug_assert!(batch.num_rows() > 0);
+    Ok(batch)
 }
 
 /// Fully evaluated aggregate output and the next row offset to emit.
