@@ -36,13 +36,18 @@ use crate::logical_expr::{
     Expr, JoinType, LogicalPlan, LogicalPlanBuilder, LogicalPlanBuilderOptions,
     Partitioning, TableType, col, ident,
 };
+use crate::physical_expr::EquivalenceProperties;
 use crate::physical_plan::{
-    ExecutionPlan, SendableRecordBatchStream, collect, collect_partitioned,
-    execute_stream, execute_stream_partitioned,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
+    ExecutionPlanProperties, Partitioning as PhysicalPartitioning, PhysicalExpr,
+    PlanProperties, ReplaceChildrenOptions, SendableRecordBatchStream,
+    coalesce_partitions::CoalescePartitionsExec, collect, collect_partitioned,
+    execute_stream, execute_stream_partitioned, stream::RecordBatchStreamAdapter,
 };
 use crate::prelude::SessionContext;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::fmt::{self, Formatter};
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
@@ -54,7 +59,8 @@ use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
     Column, DFSchema, DataFusionError, ParamValues, ScalarValue, SchemaError,
     TableReference, UnnestOptions, exec_err, internal_datafusion_err, not_impl_err,
-    plan_datafusion_err, plan_err, unqualified_field_not_found,
+    plan_datafusion_err, plan_err, project_schema, tree_node::TreeNodeRecursion,
+    unqualified_field_not_found,
 };
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
@@ -70,6 +76,7 @@ use datafusion_functions_aggregate::expr_fn::{
 use async_trait::async_trait;
 use datafusion_catalog::Session;
 use datafusion_expr::extension_types::DFArrayFormatterFactory;
+use futures::StreamExt;
 use futures::future::BoxFuture;
 
 /// Contains options that control how data is
@@ -2744,6 +2751,310 @@ impl DataFrame {
         let ctx = SessionContext::new();
         let df = ctx.read_batch(batch)?;
         Ok(df)
+    }
+
+    /// Append named Arrow arrays as columns to this [`DataFrame`].
+    ///
+    /// This does not execute the current plan. The arrays are attached when the
+    /// returned DataFrame is collected. Each array must have the same length as
+    /// the number of rows this DataFrame produces.
+    ///
+    /// See [`Self::with_column`] to add a column from an [`Expr`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use arrow::array::{ArrayRef, Int32Array, StringArray};
+    /// use datafusion::prelude::DataFrame;
+    /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let id: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+    /// let name: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar", "baz"]));
+    /// let df = DataFrame::from_columns([("id", id), ("name", name)])?;
+    ///
+    /// let extra: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 30]));
+    /// let df = df.with_array_columns([("extra", extra)])?;
+    ///
+    /// let expected = vec![
+    ///     "+----+------+-------+",
+    ///     "| id | name | extra |",
+    ///     "+----+------+-------+",
+    ///     "| 1  | foo  | 10    |",
+    ///     "| 2  | bar  | 20    |",
+    ///     "| 3  | baz  | 30    |",
+    ///     "+----+------+-------+",
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_array_columns<'a, I>(self, columns: I) -> Result<DataFrame>
+    where
+        I: IntoIterator<Item = (&'a str, ArrayRef)>,
+    {
+        let added: Vec<(String, ArrayRef)> = columns
+            .into_iter()
+            .map(|(name, array)| (name.to_string(), array))
+            .collect();
+
+        if added.is_empty() {
+            return Ok(self);
+        }
+
+        if let Some((_, first)) = added.first() {
+            let expected = first.len();
+            for (name, array) in &added {
+                if array.len() != expected {
+                    return plan_err!(
+                        "Column '{name}' has length {}, expected {expected}",
+                        array.len()
+                    );
+                }
+            }
+        }
+
+        let (state, plan) = self.into_parts();
+        let provider = Arc::new(AddColumnProvider::try_new(plan, added)?);
+        let plan =
+            LogicalPlanBuilder::scan(UNNAMED_TABLE, provider_as_source(provider), None)?
+                .build()?;
+
+        Ok(DataFrame::new(state, plan))
+    }
+}
+
+#[derive(Debug)]
+struct AddColumnProvider {
+    input: LogicalPlan,
+    added: Vec<(String, ArrayRef)>,
+    schema: SchemaRef,
+}
+
+impl AddColumnProvider {
+    fn try_new(input: LogicalPlan, added: Vec<(String, ArrayRef)>) -> Result<Self> {
+        let mut fields: Vec<Field> = input
+            .schema()
+            .as_arrow()
+            .fields()
+            .iter()
+            .map(|f| f.as_ref().clone())
+            .collect();
+
+        for (name, array) in &added {
+            if input.schema().has_column_with_unqualified_name(name) {
+                return plan_err!("Column '{name}' already exists");
+            }
+            fields.push(Field::new(name, array.data_type().clone(), true));
+        }
+
+        Ok(Self {
+            input,
+            added,
+            schema: Arc::new(Schema::new(fields)),
+        })
+    }
+}
+
+#[async_trait]
+impl TableProvider for AddColumnProvider {
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
+    fn table_type(&self) -> TableType {
+        TableType::Base
+    }
+
+    async fn scan(
+        &self,
+        state: &dyn Session,
+        projection: Option<&[usize]>,
+        _filters: &[Expr],
+        _limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let input = state.create_physical_plan(&self.input).await?;
+        Ok(Arc::new(AddColumnExec::new(
+            input,
+            self.added.clone(),
+            Arc::clone(&self.schema),
+            projection,
+        )?))
+    }
+}
+
+#[derive(Debug)]
+struct AddColumnExec {
+    input: Arc<dyn ExecutionPlan>,
+    added: Vec<(String, ArrayRef)>,
+    full_schema: SchemaRef,
+    projection: Option<Vec<usize>>,
+    cache: Arc<PlanProperties>,
+}
+
+impl AddColumnExec {
+    fn new(
+        input: Arc<dyn ExecutionPlan>,
+        added: Vec<(String, ArrayRef)>,
+        full_schema: SchemaRef,
+        projection: Option<&[usize]>,
+    ) -> Result<Self> {
+        let projected_schema = project_schema(&full_schema, projection)?;
+        Ok(Self {
+            cache: Arc::new(Self::compute_properties(projected_schema, input.as_ref())),
+            input,
+            added,
+            full_schema,
+            projection: projection.map(|p| p.to_vec()),
+        })
+    }
+
+    fn compute_properties(
+        schema: SchemaRef,
+        input: &dyn ExecutionPlan,
+    ) -> PlanProperties {
+        PlanProperties::new(
+            EquivalenceProperties::new(schema),
+            PhysicalPartitioning::UnknownPartitioning(1),
+            input.pipeline_behavior(),
+            input.boundedness(),
+        )
+    }
+}
+
+impl DisplayAs for AddColumnExec {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
+        let names: Vec<&str> = self.added.iter().map(|(n, _)| n.as_str()).collect();
+        write!(f, "AddColumnExec: {}", names.join(", "))
+    }
+}
+
+impl ExecutionPlan for AddColumnExec {
+    fn name(&self) -> &'static str {
+        "AddColumnExec"
+    }
+
+    fn properties(&self) -> &Arc<PlanProperties> {
+        &self.cache
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![true]
+    }
+
+    fn replace_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if children.len() != 1 {
+            return plan_err!("AddColumnExec expects exactly one child");
+        }
+
+        let input = children.swap_remove(0);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
+                input,
+                added: self.added.clone(),
+                full_schema: Arc::clone(&self.full_schema),
+                projection: self.projection.clone(),
+                cache: Arc::clone(&self.cache),
+            })),
+            ChildrenPropertiesMode::Recompute => Ok(Arc::new(Self::new(
+                input,
+                self.added.clone(),
+                Arc::clone(&self.full_schema),
+                self.projection.as_deref(),
+            )?)),
+        }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        if partition != 0 {
+            return exec_err!("AddColumnExec only produces partition 0");
+        }
+
+        // A single ArrayRef is one global vector, so the input must be one stream.
+        let input = if self.input.output_partitioning().partition_count() == 1 {
+            Arc::clone(&self.input)
+        } else {
+            Arc::new(CoalescePartitionsExec::new(Arc::clone(&self.input)))
+        };
+
+        let stream = input.execute(0, context)?;
+        let added = self.added.clone();
+        let full_schema = Arc::clone(&self.full_schema);
+        let projection = self.projection.clone();
+        let expected_rows = added.first().map(|(_, a)| a.len()).unwrap_or(0);
+        let out_schema = self.schema();
+
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            out_schema,
+            futures::stream::try_unfold((stream, 0usize), move |(mut stream, offset)| {
+                let added = added.clone();
+                let full_schema = Arc::clone(&full_schema);
+                let projection = projection.clone();
+
+                async move {
+                    match stream.next().await {
+                        Some(Ok(batch)) => {
+                            let n = batch.num_rows();
+                            if offset + n > expected_rows {
+                                return exec_err!(
+                                    "Added column has {expected_rows} rows, \
+                                         dataframe produced at least {}",
+                                    offset + n
+                                );
+                            }
+
+                            let mut columns = batch.columns().to_vec();
+                            for (_, array) in &added {
+                                columns.push(array.slice(offset, n));
+                            }
+                            let full = RecordBatch::try_new(full_schema, columns)?;
+                            let batch = match &projection {
+                                Some(indices) => full.project(indices)?,
+                                None => full,
+                            };
+                            Ok(Some((batch, (stream, offset + n))))
+                        }
+                        Some(Err(e)) => Err(e),
+                        None if offset != expected_rows => exec_err!(
+                            "Added column has {expected_rows} rows, \
+                                 dataframe produced {offset}"
+                        ),
+                        None => Ok(None),
+                    }
+                }
+            }),
+        )))
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 
