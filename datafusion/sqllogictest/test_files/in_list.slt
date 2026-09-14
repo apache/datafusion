@@ -20,9 +20,10 @@
 #
 # This file focuses on the IN operator and its various specializations
 #
-# Note that "short" IN LISTS do not go through the InList implementation at all,
-# instead they are rewritten into a series of OR expressions. See:
-# https://github.com/apache/datafusion/blob/ed37b6c9555bc278130dc774ed833b8c0bd29bfa/datafusion/optimizer/src/simplify_expressions/inlist_simplifier.rs#L39-L88
+# One-item IN lists are rewritten to a comparison. Two- and three-item lists on
+# a column are rewritten to OR/AND expressions unless a specialized static
+# InList filter is available. See:
+# https://github.com/apache/datafusion/blob/main/datafusion/optimizer/src/simplify_expressions/inlist_simplifier.rs
 ##########
 
 
