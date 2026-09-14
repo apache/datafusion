@@ -834,7 +834,7 @@ mod tests {
                     if rows > 0 {
                         assert_eq!(
                             ScalarValue::try_from_array(&result, 2)?,
-                            ScalarValue::Decimal128(Some(66_666_667), 21, 8)
+                            ScalarValue::Decimal128(Some(66_666_666), 21, 8)
                         );
                     }
                 }
@@ -951,6 +951,214 @@ mod tests {
         for df in [df, ctx.execute_logical_plan(reimported).await?] {
             let err = df.collect().await.unwrap_err();
             assert!(err.to_string().contains("Decimal overflow"), "{err}");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_decimal_division_rounding_is_independent_of_options() -> Result<()> {
+        use crate::logical_plan::consumer::from_substrait_plan;
+        use crate::logical_plan::producer::to_substrait_plan;
+        use datafusion::arrow::array::Decimal128Array;
+        use datafusion::arrow::record_batch::RecordBatch;
+        use datafusion::prelude::SessionContext;
+        use std::sync::Arc;
+        use substrait::proto::FunctionOption;
+
+        let ctx = SessionContext::new();
+        ctx.register_batch(
+            "decimals",
+            RecordBatch::try_from_iter(vec![
+                (
+                    "a",
+                    Arc::new(
+                        Decimal128Array::from(vec![200, -200])
+                            .with_precision_and_scale(10, 2)?,
+                    ) as datafusion::arrow::array::ArrayRef,
+                ),
+                (
+                    "b",
+                    Arc::new(
+                        Decimal128Array::from(vec![30, 30])
+                            .with_precision_and_scale(5, 1)?,
+                    ),
+                ),
+            ])?,
+        )?;
+        let state = ctx.state();
+        // Match the native scale, while varying precision and overflow options.
+        // Neither change should alter the last fractional digit.
+        for precision in [15, 21] {
+            for checked in [false, true] {
+                let (extensions, mut call, schema) = decimal_function(
+                    "divide",
+                    DataType::Decimal128(10, 2),
+                    DataType::Decimal128(5, 1),
+                    Some(DataType::Decimal128(precision, 6)),
+                )?;
+                if checked {
+                    call.options.push(FunctionOption {
+                        name: "overflow".into(),
+                        preference: vec!["ERROR".into()],
+                    });
+                }
+                let consumer = DefaultSubstraitConsumer::new(&extensions, &state);
+                let expression = consumer.consume_scalar_function(&call, &schema).await?;
+                let df = ctx
+                    .table("decimals")
+                    .await?
+                    .select(vec![expression.alias("ratio")])?;
+                // Also export after optimization: type coercion and constant
+                // folding must not change the function on its next import.
+                let optimized = df.into_optimized_plan()?;
+                let exported = to_substrait_plan(&optimized, &state)?;
+                let imported = from_substrait_plan(&state, &exported).await?;
+                let batches = ctx.execute_logical_plan(imported).await?.collect().await?;
+                for (row, expected) in [666_666, -666_666].into_iter().enumerate() {
+                    assert_eq!(
+                        ScalarValue::try_from_array(batches[0].column(0), row)?,
+                        ScalarValue::Decimal128(Some(expected), precision, 6)
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_declared_decimal_filter_and_aggregate() -> Result<()> {
+        use crate::logical_plan::consumer::from_substrait_plan;
+        use crate::logical_plan::producer::to_substrait_plan;
+        use datafusion::arrow::array::Decimal128Array;
+        use datafusion::arrow::record_batch::RecordBatch;
+        use datafusion::functions_aggregate::expr_fn::{count, sum};
+        use datafusion::logical_expr::{col, lit};
+        use datafusion::prelude::SessionContext;
+        use std::sync::Arc;
+
+        let ctx = SessionContext::new();
+        let state = ctx.state();
+        let (extensions, call, schema) = decimal_function(
+            "divide",
+            DataType::Decimal128(10, 2),
+            DataType::Decimal128(5, 1),
+            Some(DataType::Decimal128(21, 8)),
+        )?;
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &state);
+        let expression = consumer.consume_scalar_function(&call, &schema).await?;
+        ctx.register_batch(
+            "decimals",
+            RecordBatch::try_from_iter(vec![
+                (
+                    "a",
+                    Arc::new(
+                        Decimal128Array::from(vec![100, 200, -100])
+                            .with_precision_and_scale(10, 2)?,
+                    ) as datafusion::arrow::array::ArrayRef,
+                ),
+                (
+                    "b",
+                    Arc::new(
+                        Decimal128Array::from(vec![30, 30, 30])
+                            .with_precision_and_scale(5, 1)?,
+                    ),
+                ),
+            ])?,
+        )?;
+        let df = ctx
+            .table("decimals")
+            .await?
+            .select(vec![expression.alias("ratio")])?
+            .filter(col("ratio").gt(lit(ScalarValue::Decimal128(Some(3_333_331), 8, 7))))?
+            .aggregate(
+                vec![],
+                vec![
+                    count(col("ratio")).alias("count"),
+                    sum(col("ratio")).alias("total"),
+                ],
+            )?;
+        let optimized = df.into_optimized_plan()?;
+        let exported = to_substrait_plan(&optimized, &state)?;
+        let imported = from_substrait_plan(&state, &exported).await?;
+        for plan in [optimized, imported] {
+            let batches = ctx.execute_logical_plan(plan).await?.collect().await?;
+            // Both positive rows pass. Native six-digit division would lose
+            // the 1/3 row at this threshold and produce a different total.
+            assert_eq!(
+                ScalarValue::try_from_array(batches[0].column(0), 0)?,
+                ScalarValue::Int64(Some(2))
+            );
+            assert_eq!(
+                ScalarValue::try_from_array(batches[0].column(1), 0)?,
+                ScalarValue::Decimal128(Some(99_999_999), 31, 8)
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_declared_decimal_null_scalars_and_slices() -> Result<()> {
+        use crate::logical_plan::producer::to_substrait_literal_expr;
+        use datafusion::arrow::array::Decimal128Array;
+        use datafusion::arrow::record_batch::RecordBatch;
+        use std::sync::Arc;
+
+        let (extensions, mut call, _) = decimal_function(
+            "divide",
+            DataType::Decimal128(10, 2),
+            DataType::Decimal128(5, 1),
+            Some(DataType::Decimal128(21, 8)),
+        )?;
+        if let Some(super::Kind::Decimal(decimal)) =
+            &mut call.output_type.as_mut().unwrap().kind
+        {
+            decimal.nullability = substrait::proto::r#type::Nullability::Nullable as i32;
+        }
+        let schema = DFSchema::try_from(Schema::new(vec![
+            Field::new("a", DataType::Decimal128(10, 2), true),
+            Field::new("b", DataType::Decimal128(5, 1), true),
+        ]))?;
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &TEST_SESSION_STATE);
+        let left =
+            Decimal128Array::from(vec![None, Some(200), None, Some(-200), Some(200)])
+                .with_precision_and_scale(10, 2)?;
+        let right =
+            Decimal128Array::from(vec![Some(0), Some(30), Some(0), Some(30), None])
+                .with_precision_and_scale(5, 1)?;
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.as_arrow().clone()),
+            vec![Arc::new(left.slice(1, 4)), Arc::new(right.slice(1, 4))],
+        )?;
+        let expression = consumer.consume_scalar_function(&call, &schema).await?;
+        let physical = TEST_SESSION_STATE.create_physical_expr(expression, &schema)?;
+        let result = physical.evaluate(&batch)?.into_array(4)?;
+        for (row, expected) in [Some(66_666_666), None, Some(-66_666_666), None]
+            .into_iter()
+            .enumerate()
+        {
+            assert_eq!(
+                ScalarValue::try_from_array(&result, row)?,
+                ScalarValue::Decimal128(expected, 21, 8)
+            );
+        }
+        for scalar_left in [false, true] {
+            let mut producer = DefaultSubstraitProducer::new(&TEST_SESSION_STATE);
+            let index = usize::from(!scalar_left);
+            let value = if scalar_left {
+                ScalarValue::Decimal128(None, 10, 2)
+            } else {
+                ScalarValue::Decimal128(None, 5, 1)
+            };
+            call.arguments[index].arg_type = Some(ArgType::Value(
+                to_substrait_literal_expr(&mut producer, &value)?,
+            ));
+            let expression = consumer.consume_scalar_function(&call, &schema).await?;
+            let physical =
+                TEST_SESSION_STATE.create_physical_expr(expression, &schema)?;
+            let result = physical.evaluate(&batch)?.into_array(4)?;
+            assert_eq!(result.null_count(), 4);
+            call.arguments[index].arg_type =
+                Some(ArgType::Value(substrait_field_ref(index)?));
         }
         Ok(())
     }
