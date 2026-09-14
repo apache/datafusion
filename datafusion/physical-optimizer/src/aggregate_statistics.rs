@@ -16,7 +16,7 @@
 // under the License.
 
 //! Utilizing exact statistics from sources to avoid scanning data
-use datafusion_common::Result;
+use datafusion_common::{plan_err, Result};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -31,7 +31,7 @@ use datafusion_physical_plan::udaf::{
 };
 use datafusion_physical_plan::{ExecutionPlan, expressions};
 use std::sync::Arc;
-
+use datafusion_physical_plan::aggregates_blocked::BlockedAggregateExec;
 use crate::PhysicalOptimizerRule;
 
 /// Optimizer that uses available statistics for aggregate functions
@@ -55,9 +55,14 @@ impl PhysicalOptimizerRule for AggregateStatistics {
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if let Some(partial_agg_exec) = take_optimizable(&plan) {
+            if partial_agg_exec
+              .downcast_ref::<AggregateExec>()
+              .is_some() {
+                return plan_err!("should not have AggregateExec, we should migrate to BlockedAggregateExec");
+            }
             let partial_agg_exec = partial_agg_exec
-                .downcast_ref::<AggregateExec>()
-                .expect("take_optimizable() ensures that this is a AggregateExec");
+              .downcast_ref::<BlockedAggregateExec>()
+              .expect("take_optimizable() ensures that this is a BlockedAggregateExec");
             let stats = StatisticsContext::new()
                 .compute(partial_agg_exec.input().as_ref(), &StatisticsArgs::new())?;
             let mut projections = vec![];
@@ -117,7 +122,10 @@ impl PhysicalOptimizerRule for AggregateStatistics {
 /// `Final` aggregate wrapping a `Partial`. Must have no GROUP BY and no
 /// filters.
 fn take_optimizable(plan: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPlan>> {
-    let agg_exec = plan.downcast_ref::<AggregateExec>()?;
+    if plan.downcast_ref::<AggregateExec>().is_some() {
+        panic!("should not have AggregateExec, we should migrate to BlockedAggregateExec")
+    }
+    let agg_exec = plan.downcast_ref::<BlockedAggregateExec>()?;
 
     if matches!(
         agg_exec.mode(),
@@ -133,7 +141,10 @@ fn take_optimizable(plan: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPl
     {
         let mut child = Arc::clone(agg_exec.input());
         loop {
-            if let Some(partial_agg_exec) = child.downcast_ref::<AggregateExec>()
+            if child.downcast_ref::<AggregateExec>().is_some() {
+                panic!("should not have AggregateExec, we should migrate to BlockedAggregateExec")
+            }
+            if let Some(partial_agg_exec) = child.downcast_ref::<BlockedAggregateExec>()
                 && partial_agg_exec.mode().input_mode() == AggregateInputMode::Raw
                 && partial_agg_exec.group_expr().is_empty()
                 && partial_agg_exec.filter_expr().iter().all(|e| e.is_none())

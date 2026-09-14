@@ -34,6 +34,7 @@
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 pub mod accumulator;
+pub mod blocked_helpers;
 pub mod casts;
 pub mod columnar_value;
 pub mod dyn_eq;

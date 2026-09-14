@@ -48,6 +48,7 @@ use datafusion_functions_table::generate_series::{
 use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
 use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
 use datafusion_physical_plan::aggregates::AggregateExec;
+use datafusion_physical_plan::aggregates_blocked::BlockedAggregateExec;
 use datafusion_physical_plan::analyze::AnalyzeExec;
 use datafusion_physical_plan::async_func::AsyncFuncExec;
 use datafusion_physical_plan::buffer::BufferExec;
@@ -1242,7 +1243,7 @@ pub trait PhysicalPlanNodeExt: Sized {
                 WindowAggExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::Aggregate(_) => {
-                AggregateExec::try_from_proto(self.node(), &decode_ctx)
+                BlockedAggregateExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::HashJoin(_) => {
                 HashJoinExec::try_from_proto(self.node(), &decode_ctx)

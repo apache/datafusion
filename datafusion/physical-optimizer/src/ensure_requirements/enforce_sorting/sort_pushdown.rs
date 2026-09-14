@@ -25,7 +25,7 @@ use crate::utils::{
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{HashSet, JoinSide, Result, internal_err};
+use datafusion_common::{internal_err, plan_err, HashSet, JoinSide, Result};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
@@ -50,6 +50,7 @@ use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use datafusion_physical_plan::aggregates_blocked::BlockedAggregateExec;
 
 /// "Data class" used by sort pushdown (now driven from `EnsureRequirements`)
 /// to push down [`SortExec`] in the plan. In some cases the total
@@ -616,7 +617,9 @@ fn pushdown_requirement_to_children(
                 Ok(None)
             }
         }
-    } else if let Some(aggregate_exec) = plan.downcast_ref::<AggregateExec>() {
+    } else if plan.downcast_ref::<AggregateExec>().is_some() {
+        return plan_err!("should not have AggregateExec, we should migrate to BlockedAggregateExec")
+    } else if let Some(aggregate_exec) = plan.downcast_ref::<BlockedAggregateExec>() {
         handle_aggregate_pushdown(aggregate_exec, parent_required)
     } else if let Some(projection_exec) = plan.downcast_ref::<ProjectionExec>() {
         handle_projection_pushdown(projection_exec, &parent_required)
@@ -711,7 +714,7 @@ fn remap_lex_requirement_through_projection(
 /// If no such mapping is possible (e.g. because the sort references aggregate
 /// columns), returns None.
 fn handle_aggregate_pushdown(
-    aggregate_exec: &AggregateExec,
+    aggregate_exec: &BlockedAggregateExec,
     parent_required: OrderingRequirements,
 ) -> Result<Option<Vec<Option<OrderingRequirements>>>> {
     if !aggregate_exec

@@ -28,9 +28,11 @@ use datafusion_physical_plan::aggregates::{
 
 use crate::PhysicalOptimizerRule;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::plan_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::{PhysicalExpr, physical_exprs_equal};
+use datafusion_physical_plan::aggregates_blocked::BlockedAggregateExec;
 
 /// CombinePartialFinalAggregate optimizer rule combines the adjacent Partial and Final AggregateExecs
 /// into a Single AggregateExec if their grouping exprs and aggregate exprs equal.
@@ -54,8 +56,12 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_down(|plan| {
+
+            if plan.downcast_ref::<AggregateExec>().is_some() {
+                return plan_err!("should not get AggregateExec, should be migrated to BlockedAggregateExec already");
+            }
             // Check if the plan is AggregateExec
-            let Some(agg_exec) = plan.downcast_ref::<AggregateExec>() else {
+            let Some(agg_exec) = plan.downcast_ref::<BlockedAggregateExec>() else {
                 return Ok(Transformed::no(plan));
             };
 
@@ -66,8 +72,12 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                 return Ok(Transformed::no(plan));
             }
 
+            if agg_exec.input().downcast_ref::<AggregateExec>().is_some() {
+                return plan_err!("should not get AggregateExec, should be migrated to BlockedAggregateExec already");
+            }
+
             // Check if the input is AggregateExec
-            let Some(input_agg_exec) = agg_exec.input().downcast_ref::<AggregateExec>()
+            let Some(input_agg_exec) = agg_exec.input().downcast_ref::<BlockedAggregateExec>()
             else {
                 return Ok(Transformed::no(plan));
             };

@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
-use datafusion_common::Result;
+use datafusion_common::{plan_err, Result};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::expressions::Column;
@@ -31,6 +31,7 @@ use datafusion_physical_plan::execution_plan::CardinalityEffect;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use itertools::Itertools;
+use datafusion_physical_plan::aggregates_blocked::BlockedAggregateExec;
 
 /// An optimizer rule that passes a `limit` hint to aggregations if the whole result is not needed
 #[derive(Debug)]
@@ -43,7 +44,7 @@ impl TopKAggregation {
     }
 
     fn transform_agg(
-        aggr: &AggregateExec,
+        aggr: &BlockedAggregateExec,
         order_by: &str,
         order_desc: bool,
         nulls_first: bool,
@@ -106,7 +107,7 @@ impl TopKAggregation {
         }
 
         // We found what we want: clone, copy the limit down, and return modified node
-        let new_aggr = AggregateExec::with_new_limit_options(
+        let new_aggr = BlockedAggregateExec::with_new_limit_options(
             aggr,
             Some(LimitOptions::new_with_order(limit, order_desc)),
         );
@@ -131,7 +132,10 @@ impl TopKAggregation {
             if !cardinality_preserved {
                 return Ok(Transformed::no(plan));
             }
-            if let Some(aggr) = plan.downcast_ref::<AggregateExec>() {
+            if plan.downcast_ref::<AggregateExec>().is_some() {
+                return plan_err!("should not get AggregateExec, should be migrated to BlockedAggregateExec already");
+            }
+            if let Some(aggr) = plan.downcast_ref::<BlockedAggregateExec>() {
                 // either we run into an Aggregate and transform it
                 match Self::transform_agg(
                     aggr,

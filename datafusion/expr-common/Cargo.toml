@@ -45,6 +45,7 @@ arrow = { workspace = true }
 datafusion-common = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }
+libc = "0.2.185"
 
 [dev-dependencies]
 insta = { workspace = true }

@@ -74,7 +74,7 @@ pub struct GroupOrderingPartial {
 }
 
 #[derive(Debug, Default, PartialEq)]
-enum State {
+pub(crate) enum State {
     /// The ordering was temporarily taken.  `Self::Taken` is left
     /// when state must be temporarily taken to satisfy the borrow
     /// checker. If an error happens before the state can be restored,
@@ -123,6 +123,10 @@ impl GroupOrderingPartial {
             state: State::Start,
             order_indices,
         })
+    }
+
+    pub(crate) fn new_from_parts(state: State, order_indices: Vec<usize>) -> Self {
+        Self { state, order_indices }
     }
 
     /// Select sort keys from the group values

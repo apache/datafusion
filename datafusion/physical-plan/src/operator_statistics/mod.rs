@@ -85,6 +85,7 @@ use datafusion_common::{Result, Statistics};
 
 use crate::ExecutionPlan;
 use crate::aggregates::{AggregateExec, AggregateMode};
+use crate::aggregates_blocked::BlockedAggregateExec;
 use crate::execution_plan::CardinalityEffect;
 use crate::filter::FilterExec;
 use crate::joins::{CrossJoinExec, HashJoinExec, JoinOnRef, SortMergeJoinExec};
@@ -742,7 +743,10 @@ pub struct AggregateStatisticsProvider;
 
 impl StatisticsProvider for AggregateStatisticsProvider {
     fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
-        plan.downcast_ref::<AggregateExec>().is_some()
+        if plan.downcast_ref::<AggregateExec>().is_some() {
+            panic!("should not get AggregateExec, should be migrated to BlockedAggregateExec");
+        }
+        plan.downcast_ref::<BlockedAggregateExec>().is_some()
     }
 
     fn compute_statistics(
@@ -752,7 +756,11 @@ impl StatisticsProvider for AggregateStatisticsProvider {
     ) -> Result<StatisticsResult> {
         use datafusion_physical_expr::expressions::Column;
 
-        let Some(agg) = plan.downcast_ref::<AggregateExec>() else {
+        if plan.downcast_ref::<AggregateExec>().is_some() {
+            panic!("should not get AggregateExec, should be migrated to BlockedAggregateExec");
+        }
+
+        let Some(agg) = plan.downcast_ref::<BlockedAggregateExec>() else {
             return Ok(StatisticsResult::Delegate);
         };
 

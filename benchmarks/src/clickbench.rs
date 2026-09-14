@@ -19,7 +19,7 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use crate::util::{BenchmarkRun, CommonOpt, QueryResult, print_memory_stats};
+use crate::util::{print_memory_stats, run_with_debug, BenchmarkRun, CommonOpt, QueryResult};
 use clap::Args;
 use datafusion::logical_expr::{ExplainFormat, ExplainOption};
 use datafusion::{
@@ -253,9 +253,7 @@ impl RunOpt {
         let mut millis = Vec::with_capacity(self.iterations());
         let mut query_results = vec![];
         for i in 0..self.iterations() {
-            let start = Instant::now();
-            let results = ctx.sql(sql).await?.collect().await?;
-            let elapsed = start.elapsed();
+            let (elapsed, results) = run_with_debug(ctx, sql, self.common.debug).await?;
             let ms = elapsed.as_secs_f64() * 1000.0;
             millis.push(ms);
             let row_count: usize = results.iter().map(|b| b.num_rows()).sum();

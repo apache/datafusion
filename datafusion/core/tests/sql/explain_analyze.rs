@@ -141,6 +141,7 @@ async fn explain_analyze_baseline_metrics() {
 
         plan.is::<sorts::sort::SortExec>()
             || plan.is::<physical_plan::aggregates::AggregateExec>()
+            || plan.is::<physical_plan::aggregates_blocked::BlockedAggregateExec>()
             || plan.is::<physical_plan::filter::FilterExec>()
             || plan.is::<physical_plan::limit::LocalLimitExec>()
             || plan.is::<physical_plan::projection::ProjectionExec>()

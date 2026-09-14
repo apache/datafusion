@@ -43,6 +43,10 @@ use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::format_state_name,
 };
+use arrow::datatypes::ArrowNativeType;
+use datafusion_expr::blocked_helpers::CopyItemBlockedVecBuilder;
+use datafusion_expr::groups_accumulator::{BlockedEmitTo, BlockedGroupSelection, BlockedGroupsAccumulator, BlocksIndex};
+use datafusion_functions_aggregate_common::accumulator::BlockedAccumulatorArgs;
 use datafusion_functions_aggregate_common::stats::StatsType;
 use datafusion_macros::user_doc;
 
@@ -144,6 +148,18 @@ impl AggregateUDFImpl for Correlation {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         debug!("GroupsAccumulator is created for aggregate function `corr(c1, c2)`");
         Ok(Box::new(CorrelationGroupsAccumulator::new()))
+    }
+
+    fn blocked_groups_accumulator_supported(&self, _args: BlockedAccumulatorArgs) -> bool {
+        true
+    }
+
+    fn create_blocked_groups_accumulator(
+        &self,
+        args: BlockedAccumulatorArgs,
+    ) -> Result<Box<dyn BlockedGroupsAccumulator>> {
+        debug!("BlockedGroupsAccumulator is created for aggregate function `corr(c1, c2)`");
+        Ok(Box::new(CorrelationBlockedGroupsAccumulator::new(args.batch_size)))
     }
 }
 
@@ -371,8 +387,8 @@ impl CorrelationGroupsAccumulator {
 /// Note: Arrays in `state_arrays` should not have null values, because they are all
 /// intermediate states created within the accumulator, instead of inputs from
 /// outside.
-fn accumulate_correlation_states(
-    group_indices: &[usize],
+fn accumulate_correlation_states<Index: Copy>(
+    group_indices: &[Index],
     state_arrays: (
         &UInt64Array,  // count
         &Float64Array, // sum_x
@@ -381,7 +397,7 @@ fn accumulate_correlation_states(
         &Float64Array, // sum_xx
         &Float64Array, // sum_yy
     ),
-    mut value_fn: impl FnMut(usize, u64, &[f64]),
+    mut value_fn: impl FnMut(Index, u64, &[f64]),
 ) {
     let (counts, sum_x, sum_y, sum_xy, sum_xx, sum_yy) = state_arrays;
 
@@ -514,51 +530,9 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         values: &[ArrayRef],
         opt_filter: Option<&BooleanArray>,
     ) -> Result<Vec<ArrayRef>> {
-        assert_eq!(values.len(), 2, "two arguments to convert_to_state");
-        let array_x = downcast_array::<Float64Array>(&values[0]);
-        let array_y = downcast_array::<Float64Array>(&values[1]);
-
-        let len = array_x.len();
-        let mut counts = Vec::with_capacity(len);
-        let mut sum_x = Vec::with_capacity(len);
-        let mut sum_y = Vec::with_capacity(len);
-        let mut sum_xy = Vec::with_capacity(len);
-        let mut sum_xx = Vec::with_capacity(len);
-        let mut sum_yy = Vec::with_capacity(len);
-
-        for row in 0..len {
-            let included = array_x.is_valid(row)
-                && array_y.is_valid(row)
-                && opt_filter
-                    .is_none_or(|filter| filter.is_valid(row) && filter.value(row));
-            if included {
-                let x = array_x.value(row);
-                let y = array_y.value(row);
-                counts.push(1);
-                sum_x.push(x);
-                sum_y.push(y);
-                sum_xy.push(x * y);
-                sum_xx.push(x * x);
-                sum_yy.push(y * y);
-            } else {
-                counts.push(0);
-                sum_x.push(0.0);
-                sum_y.push(0.0);
-                sum_xy.push(0.0);
-                sum_xx.push(0.0);
-                sum_yy.push(0.0);
-            }
-        }
-
-        Ok(vec![
-            Arc::new(UInt64Array::from(counts)),
-            Arc::new(Float64Array::from(sum_x)),
-            Arc::new(Float64Array::from(sum_y)),
-            Arc::new(Float64Array::from(sum_xy)),
-            Arc::new(Float64Array::from(sum_xx)),
-            Arc::new(Float64Array::from(sum_yy)),
-        ])
+        convert_to_state(values, opt_filter)
     }
+
     fn state_preserving(
         &mut self,
         selection: GroupSelection<'_>,
@@ -630,6 +604,440 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
             + self.sum_xy.capacity() * size_of::<f64>()
             + self.sum_xx.capacity() * size_of::<f64>()
             + self.sum_yy.capacity() * size_of::<f64>()
+    }
+}
+
+fn convert_to_state(
+    values: &[ArrayRef],
+    opt_filter: Option<&BooleanArray>,
+) -> Result<Vec<ArrayRef>> {
+    assert_eq!(values.len(), 2, "two arguments to convert_to_state");
+    let array_x = downcast_array::<Float64Array>(&values[0]);
+    let array_y = downcast_array::<Float64Array>(&values[1]);
+
+    let len = array_x.len();
+    let mut counts = Vec::with_capacity(len);
+    let mut sum_x = Vec::with_capacity(len);
+    let mut sum_y = Vec::with_capacity(len);
+    let mut sum_xy = Vec::with_capacity(len);
+    let mut sum_xx = Vec::with_capacity(len);
+    let mut sum_yy = Vec::with_capacity(len);
+
+    for row in 0..len {
+        let included = array_x.is_valid(row)
+          && array_y.is_valid(row)
+          && opt_filter
+          .is_none_or(|filter| filter.is_valid(row) && filter.value(row));
+        if included {
+            let x = array_x.value(row);
+            let y = array_y.value(row);
+            counts.push(1);
+            sum_x.push(x);
+            sum_y.push(y);
+            sum_xy.push(x * y);
+            sum_xx.push(x * x);
+            sum_yy.push(y * y);
+        } else {
+            counts.push(0);
+            sum_x.push(0.0);
+            sum_y.push(0.0);
+            sum_xy.push(0.0);
+            sum_xx.push(0.0);
+            sum_yy.push(0.0);
+        }
+    }
+
+    Ok(vec![
+        Arc::new(UInt64Array::from(counts)),
+        Arc::new(Float64Array::from(sum_x)),
+        Arc::new(Float64Array::from(sum_y)),
+        Arc::new(Float64Array::from(sum_xy)),
+        Arc::new(Float64Array::from(sum_xx)),
+        Arc::new(Float64Array::from(sum_yy)),
+    ])
+}
+
+pub struct CorrelationBlockedGroupsAccumulator {
+    // Number of elements for each group
+    // This is also used to track nulls: if a group has 0 valid values accumulated,
+    // final aggregation result will be null.
+    count: CopyItemBlockedVecBuilder<true, u64>,
+    // Sum of x values for each group
+    sum_x: CopyItemBlockedVecBuilder<true, f64>,
+    // Sum of y
+    sum_y: CopyItemBlockedVecBuilder<true, f64>,
+    // Sum of x*y
+    sum_xy: CopyItemBlockedVecBuilder<true, f64>,
+    // Sum of x^2
+    sum_xx: CopyItemBlockedVecBuilder<true, f64>,
+    // Sum of y^2
+    sum_yy: CopyItemBlockedVecBuilder<true, f64>,
+}
+
+fn blocked_copy_selected<T: ArrowNativeType>(selection: BlockedGroupSelection<'_>, values: &CopyItemBlockedVecBuilder<true, T>) -> Vec<T> {
+    debug_assert_eq!(selection.total_num_groups(), values.len());
+    selection.iter().map(|index| values[index]).collect()
+}
+
+impl CorrelationBlockedGroupsAccumulator {
+    pub fn new(block_size: usize) -> Self {
+        Self {
+            count: CopyItemBlockedVecBuilder::new(block_size),
+            sum_x: CopyItemBlockedVecBuilder::new(block_size),
+            sum_y: CopyItemBlockedVecBuilder::new(block_size),
+            sum_xy: CopyItemBlockedVecBuilder::new(block_size),
+            sum_xx: CopyItemBlockedVecBuilder::new(block_size),
+            sum_yy: CopyItemBlockedVecBuilder::new(block_size),
+        }
+    }
+
+    fn evaluate_all(&mut self) -> Vec<ArrayRef> {
+        let count = self.count.take_all();
+        let sum_x = self.sum_x.take_all();
+        let sum_y = self.sum_y.take_all();
+        let sum_xy = self.sum_xy.take_all();
+        let sum_xx = self.sum_xx.take_all();
+        let sum_yy = self.sum_yy.take_all();
+
+        count.into_iter().zip(sum_x).zip(sum_y)
+          .zip(sum_xy).zip(sum_xx).zip(sum_yy)
+          .map(|(((((count, sum_x), sum_y), sum_xy), sum_xx), sum_yy)| Self::evaluate_values(
+              &count,
+              &sum_x,
+              &sum_y,
+              &sum_xy,
+              &sum_xx,
+              &sum_yy,
+          ))
+          .collect()
+
+    }
+
+    fn evaluate_block(&mut self) -> Option<ArrayRef> {
+        let count = self.count.take_block()?;
+        let sum_x = self.sum_x.take_block()?;
+        let sum_y = self.sum_y.take_block()?;
+        let sum_xy = self.sum_xy.take_block()?;
+        let sum_xx = self.sum_xx.take_block()?;
+        let sum_yy = self.sum_yy.take_block()?;
+
+        Some(Self::evaluate_values(
+            &count,
+            &sum_x,
+            &sum_y,
+            &sum_xy,
+            &sum_xx,
+            &sum_yy,
+        ))
+    }
+
+    fn evaluate_first_n(&mut self, n: usize) -> ArrayRef {
+        let count = self.count.take_n_fixed(n);
+        let sum_x = self.sum_x.take_n_fixed(n);
+        let sum_y = self.sum_y.take_n_fixed(n);
+        let sum_xy = self.sum_xy.take_n_fixed(n);
+        let sum_xx = self.sum_xx.take_n_fixed(n);
+        let sum_yy = self.sum_yy.take_n_fixed(n);
+
+        Self::evaluate_values(
+            &count,
+            &sum_x,
+            &sum_y,
+            &sum_xy,
+            &sum_xx,
+            &sum_yy,
+        )
+    }
+
+    fn state_all(&mut self) -> Vec<Vec<ArrayRef>> {
+        let count = self.count.take_all();
+        let sum_x = self.sum_x.take_all();
+        let sum_y = self.sum_y.take_all();
+        let sum_xy = self.sum_xy.take_all();
+        let sum_xx = self.sum_xx.take_all();
+        let sum_yy = self.sum_yy.take_all();
+
+        count.into_iter().zip(sum_x).zip(sum_y)
+          .zip(sum_xy).zip(sum_xx).zip(sum_yy)
+          .map(|(((((count, sum_x), sum_y), sum_xy), sum_xx), sum_yy)| vec![
+              Arc::new(UInt64Array::new(count.into(), None)) as ArrayRef,
+              Arc::new(Float64Array::new(sum_x.into(), None)),
+              Arc::new(Float64Array::new(sum_y.into(), None)),
+              Arc::new(Float64Array::new(sum_xy.into(), None)),
+              Arc::new(Float64Array::new(sum_xx.into(), None)),
+              Arc::new(Float64Array::new(sum_yy.into(), None)),
+          ])
+          .collect()
+
+    }
+
+    fn state_block(&mut self) -> Option<Vec<ArrayRef>> {
+        // Drain the state vectors for the groups being emitted
+        let count = self.count.take_block()?;
+        let sum_x =  self.sum_x.take_block()?;
+        let sum_y =  self.sum_y.take_block()?;
+        let sum_xy = self.sum_xy.take_block()?;
+        let sum_xx = self.sum_xx.take_block()?;
+        let sum_yy = self.sum_yy.take_block()?;
+
+        Some(vec![
+            Arc::new(UInt64Array::new(count.into(), None)),
+            Arc::new(Float64Array::new(sum_x.into(), None)),
+            Arc::new(Float64Array::new(sum_y.into(), None)),
+            Arc::new(Float64Array::new(sum_xy.into(), None)),
+            Arc::new(Float64Array::new(sum_xx.into(), None)),
+            Arc::new(Float64Array::new(sum_yy.into(), None)),
+        ])
+    }
+
+    fn state_first_n(&mut self, n: usize) -> Vec<ArrayRef> {
+        let count = self.count.take_n_fixed(n);
+        let sum_x = self.sum_x.take_n_fixed(n);
+        let sum_y = self.sum_y.take_n_fixed(n);
+        let sum_xy = self.sum_xy.take_n_fixed(n);
+        let sum_xx = self.sum_xx.take_n_fixed(n);
+        let sum_yy = self.sum_yy.take_n_fixed(n);
+
+        vec![
+            Arc::new(UInt64Array::new(count.into(), None)),
+            Arc::new(Float64Array::new(sum_x.into(), None)),
+            Arc::new(Float64Array::new(sum_y.into(), None)),
+            Arc::new(Float64Array::new(sum_xy.into(), None)),
+            Arc::new(Float64Array::new(sum_xx.into(), None)),
+            Arc::new(Float64Array::new(sum_yy.into(), None)),
+        ]
+    }
+
+    fn evaluate_values(
+        counts: &[u64],
+        sum_xs: &[f64],
+        sum_ys: &[f64],
+        sum_xys: &[f64],
+        sum_xxs: &[f64],
+        sum_yys: &[f64],
+    ) -> ArrayRef {
+        let n = counts.len();
+        let mut values = Vec::with_capacity(n);
+        let mut nulls = NullBufferBuilder::new(n);
+
+        for i in 0..n {
+            let count = counts[i];
+            let sum_x = sum_xs[i];
+            let sum_y = sum_ys[i];
+            let sum_xy = sum_xys[i];
+            let sum_xx = sum_xxs[i];
+            let sum_yy = sum_yys[i];
+
+            // If both inputs are NaN, return NaN. If only one input is NaN,
+            // or there are too few values, return NULL.
+            if sum_x.is_nan() && sum_y.is_nan() {
+                values.push(f64::NAN);
+                nulls.append_non_null();
+                continue;
+            } else if count < 2 || sum_x.is_nan() || sum_y.is_nan() {
+                values.push(0.0);
+                nulls.append_null();
+                continue;
+            }
+
+            let mean_x = sum_x / count as f64;
+            let mean_y = sum_y / count as f64;
+            let numerator = sum_xy - sum_x * mean_y;
+            let denominator =
+              ((sum_xx - sum_x * mean_x) * (sum_yy - sum_y * mean_y)).sqrt();
+
+            if denominator == 0.0 {
+                values.push(0.0);
+                nulls.append_null();
+            } else {
+                values.push(numerator / denominator);
+                nulls.append_non_null();
+            }
+        }
+
+        Arc::new(Float64Array::new(values.into(), nulls.finish()))
+    }
+}
+
+/// GroupsAccumulator implementation for `corr(x, y)` that computes the Pearson correlation coefficient
+/// between two numeric columns.
+///
+/// Online algorithm for correlation:
+///
+/// r = (n * sum_xy - sum_x * sum_y) / sqrt((n * sum_xx - sum_x^2) * (n * sum_yy - sum_y^2))
+/// where:
+/// n = number of observations
+/// sum_x = sum of x values
+/// sum_y = sum of y values
+/// sum_xy = sum of (x * y)
+/// sum_xx = sum of x^2 values
+/// sum_yy = sum of y^2 values
+///
+/// Reference: <https://en.wikipedia.org/wiki/Pearson_correlation_coefficient#For_a_sample>
+impl BlockedGroupsAccumulator for CorrelationBlockedGroupsAccumulator {
+    fn batch_size(&self) -> usize {
+        self.count.block_size()
+    }
+
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[BlocksIndex],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        // All vec should have the same length
+        {
+            let before = self.count.len();
+            assert!(before <= total_num_groups);
+            let to_add = total_num_groups - before;
+            self.count.push_value_n(0, to_add);
+            self.sum_x.push_value_n(0.0, to_add);
+            self.sum_y.push_value_n(0.0, to_add);
+            self.sum_xy.push_value_n(0.0, to_add);
+            self.sum_xx.push_value_n(0.0, to_add);
+            self.sum_yy.push_value_n(0.0, to_add);
+        }
+
+        let array_x = downcast_array::<Float64Array>(&values[0]);
+        let array_y = downcast_array::<Float64Array>(&values[1]);
+
+        accumulate_multiple(
+            group_indices,
+            &[&array_x, &array_y],
+            opt_filter,
+            |group_index, batch_index, columns| {
+                let x = columns[0].value(batch_index);
+                let y = columns[1].value(batch_index);
+                self.count[group_index] += 1;
+                self.sum_x[group_index] += x;
+                self.sum_y[group_index] += y;
+                self.sum_xy[group_index] += x * y;
+                self.sum_xx[group_index] += x * x;
+                self.sum_yy[group_index] += y * y;
+            },
+        );
+
+        Ok(())
+    }
+
+    fn evaluate(&mut self, emit_to: BlockedEmitTo) -> Result<Vec<ArrayRef>> {
+        Ok(match emit_to {
+            BlockedEmitTo::All => self.evaluate_all(),
+            BlockedEmitTo::NextBlock => self.evaluate_block().into_iter().collect(),
+            BlockedEmitTo::First(n) => vec![self.evaluate_first_n(n)]
+        })
+    }
+
+    fn evaluate_preserving(&mut self, selection: BlockedGroupSelection<'_>) -> Result<ArrayRef> {
+        selection.validate_num_groups(self.count.len())?;
+        Ok(Self::evaluate_values(
+            &blocked_copy_selected(selection, &self.count),
+            &blocked_copy_selected(selection, &self.sum_x),
+            &blocked_copy_selected(selection, &self.sum_y),
+            &blocked_copy_selected(selection, &self.sum_xy),
+            &blocked_copy_selected(selection, &self.sum_xx),
+            &blocked_copy_selected(selection, &self.sum_yy),
+        ))
+    }
+
+    fn supports_evaluate_preserving(&self) -> bool {
+        true
+    }
+
+    fn state(&mut self, emit_to: BlockedEmitTo) -> Result<Vec<Vec<ArrayRef>>> {
+        Ok(match emit_to {
+            BlockedEmitTo::All => self.state_all(),
+            BlockedEmitTo::NextBlock => self.state_block().into_iter().collect(),
+            BlockedEmitTo::First(n) => vec![self.state_first_n(n)]
+        })
+    }
+
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        convert_to_state(values, opt_filter)
+    }
+
+    fn state_preserving(
+        &mut self,
+        selection: BlockedGroupSelection<'_>,
+    ) -> Result<Vec<ArrayRef>> {
+        selection.validate_num_groups(self.count.len())?;
+        Ok(vec![
+            Arc::new(UInt64Array::from(blocked_copy_selected(selection, &self.count))),
+            Arc::new(Float64Array::from(blocked_copy_selected(selection, &self.sum_x))),
+            Arc::new(Float64Array::from(blocked_copy_selected(selection, &self.sum_y))),
+            Arc::new(Float64Array::from(blocked_copy_selected(selection, &self.sum_xy))),
+            Arc::new(Float64Array::from(blocked_copy_selected(selection, &self.sum_xx))),
+            Arc::new(Float64Array::from(blocked_copy_selected(selection, &self.sum_yy))),
+        ])
+    }
+
+    fn supports_state_preserving(&self) -> bool {
+        true
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[BlocksIndex],
+        total_num_groups: usize,
+    ) -> Result<()> {
+        // Resize vectors to accommodate total number of groups
+        {
+            let before = self.count.len();
+            assert!(before <= total_num_groups);
+            let to_add = total_num_groups - before;
+            self.count.push_value_n(0, to_add);
+            self.sum_x.push_value_n(0.0, to_add);
+            self.sum_y.push_value_n(0.0, to_add);
+            self.sum_xy.push_value_n(0.0, to_add);
+            self.sum_xx.push_value_n(0.0, to_add);
+            self.sum_yy.push_value_n(0.0, to_add);
+        }
+
+
+        // Extract arrays from input values
+        let partial_counts = values[0].as_primitive::<UInt64Type>();
+        let partial_sum_x = values[1].as_primitive::<Float64Type>();
+        let partial_sum_y = values[2].as_primitive::<Float64Type>();
+        let partial_sum_xy = values[3].as_primitive::<Float64Type>();
+        let partial_sum_xx = values[4].as_primitive::<Float64Type>();
+        let partial_sum_yy = values[5].as_primitive::<Float64Type>();
+
+        accumulate_correlation_states(
+            group_indices,
+            (
+                partial_counts,
+                partial_sum_x,
+                partial_sum_y,
+                partial_sum_xy,
+                partial_sum_xx,
+                partial_sum_yy,
+            ),
+            |group_index, count, values| {
+                self.count[group_index] += count;
+                self.sum_x[group_index] += values[0];
+                self.sum_y[group_index] += values[1];
+                self.sum_xy[group_index] += values[2];
+                self.sum_xx[group_index] += values[3];
+                self.sum_yy[group_index] += values[4];
+            },
+        );
+
+        Ok(())
+    }
+
+    fn size(&self) -> usize {
+        self.count.allocated_size()
+          + self.sum_x.allocated_size()
+          + self.sum_y.allocated_size()
+          + self.sum_xy.allocated_size()
+          + self.sum_xx.allocated_size()
+          + self.sum_yy.allocated_size()
     }
 }
 

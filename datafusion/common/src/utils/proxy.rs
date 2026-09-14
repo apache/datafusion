@@ -17,6 +17,7 @@
 
 //! [`VecAllocExt`] to help tracking of memory allocations
 
+use std::collections::VecDeque;
 use hashbrown::hash_table::HashTable;
 use std::mem::size_of;
 
@@ -106,6 +107,41 @@ impl<T> VecAllocExt for Vec<T> {
             *accounting = (*accounting).checked_add(bump_size).expect("overflow");
         }
     }
+    fn allocated_size(&self) -> usize {
+        size_of::<T>() * self.capacity()
+    }
+}
+
+/// Extension trait for [`Vec`] to account for allocations.
+pub trait VecDequeAllocExt {
+    /// Return the amount of memory allocated by this VecDeque to store elements
+    /// (`size_of<T> * capacity`).
+    ///
+    /// Note this calculation is not recursive, and does not include any heap
+    /// allocations contained within the Vec's elements. Does not include the
+    /// size of `self`
+    ///
+    /// # Example:
+    /// ```
+    /// # use datafusion_common::utils::proxy::VecDequeAllocExt;
+    /// let mut vec = VecDeque::new();
+    /// // Push data into the vec and the accounting will be updated to reflect
+    /// // memory allocation
+    /// vec.push_back(1);
+    /// assert_eq!(vec.allocated_size(), 16); // space for 4 u32s
+    /// vec.push_back(1);
+    /// assert_eq!(vec.allocated_size(), 16); // no new allocation needed
+    ///
+    /// // push more data into the vec
+    /// for _ in 0..10 {
+    ///     vec.push_back(1);
+    /// }
+    /// assert_eq!(vec.allocated_size(), 64); // space for 64 now
+    /// ```
+    fn allocated_size(&self) -> usize;
+}
+
+impl<T> VecDequeAllocExt for VecDeque<T> {
     fn allocated_size(&self) -> usize {
         size_of::<T>() * self.capacity()
     }
