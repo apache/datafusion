@@ -49,11 +49,17 @@ url = { workspace = true }
 tokio = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
+bigdecimal = { workspace = true }
+criterion = { workspace = true }
 datafusion = { workspace = true, features = ["nested_expressions", "unicode_expressions"] }
 datafusion-functions-aggregate = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 insta = { workspace = true }
+
+[[bench]]
+name = "decimal_arithmetic"
+harness = false
 
 [features]
 default = ["physical"]
