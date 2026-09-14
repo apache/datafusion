@@ -210,6 +210,34 @@ pub fn compile_regex(regex: &str, flags: Option<&str>) -> Result<Regex, ArrowErr
 #[cfg(test)]
 mod tests {
     use super::start_to_byte_offset;
+    use datafusion_expr::expr::ScalarFunction;
+    use datafusion_expr::{Expr, col, lit};
+
+    #[test]
+    fn regexp_split_to_array_expr_arguments() {
+        let values = col("values");
+        let pattern = lit(",");
+        let flags = lit("i");
+
+        for (flags, expected) in [
+            (None, vec![values.clone(), pattern.clone()]),
+            (
+                Some(flags.clone()),
+                vec![values.clone(), pattern.clone(), flags.clone()],
+            ),
+        ] {
+            let actual = super::expr_fn::regexp_split_to_array(
+                values.clone(),
+                pattern.clone(),
+                flags,
+            );
+            let expected = Expr::ScalarFunction(ScalarFunction::new_udf(
+                super::regexp_split_to_array(),
+                expected,
+            ));
+            assert_eq!(actual, expected);
+        }
+    }
 
     #[test]
     fn empty_flags_match_omitted_flags() {

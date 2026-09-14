@@ -299,6 +299,7 @@ impl SplitOutputSize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::Int32Array;
     use arrow::compute::cast;
     use datafusion_common::config::ConfigOptions;
 
@@ -352,6 +353,39 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn metadata_and_invalid_input_types() {
+        let udf = RegexpSplitToArrayFunc::default();
+        assert!(udf.is_strict());
+
+        let error = udf.return_type(&[DataType::Int32, DataType::Int32]);
+        assert!(
+            error
+                .unwrap_err()
+                .to_string()
+                .contains("requires string arguments")
+        );
+
+        let utf8 = strings(&[Some("a")], &DataType::Utf8);
+        let large_utf8 = strings(&[Some("a")], &DataType::LargeUtf8);
+        let error = split_arrays(&[utf8, large_utf8], 1);
+        assert!(
+            error
+                .unwrap_err()
+                .to_string()
+                .contains("requires matching string types")
+        );
+
+        let integers: ArrayRef = Arc::new(Int32Array::from(vec![1]));
+        let error = split_arrays(&[Arc::clone(&integers), integers], 1);
+        assert!(
+            error
+                .unwrap_err()
+                .to_string()
+                .contains("requires string arguments")
+        );
     }
 
     #[test]
