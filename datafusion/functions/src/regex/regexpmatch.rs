@@ -192,7 +192,10 @@ fn regexp_match_scalar_pattern(args: &[ColumnarValue]) -> Result<Option<ArrayRef
     }
 
     let pattern = pattern.to_scalar()?;
-    let flags = flags.map(ScalarValue::to_scalar).transpose()?;
+    let flags = flags
+        .filter(|flags| flags.try_as_str() != Some(Some("")))
+        .map(ScalarValue::to_scalar)
+        .transpose()?;
 
     regexp::regexp_match(
         values,
@@ -237,7 +240,8 @@ pub fn regexp_match(args: &[ArrayRef]) -> Result<ArrayRef> {
                 }
             }
 
-            regexp::regexp_match(&args[0], &args[1], Some(&args[2]))
+            let flags = super::normalize_empty_flags(&args[2])?;
+            regexp::regexp_match(&args[0], &args[1], Some(&flags))
                 .map_err(|e| arrow_datafusion_err!(e))
         }
         other => exec_err!(

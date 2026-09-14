@@ -1601,6 +1601,39 @@ impl PlanProperties {
     }
 }
 
+#[derive(Debug)]
+struct DefaultInvariantChecker<'a> {
+    plan_name: &'a str,
+}
+
+impl<'a> DefaultInvariantChecker<'a> {
+    fn new(plan_name: &'a str) -> Self {
+        Self { plan_name }
+    }
+
+    /// All dynamic expressions must have an expression id.
+    fn check_dynamic_expression_invariants(
+        &self,
+        dynamic_expressions: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<()> {
+        let mut produced_ids = HashSet::new();
+        for expr in dynamic_expressions {
+            let Some(expression_id) = expr.expression_id() else {
+                return internal_err!(
+                    "{}::dynamic_expressions_produced returned an expression without an expression ID",
+                    self.plan_name
+                );
+            };
+            assert_or_internal_err!(
+                produced_ids.insert(expression_id),
+                "{}::dynamic_expressions_produced returned duplicate expression ID {expression_id}",
+                self.plan_name
+            );
+        }
+        Ok(())
+    }
+}
+
 macro_rules! check_len {
     ($target:expr, $func_name:ident, $expected_len:expr) => {
         let actual_len = $target.$func_name().len();
@@ -1616,27 +1649,6 @@ macro_rules! check_len {
     };
 }
 
-/// All dynamic expressions must have an expression id.
-fn check_dynamic_expression_invariants<P: ExecutionPlan + ?Sized>(
-    plan: &P,
-) -> Result<()> {
-    let mut produced_ids = HashSet::new();
-    for expr in plan.dynamic_expressions_produced() {
-        let Some(expression_id) = expr.expression_id() else {
-            return internal_err!(
-                "{}::dynamic_expressions_produced returned an expression without an expression ID",
-                plan.name()
-            );
-        };
-        assert_or_internal_err!(
-            produced_ids.insert(expression_id),
-            "{}::dynamic_expressions_produced returned duplicate expression ID {expression_id}",
-            plan.name()
-        );
-    }
-    Ok(())
-}
-
 /// Checks a set of invariants that apply to all ExecutionPlan implementations.
 /// Returns an error if the given node does not conform.
 pub fn check_default_invariants<P: ExecutionPlan + ?Sized>(
@@ -1648,9 +1660,19 @@ pub fn check_default_invariants<P: ExecutionPlan + ?Sized>(
     check_len!(plan, maintains_input_order, children_len);
     check_len!(plan, required_input_ordering, children_len);
     check_len!(plan, benefits_from_input_partitioning, children_len);
-    plan.input_distribution_requirements()
-        .check_invariants(plan, check)?;
-    check_dynamic_expression_invariants(plan)?;
+
+    let input_distribution_requirements = plan.input_distribution_requirements();
+    let children = plan.children();
+    let checker = DefaultInvariantChecker::new(plan.name());
+    input_distribution_requirements.check_invariants(
+        checker.plan_name,
+        children,
+        check,
+    )?;
+    let dynamic_expressions = plan.dynamic_expressions_produced();
+    if !dynamic_expressions.is_empty() {
+        checker.check_dynamic_expression_invariants(dynamic_expressions)?;
+    }
 
     Ok(())
 }
@@ -2094,14 +2116,29 @@ mod tests {
 
     #[derive(Debug)]
     pub struct EmptyExec {
+        children: Vec<Arc<dyn ExecutionPlan>>,
         dynamic_expressions: Vec<Arc<dyn PhysicalExpr>>,
+        maintains_input_order_len: Option<usize>,
+        required_input_ordering_len: Option<usize>,
+        benefits_from_input_partitioning_len: Option<usize>,
+        input_distribution_requirements: Option<InputDistributionRequirements>,
     }
 
     impl EmptyExec {
         pub fn new(_schema: SchemaRef) -> Self {
             Self {
+                children: vec![],
                 dynamic_expressions: vec![],
+                maintains_input_order_len: None,
+                required_input_ordering_len: None,
+                benefits_from_input_partitioning_len: None,
+                input_distribution_requirements: None,
             }
+        }
+
+        fn with_child(mut self, child: Arc<dyn ExecutionPlan>) -> Self {
+            self.children.push(child);
+            self
         }
 
         fn with_dynamic_expressions(
@@ -2109,6 +2146,37 @@ mod tests {
             dynamic_expressions: Vec<Arc<dyn PhysicalExpr>>,
         ) -> Self {
             self.dynamic_expressions = dynamic_expressions;
+            self
+        }
+
+        fn with_maintains_input_order_len(mut self, len: usize) -> Self {
+            self.maintains_input_order_len = Some(len);
+            self
+        }
+
+        fn with_required_input_ordering_len(mut self, len: usize) -> Self {
+            self.required_input_ordering_len = Some(len);
+            self
+        }
+
+        fn with_benefits_from_input_partitioning_len(mut self, len: usize) -> Self {
+            self.benefits_from_input_partitioning_len = Some(len);
+            self
+        }
+
+        fn with_input_distribution_requirements_len(mut self, len: usize) -> Self {
+            self.input_distribution_requirements =
+                Some(InputDistributionRequirements::new(
+                    vec![Distribution::UnspecifiedDistribution; len],
+                ));
+            self
+        }
+
+        fn with_input_distribution_requirements(
+            mut self,
+            requirements: InputDistributionRequirements,
+        ) -> Self {
+            self.input_distribution_requirements = Some(requirements);
             self
         }
     }
@@ -2133,7 +2201,42 @@ mod tests {
         }
 
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-            vec![]
+            self.children.iter().collect()
+        }
+
+        fn maintains_input_order(&self) -> Vec<bool> {
+            vec![
+                false;
+                self.maintains_input_order_len
+                    .unwrap_or(self.children.len())
+            ]
+        }
+
+        fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
+            vec![
+                None;
+                self.required_input_ordering_len
+                    .unwrap_or(self.children.len())
+            ]
+        }
+
+        fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+            vec![
+                true;
+                self.benefits_from_input_partitioning_len
+                    .unwrap_or(self.children.len())
+            ]
+        }
+
+        fn input_distribution_requirements(&self) -> InputDistributionRequirements {
+            self.input_distribution_requirements
+                .clone()
+                .unwrap_or_else(|| {
+                    InputDistributionRequirements::new(vec![
+                    Distribution::UnspecifiedDistribution;
+                    self.children.len()
+                ])
+                })
         }
 
         fn replace_children(
@@ -2206,6 +2309,87 @@ mod tests {
         assert!(error.contains("duplicate expression ID"), "{error}");
 
         Ok(())
+    }
+
+    #[test]
+    fn test_default_invariant_lengths() -> Result<()> {
+        let schema = Arc::new(Schema::empty());
+        let child: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let make_plan =
+            || EmptyExec::new(Arc::clone(&schema)).with_child(Arc::clone(&child));
+
+        check_default_invariants(&make_plan(), InvariantLevel::Always)?;
+
+        let cases = [
+            (
+                make_plan().with_maintains_input_order_len(0),
+                "Internal error: Assertion failed: actual_len == children_len (left: 0, right: 1): EmptyExec::maintains_input_order returned Vec with incorrect size: 0 != 1",
+            ),
+            (
+                make_plan().with_required_input_ordering_len(0),
+                "Internal error: Assertion failed: actual_len == children_len (left: 0, right: 1): EmptyExec::required_input_ordering returned Vec with incorrect size: 0 != 1",
+            ),
+            (
+                make_plan().with_benefits_from_input_partitioning_len(0),
+                "Internal error: Assertion failed: actual_len == children_len (left: 0, right: 1): EmptyExec::benefits_from_input_partitioning returned Vec with incorrect size: 0 != 1",
+            ),
+            (
+                make_plan().with_input_distribution_requirements_len(0),
+                "Internal error: EmptyExec::input_distribution_requirements returned incorrect child count: 0 != 1",
+            ),
+        ];
+
+        for (plan, expected) in cases {
+            let error = check_default_invariants(&plan, InvariantLevel::Always)
+                .unwrap_err()
+                .strip_backtrace();
+            assert!(error.starts_with(expected), "{error}");
+        }
+
+        let invalid_co_partitioning = make_plan()
+            .with_child(child)
+            .with_input_distribution_requirements(
+                InputDistributionRequirements::co_partitioned(vec![
+                    Distribution::UnspecifiedDistribution,
+                    Distribution::UnspecifiedDistribution,
+                ]),
+            );
+        let error =
+            check_default_invariants(&invalid_co_partitioning, InvariantLevel::Always)
+                .unwrap_err()
+                .strip_backtrace();
+        assert!(
+            error.starts_with(
+                "Internal error: EmptyExec has invalid co-partitioning requirement: child 0 has unspecified distribution"
+            ),
+            "{error}"
+        );
+
+        let left: Arc<dyn ExecutionPlan> =
+            Arc::new(crate::empty::EmptyExec::new(Arc::clone(&schema)));
+        let right: Arc<dyn ExecutionPlan> =
+            Arc::new(crate::empty::EmptyExec::new(Arc::clone(&schema)));
+        let valid_co_partitioning = EmptyExec::new(schema)
+            .with_child(left)
+            .with_child(right)
+            .with_input_distribution_requirements(
+                InputDistributionRequirements::co_partitioned(vec![
+                    Distribution::SinglePartition,
+                    Distribution::SinglePartition,
+                ]),
+            );
+        check_default_invariants(&valid_co_partitioning, InvariantLevel::Executable)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_default_invariants_accept_trait_object() -> Result<()> {
+        let plan = EmptyExec::new(Arc::new(Schema::empty()));
+        let plan: &dyn ExecutionPlan = &plan;
+
+        check_default_invariants(plan, InvariantLevel::Always)?;
+        plan.check_invariants(InvariantLevel::Always)
     }
 
     #[derive(Debug)]

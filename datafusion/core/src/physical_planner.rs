@@ -1270,16 +1270,20 @@ impl DefaultPhysicalPlanner {
             LogicalPlan::SubqueryAlias(_) => children.one()?,
             LogicalPlan::Limit(limit) => {
                 let input = children.one()?;
+                // `get_skip_type` / `get_fetch_type` only return a non literal
+                // type for an expression that is present
                 let SkipType::Literal(skip) = limit.get_skip_type()? else {
+                    let skip = limit.skip.as_deref().map(ToString::to_string);
                     return not_impl_err!(
-                        "Unsupported OFFSET expression: {:?}",
-                        limit.skip
+                        "Unsupported OFFSET expression: {}",
+                        skip.unwrap_or_default()
                     );
                 };
                 let FetchType::Literal(fetch) = limit.get_fetch_type()? else {
+                    let fetch = limit.fetch.as_deref().map(ToString::to_string);
                     return not_impl_err!(
-                        "Unsupported LIMIT expression: {:?}",
-                        limit.fetch
+                        "Unsupported LIMIT expression: {}",
+                        fetch.unwrap_or_default()
                     );
                 };
 
@@ -1607,16 +1611,13 @@ impl DefaultPhysicalPlanner {
                         Arc::new(CrossJoinExec::new(physical_left, physical_right))
                     } else if num_range_filters == 1
                         && total_filters == 1
-                        // PWMJ supports classic joins and Left Semi/Anti existence joins.
-                        // Right Semi/Anti and Mark joins are not implemented yet (they
-                        // would require swapping the inputs so the marked side is buffered),
-                        // so exclude them here and let them fall back to NestedLoopJoin.
+                        // PWMJ supports classic joins and Semi/Anti existence joins. Mark
+                        // joins are not implemented yet (they need an extra boolean column
+                        // rather than a subset of one side's rows), so exclude them here
+                        // and let them fall back to NestedLoopJoin.
                         && !matches!(
                             join_type,
-                            JoinType::RightSemi
-                                | JoinType::RightAnti
-                                | JoinType::LeftMark
-                                | JoinType::RightMark
+                            JoinType::LeftMark | JoinType::RightMark
                         )
                         && session_state
                             .config_options()
@@ -1650,14 +1651,20 @@ impl DefaultPhysicalPlanner {
                             }
                         }
 
+                        // `Neither` covers an operand that references no column from
+                        // either side (e.g. a literal), and `Both` an operand that
+                        // references columns from both. PWMJ needs one operand pinned
+                        // to each side, so both fall back to NestedLoopJoin below rather
+                        // than erroring or (for `Neither`) panicking.
                         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
                         enum Side {
                             Left,
                             Right,
                             Both,
+                            Neither,
                         }
 
-                        let side_of = |e: &Expr| -> Result<Side> {
+                        let side_of = |e: &Expr| -> Side {
                             let cols = e.column_refs();
                             let any_left = cols
                                 .iter()
@@ -1666,20 +1673,29 @@ impl DefaultPhysicalPlanner {
                                 .iter()
                                 .any(|c| right_df_schema.index_of_column(c).is_ok());
 
-                            Ok(match (any_left, any_right) {
+                            match (any_left, any_right) {
                                 (true, false) => Side::Left,
                                 (false, true) => Side::Right,
                                 (true, true) => Side::Both,
-                                _ => unreachable!(),
-                            })
+                                (false, false) => Side::Neither,
+                            }
                         };
 
                         let mut lhs_logical = &be.left;
                         let mut rhs_logical = &be.right;
 
-                        let left_side = side_of(lhs_logical)?;
-                        let right_side = side_of(rhs_logical)?;
-                        if left_side == Side::Both || right_side == Side::Both {
+                        let left_side = side_of(lhs_logical);
+                        let right_side = side_of(rhs_logical);
+
+                        if left_side == Side::Right && right_side == Side::Left {
+                            std::mem::swap(&mut lhs_logical, &mut rhs_logical);
+                            op = reverse_ineq(op);
+                        } else if !(left_side == Side::Left && right_side == Side::Right)
+                        {
+                            // Anything other than a clean left/right split -- both
+                            // operands on one side, one referencing neither side, or
+                            // either referencing both -- isn't a range predicate PWMJ
+                            // can plan, so let NestedLoopJoin evaluate it instead.
                             return Ok(Arc::new(NestedLoopJoinExec::try_new(
                                 physical_left,
                                 physical_right,
@@ -1687,17 +1703,6 @@ impl DefaultPhysicalPlanner {
                                 join_type,
                                 None,
                             )?));
-                        }
-
-                        if left_side == Side::Right && right_side == Side::Left {
-                            std::mem::swap(&mut lhs_logical, &mut rhs_logical);
-                            op = reverse_ineq(op);
-                        } else if !(left_side == Side::Left && right_side == Side::Right)
-                        {
-                            return plan_err!(
-                                "Unsupported operator for PWMJ: {:?}. Expected one of <, <=, >, >=",
-                                op
-                            );
                         }
 
                         let on_left = create_physical_expr(

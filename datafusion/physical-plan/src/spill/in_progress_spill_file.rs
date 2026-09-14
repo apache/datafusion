@@ -17,7 +17,7 @@
 
 //! Define the `InProgressSpillFile` struct, which represents an in-progress spill file used for writing `RecordBatch`es to disk, created by `SpillManager`.
 
-use datafusion_common::Result;
+use datafusion_common::{Result, internal_datafusion_err};
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
@@ -25,28 +25,33 @@ use datafusion_common::exec_datafusion_err;
 use datafusion_execution::spill_file::SpillFile;
 
 use super::{
-    IPCStreamWriter, gc_view_arrays,
+    AsyncIPCStreamWriter, IPCStreamEncoder, IPCStreamWriter, gc_view_arrays,
     spill_manager::{GetSlicedSize, SpillManager},
 };
+
+enum InProgressWriter {
+    Sync(IPCStreamWriter),
+    Async(AsyncIPCStreamWriter),
+}
 
 /// Represents an in-progress spill file used for writing `RecordBatch`es to disk, created by `SpillManager`.
 /// Caller is able to use this struct to incrementally append in-memory batches to
 /// the file, and then finalize the file by calling the `finish` method.
 pub struct InProgressSpillFile {
-    pub(crate) spill_writer: Arc<SpillManager>,
+    pub(crate) spill_manager: Arc<SpillManager>,
     /// Lazily initialized writer
-    writer: Option<IPCStreamWriter>,
+    writer: Option<InProgressWriter>,
     /// Lazily initialized in-progress file, it will be moved out when the `finish` method is invoked
     in_progress_file: Option<Arc<dyn SpillFile>>,
 }
 
 impl InProgressSpillFile {
     pub fn new(
-        spill_writer: Arc<SpillManager>,
+        spill_manager: Arc<SpillManager>,
         in_progress_file: Arc<dyn SpillFile>,
     ) -> Self {
         Self {
-            spill_writer,
+            spill_manager,
             in_progress_file: Some(in_progress_file),
             writer: None,
         }
@@ -78,35 +83,92 @@ impl InProgressSpillFile {
             // Individual batches may have different schemas (e.g., different nullability)
             // when they come from different branches of a UnionExec. The SpillManager's
             // schema represents the canonical schema that all batches should conform to.
-            let schema = self.spill_writer.schema();
+            let schema = self.spill_manager.schema();
             if let Some(in_progress_file) = &self.in_progress_file {
                 let spill_writer = in_progress_file.open_writer()?;
 
-                self.writer = Some(IPCStreamWriter::new(
+                self.writer = Some(InProgressWriter::Sync(IPCStreamWriter::new(
                     spill_writer,
                     schema.as_ref(),
-                    self.spill_writer.compression,
-                )?);
+                    self.spill_manager.compression,
+                )?));
 
                 // Update metrics
-                self.spill_writer.metrics.spill_file_count.add(1);
-                let header_bytes = self.writer.as_ref().unwrap().bytes_written();
-                self.spill_writer.metrics.spilled_bytes.add(header_bytes);
+                self.spill_manager.metrics.spill_file_count.add(1);
             }
         }
-        if let Some(writer) = &mut self.writer {
+        if let Some(InProgressWriter::Sync(writer)) = &mut self.writer {
             // The writer calculates how many serialized bytes were emitted
             let (spilled_rows, delta_bytes) = writer.write(&gc_batch)?;
 
-            self.spill_writer.metrics.spilled_rows.add(spilled_rows);
-            self.spill_writer.metrics.spilled_bytes.add(delta_bytes);
+            self.spill_manager.metrics.spilled_rows.add(spilled_rows);
+            self.spill_manager.metrics.spilled_bytes.add(delta_bytes);
+        } else if self.writer.is_some() {
+            return Err(exec_datafusion_err!(
+                "Cannot use synchronous append after asynchronous spill writing has started"
+            ));
+        }
+        gc_batch.get_sliced_size()
+    }
+
+    /// Appends a `RecordBatch` using the asynchronous spill writer.
+    pub async fn append_batch_async(&mut self, batch: &RecordBatch) -> Result<usize> {
+        if self.in_progress_file.is_none() {
+            return Err(exec_datafusion_err!(
+                "Append operation failed: No active in-progress file. The file may have already been finalized."
+            ));
+        }
+
+        let gc_batch = gc_view_arrays(batch)?;
+
+        if self.writer.is_none() {
+            let schema = self.spill_manager.schema();
+            if let Some(in_progress_file) = &self.in_progress_file {
+                // Validate the IPC schema and compression options before opening
+                // a remote upload that would otherwise need to be aborted.
+                let encoder = IPCStreamEncoder::new(
+                    schema.as_ref(),
+                    self.spill_manager.compression,
+                )?;
+                let spill_writer = in_progress_file.open_async_writer().await?;
+
+                self.writer = Some(InProgressWriter::Async(AsyncIPCStreamWriter::new(
+                    spill_writer,
+                    encoder,
+                )));
+
+                self.spill_manager.metrics.spill_file_count.add(1);
+            }
+        }
+
+        match &mut self.writer {
+            Some(InProgressWriter::Async(writer)) => {
+                let (spilled_rows, delta_bytes) = writer.write(&gc_batch).await?;
+
+                self.spill_manager.metrics.spilled_rows.add(spilled_rows);
+                self.spill_manager.metrics.spilled_bytes.add(delta_bytes);
+            }
+            Some(InProgressWriter::Sync(_)) => {
+                return Err(exec_datafusion_err!(
+                    "Cannot use asynchronous append after synchronous spill writing has started"
+                ));
+            }
+            None => {
+                return Err(internal_datafusion_err!(
+                    "Asynchronous spill writer was not initialized"
+                ));
+            }
         }
         gc_batch.get_sliced_size()
     }
 
     pub fn flush(&mut self) -> Result<()> {
-        if let Some(writer) = &mut self.writer {
+        if let Some(InProgressWriter::Sync(writer)) = &mut self.writer {
             writer.flush()?;
+        } else if self.writer.is_some() {
+            return Err(exec_datafusion_err!(
+                "Cannot use synchronous flush for an asynchronous spill writer"
+            ));
         }
         Ok(())
     }
@@ -125,15 +187,61 @@ impl InProgressSpillFile {
                 "Finish operation failed: file has already been finalized."
             ));
         }
-        if let Some(mut writer) = self.writer.take() {
+        if matches!(self.writer, Some(InProgressWriter::Async(_))) {
+            return Err(exec_datafusion_err!(
+                "Cannot use synchronous finish for an asynchronous spill writer"
+            ));
+        }
+        if let Some(InProgressWriter::Sync(mut writer)) = self.writer.take() {
             // Finish the writer and capture any final trailing bytes emitted
             let delta_bytes = writer.finish()?;
-            self.spill_writer.metrics.spilled_bytes.add(delta_bytes);
+            self.spill_manager.metrics.spilled_bytes.add(delta_bytes);
         } else {
             return Ok(None);
         }
 
         Ok(self.in_progress_file.take())
+    }
+
+    /// Finalizes an asynchronous spill write, returning the completed file.
+    pub async fn finish_async(&mut self) -> Result<Option<Arc<dyn SpillFile>>> {
+        if self.in_progress_file.is_none() && self.writer.is_none() {
+            return Err(exec_datafusion_err!(
+                "Finish operation failed: file has already been finalized."
+            ));
+        }
+        if matches!(self.writer, Some(InProgressWriter::Sync(_))) {
+            return Err(exec_datafusion_err!(
+                "Cannot use asynchronous finish for a synchronous spill writer"
+            ));
+        }
+        if let Some(InProgressWriter::Async(writer)) = &mut self.writer {
+            let delta_bytes = writer.finish().await?;
+            self.spill_manager.metrics.spilled_bytes.add(delta_bytes);
+        } else {
+            return Ok(None);
+        }
+
+        self.writer.take();
+        Ok(self.in_progress_file.take())
+    }
+
+    /// Aborts an asynchronous spill write and discards its file.
+    pub async fn abort_async(&mut self) -> Result<()> {
+        if matches!(self.writer, Some(InProgressWriter::Sync(_))) {
+            return Err(exec_datafusion_err!(
+                "Cannot use asynchronous abort for a synchronous spill writer"
+            ));
+        }
+
+        let result = if let Some(InProgressWriter::Async(writer)) = &mut self.writer {
+            writer.abort().await
+        } else {
+            Ok(())
+        };
+        self.writer.take();
+        self.in_progress_file.take();
+        result
     }
 }
 
