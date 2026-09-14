@@ -456,6 +456,39 @@
 <p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">56.0.0</span></code> has not been released yet. The information provided
 in this section pertains to features and changes that have already been merged
 to the main branch and are awaiting release in this version.</p>
+<section id="missing-parquet-null-counts-are-treated-as-unknown">
+<h3>Missing Parquet null counts are treated as unknown<a class="headerlink" href="#missing-parquet-null-counts-are-treated-as-unknown" title="Link to this heading">#</a></h3>
+<p>DataFusion now preserves an omitted Parquet <code class="docutils literal notranslate"><span class="pre">null_count</span></code> statistic as unknown.
+Previously, it assumed zero nulls, which could discard matching NULL rows in
+<code class="docutils literal notranslate"><span class="pre">IS</span> <span class="pre">NULL</span></code> filters and <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span> <span class="pre">...</span> <span class="pre">NULLS</span> <span class="pre">FIRST</span> <span class="pre">LIMIT</span></code> queries, or produce an
+incorrectly high <code class="docutils literal notranslate"><span class="pre">COUNT(column)</span></code> from metadata.</p>
+<p>Queries over affected files may read or sort more data because these optimizations
+require a known null count:</p>
+<ul class="simple">
+<li><p>Pruning row groups for <code class="docutils literal notranslate"><span class="pre">IS</span> <span class="pre">NULL</span></code> filters.</p></li>
+<li><p>Computing <code class="docutils literal notranslate"><span class="pre">COUNT(column)</span></code> using only file metadata.</p></li>
+<li><p>Pruning row groups with a dynamic <code class="docutils literal notranslate"><span class="pre">NULLS</span> <span class="pre">FIRST</span></code> TopK filter.</p></li>
+<li><p>Eliminating a sort over nullable columns in sorted, non-overlapping files.
+Such queries may now retain a full <code class="docutils literal notranslate"><span class="pre">SortExec</span></code>, even when the data has no NULLs.</p></li>
+</ul>
+<p>parquet-rs versions before 53.1.0 omitted zero null counts. This includes files
+produced with the older parquet-rs dependency used by DataFusion releases before
+42.1.0. <a class="reference external" href="https://github.com/apache/arrow-rs/pull/6490">Arrow #6490</a> changed the
+writer to record known zero counts. Files with explicit counts retain their
+existing behavior.</p>
+<p>To identify column chunks with bounds but no null count, run this query in the
+DataFusion CLI:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">row_group_id</span><span class="p">,</span><span class="w"> </span><span class="n">path_in_schema</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">parquet_metadata</span><span class="p">(</span><span class="s1">&#39;data.parquet&#39;</span><span class="p">)</span>
+<span class="k">WHERE</span><span class="w"> </span><span class="p">(</span><span class="n">stats_min</span><span class="w"> </span><span class="k">IS</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">OR</span><span class="w"> </span><span class="n">stats_max</span><span class="w"> </span><span class="k">IS</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">)</span>
+<span class="w">  </span><span class="k">AND</span><span class="w"> </span><span class="n">stats_null_count</span><span class="w"> </span><span class="k">IS</span><span class="w"> </span><span class="k">NULL</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>Rewriting affected files with a current DataFusion version, for example using
+<code class="docutils literal notranslate"><span class="pre">COPY</span> <span class="pre">...</span> <span class="pre">TO</span></code> with Parquet statistics enabled, records the missing counts and
+restores optimizations that depend on them. Preserve the required data ordering
+and ordering metadata when rewriting sorted files.</p>
+</section>
 <section id="foreignsession-create-physical-plan-is-unsupported">
 <h3><code class="docutils literal notranslate"><span class="pre">ForeignSession::create_physical_plan</span></code> is unsupported<a class="headerlink" href="#foreignsession-create-physical-plan-is-unsupported" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">ForeignSession::create_physical_plan</span></code> no longer forwards to the library that
@@ -735,6 +768,7 @@ to be updated to account for the new generic API.</p>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-56-0-0">DataFusion 56.0.0</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#missing-parquet-null-counts-are-treated-as-unknown">Missing Parquet null counts are treated as unknown</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#foreignsession-create-physical-plan-is-unsupported"><code class="docutils literal notranslate"><span class="pre">ForeignSession::create_physical_plan</span></code> is unsupported</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#groupcolumn-now-requires-values-preserving"><code class="docutils literal notranslate"><span class="pre">GroupColumn</span></code> now requires <code class="docutils literal notranslate"><span class="pre">values_preserving</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-proto-common-option-and-constraint-conversions-are-fallible"><code class="docutils literal notranslate"><span class="pre">datafusion-proto</span></code>: common option and constraint conversions are fallible</a></li>
