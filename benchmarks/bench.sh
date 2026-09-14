@@ -239,6 +239,7 @@ main() {
                     data_clickbench_1
                     data_clickbench_partitioned
                     data_imdb
+                    data_asof_join
                     # nlj uses range() function, no data generation needed
                     ;;
                 tpch)
@@ -271,8 +272,7 @@ main() {
                     echo "parquet_row_filter_skip: no external data to generate"
                     ;;
                 asof_join)
-                    # The ordered Parquet case is generated inline by the suite's load SQL.
-                    echo "asof_join: no external data to generate"
+                    data_asof_join
                     ;;
                 tpcds)
                     data_tpcds
@@ -1641,12 +1641,49 @@ run_topk_sorted_tpch() {
     $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" --sorted --limit 100 ${QUERY_ARG} ${LATENCY_ARG}
 }
 
+# Generates the pre-sorted Parquet inputs for the ASOF join benchmark.
+data_asof_join() {
+    ASOF_DIR="${DATA_DIR}/asof_join"
+    LEFT_FILE="${ASOF_DIR}/q07_left.parquet"
+    RIGHT_FILE="${ASOF_DIR}/q07_right.parquet"
+
+    if [ -f "${LEFT_FILE}" ] && [ -f "${RIGHT_FILE}" ]; then
+        echo "ASOF join benchmark data already exists at ${ASOF_DIR}"
+        return
+    fi
+
+    mkdir -p "${ASOF_DIR}"
+    echo "Generating ASOF join benchmark data at ${ASOF_DIR}..."
+    (
+        cd "${DATAFUSION_DIR}"
+        debug_run $CARGO_COMMAND -p datafusion-cli -- -c "
+            COPY (
+                SELECT value / 10 AS group_key,
+                       value % 10 + 1 AS ts,
+                       value AS payload
+                FROM range(100000)
+                ORDER BY group_key, ts
+            )
+            TO '${LEFT_FILE}' STORED AS PARQUET;
+
+            COPY (
+                SELECT value / 10 AS group_key,
+                       value % 10 AS ts,
+                       value AS payload
+                FROM range(100000)
+                ORDER BY group_key, ts
+            )
+            TO '${RIGHT_FILE}' STORED AS PARQUET;
+        "
+    )
+}
+
 # Runs the ASOF join benchmark
 run_asof_join() {
     RESULTS_FILE="${RESULTS_DIR}/asof_join.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running ASOF join benchmark..."
-    debug_run $CARGO_COMMAND --bin benchmark_runner -- asof_join --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+    debug_run $CARGO_COMMAND --bin benchmark_runner -- asof_join --iterations 5 --path "${DATA_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Runs the nlj benchmark

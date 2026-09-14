@@ -9,6 +9,9 @@ description = "ASOF join SQL benchmarks"
 
 query_pattern = "q{QUERY_ID_PADDED}.benchmark"
 
+[path_replacements]
+DATA_DIR = "../../data"
+
 [[examples]]
 command = "cargo run --release --bin benchmark_runner -- asof_join"
 description = "Run all ASOF join queries."
