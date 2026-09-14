@@ -446,7 +446,7 @@ impl ChildFilterDescription {
         let column_mapping = parent_filters
             .iter()
             .flat_map(collect_columns)
-            .filter(|col| allowed_indices.contains(&col.index()))
+            .filter(move |col| allowed_indices.contains(&col.index()))
             .filter_map(|col| {
                 child_schema
                     .index_of(col.name())
