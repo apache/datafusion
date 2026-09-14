@@ -263,9 +263,11 @@ fn bench_shared_values_arc(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("dict_shared_values_arc");
     let size = SIZES[0];
-    let mut rng = StdRng::seed_from_u64(SEED);
 
-    for &cardinality in &[size, 100_000, 500_000] {
+    for &cardinality in &[size, 32 * 1024, 64 * 1024, 100_000, 500_000] {
+        // Seeded per cardinality so each configuration is reproducible on its
+        // own and adding one does not change the data used by the others.
+        let mut rng = StdRng::seed_from_u64(SEED);
         // One values array, shared by every batch.
         let strings: Vec<String> =
             (0..cardinality).map(|i| format!("v_{i:08}")).collect();
