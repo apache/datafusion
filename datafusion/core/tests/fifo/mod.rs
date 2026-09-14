@@ -311,7 +311,7 @@ mod unix_test {
                 left += 1;
             } else {
                 right += 1;
-            };
+            }
         }
         futures::future::try_join_all(tasks).await.unwrap();
 

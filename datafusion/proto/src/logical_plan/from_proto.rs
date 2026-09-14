@@ -255,7 +255,7 @@ pub fn parse_expr(
 
             if expr.distinct {
                 builder = builder.distinct();
-            };
+            }
 
             if let Some(filter) = parse_optional_expr(expr.filter.as_deref(), ctx, codec)?
             {
@@ -429,7 +429,8 @@ pub fn parse_expr(
             let data_type: DataType = cast.arrow_type.as_ref().required("arrow_type")?;
             let field = data_type
                 .into_nullable_field()
-                .with_nullable(cast.nullable.unwrap_or(true));
+                .with_nullable(cast.nullable.unwrap_or(true))
+                .with_metadata(cast.metadata.clone());
             Ok(Expr::Cast(Cast::new_from_field(expr, Arc::new(field))))
         }
         ExprType::TryCast(cast) => {
@@ -442,7 +443,8 @@ pub fn parse_expr(
             let data_type: DataType = cast.arrow_type.as_ref().required("arrow_type")?;
             let field = data_type
                 .into_nullable_field()
-                .with_nullable(cast.nullable.unwrap_or(true));
+                .with_nullable(cast.nullable.unwrap_or(true))
+                .with_metadata(cast.metadata.clone());
             Ok(Expr::TryCast(TryCast::new_from_field(
                 expr,
                 Arc::new(field),

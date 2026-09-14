@@ -247,7 +247,7 @@ fn shrink_boundaries(
                 .find(|bound| bound.column.eq(column))
         {
             bound.interval = Some(graph.get_interval(*i));
-        };
+        }
     }
 
     let selectivity = calculate_selectivity(&target_boundaries, &initial_boundaries)?;

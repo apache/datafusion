@@ -237,7 +237,7 @@ impl Column {
                 .flat_map(|s| s.qualified_fields_with_unqualified_name(&self.name))
                 .collect::<Vec<_>>();
             match qualified_fields.len() {
-                0 => continue,
+                0 => {}
                 1 => return Ok(Column::from(qualified_fields[0])),
                 _ => {
                     // More than 1 fields in this schema have their names set to self.name.

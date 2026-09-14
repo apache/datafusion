@@ -376,7 +376,7 @@ impl PlannerContext {
         match self.outer_from_schema.as_mut() {
             Some(from_schema) => Arc::make_mut(from_schema).merge(schema),
             None => self.outer_from_schema = Some(Arc::clone(schema)),
-        };
+        }
         Ok(())
     }
 

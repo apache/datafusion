@@ -22,6 +22,7 @@ use arrow::array::{
     BooleanArray, PrimitiveArray, PrimitiveBuilder, UInt64Array,
 };
 
+use arrow::buffer::NullBuffer;
 use arrow::compute::{DecimalCast, sum};
 use arrow::datatypes::{
     ArrowNativeType, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
@@ -37,7 +38,7 @@ use datafusion_common::{
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Coercion, Documentation, EmitTo, Expr,
+    Accumulator, AggregateUDFImpl, Coercion, Documentation, EmitTo, Expr, GroupSelection,
     GroupsAccumulator, ReversedUDAF, Signature, TypeSignature, TypeSignatureClass,
     Volatility,
 };
@@ -1028,6 +1029,58 @@ where
             _phantom: PhantomData,
         }
     }
+
+    fn evaluate_values(
+        &self,
+        counts: Vec<u64>,
+        sums: Vec<S::Native>,
+        nulls: Option<NullBuffer>,
+    ) -> Result<ArrayRef> {
+        if let Some(nulls) = &nulls {
+            assert_eq!(nulls.len(), sums.len());
+        }
+        assert_eq!(counts.len(), sums.len());
+
+        // Don't evaluate averages with null inputs to avoid errors on null values.
+        let array: PrimitiveArray<O> = if let Some(nulls) = &nulls
+            && nulls.null_count() > 0
+        {
+            let mut builder = PrimitiveBuilder::<O>::with_capacity(nulls.len())
+                .with_data_type(self.return_data_type.clone());
+            let iter = sums.into_iter().zip(counts).zip(nulls.iter());
+
+            for ((sum, count), is_valid) in iter {
+                if is_valid {
+                    builder.append_value((self.avg_fn)(sum, count)?)
+                } else {
+                    builder.append_null();
+                }
+            }
+            builder.finish()
+        } else {
+            let averages: Vec<O::Native> = sums
+                .into_iter()
+                .zip(counts)
+                .map(|(sum, count)| (self.avg_fn)(sum, count))
+                .collect::<Result<Vec<_>>>()?;
+            PrimitiveArray::new(averages.into(), nulls)
+                .with_data_type(self.return_data_type.clone())
+        };
+
+        Ok(Arc::new(array))
+    }
+
+    fn state_values(
+        &self,
+        counts: Vec<u64>,
+        sums: Vec<S::Native>,
+        nulls: Option<NullBuffer>,
+    ) -> Vec<ArrayRef> {
+        let counts = UInt64Array::new(counts.into(), nulls.clone());
+        let sums = PrimitiveArray::<S>::new(sums.into(), nulls)
+            .with_data_type(self.sum_data_type.clone());
+        vec![Arc::new(counts), Arc::new(sums)]
+    }
 }
 
 impl<I, F, S, O> GroupsAccumulator for AvgGroupsAccumulator<I, F, S, O>
@@ -1073,57 +1126,44 @@ where
         let counts = emit_to.take_needed(&mut self.counts);
         let sums = emit_to.take_needed(&mut self.sums);
         let nulls = self.null_state.build(emit_to);
+        self.evaluate_values(counts, sums, nulls)
+    }
 
-        if let Some(nulls) = &nulls {
-            assert_eq!(nulls.len(), sums.len());
-        }
-        assert_eq!(counts.len(), sums.len());
+    fn evaluate_preserving(&mut self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
+        debug_assert_eq!(self.counts.len(), self.sums.len());
+        selection.validate_num_groups(self.counts.len())?;
+        let counts = selection.iter().map(|index| self.counts[index]).collect();
+        let sums = selection.iter().map(|index| self.sums[index]).collect();
+        let nulls = self.null_state.build_preserving(selection)?;
+        self.evaluate_values(counts, sums, nulls)
+    }
 
-        // don't evaluate averages with null inputs to avoid errors on null values
-
-        let array: PrimitiveArray<O> = if let Some(nulls) = &nulls
-            && nulls.null_count() > 0
-        {
-            let mut builder = PrimitiveBuilder::<O>::with_capacity(nulls.len())
-                .with_data_type(self.return_data_type.clone());
-            let iter = sums.into_iter().zip(counts).zip(nulls.iter());
-
-            for ((sum, count), is_valid) in iter {
-                if is_valid {
-                    builder.append_value((self.avg_fn)(sum, count)?)
-                } else {
-                    builder.append_null();
-                }
-            }
-            builder.finish()
-        } else {
-            let averages: Vec<O::Native> = sums
-                .into_iter()
-                .zip(counts)
-                .map(|(sum, count)| (self.avg_fn)(sum, count))
-                .collect::<Result<Vec<_>>>()?;
-            PrimitiveArray::new(averages.into(), nulls) // no copy
-                .with_data_type(self.return_data_type.clone())
-        };
-
-        Ok(Arc::new(array))
+    fn supports_evaluate_preserving(&self) -> bool {
+        true
     }
 
     // return arrays for sums and counts
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let nulls = self.null_state.build(emit_to);
-
         let counts = emit_to.take_needed(&mut self.counts);
-        let counts = UInt64Array::new(counts.into(), nulls.clone()); // zero copy
-
         let sums = emit_to.take_needed(&mut self.sums);
-        let sums = PrimitiveArray::<S>::new(sums.into(), nulls) // zero copy
-            .with_data_type(self.sum_data_type.clone());
+        Ok(self.state_values(counts, sums, nulls))
+    }
 
-        Ok(vec![
-            Arc::new(counts) as ArrayRef,
-            Arc::new(sums) as ArrayRef,
-        ])
+    fn state_preserving(
+        &mut self,
+        selection: GroupSelection<'_>,
+    ) -> Result<Vec<ArrayRef>> {
+        debug_assert_eq!(self.counts.len(), self.sums.len());
+        selection.validate_num_groups(self.counts.len())?;
+        let counts = selection.iter().map(|index| self.counts[index]).collect();
+        let sums = selection.iter().map(|index| self.sums[index]).collect();
+        let nulls = self.null_state.build_preserving(selection)?;
+        Ok(self.state_values(counts, sums, nulls))
+    }
+
+    fn supports_state_preserving(&self) -> bool {
+        true
     }
 
     fn merge_batch(
@@ -1206,12 +1246,9 @@ where
     fn size(&self) -> usize {
         // Heap buffers
         self.counts.capacity() * size_of::<u64>()
-        + self.sums.capacity() * size_of::<S::Native>()
-        // Vec struct overhead (ptr, len, cap) for each field
-        + size_of::<Vec<u64>>()
-        + size_of::<Vec<S::Native>>()
-        // Null tracking buffers
-        + self.null_state.size()
+            + self.sums.capacity() * size_of::<S::Native>()
+            // Null tracking buffers
+            + self.null_state.size()
     }
 }
 
@@ -1600,6 +1637,105 @@ mod tests {
             ScalarValue::Decimal64(Some(9_999_999_990_000), 13, 4)
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn avg_groups_size_excludes_accumulator_storage() -> Result<()> {
+        let mut accumulator = AvgGroupsAccumulator::<Float64Type, _>::new(
+            &DataType::Float64,
+            &DataType::Float64,
+            |sum, count| Ok(sum / count as f64),
+        );
+
+        assert_eq!(accumulator.size(), 0);
+
+        let values = Arc::new(Float64Array::from(vec![Some(2.0), None, Some(4.0)]));
+        accumulator.update_batch(&[values], &[0, 1, 2], None, 3)?;
+
+        let expected_size = accumulator.counts.capacity() * size_of::<u64>()
+            + accumulator.sums.capacity() * size_of::<f64>()
+            + accumulator.null_state.size();
+        assert_eq!(accumulator.size(), expected_size);
+        assert!(accumulator.size() > 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn avg_groups_size_uses_sum_native_type() -> Result<()> {
+        let input_type = DataType::Decimal128(26, 0);
+        let sum_type = avg_sum_data_type(&input_type);
+        let return_type = Avg::new().return_type(std::slice::from_ref(&input_type))?;
+        assert_eq!(sum_type, DataType::Decimal256(76, 0));
+        assert_eq!(return_type, DataType::Decimal128(30, 4));
+        let mut accumulator = AvgGroupsAccumulator::<
+            Decimal128Type,
+            _,
+            Decimal256Type,
+            Decimal128Type,
+        >::new(&sum_type, &return_type, |_, _| Ok(0_i128));
+
+        let values = Arc::new(
+            Decimal128Array::from(vec![Some(2), None, Some(4)])
+                .with_precision_and_scale(26, 0)?,
+        );
+        accumulator.update_batch(&[values], &[0, 1, 2], None, 3)?;
+
+        let expected_size = accumulator.counts.capacity() * size_of::<u64>()
+            + accumulator.sums.capacity() * size_of::<i256>()
+            + accumulator.null_state.size();
+        assert_eq!(accumulator.size(), expected_size);
+
+        Ok(())
+    }
+
+    #[test]
+    fn average_groups_preserving_reads() -> Result<()> {
+        let mut accumulator = AvgGroupsAccumulator::<Float64Type, _>::new(
+            &DataType::Float64,
+            &DataType::Float64,
+            |sum, count| Ok(sum / count as f64),
+        );
+        let values = Arc::new(Float64Array::from(vec![
+            Some(2.0),
+            Some(4.0),
+            None,
+            Some(8.0),
+        ]));
+        accumulator.update_batch(&[values], &[0, 0, 1, 2], None, 4)?;
+
+        let selection = GroupSelection::try_from_indices(&[2, 0, 3, 2], 4)?;
+        let expected = Float64Array::from(vec![Some(8.0), Some(3.0), None, Some(8.0)]);
+        for _ in 0..2 {
+            assert_eq!(
+                accumulator
+                    .evaluate_preserving(selection)?
+                    .as_primitive::<Float64Type>(),
+                &expected
+            );
+        }
+
+        let state = accumulator.state_preserving(selection)?;
+        assert_eq!(
+            state[0].as_primitive::<UInt64Type>(),
+            &UInt64Array::from(vec![Some(1), Some(2), None, Some(1)])
+        );
+        assert_eq!(
+            state[1].as_primitive::<Float64Type>(),
+            &Float64Array::from(vec![Some(8.0), Some(6.0), None, Some(8.0)])
+        );
+
+        let values = Arc::new(Float64Array::from(vec![10.0, 6.0]));
+        accumulator.update_batch(&[values], &[1, 3], None, 4)?;
+        let expected =
+            Float64Array::from(vec![Some(3.0), Some(10.0), Some(8.0), Some(6.0)]);
+        assert_eq!(
+            accumulator
+                .evaluate_preserving(GroupSelection::all(4))?
+                .as_primitive::<Float64Type>(),
+            &expected
+        );
         Ok(())
     }
 }

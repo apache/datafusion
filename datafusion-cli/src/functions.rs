@@ -416,7 +416,7 @@ impl TableFunctionImpl for ParquetMetadataFunc {
                     stats_distinct_count_arr.push(None);
                     stats_min_value_arr.push(None);
                     stats_max_value_arr.push(None);
-                };
+                }
                 compression_arr.push(format!("{:?}", column.compression()));
                 // need to collect into Vec to format
                 let encodings: Vec<_> = column.encodings().collect();

@@ -61,7 +61,7 @@ pub use self::url::ListingTableUrl;
 use crate::file_groups::FileGroup;
 use arrow::datatypes::SchemaRef;
 use chrono::TimeZone;
-use datafusion_common::stats::Precision;
+use datafusion_common::stats::{Precision, is_known_empty};
 use datafusion_common::{ColumnStatistics, Result, TableReference};
 use datafusion_common::{ScalarValue, Statistics};
 use datafusion_physical_expr::LexOrdering;
@@ -504,7 +504,12 @@ pub fn generate_test_files(num_files: usize, overlap_factor: f64) -> Vec<FileGro
 /// Used by tests and benchmarks
 pub fn verify_sort_integrity(file_groups: &[FileGroup]) -> bool {
     for group in file_groups {
-        let files = group.iter().collect::<Vec<_>>();
+        // Known-empty files contribute no rows and may not have min/max
+        // statistics, so they cannot violate the ordering.
+        let files = group
+            .iter()
+            .filter(|file| !file.statistics.as_deref().is_some_and(is_known_empty))
+            .collect::<Vec<_>>();
         for i in 1..files.len() {
             let prev_file = files[i - 1];
             let curr_file = files[i];

@@ -896,7 +896,7 @@ mod tests {
 
     /// Test IN LIST for all string types (Utf8, LargeUtf8, Utf8View).
     ///
-    /// Test data: "a" (in list), "d" (not in list), ["b", "c"] (other list values)
+    /// Test data: "a" (in list), "d" (not in list), `["b", "c"]` (other list values)
     #[test]
     fn in_list_string_types() -> Result<()> {
         let string_data = PrimitiveTestCaseData {

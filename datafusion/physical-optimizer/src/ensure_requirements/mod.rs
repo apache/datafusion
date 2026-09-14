@@ -42,6 +42,8 @@
 //! ```text
 //! EnsureRequirements::optimize(plan)
 //! │
+//! ├─ Phase 0: top-down Interleave → Union      (replace_interleave_with_union)
+//! │
 //! ├─ Phase 1: top-down join-key reorder        (adjust_input_keys_ordering)
 //! │
 //! ├─ Phase 2: combined distribution + sorting  (single bottom-up pass)
@@ -178,6 +180,13 @@ impl PhysicalOptimizerRule for EnsureRequirements {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Phase 0: Normalize `InterleaveExec` back to `UnionExec` (top-down).
+        // Interleaves are distribution artifacts of Phase 2, which re-derives
+        // them from the children's final partitioning. Keeping them would
+        // fail as soon as a child loses the partitioning they depend on.
+        use super::enforce_distribution::replace_interleave_with_union;
+        let plan = plan.transform_down(replace_interleave_with_union).data()?;
+
         // Phase 1: Join key reordering (top-down, from EnforceDistribution)
         use super::enforce_distribution::{
             PlanWithKeyRequirements, adjust_input_keys_ordering,

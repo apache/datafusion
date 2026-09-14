@@ -85,8 +85,8 @@ pub async fn from_window_function(
     };
     let window_frame = datafusion::logical_expr::WindowFrame::new_bounds(
         bound_units,
-        from_substrait_bound(&window.lower_bound, true)?,
-        from_substrait_bound(&window.upper_bound, false)?,
+        from_substrait_bound(window.lower_bound.as_ref(), true)?,
+        from_substrait_bound(window.upper_bound.as_ref(), false)?,
     );
 
     window_frame.regularize_order_bys(&mut order_by)?;
@@ -130,7 +130,7 @@ pub async fn from_window_function(
 }
 
 fn from_substrait_bound(
-    bound: &Option<Bound>,
+    bound: Option<&Bound>,
     is_lower: bool,
 ) -> datafusion::common::Result<WindowFrameBound> {
     match bound {
