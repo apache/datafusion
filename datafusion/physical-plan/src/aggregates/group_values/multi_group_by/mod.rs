@@ -87,7 +87,7 @@ pub trait GroupColumn: Send + Sync {
     /// And if found nth result in `equal_to_results` is already
     /// `false`, the check for nth row will be skipped.
     fn vectorized_equal_to(
-        &self,
+        &mut self,
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
@@ -664,7 +664,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         equal_to_results.truncate(0);
         equal_to_results.append_n(n, true);
 
-        for (col_idx, group_col) in self.group_values.iter().enumerate() {
+        for (col_idx, group_col) in self.group_values.iter_mut().enumerate() {
             group_col.vectorized_equal_to(
                 &self.vectorized_operation_buffers.equal_to_group_indices,
                 &cols[col_idx],

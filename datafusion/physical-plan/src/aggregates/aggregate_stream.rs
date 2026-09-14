@@ -109,9 +109,9 @@ impl AggregateStreamInner {
         };
 
         let mut predicates: Vec<Arc<dyn PhysicalExpr>> =
-            Vec::with_capacity(filter_state.supported_accumulators_info.len());
+            Vec::with_capacity(filter_state.accumulator_dyn_filter_info.len());
 
-        for acc_info in &filter_state.supported_accumulators_info {
+        for acc_info in &filter_state.accumulator_dyn_filter_info {
             // Skip if we don't yet have a meaningful bound
             let bound = {
                 let guard = acc_info.shared_bound.lock();
@@ -171,7 +171,7 @@ impl AggregateStreamInner {
 
         let mut bounds_changed = false;
 
-        for acc_info in &filter_state.supported_accumulators_info {
+        for acc_info in &filter_state.accumulator_dyn_filter_info {
             let acc =
                 self.accumulators
                     .get_mut(acc_info.aggr_index)
@@ -701,6 +701,7 @@ mod tests {
         }
         assert!(aggregate_metrics(&metrics, "merge").is_empty());
         assert!(aggregate_metrics(&metrics, "state").is_empty());
+        assert!(metrics.sum_by_name("emitting_time").is_none());
 
         Ok(())
     }

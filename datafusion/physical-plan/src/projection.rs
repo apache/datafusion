@@ -679,8 +679,17 @@ impl ExecutionPlan for ProjectionExec {
         let input = ctx.encode_child(input)?;
         let expr = ctx.encode_expressions(projection_exprs.iter().map(|p| &p.expr))?;
         let expr_name = projection_exprs.iter().map(|p| p.alias.clone()).collect();
-        let schema = if *overrides_metadata {
-            Some(projector.output_schema().as_ref().try_into()?)
+        let output_schema = projector.output_schema();
+        // Keep inherited metadata self-contained, and retain empty overrides
+        // that explicitly clear metadata from the input.
+        let schema = if *overrides_metadata
+            || !output_schema.metadata().is_empty()
+            || output_schema
+                .fields()
+                .iter()
+                .any(|field| !field.metadata().is_empty())
+        {
+            Some(output_schema.as_ref().try_into()?)
         } else {
             None
         };
