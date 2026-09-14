@@ -1973,6 +1973,147 @@ fn select_nested_window_function() {
 }
 
 #[test]
+fn select_window_function_in_where() {
+    // https://github.com/apache/datafusion/issues/4610
+    let err = logical_plan("SELECT id FROM person WHERE sum(age) OVER () > 0")
+        .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Window function calls are not allowed in WHERE: 'sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+    );
+
+    // a window function inside a subquery of the predicate is legal
+    let plan = logical_plan(
+        "SELECT id FROM person WHERE id IN (SELECT id FROM person QUALIFY sum(age) OVER () > 0)",
+    )
+    .unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: person.id
+      Filter: person.id IN (<subquery>)
+        Subquery:
+          Projection: person.id
+            Filter: sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING > Int64(0)
+              WindowAggr: windowExpr=[[sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+                TableScan: person
+        TableScan: person
+    "
+    );
+}
+
+#[test]
+fn select_window_function_in_having() {
+    // https://github.com/apache/datafusion/issues/4610
+    let err = logical_plan(
+        "SELECT state, sum(count(age)) OVER () AS total FROM person GROUP BY state HAVING sum(count(age)) OVER () > 0",
+    )
+    .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Window function calls are not allowed in HAVING: 'sum(count(person.age)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+    );
+
+    // an alias of a window function is resolved before the check
+    let err = logical_plan(
+        "SELECT state, sum(count(age)) OVER () AS total FROM person GROUP BY state HAVING total > 0",
+    )
+    .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Window function calls are not allowed in HAVING: 'sum(count(person.age)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+    );
+
+    // the same window function is legal in the SELECT list and in QUALIFY
+    let plan = logical_plan(
+        "SELECT state, sum(count(age)) OVER () AS total FROM person GROUP BY state QUALIFY sum(count(age)) OVER () > 0",
+    )
+    .unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: person.state, sum(count(person.age)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS total
+      Filter: sum(count(person.age)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING > Int64(0)
+        WindowAggr: windowExpr=[[sum(count(person.age)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+          Aggregate: groupBy=[[person.state]], aggr=[[count(person.age)]]
+            TableScan: person
+    "
+    );
+}
+
+#[test]
+fn select_window_function_in_join_on() {
+    // https://github.com/apache/datafusion/issues/4610
+    let err = logical_plan(
+        "SELECT p.id FROM person p JOIN person q ON p.id = q.id AND sum(p.age) OVER () > 0",
+    )
+    .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Window function calls are not allowed in JOIN ON: 'sum(p.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+    );
+
+    // a window function in a joined subquery is legal
+    let plan = logical_plan(
+        "SELECT p.id FROM person p JOIN (SELECT id FROM person QUALIFY sum(age) OVER () > 0) q ON p.id = q.id",
+    )
+    .unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: p.id
+      Inner Join:  Filter: p.id = q.id
+        SubqueryAlias: p
+          TableScan: person
+        SubqueryAlias: q
+          Projection: person.id
+            Filter: sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING > Int64(0)
+              WindowAggr: windowExpr=[[sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+                TableScan: person
+    "
+    );
+}
+
+#[test]
+fn select_window_function_in_group_by() {
+    // https://github.com/apache/datafusion/issues/4610
+    let err = logical_plan("SELECT count(*) FROM person GROUP BY sum(age) OVER ()")
+        .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Window function calls are not allowed in GROUP BY: 'sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+    );
+
+    // through an alias of a select expression
+    let err =
+        logical_plan("SELECT sum(age) OVER () AS w, count(*) FROM person GROUP BY w")
+            .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Window function calls are not allowed in GROUP BY: 'sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+    );
+
+    // through the position of a select expression
+    let err = logical_plan("SELECT sum(age) OVER (), count(*) FROM person GROUP BY 1")
+        .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Window function calls are not allowed in GROUP BY: 'sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+    );
+}
+
+#[test]
+fn values_window_function() {
+    // https://github.com/apache/datafusion/issues/4610
+    let err =
+        logical_plan("VALUES (1, sum(2) OVER ())").expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Window function calls are not allowed in VALUES: 'sum(Int64(2)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+    );
+}
+
+#[test]
 fn select_aggregate_inside_window_function() {
     // an aggregate as the argument of a window function is legal: the window
     // function is evaluated on top of the aggregate
@@ -5849,4 +5990,44 @@ impl HigherOrderUDFImpl for MockArrayReduce {
     fn invoke_with_args(&self, _args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
         unreachable!()
     }
+}
+
+#[test]
+fn test_reserved_column_name() {
+    let sql = "SELECT 1 AS __common_expr_1";
+    let err = logical_plan(sql).unwrap_err().strip_backtrace();
+    assert_eq!(
+        err,
+        "Error during planning: __common_expr_1 is a reserved DataFusion column name, please use another name"
+    );
+}
+
+#[test]
+fn test_reserved_column_name_copy() {
+    let sql = "COPY (SELECT 1 AS __common_expr_1) TO 'output.csv' STORED AS CSV";
+    let err = logical_plan(sql).unwrap_err().strip_backtrace();
+    assert_eq!(
+        err,
+        "Error during planning: __common_expr_1 is a reserved DataFusion column name, please use another name"
+    );
+}
+
+#[test]
+fn test_reserved_column_name_boundary() {
+    let sql = "SELECT 1 AS user__common_expr_1";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(
+        format!("{plan}"),
+        "Projection: Int64(1) AS user__common_expr_1\n  EmptyRelation: rows=1"
+    );
+}
+
+#[test]
+fn test_reserved_column_name_explain_copy() {
+    let sql = "EXPLAIN COPY (SELECT 1 AS __common_expr_1) TO 'output.csv' STORED AS CSV";
+    let err = logical_plan(sql).unwrap_err().strip_backtrace();
+    assert_eq!(
+        err,
+        "Error during planning: __common_expr_1 is a reserved DataFusion column name, please use another name"
+    );
 }

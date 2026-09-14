@@ -76,6 +76,10 @@ name = "array_concat"
 
 [[bench]]
 harness = false
+name = "array_length"
+
+[[bench]]
+harness = false
 name = "array_min_max"
 
 [[bench]]
@@ -137,3 +141,7 @@ name = "array_resize"
 [[bench]]
 harness = false
 name = "array_range"
+
+[[bench]]
+harness = false
+name = "cardinality"

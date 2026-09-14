@@ -15,7 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Hash aggregation
+//! Legacy hash aggregation.
+//!
+//! # Deprecation
+//!
+//! [`GroupedHashAggregateStream`] handled every grouped execution path before
+//! they were split into dedicated streams. It is no longer planned by default:
+//! it is only reachable by setting
+//! `datafusion.execution.enable_migration_aggregate` to `false`. It is kept as
+//! a fallback in case of major bugs in the new streams, and will be deleted
+//! after the 56.0.0 release together with that option.
+//!
+//! New features and improvements should go into the dedicated streams instead.
+//!
+//! See issue for details: <https://github.com/apache/datafusion/issues/22710>
 
 use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
@@ -136,15 +149,8 @@ enum OutOfMemoryMode {
 
 /// HashTable based Grouping Aggregator
 ///
-/// # Development Note
-///
-/// This implementation is being incrementally refactored. See the tracking issue
-/// for details.
-///
-/// New features and improvements should go directly into the new implementation.
-/// Please coordinate through the tracking issue.
-///
-/// Issue: <https://github.com/apache/datafusion/issues/22710>
+/// This is the legacy implementation. See the [module documentation](self) for
+/// the deprecation schedule.
 ///
 /// # Design Goals
 ///
@@ -1396,15 +1402,16 @@ impl GroupedHashAggregateStream {
 
             // Recreate `group_values` for streaming merge so group ids are assigned
             // in first-seen order, as required by `GroupOrderingFull`.
-            // The pre-spill multi-column collector may use `vectorized_intern`, which
-            // can assign new group ids out of input order under hash collisions.
+            // The pre-spill collector may use `vectorized_intern`, which can assign
+            // new group ids out of input order under hash collisions. That is the
+            // multi-column collector, which also serves a single group column
+            // whose type has no specialized single-column collector (for example
+            // `Struct` or `Map`), so recreate unconditionally.
             let group_schema = self
                 .spill_state
                 .merging_group_by
                 .group_schema(&self.spill_state.spill_schema)?;
-            if group_schema.fields().len() > 1 {
-                self.group_values = new_group_values(group_schema, &self.group_ordering)?;
-            }
+            self.group_values = new_group_values(group_schema, &self.group_ordering)?;
 
             // Use `OutOfMemoryMode::ReportError` from this point on
             // to ensure we don't spill the spilled data to disk again.

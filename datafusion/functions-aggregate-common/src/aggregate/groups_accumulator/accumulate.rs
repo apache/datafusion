@@ -31,11 +31,8 @@ use datafusion_expr_common::groups_accumulator::{EmitTo, GroupSelection};
 /// handle each input null value specially (e.g. for `SUM` to mark the
 /// corresponding sum as null)
 ///
-/// If there are filters present, `NullState` tracks if it has seen
-/// *any* value for that group (as some values may be filtered
-/// out). Without a filter, the accumulator is only passed groups that
-/// had at least one value to accumulate so they do not need to track
-/// if they have seen values for a particular group.
+/// `NullState` tracks if it has seen *any* value for each group when filters or
+/// sparse group indices may omit input for a registered group.
 #[derive(Debug)]
 pub enum SeenValues {
     /// All groups seen so far have seen at least one non-null value
@@ -86,6 +83,31 @@ impl SeenValues {
     }
 }
 
+/// Returns true when all newly registered groups are present in `group_indices`.
+///
+/// Group indices are assigned in first-seen order, so an unfiltered batch visits
+/// new groups in ascending order. Pre-filtered input can omit a new group, making
+/// the indices sparse even though the accumulator no longer receives a filter.
+fn new_groups_are_dense(
+    group_indices: &[usize],
+    first_new_group: usize,
+    total_num_groups: usize,
+) -> bool {
+    if first_new_group == total_num_groups {
+        return true;
+    }
+
+    let mut next_new_group = first_new_group;
+    for &group_index in group_indices {
+        if group_index == next_new_group {
+            next_new_group += 1;
+        } else if group_index > next_new_group {
+            return false;
+        }
+    }
+    next_new_group == total_num_groups
+}
+
 /// Track the accumulator null state per row: if any values for that
 /// group were null and if any values have been seen at all for that group.
 ///
@@ -104,11 +126,8 @@ impl SeenValues {
 /// handle each input null value specially (e.g. for `SUM` to mark the
 /// corresponding sum as null)
 ///
-/// If there are filters present, `NullState` tracks if it has seen
-/// *any* value for that group (as some values may be filtered
-/// out). Without a filter, the accumulator is only passed groups that
-/// had at least one value to accumulate so they do not need to track
-/// if they have seen values for a particular group.
+/// `NullState` tracks if it has seen *any* value for each group when filters or
+/// sparse group indices may omit input for a registered group.
 ///
 /// [`GroupsAccumulator`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator
 #[derive(Debug)]
@@ -173,10 +192,13 @@ impl NullState {
         T: ArrowPrimitiveType + Send,
         F: FnMut(usize, T::Native) + Send,
     {
-        // skip null handling if no nulls in input or accumulator
-        if let SeenValues::All { num_values } = &mut self.seen_values
-            && opt_filter.is_none()
+        // Skip per-value null handling when every input value is valid and all
+        // newly registered groups are represented. Pre-filtered inputs can have
+        // sparse group indices despite not passing a filter to the accumulator.
+        if opt_filter.is_none()
             && values.null_count() == 0
+            && let SeenValues::All { num_values } = &mut self.seen_values
+            && new_groups_are_dense(group_indices, *num_values, total_num_groups)
         {
             accumulate(group_indices, values, None, value_fn);
             *num_values = total_num_groups;
@@ -213,10 +235,13 @@ impl NullState {
         let data = values.values();
         assert_eq!(data.len(), group_indices.len());
 
-        // skip null handling if no nulls in input or accumulator
-        if let SeenValues::All { num_values } = &mut self.seen_values
-            && opt_filter.is_none()
+        // Skip per-value null handling when every input value is valid and all
+        // newly registered groups are represented. Pre-filtered inputs can have
+        // sparse group indices despite not passing a filter to the accumulator.
+        if opt_filter.is_none()
             && values.null_count() == 0
+            && let SeenValues::All { num_values } = &mut self.seen_values
+            && new_groups_are_dense(group_indices, *num_values, total_num_groups)
         {
             group_indices
                 .iter()
