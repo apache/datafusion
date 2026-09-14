@@ -284,3 +284,34 @@ SELECT * FROM test_update_div;
 
 statement ok
 DROP TABLE test_update_div;
+
+# Test that EXPLAIN UPDATE prints the plan and updates nothing.
+# Regression test for https://github.com/apache/datafusion/issues/24656:
+# the update used to run while the physical plan was built.
+statement ok
+CREATE TABLE test_update_explain AS VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+statement ok
+EXPLAIN UPDATE test_update_explain SET column1 = column1 + 10 WHERE column1 > 1;
+
+query IT rowsort
+SELECT * FROM test_update_explain;
+----
+1 a
+2 b
+3 c
+
+# EXPLAIN ANALYZE runs the plan, so it does update. Each matching value goes
+# up by ten once, so a second run of the plan would show 22 and 23.
+statement ok
+EXPLAIN ANALYZE UPDATE test_update_explain SET column1 = column1 + 10 WHERE column1 > 1;
+
+query IT rowsort
+SELECT * FROM test_update_explain;
+----
+1 a
+12 b
+13 c
+
+statement ok
+DROP TABLE test_update_explain;
