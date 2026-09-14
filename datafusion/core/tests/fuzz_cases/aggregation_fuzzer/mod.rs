@@ -35,10 +35,13 @@
 //!   different configuration parameters to control the execution path of aggregate
 //!   queries.
 
+use std::sync::Arc;
+
 use arrow::array::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::prelude::SessionContext;
 use datafusion_common::error::Result;
+use datafusion_physical_plan::{ExecutionPlan, collect};
 
 mod context_generator;
 mod data_generator;
@@ -88,4 +91,41 @@ pub(crate) fn check_equality_of_batches(
 
 pub(crate) async fn run_sql(sql: &str, ctx: &SessionContext) -> Result<Vec<RecordBatch>> {
     ctx.sql(sql).await?.collect().await
+}
+
+/// Run `sql` and return the result along with the aggregate's peak memory
+/// reservation, read from the `peak_mem_used` metric the aggregate publishes.
+/// The peak sizes the spilling pools for the randomized contexts.
+///
+/// We read the metric rather than the memory pool because the pool cannot report
+/// a peak: it only tracks current usage, which drops back to zero as reservations
+/// are freed, so it reads as ~0 once the query finishes.
+pub(crate) async fn run_sql_capturing_peak(
+    sql: &str,
+    ctx: &SessionContext,
+) -> Result<(Vec<RecordBatch>, usize)> {
+    let plan = ctx.sql(sql).await?.create_physical_plan().await?;
+    let result = collect(Arc::clone(&plan), ctx.task_ctx()).await?;
+
+    Ok((result, peak_mem_used(plan.as_ref())))
+}
+
+/// Sum the `peak_mem_used` metric over the whole plan tree. Metrics are per
+/// node, so this walks children and adds up the aggregate nodes. Returns 0 if
+/// no node reports it (e.g. a query with no grouping).
+///
+/// If this metric name drifts, the peak silently becomes 0 and nothing spills;
+/// `test_generated_context_spills` guards against that.
+fn peak_mem_used(plan: &dyn ExecutionPlan) -> usize {
+    let here = plan
+        .metrics()
+        .and_then(|m| m.sum_by_name("peak_mem_used"))
+        .map(|v| v.as_usize())
+        .unwrap_or(0);
+
+    here + plan
+        .children()
+        .iter()
+        .map(|child| peak_mem_used(child.as_ref()))
+        .sum::<usize>()
 }
