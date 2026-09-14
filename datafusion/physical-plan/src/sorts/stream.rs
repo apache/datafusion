@@ -376,8 +376,10 @@ impl Iterator for IncrementalSortIterator {
         }
     }
 
+    // Not implementing ExactSizeIterator since in case of an error we stop and don't emit any more
+    // so the length would be wrong
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let num_rows = self.batch.num_rows();
+        let num_rows = self.batch.num_rows().saturating_sub(self.cursor);
         let batch_size = self.batch_size;
         let num_batches = num_rows.div_ceil(batch_size);
         (num_batches, Some(num_batches))
@@ -398,6 +400,29 @@ mod tests {
     use futures::Stream;
     use std::pin::Pin;
 
+    fn create_incremental_sort_iter_on(
+        input_batch_len: usize,
+        output_batch_size: usize,
+    ) -> Result<(IncrementalSortIterator, RecordBatch)> {
+        // Build a batch with a single Int32 column of descending values
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let col_a: Int32Array =
+            Int32Array::from_iter_values((0..input_batch_len as i32).rev());
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(col_a)])?;
+
+        // Sort ascending on column "a"
+        let expressions = LexOrdering::new(vec![PhysicalSortExpr::new_default(col(
+            "a",
+            &batch.schema(),
+        )?)])
+        .unwrap();
+
+        let iter =
+            IncrementalSortIterator::new(batch.clone(), expressions, output_batch_size);
+
+        Ok((iter, batch))
+    }
+
     /// Verifies that `take_record_batch` in `IncrementalSortIterator` actually
     /// copies the data into a new allocation rather than returning a zero-copy
     /// slice of the original batch. If the output arrays were slices, their
@@ -408,20 +433,11 @@ mod tests {
         let original_len = 10;
         let batch_size = 3;
 
-        // Build a batch with a single Int32 column of descending values
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-        let col_a: Int32Array = Int32Array::from(vec![0; original_len]);
-        let batch = RecordBatch::try_new(schema, vec![Arc::new(col_a)])?;
-
-        // Sort ascending on column "a"
-        let expressions = LexOrdering::new(vec![PhysicalSortExpr::new_default(col(
-            "a",
-            &batch.schema(),
-        )?)])
-        .unwrap();
+        let (mut iter, batch) =
+            create_incremental_sort_iter_on(original_len, batch_size)?;
 
         let mut total_rows = 0;
-        IncrementalSortIterator::new(batch.clone(), expressions, batch_size).try_for_each(
+        iter.try_for_each(
             |result| {
                 let chunk = result?;
                 total_rows += chunk.num_rows();
@@ -530,5 +546,45 @@ mod tests {
             assert!(matches!(poll, Poll::Ready(None)));
             assert_eq!(Arc::strong_count(&hold_ref), 1);
         }
+    }
+
+    fn assert_iterator_size_hint(iter: &IncrementalSortIterator, expected_len: usize) {
+        assert_eq!(iter.size_hint(), (expected_len, Some(expected_len)));
+    }
+
+    #[test]
+    fn incremental_sort_iterator_report_correct_len() -> Result<()> {
+        let original_len = 10;
+        let batch_size = 3;
+
+        let (mut iterator, _) =
+            create_incremental_sort_iter_on(original_len, batch_size)?;
+
+        assert_iterator_size_hint(&iterator, 4);
+
+        let batch = iterator.next().unwrap()?;
+        assert_eq!(batch.num_rows(), batch_size);
+
+        assert_iterator_size_hint(&iterator, 3);
+
+        let batch = iterator.next().unwrap()?;
+        assert_eq!(batch.num_rows(), batch_size);
+
+        assert_iterator_size_hint(&iterator, 2);
+
+        let batch = iterator.next().unwrap()?;
+        assert_eq!(batch.num_rows(), batch_size);
+
+        assert_iterator_size_hint(&iterator, 1);
+
+        let batch = iterator.next().unwrap()?;
+        // left over
+        assert_eq!(batch.num_rows(), 1);
+
+        assert_iterator_size_hint(&iterator, 0);
+
+        assert!(iterator.next().is_none());
+
+        Ok(())
     }
 }

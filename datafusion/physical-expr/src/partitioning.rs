@@ -207,7 +207,7 @@ impl Display for Partitioning {
 /// NOTE: Optimizer and execution behavior for this partitioning is intentionally
 /// not implemented and will be introduced incrementally. See
 /// <https://github.com/apache/datafusion/issues/22395>.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RangePartitioning {
     /// Ordered partitioning key.
     ordering: LexOrdering,
@@ -364,7 +364,7 @@ impl RangePartitioning {
         if self.ordering.len() != exprs.len() {
             return false;
         }
-        if let Some(first_split) = self.split_points.first() {
+        if let Some(first_split) = self.samples.first() {
             exprs.iter().zip(first_split.values()).all(|(expr, val)| {
                 expr.data_type(schema)
                     .map(|dt| dt == val.data_type())
@@ -395,18 +395,15 @@ impl RangePartitioning {
                 })
                 .collect::<Vec<_>>(),
         )?;
+        if new_ordering.len() != self.ordering.len() {
+            return None;
+        }
         Some(Self {
             ordering: new_ordering,
             samples: Arc::clone(&self.samples),
             split_points: Arc::clone(&self.split_points),
             partition_count: self.partition_count,
         })
-    }
-}
-
-impl PartialEq for RangePartitioning {
-    fn eq(&self, other: &Self) -> bool {
-        self.ordering == other.ordering && self.split_points == other.split_points
     }
 }
 
@@ -1394,7 +1391,7 @@ mod tests {
     }
 
     #[test]
-    fn test_range_partitioning_equality_uses_effective_split_points() -> Result<()> {
+    fn test_range_partitioning_equality_includes_scaling_capacity() -> Result<()> {
         let fixture = PartitioningTestFixture::int64(&["a"])?;
         let ordering = fixture.range_ordering([0]);
         let sampled = RangePartitioning::try_new_with_samples(
@@ -1414,8 +1411,11 @@ mod tests {
             ],
         )?;
 
-        assert_eq!(sampled, exact);
-        assert_eq!(Partitioning::Range(sampled), Partitioning::Range(exact));
+        assert_eq!(sampled.split_points(), exact.split_points());
+        assert!(sampled.scale(10).is_ok());
+        assert!(exact.scale(10).is_err());
+        assert_ne!(sampled, exact);
+        assert_ne!(Partitioning::Range(sampled), Partitioning::Range(exact));
 
         Ok(())
     }
@@ -1624,6 +1624,16 @@ mod tests {
 
         // Adapting to col_b (different type Int64) fails
         assert!(range.adapt(&[fixture.col(1)], &fixture.schema).is_none());
+        // Scaling to one partition removes effective boundaries, not sample types.
+        let singleton = range.scale(1)?;
+        assert!(
+            singleton
+                .adapt(&[fixture.col(1)], &fixture.schema)
+                .is_none()
+        );
+        let adapted_singleton =
+            singleton.adapt(&[fixture.col(2)], &fixture.schema).unwrap();
+        assert_eq!(adapted_singleton.scale(5)?.samples(), range.samples());
 
         // Adapting to empty or mismatch count fails
         assert!(range.adapt(&[], &fixture.schema).is_none());
@@ -1662,6 +1672,32 @@ mod tests {
             _ => panic!("expected Hash partitioning"),
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_range_partitioning_adapt_rejects_duplicate_keys() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![
+            ("a", DataType::Int32),
+            ("b", DataType::Int32),
+            ("c", DataType::Int32),
+        ])?;
+        let range = RangePartitioning::try_new_with_samples(
+            fixture.range_ordering([0, 1]),
+            vec![SplitPoint::new(vec![
+                ScalarValue::Int32(Some(10)),
+                ScalarValue::Int32(Some(20)),
+            ])],
+            1,
+        )?;
+        for count in [1, 2] {
+            assert!(
+                range
+                    .scale(count)?
+                    .adapt(&fixture.cols([2, 2]), &fixture.schema)
+                    .is_none()
+            );
+        }
         Ok(())
     }
 

@@ -196,11 +196,12 @@ fn roundtrip_range_expr() -> Result<()> {
             ScalarValue::Float64(Some(1.0)),
         ])],
     )?;
-    let range_expr: Arc<dyn PhysicalExpr> = Arc::new(RangeExpr::try_new(
+    let range_expr: Arc<dyn PhysicalExpr> = Arc::new(RangeExpr::try_new_with_schema(
         // Expression remapping may produce duplicate children. Preserve both
         // so their sort options stay aligned with the split-point values.
         vec![col("a", &schema)?, col("a", &schema)?],
         &range_partitioning,
+        &schema,
     )?);
     let filter_expr = binary(range_expr, Operator::Eq, lit(0u64), &schema)?;
     let plan = Arc::new(FilterExec::try_new(
