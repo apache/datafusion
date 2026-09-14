@@ -940,7 +940,9 @@ config_namespace! {
 
         /// The default time zone
         ///
-        /// Some functions, e.g. `now` return timestamps in this time zone
+        /// Some functions, e.g. `now`, return timestamps in this time zone.
+        /// This is also used to interpret timezone-naive timestamps in
+        /// comparisons and subtraction with timezone-aware timestamps.
         pub time_zone: Option<String>, default = None
 
         /// Parquet options

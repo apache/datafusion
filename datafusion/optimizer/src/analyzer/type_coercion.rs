@@ -43,15 +43,13 @@ use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::expr_schema::cast_subquery;
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
-    comparison_coercion, like_coercion, regex_coercion, type_union_coercion,
+    comparison_coercion_with_session_timezone, like_coercion, regex_coercion,
+    type_union_coercion,
 };
 use datafusion_expr::type_coercion::functions::{
     UDFCoercionExt, fields_with_udf, value_fields_with_higher_order_udf_and_lambdas,
 };
-use datafusion_expr::type_coercion::other::{
-    get_coerce_type_for_case_expression, get_coerce_type_for_case_when,
-    get_coerce_type_for_list,
-};
+use datafusion_expr::type_coercion::other::get_coerce_type_for_case_expression;
 use datafusion_expr::type_coercion::{
     is_datetime, is_interval, is_signed_numeric, is_timestamp,
 };
@@ -102,7 +100,13 @@ impl AnalyzerRule for TypeCoercion {
 
         // recurse
         let transformed_plan = plan
-            .transform_up_with_subqueries(|plan| analyze_internal(&EMPTY_SCHEMA, plan))?
+            .transform_up_with_subqueries(|plan| {
+                analyze_internal(
+                    &EMPTY_SCHEMA,
+                    plan,
+                    config.execution.time_zone.as_deref(),
+                )
+            })?
             .data;
 
         // finish
@@ -116,6 +120,7 @@ impl AnalyzerRule for TypeCoercion {
 fn analyze_internal(
     external_schema: &DFSchema,
     plan: LogicalPlan,
+    session_time_zone: Option<&str>,
 ) -> Result<Transformed<LogicalPlan>> {
     // get schema representing all available input fields. This is used for data type
     // resolution only, so order does not matter here
@@ -157,7 +162,8 @@ fn analyze_internal(
         plan
     };
 
-    let mut expr_rewrite = TypeCoercionRewriter::new(&schema);
+    let mut expr_rewrite =
+        TypeCoercionRewriter::new(&schema).with_session_time_zone(session_time_zone);
 
     let name_preserver = NamePreserver::new(&plan);
     // apply coercion rewrite all expressions in the plan individually
@@ -175,13 +181,25 @@ fn analyze_internal(
 /// Rewrite expressions to apply type coercion.
 pub struct TypeCoercionRewriter<'a> {
     pub(crate) schema: &'a DFSchema,
+    session_time_zone: Option<&'a str>,
 }
 
 impl<'a> TypeCoercionRewriter<'a> {
     /// Create a new [`TypeCoercionRewriter`] with a provided schema
     /// representing both the inputs and output of the [`LogicalPlan`] node.
     pub fn new(schema: &'a DFSchema) -> Self {
-        Self { schema }
+        Self {
+            schema,
+            session_time_zone: None,
+        }
+    }
+
+    pub(crate) fn with_session_time_zone(
+        mut self,
+        session_time_zone: Option<&'a str>,
+    ) -> Self {
+        self.session_time_zone = session_time_zone;
+        self
     }
 
     /// Coerce the [`LogicalPlan`].
@@ -400,6 +418,7 @@ impl<'a> TypeCoercionRewriter<'a> {
         let right_data_type = right.get_type(right_schema)?;
         let (left_type, right_type) =
             BinaryTypeCoercer::new(&left_data_type, &op, &right_data_type)
+                .with_session_time_zone(self.session_time_zone)
                 .get_input_types()?;
         let left_cast_ok = can_cast_types(&left_data_type, &left_type);
         let right_cast_ok = can_cast_types(&right_data_type, &right_type);
@@ -588,8 +607,12 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 outer_ref_columns,
                 spans,
             }) => {
-                let new_plan =
-                    analyze_internal(self.schema, Arc::unwrap_or_clone(subquery))?.data;
+                let new_plan = analyze_internal(
+                    self.schema,
+                    Arc::unwrap_or_clone(subquery),
+                    self.session_time_zone,
+                )?
+                .data;
                 Ok(Transformed::yes(Expr::ScalarSubquery(Subquery {
                     subquery: Arc::new(new_plan),
                     outer_ref_columns,
@@ -600,6 +623,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 let new_plan = analyze_internal(
                     self.schema,
                     Arc::unwrap_or_clone(subquery.subquery),
+                    self.session_time_zone,
                 )?
                 .data;
                 Ok(Transformed::yes(Expr::Exists(Exists {
@@ -619,15 +643,19 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 let new_plan = analyze_internal(
                     self.schema,
                     Arc::unwrap_or_clone(subquery.subquery),
+                    self.session_time_zone,
                 )?
                 .data;
                 let expr_type = expr.get_type(self.schema)?;
                 let subquery_type = new_plan.schema().field(0).data_type();
-                let common_type = comparison_coercion(&expr_type, subquery_type).ok_or(
-                    plan_datafusion_err!(
+                let common_type = comparison_coercion_with_session_timezone(
+                    &expr_type,
+                    subquery_type,
+                    self.session_time_zone,
+                )
+                .ok_or(plan_datafusion_err!(
                     "expr type {expr_type} can't cast to {subquery_type} in InSubquery"
-                ),
-                )?;
+                ))?;
                 let new_subquery = Subquery {
                     subquery: Arc::new(new_plan),
                     outer_ref_columns: subquery.outer_ref_columns,
@@ -648,6 +676,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 let new_plan = analyze_internal(
                     self.schema,
                     Arc::unwrap_or_clone(subquery.subquery),
+                    self.session_time_zone,
                 )?
                 .data;
                 let expr_type = expr.get_type(self.schema)?;
@@ -659,11 +688,14 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                         "expr type {expr_type} can't cast to {subquery_type} in SetComparison"
                     );
                 }
-                let common_type = comparison_coercion(&expr_type, subquery_type).ok_or(
-                    plan_datafusion_err!(
-                        "expr type {expr_type} can't cast to {subquery_type} in SetComparison"
-                    ),
-                )?;
+                let common_type = comparison_coercion_with_session_timezone(
+                    &expr_type,
+                    subquery_type,
+                    self.session_time_zone,
+                )
+                .ok_or(plan_datafusion_err!(
+                    "expr type {expr_type} can't cast to {subquery_type} in SetComparison"
+                ))?;
                 let new_subquery = Subquery {
                     subquery: Arc::new(new_plan),
                     outer_ref_columns: subquery.outer_ref_columns,
@@ -778,26 +810,27 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             }) => {
                 let expr_type = expr.get_type(self.schema)?;
                 let low_type = low.get_type(self.schema)?;
-                let low_coerced_type = comparison_coercion(&expr_type, &low_type)
-                    .ok_or_else(|| {
-                        internal_datafusion_err!(
-                            "Failed to coerce types {expr_type} and {low_type} in BETWEEN expression"
-                        )
-                    })?;
+                let low_coerced_type = comparison_coercion_with_session_timezone(
+                    &expr_type,
+                    &low_type,
+                    self.session_time_zone,
+                )
+                .ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Failed to coerce types {expr_type} and {low_type} in BETWEEN expression"
+                    )
+                })?;
                 let high_type = high.get_type(self.schema)?;
-                let high_coerced_type = comparison_coercion(&expr_type, &high_type)
+                let coercion_type = comparison_coercion_with_session_timezone(
+                    &low_coerced_type,
+                    &high_type,
+                    self.session_time_zone,
+                )
                     .ok_or_else(|| {
                         internal_datafusion_err!(
-                            "Failed to coerce types {expr_type} and {high_type} in BETWEEN expression"
+                            "Failed to coerce types {expr_type}, {low_type} and {high_type} in BETWEEN expression"
                         )
                     })?;
-                let coercion_type =
-                    comparison_coercion(&low_coerced_type, &high_coerced_type)
-                        .ok_or_else(|| {
-                            internal_datafusion_err!(
-                                "Failed to coerce types {expr_type} and {high_type} in BETWEEN expression"
-                            )
-                        })?;
                 Ok(Transformed::yes(Expr::Between(Between::new(
                     Box::new(expr.cast_to(&coercion_type, self.schema)?),
                     negated,
@@ -815,8 +848,16 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     .iter()
                     .map(|list_expr| list_expr.get_type(self.schema))
                     .collect::<Result<Vec<_>>>()?;
-                let result_type =
-                    get_coerce_type_for_list(&expr_data_type, &list_data_types);
+                let result_type = list_data_types.iter().try_fold(
+                    expr_data_type.clone(),
+                    |coerced_type, list_data_type| {
+                        comparison_coercion_with_session_timezone(
+                            &coerced_type,
+                            list_data_type,
+                            self.session_time_zone,
+                        )
+                    },
+                );
                 match result_type {
                     None => plan_err!(
                         "Can not find compatible types to compare {expr_data_type} with [{}]",
@@ -840,7 +881,8 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 }
             }
             Expr::Case(case) => {
-                let case = coerce_case_expression(case, self.schema)?;
+                let case =
+                    coerce_case_expression(case, self.schema, self.session_time_zone)?;
                 Ok(Transformed::yes(Expr::Case(case)))
             }
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
@@ -1261,7 +1303,11 @@ fn coerce_scalar_function_argument(
     Expr::Literal(value, metadata).cast_to(data_type, schema)
 }
 
-fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
+fn coerce_case_expression(
+    case: Case,
+    schema: &DFSchema,
+    session_time_zone: Option<&str>,
+) -> Result<Case> {
     // Given expressions like:
     //
     // CASE a1
@@ -1318,7 +1364,16 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
                 .iter()
                 .map(|(when, _then)| when.get_type(schema))
                 .collect::<Result<Vec<_>>>()?;
-            let coerced_type = get_coerce_type_for_case_when(&when_types, case_type);
+            let coerced_type = when_types.iter().try_fold(
+                case_type.clone(),
+                |coerced_type, when_type| {
+                    comparison_coercion_with_session_timezone(
+                        &coerced_type,
+                        when_type,
+                        session_time_zone,
+                    )
+                },
+            );
             coerced_type.ok_or_else(|| {
                 plan_datafusion_err!(
                     "Failed to coerce case ({case_type}) and when ({}) \
@@ -1552,7 +1607,9 @@ mod test {
     use datafusion_common::{
         DFSchema, DFSchemaRef, Result, ScalarValue, Spans, TableReference,
     };
-    use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
+    use datafusion_expr::expr::{
+        self, InSubquery, Like, ScalarFunction, SetComparison, SetQuantifier,
+    };
     use datafusion_expr::logical_plan::{EmptyRelation, Projection, Sort};
     use datafusion_expr::test::function_stub::avg_udaf;
     use datafusion_expr::{
@@ -2721,7 +2778,7 @@ mod test {
             vec![Field::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
-        let mut rewriter = TypeCoercionRewriter { schema: &schema };
+        let mut rewriter = TypeCoercionRewriter::new(&schema);
         let expr = is_true(lit(12i32).gt(lit(13i64)));
         let expected = is_true(cast(lit(12i32), DataType::Int64).gt(lit(13i64)));
         let result = expr.rewrite(&mut rewriter).data()?;
@@ -2732,7 +2789,7 @@ mod test {
             vec![Field::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
-        let mut rewriter = TypeCoercionRewriter { schema: &schema };
+        let mut rewriter = TypeCoercionRewriter::new(&schema);
         let expr = is_true(lit(12i32).eq(lit(13i64)));
         let expected = is_true(cast(lit(12i32), DataType::Int64).eq(lit(13i64)));
         let result = expr.rewrite(&mut rewriter).data()?;
@@ -2743,7 +2800,7 @@ mod test {
             vec![Field::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
-        let mut rewriter = TypeCoercionRewriter { schema: &schema };
+        let mut rewriter = TypeCoercionRewriter::new(&schema);
         let expr = is_true(lit(12i32).lt(lit(13i64)));
         let expected = is_true(cast(lit(12i32), DataType::Int64).lt(lit(13i64)));
         let result = expr.rewrite(&mut rewriter).data()?;
@@ -2860,7 +2917,7 @@ mod test {
             &then_else_common_type,
             &schema,
         );
-        let actual = coerce_case_expression(case, &schema)?;
+        let actual = coerce_case_expression(case, &schema, None)?;
         assert_eq!(expected, actual);
 
         // CASE string WHEN float/integer/string: comparison coercion
@@ -2883,7 +2940,7 @@ mod test {
             &then_else_common_type,
             &schema,
         );
-        let actual = coerce_case_expression(case, &schema)?;
+        let actual = coerce_case_expression(case, &schema, None)?;
         assert_eq!(expected, actual);
 
         let case = Case {
@@ -2895,7 +2952,7 @@ mod test {
             ],
             else_expr: Some(Box::new(col("string"))),
         };
-        let err = coerce_case_expression(case, &schema).unwrap_err();
+        let err = coerce_case_expression(case, &schema, None).unwrap_err();
         assert_snapshot!(
             err.strip_backtrace(),
             @"Error during planning: Failed to coerce case (Interval(MonthDayNano)) and when (Float32, Binary, Utf8) to common types in CASE WHEN expression"
@@ -2910,7 +2967,7 @@ mod test {
             ],
             else_expr: Some(Box::new(col("timestamp"))),
         };
-        let err = coerce_case_expression(case, &schema).unwrap_err();
+        let err = coerce_case_expression(case, &schema, None).unwrap_err();
         assert_snapshot!(
             err.strip_backtrace(),
             @"Error during planning: Failed to coerce then (Date32, Float32, Binary) and else (Timestamp(ns)) to common types in CASE WHEN expression"
@@ -2930,7 +2987,7 @@ mod test {
             let expected =
                 cast_helper(case.clone(), &$case_when_type, &$then_else_type, &$schema);
 
-            let actual = coerce_case_expression(case, &$schema)?;
+            let actual = coerce_case_expression(case, &$schema, None)?;
             assert_eq!(expected, actual);
         };
     }
@@ -3202,6 +3259,53 @@ mod test {
     }
 
     #[test]
+    fn timestamp_subtraction_uses_session_timezone() -> Result<()> {
+        let schema = DFSchema::from_unqualified_fields(
+            vec![
+                Field::new(
+                    "tstz",
+                    DataType::Timestamp(
+                        TimeUnit::Second,
+                        Some("America/New_York".into()),
+                    ),
+                    true,
+                ),
+                Field::new("ts", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+            ]
+            .into(),
+            std::collections::HashMap::new(),
+        )?;
+        let input = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(schema),
+        }));
+        let subtract = |left, right| {
+            Expr::BinaryExpr(BinaryExpr::new(
+                Box::new(col(left)),
+                Operator::Minus,
+                Box::new(col(right)),
+            ))
+        };
+        let plan = LogicalPlan::Projection(Projection::try_new(
+            vec![subtract("tstz", "ts"), subtract("ts", "tstz")],
+            input,
+        )?);
+
+        let mut options = ConfigOptions::default();
+        options.execution.time_zone = Some("+08:00".to_string());
+        let rule = Arc::new(TypeCoercion::new());
+        assert_analyzed_plan_with_config_eq_snapshot!(
+            options,
+            rule,
+            plan,
+            @r#"
+        Projection: CAST(tstz AS Timestamp(ns, "+08:00")) - CAST(ts AS Timestamp(ns, "+08:00")), CAST(ts AS Timestamp(ns, "+08:00")) - CAST(tstz AS Timestamp(ns, "+08:00"))
+          EmptyRelation: rows=0
+        "#,
+        )
+    }
+
+    #[test]
     fn in_subquery_cast_subquery() -> Result<()> {
         let empty_int32 = empty_with_type(DataType::Int32);
         let empty_int64 = empty_with_type(DataType::Int64);
@@ -3284,6 +3388,42 @@ mod test {
               EmptyRelation: rows=0
           EmptyRelation: rows=0
         "
+        )
+    }
+
+    #[test]
+    fn timestamp_set_comparison_uses_session_timezone() -> Result<()> {
+        let outer = empty_with_type(DataType::Timestamp(
+            TimeUnit::Second,
+            Some("America/New_York".into()),
+        ));
+        let subquery = empty_with_type(DataType::Timestamp(TimeUnit::Nanosecond, None));
+        let set_comparison = Expr::SetComparison(SetComparison::new(
+            Box::new(col("a")),
+            Subquery {
+                subquery,
+                outer_ref_columns: vec![],
+                spans: Spans::new(),
+            },
+            Operator::Eq,
+            SetQuantifier::Any,
+        ));
+        let plan = LogicalPlan::Filter(Filter::try_new(set_comparison, outer)?);
+
+        let mut options = ConfigOptions::default();
+        options.execution.time_zone = Some("+08:00".to_string());
+        let rule = Arc::new(TypeCoercion::new());
+        assert_analyzed_plan_with_config_eq_snapshot!(
+            options,
+            rule,
+            plan,
+            @r#"
+        Filter: CAST(a AS Timestamp(ns, "+08:00")) = ANY (<subquery>)
+          Subquery:
+            Projection: CAST(a AS Timestamp(ns, "+08:00"))
+              EmptyRelation: rows=0
+          EmptyRelation: rows=0
+        "#,
         )
     }
 }
