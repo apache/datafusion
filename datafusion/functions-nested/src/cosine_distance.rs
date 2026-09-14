@@ -198,7 +198,8 @@ fn general_cosine_distance<O: OffsetSizeTrait>(arrays: &[ArrayRef]) -> Result<Ar
         let vals2 = slice2.values();
 
         let (mut dot, mut sq1, mut sq2) = dot_and_squares(vals1, vals2, 1.0, 1.0);
-        if needs_norm_scale(sq1) || needs_norm_scale(sq2) || !dot.is_finite() {
+        if needs_norm_scale(sq1, len1) || needs_norm_scale(sq2, len1) || !dot.is_finite()
+        {
             // Cosine distance does not change when either vector is multiplied
             // by a positive factor, so scale each vector to keep the products in
             // range.

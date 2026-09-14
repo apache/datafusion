@@ -184,7 +184,7 @@ fn general_array_normalize<O: OffsetSizeTrait>(arrays: &[ArrayRef]) -> Result<Ar
         // If a square may have overflowed or underflowed, recompute with scaled
         // values. Dividing the scaled values by the scaled magnitude gives the
         // same unit vector.
-        let scale = if needs_norm_scale(sq_sum) {
+        let scale = if needs_norm_scale(sq_sum, len) {
             norm_scale(vals.iter().copied())
         } else {
             None

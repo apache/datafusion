@@ -198,7 +198,7 @@ fn compute_array_distance(
     };
 
     let sum_squares: f64 = diffs().map(|diff| diff * diff).sum();
-    if !needs_norm_scale(sum_squares) {
+    if !needs_norm_scale(sum_squares, values1.len()) {
         return Ok(Some(sum_squares.sqrt()));
     }
 

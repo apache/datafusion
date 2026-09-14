@@ -491,15 +491,18 @@ pub(crate) fn norm_scale(values: impl IntoIterator<Item = f64>) -> Option<f64> {
     Some(2.0_f64.powi(-exponent))
 }
 
-/// Returns whether a sum of squares computed without scaling may be wrong
-/// because a square overflowed or underflowed, in which case it should be
+/// Returns whether a sum of `len` squares computed without scaling may be
+/// wrong because a square overflowed or underflowed, in which case it should be
 /// recomputed with the factor from [`norm_scale`].
 ///
 /// An overflowing square makes the sum infinite. An underflowing square is off
-/// by less than the smallest subnormal value (about `5e-324`), so a sum of at
-/// least `1e-180` is not affected by any practical number of such terms.
-pub(crate) fn needs_norm_scale(sum_of_squares: f64) -> bool {
-    !(1e-180..f64::INFINITY).contains(&sum_of_squares)
+/// by at most half the smallest subnormal value, so `len` of them move the sum
+/// by at most `len * 2^-1075`. A sum of at least `len * 2^-1012` is therefore
+/// off by less than `2^-63` of itself, far below its rounding precision.
+pub(crate) fn needs_norm_scale(sum_of_squares: f64, len: usize) -> bool {
+    // 2^-1012 = 2^10 * f64::MIN_POSITIVE
+    let min_unscaled = 1024.0 * len as f64 * f64::MIN_POSITIVE;
+    !(min_unscaled..f64::INFINITY).contains(&sum_of_squares)
 }
 
 #[cfg(test)]
@@ -579,12 +582,19 @@ mod tests {
 
     #[test]
     fn needs_norm_scale_only_for_sums_that_may_have_overflowed_or_underflowed() {
-        assert!(!needs_norm_scale(1.0));
-        assert!(!needs_norm_scale(f64::MAX));
-        assert!(!needs_norm_scale(1e-180));
-        assert!(needs_norm_scale(1e-200));
-        assert!(needs_norm_scale(0.0));
-        assert!(needs_norm_scale(f64::INFINITY));
-        assert!(needs_norm_scale(f64::NAN));
+        assert!(!needs_norm_scale(1.0, 1));
+        assert!(!needs_norm_scale(f64::MAX, 1));
+        // The square of 1e-100 is 1e-200, which is far from underflowing.
+        assert!(!needs_norm_scale(1e-200, 1));
+        assert!(!needs_norm_scale(1e-200, 1536));
+
+        let min_unscaled = 1024.0 * f64::MIN_POSITIVE;
+        assert!(!needs_norm_scale(min_unscaled, 1));
+        assert!(needs_norm_scale(min_unscaled, 2));
+        assert!(needs_norm_scale(min_unscaled / 2.0, 1));
+
+        assert!(needs_norm_scale(0.0, 1));
+        assert!(needs_norm_scale(f64::INFINITY, 1));
+        assert!(needs_norm_scale(f64::NAN, 1));
     }
 }
