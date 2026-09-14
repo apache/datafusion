@@ -912,6 +912,13 @@ config_namespace! {
         /// Support for build_side.num_rows() >= u32::MAX will be added in the future.
         pub perfect_hash_join_small_build_threshold: usize, default = 1024
 
+        /// Enable probe-side selection exchange for partitioned inner hash joins.
+        /// Shares payload batches and copies only selected join keys before lookup.
+        /// Requires simple column keys, an unordered hash repartition directly on
+        /// the probe side, no dynamic filter, and an unlimited memory pool.
+        /// Other plans retain the ordinary spill-capable repartition path.
+        pub enable_hash_join_probe_selection: bool, default = false
+
         /// The minimum required density of join keys on the build side to consider a
         /// perfect hash join (see `HashJoinExec` for more details). Density is calculated as:
         /// `(number of rows) / (max_key - min_key + 1)`.

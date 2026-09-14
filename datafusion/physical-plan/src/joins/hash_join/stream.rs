@@ -178,6 +178,8 @@ impl HashJoinStreamState {
 pub(super) struct ProcessProbeBatchState {
     /// Current probe-side batch
     batch: RecordBatch,
+    /// Owns the original payload and reservation until all selected rows finish.
+    selection: Option<Arc<super::selection::SelectedBatch>>,
     /// Probe-side on expressions values
     values: Vec<ArrayRef>,
     /// Combined validity of the probe-side key columns, set when NULL keys
@@ -345,6 +347,7 @@ pub(super) struct HashJoinStream {
     join_type: JoinType,
     /// right (probe) input
     right: SendableRecordBatchStream,
+    selection_input: Option<super::selection::SelectionStream>,
     /// Random state used for hashing initialization
     random_state: RandomState,
     /// Metrics
@@ -549,6 +552,7 @@ impl HashJoinStream {
             filter,
             join_type,
             right,
+            selection_input: None,
             random_state,
             join_metrics,
             column_indices,
@@ -570,6 +574,14 @@ impl HashJoinStream {
             output_buffer,
             null_aware,
         }
+    }
+
+    pub(super) fn with_selection_input(
+        mut self,
+        input: Option<super::selection::SelectionStream>,
+    ) -> Self {
+        self.selection_input = input;
+        self
     }
 
     /// Returns the next state after the build side has been fully collected
@@ -688,7 +700,10 @@ impl HashJoinStream {
                     // Continue loop to emit the flushed batch
                     continue;
                 }
-                HashJoinStreamState::Completed => Poll::Ready(None),
+                HashJoinStreamState::Completed => {
+                    self.selection_input = None;
+                    Poll::Ready(None)
+                }
             };
         }
     }
@@ -748,24 +763,41 @@ impl HashJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
-        match ready!(self.right.poll_next_unpin(cx)) {
+        let next = if let Some(input) = self.selection_input.as_mut() {
+            ready!(input.poll_next_unpin(cx)).map(|result| {
+                result.map(|selected| {
+                    (selected.owner.batch.clone(), Some(Arc::new(selected)))
+                })
+            })
+        } else {
+            ready!(self.right.poll_next_unpin(cx))
+                .map(|result| result.map(|batch| (batch, None)))
+        };
+        match next {
             None => {
                 // Release the probe-side input pipeline's resources. The schema
                 // is preserved so callers that still query `self.right.schema()`
                 // (e.g. for unmatched-build emission) keep working.
                 let right_schema = self.right.schema();
                 self.right = Box::pin(EmptyRecordBatchStream::new(right_schema));
+                self.selection_input = None;
                 self.state = HashJoinStreamState::ExhaustedProbeSide;
             }
-            Some(Ok(batch)) => {
+            Some(Ok((batch, selection))) => {
                 // Precalculate hash values for fetched batch
-                let keys_values = evaluate_expressions_to_arrays(&self.on_right, &batch)?;
+                let keys_values = match &selection {
+                    Some(selected) => selected.values.clone(),
+                    None => evaluate_expressions_to_arrays(&self.on_right, &batch)?,
+                };
+                let num_rows = selection
+                    .as_ref()
+                    .map_or_else(|| batch.num_rows(), |s| s.indices.len());
 
                 let valid_keys = if let Map::HashMap(_) =
                     self.build_side.try_as_ready()?.left_data.map()
                 {
                     self.hashes_buffer.clear();
-                    self.hashes_buffer.resize(batch.num_rows(), 0);
+                    self.hashes_buffer.resize(num_rows, 0);
                     create_hashes(
                         &keys_values,
                         &self.random_state,
@@ -777,11 +809,12 @@ impl HashJoinStream {
                 };
 
                 self.join_metrics.input_batches.add(1);
-                self.join_metrics.input_rows.add(batch.num_rows());
+                self.join_metrics.input_rows.add(num_rows);
 
                 self.state =
                     HashJoinStreamState::ProcessProbeBatch(ProcessProbeBatchState {
                         batch,
+                        selection,
                         values: keys_values,
                         valid_keys,
                         offset: (0, None),
@@ -803,9 +836,12 @@ impl HashJoinStream {
         let state = self.state.try_as_process_probe_batch_mut()?;
         let build_side = self.build_side.try_as_ready_mut()?;
 
-        self.join_metrics
-            .probe_hit_rate
-            .add_total(state.batch.num_rows());
+        self.join_metrics.probe_hit_rate.add_total(
+            state
+                .selection
+                .as_ref()
+                .map_or_else(|| state.batch.num_rows(), |s| s.indices.len()),
+        );
 
         let timer = self.join_metrics.join_time.timer();
 
@@ -901,6 +937,19 @@ impl HashJoinStream {
         self.join_metrics
             .avg_fanout
             .add_total(distinct_right_indices_count);
+
+        // Equality checks used compact keys. Filters and output materialization
+        // use the original payload, so map back only after collision checking.
+        let right_indices = if let Some(selected) = &state.selection {
+            UInt32Array::from_iter_values(
+                right_indices
+                    .values()
+                    .iter()
+                    .map(|&i| selected.indices.value(i as usize)),
+            )
+        } else {
+            right_indices
+        };
 
         // apply join filter if exists
         let (left_indices, right_indices) = if let Some(filter) = &self.filter {

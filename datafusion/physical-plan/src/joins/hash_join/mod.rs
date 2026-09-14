@@ -24,5 +24,8 @@ mod exec;
 mod inlist_builder;
 mod partitioned_hash_eval;
 mod probe_completion;
+mod selection;
+#[cfg(test)]
+mod selection_tests;
 mod shared_bounds;
 mod stream;
