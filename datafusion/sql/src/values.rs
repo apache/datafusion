@@ -17,8 +17,9 @@
 
 use std::sync::Arc;
 
+use crate::expr::reject_window_functions;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{DFSchema, Result, not_impl_err};
+use datafusion_common::{DFSchema, HashMap, Result, not_impl_err};
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::Values as SQLValues;
 
@@ -45,7 +46,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .map(|row| {
                 row.content
                     .into_iter()
-                    .map(|v| self.sql_to_expr(v, &empty_schema, planner_context))
+                    .map(|v| {
+                        let window_span = self.window_function_span(&v, &HashMap::new());
+                        let expr = self.sql_to_expr(v, &empty_schema, planner_context)?;
+                        // A VALUES row has no input rows to compute a window over
+                        reject_window_functions(
+                            &expr,
+                            "VALUES",
+                            "Compute the window function in a SELECT over a table or subquery instead",
+                            window_span,
+                        )?;
+                        Ok(expr)
+                    })
                     .collect::<Result<Vec<_>>>()
             })
             .collect::<Result<Vec<_>>>()?;
