@@ -251,7 +251,7 @@ impl GroupColumn for RowsGroupColumn {
     }
 
     fn vectorized_equal_to(
-        &self,
+        &mut self,
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],

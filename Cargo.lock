@@ -1700,7 +1700,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -1775,7 +1775,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-benchmarks"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1806,7 +1806,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-catalog"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1829,7 +1829,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-catalog-listing"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1853,7 +1853,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-cli"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1886,7 +1886,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-common"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "arrow-ipc",
@@ -1915,7 +1915,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-common-runtime"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "futures",
  "log",
@@ -1924,7 +1924,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "async-compression",
@@ -1963,7 +1963,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource-arrow"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "arrow-ipc",
@@ -1987,25 +1987,30 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource-avro"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "arrow-avro",
  "async-trait",
  "bytes",
  "datafusion-common",
+ "datafusion-common-runtime",
  "datafusion-datasource",
+ "datafusion-execution",
+ "datafusion-expr",
  "datafusion-physical-expr-adapter",
+ "datafusion-physical-expr-common",
  "datafusion-physical-plan",
  "datafusion-proto-models",
  "datafusion-session",
  "futures",
  "object_store",
+ "tokio",
 ]
 
 [[package]]
 name = "datafusion-datasource-csv"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2027,7 +2032,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource-json"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2050,7 +2055,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource-parquet"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -2085,11 +2090,11 @@ dependencies = [
 
 [[package]]
 name = "datafusion-doc"
-version = "55.0.0"
+version = "55.1.0"
 
 [[package]]
 name = "datafusion-examples"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "arrow-flight",
@@ -2130,7 +2135,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-execution"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -2157,7 +2162,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-expr"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -2183,7 +2188,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-expr-common"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -2196,7 +2201,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-ffi"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -2233,7 +2238,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -2267,9 +2272,10 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-aggregate"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
+ "arrow-select",
  "criterion",
  "datafusion-common",
  "datafusion-doc",
@@ -2281,6 +2287,7 @@ dependencies = [
  "datafusion-physical-expr-common",
  "half",
  "hashbrown 0.17.1",
+ "itertools 0.15.0",
  "log",
  "num-traits",
  "rand 0.9.4",
@@ -2288,7 +2295,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-aggregate-common"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "criterion",
@@ -2300,7 +2307,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-nested"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "arrow-ord",
@@ -2326,7 +2333,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-table"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2340,7 +2347,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-window"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "criterion",
@@ -2356,7 +2363,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-window-common"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "datafusion-common",
  "datafusion-physical-expr-common",
@@ -2364,7 +2371,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-macros"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "datafusion-doc",
  "quote",
@@ -2373,7 +2380,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-optimizer"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2400,7 +2407,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -2428,7 +2435,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr-adapter"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -2441,7 +2448,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr-common"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "chrono",
@@ -2460,7 +2467,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-optimizer"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -2482,7 +2489,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-plan"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "arrow-data",
@@ -2513,6 +2520,7 @@ dependencies = [
  "insta",
  "itertools 0.15.0",
  "log",
+ "loom",
  "num-traits",
  "parking_lot",
  "pin-project-lite",
@@ -2525,7 +2533,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-proto"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2563,7 +2571,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-proto-common"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -2575,7 +2583,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-proto-models"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "datafusion-common",
  "datafusion-proto-common",
@@ -2587,7 +2595,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-pruning"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "criterion",
@@ -2606,7 +2614,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-session"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow-schema",
  "async-trait",
@@ -2620,7 +2628,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-spark"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "base64 0.23.1",
@@ -2650,7 +2658,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-sql"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "bigdecimal",
@@ -2676,7 +2684,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-sqllogictest"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2709,7 +2717,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-substrait"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "async-recursion",
  "async-trait",
@@ -2730,7 +2738,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-wasmtest"
-version = "55.0.0"
+version = "55.1.0"
 dependencies = [
  "bytes",
  "chrono",
@@ -3223,6 +3231,21 @@ version = "0.1.0"
 dependencies = [
  "pbjson-build 0.9.0",
  "prost-build",
+]
+
+[[package]]
+name = "generator"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3b854b0e584ead1a33f18b2fcad7cf7be18b3875c78816b753639aa501513ae"
+dependencies = [
+ "cc",
+ "cfg-if",
+ "libc",
+ "log",
+ "rustversion",
+ "windows-link",
+ "windows-result",
 ]
 
 [[package]]
@@ -4082,6 +4105,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
+name = "loom"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "419e0dc8046cb947daa77eb95ae174acfbddb7673b4151f56d1eed8e93fbfaca"
+dependencies = [
+ "cfg-if",
+ "generator",
+ "scoped-tls",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "lru-slab"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4094,6 +4130,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ecbdfe44b1bd960b68170b417450a628c43f7cf56bb3c5317e61cb230ee7f226"
 dependencies = [
  "twox-hash",
+]
+
+[[package]]
+name = "matchers"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1525a2a28c7f4fa0fc98bb91ae755d1e2d1505079e05539e35bc876b5d65ae9"
+dependencies = [
+ "regex-automata",
 ]
 
 [[package]]
@@ -5539,6 +5584,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "scoped-tls"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1cf6437eb19a8f4a6cc0f7dca544973b0b78843adbfeb3683d1a94a0024a294"
+
+[[package]]
 name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6575,10 +6626,14 @@ version = "0.3.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb7f578e5945fb242538965c2d0b04418d38ec25c79d160cd279bf0731c8d319"
 dependencies = [
+ "matchers",
  "nu-ansi-term",
+ "once_cell",
+ "regex-automata",
  "sharded-slab",
  "smallvec",
  "thread_local",
+ "tracing",
  "tracing-core",
  "tracing-log",
 ]

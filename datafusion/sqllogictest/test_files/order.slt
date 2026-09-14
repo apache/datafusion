@@ -15,7 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-
 statement ok
 CREATE EXTERNAL TABLE alltypes_plain STORED AS PARQUET LOCATION '../../parquet-testing/data/alltypes_plain.parquet';
 

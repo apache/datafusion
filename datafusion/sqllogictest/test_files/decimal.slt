@@ -1,17 +1,17 @@
 # Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.See the NOTICE file
+# or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
-# regarding copyright ownership.The ASF licenses this file
+# regarding copyright ownership.  The ASF licenses this file
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
-# with the License.You may obtain a copy of the License at
-
-# http://www.apache.org/licenses/LICENSE-2.0
-
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.See the License for the
+# KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
 
@@ -1375,3 +1375,31 @@ query RB
 select arrow_cast('1.2300', 'Decimal32(9, 4)'), arrow_cast(arrow_cast('1.2300', 'Decimal32(9, 4)'), 'Utf8') == '1.2300';
 ----
 1.2300 true
+
+# Regression for https://github.com/apache/datafusion/issues/24850: coercing
+# Decimal256(76, 0) against Decimal256(76, 52) needs precision 128, computed in
+# `i8` before. Columns, not literals: literals are const-folded at plan time and
+# hit the same overflow inside arrow's decimal cast, which is a separate bug.
+
+statement ok
+CREATE TABLE decimal256_wide(a DECIMAL(76,0), b DECIMAL(76,52));
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+query TT
+EXPLAIN SELECT a < b FROM decimal256_wide;
+----
+logical_plan
+01)Projection: CAST(decimal256_wide.a AS Decimal256(76, 52)) < decimal256_wide.b
+02)--TableScan: decimal256_wide projection=[a, b]
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
+
+query B
+SELECT a < b FROM decimal256_wide;
+----
+
+statement ok
+DROP TABLE decimal256_wide;

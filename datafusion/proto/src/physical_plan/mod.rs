@@ -63,8 +63,8 @@ use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::explain::ExplainExec;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::{
-    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PiecewiseMergeJoinExec,
-    SortMergeJoinExec, SymmetricHashJoinExec,
+    AsOfJoinExec, CrossJoinExec, HashJoinExec, NestedLoopJoinExec,
+    PiecewiseMergeJoinExec, SortMergeJoinExec, SymmetricHashJoinExec,
 };
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::memory::LazyMemoryExec;
@@ -1306,6 +1306,9 @@ pub trait PhysicalPlanNodeExt: Sized {
             }
             PhysicalPlanType::SortMergeJoin(_) => {
                 SortMergeJoinExec::try_from_proto(self.node(), &decode_ctx)
+            }
+            PhysicalPlanType::AsOfJoin(_) => {
+                AsOfJoinExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::AsyncFunc(_) => {
                 AsyncFuncExec::try_from_proto(self.node(), &decode_ctx)
