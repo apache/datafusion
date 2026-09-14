@@ -25,8 +25,8 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 
-use crate::InputOrderMode;
 use crate::aggregates::aggregate_hash_table::FinalMarker;
+use crate::aggregates::order::GroupCompletionMode;
 use crate::aggregates::{AggregateExec, AggregateMode, group_values::AccumulatorPhase};
 
 use super::common::HashAggregateAccumulator;
@@ -42,12 +42,12 @@ use super::common_ordered::{OrderedAggregateTable, OrderedAggregateTableMetrics}
 ///
 /// See comments at [`OrderedAggregateTable`] for details.
 impl OrderedAggregateTable<FinalMarker> {
-    pub(in crate::aggregates) fn new_with_input_order(
+    pub(in crate::aggregates) fn new_with_group_completion(
         agg: &AggregateExec,
         input_schema: &SchemaRef,
         output_schema: SchemaRef,
         batch_size: usize,
-        input_order_mode: &InputOrderMode,
+        group_completion_mode: &GroupCompletionMode,
         metrics: OrderedAggregateTableMetrics,
     ) -> Result<Self> {
         Self::new_for_mode(
@@ -56,7 +56,7 @@ impl OrderedAggregateTable<FinalMarker> {
             output_schema,
             Arc::clone(input_schema),
             batch_size,
-            input_order_mode,
+            group_completion_mode,
             &AggregateMode::Final,
             vec![None; agg.aggr_expr.len()],
             metrics,
