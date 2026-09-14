@@ -257,9 +257,8 @@ impl ParquetOptions {
             .set_writer_version((*writer_version).into())
             .set_dictionary_page_size_limit(*dictionary_page_size_limit)
             .set_statistics_enabled(
-                statistics_enabled
-                    .as_ref()
-                    .and_then(|s| parse_statistics_string(s).ok())
+                (*statistics_enabled)
+                    .map(Into::into)
                     .unwrap_or(DEFAULT_STATISTICS_ENABLED),
             )
             .set_max_row_group_row_count(Some(*max_row_group_size))
@@ -434,7 +433,7 @@ mod tests {
         MaxRowGroupBytes, ParquetCdcOptions, ParquetColumnOptions,
         ParquetEncryptionOptions, ParquetOptions,
     };
-    use crate::parquet_config::DFParquetWriterVersion;
+    use crate::parquet_config::{DFParquetStatistics, DFParquetWriterVersion};
     use parquet::basic::Compression;
     use parquet::file::properties::{
         BloomFilterProperties, DEFAULT_BLOOM_FILTER_FPP, DEFAULT_BLOOM_FILTER_NDV,
@@ -475,7 +474,7 @@ mod tests {
             compression: Some("zstd(22)".into()),
             dictionary_enabled: Some(!defaults.dictionary_enabled.unwrap_or(false)),
             dictionary_page_size_limit: 43,
-            statistics_enabled: Some("chunk".into()),
+            statistics_enabled: Some(DFParquetStatistics::Chunk),
             max_row_group_size: 42,
             max_row_group_bytes: Some(MaxRowGroupBytes::try_new(42).unwrap()),
             created_by: "wordy".into(),
@@ -545,7 +544,7 @@ mod tests {
     /// (use identity to confirm correct.)
     fn session_config_from_writer_props(props: &WriterProperties) -> TableParquetOptions {
         let default_col = ColumnPath::from("col doesn't have specific config");
-        let default_col_props = extract_column_options(props, default_col);
+        let default_col_props = extract_column_options(props, default_col.clone());
 
         let configured_col = ColumnPath::from(COL_NAME);
         let configured_col_props = extract_column_options(props, configured_col);
@@ -600,7 +599,7 @@ mod tests {
                 encoding: default_col_props.encoding,
                 compression: default_col_props.compression,
                 dictionary_enabled: default_col_props.dictionary_enabled,
-                statistics_enabled: default_col_props.statistics_enabled,
+                statistics_enabled: Some(props.statistics_enabled(&default_col).into()),
                 bloom_filter_on_write: default_col_props
                     .bloom_filter_enabled
                     .unwrap_or_default(),

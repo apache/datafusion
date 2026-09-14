@@ -17,8 +17,7 @@
 
 //! [`ArrowBytesViewMap`] and [`ArrowBytesViewSet`] for storing maps/sets of values from
 //! `StringViewArray`/`BinaryViewArray`.
-use crate::binary_map::OutputType;
-use arrow::array::NullBufferBuilder;
+use crate::binary_map::{OutputType, single_null_buffer};
 use arrow::array::cast::AsArray;
 use arrow::array::{
     Array, ArrayRef, BinaryViewArray, BinaryViewBuilder, ByteView, StringViewBuilder,
@@ -148,8 +147,6 @@ where
     in_progress: Vec<u8>,
     /// Completed buffers containing string data
     completed: Vec<Buffer>,
-    /// Tracks null values (true = null)
-    nulls: NullBufferBuilder,
 
     /// random state used to generate hashes
     random_state: RandomState,
@@ -194,7 +191,6 @@ where
             views: Vec::new(),
             in_progress: Vec::new(),
             completed: Vec::new(),
-            nulls: NullBufferBuilder::new(0),
             random_state: RandomState::default(),
             hashes_buffer: vec![],
             null: None,
@@ -330,7 +326,6 @@ where
                     let payload = make_payload_fn(None);
                     let null_index = self.views.len();
                     self.views.push(0);
-                    self.nulls.append_null();
                     self.null = Some((payload, null_index));
                     payload
                 };
@@ -455,7 +450,10 @@ where
         }
 
         // Build null buffer if we have any nulls
-        let null_buffer = self.nulls.finish();
+        let null_buffer = match self.null {
+            Some((_payload, index)) => Some(single_null_buffer(self.views.len(), index)),
+            None => None,
+        };
 
         let views = ScalarBuffer::from(self.views);
         let array =
@@ -529,7 +527,6 @@ where
     /// allocation in those buffers.
     unsafe fn append_inline_view(&mut self, view: u128) -> u128 {
         self.views.push(view);
-        self.nulls.append_non_null();
         view
     }
 
@@ -556,7 +553,6 @@ where
         };
 
         self.views.push(view);
-        self.nulls.append_non_null();
         view
     }
 
@@ -590,13 +586,11 @@ where
         let in_progress_size = self.in_progress.allocated_size();
         let completed_size = self.completed.allocated_size()
             + self.completed.iter().map(Buffer::capacity).sum::<usize>();
-        let nulls_size = self.nulls.allocated_size();
 
         map_size
             + views_size
             + in_progress_size
             + completed_size
-            + nulls_size
             + self.hashes_buffer.allocated_size()
     }
 }
@@ -967,7 +961,6 @@ mod tests {
             + map.in_progress.allocated_size()
             + map.completed.allocated_size()
             + map.completed.iter().map(Buffer::capacity).sum::<usize>()
-            + map.nulls.allocated_size()
             + map.hashes_buffer.allocated_size();
         assert_eq!(map.size(), expected_size);
 
@@ -976,7 +969,6 @@ mod tests {
             + map.views.len() * size_of::<u128>()
             + map.in_progress.capacity()
             + map.completed.iter().map(Buffer::len).sum::<usize>()
-            + map.nulls.allocated_size()
             + map.hashes_buffer.allocated_size();
         let retained_capacity_delta = (map.views.capacity() - map.views.len())
             * size_of::<u128>()

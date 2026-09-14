@@ -16,17 +16,18 @@
 // under the License.
 
 use arrow::array::{
-    ArrayRef, BinaryArray, BinaryViewArray, Int32Array, ListArray, StringArray,
-    StringViewArray,
+    Array, ArrayRef, BinaryArray, BinaryViewArray, Int32Array, ListArray, MapArray,
+    StringArray, StringViewArray, StructArray,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
-use arrow::datatypes::Field;
-use criterion::{Criterion, criterion_group, criterion_main};
+use arrow::datatypes::{DataType, Field};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::{ColumnarValue, Expr, ScalarFunctionArgs};
 use datafusion_functions_nested::map::map_udf;
+use datafusion_functions_nested::map_extract::map_extract_udf;
 use datafusion_functions_nested::planner::NestedFunctionPlanner;
 use rand::prelude::*;
 use std::collections::HashSet;
@@ -208,5 +209,108 @@ fn criterion_benchmark(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, criterion_benchmark);
+fn bench_map_extract(c: &mut Criterion) {
+    let udf = map_extract_udf();
+    let config_options = Arc::new(ConfigOptions::default());
+    let mut group = c.benchmark_group("map_extract");
+
+    for (rows, width) in [(1, 0), (1, 1), (1024, 1), (1024, 32)] {
+        for key_type in ["int32", "utf8_view", "struct"] {
+            let make_keys = |keys: Vec<i32>| -> ArrayRef {
+                match key_type {
+                    "int32" => Arc::new(Int32Array::from(keys)),
+                    "utf8_view" => Arc::new(StringViewArray::from_iter_values(
+                        keys.iter().map(|key| format!("key_{key:016}")),
+                    )),
+                    "struct" => Arc::new(StructArray::from(vec![(
+                        Arc::new(Field::new("key", DataType::Int32, false)),
+                        Arc::new(Int32Array::from(keys)) as ArrayRef,
+                    )])),
+                    _ => unreachable!(),
+                }
+            };
+            let keys = make_keys((0..rows).flat_map(|_| 0..width as i32).collect());
+            let entries = StructArray::from(vec![
+                (
+                    Arc::new(Field::new("key", keys.data_type().clone(), false)),
+                    keys,
+                ),
+                (
+                    Arc::new(Field::new("value", DataType::Int32, false)),
+                    Arc::new(Int32Array::from_iter_values(0..(rows * width) as i32))
+                        as ArrayRef,
+                ),
+            ]);
+            let map: ArrayRef = Arc::new(MapArray::new(
+                Arc::new(Field::new("entries", entries.data_type().clone(), false)),
+                OffsetBuffer::from_lengths(std::iter::repeat_n(width, rows)),
+                entries,
+                None,
+                false,
+            ));
+            let lookups: &[&str] = if width <= 1 {
+                &["last"]
+            } else {
+                &["first", "last", "missing", "varying"]
+            };
+            for &lookup in lookups {
+                let query_keys = match lookup {
+                    "first" => vec![0],
+                    "last" => vec![width.saturating_sub(1) as i32],
+                    "missing" => vec![width as i32],
+                    // Mix matches and misses with a different lookup key per row.
+                    "varying" => {
+                        (0..rows).map(|row| (row % (width + 1)) as i32).collect()
+                    }
+                    _ => unreachable!(),
+                };
+                let query_keys = make_keys(query_keys);
+                let query_keys = if lookup == "varying" {
+                    ColumnarValue::Array(query_keys)
+                } else {
+                    ColumnarValue::Scalar(
+                        ScalarValue::try_from_array(&query_keys, 0).unwrap(),
+                    )
+                };
+                let args = vec![ColumnarValue::Array(Arc::clone(&map)), query_keys];
+                let arg_fields = args
+                    .iter()
+                    .map(|arg| Field::new("arg", arg.data_type(), true).into())
+                    .collect::<Vec<_>>();
+                let return_type = udf
+                    .return_type(
+                        &args
+                            .iter()
+                            .map(ColumnarValue::data_type)
+                            .collect::<Vec<_>>(),
+                    )
+                    .unwrap();
+                let return_field = Arc::new(Field::new("result", return_type, true));
+                group.bench_function(
+                    BenchmarkId::new(
+                        format!("{key_type}/{lookup}"),
+                        format!("{rows}x{width}"),
+                    ),
+                    |b| {
+                        b.iter(|| {
+                            black_box(
+                                udf.invoke_with_args(ScalarFunctionArgs {
+                                    args: args.clone(),
+                                    arg_fields: arg_fields.clone(),
+                                    number_rows: rows,
+                                    return_field: Arc::clone(&return_field),
+                                    config_options: Arc::clone(&config_options),
+                                })
+                                .unwrap(),
+                            )
+                        });
+                    },
+                );
+            }
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(benches, criterion_benchmark, bench_map_extract);
 criterion_main!(benches);
