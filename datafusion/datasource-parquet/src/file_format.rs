@@ -155,46 +155,47 @@ impl ParquetFormat {
         Self::default()
     }
 
-    /// Activate statistics based row group level pruning
-    /// - If `None`, defaults to value on `config_options`
+    /// Set [`pruning`]
+    ///
+    /// [`pruning`]: datafusion_common::config::ParquetOptions::pruning
     pub fn with_enable_pruning(mut self, enable: bool) -> Self {
         self.options.global.pruning = enable;
         self
     }
 
-    /// Return `true` if pruning is enabled
+    /// Get [`pruning`]
+    ///
+    /// [`pruning`]: datafusion_common::config::ParquetOptions::pruning
     pub fn enable_pruning(&self) -> bool {
         self.options.global.pruning
     }
 
-    /// Provide a hint to the size of the file metadata. If a hint is provided
-    /// the reader will try and fetch the last `size_hint` bytes of the parquet file optimistically.
-    /// Without a hint, two read are required. One read to fetch the 8-byte parquet footer and then
-    /// another read to fetch the metadata length encoded in the footer.
+    /// Set [`metadata_size_hint`]
     ///
-    /// - If `None`, defaults to value on `config_options`
+    /// [`metadata_size_hint`]: datafusion_common::config::ParquetOptions::metadata_size_hint
     pub fn with_metadata_size_hint(mut self, size_hint: Option<usize>) -> Self {
         self.options.global.metadata_size_hint = size_hint;
         self
     }
 
-    /// Return the metadata size hint if set
+    /// Get [`metadata_size_hint`]
+    ///
+    /// [`metadata_size_hint`]: datafusion_common::config::ParquetOptions::metadata_size_hint
     pub fn metadata_size_hint(&self) -> Option<usize> {
         self.options.global.metadata_size_hint
     }
 
-    /// Tell the parquet reader to skip any metadata that may be in
-    /// the file Schema. This can help avoid schema conflicts due to
-    /// metadata.
+    /// Set [`skip_metadata`]
     ///
-    /// - If `None`, defaults to value on `config_options`
+    /// [`skip_metadata`]: datafusion_common::config::ParquetOptions::skip_metadata
     pub fn with_skip_metadata(mut self, skip_metadata: bool) -> Self {
         self.options.global.skip_metadata = skip_metadata;
         self
     }
 
-    /// Returns `true` if schema metadata will be cleared prior to
-    /// schema merging.
+    /// Get [`skip_metadata`]
+    ///
+    /// [`skip_metadata`]: datafusion_common::config::ParquetOptions::skip_metadata
     pub fn skip_metadata(&self) -> bool {
         self.options.global.skip_metadata
     }
@@ -210,49 +211,46 @@ impl ParquetFormat {
         &self.options
     }
 
-    /// Return `true` if should use view types.
+    /// Get [`schema_force_view_types`]
     ///
-    /// If this returns true, DataFusion will instruct the parquet reader
-    /// to read string / binary columns using view `StringView` or `BinaryView`
-    /// if the table schema specifies those types, regardless of any embedded metadata
-    /// that may specify an alternate Arrow type. The parquet reader is optimized
-    /// for reading `StringView` and `BinaryView` and such queries are significantly faster.
-    ///
-    /// If this returns false, the parquet reader will read the columns according to the
-    /// defaults or any embedded Arrow type information. This may result in reading
-    /// `StringArrays` and then casting to `StringViewArray` which is less efficient.
+    /// [`schema_force_view_types`]: datafusion_common::config::ParquetOptions::schema_force_view_types
     pub fn force_view_types(&self) -> bool {
         self.options.global.schema_force_view_types
     }
 
-    /// If true, will use view types. See [`Self::force_view_types`] for details
+    /// Set [`schema_force_view_types`]
+    ///
+    /// [`schema_force_view_types`]: datafusion_common::config::ParquetOptions::schema_force_view_types
     pub fn with_force_view_types(mut self, use_views: bool) -> Self {
         self.options.global.schema_force_view_types = use_views;
         self
     }
 
-    /// Return `true` if binary types will be read as strings.
+    /// Get [`binary_as_string`]
     ///
-    /// If this returns true, DataFusion will instruct the parquet reader
-    /// to read binary columns such as `Binary` or `BinaryView` as the
-    /// corresponding string type such as `Utf8` or `LargeUtf8`.
-    /// The parquet reader has special optimizations for `Utf8` and `LargeUtf8`
-    /// validation, and such queries are significantly faster than reading
-    /// binary columns and then casting to string columns.
+    /// [`binary_as_string`]: datafusion_common::config::ParquetOptions::binary_as_string
     pub fn binary_as_string(&self) -> bool {
         self.options.global.binary_as_string
     }
 
-    /// If true, will read binary types as strings. See [`Self::binary_as_string`] for details
+    /// Set [`binary_as_string`]
+    ///
+    /// [`binary_as_string`]: datafusion_common::config::ParquetOptions::binary_as_string
     pub fn with_binary_as_string(mut self, binary_as_string: bool) -> Self {
         self.options.global.binary_as_string = binary_as_string;
         self
     }
 
+    /// Get [`coerce_int96`]
+    ///
+    /// [`coerce_int96`]: datafusion_common::config::ParquetOptions::coerce_int96
     pub fn coerce_int96(&self) -> Option<String> {
         self.options.global.coerce_int96.clone()
     }
 
+    /// Set [`coerce_int96`]
+    ///
+    /// [`coerce_int96`]: datafusion_common::config::ParquetOptions::coerce_int96
     pub fn with_coerce_int96(mut self, time_unit: Option<String>) -> Self {
         self.options.global.coerce_int96 = time_unit;
         self
@@ -743,7 +741,7 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
             }),
             dictionary_page_size_limit: global_options.global.dictionary_page_size_limit as u64,
             statistics_enabled_opt: global_options.global.statistics_enabled.map(|enabled| {
-                parquet_options::StatisticsEnabledOpt::StatisticsEnabled(enabled)
+                parquet_options::StatisticsEnabledOpt::StatisticsEnabled(enabled.to_string())
             }),
             max_row_group_size: global_options.global.max_row_group_size as u64,
             max_in_list_size: global_options.global.max_in_list_size as u64,

@@ -24,25 +24,30 @@
 //! See [`datafusion::execution::memory_pool`] for more information on how
 //! DataFusion decides when operators should spill, and [`SpillFile`] for the
 //! spill file abstraction this example implements.
-use std::future::Future;
-use std::io::Write;
+//!
+//! This example exercises the asynchronous external-sort spill path. Execution
+//! paths that require a partially written local file to be readable still use
+//! the synchronous spill API.
 use std::path::Path as StdPath;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use async_trait::async_trait;
 use bytes::Bytes;
-use datafusion::common::Result;
+use datafusion::common::{Result, not_impl_err};
 use datafusion::execution::disk_manager::DiskManagerBuilder;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
-use datafusion::execution::{SpillFile, SpillWriter, TempFileFactory};
+use datafusion::execution::{AsyncSpillWriter, SpillFile, SpillWriter, TempFileFactory};
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_common::exec_err;
 use futures::{Stream, StreamExt, TryStreamExt, stream};
 use object_store::local::LocalFileSystem;
 use object_store::path::Path;
-use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
+use object_store::{MultipartUpload, ObjectStore, ObjectStoreExt, PutPayloadMut};
 use tempfile::tempdir;
+
+/// Most remote object stores require non-final multipart parts to be at least 5 MiB.
+const OBJECT_STORE_PART_SIZE: usize = 5 * 1024 * 1024;
 
 /// Demonstrates configuring DataFusion with spill files backed by an ObjectStore.
 pub async fn object_store_spill() -> Result<()> {
@@ -54,7 +59,7 @@ pub async fn object_store_spill() -> Result<()> {
         Arc::new(LocalFileSystem::new_with_prefix(tmp_dir.path())?);
 
     // Create the custom TempFileFactory that creates spill files in the ObjectStore.
-    let temp_file_factory = Arc::new(ObjectStoreTempFileFactory::new(store));
+    let temp_file_factory = Arc::new(ObjectStoreTempFileFactory::new(Arc::clone(&store)));
     let disk_manager_builder =
         DiskManagerBuilder::default().with_temp_file_factory(temp_file_factory.clone());
     let runtime = RuntimeEnvBuilder::new()
@@ -93,6 +98,19 @@ pub async fn object_store_spill() -> Result<()> {
     assert!(
         temp_file_factory.created_files() > 0,
         "expected the custom TempFileFactory to be used for spilling"
+    );
+    // Ensure the workload crosses a multipart boundary so the example uploads
+    // at least one complete part before the final `finish` call.
+    let spill_prefix = Path::from("spill");
+    let spill_objects = store
+        .list(Some(&spill_prefix))
+        .try_collect::<Vec<_>>()
+        .await?;
+    assert!(
+        spill_objects
+            .iter()
+            .any(|object| object.size >= OBJECT_STORE_PART_SIZE as u64),
+        "expected at least one spill object to exceed the multipart part size"
     );
 
     Ok(())
@@ -154,8 +172,8 @@ impl TempFileFactory for ObjectStoreTempFileFactory {
 
 /// Logical spill file stored at an ObjectStore path.
 ///
-/// DataFusion writes spill data by calling [`SpillFile::open_writer`] and reads
-/// it back by calling [`SpillFile::read_stream`].
+/// DataFusion writes spill data by calling [`SpillFile::open_async_writer`] and
+/// reads it back by calling [`SpillFile::read_stream`].
 struct ObjectStoreSpillFile {
     /// ObjectStore containing the spill object.
     store: Arc<dyn ObjectStore>,
@@ -165,6 +183,7 @@ struct ObjectStoreSpillFile {
     size: Arc<AtomicU64>,
 }
 
+#[async_trait]
 impl SpillFile for ObjectStoreSpillFile {
     /// Return no local filesystem path because the spill file is accessed through ObjectStore.
     fn path(&self) -> Option<&StdPath> {
@@ -193,81 +212,180 @@ impl SpillFile for ObjectStoreSpillFile {
         Ok(Box::pin(stream))
     }
 
-    /// Open a synchronous writer for this spill file.
+    /// This example backend supports the asynchronous external-sort spill path only.
     fn open_writer(&self) -> Result<Box<dyn SpillWriter>> {
-        // Create a writer that buffers bytes and uploads them on finish.
+        not_impl_err!("Synchronous spill writing is not supported by this backend")
+    }
+
+    /// Open an asynchronous, multipart-capable writer for this spill file.
+    async fn open_async_writer(&self) -> Result<Box<dyn AsyncSpillWriter>> {
+        let upload = self.store.put_multipart(&self.location).await?;
         Ok(Box::new(ObjectStoreSpillWriter {
-            store: Arc::clone(&self.store),
-            location: self.location.clone(),
+            upload,
+            buffer: PutPayloadMut::new(),
             size: Arc::clone(&self.size),
-            buffer: Vec::new(),
+            bytes_written: 0,
         }))
     }
 }
 
-/// Adapts DataFusion's [`SpillWriter`] API to ObjectStore.
-///
-/// This simple example buffers bytes in memory and uploads them in
-/// [`SpillWriter::finish`]. A production remote implementation should consider
-/// multipart or streaming uploads.
+/// Adapts DataFusion's [`AsyncSpillWriter`] API to ObjectStore.
 struct ObjectStoreSpillWriter {
-    /// ObjectStore to read/write bytes to.
-    store: Arc<dyn ObjectStore>,
-    /// ObjectStore path to upload to.
-    location: Path,
+    /// Multipart upload used to stream completed parts to the store.
+    upload: Box<dyn MultipartUpload>,
+    /// Buffers at most one part while preserving owned `Bytes` chunks.
+    buffer: PutPayloadMut,
     /// Shared size field on the corresponding [`ObjectStoreSpillFile`].
     size: Arc<AtomicU64>,
-    /// Buffered spill bytes waiting to be uploaded.
-    ///
-    /// This simple example buffers the spill and uploads it on finish.
-    /// Production remote stores should consider multipart or streaming uploads.
-    buffer: Vec<u8>,
+    /// Number of bytes passed to the writer.
+    bytes_written: u64,
 }
 
-impl Write for ObjectStoreSpillWriter {
-    /// Append bytes to the in-memory buffer.
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        // Buffer bytes written through the synchronous Write API.
-        self.buffer.extend_from_slice(buf);
-        Ok(buf.len())
+impl ObjectStoreSpillWriter {
+    async fn flush_part(&mut self) -> object_store::Result<()> {
+        if self.buffer.is_empty() {
+            return Ok(());
+        }
+
+        let part = std::mem::take(&mut self.buffer).freeze();
+        self.upload.put_part(part).await
+    }
+}
+
+#[async_trait]
+impl AsyncSpillWriter for ObjectStoreSpillWriter {
+    async fn write_all(&mut self, mut data: Bytes) -> Result<()> {
+        let len = data.len() as u64;
+        while !data.is_empty() {
+            let remaining = OBJECT_STORE_PART_SIZE - self.buffer.content_length();
+            if data.len() < remaining {
+                // A Bytes slice can pin an entire Arrow allocation. Copy only
+                // the tail retained after this call so it remains accurately
+                // bounded after DataFusion releases the batch reservation.
+                self.buffer.push(Bytes::copy_from_slice(&data));
+                break;
+            }
+
+            self.buffer.push(data.split_to(remaining));
+            self.flush_part().await?;
+        }
+        self.bytes_written += len;
+        Ok(())
     }
 
-    /// No-op because data is committed in [`SpillWriter::finish`].
-    fn flush(&mut self) -> std::io::Result<()> {
+    async fn finish(&mut self) -> Result<()> {
+        self.flush_part().await?;
+        self.upload.complete().await?;
+        self.size.store(self.bytes_written, Ordering::Relaxed);
+        Ok(())
+    }
+
+    async fn abort(&mut self) -> Result<()> {
+        // Release locally buffered spill data before waiting on remote cleanup.
+        self.buffer = PutPayloadMut::new();
+        self.upload.abort().await?;
         Ok(())
     }
 }
 
-impl SpillWriter for ObjectStoreSpillWriter {
-    /// Upload buffered bytes to ObjectStore and mark the spill file complete.
-    fn finish(&mut self) -> Result<()> {
-        // Move the buffered bytes into the upload future.
-        let store = Arc::clone(&self.store);
-        let location = self.location.clone();
-        let data = std::mem::take(&mut self.buffer);
-        let size = data.len() as u64;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use object_store::{PutPayload, PutResult, UploadPart};
+    use std::sync::Mutex;
+    use std::sync::atomic::AtomicBool;
 
-        // This simple example buffers the spill and uploads it on finish.
-        // Production remote stores should consider multipart or streaming uploads.
-        block_on_object_store(async move {
-            store
-                .put(&location, PutPayload::from_bytes(data.into()))
-                .await?;
+    #[derive(Debug)]
+    struct RecordingMultipartUpload {
+        part_sizes: Arc<Mutex<Vec<usize>>>,
+    }
+
+    #[async_trait]
+    impl MultipartUpload for RecordingMultipartUpload {
+        fn put_part(&mut self, data: PutPayload) -> UploadPart {
+            self.part_sizes.lock().unwrap().push(data.content_length());
+            Box::pin(async { Ok(()) })
+        }
+
+        async fn complete(&mut self) -> object_store::Result<PutResult> {
+            Ok(PutResult {
+                e_tag: None,
+                version: None,
+            })
+        }
+
+        async fn abort(&mut self) -> object_store::Result<()> {
             Ok(())
-        })?;
+        }
+    }
 
-        self.size.store(size, Ordering::Relaxed);
+    struct DropTrackingOwner {
+        data: Vec<u8>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl AsRef<[u8]> for DropTrackingOwner {
+        fn as_ref(&self) -> &[u8] {
+            &self.data
+        }
+    }
+
+    impl Drop for DropTrackingOwner {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::Relaxed);
+        }
+    }
+
+    #[tokio::test]
+    async fn uploads_full_part_before_finish() -> Result<()> {
+        let part_sizes = Arc::new(Mutex::new(Vec::new()));
+        let upload = RecordingMultipartUpload {
+            part_sizes: Arc::clone(&part_sizes),
+        };
+        let mut writer = ObjectStoreSpillWriter {
+            upload: Box::new(upload),
+            buffer: PutPayloadMut::new(),
+            size: Arc::new(AtomicU64::new(0)),
+            bytes_written: 0,
+        };
+
+        writer
+            .write_all(Bytes::from(vec![42; OBJECT_STORE_PART_SIZE + 1]))
+            .await?;
+        assert_eq!(
+            part_sizes.lock().unwrap().as_slice(),
+            &[OBJECT_STORE_PART_SIZE]
+        );
+        assert_eq!(writer.buffer.content_length(), 1);
+        writer.abort().await?;
         Ok(())
     }
-}
 
-/// Run an async ObjectStore operation.
-///
-/// Adding a native async API is tracked in <https://github.com/apache/datafusion/issues/23247>
-fn block_on_object_store<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        tokio::task::block_in_place(|| handle.block_on(future))
-    } else {
-        exec_err!("No current Tokio runtime available")
+    #[tokio::test]
+    async fn buffered_tail_does_not_retain_input_allocation() -> Result<()> {
+        let tmp_dir = tempdir()?;
+        let store: Arc<dyn ObjectStore> =
+            Arc::new(LocalFileSystem::new_with_prefix(tmp_dir.path())?);
+        let location = Path::from("tail-retention-test");
+        let upload = store.put_multipart(&location).await?;
+        let dropped = Arc::new(AtomicBool::new(false));
+        let data = Bytes::from_owner(DropTrackingOwner {
+            data: vec![42; 128],
+            dropped: Arc::clone(&dropped),
+        });
+        let mut writer = ObjectStoreSpillWriter {
+            upload,
+            buffer: PutPayloadMut::new(),
+            size: Arc::new(AtomicU64::new(0)),
+            bytes_written: 0,
+        };
+
+        writer.write_all(data).await?;
+        assert!(
+            dropped.load(Ordering::Relaxed),
+            "buffered tail should not retain the input allocation"
+        );
+        writer.abort().await?;
+        Ok(())
     }
 }

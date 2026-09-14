@@ -18,9 +18,10 @@
 //! PiecewiseMergeJoin stream specialized for existence joins.
 //!
 //! Instantiated by [`PiecewiseMergeJoinExec`] when the join type is `LeftSemi` or `LeftAnti`.
-//! The other existence joins are rejected in `PiecewiseMergeJoinExec::try_new`:
-//! `RightSemi`/`RightAnti`/`RightMark` mark the right side and so need an input swap, while
-//! `LeftMark` marks the left side but needs an extra boolean column rather than a slice.
+//! `RightSemi`/`RightAnti` mark the streamed side instead and are served by
+//! `RightExistencePWMJStream` (see `right_existence_join.rs`); the Mark joins are rejected in
+//! `PiecewiseMergeJoinExec::try_new`, as they need an extra boolean column rather than a
+//! subset of one side's rows.
 //!
 //! # Motivation
 //!
@@ -452,7 +453,7 @@ impl ExistencePWMJStream {
 /// Numeric, temporal, string, binary and boolean keys get a typed arrow kernel -- a linear
 /// scan that allocates nothing. Dictionary and nested keys fall to `min_max_batch_generic`, a
 /// `ScalarValue`-per-row comparator loop; specializing those is left to a follow-up.
-fn extreme_key(values: &ArrayRef, descending: bool) -> Result<ArrayRef> {
+pub(super) fn extreme_key(values: &ArrayRef, descending: bool) -> Result<ArrayRef> {
     let extreme = if descending {
         max_batch(values)?
     } else {
@@ -777,11 +778,8 @@ mod tests {
         Ok(())
     }
 
-    /// The unsupported existence joins must be rejected at construction, not deeper in.
-    /// `required_input_ordering` still has an `unimplemented!()` for right existence joins
-    /// and cannot return an error, so this test is what keeps that panic unreachable: if
-    /// someone opens the gate for RightSemi/RightAnti without also supplying an ordering
-    /// requirement, this fails instead of panicking the optimizer at runtime.
+    /// The Mark joins must be rejected at construction, not deeper in: `execute` has no way
+    /// to fall back, and the planner has already committed to this operator by then.
     #[test]
     fn try_new_rejects_unsupported_existence_joins() -> Result<()> {
         let left = build_table(
@@ -799,12 +797,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         );
 
-        for join_type in [
-            JoinType::RightSemi,
-            JoinType::RightAnti,
-            JoinType::LeftMark,
-            JoinType::RightMark,
-        ] {
+        for join_type in [JoinType::LeftMark, JoinType::RightMark] {
             let err = PiecewiseMergeJoinExec::try_new(
                 Arc::clone(&left),
                 Arc::clone(&right),
