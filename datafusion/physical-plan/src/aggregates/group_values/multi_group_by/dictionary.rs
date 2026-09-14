@@ -30,7 +30,7 @@ use datafusion_expr::GroupSelection;
 use hashbrown::{HashMap, hash_table::HashTable};
 use std::marker::PhantomData;
 use std::mem::size_of;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use crate::aggregates::AGGREGATION_HASH_SEED;
 
@@ -58,9 +58,10 @@ pub struct DictionaryGroupValuesColumn<K: ArrowDictionaryKeyType + Send + Sync> 
     val_to_inner: Vec<usize>,
     /// Reusable hash buffer for the dictionary values array.
     val_hashes: Vec<u64>,
-    /// The last `dict.values()` Arc hashed in `append_val`. When the incoming
-    /// values array is `ptr_eq` to this, `val_hashes` can be reused directly.
-    cached_values: Option<ArrayRef>,
+    /// Weak reference to the last `dict.values()` hashed in `append_val`.
+    /// This enables hash reuse when the array remains live without retaining an
+    /// input dictionary after its batch is released.
+    cached_values: Option<Weak<dyn Array>>,
     _phantom: PhantomData<K>,
 }
 
@@ -302,13 +303,13 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
             }
             Some(val_idx) => {
                 let dict_values = dict.values();
-                // check if the dictionary values array we are hashing was already seen.
-                // if its arc was already stored we dont need to rehash the entire array again
-                // if its new hash the entire array and store an arc ptr for future use
-                let cache_hit = self
-                    .cached_values
-                    .as_ref()
-                    .is_some_and(|c| Arc::ptr_eq(c, dict_values));
+                // Reuse hashes when the dictionary values array is still live
+                // and identical to the prior input; otherwise refresh the cache.
+                let cache_hit = self.cached_values.as_ref().is_some_and(|cached| {
+                    cached
+                        .upgrade()
+                        .is_some_and(|values| Arc::ptr_eq(&values, dict_values))
+                });
                 if !cache_hit {
                     self.val_hashes.clear();
                     self.val_hashes.resize(dict_values.len(), 0);
@@ -318,7 +319,7 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
                         &mut self.val_hashes,
                     )
                     .unwrap();
-                    self.cached_values = Some(Arc::clone(dict_values));
+                    self.cached_values = Some(Arc::downgrade(dict_values));
                 }
                 self.find_or_insert_value(dict_values, val_idx, self.val_hashes[val_idx])?
             }
@@ -668,6 +669,29 @@ mod tests {
 
     fn bool_vec(buf: &BooleanBufferBuilder) -> Vec<bool> {
         (0..buf.len()).map(|i| buf.get_bit(i)).collect()
+    }
+
+    #[test]
+    fn hash_cache_does_not_retain_dictionary_values() {
+        let mut column = utf8_col();
+        let input = i32_dict(&[Some(0)], &[Some("retained")]);
+        let values = Arc::clone(input.as_dictionary::<Int32Type>().values());
+        let weak_values = Arc::downgrade(&values);
+        column.append_val(&input, 0).unwrap();
+        assert!(
+            column
+                .cached_values
+                .as_ref()
+                .is_some_and(|cached| cached.ptr_eq(&weak_values))
+        );
+        let size_with_input = column.size();
+
+        // The cache is only an identity hint: it must not keep an input
+        // dictionary allocation alive after its batch is released.
+        drop(values);
+        drop(input);
+        assert!(weak_values.upgrade().is_none());
+        assert_eq!(column.size(), size_with_input);
     }
 
     fn all_true(len: usize) -> BooleanBufferBuilder {

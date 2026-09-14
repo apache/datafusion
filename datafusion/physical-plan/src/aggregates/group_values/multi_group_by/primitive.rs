@@ -33,6 +33,7 @@ use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::GroupSelection;
 use std::iter;
+use std::mem::size_of;
 use std::sync::Arc;
 
 /// An implementation of [`GroupColumn`] for primitive values
@@ -259,7 +260,9 @@ where
     }
 
     fn size(&self) -> usize {
-        self.group_values.allocated_size() + self.nulls.allocated_size()
+        size_of::<Self>()
+            + self.group_values.allocated_size()
+            + self.nulls.allocated_size()
     }
 
     fn build(self: Box<Self>) -> ArrayRef {
@@ -309,7 +312,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{mem::size_of, sync::Arc};
 
     use crate::aggregates::group_values::multi_group_by::primitive::PrimitiveGroupValueBuilder;
     use arrow::array::{
@@ -328,6 +331,16 @@ mod tests {
 
     fn to_vec(buf: &BooleanBufferBuilder) -> Vec<bool> {
         (0..buf.len()).map(|i| buf.get_bit(i)).collect()
+    }
+
+    #[test]
+    fn size_includes_boxed_owner_descriptor() {
+        let builder =
+            PrimitiveGroupValueBuilder::<Int32Type, false>::new(DataType::Int32);
+        assert_eq!(
+            builder.size(),
+            size_of::<PrimitiveGroupValueBuilder<Int32Type, false>>()
+        );
     }
 
     #[test]
