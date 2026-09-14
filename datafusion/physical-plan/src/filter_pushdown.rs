@@ -43,6 +43,7 @@ use datafusion_common::{
     tree_node::{Transformed, TreeNode},
 };
 use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -312,6 +313,18 @@ pub struct ChildFilterDescription {
     pub(crate) self_filters: Vec<Arc<dyn PhysicalExpr>>,
 }
 
+/// How a parent output position resolves to a child input position.
+enum ColumnMapping {
+    /// Output position `i` reads child position `i`, and the child field at
+    /// that position must carry the same name. Used by schema-preserving
+    /// nodes such as sort, repartition and coalesce.
+    Identity,
+    /// Explicit output -> input positions supplied by a node that projects,
+    /// reorders or pairs columns (joins, aggregates, projected filters).
+    /// Names may differ, so the caller is trusted.
+    Explicit(HashMap<usize, usize>),
+}
+
 /// Validates and remaps filter column references to a target schema in one step.
 ///
 /// When pushing filters from a parent to a child node, we need to:
@@ -325,11 +338,7 @@ pub struct ChildFilterDescription {
 pub(crate) struct FilterRemapper {
     /// The target schema to remap column indices into.
     child_schema: SchemaRef,
-    /// Parent output index to child input index. `None` maps every parent
-    /// index to the same child index, for nodes that preserve their input
-    /// schema. Parent columns absent from an explicit mapping cannot be
-    /// pushed to this child.
-    column_mapping: Option<HashMap<usize, usize>>,
+    mapping: ColumnMapping,
 }
 
 impl FilterRemapper {
@@ -339,7 +348,7 @@ impl FilterRemapper {
     pub(crate) fn new(child_schema: SchemaRef) -> Self {
         Self {
             child_schema,
-            column_mapping: None,
+            mapping: ColumnMapping::Identity,
         }
     }
 
@@ -350,22 +359,20 @@ impl FilterRemapper {
     ) -> Self {
         Self {
             child_schema,
-            column_mapping: Some(column_mapping),
+            mapping: ColumnMapping::Explicit(column_mapping),
         }
     }
 
     /// Resolve a parent column to its position in the child schema.
     fn remap_column(&self, col: &Column) -> Option<Column> {
-        let index = match &self.column_mapping {
-            None => col.index(),
-            Some(mapping) => *mapping.get(&col.index())?,
+        let index = match &self.mapping {
+            ColumnMapping::Identity => {
+                let field = self.child_schema.fields().get(col.index())?;
+                (field.name() == col.name()).then_some(col.index())?
+            }
+            ColumnMapping::Explicit(mapping) => *mapping.get(&col.index())?,
         };
         let field = self.child_schema.fields().get(index)?;
-        // With an identity mapping the parent and child names must agree;
-        // a mismatch means the caller does not actually preserve positions.
-        if self.column_mapping.is_none() && field.name() != col.name() {
-            return None;
-        }
         Some(Column::new(field.name(), index))
     }
 
@@ -415,23 +422,38 @@ impl ChildFilterDescription {
         Self::remap_filters(parent_filters, &remapper)
     }
 
-    /// Like [`Self::from_child`], but only forwards filters whose columns all
-    /// appear in `allowed_indices`.
+    /// Forwards filters whose columns all appear in `allowed_indices` and
+    /// resolve by name in the child schema.
     ///
-    /// Columns are resolved at the same position in the child schema. Earlier
-    /// versions resolved them by name, which is ambiguous when the child has
-    /// duplicate field names. Nodes whose output positions differ from the
-    /// child's must use [`Self::from_child_with_column_mapping`] instead.
+    /// Preserves the historical name-based resolution to the first matching
+    /// child field. This is ambiguous when the child has duplicate field names;
+    /// use [`Self::from_child_with_column_mapping`] to specify positions explicitly.
     #[deprecated(
         since = "56.0.0",
-        note = "columns now resolve by position; use `from_child` for matching schemas or `from_child_with_column_mapping` when positions differ"
+        note = "use `from_child` for matching schemas or `from_child_with_column_mapping` when positions differ"
     )]
     pub fn from_child_with_allowed_indices(
         parent_filters: &[Arc<dyn PhysicalExpr>],
         allowed_indices: HashSet<usize>,
         child: &Arc<dyn crate::ExecutionPlan>,
     ) -> Result<Self> {
-        let column_mapping = allowed_indices.into_iter().map(|i| (i, i)).collect();
+        if parent_filters.is_empty() {
+            return Ok(Self::empty());
+        }
+        // Keep legacy name resolution local to this deprecated API. New callers
+        // must supply positions explicitly to avoid ambiguous column names.
+        let child_schema = child.schema();
+        let column_mapping = parent_filters
+            .iter()
+            .flat_map(collect_columns)
+            .filter(|col| allowed_indices.contains(&col.index()))
+            .filter_map(|col| {
+                child_schema
+                    .index_of(col.name())
+                    .ok()
+                    .map(|child_index| (col.index(), child_index))
+            })
+            .collect();
         Self::from_child_with_column_mapping(parent_filters, column_mapping, child)
     }
 

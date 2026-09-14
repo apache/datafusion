@@ -1843,10 +1843,11 @@ fn test_filter_with_projection_rejects_out_of_range_parent_filter() {
     );
 }
 
-/// The deprecated allowed-indices API resolves columns by position too.
+/// The deprecated API preserves name lookup, including the first matching
+/// field for duplicate names and parent indices outside the child schema.
 #[test]
 #[expect(deprecated)]
-fn test_from_child_with_allowed_indices_resolves_by_position() {
+fn test_from_child_with_allowed_indices_preserves_name_resolution() {
     use datafusion_physical_plan::filter_pushdown::{
         ChildFilterDescription, FilterDescription, PushedDown,
     };
@@ -1854,15 +1855,43 @@ fn test_from_child_with_allowed_indices_resolves_by_position() {
 
     let input = TestScanBuilder::new(duplicate_id_schema()).build();
     let child = ChildFilterDescription::from_child_with_allowed_indices(
-        &[id_eq_x(0), id_eq_x(1)],
-        HashSet::from([1]),
+        &[id_eq_x(0), id_eq_x(1), id_eq_x(3)],
+        HashSet::from([1, 3]),
         &input,
     )
     .unwrap();
     let filters = FilterDescription::new().with_child(child).parent_filters();
     assert!(matches!(filters[0][0].discriminant, PushedDown::No));
     assert!(matches!(filters[0][1].discriminant, PushedDown::Yes));
-    assert_eq!(filters[0][1].predicate.to_string(), "id@1 = x");
+    assert_eq!(filters[0][1].predicate.to_string(), "id@0 = x");
+    assert!(matches!(filters[0][2].discriminant, PushedDown::Yes));
+    assert_eq!(filters[0][2].predicate.to_string(), "id@0 = x");
+}
+
+/// An allowed position cannot make a column with an unknown name pushable.
+#[test]
+#[expect(deprecated)]
+fn test_from_child_with_allowed_indices_rejects_unresolvable_name() {
+    use datafusion_physical_plan::filter_pushdown::{
+        ChildFilterDescription, FilterDescription, PushedDown,
+    };
+    use std::collections::HashSet;
+
+    let input = TestScanBuilder::new(duplicate_id_schema()).build();
+    let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+        Arc::new(Column::new("missing", 1)),
+        Operator::Eq,
+        Arc::new(Literal::new(ScalarValue::from("x"))),
+    ));
+    let child = ChildFilterDescription::from_child_with_allowed_indices(
+        &[Arc::clone(&predicate)],
+        HashSet::from([1]),
+        &input,
+    )
+    .unwrap();
+    let filters = FilterDescription::new().with_child(child).parent_filters();
+    assert!(matches!(filters[0][0].discriminant, PushedDown::No));
+    assert_eq!(filters[0][0].predicate.to_string(), predicate.to_string());
 }
 
 /// A join's output projection must map to child positions even when a child
