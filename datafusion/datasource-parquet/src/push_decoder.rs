@@ -251,11 +251,13 @@ impl RowGroupPruner {
             column_orders: file_metadata.column_orders().map(Vec::as_slice),
             row_group_metadatas,
             arrow_schema: self.arrow_schema.as_ref(),
+
             // Match the static row-group pruning behavior: a missing null count
             // is exactly zero for old parquet-rs / DataFusion writers and
             // unknown for everyone else. Runtime pruning only needs to prove a
             // row group *cannot* contain matching rows, so this is sound.
             missing_null_counts_as_zero: missing_null_counts_are_zero(file_metadata),
+
         };
 
         match pp.prune(&stats) {
