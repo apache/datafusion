@@ -18,7 +18,7 @@
 use std::hint::black_box;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, TimestampNanosecondArray, TimestampSecondArray};
+use arrow::array::{Array, ArrayRef, TimestampNanosecondArray};
 use arrow::datatypes::Field;
 use criterion::{Criterion, criterion_group};
 use datafusion_common::ScalarValue;
@@ -28,7 +28,7 @@ use datafusion_functions::datetime::date_trunc;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
-const NUM_ROWS: usize = 1000;
+const NUM_ROWS: usize = 100_000;
 const NANOS_PER_SECOND: i64 = 1_000_000_000;
 /// Roughly 30 years, so that values span many months, quarters and years.
 const RANGE_SECONDS: i64 = 30 * 365 * 24 * 60 * 60;
@@ -37,21 +37,15 @@ fn seedable_rng() -> StdRng {
     StdRng::seed_from_u64(42)
 }
 
-fn second_timestamps() -> TimestampSecondArray {
+fn nanosecond_timestamps(tz: Option<Arc<str>>) -> TimestampNanosecondArray {
     let mut rng = seedable_rng();
-    (0..NUM_ROWS)
-        .map(|_| Some(rng.random_range(0..1_000_000i64)))
-        .collect()
-}
-
-fn nanosecond_timestamps() -> TimestampNanosecondArray {
-    let mut rng = seedable_rng();
-    (0..NUM_ROWS)
+    let array: TimestampNanosecondArray = (0..NUM_ROWS)
         .map(|_| {
             let seconds = rng.random_range(-RANGE_SECONDS..RANGE_SECONDS);
             Some(seconds * NANOS_PER_SECOND + rng.random_range(0..NANOS_PER_SECOND))
         })
-        .collect()
+        .collect();
+    array.with_timezone_opt(tz)
 }
 
 fn run_benchmark(c: &mut Criterion, name: &str, granularity: &str, array: ArrayRef) {
@@ -92,19 +86,80 @@ fn run_benchmark(c: &mut Criterion, name: &str, granularity: &str, array: ArrayR
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let seconds: ArrayRef = Arc::new(second_timestamps());
-    run_benchmark(c, "date_trunc_minute_1000", "minute", Arc::clone(&seconds));
-    run_benchmark(c, "date_trunc_month_second_1000", "month", seconds);
+    // `hour`/`day` granularity on a 1M-row nanosecond array across timezone
+    // flavors: no timezone, a fixed offset (UTC and +05:30), and a DST IANA
+    // zone. Fixed offsets (and no timezone) truncate by plain arithmetic on
+    // the offset-shifted value; the DST zone still goes through the per-value
+    // chrono path.
+    for (label, tz_opt) in [
+        ("notz", None),
+        ("utc", Some(Arc::from("+00:00"))),
+        ("fixed_offset", Some(Arc::from("+05:30"))),
+        ("dst_zone", Some(Arc::from("Europe/Berlin"))),
+    ] {
+        let nanos: ArrayRef = Arc::new(nanosecond_timestamps(tz_opt));
+        run_benchmark(
+            c,
+            &format!("date_trunc_hour_{label}_nanos_{NUM_ROWS}"),
+            "hour",
+            Arc::clone(&nanos),
+        );
+    }
 
-    // Coarse granularities on an untimezoned array: these need calendar
-    // arithmetic rather than a plain division.
-    let nanos: ArrayRef = Arc::new(nanosecond_timestamps());
+    // `day` is also a fine-granularity-UTC truncation: plain arithmetic for
+    // fixed offsets / no timezone, chrono for DST zones.
+    for (label, tz_opt) in [
+        ("utc", Some(Arc::from("+00:00"))),
+        ("fixed_offset", Some(Arc::from("+05:30"))),
+    ] {
+        let nanos: ArrayRef = Arc::new(nanosecond_timestamps(tz_opt));
+        run_benchmark(
+            c,
+            &format!("date_trunc_day_{label}_nanos_{NUM_ROWS}"),
+            "day",
+            nanos,
+        );
+    }
+
+    // Fine granularities (e.g. minute) truncate by plain arithmetic for any
+    // timezone, including DST zones.
+    for (label, tz_opt) in [
+        ("notz", None),
+        ("utc", Some(Arc::from("+00:00"))),
+        ("dst_zone", Some(Arc::from("Europe/Berlin"))),
+    ] {
+        let nanos: ArrayRef = Arc::new(nanosecond_timestamps(tz_opt));
+        run_benchmark(
+            c,
+            &format!("date_trunc_minute_{label}_nanos_{NUM_ROWS}"),
+            "minute",
+            nanos,
+        );
+    }
+
+    // Coarse granularities (week, month, quarter, year) need calendar
+    // arithmetic rather than a plain division: per-value integer math on a
+    // timezone-naive array, plus a fixed-offset (offset-shifted) variant and a
+    // DST (chrono) variant.
+    let nanos: ArrayRef = Arc::new(nanosecond_timestamps(None));
     for granularity in ["week", "month", "quarter", "year"] {
         run_benchmark(
             c,
-            &format!("date_trunc_{granularity}_nanos_1000"),
+            &format!("date_trunc_{granularity}_notz_nanos_{NUM_ROWS}"),
             granularity,
             Arc::clone(&nanos),
+        );
+    }
+    for (label, tz_opt) in [
+        ("fixed_offset", Some(Arc::from("+05:30"))),
+        ("dst_zone", Some(Arc::from("Europe/Berlin"))),
+    ] {
+        let nanos: ArrayRef = Arc::new(nanosecond_timestamps(tz_opt));
+        run_benchmark(
+            c,
+            &format!("date_trunc_month_{label}_nanos_{NUM_ROWS}"),
+            "month",
+            nanos,
         );
     }
 }
