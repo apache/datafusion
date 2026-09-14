@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, ArrayRef};
-use arrow::compute::cast;
+use arrow::array::{Array, ArrayRef, UInt64Array};
+use arrow::compute::{cast, take};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::{Result, ScalarValue, internal_err};
@@ -245,6 +245,15 @@ impl<T: Accumulator> NullToEmptyListAccumulator<T> {
         if value.data_type() == field.data_type() {
             Ok(Arc::clone(value))
         } else {
+            // Materialize only retained rows before narrowing nested fields.
+            // A slice can still reference null payload outside its logical rows.
+            let indices = match value.logical_nulls() {
+                Some(nulls) => UInt64Array::from_iter_values(
+                    nulls.valid_indices().map(|index| index as u64),
+                ),
+                None => UInt64Array::from_iter_values(0..value.len() as u64),
+            };
+            let value = take(value.as_ref(), &indices, None)?;
             Ok(cast(value.as_ref(), field.data_type())?)
         }
     }
@@ -281,7 +290,11 @@ impl<T: Accumulator> Accumulator for NullToEmptyListAccumulator<T> {
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        self.inner.retract_batch(values)
+        let [value] = values else {
+            return self.inner.retract_batch(values);
+        };
+        let value = self.normalize_input(value)?;
+        self.inner.retract_batch(&[value])
     }
 
     fn supports_retract_batch(&self) -> bool {
@@ -300,7 +313,7 @@ mod tests {
         DictionaryArray, Int8Array, Int16Array, Int32Array, ListArray, RunArray,
         StringArray, StructArray, UnionArray,
     };
-    use arrow::buffer::ScalarBuffer;
+    use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::{Fields, Int8Type, Int16Type, Schema, UnionFields};
     use arrow::record_batch::RecordBatch;
     use arrow::util::display::array_value_to_string;
@@ -586,6 +599,69 @@ mod tests {
             );
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn retract_preserves_nested_type() -> Result<()> {
+        let element_type = DataType::Struct(Fields::from(vec![Field::new(
+            "required",
+            DataType::Int32,
+            false,
+        )]));
+        let values = Arc::new(StructArray::new(
+            Fields::from(vec![Field::new("required", DataType::Int32, true)]),
+            vec![Arc::new(Int32Array::from(vec![1, 2]))],
+            None,
+        )) as ArrayRef;
+
+        for distinct in [false, true] {
+            let mut acc = accumulator(&element_type, distinct)?;
+            acc.update_batch(std::slice::from_ref(&values))?;
+            acc.retract_batch(&[values.slice(0, 1)])?;
+            assert_list_values(&acc.evaluate()?, &element_type, &["{required: 2}"])?;
+            let state = acc.state()?;
+            assert_list_values(&state[0], &element_type, &["{required: 2}"])?;
+            let mut merged = accumulator(&element_type, distinct)?;
+            merged.merge_batch(&[state[0].to_array()?])?;
+            assert_list_values(&merged.evaluate()?, &element_type, &["{required: 2}"])?;
+            acc.retract_batch(&[values.slice(1, 1)])?;
+            assert_empty_list(&acc.evaluate()?);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ignored_null_rows_do_not_narrow_nested_payload() -> Result<()> {
+        let element_type =
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
+        // A null list can retain a null child, even though every retained list
+        // satisfies the declared non-nullable item field.
+        let values = Arc::new(ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 1, 2])),
+            Arc::new(Int32Array::from(vec![None, Some(1)])),
+            Some(NullBuffer::from(vec![false, true])),
+        )) as ArrayRef;
+        values.to_data().validate_full()?;
+
+        for distinct in [false, true] {
+            let mut acc = accumulator(&element_type, distinct)?;
+            acc.update_batch(std::slice::from_ref(&values))?;
+            assert_list_values(&acc.evaluate()?, &element_type, &["[1]"])?;
+            let state = acc.state()?;
+            assert_list_values(&state[0], &element_type, &["[1]"])?;
+            let mut merged = accumulator(&element_type, distinct)?;
+            merged.merge_batch(&[state[0].to_array()?])?;
+            assert_list_values(&merged.evaluate()?, &element_type, &["[1]"])?;
+
+            acc.retract_batch(&[values.slice(0, 1)])?;
+            assert_list_values(&acc.evaluate()?, &element_type, &["[1]"])?;
+            acc.retract_batch(&[values.slice(1, 1)])?;
+            assert_empty_list(&acc.evaluate()?);
+            acc.update_batch(&[values.slice(0, 1)])?;
+            assert_empty_list(&acc.evaluate()?);
+        }
         Ok(())
     }
 
