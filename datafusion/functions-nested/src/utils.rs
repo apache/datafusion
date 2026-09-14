@@ -463,6 +463,45 @@ where
     )?))
 }
 
+/// Returns a power of two that brings the largest magnitude in `values` close
+/// to 1, so that squaring the scaled values neither overflows nor underflows.
+///
+/// Squaring a large finite value overflows (`1e200 * 1e200` is infinity) and
+/// squaring a small one underflows (`1e-200 * 1e-200` is zero), even when the
+/// norm itself is representable. The factor is a power of two, so scaling is
+/// exact and does not change how the result is rounded.
+///
+/// Returns `None` when `values` is empty, all zero, or contains a NaN or an
+/// infinity. The unscaled computation already gives the expected result for
+/// those inputs.
+pub(crate) fn norm_scale(values: impl IntoIterator<Item = f64>) -> Option<f64> {
+    let mut max = 0.0_f64;
+    for value in values {
+        if !value.is_finite() {
+            return None;
+        }
+        max = max.max(value.abs());
+    }
+    if max == 0.0 {
+        return None;
+    }
+    // Unbiased exponent of `max`. Subnormal values store a biased exponent of 0,
+    // so clamp them to the smallest normal exponent.
+    let exponent = ((max.to_bits() >> 52) as i32 - 1023).max(-1022);
+    Some(2.0_f64.powi(-exponent))
+}
+
+/// Returns whether a sum of squares computed without scaling may be wrong
+/// because a square overflowed or underflowed, in which case it should be
+/// recomputed with the factor from [`norm_scale`].
+///
+/// An overflowing square makes the sum infinite. An underflowing square is off
+/// by less than the smallest subnormal value (about `5e-324`), so a sum of at
+/// least `1e-180` is not affected by any practical number of such terms.
+pub(crate) fn needs_norm_scale(sum_of_squares: f64) -> bool {
+    !(1e-180..f64::INFINITY).contains(&sum_of_squares)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -517,5 +556,35 @@ mod tests {
             datafusion_common::utils::list_ndims(res[0].data_type()),
             expected_dim
         );
+    }
+
+    #[test]
+    fn norm_scale_brings_largest_magnitude_close_to_one() {
+        assert_eq!(norm_scale([3e200, -4e200]), Some(2.0_f64.powi(-666)));
+        assert_eq!(norm_scale([3.0, 4.0]), Some(0.25));
+        assert_eq!(norm_scale([f64::MAX]), Some(2.0_f64.powi(-1023)));
+        assert_eq!(
+            norm_scale([f64::MIN_POSITIVE / 4.0]),
+            Some(2.0_f64.powi(1022))
+        );
+    }
+
+    #[test]
+    fn norm_scale_skips_inputs_the_unscaled_computation_handles() {
+        assert_eq!(norm_scale([]), None);
+        assert_eq!(norm_scale([0.0, -0.0]), None);
+        assert_eq!(norm_scale([1.0, f64::NAN]), None);
+        assert_eq!(norm_scale([f64::INFINITY, 1.0]), None);
+    }
+
+    #[test]
+    fn needs_norm_scale_only_for_sums_that_may_have_overflowed_or_underflowed() {
+        assert!(!needs_norm_scale(1.0));
+        assert!(!needs_norm_scale(f64::MAX));
+        assert!(!needs_norm_scale(1e-180));
+        assert!(needs_norm_scale(1e-200));
+        assert!(needs_norm_scale(0.0));
+        assert!(needs_norm_scale(f64::INFINITY));
+        assert!(needs_norm_scale(f64::NAN));
     }
 }
