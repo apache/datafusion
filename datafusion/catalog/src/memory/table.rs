@@ -33,7 +33,9 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::TreeNodeRecursion;
-use datafusion_common::{Constraints, DFSchema, SchemaExt, not_impl_err, plan_err};
+use datafusion_common::{
+    Constraints, DFSchema, SchemaExt, internal_err, not_impl_err, plan_err,
+};
 use datafusion_datasource::memory::{MemSink, MemorySourceConfig};
 use datafusion_datasource::sink::DataSinkExec;
 use datafusion_datasource::source::DataSourceExec;
@@ -361,25 +363,203 @@ impl MemTable {
         state: &'a dyn Session,
         filters: Vec<Expr>,
     ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
-        Box::pin(self.delete_from_inner(state, filters))
+        Box::pin(ready(self.plan_delete(state, filters)))
     }
 
-    async fn delete_from_inner(
+    /// Build the plan of a DELETE. The rows change when the plan runs, not here.
+    fn plan_delete(
         &self,
         state: &dyn Session,
         filters: Vec<Expr>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Early exit if table has no partitions
         if self.batches.is_empty() {
-            return Ok(Arc::new(DmlResultExec::new(0)));
+            return Ok(self.dml_exec(vec![], vec![], MemDmlOp::Delete));
         }
 
-        *self.sort_order.lock() = vec![];
+        let df_schema = DFSchema::try_from(Arc::clone(&self.schema))?;
+        let filters = compile_filters(filters, &df_schema, state.execution_props())?;
 
-        let mut total_deleted: u64 = 0;
+        Ok(self.dml_exec(self.batches.clone(), filters, MemDmlOp::Delete))
+    }
+
+    fn update_boxed<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        assignments: Vec<(String, Expr)>,
+        filters: Vec<Expr>,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(ready(self.plan_update(state, assignments, filters)))
+    }
+
+    /// Build the plan of an UPDATE. The rows change when the plan runs, not
+    /// here. Every check of the statement stays here, so that an `EXPLAIN`
+    /// still reports an invalid statement.
+    fn plan_update(
+        &self,
+        state: &dyn Session,
+        assignments: Vec<(String, Expr)>,
+        filters: Vec<Expr>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Early exit if table has no partitions
+        if self.batches.is_empty() {
+            return Ok(self.dml_exec(vec![], vec![], MemDmlOp::Update(HashMap::new())));
+        }
+
+        // Validate column names upfront with clear error messages
+        let available_columns: Vec<&str> = self
+            .schema
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .collect();
+        for (column_name, _) in &assignments {
+            if self.schema.field_with_name(column_name).is_err() {
+                return plan_err!(
+                    "UPDATE failed: column '{}' does not exist. Available columns: {}",
+                    column_name,
+                    available_columns.join(", ")
+                );
+            }
+        }
+
         let df_schema = DFSchema::try_from(Arc::clone(&self.schema))?;
 
-        for partition_data in &self.batches {
+        // Create physical expressions for assignments upfront (outside batch loop)
+        let physical_assignments: HashMap<String, Arc<dyn PhysicalExpr>> = assignments
+            .into_iter()
+            .map(|(name, expr)| {
+                let physical_expr = create_physical_expr(
+                    &expr,
+                    &df_schema,
+                    state.execution_props(),
+                    &PhysicalPlanningContext::default(),
+                )?;
+                Ok((name, physical_expr))
+            })
+            .collect::<Result<_>>()?;
+
+        let filters = compile_filters(filters, &df_schema, state.execution_props())?;
+
+        Ok(self.dml_exec(
+            self.batches.clone(),
+            filters,
+            MemDmlOp::Update(physical_assignments),
+        ))
+    }
+
+    /// Build the plan node that applies `op` to `partitions`.
+    fn dml_exec(
+        &self,
+        partitions: Vec<PartitionData>,
+        filters: Vec<Arc<dyn PhysicalExpr>>,
+        op: MemDmlOp,
+    ) -> Arc<dyn ExecutionPlan> {
+        Arc::new(MemDmlExec::new(MemDmlState {
+            partitions,
+            table_schema: Arc::clone(&self.schema),
+            sort_order: Arc::clone(&self.sort_order),
+            filters,
+            op,
+        }))
+    }
+}
+
+/// Compile the `WHERE` clause of a DELETE or an UPDATE into physical
+/// expressions. An empty result means "match all rows".
+fn compile_filters(
+    filters: Vec<Expr>,
+    df_schema: &DFSchema,
+    execution_props: &datafusion_expr::execution_props::ExecutionProps,
+) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
+    filters
+        .into_iter()
+        .map(|filter_expr| {
+            create_physical_expr(
+                &filter_expr,
+                df_schema,
+                execution_props,
+                &PhysicalPlanningContext::default(),
+            )
+        })
+        .collect()
+}
+
+/// Evaluate filter expressions against a batch and return a combined boolean mask.
+/// Returns None if filters is empty (meaning "match all rows").
+/// The returned mask has true for rows that match the filter predicates.
+fn evaluate_filters_to_mask(
+    filters: &[Arc<dyn PhysicalExpr>],
+    batch: &RecordBatch,
+) -> Result<Option<BooleanArray>> {
+    if filters.is_empty() {
+        return Ok(None);
+    }
+
+    let mut combined_mask: Option<BooleanArray> = None;
+
+    for physical_expr in filters {
+        let result = physical_expr.evaluate(batch)?;
+        let array = result.into_array(batch.num_rows())?;
+        let bool_array = array
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .ok_or_else(|| {
+                datafusion_common::DataFusionError::Internal(
+                    "Filter did not evaluate to boolean".to_string(),
+                )
+            })?
+            .clone();
+
+        combined_mask = Some(match combined_mask {
+            Some(existing) => and(&existing, &bool_array)?,
+            None => bool_array,
+        });
+    }
+
+    Ok(combined_mask)
+}
+
+/// The operation that a [`MemDmlExec`] applies to the rows of a [`MemTable`].
+#[derive(Debug)]
+enum MemDmlOp {
+    /// Delete each row that the filters match.
+    Delete,
+    /// Assign a new value to each row that the filters match. The map holds one
+    /// expression per assigned column, keyed by column name.
+    Update(HashMap<String, Arc<dyn PhysicalExpr>>),
+}
+
+impl MemDmlOp {
+    fn as_str(&self) -> &'static str {
+        match self {
+            MemDmlOp::Delete => "Delete",
+            MemDmlOp::Update(_) => "Update",
+        }
+    }
+}
+
+/// Everything that a [`MemDmlExec`] needs in order to apply its operation.
+/// Each field is a clone of a field of the [`MemTable`], so the plan changes the
+/// rows of the table itself.
+#[derive(Debug)]
+struct MemDmlState {
+    partitions: Vec<PartitionData>,
+    table_schema: SchemaRef,
+    sort_order: Arc<Mutex<Vec<Vec<SortExpr>>>>,
+    /// The `WHERE` clause of the statement, compiled while the plan was built.
+    /// An empty list means "match all rows".
+    filters: Vec<Arc<dyn PhysicalExpr>>,
+    op: MemDmlOp,
+}
+
+impl MemDmlState {
+    /// Delete the rows that the filters match, and return the number of rows
+    /// deleted.
+    async fn apply_delete(&self) -> Result<u64> {
+        let mut total_deleted: u64 = 0;
+
+        for partition_data in &self.partitions {
             let mut partition = partition_data.write().await;
             let mut new_batches = Vec::with_capacity(partition.len());
 
@@ -389,12 +569,7 @@ impl MemTable {
                 }
 
                 // Evaluate filters - None means "match all rows"
-                let filter_mask = evaluate_filters_to_mask(
-                    &filters,
-                    batch,
-                    &df_schema,
-                    state.execution_props(),
-                )?;
+                let filter_mask = evaluate_filters_to_mask(&self.filters, batch)?;
 
                 let (delete_count, keep_mask) = match filter_mask {
                     Some(mask) => {
@@ -425,67 +600,18 @@ impl MemTable {
             *partition = new_batches;
         }
 
-        Ok(Arc::new(DmlResultExec::new(total_deleted)))
+        Ok(total_deleted)
     }
 
-    fn update_boxed<'a>(
-        &'a self,
-        state: &'a dyn Session,
-        assignments: Vec<(String, Expr)>,
-        filters: Vec<Expr>,
-    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
-        Box::pin(self.update_inner(state, assignments, filters))
-    }
-
-    async fn update_inner(
+    /// Assign a new value to each row that the filters match, and return the
+    /// number of rows updated.
+    async fn apply_update(
         &self,
-        state: &dyn Session,
-        assignments: Vec<(String, Expr)>,
-        filters: Vec<Expr>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Early exit if table has no partitions
-        if self.batches.is_empty() {
-            return Ok(Arc::new(DmlResultExec::new(0)));
-        }
-
-        // Validate column names upfront with clear error messages
-        let available_columns: Vec<&str> = self
-            .schema
-            .fields()
-            .iter()
-            .map(|f| f.name().as_str())
-            .collect();
-        for (column_name, _) in &assignments {
-            if self.schema.field_with_name(column_name).is_err() {
-                return plan_err!(
-                    "UPDATE failed: column '{}' does not exist. Available columns: {}",
-                    column_name,
-                    available_columns.join(", ")
-                );
-            }
-        }
-
-        let df_schema = DFSchema::try_from(Arc::clone(&self.schema))?;
-
-        // Create physical expressions for assignments upfront (outside batch loop)
-        let physical_assignments: HashMap<String, Arc<dyn PhysicalExpr>> = assignments
-            .iter()
-            .map(|(name, expr)| {
-                let physical_expr = create_physical_expr(
-                    expr,
-                    &df_schema,
-                    state.execution_props(),
-                    &PhysicalPlanningContext::default(),
-                )?;
-                Ok((name.clone(), physical_expr))
-            })
-            .collect::<Result<_>>()?;
-
-        *self.sort_order.lock() = vec![];
-
+        physical_assignments: &HashMap<String, Arc<dyn PhysicalExpr>>,
+    ) -> Result<u64> {
         let mut total_updated: u64 = 0;
 
-        for partition_data in &self.batches {
+        for partition_data in &self.partitions {
             let mut partition = partition_data.write().await;
             let mut new_batches = Vec::with_capacity(partition.len());
 
@@ -495,12 +621,7 @@ impl MemTable {
                 }
 
                 // Evaluate filters - None means "match all rows"
-                let filter_mask = evaluate_filters_to_mask(
-                    &filters,
-                    batch,
-                    &df_schema,
-                    state.execution_props(),
-                )?;
+                let filter_mask = evaluate_filters_to_mask(&self.filters, batch)?;
 
                 let (update_count, update_mask) = match filter_mask {
                     Some(mask) => {
@@ -530,7 +651,7 @@ impl MemTable {
                 let mut new_columns: Vec<ArrayRef> =
                     Vec::with_capacity(batch.num_columns());
 
-                for field in self.schema.fields() {
+                for field in self.table_schema.fields() {
                     let column_name = field.name();
                     let original_column =
                         batch.column_by_name(column_name).ok_or_else(|| {
@@ -561,72 +682,35 @@ impl MemTable {
                     new_columns.push(new_column);
                 }
 
-                let updated_batch =
-                    ArrowRecordBatch::try_new(Arc::clone(&self.schema), new_columns)?;
+                let updated_batch = ArrowRecordBatch::try_new(
+                    Arc::clone(&self.table_schema),
+                    new_columns,
+                )?;
                 new_batches.push(updated_batch);
             }
 
             *partition = new_batches;
         }
 
-        Ok(Arc::new(DmlResultExec::new(total_updated)))
+        Ok(total_updated)
     }
 }
 
-/// Evaluate filter expressions against a batch and return a combined boolean mask.
-/// Returns None if filters is empty (meaning "match all rows").
-/// The returned mask has true for rows that match the filter predicates.
-fn evaluate_filters_to_mask(
-    filters: &[Expr],
-    batch: &RecordBatch,
-    df_schema: &DFSchema,
-    execution_props: &datafusion_expr::execution_props::ExecutionProps,
-) -> Result<Option<BooleanArray>> {
-    if filters.is_empty() {
-        return Ok(None);
-    }
-
-    let mut combined_mask: Option<BooleanArray> = None;
-
-    for filter_expr in filters {
-        let physical_expr = create_physical_expr(
-            filter_expr,
-            df_schema,
-            execution_props,
-            &PhysicalPlanningContext::default(),
-        )?;
-
-        let result = physical_expr.evaluate(batch)?;
-        let array = result.into_array(batch.num_rows())?;
-        let bool_array = array
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .ok_or_else(|| {
-                datafusion_common::DataFusionError::Internal(
-                    "Filter did not evaluate to boolean".to_string(),
-                )
-            })?
-            .clone();
-
-        combined_mask = Some(match combined_mask {
-            Some(existing) => and(&existing, &bool_array)?,
-            None => bool_array,
-        });
-    }
-
-    Ok(combined_mask)
-}
-
-/// Returns a single row with the count of affected rows.
+/// Applies a DELETE or an UPDATE to a [`MemTable`], and returns a single row
+/// with the count of affected rows.
+///
+/// The rows change in [`ExecutionPlan::execute`], not while the plan is built,
+/// so an `EXPLAIN` of the statement leaves the table alone. Each run of the plan
+/// applies the operation once more, as [`DataSinkExec`] does for an INSERT.
 #[derive(Debug)]
-struct DmlResultExec {
-    rows_affected: u64,
+struct MemDmlExec {
+    state: Arc<MemDmlState>,
     schema: SchemaRef,
     properties: Arc<PlanProperties>,
 }
 
-impl DmlResultExec {
-    fn new(rows_affected: u64) -> Self {
+impl MemDmlExec {
+    fn new(state: MemDmlState) -> Self {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "count",
             DataType::UInt64,
@@ -641,14 +725,14 @@ impl DmlResultExec {
         );
 
         Self {
-            rows_affected,
+            state: Arc::new(state),
             schema,
             properties: Arc::new(properties),
         }
     }
 }
 
-impl DisplayAs for DmlResultExec {
+impl DisplayAs for MemDmlExec {
     fn fmt_as(
         &self,
         t: DisplayFormatType,
@@ -658,15 +742,15 @@ impl DisplayAs for DmlResultExec {
             DisplayFormatType::Default
             | DisplayFormatType::Verbose
             | DisplayFormatType::TreeRender => {
-                write!(f, "DmlResultExec: rows_affected={}", self.rows_affected)
+                write!(f, "MemDmlExec: op={}", self.state.op.as_str())
             }
         }
     }
 }
 
-impl ExecutionPlan for DmlResultExec {
+impl ExecutionPlan for MemDmlExec {
     fn name(&self) -> &str {
-        "DmlResultExec"
+        "MemDmlExec"
     }
 
     fn schema(&self) -> SchemaRef {
@@ -701,18 +785,36 @@ impl ExecutionPlan for DmlResultExec {
 
     fn execute(
         &self,
-        _partition: usize,
+        partition: usize,
         _context: Arc<datafusion_execution::TaskContext>,
     ) -> Result<datafusion_execution::SendableRecordBatchStream> {
-        // Create a single batch with the count
-        let count_array = UInt64Array::from(vec![self.rows_affected]);
-        let batch = ArrowRecordBatch::try_new(
-            Arc::clone(&self.schema),
-            vec![Arc::new(count_array) as ArrayRef],
-        )?;
+        if partition != 0 {
+            return internal_err!(
+                "MemDmlExec has one partition, but partition {partition} was requested"
+            );
+        }
 
-        // Create a stream that yields just this one batch
-        let stream = futures::stream::iter(vec![Ok(batch)]);
+        let state = Arc::clone(&self.state);
+        let schema = Arc::clone(&self.schema);
+
+        // Apply the operation, then emit the count as the single output row.
+        let stream = futures::stream::once(async move {
+            // The rows change, so any declared sort order no longer holds. The
+            // guard drops at the end of this statement, before the first await.
+            *state.sort_order.lock() = vec![];
+
+            let rows_affected = match &state.op {
+                MemDmlOp::Delete => state.apply_delete().await?,
+                MemDmlOp::Update(assignments) => state.apply_update(assignments).await?,
+            };
+
+            let count_array = UInt64Array::from(vec![rows_affected]);
+            Ok(ArrowRecordBatch::try_new(
+                schema,
+                vec![Arc::new(count_array) as ArrayRef],
+            )?)
+        });
+
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             Arc::clone(&self.schema),
             stream,
