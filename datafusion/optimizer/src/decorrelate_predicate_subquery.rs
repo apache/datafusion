@@ -16,14 +16,12 @@
 // under the License.
 
 //! [`DecorrelatePredicateSubquery`] converts `IN`/`EXISTS` subquery predicates to `SEMI`/`ANTI` joins
-use std::collections::BTreeSet;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use crate::decorrelate::PullUpCorrelatedExpr;
+use crate::decorrelate::{PullUpCorrelatedExpr, build_join_filter};
 use crate::extract_equijoin_predicate::split_eq_and_noneq_join_predicate;
 use crate::optimizer::ApplyOrder;
-use crate::utils::replace_qualified_name;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::alias::AliasGenerator;
@@ -33,9 +31,7 @@ use datafusion_common::{
     plan_err,
 };
 use datafusion_expr::expr::{Exists, InSubquery};
-use datafusion_expr::expr_rewriter::{
-    create_col_from_scalar_expr, strip_outer_reference,
-};
+use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::{conjunction, expr_to_columns, split_conjunction_owned};
 use datafusion_expr::{
@@ -376,19 +372,11 @@ fn build_join(
     let sub_query_alias = LogicalPlanBuilder::from(new_plan)
         .alias(alias.to_string())?
         .build()?;
-    let mut all_correlated_cols = BTreeSet::new();
-    pull_up
-        .correlated_subquery_cols_map
-        .values()
-        .for_each(|cols| all_correlated_cols.extend(cols.clone()));
-
-    // alias the join filter
-    let join_filter_opt =
-        conjunction(pull_up.join_filters).map_or(Ok(None), |filter| {
-            replace_qualified_name(filter, &all_correlated_cols, &alias)
-                .map(strip_outer_reference)
-                .map(Some)
-        })?;
+    let join_filter_opt = build_join_filter(
+        pull_up.join_filters,
+        pull_up.correlated_subquery_cols_map.values().flatten(),
+        &alias,
+    )?;
 
     let join_filter = match (join_filter_opt, in_predicate_opt.cloned()) {
         (
