@@ -1125,7 +1125,7 @@ async fn create_scalar_function_from_sql_statement() -> Result<()> {
     "#;
     assert!(ctx.sql(bad_definition_sql).await.is_err());
 
-    // Definitions with invalid placeholders are rejected at definition time
+    // invalid placeholders are rejected at definition time
     let bad_expression_sql = r#"
     CREATE FUNCTION better_add(DOUBLE, DOUBLE)
         RETURNS DOUBLE
@@ -1146,8 +1146,7 @@ async fn create_scalar_function_from_sql_statement_invalid_placeholders() -> Res
     let function_factory = Arc::new(CustomFunctionFactory::default());
     let ctx = SessionContext::new().with_function_factory(function_factory.clone());
 
-    // Out of range positional placeholder in the body of a function declared
-    // with positional arguments
+    // out of range placeholder, positional declared args
     let sql = r#"
     CREATE FUNCTION bad_placeholder_pos(DOUBLE, DOUBLE)
         RETURNS DOUBLE
@@ -1157,8 +1156,7 @@ async fn create_scalar_function_from_sql_statement_invalid_placeholders() -> Res
     let expected = "Error during planning: Invalid placeholder, out of range: $3";
     assert!(expected.starts_with(&err.strip_backtrace()));
 
-    // Out of range positional placeholder in the body of a function declared
-    // with named arguments
+    // out of range placeholder, named declared args
     let sql = r#"
     CREATE FUNCTION bad_placeholder_named(a DOUBLE, b DOUBLE)
         RETURNS DOUBLE
@@ -1168,7 +1166,7 @@ async fn create_scalar_function_from_sql_statement_invalid_placeholders() -> Res
     let expected = "Error during planning: Invalid placeholder, out of range: $3";
     assert!(expected.starts_with(&err.strip_backtrace()));
 
-    // Placeholder in the body of a function declared with no arguments
+    // placeholder with zero declared args
     let sql = r#"
     CREATE FUNCTION bad_placeholder_zero_args()
         RETURNS DOUBLE
@@ -1178,7 +1176,7 @@ async fn create_scalar_function_from_sql_statement_invalid_placeholders() -> Res
     let expected = "Error during planning: Invalid placeholder, out of range: $1";
     assert!(expected.starts_with(&err.strip_backtrace()));
 
-    // Named placeholder in the body of a function declared with no arguments
+    // named placeholder with zero declared args
     let sql = r#"
     CREATE FUNCTION bad_placeholder_unknown_name()
         RETURNS DOUBLE
@@ -1188,11 +1186,105 @@ async fn create_scalar_function_from_sql_statement_invalid_placeholders() -> Res
     let expected = "Error during planning: Unknown placeholder: $a";
     assert!(expected.starts_with(&err.strip_backtrace()));
 
-    // Valid bodies must still be accepted
+    // out of range placeholder in an argument default expression; the default
+    // is substituted into the body at call time, so it must be validated too
+    let sql = r#"
+    CREATE FUNCTION bad_placeholder_default(a DOUBLE, b DOUBLE DEFAULT $9)
+        RETURNS DOUBLE
+        RETURN $1 + $2
+    "#;
+    let err = ctx.sql(sql).await.expect_err("out of range placeholder");
+    let expected = "Error during planning: Invalid placeholder, out of range: $9";
+    assert!(expected.starts_with(&err.strip_backtrace()));
+
+    // placeholder referencing an argument in a default expression is valid
+    let sql = r#"
+    CREATE FUNCTION good_placeholder_default(a DOUBLE, b DOUBLE DEFAULT $1)
+        RETURNS DOUBLE
+        RETURN $1 + $2
+    "#;
+    assert!(ctx.sql(sql).await.is_ok());
+
+    // named placeholder in a default expression; defaults are substituted by
+    // position at call time, so a named id can never be resolved there
+    let sql = r#"
+    CREATE FUNCTION bad_placeholder_named_default(a DOUBLE, b DOUBLE DEFAULT $a)
+        RETURNS DOUBLE
+        RETURN $1 + $2
+    "#;
+    let err = ctx
+        .sql(sql)
+        .await
+        .expect_err("named placeholder in default");
+    let expected = "Error during planning: Unknown placeholder: $a";
+    assert!(expected.starts_with(&err.strip_backtrace()));
+
+    // out of range placeholder inside a subquery
+    let sql = r#"
+    CREATE FUNCTION bad_placeholder_scalar_subquery(DOUBLE)
+        RETURNS DOUBLE
+        RETURN $1 + (SELECT $9)
+    "#;
+    let err = ctx.sql(sql).await.expect_err("out of range placeholder");
+    let expected = "Error during planning: Invalid placeholder, out of range: $9";
+    assert!(expected.starts_with(&err.strip_backtrace()));
+
+    let sql = r#"
+    CREATE FUNCTION bad_placeholder_exists_subquery(DOUBLE)
+        RETURNS BOOLEAN
+        RETURN EXISTS (SELECT $9)
+    "#;
+    let err = ctx.sql(sql).await.expect_err("out of range placeholder");
+    let expected = "Error during planning: Invalid placeholder, out of range: $9";
+    assert!(expected.starts_with(&err.strip_backtrace()));
+
+    let sql = r#"
+    CREATE TABLE t (v DOUBLE) AS VALUES (1.0), (2.0)
+    "#;
+    ctx.sql(sql).await?.collect().await?;
+
+    let sql = r#"
+    CREATE FUNCTION bad_placeholder_in_subquery(DOUBLE)
+        RETURNS BOOLEAN
+        RETURN $1 IN (SELECT $9 FROM t)
+    "#;
+    let err = ctx.sql(sql).await.expect_err("out of range placeholder");
+    let expected = "Error during planning: Invalid placeholder, out of range: $9";
+    assert!(expected.starts_with(&err.strip_backtrace()));
+
+    // placeholder nested two subqueries deep
+    let sql = r#"
+    CREATE FUNCTION bad_placeholder_nested_subquery(DOUBLE)
+        RETURNS BOOLEAN
+        RETURN EXISTS (SELECT 1 FROM t WHERE (SELECT $9) > 0.0)
+    "#;
+    let err = ctx.sql(sql).await.expect_err("out of range placeholder");
+    let expected = "Error during planning: Invalid placeholder, out of range: $9";
+    assert!(expected.starts_with(&err.strip_backtrace()));
+
+    // out of range placeholder in a subquery's LIMIT clause
+    let sql = r#"
+    CREATE FUNCTION bad_placeholder_subquery_limit(DOUBLE)
+        RETURNS BOOLEAN
+        RETURN $1 IN (SELECT v FROM t LIMIT $9)
+    "#;
+    let err = ctx.sql(sql).await.expect_err("out of range placeholder");
+    let expected = "Error during planning: Invalid placeholder, out of range: $9";
+    assert!(expected.starts_with(&err.strip_backtrace()));
+
+    // valid body
     let sql = r#"
     CREATE FUNCTION good_placeholder(DOUBLE, DOUBLE)
         RETURNS DOUBLE
         RETURN $1 + $2
+    "#;
+    assert!(ctx.sql(sql).await.is_ok());
+
+    // valid placeholder inside a subquery
+    let sql = r#"
+    CREATE FUNCTION good_placeholder_subquery(DOUBLE)
+        RETURNS BOOLEAN
+        RETURN $1 IN (SELECT v FROM t WHERE v > $1)
     "#;
     assert!(ctx.sql(sql).await.is_ok());
 
