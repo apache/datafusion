@@ -188,7 +188,14 @@ tested in the same way using the [doc_comment] crate. See the end of
 
 ## Documentation Link Checks
 
-Run the internal markdown link check locally:
+The local lint suite, `./dev/rust_lint.sh`, includes the internal markdown link
+check. When `lychee` is not on your `PATH`, the suite installs the version
+pinned in `ci/scripts/utils/tool_versions.sh`, which is the version CI uses. An
+already installed `lychee` is used as is, so its version can differ from the
+CI pin. The check is read-only: `--write` and `--allow-dirty` do not change
+links.
+
+Run the internal markdown link check on its own:
 
 ```shell
 source ci/scripts/utils/tool_versions.sh
