@@ -231,3 +231,21 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[(random() = 0 OR a@0 = 1) AND a@0 = 2 as c1, random() = 0 AND a@0 = 2 OR a@0 = 1 as c2, CASE WHEN random() = 0 THEN a@0 + 3 ELSE a@0 + 3 END as c3, CASE WHEN random() = 0 THEN 0 WHEN a@0 + 4 = 0 THEN a@0 + 4 ELSE 0 END as c4, CASE WHEN random() = 0 THEN 0 WHEN a@0 + 5 = 0 THEN 0 ELSE a@0 + 5 END as c5, CASE WHEN random() = 0 THEN 0 WHEN random() = 0 THEN a@0 + 6 ELSE a@0 + 6 END as c6]
 02)--DataSourceExec: partitions=1, partition_sizes=[0]
+
+# A common expression that also feeds a conditionally evaluated get_field
+# call must be evaluated once, not once as the common expression and once
+# again inlined inside the extracted get_field call.
+query TT
+EXPLAIN SELECT
+    CASE WHEN arrow_field(a) IS NOT NULL
+         THEN get_field(arrow_field(a), 'name') END AS c1
+FROM t1
+----
+logical_plan
+01)Projection: CASE WHEN __common_expr_1 IS NOT NULL THEN get_field(__common_expr_1, Utf8("name")) END AS c1
+02)--Projection: arrow_field(t1.a) AS __common_expr_1
+03)----TableScan: t1 projection=[a]
+physical_plan
+01)ProjectionExec: expr=[CASE WHEN __common_expr_1@0 IS NOT NULL THEN get_field(__common_expr_1@0, name) END as c1]
+02)--ProjectionExec: expr=[arrow_field(a@0) as __common_expr_1]
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
