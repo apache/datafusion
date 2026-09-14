@@ -31,8 +31,11 @@ pub(super) fn validate_aggregation_phase(phase: i32) -> datafusion::common::Resu
     match AggregationPhase::try_from(phase)
         .map_err(|e| plan_datafusion_err!("Invalid aggregation phase {phase}: {e}"))?
     {
-        // Logical plans represent complete calls. Keep accepting unspecified phases
-        // for compatibility with existing DataFusion aggregate and window producers.
+        // Substrait defines UNSPECIFIED as INTERMEDIATE_TO_RESULT. Accept it as a
+        // complete call only for compatibility with existing DataFusion-produced
+        // aggregate and window plans. This exception also accepts unspecified
+        // intermediate-state calls from other producers; their intent cannot be
+        // distinguished here. Explicit intermediate phases remain unsupported.
         AggregationPhase::Unspecified | AggregationPhase::InitialToResult => Ok(()),
         phase => not_impl_err!("Unsupported aggregation phase: {}", phase.as_str_name()),
     }
