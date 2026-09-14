@@ -123,7 +123,7 @@ impl ScalarUDFImpl for FactorialFunc {
     }
 
     fn strictly_order_preserving(&self, _inputs: &[ExprProperties]) -> Result<bool> {
-        // factorial(0) == factorial(1) == 1 so orderingis not preserved
+        // factorial(0) == factorial(1) == 1 so ordering is not preserved
         Ok(false)
     }
 
