@@ -73,7 +73,7 @@ jobs:
       - name: Rust Dependency Cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
         with:
-          shared-key: "amd-ci-check" # this job uses it's own cache becase check has a separate cache and we need it to be fast as it blocks other jobs
+          shared-key: "amd-ci-check" # Keep cargo check artifacts separate from test builds.
           save-if: ${{ github.ref_name == 'main' }}
       - name: Prepare cargo build
         # `--locked` asserts that Cargo.lock is up to date with the manifest.
@@ -95,6 +95,11 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        with:
+          save-if: false # The workspace and functions checks save this cache on main.
+          shared-key: "amd-ci-check"
       - name: Check datafusion-common (default features)
         run: cargo xtask ci step check datafusion-common default
       #
@@ -158,6 +163,11 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        with:
+          save-if: false # The workspace and functions checks save this cache on main.
+          shared-key: "amd-ci-check"
       - name: Check datafusion-proto (default features)
         run: cargo xtask ci step check datafusion-proto default
       #
@@ -189,6 +199,11 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        with:
+          save-if: false # The workspace and functions checks save this cache on main.
+          shared-key: "amd-ci-check"
       - name: Check datafusion-ffi (no-default-features)
         run: cargo xtask ci step check datafusion-ffi no-default
 
@@ -275,6 +290,12 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        with:
+          # Warm GitHub's cache when linux-build-lib saves to Runs-On.
+          save-if: ${{ github.ref_name == 'main' }}
+          shared-key: "amd-ci-check"
       - name: Check datafusion-functions (default features)
         run: cargo xtask ci step check datafusion-functions default
       #
@@ -314,6 +335,11 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        with:
+          save-if: false # The workspace and functions checks save this cache on main.
+          shared-key: "amd-ci-check"
       - name: Check datafusion-spark (default features)
         run: cargo check --profile ci --all-targets -p datafusion-spark
       #
@@ -401,12 +427,13 @@ jobs:
       # with transient Docker transport errors. The tests retry the pull
       # themselves, so a failure here is only a warning.
       #
-      # MINIO_IMAGE must match the image used by the `minio` module of the
-      # `testcontainers-modules` crate. The `minio_image_matches_ci_prepull`
-      # test in `datafusion-cli/tests/cli_integration.rs` fails if it drifts.
+      # MINIO_IMAGE must match what the tests start: the tag comes from the
+      # `minio` module of `testcontainers-modules`, the registry from
+      # MINIO_IMAGE_NAME in `datafusion-cli/tests/cli_integration.rs`. The
+      # `minio_image_matches_ci_prepull` test fails if either drifts.
       - name: Pre-pull MinIO image
         env:
-          MINIO_IMAGE: minio/minio:RELEASE.2025-02-28T09-55-16Z
+          MINIO_IMAGE: quay.io/minio/minio:RELEASE.2025-02-28T09-55-16Z
         run: |
           ci/scripts/retry timeout 120 docker pull "$MINIO_IMAGE" \
             || echo "::warning::Could not pre-pull $MINIO_IMAGE, the tests will pull it themselves"

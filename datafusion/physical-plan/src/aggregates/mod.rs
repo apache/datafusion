@@ -868,8 +868,8 @@ pub struct AggregateExec {
     /// Supported by:
     /// - [`StreamType::GroupedPriorityQueue`]: retains only the best `limit`
     ///   groups per partition (this stream is selected only when a limit is set)
-    /// - [`StreamType::PartialHash`], [`StreamType::FinalHash`] and the legacy
-    ///   [`StreamType::GroupedHash`]: stop reading input once `limit` groups
+    /// - [`StreamType::SingleHash`], [`StreamType::PartialHash`], [`StreamType::FinalHash`]
+    ///   and the legacy [`StreamType::GroupedHash`]: stop reading input once `limit` groups
     ///   have been accumulated
     ///
     /// The remaining streams consume all input.
@@ -4830,6 +4830,16 @@ mod tests {
         assert!(matches!(stream, StreamType::PartialReduceHash(_)));
         let stream: SendableRecordBatchStream = stream.into();
         let output = collect(stream).await?;
+
+        assert_eq!(
+            partial_reduce
+                .metrics()
+                .unwrap()
+                .sum_by_name("early_emit_count")
+                .unwrap()
+                .as_usize(),
+            num_input_batches
+        );
 
         // The table is flushed after every input batch, so each of the three
         // groups is emitted once per input batch instead of being merged into a
