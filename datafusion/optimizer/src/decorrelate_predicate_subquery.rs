@@ -604,10 +604,29 @@ fn build_join_with_count_bug(
 
     let indicator_col = Expr::Column(Column::new(Some(alias), UN_MATCHED_ROW_INDICATOR));
 
-    let having_arm = pull_up_having_expr.map(|f| not(f.clone()));
+    let having_arm = pull_up_having_expr.map(|f| f.clone().is_not_true());
 
     let mut expr_rewrite = TypeCoercionRewriter {
         schema: joined.schema(),
+    };
+
+    // The subquery's HAVING clause, evaluated against an unmatched row's
+    // default aggregate values, is usually `true`, but not once a second
+    // filter is combined into it, so it cannot be assumed.
+    let unmatched_having_default = match pull_up_having_expr {
+        Some(f) => f
+            .clone()
+            .transform_up(|e| {
+                if let Expr::Column(Column { name, .. }) = &e
+                    && let Some(default_value) = expr_map.get(name)
+                {
+                    return Ok(Transformed::yes(default_value.clone()));
+                }
+                Ok(Transformed::no(e))
+            })
+            .data()
+            .and_then(|simplified| simplified.rewrite(&mut expr_rewrite).data())?,
+        None => lit(true),
     };
 
     let exists_expr = if let Some(in_predicate) = in_predicate_opt {
@@ -628,7 +647,7 @@ fn build_join_with_count_bug(
         // Only substitute the empty-input value when it isn't NULL itself.
         // If it is NULL, the unmatched row's raw NULL from the LEFT JOIN is
         // already the correct value, so no substitution is needed.
-        let unmatched_result = match &compensation {
+        let unmatched_value_result = match &compensation {
             Some(empty_batch_result)
                 if !evaluates_to_null(
                     empty_batch_result.clone(),
@@ -639,6 +658,11 @@ fn build_join_with_count_bug(
             }
             _ => in_left.deref().clone().eq(value_col.clone()),
         };
+        let unmatched_result = when(
+            unmatched_having_default.clone().is_not_true(),
+            having_failed_result.clone(),
+        )
+        .otherwise(unmatched_value_result)?;
         let matched_result = in_left.deref().clone().eq(value_col);
         match &having_arm {
             Some(when_expr) => when(indicator_col.clone().is_null(), unmatched_result)
@@ -653,14 +677,17 @@ fn build_join_with_count_bug(
         }
     } else {
         // EXISTS is true by default (the groupless aggregate always
-        // produces a row), unless the row has an actual join match whose
-        // HAVING predicate fails.
+        // produces a row), unless either the row joined against a group
+        // whose HAVING predicate failed, or an unmatched row's own
+        // default aggregate values fail that same HAVING clause.
         match having_arm {
-            Some(when_expr) => when(indicator_col.clone().is_null(), lit(true))
-                .when(when_expr, lit(false))
-                .otherwise(lit(true))?
-                .rewrite(&mut expr_rewrite)
-                .data()?,
+            Some(when_expr) => {
+                when(indicator_col.clone().is_null(), unmatched_having_default)
+                    .when(when_expr, lit(false))
+                    .otherwise(lit(true))?
+                    .rewrite(&mut expr_rewrite)
+                    .data()?
+            }
             None => lit(true),
         }
     };

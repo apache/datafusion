@@ -1153,7 +1153,7 @@ explain SELECT t1_id, t1_int FROM t1 WHERE EXISTS (SELECT count(*) FROM t2 WHERE
 ----
 logical_plan
 01)Projection: t1.t1_id, t1.t1_int
-02)--Filter: __correlated_sq_1.__always_true IS NULL OR __correlated_sq_1.__always_true IS NOT NULL AND (__correlated_sq_1.count(Int64(1)) != Int64(0)) IS DISTINCT FROM Boolean(true)
+02)--Filter: __correlated_sq_1.__always_true IS NULL OR __correlated_sq_1.__always_true IS NOT NULL AND NOT __correlated_sq_1.count(Int64(1)) = Int64(0) IS NOT TRUE
 03)----Projection: t1.t1_id, t1.t1_int, __correlated_sq_1.count(Int64(1)), __correlated_sq_1.__always_true
 04)------Left Join: t1.t1_id = __correlated_sq_1.t2_id
 05)--------TableScan: t1 projection=[t1_id, t1_int]
@@ -1166,6 +1166,56 @@ query II
 SELECT t1_id, t1_int FROM t1 WHERE EXISTS (SELECT count(*) FROM t2 WHERE t1.t1_id = t2.t2_id HAVING count(*) = 0)
 ----
 33 3
+
+# correlated_exists_groupless_compound_having_select_dummy_column
+query II
+SELECT t1_id, t1_int FROM t1 WHERE EXISTS (SELECT 1 FROM t2 WHERE t1.t1_id = t2.t2_id HAVING count(*) = 0 AND count(*) < 100)
+----
+33 3
+
+# correlated_not_exists_groupless_compound_having_select_dummy_column
+query II rowsort
+SELECT t1_id, t1_int FROM t1 WHERE NOT EXISTS (SELECT 1 FROM t2 WHERE t1.t1_id = t2.t2_id HAVING count(*) = 0 AND count(*) < 100)
+----
+11 1
+22 2
+44 4
+
+# correlated_exists_groupless_having_with_stacked_filter_via_cte
+query II
+SELECT t1_id, t1_int FROM t1 WHERE EXISTS (
+  WITH agg AS (SELECT count(*) AS c FROM t2 WHERE t1.t1_id = t2.t2_id HAVING count(*) = 0)
+  SELECT c FROM agg WHERE c >= 0
+)
+----
+33 3
+
+# correlated_not_exists_groupless_having_with_stacked_filter_via_cte
+query II rowsort
+SELECT t1_id, t1_int FROM t1 WHERE NOT EXISTS (
+  WITH agg AS (SELECT count(*) AS c FROM t2 WHERE t1.t1_id = t2.t2_id HAVING count(*) = 0)
+  SELECT c FROM agg WHERE c >= 0
+)
+----
+11 1
+22 2
+44 4
+
+# correlated_in_groupless_having_with_stacked_filter_via_cte
+query II
+SELECT t1_id, t1_int FROM t1 WHERE t1_int IN (
+  WITH agg AS (SELECT count(*) AS c FROM t2 WHERE t1.t1_id = t2.t2_id HAVING count(*) = 0)
+  SELECT c FROM agg WHERE c > 0
+)
+----
+
+# correlated_exists_groupless_having_with_stacked_filter_on_different_aggregate
+query II
+SELECT t1_id, t1_int FROM t1 WHERE EXISTS (
+  WITH agg AS (SELECT count(*) AS c, sum(t2_int) AS s FROM t2 WHERE t1.t1_id = t2.t2_id HAVING count(*) = 0)
+  SELECT c FROM agg WHERE s > 5
+)
+----
 
 # correlated_not_exists_groupless_count_agg_count_bug
 query II
@@ -1183,6 +1233,11 @@ query II
 SELECT t1_id, t1_int FROM t1 WHERE 0 IN (SELECT count(*) FROM t2 WHERE t1.t1_id = t2.t2_id HAVING count(*) = 0)
 ----
 33 3
+
+# correlated_in_groupless_null_default_agg_having_with_type_coercion_plans_successfully
+query I
+SELECT t1_id FROM t1 WHERE 5.0 IN (SELECT sum(t2_int) FROM t2 WHERE t1.t1_id = t2.t2_id HAVING count(*) = 0 OR sum(t2_int) IS NULL)
+----
 
 # correlated_exists_groupless_null_default_agg_always_true
 query II rowsort
@@ -1220,10 +1275,9 @@ logical_plan
 02)--TableScan: t1 projection=[t1_id, t1_int]
 03)--SubqueryAlias: __correlated_sq_1
 04)----Projection: t2.t2_id
-05)------Filter: __common_expr_2 IS NOT DISTINCT FROM Boolean(true) OR __common_expr_2
-06)--------Projection: count(Int64(1)) != Int64(0) AS __common_expr_2, t2.t2_id
-07)----------Aggregate: groupBy=[[t2.t2_id]], aggr=[[count(Int64(1))]]
-08)------------TableScan: t2 projection=[t2_id]
+05)------Filter: count(Int64(1)) = Int64(0) IS NOT TRUE OR count(Int64(1)) != Int64(0)
+06)--------Aggregate: groupBy=[[t2.t2_id]], aggr=[[count(Int64(1))]]
+07)----------TableScan: t2 projection=[t2_id]
 
 query II rowsort
 SELECT t1_id, t1_int FROM t1 WHERE 0 NOT IN (SELECT count(*) FROM t2 WHERE t1.t1_id = t2.t2_id HAVING count(*) = 0)
