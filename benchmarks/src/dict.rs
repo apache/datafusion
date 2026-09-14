@@ -84,6 +84,8 @@ pub enum InputEncoding {
     Dictionary,
     /// Keep the group keys as plain string arrays.
     Plain,
+    /// Keep the group keys as string view arrays.
+    View,
     /// Build plain strings and dictionary-encode them in the query plan.
     RuntimeDictionary,
 }
@@ -93,6 +95,7 @@ impl InputEncoding {
         match self {
             Self::Dictionary => "dictionary",
             Self::Plain => "plain",
+            Self::View => "view",
             Self::RuntimeDictionary => "runtime_dictionary",
         }
     }
@@ -498,14 +501,16 @@ impl RunOpt {
 
     fn query_sql(&self, query: &DictionaryQuery) -> String {
         if self.input_encoding == InputEncoding::Plain
-            || (self.input_encoding == InputEncoding::Dictionary
-                && !self.normalize_output)
+            || (matches!(
+                self.input_encoding,
+                InputEncoding::Dictionary | InputEncoding::View
+            ) && !self.normalize_output)
         {
             return query.sql.to_string();
         }
 
         let group_col = match self.input_encoding {
-            InputEncoding::Dictionary => "dict_col",
+            InputEncoding::Dictionary | InputEncoding::View => "dict_col",
             InputEncoding::RuntimeDictionary => {
                 "arrow_cast(dict_col, 'Dictionary(Int32, Utf8)')"
             }
@@ -519,7 +524,7 @@ impl RunOpt {
 
         if query.col2.is_some() {
             let group_col2 = match self.input_encoding {
-                InputEncoding::Dictionary => "dict_col2",
+                InputEncoding::Dictionary | InputEncoding::View => "dict_col2",
                 InputEncoding::RuntimeDictionary => {
                     "arrow_cast(dict_col2, 'Dictionary(Int32, Utf8)')"
                 }
@@ -620,6 +625,9 @@ impl RunOpt {
             InputEncoding::Plain | InputEncoding::RuntimeDictionary => {
                 arrow::compute::cast(col1.as_ref(), &DataType::Utf8)?
             }
+            InputEncoding::View => {
+                arrow::compute::cast(col1.as_ref(), &DataType::Utf8View)?
+            }
         };
 
         let (schema, columns): (Schema, Vec<ArrayRef>) = match &query.col2 {
@@ -645,6 +653,9 @@ impl RunOpt {
                     InputEncoding::Dictionary => col2,
                     InputEncoding::Plain | InputEncoding::RuntimeDictionary => {
                         arrow::compute::cast(col2.as_ref(), &DataType::Utf8)?
+                    }
+                    InputEncoding::View => {
+                        arrow::compute::cast(col2.as_ref(), &DataType::Utf8View)?
                     }
                 };
                 let schema = Schema::new(vec![
@@ -749,6 +760,10 @@ mod tests {
 
         assert_eq!(
             run_opt(InputEncoding::Dictionary).query_sql(query),
+            "SELECT arrow_cast(dict_col, 'Utf8') AS dict_col, COUNT(*) FROM test_data GROUP BY dict_col"
+        );
+        assert_eq!(
+            run_opt(InputEncoding::View).query_sql(query),
             "SELECT arrow_cast(dict_col, 'Utf8') AS dict_col, COUNT(*) FROM test_data GROUP BY dict_col"
         );
         assert_eq!(
@@ -868,6 +883,7 @@ mod tests {
         let mut per_batch = run_opt(InputEncoding::Dictionary);
         per_batch.dictionary_value_reuse = DictionaryValueReuse::PerBatch;
         let runtime = run_opt(InputEncoding::RuntimeDictionary);
+        let view = run_opt(InputEncoding::View);
 
         let expected = grouped_counts(&plain).await;
         assert_eq!(
@@ -877,5 +893,6 @@ mod tests {
         assert_eq!(grouped_counts(&shared).await, expected);
         assert_eq!(grouped_counts(&per_batch).await, expected);
         assert_eq!(grouped_counts(&runtime).await, expected);
+        assert_eq!(grouped_counts(&view).await, expected);
     }
 }
