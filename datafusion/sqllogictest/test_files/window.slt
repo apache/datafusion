@@ -7155,9 +7155,17 @@ select count(*) over (order by l) from (values ([struct(1)]), ([struct(2)])) t(l
 query error DataFusion error: Internal error: Uncomparable values: List\(\[\[1\]\]\), List\(\[\[1\]\]\)
 select count(*) over (order by l) from (values ([[1]]), ([[2]])) t(l)
 
-# the same list type after a duration key: the duration passes the free-range
-# check, the list is accepted as before, and the execution error is the same
-query error DataFusion error: Internal error: Uncomparable values: List\(\[\{c0: 1\}\]\), List\(\[\{c0: 1\}\]\)
+# after a duration key the free-range check looks at every ORDER BY type: a
+# list of primitives is still fine,
+query I
+select count(*) over (order by d, l) from (values (arrow_cast(1, 'Duration(Second)'), [1]), (arrow_cast(1, 'Duration(Second)'), [2])) t(d, l)
+----
+1
+2
+
+# but a list of nested elements is rejected at planning, instead of reaching
+# the execution error above
+query error Error during planning: RANGE window frames are not supported for ORDER BY type List
 select count(*) over (order by d, l) from (values (arrow_cast(1, 'Duration(Second)'), [struct(1)]), (arrow_cast(1, 'Duration(Second)'), [struct(2)])) t(d, l)
 
 # Window functions are not allowed in WHERE or HAVING: both are evaluated before

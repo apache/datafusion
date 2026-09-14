@@ -1150,16 +1150,35 @@ fn supports_free_range_frame(col_type: &DataType) -> bool {
     }
 }
 
-/// Errors if any ORDER BY expression has a type not supported in a free RANGE frame.
+/// Whether `col_type` is a list whose elements are themselves nested
+/// (`List<Struct>`, `List<List<..>>`, ...). Such a key sorts fine, but the
+/// RANGE peer check compares it with `ScalarValue::partial_cmp`, which cannot
+/// compare nested list elements and fails at execution.
+fn is_list_of_nested(col_type: &DataType) -> bool {
+    match col_type {
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::FixedSizeList(field, _) => field.data_type().is_nested(),
+        DataType::Dictionary(_, value_type) => is_list_of_nested(value_type),
+        DataType::RunEndEncoded(_, value_type) => {
+            is_list_of_nested(value_type.data_type())
+        }
+        _ => false,
+    }
+}
+
+/// Errors if any ORDER BY expression has a type not supported in a free RANGE
+/// frame: a type with neither an offset target nor a sound peer comparison, or
+/// a list of nested elements (see `is_list_of_nested`).
 fn check_free_range_order_by_types(
     expressions: &[Sort],
     schema: &DFSchema,
 ) -> Result<()> {
     for sort in expressions {
         let t = sort.expr.get_type(schema)?;
-        if extract_window_frame_target_type(&t).is_none()
-            && !supports_free_range_frame(&t)
-        {
+        let supported = supports_free_range_frame(&t)
+            || (extract_window_frame_target_type(&t).is_some() && !is_list_of_nested(&t));
+        if !supported {
             return plan_err!(
                 "RANGE window frames are not supported for ORDER BY type {t}"
             );
