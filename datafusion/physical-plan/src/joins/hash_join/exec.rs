@@ -27,7 +27,7 @@ use crate::execution_plan::{
 };
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
-    FilterPushdownPropagation, PushedDown, PushedDownPredicate,
+    FilterPushdownPropagation, PushedDownPredicate,
 };
 use crate::joins::Map;
 use crate::joins::array_map::ArrayMap;
@@ -1004,6 +1004,18 @@ impl HashJoinExec {
         &self,
         column_indices: &[ColumnIndex],
     ) -> (KeyTransferMap, KeyTransferMap) {
+        // A transferred filter compares the other side's key with literals
+        // typed for this side's key. The planner coerces both keys to one
+        // type, and `try_new` does not check it, so make the assumption
+        // explicit here.
+        debug_assert!(
+            self.on.iter().all(|(left_key, right_key)| {
+                left_key.data_type(&self.left.schema()).ok()
+                    == right_key.data_type(&self.right.schema()).ok()
+            }),
+            "join key data types differ: {:?}",
+            self.on
+        );
         let mut to_right = HashMap::new();
         let mut to_left = HashMap::new();
         for (output_idx, ci) in column_indices.iter().enumerate() {
@@ -1022,6 +1034,9 @@ impl HashJoinExec {
                         .find(|(_, right_key)| is_column_at(right_key, ci.index))
                         .map(|(left_key, _)| left_key),
                 ),
+                // Only mark joins produce mark columns, and
+                // `supports_key_transfer` excludes them; this arm is here for
+                // exhaustiveness.
                 JoinSide::None => continue,
             };
             if let Some(other_key) = other_key {
@@ -1899,37 +1914,40 @@ impl ExecutionPlan for HashJoinExec {
                 };
             });
 
-        let mut left_child = if left_preserved {
-            ChildFilterDescription::from_child_with_allowed_indices(
-                &parent_filters,
-                left_allowed,
-                self.left(),
-            )?
-        } else {
-            ChildFilterDescription::all_unsupported(&parent_filters)
-        };
-
-        let mut right_child = if right_preserved {
-            ChildFilterDescription::from_child_with_allowed_indices(
-                &parent_filters,
-                right_allowed,
-                self.right(),
-            )?
-        } else {
-            ChildFilterDescription::all_unsupported(&parent_filters)
-        };
-
         // Transfer filters across the equi-join keys: a parent filter over one
         // side's join-key columns holds for every matching row of the other
         // side too, so it is also pushed there, rewritten over that side's key
         // expressions. This is how a dynamic filter from a join above reaches
         // the scans on both sides of this join, and how a semi join prunes its
-        // non-output side.
-        if Self::supports_key_transfer(self.join_type) {
-            let (to_right, to_left) = self.key_transfer_maps(&column_indices);
-            transfer_key_filters(&parent_filters, &to_right, &mut right_child)?;
-            transfer_key_filters(&parent_filters, &to_left, &mut left_child)?;
-        }
+        // non-output side. Like the plain column routing, a transfer only
+        // targets a side that `lr_is_preserved` permits.
+        let (to_right, to_left) = if Self::supports_key_transfer(self.join_type) {
+            self.key_transfer_maps(&column_indices)
+        } else {
+            Default::default()
+        };
+        let describe_child = |preserved: bool,
+                              allowed: HashSet<usize>,
+                              key_map: &KeyTransferMap,
+                              child: &Arc<dyn ExecutionPlan>|
+         -> Result<ChildFilterDescription> {
+            if !preserved {
+                return Ok(ChildFilterDescription::all_unsupported(&parent_filters));
+            }
+            let mut description =
+                ChildFilterDescription::from_child_with_allowed_indices(
+                    &parent_filters,
+                    allowed,
+                    child,
+                )?;
+            transfer_key_filters(&parent_filters, key_map, &mut description)?;
+            Ok(description)
+        };
+
+        let left_child =
+            describe_child(left_preserved, left_allowed, &to_left, self.left())?;
+        let mut right_child =
+            describe_child(right_preserved, right_allowed, &to_right, self.right())?;
 
         // Add dynamic filters in Post phase if enabled. Skip when this join
         // already carries a dynamic filter from a previous pass — the shared
@@ -2552,10 +2570,11 @@ fn is_column_at(expr: &PhysicalExprRef, index: usize) -> bool {
 /// Marks every parent filter whose columns are all join keys in `key_map` as
 /// supported for `child`, rewritten over the other side's key expressions.
 ///
-/// Filters `child` already accepts directly are left alone, as are filters
-/// that reference a non-key column or no column at all: the former cannot be
-/// expressed on the other side, the latter were already routed by the plain
-/// column analysis.
+/// `key_map` only holds columns of the other side, so a filter it rewrites is
+/// one the plain column analysis marked unsupported for `child`. A filter that
+/// references any other column is left as that analysis routed it. A filter
+/// with no columns comes back unchanged and was already accepted, so
+/// rewriting it is a no-op.
 fn transfer_key_filters(
     parent_filters: &[Arc<dyn PhysicalExpr>],
     key_map: &KeyTransferMap,
@@ -2565,9 +2584,6 @@ fn transfer_key_filters(
         return Ok(());
     }
     for (filter, pushed) in parent_filters.iter().zip(child.parent_filters.iter_mut()) {
-        if matches!(pushed.discriminant, PushedDown::Yes) {
-            continue;
-        }
         if let Some(transferred) = transfer_filter_across_keys(filter, key_map)? {
             *pushed = PushedDownPredicate::supported(transferred);
         }
@@ -2576,7 +2592,7 @@ fn transfer_key_filters(
 }
 
 /// Rewrites `filter` over the other side's join keys, or returns `None` when
-/// it references a column that is not a transferable key, or no column.
+/// it references a column that is not a transferable key.
 ///
 /// A [`DynamicFilterPhysicalExpr`] comes out as a view sharing the original's
 /// state with its key columns remapped, so it keeps tracking the build side.
@@ -2585,15 +2601,16 @@ fn transfer_filter_across_keys(
     key_map: &KeyTransferMap,
 ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
     let mut all_keys = true;
-    let mut any_column = false;
     let transformed = Arc::clone(filter).transform_down(|expr| {
         let Some(column) = expr.downcast_ref::<Column>() else {
             return Ok(Transformed::no(expr));
         };
-        any_column = true;
         match key_map.get(&column.index()) {
-            // The replacement is already in the other side's schema: do not
-            // descend into it, its columns are not indices of this join.
+            // The replacement is in the other side's input schema, so its
+            // columns are not output indices of this join: `Jump` over it.
+            // Descending would substitute again whenever the key column's
+            // index is also an output index, e.g. `CAST(k@0 AS Int64)` for
+            // output column 0, and never terminate.
             Some(other_key) => Ok(Transformed::new(
                 Arc::clone(other_key),
                 true,
@@ -2605,7 +2622,7 @@ fn transfer_filter_across_keys(
             }
         }
     })?;
-    Ok((any_column && all_keys).then_some(transformed.data))
+    Ok(all_keys.then_some(transformed.data))
 }
 
 /// Determines which sides of a join are "preserved" for filter pushdown.
@@ -2619,8 +2636,11 @@ fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
         JoinType::Left => (true, false),
         JoinType::Right => (false, true),
         JoinType::Full => (false, false),
-        // The non-output side of a semi join only receives filters transferred
-        // across the join keys, see `HashJoinExec::supports_key_transfer`.
+        // A semi join emits only matched rows, so pruning either input by a
+        // filter its output satisfies is exact. The non-output side has no
+        // output columns, so the column routing sends it nothing but
+        // column-free filters; key filters reach it through the transfer in
+        // `HashJoinExec::gather_filters_for_pushdown`.
         JoinType::LeftSemi | JoinType::RightSemi => (true, true),
         JoinType::LeftAnti | JoinType::LeftMark => (true, false),
         JoinType::RightAnti | JoinType::RightMark => (false, true),
