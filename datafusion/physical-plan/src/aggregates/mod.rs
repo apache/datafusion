@@ -868,8 +868,8 @@ pub struct AggregateExec {
     /// Supported by:
     /// - [`StreamType::GroupedPriorityQueue`]: retains only the best `limit`
     ///   groups per partition (this stream is selected only when a limit is set)
-    /// - [`StreamType::PartialHash`], [`StreamType::FinalHash`] and the legacy
-    ///   [`StreamType::GroupedHash`]: stop reading input once `limit` groups
+    /// - [`StreamType::SingleHash`], [`StreamType::PartialHash`], [`StreamType::FinalHash`]
+    ///   and the legacy [`StreamType::GroupedHash`]: stop reading input once `limit` groups
     ///   have been accumulated
     ///
     /// The remaining streams consume all input.
