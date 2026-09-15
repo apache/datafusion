@@ -246,6 +246,22 @@ SELECT regexp_instr(str, pattern) FROM t_alternating_pattern;
 4
 1
 
+#
+# Invalid patterns and flags report the reason from the regex parser
+#
+
+query error Arrow error: Compute error: Regular expression did not compile: regex parse error:
+SELECT regexp_instr(str, 'a(b') FROM empty_table;
+
+query error Arrow error: Compute error: Regular expression did not compile: regex parse error:
+SELECT regexp_instr('abc', 'a(b');
+
+query error Arrow error: Compute error: Regular expression did not compile: regex parse error:
+SELECT regexp_instr('abc', 'a', 1, 1, 'z');
+
+query error Arrow error: Compute error: regexp_count\(\)/regexp_instr\(\) does not support the global flag
+SELECT regexp_instr('abc', 'a', 1, 1, 'g');
+
 statement ok
 DROP TABLE t_stringview;
 
