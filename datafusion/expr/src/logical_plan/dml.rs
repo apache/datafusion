@@ -318,12 +318,12 @@ impl Display for InsertOp {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 #[non_exhaustive]
 pub struct MergeIntoOp {
-    /// The target relation name visible to expressions in the MERGE scope.
-    target_qualifier: TableReference,
     /// The join condition from `ON <expr>`.
     pub on: Expr,
     /// The WHEN clauses, in the order they appeared in the SQL.
     pub clauses: Vec<MergeIntoClause>,
+    /// The target relation name visible to expressions in the MERGE scope.
+    target_qualifier: TableReference,
 }
 
 impl MergeIntoOp {
