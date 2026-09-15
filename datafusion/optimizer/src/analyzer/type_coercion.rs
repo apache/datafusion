@@ -1099,7 +1099,11 @@ fn coerce_frame_bound(
     }
 }
 
-fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
+/// The type that RANGE frame offsets are coerced to for an ORDER BY column of
+/// `col_type`, or `None` if there is no offset type to coerce to (the column
+/// type has no arithmetic). `None` does not mean the type is unusable in a
+/// RANGE frame: a free frame has no offsets, see `supports_free_range_frame`.
+fn extract_window_frame_target_type(col_type: &DataType) -> Option<DataType> {
     if col_type.is_numeric()
         || col_type.is_string()
         || col_type.is_binary()
@@ -1114,16 +1118,98 @@ fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
                 | DataType::Time64(_)
         )
     {
-        Ok(col_type.clone())
+        Some(col_type.clone())
     } else if is_datetime(col_type) {
-        Ok(DataType::Interval(IntervalUnit::MonthDayNano))
+        Some(DataType::Interval(IntervalUnit::MonthDayNano))
     } else if let DataType::Dictionary(_, value_type) = col_type {
         extract_window_frame_target_type(value_type)
     } else if let DataType::RunEndEncoded(_, value_type) = col_type {
         extract_window_frame_target_type(value_type.data_type())
     } else {
-        internal_err!("Cannot run range queries on datatype: {col_type}")
+        None
     }
+}
+
+/// Whether a free RANGE frame (all bounds `UNBOUNDED` or `CURRENT ROW`) can
+/// run over an ORDER BY column of `col_type` even though the type has no
+/// arithmetic for finite offsets.
+///
+/// Such a frame only compares rows to find peers, so the type must compare
+/// the same way in the RANGE peer check (`ScalarValue::partial_cmp`) as in
+/// the sort that produced the input order. That holds for durations and
+/// intervals; it does not for structs and maps, whose `ScalarValue`
+/// comparison differs from the sorter's, so they stay unsupported.
+fn supports_free_range_frame(col_type: &DataType) -> bool {
+    match col_type {
+        DataType::Duration(_) | DataType::Interval(_) => true,
+        DataType::Dictionary(_, value_type) => supports_free_range_frame(value_type),
+        DataType::RunEndEncoded(_, value_type) => {
+            supports_free_range_frame(value_type.data_type())
+        }
+        _ => false,
+    }
+}
+
+/// Whether `col_type` is a list whose elements the RANGE peer check cannot
+/// compare. Such a key sorts fine, since the sorter uses `make_comparator`,
+/// but the peer check goes through `ScalarValue::partial_cmp`, which compares
+/// list elements with the arrow `lt`/`eq` kernels and fails at execution when
+/// they reject the element type (see `list_element_comparable`).
+fn is_list_of_uncomparable(col_type: &DataType) -> bool {
+    match col_type {
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::FixedSizeList(field, _) => {
+            !list_element_comparable(field.data_type())
+        }
+        DataType::Dictionary(_, value_type) => is_list_of_uncomparable(value_type),
+        DataType::RunEndEncoded(_, value_type) => {
+            is_list_of_uncomparable(value_type.data_type())
+        }
+        _ => false,
+    }
+}
+
+/// Mirrors what the arrow comparison kernels (`lt`, `eq`) accept: they unwrap
+/// one run-end-encoded layer, then one dictionary layer, and compare what is
+/// left only if it is a flat type. A nested element (`Struct`, `List`, ...) or a
+/// second encoding layer (`Dictionary<Dictionary<..>>`, `Dictionary<REE<..>>`)
+/// is rejected, even though `DataType::is_nested` sees through encodings.
+fn list_element_comparable(elem_type: &DataType) -> bool {
+    let elem_type = match elem_type {
+        DataType::RunEndEncoded(_, value_type) => value_type.data_type(),
+        other => other,
+    };
+    let elem_type = match elem_type {
+        DataType::Dictionary(_, value_type) => value_type.as_ref(),
+        other => other,
+    };
+    !elem_type.is_nested()
+        && !matches!(
+            elem_type,
+            DataType::Dictionary(_, _) | DataType::RunEndEncoded(_, _)
+        )
+}
+
+/// Errors if any ORDER BY expression has a type not supported in a free RANGE
+/// frame: a type with neither an offset target nor a sound peer comparison, or
+/// a list whose elements cannot be compared (see `is_list_of_uncomparable`).
+fn check_free_range_order_by_types(
+    expressions: &[Sort],
+    schema: &DFSchema,
+) -> Result<()> {
+    for sort in expressions {
+        let t = sort.expr.get_type(schema)?;
+        let supported = supports_free_range_frame(&t)
+            || (extract_window_frame_target_type(&t).is_some()
+                && !is_list_of_uncomparable(&t));
+        if !supported {
+            return plan_err!(
+                "RANGE window frames are not supported for ORDER BY type {t}"
+            );
+        }
+    }
+    Ok(())
 }
 
 // Coerces the given `window_frame` to use appropriate natural types.
@@ -1141,7 +1227,21 @@ fn coerce_window_frame(
                 .map(|s| s.expr.get_type(schema))
                 .transpose()?;
             if let Some(col_type) = current_types {
-                let target_type = extract_window_frame_target_type(&col_type)?;
+                let target_type = match extract_window_frame_target_type(&col_type) {
+                    Some(target_type) => target_type,
+                    // A free range frame has no offsets to coerce, so ORDER BY
+                    // types without arithmetic are fine as long as their peer
+                    // comparison is sound (see `supports_free_range_frame`).
+                    None if window_frame.free_range() => {
+                        check_free_range_order_by_types(expressions, schema)?;
+                        return Ok(window_frame);
+                    }
+                    None => {
+                        return plan_err!(
+                            "RANGE window frames are not supported for ORDER BY type {col_type}"
+                        );
+                    }
+                };
                 // A finite offset bound (e.g. `5 PRECEDING`) is computed as
                 // `current_value ± offset`, so it is only meaningful for target
                 // types that support arithmetic. Other orderable target types can
@@ -1581,6 +1681,47 @@ mod test {
                 .unwrap(),
             ),
         }))
+    }
+
+    #[test]
+    fn free_range_list_element_comparable() {
+        use super::list_element_comparable;
+        use DataType::*;
+        let dict = |v: DataType| Dictionary(Box::new(Int32), Box::new(v));
+        let ree = |v: DataType| {
+            RunEndEncoded(
+                Arc::new(Field::new("run_ends", Int32, false)),
+                Arc::new(Field::new("values", v, true)),
+            )
+        };
+        let list = |v: DataType| List(Arc::new(Field::new_list_field(v, true)));
+
+        // flat elements, optionally behind one encoding layer, compare fine
+        for t in [
+            Int64,
+            Utf8,
+            Boolean,
+            Null,
+            Duration(TimeUnit::Second),
+            dict(Utf8),
+            ree(Utf8),
+            ree(dict(Utf8)),
+        ] {
+            assert!(list_element_comparable(&t), "{t} should be comparable");
+        }
+
+        // nested elements and a second encoding layer are not: the arrow
+        // comparison kernels unwrap only one run-end and one dictionary layer
+        for t in [
+            Struct(vec![Field::new("c0", Int64, true)].into()),
+            list(Int64),
+            dict(list(Int64)),
+            dict(dict(Utf8)),
+            dict(ree(Utf8)),
+            ree(ree(Utf8)),
+        ] {
+            assert!(!list_element_comparable(&t), "{t} should not be comparable");
+        }
     }
 
     macro_rules! assert_analyzed_plan_eq {
