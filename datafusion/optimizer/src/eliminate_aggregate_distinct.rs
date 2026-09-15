@@ -131,9 +131,12 @@ fn can_strip_every_distinct(aggr_expr: &[Expr]) -> Result<bool> {
 /// [`can_strip_every_distinct`], which only inspects `aggr_expr`, while
 /// `map_expressions` also visits the group expressions.
 ///
-/// An idempotent merge is also commutative, so an `Ignored` function is
-/// insensitive to input order and `order_by` needs no extra guard. `filter` is
-/// applied before deduplication either way, so it is carried over untouched.
+/// An idempotent merge is not always commutative: `first_value` is
+/// idempotent but order-sensitive. The rule does not need commutativity.
+/// `Ignored` means that the result does not change when duplicates are
+/// removed, and stripping `DISTINCT` only stops that removal. `order_by` and
+/// `filter` are carried over untouched, so the function sees the same rows in
+/// the same order, plus the duplicates that it ignores.
 fn strip_ignored_distinct(expr: Expr) -> Result<Transformed<Expr>> {
     Ok(match expr {
         Expr::AggregateFunction(mut agg)
