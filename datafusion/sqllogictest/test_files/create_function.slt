@@ -22,7 +22,28 @@
 
 # Create function will fail unless a user supplied function factory is supplied
 statement error DataFusion error: Invalid or Unsupported Configuration: Function factory has not been configured
+CREATE FUNCTION foo (DOUBLE) RETURNS DOUBLE RETURN $1;
+
+# Invalid placeholders are rejected during planning, before a function
+# factory is consulted (see #25038)
+statement error DataFusion error: Error during planning: Invalid placeholder, out of range: \$2
 CREATE FUNCTION foo (DOUBLE) RETURNS DOUBLE RETURN $1 + $2;
+
+# a zero-argument function cannot reference arguments either
+statement error DataFusion error: Error during planning: Invalid placeholder, out of range: \$1
+CREATE FUNCTION foo_zero () RETURNS DOUBLE RETURN $1;
+
+# placeholders inside subqueries are validated too
+statement error DataFusion error: Error during planning: Invalid placeholder, out of range: \$9
+CREATE FUNCTION foo_subquery (DOUBLE) RETURNS DOUBLE RETURN $1 + (SELECT $9);
+
+# placeholders in argument default expressions are validated too
+statement error DataFusion error: Error during planning: Invalid placeholder, out of range: \$9
+CREATE FUNCTION foo_default (a DOUBLE, b DOUBLE DEFAULT $9) RETURNS DOUBLE RETURN $1 + $2;
+
+# out of range placeholder in a subquery's ORDER BY / LIMIT clauses
+statement error DataFusion error: Error during planning: Invalid placeholder, out of range: \$9
+CREATE FUNCTION foo_limit (DOUBLE) RETURNS BOOLEAN RETURN $1 IN (SELECT v FROM (VALUES (1.0), (2.0)) AS t(v) ORDER BY v LIMIT $9);
 
 # multi-part identifiers are not supported
 statement error DataFusion error: This feature is not implemented: Qualified functions are not supported

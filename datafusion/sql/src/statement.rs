@@ -43,6 +43,7 @@ use datafusion_common::{
 use datafusion_expr::dml::{
     CopyTo, InsertOp, MergeIntoAction, MergeIntoClause, MergeIntoClauseKind, MergeIntoOp,
 };
+use datafusion_expr::expr::{Exists, InSubquery, SetComparison};
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::DdlStatement;
 use datafusion_expr::logical_plan::builder::project;
@@ -222,6 +223,56 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
         }
     }
     constraints
+}
+
+/// Rejects placeholders in a `CREATE FUNCTION` body or argument default
+/// expression that do not reference a declared argument (e.g. `$3` for a
+/// two-argument function) at definition time, instead of deferring the error
+/// to function invocation.
+fn validate_function_body_placeholders(expr: &Expr, arg_count: usize) -> Result<()> {
+    expr.apply(|expr| {
+        if let Expr::Placeholder(placeholder) = expr {
+            match placeholder
+                .id
+                .strip_prefix('$')
+                .and_then(|id| id.parse::<usize>().ok())
+            {
+                // In range, e.g. `$2` with two declared arguments
+                Some(idx) if (1..=arg_count).contains(&idx) => {}
+                // Out of range, e.g. `$3` with two declared arguments
+                Some(_) => {
+                    return plan_err!(
+                        "Invalid placeholder, out of range: {}",
+                        placeholder.id
+                    );
+                }
+                // Named placeholder, only possible with no declared arguments
+                None => {
+                    return plan_err!("Unknown placeholder: {}", placeholder.id);
+                }
+            }
+        }
+        // `Expr::apply` does not descend into subqueries, so walk their
+        // plans explicitly to validate placeholders inside them
+        if let Some(subquery) = match expr {
+            Expr::ScalarSubquery(subquery) => Some(&subquery.subquery),
+            Expr::Exists(Exists { subquery, .. }) => Some(&subquery.subquery),
+            Expr::InSubquery(InSubquery { subquery, .. }) => Some(&subquery.subquery),
+            Expr::SetComparison(SetComparison { subquery, .. }) => {
+                Some(&subquery.subquery)
+            }
+            _ => None,
+        } {
+            subquery.apply_with_subqueries(|plan| {
+                plan.apply_expressions(|e| {
+                    validate_function_body_placeholders(e, arg_count)?;
+                    Ok(TreeNodeRecursion::Continue)
+                })
+            })?;
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(())
 }
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
@@ -1463,6 +1514,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     )?),
                     None => None,
                 };
+
+                let arg_count = args.as_ref().map_or(0, |declared| declared.len());
+                // Argument defaults can reference placeholders too; they are
+                // substituted at call time, so validate them with the same rule
+                for default_expr in args
+                    .iter()
+                    .flatten()
+                    .filter_map(|arg| arg.default_expr.as_ref())
+                {
+                    validate_function_body_placeholders(default_expr, arg_count)?;
+                }
+                if let Some(body) = &function_body {
+                    validate_function_body_placeholders(body, arg_count)?;
+                }
 
                 let params = CreateFunctionBody {
                     language,
