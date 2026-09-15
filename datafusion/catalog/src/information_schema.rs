@@ -32,7 +32,7 @@ use async_trait::async_trait;
 use datafusion_common::DataFusionError;
 use datafusion_common::config::{ConfigEntry, ConfigOptions};
 use datafusion_common::error::Result;
-use datafusion_common::types::NativeType;
+use datafusion_common::types::{LogicalType, NativeType};
 use datafusion_execution::TaskContext;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::function::WindowUDFFieldArgs;
@@ -454,26 +454,35 @@ impl InformationSchemaConfig {
     }
 }
 
+/// Build the argument field for `information_schema` to provide a return type
+fn resolve_informational_field(idx: usize, t: &NativeType) -> Result<FieldRef> {
+    // Since a native type maps to several physical types, resolve it against `Null` data type
+    // to get the canonical `DataType` for the native type
+    let data_type = t.default_cast_for(&DataType::Null)?;
+    Ok(Arc::new(Field::new(format!("arg_{idx}"), data_type, true)))
+}
+
 /// get the arguments and return types of a UDF
 /// returns a tuple of (arg_types, return_type)
 fn get_udf_args_and_return_types(
     udf: &Arc<ScalarUDF>,
 ) -> Result<BTreeSet<(Vec<String>, Option<String>)>> {
     let signature = udf.signature();
-    let arg_types = signature.type_signature.get_example_types();
+    let arg_types = signature.type_signature.get_representative_types();
     if arg_types.is_empty() {
         Ok(vec![(vec![], None)].into_iter().collect::<BTreeSet<_>>())
     } else {
-        Ok(arg_types
+        arg_types
             .into_iter()
             .map(|arg_types| {
-                let arg_fields: Vec<FieldRef> = arg_types
+                let mut arg_fields = arg_types
                     .iter()
                     .enumerate()
-                    .map(|(i, t)| {
-                        Arc::new(Field::new(format!("arg_{i}"), t.clone(), true))
-                    })
-                    .collect();
+                    .map(|(i, t)| resolve_informational_field(i, t))
+                    .collect::<Result<Vec<FieldRef>>>()?;
+                // Even with collecting results into a set, drop duplicates early
+                arg_fields.sort();
+                arg_fields.dedup();
                 let scalar_arguments = vec![None; arg_fields.len()];
                 let return_type = udf
                     .return_field_from_args(ReturnFieldArgs {
@@ -488,11 +497,11 @@ fn get_udf_args_and_return_types(
                     .ok();
                 let arg_types = arg_types
                     .into_iter()
-                    .map(|t| remove_native_type_prefix(&NativeType::from(t)))
+                    .map(|t| remove_native_type_prefix(&t))
                     .collect::<Vec<_>>();
-                (arg_types, return_type)
+                Ok((arg_types, return_type))
             })
-            .collect::<BTreeSet<_>>())
+            .collect::<Result<BTreeSet<_>>>()
     }
 }
 
@@ -500,20 +509,21 @@ fn get_udaf_args_and_return_types(
     udaf: &Arc<AggregateUDF>,
 ) -> Result<BTreeSet<(Vec<String>, Option<String>)>> {
     let signature = udaf.signature();
-    let arg_types = signature.type_signature.get_example_types();
+    let arg_types = signature.type_signature.get_representative_types();
     if arg_types.is_empty() {
         Ok(vec![(vec![], None)].into_iter().collect::<BTreeSet<_>>())
     } else {
-        Ok(arg_types
+        arg_types
             .into_iter()
             .map(|arg_types| {
-                let arg_fields: Vec<FieldRef> = arg_types
+                let mut arg_fields = arg_types
                     .iter()
                     .enumerate()
-                    .map(|(i, t)| {
-                        Arc::new(Field::new(format!("arg_{i}"), t.clone(), true))
-                    })
-                    .collect();
+                    .map(|(i, t)| resolve_informational_field(i, t))
+                    .collect::<Result<Vec<FieldRef>>>()?;
+                // Even with collecting results into a set, drop duplicates early
+                arg_fields.sort();
+                arg_fields.dedup();
                 let return_type = udaf
                     .return_field(&arg_fields)
                     .map(|f| {
@@ -524,11 +534,11 @@ fn get_udaf_args_and_return_types(
                     .ok();
                 let arg_types = arg_types
                     .into_iter()
-                    .map(|t| remove_native_type_prefix(&NativeType::from(t)))
+                    .map(|t| remove_native_type_prefix(&t))
                     .collect::<Vec<_>>();
-                (arg_types, return_type)
+                Ok((arg_types, return_type))
             })
-            .collect::<BTreeSet<_>>())
+            .collect::<Result<BTreeSet<_>>>()
     }
 }
 
@@ -536,20 +546,21 @@ fn get_udwf_args_and_return_types(
     udwf: &Arc<WindowUDF>,
 ) -> Result<BTreeSet<(Vec<String>, Option<String>)>> {
     let signature = udwf.signature();
-    let arg_types = signature.type_signature.get_example_types();
+    let arg_types = signature.type_signature.get_representative_types();
     if arg_types.is_empty() {
         Ok(vec![(vec![], None)].into_iter().collect::<BTreeSet<_>>())
     } else {
-        Ok(arg_types
+        arg_types
             .into_iter()
             .map(|arg_types| {
-                let arg_fields: Vec<FieldRef> = arg_types
+                let mut arg_fields = arg_types
                     .iter()
                     .enumerate()
-                    .map(|(i, t)| {
-                        Arc::new(Field::new(format!("arg_{i}"), t.clone(), true))
-                    })
-                    .collect();
+                    .map(|(i, t)| resolve_informational_field(i, t))
+                    .collect::<Result<Vec<FieldRef>>>()?;
+                // Even with collecting results into a set, drop duplicates early
+                arg_fields.sort();
+                arg_fields.dedup();
                 let return_type = udwf
                     .field(WindowUDFFieldArgs::new(&arg_fields, udwf.name()))
                     .map(|f| {
@@ -560,11 +571,11 @@ fn get_udwf_args_and_return_types(
                     .ok();
                 let arg_types = arg_types
                     .into_iter()
-                    .map(|t| remove_native_type_prefix(&NativeType::from(t)))
+                    .map(|t| remove_native_type_prefix(&t))
                     .collect::<Vec<_>>();
-                (arg_types, return_type)
+                Ok((arg_types, return_type))
             })
-            .collect::<BTreeSet<_>>())
+            .collect::<Result<BTreeSet<_>>>()
     }
 }
 
