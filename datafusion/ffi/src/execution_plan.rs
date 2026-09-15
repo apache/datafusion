@@ -600,6 +600,12 @@ pub mod tests {
             self
         }
 
+        pub fn with_partitioning(mut self, partitioning: Partitioning) -> Self {
+            self.props =
+                Arc::new(self.props.as_ref().clone().with_partitioning(partitioning));
+            self
+        }
+
         pub fn with_expressions(
             mut self,
             expressions: Vec<Arc<dyn PhysicalExpr>>,

@@ -541,10 +541,9 @@ ORDER BY l.range_key;
 35 350
 
 ##########
-# TEST 13: Compatible Range Join Repartitions to Increase Parallelism
-# Co-partitioning satisfaction does not prevent a repartition that increases
-# parallelism. With target_partitions larger than the Range partition count,
-# both sides are hash repartitioned.
+# TEST 13: Compatible Range Join Preserves Unscalable Partitioning
+# The source has only three split points, so it cannot scale to five partitions.
+# Preserve its satisfying layout instead of adding two hash exchanges.
 ##########
 
 statement ok
@@ -557,10 +556,8 @@ JOIN range_partitioned r ON l.range_key = r.range_key;
 ----
 physical_plan
 01)HashJoinExec: mode=Partitioned, join_type=Inner, on=[(range_key@0, range_key@0)], projection=[range_key@0, value@1, value@3]
-02)--RepartitionExec: partitioning=Hash([range_key@0], 5), input_partitions=4
-03)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet
-04)--RepartitionExec: partitioning=Hash([range_key@0], 5), input_partitions=4
-05)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet
+02)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet
+03)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet
 
 query III
 SELECT l.range_key, l.value, r.value
