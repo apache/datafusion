@@ -282,6 +282,17 @@ select array_position([1, 2, 3], 3, 4), array_position([1], 1, 2);
 ----
 NULL NULL
 
+query error start_from out of bounds: -9223372036854775808, expected -9223372036854775807 to 9223372036854775807
+select array_position([1], 1, -9223372036854775808);
+
+query error start_from out of bounds: -9223372036854775808, expected -9223372036854775807 to 9223372036854775807
+select array_position([1], 1, start_from)
+from (values (-9223372036854775808)) as t(start_from);
+
+query error start_from out of bounds: -9223372036854775808, expected -9223372036854775807 to 9223372036854775807
+select array_position([1], needle, start_from)
+from (values (1, -9223372036854775808)) as t(needle, start_from);
+
 # array_position with empty array in various contexts
 query II
 select array_position(arrow_cast(make_array(), 'List(Int64)'), 1), array_position(arrow_cast(make_array(), 'LargeList(Int64)'), 1);

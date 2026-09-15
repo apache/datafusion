@@ -1,0 +1,11 @@
+# DENSE_RANK top-2, ~100K partitions.
+
+subgroup window_sorted
+
+template sql_benchmarks/h2o/window_sorted.benchmark.template
+QPAD=14
+FN=DENSE_RANK
+PK_MOD=100000
+OB_EXPR=v2
+OB_BOUND=count(DISTINCT ob) > 1000
+NAME=window_sorted_q14_dense_rank_100k_partitions

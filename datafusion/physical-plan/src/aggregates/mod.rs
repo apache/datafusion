@@ -102,7 +102,7 @@
 //! ```
 //!
 //! Every stage without grouping expressions uses [`AggregateStream`]. This path
-//! is selected before the grouped-stream migration setting is considered.
+//! is selected before any of the grouped streams are considered.
 //!
 //! ## 4. Grouped TopK aggregation
 //!
@@ -135,10 +135,14 @@
 //!
 //! See [`PartialReduceHashAggregateStream`] for details.
 //!
-//! ## 6. Fallback grouped hash aggregation
+//! ## 6. Legacy grouped hash aggregation
 //!
-//! [`GroupedHashAggregateStream`] is the legacy implementation for several of the
-//! stream types above. It is being incrementally migrated to separate streams.
+//! [`GroupedHashAggregateStream`] is the legacy implementation that all of the
+//! grouped streams above were split out of. The split is complete, so it is no
+//! longer planned: it is only reachable by setting
+//! [`datafusion.execution.enable_migration_aggregate`](datafusion_common::config::ExecutionOptions::enable_migration_aggregate)
+//! to `false`. That fallback is kept for one release and will then be removed
+//! together with this stream.
 //!
 //! See the issue for details: <https://github.com/apache/datafusion/issues/22710>
 #![expect(rustdoc::private_intra_doc_links)]
@@ -691,15 +695,11 @@ enum StreamType {
     OrderedFinalAggregate(OrderedFinalAggregateStream),
     /// Single stage of aggregation for ordered input.
     OrderedSingleAggregate(OrderedSingleAggregateStream),
-    /// Hash aggregation reused for multiple stages
+    /// Legacy hash aggregation reused for multiple stages
     ///
-    /// Note this is being incrementally migrated to dedicated streams like
-    /// [`StreamType::PartialHash`], [`StreamType::FinalHash`],
-    /// [`StreamType::OrderedPartialAggregate`],
-    /// [`StreamType::OrderedFinalAggregate`], and
-    /// [`StreamType::OrderedSingleAggregate`]
-    ///
-    /// See issue for details: <https://github.com/apache/datafusion/issues/22710>
+    /// Every path it handles now has a dedicated stream, so this variant is only
+    /// produced when `datafusion.execution.enable_migration_aggregate` is set to
+    /// `false`. See [`grouped_hash_stream`] for the deprecation schedule.
     GroupedHash(GroupedHashAggregateStream),
     /// Grouped TopK aggregate stream.
     /// Input output scheme: initial input -> final result
@@ -713,9 +713,9 @@ impl From<StreamType> for SendableRecordBatchStream {
     fn from(stream: StreamType) -> Self {
         match stream {
             StreamType::AggregateStream(stream) => Box::pin(stream),
-            StreamType::PartialHash(stream) => Box::pin(stream),
+            StreamType::PartialHash(stream) => stream.into_stream(),
             StreamType::PartialReduceHash(stream) => Box::pin(stream),
-            StreamType::FinalHash(stream) => Box::pin(stream),
+            StreamType::FinalHash(stream) => stream.into_stream(),
             StreamType::SingleHash(stream) => Box::pin(stream),
             StreamType::OrderedPartialAggregate(stream) => stream.into_stream(),
             StreamType::OrderedFinalAggregate(stream) => Box::pin(stream),
@@ -754,10 +754,11 @@ impl From<StreamType> for SendableRecordBatchStream {
 ///
 /// ## Enable Condition
 /// - No grouping (no `GROUP BY` clause in the sql, only a single global group to aggregate)
-/// - The aggregate expression must be `min`/`max`, and evaluate directly on columns.
-///   Note multiple aggregate expressions that satisfy this requirement are allowed,
-///   and a dynamic filter will be constructed combining all applicable expr's
-///   states. See more in the following example with dynamic filter on multiple columns.
+/// - Every aggregate expression must be `min`/`max`, and evaluate directly on a
+///   column. If any aggregate expression is unsupported, dynamic filtering is
+///   disabled for the entire [`AggregateExec`]. Multiple supported aggregate
+///   expressions are combined into one dynamic filter. See the following example
+///   with a dynamic filter on multiple columns.
 ///
 /// ## Filter Construction
 /// The filter is kept in the `DataSourceExec`, and it will gets update during execution,
@@ -777,11 +778,11 @@ struct AggrDynFilter {
     /// The current bounds for the dynamic filter, updates during the execution to
     /// tighten the bound for more effective pruning.
     ///
-    /// Each vector element is for the accumulators that support dynamic filter.
-    /// e.g. This `AggregateExec` has accumulator:
-    /// min(a), avg(a), max(b)
-    /// And this field stores [PerAccumulatorDynFilter(min(a)), PerAccumulatorDynFilter(min(b))]
-    supported_accumulators_info: Vec<PerAccumulatorDynFilter>,
+    /// Each vector element corresponds to one aggregate expression. Dynamic filtering
+    /// is enabled only when every aggregate expression is supported, so this vector
+    /// contains an entry for every accumulator. For example, `min(a), max(b)` produces
+    /// entries for `min(a)` and `max(b)`.
+    accumulator_dyn_filter_info: Vec<PerAccumulatorDynFilter>,
 }
 
 // ---- Aggregate Dynamic Filter Utility Structs ----
@@ -858,7 +859,20 @@ pub struct AggregateExec {
     /// FILTER (WHERE clause) expression for each aggregate expression
     /// The same reason to [`Arc`] it as for [`Self::group_by`].
     filter_expr: Arc<[Option<Arc<dyn PhysicalExpr>>]>,
-    /// Configuration for limit-based optimizations
+    /// Soft limit for best-effort, limit-based optimizations.
+    ///
+    /// `AggregateExec` has multiple stream implementations and not all of them
+    /// support the optimization, so this is only a hint. The downstream limit
+    /// operator enforces the exact row count either way.
+    ///
+    /// Supported by:
+    /// - [`StreamType::GroupedPriorityQueue`]: retains only the best `limit`
+    ///   groups per partition (this stream is selected only when a limit is set)
+    /// - [`StreamType::SingleHash`], [`StreamType::PartialHash`], [`StreamType::FinalHash`]
+    ///   and the legacy [`StreamType::GroupedHash`]: stop reading input once `limit` groups
+    ///   have been accumulated
+    ///
+    /// The remaining streams consume all input.
     limit_options: Option<LimitOptions>,
     /// Input plan, could be a partial aggregate or the input to the aggregate
     pub input: Arc<dyn ExecutionPlan>,
@@ -875,6 +889,10 @@ pub struct AggregateExec {
     metrics: ExecutionPlanMetricsSet,
     required_input_ordering: Option<OrderingRequirements>,
     /// Describes how the input is ordered relative to the group by columns
+    ///
+    /// This field is also overloaded to mean "the output MUST preserve this
+    /// input order". When that is not possible, the constructor overwrites it
+    /// with the unordered variant [`InputOrderMode::Linear`].
     input_order_mode: InputOrderMode,
     cache: Arc<PlanProperties>,
     /// During initialization, if the plan supports dynamic filtering (see [`AggrDynFilter`]),
@@ -1036,9 +1054,9 @@ impl AggregateExec {
             InputOrderMode::Linear
         };
 
-        // To keep the ordering optimization simple, grouping sets are not supported.
-        // See [`OrderedPartialAggregateStream`] for more details about this optimization.
-        if group_by.has_grouping_set() {
+        // Input order mode is also used to advertise plan output ordering, grouping
+        // sets handling, and partial reduce aggregation can't promise that.
+        if group_by.has_grouping_set() || mode == AggregateMode::PartialReduce {
             input_order_mode = InputOrderMode::Linear;
         }
 
@@ -1156,7 +1174,7 @@ impl AggregateExec {
         };
 
         // Validate that the filter is compatible with the aggregation columns.
-        let cols = self.cols_for_dynamic_filter(&dyn_filter.supported_accumulators_info);
+        let cols = self.cols_for_dynamic_filter(&dyn_filter.accumulator_dyn_filter_info);
         if cols.len() != filter.children().len() {
             return internal_err!(
                 "Dynamic filter expression is incompatible with aggregate due to mismatched number of columns"
@@ -1173,7 +1191,7 @@ impl AggregateExec {
         // Overwrite our filter
         self.dynamic_filter = Some(Arc::new(AggrDynFilter {
             filter,
-            supported_accumulators_info: dyn_filter.supported_accumulators_info.clone(),
+            accumulator_dyn_filter_info: dyn_filter.accumulator_dyn_filter_info.clone(),
         }));
         Ok(self)
     }
@@ -1210,144 +1228,76 @@ impl AggregateExec {
             ));
         }
 
-        // Select the stream type based on the query shape and configuration.
-        // For an overview, see the `Aggregate planning` section in this file's
-        // documentation.
-        //
-        // # Implementation Note
-        //
-        // `GroupedHashAggregateStream` is being incrementally refactored. See the
-        // tracking issue for details.
-        //
-        // New features and improvements should go directly into the new implementation.
-        // Please coordinate through the tracking issue.
-        //
-        // Issue: <https://github.com/apache/datafusion/issues/22710>
-        if context
+        // `GroupedHashAggregateStream` is the legacy implementation of every
+        // grouped path below. It is only planned as an opt-in fallback, see the
+        // `grouped_hash_stream` module documentation for the deprecation
+        // schedule.
+        if !context
             .session_config()
             .options()
             .execution
             .enable_migration_aggregate
         {
-            if self.should_use_ordered_partial_aggregate_stream(context) {
-                return Ok(StreamType::OrderedPartialAggregate(
-                    OrderedPartialAggregateStream::new(self, context, partition)?,
-                ));
-            }
-
-            if self.should_use_partial_hash_stream(context) {
-                return Ok(StreamType::PartialHash(PartialHashAggregateStream::new(
-                    self, context, partition,
-                )?));
-            }
-
-            if self.should_use_partial_reduce_hash_stream(context) {
-                return Ok(StreamType::PartialReduceHash(
-                    PartialReduceHashAggregateStream::new(self, context, partition)?,
-                ));
-            }
-
-            if self.should_use_ordered_final_aggregate_stream(context) {
-                return Ok(StreamType::OrderedFinalAggregate(
-                    OrderedFinalAggregateStream::new(self, context, partition)?,
-                ));
-            }
-
-            if self.should_use_final_hash_stream(context) {
-                return Ok(StreamType::FinalHash(FinalHashAggregateStream::new(
-                    self, context, partition,
-                )?));
-            }
-
-            if self.should_use_ordered_single_aggregate_stream(context) {
-                return Ok(StreamType::OrderedSingleAggregate(
-                    OrderedSingleAggregateStream::new(self, context, partition)?,
-                ));
-            }
-
-            if self.should_use_single_hash_stream(context) {
-                return Ok(StreamType::SingleHash(SingleHashAggregateStream::new(
-                    self, context, partition,
-                )?));
-            }
+            return Ok(StreamType::GroupedHash(GroupedHashAggregateStream::new(
+                self, context, partition,
+            )?));
         }
 
-        // Execution paths that have not been migrated use the fallback implementation
-        Ok(StreamType::GroupedHash(GroupedHashAggregateStream::new(
-            self, context, partition,
-        )?))
-    }
+        // Grouping sets are expanded by the raw-input stages, so the stages
+        // consuming partial state must receive the expanded keys as a plain
+        // group by (see `PhysicalGroupBy::as_final`).
+        if self.mode.input_mode() == AggregateInputMode::Partial
+            && !self.group_by.is_single()
+        {
+            return internal_err!(
+                "Grouping sets must be expanded before {:?} aggregation, which consumes partial state",
+                self.mode
+            );
+        }
 
-    fn should_use_partial_hash_stream(&self, _context: &TaskContext) -> bool {
-        self.mode == AggregateMode::Partial
-            && self.input_order_mode == InputOrderMode::Linear
-            && !self.group_by.is_true_no_grouping()
-            && self.group_by.is_single()
-            && self.limit_options_supported_by_hash_stream()
-    }
-
-    fn should_use_ordered_partial_aggregate_stream(
-        &self,
-        _context: &TaskContext,
-    ) -> bool {
-        self.mode == AggregateMode::Partial
-            && self.input_order_mode != InputOrderMode::Linear
-            && !self.group_by.is_true_no_grouping()
-            && self.group_by.is_single()
-            && self.limit_options_supported_by_hash_stream()
-    }
-
-    fn should_use_final_hash_stream(&self, _context: &TaskContext) -> bool {
-        matches!(
-            self.mode,
-            AggregateMode::Final | AggregateMode::FinalPartitioned
-        ) && self.limit_options_supported_by_hash_stream()
-            && self.input_order_mode == InputOrderMode::Linear
-            && !self.group_by.is_true_no_grouping()
-            && self.group_by.is_single()
-    }
-
-    fn should_use_partial_reduce_hash_stream(&self, _context: &TaskContext) -> bool {
-        self.mode == AggregateMode::PartialReduce
-            && self.limit_options.is_none()
-            && self.input_order_mode == InputOrderMode::Linear
-            && !self.group_by.is_true_no_grouping()
-            && self.group_by.is_single()
-    }
-
-    fn should_use_single_hash_stream(&self, _context: &TaskContext) -> bool {
-        matches!(
-            self.mode,
-            AggregateMode::Single | AggregateMode::SinglePartitioned
-        ) && self.limit_options.is_none()
-            && self.input_order_mode == InputOrderMode::Linear
-            && !self.group_by.is_true_no_grouping()
-            && self.group_by.is_single()
-    }
-
-    fn should_use_ordered_single_aggregate_stream(&self, _context: &TaskContext) -> bool {
-        matches!(
-            self.mode,
-            AggregateMode::Single | AggregateMode::SinglePartitioned
-        ) && self.limit_options.is_none()
-            && self.input_order_mode != InputOrderMode::Linear
-            && !self.group_by.is_true_no_grouping()
-            && self.group_by.is_single()
-    }
-
-    fn should_use_ordered_final_aggregate_stream(&self, _context: &TaskContext) -> bool {
-        matches!(
-            self.mode,
-            AggregateMode::Final | AggregateMode::FinalPartitioned
-        ) && self.limit_options_supported_by_hash_stream()
-            && self.input_order_mode != InputOrderMode::Linear
-            && !self.group_by.is_true_no_grouping()
-            && self.group_by.is_single()
-    }
-
-    /// See comments in `PartialHashAggregateStream` limit optimization section
-    fn limit_options_supported_by_hash_stream(&self) -> bool {
-        self.limit_options.is_none() || self.is_unordered_unfiltered_group_by_distinct()
+        // Choose the execution path based on (aggregation mode, ordering).
+        //
+        // Note that `self.input_order_mode` represents both input ordering and output
+        // order promise. See its comment for details.
+        use AggregateMode::*;
+        use InputOrderMode::*;
+        let stream = match (self.mode, &self.input_order_mode) {
+            (Partial, Linear) => StreamType::PartialHash(
+                PartialHashAggregateStream::new(self, context, partition)?,
+            ),
+            (Partial, Sorted | PartiallySorted(_)) => {
+                StreamType::OrderedPartialAggregate(OrderedPartialAggregateStream::new(
+                    self, context, partition,
+                )?)
+            }
+            (PartialReduce, Linear) => StreamType::PartialReduceHash(
+                PartialReduceHashAggregateStream::new(self, context, partition)?,
+            ),
+            (PartialReduce, Sorted | PartiallySorted(_)) => {
+                // See the comment above: the builder enforces `Linear` order for
+                // `PartialReduce` mode.
+                return internal_err!(
+                    "PartialReduce aggregation must use InputOrderMode::Linear"
+                );
+            }
+            (Final | FinalPartitioned, Linear) => StreamType::FinalHash(
+                FinalHashAggregateStream::new(self, context, partition)?,
+            ),
+            (Final | FinalPartitioned, Sorted | PartiallySorted(_)) => {
+                StreamType::OrderedFinalAggregate(OrderedFinalAggregateStream::new(
+                    self, context, partition,
+                )?)
+            }
+            (Single | SinglePartitioned, Linear) => StreamType::SingleHash(
+                SingleHashAggregateStream::new(self, context, partition)?,
+            ),
+            (Single | SinglePartitioned, Sorted | PartiallySorted(_)) => {
+                StreamType::OrderedSingleAggregate(OrderedSingleAggregateStream::new(
+                    self, context, partition,
+                )?)
+            }
+        };
+        Ok(stream)
     }
 
     /// Finds the DataType and SortDirection for this Aggregate, if there is one
@@ -1410,6 +1360,12 @@ impl AggregateExec {
         let mut eq_properties = input
             .equivalence_properties()
             .project(group_expr_mapping, schema);
+
+        // An aggregation that does not maintain its input order must not
+        // propegrate the input's ordering either, match `maintains_input_order` value
+        if *input_order_mode == InputOrderMode::Linear {
+            eq_properties.clear_orderings();
+        }
 
         // True no-group aggregates produce only one row in each output
         // partition, so aggregate outputs are constants within the partition.
@@ -1815,7 +1771,7 @@ impl AggregateExec {
             return;
         }
 
-        // Collect supported accumulators
+        // Collect dynamic filter metadata for every accumulator
         // It is assumed the order of aggregate expressions are not changed from `AggregateExec`
         // to `AggregateStream`
         let mut aggr_dyn_filters = Vec::new();
@@ -1846,23 +1802,28 @@ impl AggregateExec {
                     aggr_index: i,
                     shared_bound: Arc::new(Mutex::new(ScalarValue::Null)),
                 });
+            } else {
+                // An incomplete filter could prune rows that still improve an
+                // unsupported aggregate, so every aggregate must be represented.
+                // TODO: Derive safe predicates for expressions such as `min(col + literal)`.
+                return;
             }
         }
 
         if !aggr_dyn_filters.is_empty() {
             self.dynamic_filter = Some(Arc::new(AggrDynFilter {
                 filter: Arc::new(DynamicFilterPhysicalExpr::new(all_cols, lit(true))),
-                supported_accumulators_info: aggr_dyn_filters,
+                accumulator_dyn_filter_info: aggr_dyn_filters,
             }))
         }
     }
 
-    // Collect column references for the dynamic filter expression from the supported accumulators.
+    // Collect column references for the dynamic filter expression from the accumulators.
     fn cols_for_dynamic_filter(
         &self,
-        supported_accumulators_info: &[PerAccumulatorDynFilter],
+        accumulator_dyn_filter_info: &[PerAccumulatorDynFilter],
     ) -> Vec<Arc<dyn PhysicalExpr>> {
-        let all_cols: Vec<Arc<dyn PhysicalExpr>> = supported_accumulators_info
+        let all_cols: Vec<Arc<dyn PhysicalExpr>> = accumulator_dyn_filter_info
             .iter()
             .filter_map(|info| {
                 // This should always be true due to how the supported accumulators
@@ -1875,7 +1836,7 @@ impl AggregateExec {
                 None
             })
             .collect();
-        debug_assert_eq!(all_cols.len(), supported_accumulators_info.len());
+        debug_assert_eq!(all_cols.len(), accumulator_dyn_filter_info.len());
         all_cols
     }
 
@@ -3519,12 +3480,14 @@ mod tests {
             | 2 | 1.0 | 0             | 1               |
             | 3 |     | 1             | 1               |
             | 3 |     | 1             | 2               |
-            | 3 | 2.0 | 0             | 2               |
+            | 3 | 2.0 | 0             | 1               |
+            | 3 | 2.0 | 0             | 1               |
             | 3 | 3.0 | 0             | 1               |
             | 4 |     | 1             | 1               |
             | 4 |     | 1             | 2               |
             | 4 | 3.0 | 0             | 1               |
-            | 4 | 4.0 | 0             | 2               |
+            | 4 | 4.0 | 0             | 1               |
+            | 4 | 4.0 | 0             | 1               |
             +---+-----+---------------+-----------------+
             "
             );
@@ -4332,6 +4295,72 @@ mod tests {
         Ok(())
     }
 
+    /// Single and Final hash aggregation share the same terminal drain helper. Single
+    /// exercises it directly from raw input without coupling this test to partial state.
+    #[tokio::test]
+    async fn single_grouped_aggregate_avoids_destructive_terminal_drain() -> Result<()> {
+        const BATCH_SIZE: usize = 2;
+        const NUM_GROUPS: usize = 3;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("value", DataType::Int32, false),
+        ]));
+        let input_batches = vec![RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 1, 2, 3])),
+                Arc::new(Int32Array::from(vec![10, 20, 30, 40, 50, 60])),
+            ],
+        )?];
+        let input =
+            TestMemoryExec::try_new_exec(&[input_batches], Arc::clone(&schema), None)?;
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
+        let udaf = Arc::new(AggregateUDF::from(NoFirstEmitUdaf::new()));
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
+            AggregateExprBuilder::new(udaf, vec![col("value", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("no_first_emit(value)")
+                .build()?,
+        )];
+        let aggregate = Arc::new(AggregateExec::try_new(
+            AggregateMode::Single,
+            group_by,
+            aggregates,
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?);
+        let task_ctx = new_migrated_hash_ctx(BATCH_SIZE);
+
+        let stream = aggregate.execute_typed(0, &task_ctx)?;
+        assert!(matches!(stream, StreamType::SingleHash(_)));
+
+        let stream: SendableRecordBatchStream = stream.into();
+        let batches = collect(stream).await?;
+        assert!(batches.len() > 1, "expected terminal output to be chunked");
+        assert!(
+            batches.iter().all(|batch| batch.num_rows() <= BATCH_SIZE),
+            "terminal output exceeded the configured batch size"
+        );
+        assert_eq!(
+            batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            NUM_GROUPS
+        );
+        assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +-----+----------------------+
+        | key | no_first_emit(value) |
+        +-----+----------------------+
+        | 1   | 2                    |
+        | 2   | 2                    |
+        | 3   | 2                    |
+        +-----+----------------------+
+        ");
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn limited_distinct_aggregate_uses_migrated_hash_streams() -> Result<()> {
         let schema =
@@ -4391,6 +4420,13 @@ mod tests {
 | 2 |
 +---+
 ");
+        assert!(
+            partial_aggregate
+                .metrics()
+                .unwrap()
+                .sum_by_name("topk_maintenance_time")
+                .is_none()
+        );
 
         let final_input =
             TestMemoryExec::try_new_exec(&[input_batches], Arc::clone(&schema), None)?;
@@ -4425,6 +4461,13 @@ mod tests {
 | 2 |
 +---+
 ");
+        assert!(
+            final_aggregate
+                .metrics()
+                .unwrap()
+                .sum_by_name("topk_maintenance_time")
+                .is_none()
+        );
 
         Ok(())
     }
@@ -4579,6 +4622,49 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn partial_reduce_does_not_advertise_input_ordering() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::Float64, false),
+        ]));
+        let ordering = LexOrdering::new([PhysicalSortExpr::new_default(Arc::new(
+            Column::new("a", 0),
+        ))])
+        .unwrap();
+        let input = TestMemoryExec::try_new(&[vec![]], Arc::clone(&schema), None)?
+            .try_with_sort_information(vec![ordering])?;
+        let input = Arc::new(TestMemoryExec::update_cache(&Arc::new(input)));
+        assert!(
+            input.properties().output_ordering().is_some(),
+            "test setup: the input is ordered by the group key"
+        );
+
+        let partial_reduce = AggregateExec::try_new(
+            AggregateMode::PartialReduce,
+            PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]),
+            vec![Arc::new(
+                AggregateExprBuilder::new(sum_udaf(), vec![col("b", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("SUM(b)")
+                    .build()?,
+            )],
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?;
+
+        assert_eq!(partial_reduce.input_order_mode(), &InputOrderMode::Linear);
+        assert_eq!(partial_reduce.maintains_input_order(), vec![false]);
+        assert!(
+            partial_reduce.properties().output_ordering().is_none(),
+            "partial reduce advertised an ordering it does not maintain: {:?}",
+            partial_reduce.properties().output_ordering()
+        );
+
+        Ok(())
+    }
+
     fn partial_reduce_test_aggregate() -> Result<AggregateExec> {
         partial_reduce_test_aggregate_with_batches(1)
     }
@@ -4681,6 +4767,16 @@ mod tests {
         assert!(matches!(stream, StreamType::PartialReduceHash(_)));
         let stream: SendableRecordBatchStream = stream.into();
         let output = collect(stream).await?;
+
+        assert_eq!(
+            partial_reduce
+                .metrics()
+                .unwrap()
+                .sum_by_name("early_emit_count")
+                .unwrap()
+                .as_usize(),
+            num_input_batches
+        );
 
         // The table is flushed after every input batch, so each of the three
         // groups is emitted once per input batch instead of being merged into a
@@ -8244,7 +8340,7 @@ mod tests {
                     Ok(Arc::new(Int64Array::from(counts)))
                 }
                 EmitTo::First(_) => internal_err!(
-                    "partial grouped aggregate output must materialize with EmitTo::All before slicing"
+                    "grouped aggregate terminal output must not use EmitTo::First"
                 ),
             }
         }

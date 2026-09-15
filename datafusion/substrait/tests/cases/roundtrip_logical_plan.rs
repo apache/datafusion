@@ -333,8 +333,67 @@ async fn simple_aggregate() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_distinct_with_having() -> Result<()> {
-    roundtrip("SELECT a, count(distinct b) FROM data GROUP BY a, c HAVING count(b) > 100")
-        .await
+    let ctx = create_context_without_single_distinct_to_group_by().await?;
+    roundtrip_with_ctx(
+        "SELECT a, count(distinct b) FROM data GROUP BY a, c HAVING count(b) > 100",
+        ctx,
+    )
+    .await?;
+    Ok(())
+}
+
+/// The query in [`aggregate_distinct_with_having`], through the default
+/// optimizer, where `single_distinct_aggregation_to_group_by` rewrites it into
+/// a two phase group by.
+///
+/// A rewritten plan does not round trip to an identical plan, so the identity
+/// test above turns the rule off. This one leaves it on and asserts what
+/// Substrait does carry: the output schema and the rows. The `HAVING` threshold
+/// is lowered from the identity test's so that there are rows to compare.
+#[tokio::test]
+async fn aggregate_distinct_with_having_rewritten() -> Result<()> {
+    let ctx = create_context().await?;
+    let plan = ctx
+        .sql("SELECT a, count(distinct b) FROM data GROUP BY a, c HAVING count(b) > 0")
+        .await?
+        .into_optimized_plan()?;
+
+    // The rule applied: the distinct argument is a grouping key of an inner
+    // aggregate, and the non-distinct `count` became a `sum` of its partial
+    // counts. Without this the test would keep passing over an unrewritten
+    // plan, which the identity test already covers.
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: data.a, count(alias1) AS count(DISTINCT data.b)
+      Filter: CASE WHEN sum(alias2) IS NOT NULL THEN sum(alias2) ELSE Int64(0) END > Int64(0)
+        Projection: data.a, count(alias1), sum(alias2)
+          Aggregate: groupBy=[[data.a, data.c]], aggr=[[count(alias1), sum(alias2)]]
+            Aggregate: groupBy=[[data.a, data.c, data.b AS alias1]], aggr=[[count(data.b) AS alias2]]
+              TableScan: data projection=[a, b, c]
+    "
+    );
+
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    let plan2 = ctx.state().optimize(&plan2)?;
+
+    assert_eq!(plan.schema(), plan2.schema());
+
+    let results = DataFrame::new(ctx.state(), plan2).collect().await?;
+    datafusion::assert_batches_sorted_eq!(
+        [
+            "+---+------------------------+",
+            "| a | count(DISTINCT data.b) |",
+            "+---+------------------------+",
+            "| 1 | 1                      |",
+            "| 3 | 1                      |",
+            "+---+------------------------+",
+        ],
+        &results
+    );
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -344,10 +403,59 @@ async fn aggregate_multiple_keys() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_grouping_sets() -> Result<()> {
-    roundtrip(
-        "SELECT a, c, d, avg(b) FROM data GROUP BY GROUPING SETS ((a, c), (a), (d), ())",
+    let ctx = create_context().await?;
+    let proto = roundtrip_with_ctx(
+        "SELECT a, c, d, avg(b), sum(e) FROM data GROUP BY GROUPING SETS ((a, c), (a), (d), ())",
+        ctx.clone(),
     )
-    .await
+    .await?;
+
+    let Some(plan_rel::RelType::Root(root)) = &proto.relations[0].rel_type else {
+        panic!("expected root relation");
+    };
+    let Some(RelType::Project(project)) = &root.input.as_ref().unwrap().rel_type else {
+        panic!("expected project relation");
+    };
+    let Some(RelType::Aggregate(aggregate)) = &project.input.as_ref().unwrap().rel_type
+    else {
+        panic!("expected aggregate relation");
+    };
+
+    assert_eq!(aggregate.grouping_expressions.len(), 3);
+    assert_eq!(aggregate.groupings[0].expression_references, [0, 1]);
+    assert_eq!(aggregate.groupings[1].expression_references, [0]);
+    assert_eq!(aggregate.groupings[2].expression_references, [2]);
+    assert!(aggregate.groupings[3].expression_references.is_empty());
+    let output_mapping = match aggregate
+        .common
+        .as_ref()
+        .and_then(|common| common.emit_kind.as_ref())
+    {
+        Some(substrait::proto::rel_common::EmitKind::Emit(emit)) => &emit.output_mapping,
+        _ => panic!("expected aggregate output mapping"),
+    };
+    assert_eq!(output_mapping, &[0, 1, 2, 5, 3, 4]);
+
+    let plan = from_substrait_plan(&ctx.state(), &proto).await?;
+    let results = DataFrame::new(ctx.state(), plan).collect().await?;
+    datafusion::assert_batches_sorted_eq!(
+        [
+            "+---+------------+-------+-------------+-------------+",
+            "| a | c          | d     | avg(data.b) | sum(data.e) |",
+            "+---+------------+-------+-------------+-------------+",
+            "|   |            |       | 3.250000    | 6442450943  |",
+            "|   |            | false | 2.000000    | 4294967295  |",
+            "|   |            | true  | 4.500000    | 2147483648  |",
+            "| 1 |            |       | 2.000000    | 4294967295  |",
+            "| 1 | 2020-01-01 |       | 2.000000    | 4294967295  |",
+            "| 3 |            |       | 4.500000    | 2147483648  |",
+            "| 3 | 2020-01-01 |       | 4.500000    | 2147483648  |",
+            "+---+------------+-------+-------------+-------------+",
+        ],
+        &results
+    );
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -2884,6 +2992,34 @@ async fn roundtrip_all_types(sql: &str) -> Result<()> {
 
 async fn create_context() -> Result<SessionContext> {
     create_context_with_dialect(None).await
+}
+
+/// [`create_context`] with `single_distinct_aggregation_to_group_by` removed from
+/// the optimizer.
+///
+/// That rule rewrites a single `AGG(DISTINCT x)` into a two phase group by whose
+/// inner aggregate aliases its grouping and measure expressions (`alias1`,
+/// `alias2`). Substrait carries no names for those expressions, so the consumer
+/// derives them from the expressions themselves and a rewritten plan does not
+/// round trip to an identical plan. That holds for every output of the rule, not
+/// only for the query under test.
+///
+/// What a rewritten plan does carry through Substrait is covered by
+/// [`aggregate_distinct_with_having_rewritten`], on the default context.
+async fn create_context_without_single_distinct_to_group_by() -> Result<SessionContext> {
+    let ctx = create_context().await?;
+    let rules = ctx
+        .state()
+        .optimizer()
+        .rules
+        .iter()
+        .filter(|rule| rule.name() != "single_distinct_aggregation_to_group_by")
+        .cloned()
+        .collect();
+    let state = SessionStateBuilder::new_from_existing(ctx.state())
+        .with_optimizer_rules(rules)
+        .build();
+    Ok(SessionContext::new_with_state(state))
 }
 
 async fn create_context_with_dialect(dialect: Option<Dialect>) -> Result<SessionContext> {
