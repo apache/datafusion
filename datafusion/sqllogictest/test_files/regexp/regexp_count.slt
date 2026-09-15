@@ -394,6 +394,22 @@ NULL
 NULL
 NULL
 
+#
+# Invalid patterns and flags report the reason from the regex parser
+#
+
+query error Arrow error: Compute error: Regular expression did not compile: regex parse error:
+SELECT regexp_count(str, 'a(b') from empty_table;
+
+query error Arrow error: Compute error: Regular expression did not compile: regex parse error:
+SELECT regexp_count('abc', 'a(b');
+
+query error Arrow error: Compute error: Regular expression did not compile: regex parse error:
+SELECT regexp_count('abc', 'a', 1, 'z');
+
+query error Arrow error: Compute error: regexp_count\(\)/regexp_instr\(\) does not support the global flag
+SELECT regexp_count('abc', 'a', 1, 'g');
+
 statement ok
 drop table t_stringview;
 
