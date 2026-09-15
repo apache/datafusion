@@ -1407,9 +1407,9 @@ fn fsl_values_row_number(list_size: i32, array_len: usize) -> Result<Int32Array>
     Ok(PrimitiveArray::new(rows_number.into(), None))
 }
 
-/// Replace `-0.0` with `+0.0` in any `Float16`, `Float32`, or `Float64` array.
-/// For non-float arrays returns the input unchanged. NaN payloads are
-/// preserved.
+/// Replace `-0.0` with `+0.0` in any `Float16`, `Float32`, or `Float64` array,
+/// including dictionary-wrapped floats. For other arrays, returns the input
+/// unchanged. NaN payloads are preserved.
 ///
 /// Arrow's comparison kernels (`arrow::compute::kernels::cmp::eq` etc.) and
 /// row-encoding (`arrow::row::RowConverter`) use IEEE 754 totalOrder
@@ -1430,6 +1430,17 @@ pub fn normalize_float_zero(array: &ArrayRef) -> ArrayRef {
     const NEG_ZERO_F32_BITS: u32 = (-0.0_f32).to_bits();
     const NEG_ZERO_F64_BITS: u64 = (-0.0_f64).to_bits();
     match array.data_type() {
+        DataType::Dictionary(_, value_type)
+            if is_float_or_dictionary_float(value_type) =>
+        {
+            let dictionary = array.as_any_dictionary();
+            let values = normalize_float_zero(dictionary.values());
+            if Arc::ptr_eq(&values, dictionary.values()) {
+                Arc::clone(array)
+            } else {
+                dictionary.with_values(values)
+            }
+        }
         DataType::Float32 => {
             let arr: &Float32Array = array.as_primitive::<Float32Type>();
             if !arr
@@ -1439,8 +1450,13 @@ pub fn normalize_float_zero(array: &ArrayRef) -> ArrayRef {
             {
                 return Arc::clone(array);
             }
-            let normalized: Float32Array =
-                arr.unary(|v| if v.to_bits() << 1 == 0 { 0.0_f32 } else { v });
+            let normalized: Float32Array = arr.unary(|v| {
+                if v.to_bits() == NEG_ZERO_F32_BITS {
+                    0.0_f32
+                } else {
+                    v
+                }
+            });
             Arc::new(normalized)
         }
         DataType::Float64 => {
@@ -1452,8 +1468,13 @@ pub fn normalize_float_zero(array: &ArrayRef) -> ArrayRef {
             {
                 return Arc::clone(array);
             }
-            let normalized: Float64Array =
-                arr.unary(|v| if v.to_bits() << 1 == 0 { 0.0_f64 } else { v });
+            let normalized: Float64Array = arr.unary(|v| {
+                if v.to_bits() == NEG_ZERO_F64_BITS {
+                    0.0_f64
+                } else {
+                    v
+                }
+            });
             Arc::new(normalized)
         }
         DataType::Float16 => {
@@ -1466,8 +1487,8 @@ pub fn normalize_float_zero(array: &ArrayRef) -> ArrayRef {
                 return Arc::clone(array);
             }
             let normalized: Float16Array = arr.unary(|v| {
-                if v.to_bits() << 1 == 0 {
-                    half::f16::from_bits(0)
+                if v.to_bits() == NEG_ZERO_F16_BITS {
+                    half::f16::ZERO
                 } else {
                     v
                 }
@@ -1478,22 +1499,38 @@ pub fn normalize_float_zero(array: &ArrayRef) -> ArrayRef {
     }
 }
 
-/// Replace `-0.0` with `+0.0` in `Float16`, `Float32`, or `Float64` scalar
-/// values. Other variants are returned unchanged. See [`normalize_float_zero`]
-/// for context.
-pub fn normalize_float_zero_scalar(scalar: ScalarValue) -> ScalarValue {
-    match scalar {
-        ScalarValue::Float32(Some(v)) if v.to_bits() << 1 == 0 => {
-            ScalarValue::Float32(Some(0.0))
-        }
-        ScalarValue::Float64(Some(v)) if v.to_bits() << 1 == 0 => {
-            ScalarValue::Float64(Some(0.0))
-        }
-        ScalarValue::Float16(Some(v)) if v.to_bits() << 1 == 0 => {
-            ScalarValue::Float16(Some(half::f16::from_bits(0)))
-        }
-        other => other,
+fn is_float_or_dictionary_float(mut data_type: &DataType) -> bool {
+    while let DataType::Dictionary(_, value_type) = data_type {
+        data_type = value_type;
     }
+    data_type.is_floating()
+}
+
+/// Replace `-0.0` with `+0.0` in `Float16`, `Float32`, or `Float64` scalar
+/// values, including dictionary-wrapped floats. Other variants are returned
+/// unchanged. See [`normalize_float_zero`] for context.
+pub fn normalize_float_zero_scalar(mut scalar: ScalarValue) -> ScalarValue {
+    let mut value = &mut scalar;
+    while let ScalarValue::Dictionary(_, dictionary_value) = value {
+        value = dictionary_value.as_mut();
+    }
+
+    match value {
+        ScalarValue::Float32(Some(value)) if value.to_bits() == (-0.0_f32).to_bits() => {
+            *value = 0.0
+        }
+        ScalarValue::Float64(Some(value)) if value.to_bits() == (-0.0_f64).to_bits() => {
+            *value = 0.0
+        }
+        ScalarValue::Float16(Some(value))
+            if value.to_bits() == half::f16::NEG_ZERO.to_bits() =>
+        {
+            *value = half::f16::ZERO;
+        }
+        _ => {}
+    }
+
+    scalar
 }
 
 #[cfg(test)]
@@ -1503,9 +1540,9 @@ mod tests {
     use super::*;
     use crate::ScalarValue::Null;
     use arrow::{
-        array::{Float64Array, Int32Array},
+        array::{DictionaryArray, Float64Array, Int8Array, Int32Array},
         buffer::NullBuffer,
-        datatypes::Int32Type,
+        datatypes::{Float64Type, Int8Type, Int32Type},
     };
     #[cfg(feature = "sql")]
     use sqlparser::ast::Ident;
@@ -1532,6 +1569,49 @@ mod tests {
         } else {
             assert!(max.is_err());
         }
+    }
+
+    #[test]
+    fn normalize_float_zero_in_dictionary_arrays_and_scalars() -> Result<()> {
+        let nan = f64::from_bits(0x7ff8_0000_0000_0001);
+        let keys = Int8Array::from(vec![Some(0), Some(1), None, Some(2)]);
+        let array: ArrayRef = Arc::new(DictionaryArray::try_new(
+            keys.clone(),
+            Arc::new(Float64Array::from(vec![-0.0, nan, 1.0])),
+        )?);
+
+        let normalized = normalize_float_zero(&array);
+        assert!(!Arc::ptr_eq(&normalized, &array));
+        let dictionary = normalized.as_dictionary::<Int8Type>();
+        assert_eq!(dictionary.keys(), &keys);
+        let values = dictionary.values().as_primitive::<Float64Type>();
+        assert_eq!(values.value(0).to_bits(), 0.0_f64.to_bits());
+        assert_eq!(values.value(1).to_bits(), nan.to_bits());
+        assert_eq!(values.value(2), 1.0);
+
+        let without_negative_zero: ArrayRef = Arc::new(DictionaryArray::try_new(
+            Int8Array::from(vec![0, 1]),
+            Arc::new(Float64Array::from(vec![0.0, nan])),
+        )?);
+        assert!(Arc::ptr_eq(
+            &normalize_float_zero(&without_negative_zero),
+            &without_negative_zero
+        ));
+
+        let scalar = ScalarValue::Dictionary(
+            Box::new(DataType::Int8),
+            Box::new(ScalarValue::Float64(Some(-0.0))),
+        );
+        let ScalarValue::Dictionary(_, value) = normalize_float_zero_scalar(scalar)
+        else {
+            unreachable!()
+        };
+        let ScalarValue::Float64(Some(value)) = *value else {
+            unreachable!()
+        };
+        assert_eq!(value.to_bits(), 0.0_f64.to_bits());
+
+        Ok(())
     }
 
     #[test]
