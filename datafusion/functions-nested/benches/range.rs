@@ -33,7 +33,7 @@ use rand::{Rng, SeedableRng};
 const NUM_ROWS: usize = 100_000;
 const NANOS_PER_SECOND: i64 = 1_000_000_000;
 
-fn criterion_benchmark(c: &mut Criterion) {
+fn range_timestamp(c: &mut Criterion) {
     let mut rng = StdRng::seed_from_u64(42);
     // ~2016-era timestamps; each row generates a 1-second range (1 element),
     // so the per-row timestamp-range setup dominates the measurement.
@@ -94,5 +94,5 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, criterion_benchmark);
+criterion_group!(benches, range_timestamp);
 criterion_main!(benches);
