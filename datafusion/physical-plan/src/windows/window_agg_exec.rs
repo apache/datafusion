@@ -410,14 +410,16 @@ impl ExecutionPlan for WindowAggExec {
 }
 
 #[cfg(feature = "proto")]
-impl WindowAggExec {
+impl crate::proto::ExecutionPlanFromProto for WindowAggExec {
+    const NAME: &'static str = "datafusion.WindowAggExec";
+
     /// Reconstruct a window plan from its protobuf representation.
     ///
     /// This returns a [`WindowAggExec`] when `input_order_mode` is absent and a
     /// [`BoundedWindowAggExec`] when it is present.
     ///
     /// [`BoundedWindowAggExec`]: crate::windows::BoundedWindowAggExec
-    pub fn try_from_proto(
+    fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {

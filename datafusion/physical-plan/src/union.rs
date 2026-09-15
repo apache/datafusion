@@ -596,8 +596,10 @@ impl ExecutionPlan for UnionExec {
 }
 
 #[cfg(feature = "proto")]
-impl UnionExec {
-    pub fn try_from_proto(
+impl crate::proto::ExecutionPlanFromProto for UnionExec {
+    const NAME: &'static str = "datafusion.UnionExec";
+
+    fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -929,8 +931,10 @@ impl ExecutionPlan for InterleaveExec {
 }
 
 #[cfg(feature = "proto")]
-impl InterleaveExec {
-    pub fn try_from_proto(
+impl crate::proto::ExecutionPlanFromProto for InterleaveExec {
+    const NAME: &'static str = "datafusion.InterleaveExec";
+
+    fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {

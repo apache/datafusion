@@ -414,7 +414,9 @@ impl ExecutionPlan for CoalescePartitionsExec {
 }
 
 #[cfg(feature = "proto")]
-impl CoalescePartitionsExec {
+impl crate::proto::ExecutionPlanFromProto for CoalescePartitionsExec {
+    const NAME: &'static str = "datafusion.CoalescePartitionsExec";
+
     /// Reconstruct a [`CoalescePartitionsExec`] from its protobuf representation.
     ///
     /// The exact inverse of [`ExecutionPlan::try_to_proto`]. Note the protobuf
@@ -422,7 +424,7 @@ impl CoalescePartitionsExec {
     ///
     /// [`CoalescePartitionsExecNode`]: datafusion_proto_models::protobuf::CoalescePartitionsExecNode
     /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
-    pub fn try_from_proto(
+    fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {

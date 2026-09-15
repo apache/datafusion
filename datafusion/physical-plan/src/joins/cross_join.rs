@@ -494,8 +494,10 @@ impl ExecutionPlan for CrossJoinExec {
 }
 
 #[cfg(feature = "proto")]
-impl CrossJoinExec {
-    pub fn try_from_proto(
+impl crate::proto::ExecutionPlanFromProto for CrossJoinExec {
+    const NAME: &'static str = "datafusion.CrossJoinExec";
+
+    fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {

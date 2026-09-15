@@ -2104,9 +2104,11 @@ impl ExecutionPlan for RepartitionExec {
 }
 
 #[cfg(feature = "proto")]
-impl RepartitionExec {
+impl crate::proto::ExecutionPlanFromProto for RepartitionExec {
+    const NAME: &'static str = "datafusion.RepartitionExec";
+
     /// Reconstruct a [`RepartitionExec`] from its protobuf representation.
-    pub fn try_from_proto(
+    fn try_from_proto(
         node: &protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {

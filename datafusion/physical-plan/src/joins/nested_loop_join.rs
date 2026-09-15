@@ -933,8 +933,10 @@ impl ExecutionPlan for NestedLoopJoinExec {
 }
 
 #[cfg(feature = "proto")]
-impl NestedLoopJoinExec {
-    pub fn try_from_proto(
+impl crate::proto::ExecutionPlanFromProto for NestedLoopJoinExec {
+    const NAME: &'static str = "datafusion.NestedLoopJoinExec";
+
+    fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -990,6 +992,7 @@ impl NestedLoopJoinExec {
 #[cfg(all(test, feature = "proto"))]
 mod proto_tests {
     use super::*;
+    use crate::proto::ExecutionPlanFromProto;
     use crate::proto::{ExecutionPlanDecodeCtx, ExecutionPlanEncodeCtx};
     use crate::proto_test_util::{
         StubPlanDecoder, StubPlanEncoder, UnreachablePlanDecoder, encoded_child_node,

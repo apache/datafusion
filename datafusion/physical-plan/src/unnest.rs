@@ -404,13 +404,15 @@ impl ExecutionPlan for UnnestExec {
 }
 
 #[cfg(feature = "proto")]
-impl UnnestExec {
+impl crate::proto::ExecutionPlanFromProto for UnnestExec {
+    const NAME: &'static str = "datafusion.UnnestExec";
+
     /// Reconstruct an [`UnnestExec`] from its protobuf representation.
     ///
     /// The exact inverse of [`ExecutionPlan::try_to_proto`].
     ///
     /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
-    pub fn try_from_proto(
+    fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
