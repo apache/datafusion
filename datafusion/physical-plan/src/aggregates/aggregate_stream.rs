@@ -262,9 +262,9 @@ fn scalar_cmp_null_short_circuit(
     v1: &ScalarValue,
     v2: &ScalarValue,
 ) -> Option<ScalarValue> {
-    match (v1, v2) {
-        (ScalarValue::Null, ScalarValue::Null) => Some(ScalarValue::Null),
-        (ScalarValue::Null, other) | (other, ScalarValue::Null) => Some(other.clone()),
+    match (v1.is_null(), v2.is_null()) {
+        (true, _) => Some(v2.clone()),
+        (_, true) => Some(v1.clone()),
         _ => None,
     }
 }
@@ -702,6 +702,49 @@ mod tests {
         assert!(aggregate_metrics(&metrics, "merge").is_empty());
         assert!(aggregate_metrics(&metrics, "state").is_empty());
         assert!(metrics.sum_by_name("emitting_time").is_none());
+
+        Ok(())
+    }
+
+    /// A partition whose input lacks the aggregated column (for example a
+    /// Parquet file written before the column was added) yields a typed null
+    /// bound such as `Int64(None)`. Merging it into the shared bound must not
+    /// replace a valid value, otherwise the dynamic filter loses its bound and
+    /// can prune files containing the true MIN/MAX.
+    #[test]
+    fn scalar_min_max_ignore_typed_nulls() -> Result<()> {
+        let value = ScalarValue::Int64(Some(100));
+        let typed_null = ScalarValue::Int64(None);
+        let untyped_null = ScalarValue::Null;
+
+        // typed null on either side is ignored
+        assert_eq!(scalar_min(&value, &typed_null)?, value);
+        assert_eq!(scalar_min(&typed_null, &value)?, value);
+        assert_eq!(scalar_max(&value, &typed_null)?, value);
+        assert_eq!(scalar_max(&typed_null, &value)?, value);
+
+        // untyped null on either side is ignored
+        assert_eq!(scalar_min(&value, &untyped_null)?, value);
+        assert_eq!(scalar_min(&untyped_null, &value)?, value);
+        assert_eq!(scalar_max(&value, &untyped_null)?, value);
+        assert_eq!(scalar_max(&untyped_null, &value)?, value);
+
+        // null vs null stays null
+        assert!(scalar_min(&untyped_null, &typed_null)?.is_null());
+        assert!(scalar_max(&untyped_null, &typed_null)?.is_null());
+        assert!(scalar_min(&typed_null, &typed_null)?.is_null());
+        assert!(scalar_max(&typed_null, &typed_null)?.is_null());
+        assert!(scalar_min(&typed_null, &untyped_null)?.is_null());
+        assert!(scalar_max(&typed_null, &untyped_null)?.is_null());
+        assert!(scalar_min(&untyped_null, &untyped_null)?.is_null());
+        assert!(scalar_max(&untyped_null, &untyped_null)?.is_null());
+
+        // non-null values still compare normally
+        let smaller = ScalarValue::Int64(Some(1));
+        assert_eq!(scalar_min(&value, &smaller)?, smaller);
+        assert_eq!(scalar_min(&smaller, &value)?, smaller);
+        assert_eq!(scalar_max(&value, &smaller)?, value);
+        assert_eq!(scalar_max(&smaller, &value)?, value);
 
         Ok(())
     }
