@@ -360,6 +360,11 @@ impl AggregateUDF {
         self.inner.supports_within_group_clause()
     }
 
+    /// See [`AggregateUDFImpl::distinct_handling`] for more details.
+    pub fn distinct_handling(&self) -> DistinctHandling {
+        self.inner.distinct_handling()
+    }
+
     /// Returns the documentation for this Aggregate UDF.
     ///
     /// Documentation can be accessed programmatically as well as
@@ -938,6 +943,20 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// kind of sort into the plan for these functions with this syntax.
     fn supports_within_group_clause(&self) -> bool {
         false
+    }
+
+    /// How this function treats the `DISTINCT` modifier.
+    ///
+    /// Return [`DistinctHandling::Ignored`] for duplicate-insensitive
+    /// functions so that `f(DISTINCT x)` is planned as `f(x)`.
+    ///
+    /// Return [`DistinctHandling::Unsupported`] if the accumulator does not
+    /// implement `DISTINCT`, that is, it does not read `is_distinct`, or it
+    /// rejects `DISTINCT` with an error. The planner then has to deduplicate
+    /// the input or reject the query. Nothing reads this variant yet:
+    /// rejecting such queries at planning time is a follow-up change.
+    fn distinct_handling(&self) -> DistinctHandling {
+        DistinctHandling::Honored
     }
 
     /// Returns the documentation for this Aggregate UDF.
@@ -1687,6 +1706,10 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         self.inner.set_monotonicity(data_type)
     }
 
+    fn distinct_handling(&self) -> DistinctHandling {
+        self.inner.distinct_handling()
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
     }
@@ -1711,6 +1734,29 @@ pub enum SetMonotonicity {
     /// Aggregate value may increase, decrease, or stay the same as the input
     /// set grows.
     NotMonotonic,
+}
+
+/// How an aggregate function treats the `DISTINCT` modifier.
+///
+/// Mathematically, `Ignored` means the function's merge operation is
+/// idempotent (its state forms a semilattice): f(S ⊎ S) = f(S), so
+/// removing duplicates from the input cannot change the result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DistinctHandling {
+    /// The result is the same with or without `DISTINCT`, so the planner
+    /// is free to drop it. `min`, `max`, `bool_and`, `bit_or`, ...
+    Ignored,
+    /// The accumulator reads `AccumulatorArgs::is_distinct` and deduplicates
+    /// its input, so the planner must leave the flag alone. `count`, `sum`,
+    /// `avg`, `var_samp`, `array_agg`, ... This is the default.
+    Honored,
+    /// The accumulator does not implement `DISTINCT`: it does not read
+    /// `is_distinct`, or it rejects `DISTINCT` with an error. The planner has
+    /// to deduplicate the input first (today `SingleDistinctToGroupBy` does
+    /// that for single-argument functions) or reject the query. `stddev`,
+    /// `approx_median`, `corr`, `regr_*`, `nth_value`, ...
+    Unsupported,
 }
 
 #[cfg(test)]

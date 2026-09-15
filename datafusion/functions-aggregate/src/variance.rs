@@ -150,6 +150,9 @@ impl AggregateUDFImpl for VarianceSample {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+
+    // Left at the default `Honored`: `DistinctVarianceAccumulator`
+    // deduplicates the input when `is_distinct` is set.
 }
 
 #[user_doc(
@@ -252,6 +255,9 @@ impl AggregateUDFImpl for VariancePopulation {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+
+    // Left at the default `Honored`: `DistinctVarianceAccumulator`
+    // deduplicates the input when `is_distinct` is set.
 }
 
 /// An accumulator to compute variance
