@@ -76,6 +76,31 @@ pub trait PhysicalOptimizerRule: Debug + std::any::Any {
     /// A human readable name for this optimizer rule
     fn name(&self) -> &str;
 
+    /// Whether this rule is a pure function of the plan it is given, so that
+    /// running it again on a plan object it previously returned cannot change
+    /// anything.
+    ///
+    /// When a rule opts in, the optimizer remembers the plan the rule last
+    /// returned and skips the call when handed back that exact object. Plans
+    /// are reference counted and a rule returns its input untouched when it
+    /// has nothing to do, so this is an exact, allocation-free signal — no
+    /// hashing or structural comparison is involved.
+    ///
+    /// This is off by default and only consulted when
+    /// `datafusion.optimizer.skip_unchanged_physical_rules` is enabled. It
+    /// pays off for rule lists that run the same rule more than once, which
+    /// is common when downstream rewrites are inserted after the built-in
+    /// requirement enforcement and each needs its requirements re-enforced.
+    ///
+    /// Leave this `false` for any rule whose output depends on state outside
+    /// the plan — session state that can change between invocations,
+    /// counters, randomness — since the same input would no longer imply the
+    /// same output. Debug builds verify the claim: when a skip would fire,
+    /// the rule is run anyway and the result is asserted to be unchanged.
+    fn skip_if_unchanged(&self) -> bool {
+        false
+    }
+
     /// A flag to indicate whether the physical planner should validate that the rule will not
     /// change the schema of the plan after the rewriting.
     /// Some of the optimization rules might change the nullable properties of the schema

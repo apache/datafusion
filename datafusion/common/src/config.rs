@@ -1597,6 +1597,18 @@ config_namespace! {
         /// repartitioning to increase parallelism to leverage more CPU cores
         pub enable_round_robin_repartition: bool, default = true
 
+        /// When set to true, a physical optimizer rule that opts in via
+        /// [`PhysicalOptimizerRule::skip_if_unchanged`] is skipped when its
+        /// input is the very plan it returned last time, since re-running a
+        /// pure rule on its own output cannot change anything.
+        ///
+        /// The default rule list has no repeated rules, so this matters for
+        /// custom rule lists (`with_physical_optimizer_rules`) that enforce
+        /// requirements again after their own rewrites.
+        ///
+        /// [`PhysicalOptimizerRule::skip_if_unchanged`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/trait.PhysicalOptimizerRule.html#method.skip_if_unchanged
+        pub skip_unchanged_physical_rules: bool, default = false
+
         /// When set to true, the optimizer will attempt to perform limit operations
         /// during aggregations, if possible
         pub enable_topk_aggregation: bool, default = true

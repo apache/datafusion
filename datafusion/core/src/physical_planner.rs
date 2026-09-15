@@ -2965,13 +2965,62 @@ impl DefaultPhysicalPlanner {
         let optimizer_context = SessionOptimizerContext {
             session: session_state,
         };
+        // Remembers the plan each opted-in rule last returned, so the rule can
+        // be skipped when handed back that exact object. Keyed by rule name
+        // rather than position, because a repeated rule is normally a second
+        // instance rather than the same one, and it is the rule's identity
+        // that makes re-running it pointless. Scoped to this call: rule
+        // instances are shared between queries, so this must not live on the
+        // rule itself.
+        let skip_unchanged = session_state
+            .config_options()
+            .optimizer
+            .skip_unchanged_physical_rules;
+        let mut last_outputs: HashMap<&str, Arc<dyn ExecutionPlan>> = HashMap::new();
+
         for optimizer in optimizers {
+            if skip_unchanged && optimizer.skip_if_unchanged() {
+                if let Some(last) = last_outputs.get(optimizer.name())
+                    && Arc::ptr_eq(last, &new_plan)
+                {
+                    // The rule produced this exact plan and nothing since has
+                    // replaced it, so running it again cannot change anything.
+                    // Debug builds verify that claim rather than trusting it.
+                    #[cfg(debug_assertions)]
+                    {
+                        let rerun = optimizer
+                            .optimize_with_context(
+                                Arc::clone(&new_plan),
+                                &optimizer_context,
+                            )
+                            .map_err(|e| {
+                                DataFusionError::Context(
+                                    optimizer.name().to_string(),
+                                    Box::new(e),
+                                )
+                            })?;
+                        debug_assert!(
+                            Arc::ptr_eq(&rerun, &new_plan),
+                            "PhysicalOptimizer rule '{}' declares skip_if_unchanged() \
+                             but rewrote a plan it had already produced; the rule is \
+                             not a pure function of its input",
+                            optimizer.name(),
+                        );
+                    }
+                    observer(new_plan.as_ref(), optimizer.as_ref());
+                    continue;
+                }
+            }
+
             let before_schema = new_plan.schema();
             new_plan = optimizer
                 .optimize_with_context(new_plan, &optimizer_context)
                 .map_err(|e| {
                     DataFusionError::Context(optimizer.name().to_string(), Box::new(e))
                 })?;
+            if skip_unchanged && optimizer.skip_if_unchanged() {
+                last_outputs.insert(optimizer.name(), Arc::clone(&new_plan));
+            }
 
             // This only checks the schema in release build, and performs additional checks in debug mode.
             OptimizationInvariantChecker::new(optimizer)
@@ -3368,7 +3417,7 @@ mod tests {
     use std::fmt::{self, Debug};
     use std::mem::size_of_val;
     use std::ops::{BitAnd, Not};
-    use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
 
     use super::*;
     use crate::datasource::MemTable;
@@ -3691,6 +3740,112 @@ mod tests {
         assert!(physical_plan.is::<EmptyExec>());
         assert!(query_planner_invoked.load(AtomicOrdering::Relaxed));
         assert!(invoked.load(AtomicOrdering::Relaxed));
+        Ok(())
+    }
+
+    /// Counts its invocations and hands the plan back untouched, mimicking a
+    /// rule that finds nothing to do on an already-satisfied plan.
+    #[derive(Debug)]
+    struct CountingNoopRule {
+        calls: Arc<AtomicUsize>,
+        skip_if_unchanged: bool,
+    }
+
+    impl PhysicalOptimizerRule for CountingNoopRule {
+        fn optimize(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+            _config: &ConfigOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.calls.fetch_add(1, AtomicOrdering::Relaxed);
+            Ok(plan)
+        }
+
+        fn name(&self) -> &str {
+            "counting_noop_rule"
+        }
+
+        fn skip_if_unchanged(&self) -> bool {
+            self.skip_if_unchanged
+        }
+
+        fn schema_check(&self) -> bool {
+            true
+        }
+    }
+
+    /// Expected invocations of a rule listed twice. Debug builds verify the
+    /// idempotence claim by running a skipped rule anyway and asserting it
+    /// changed nothing, so the call still happens there — what the skip saves
+    /// in debug is nothing, and in release it is the whole second pass.
+    const SKIPPED_CALLS: usize = if cfg!(debug_assertions) { 2 } else { 1 };
+
+    async fn run_repeated_rule(
+        skip_if_unchanged: bool,
+        skip_enabled: bool,
+    ) -> Result<usize> {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let rule = || {
+            Arc::new(CountingNoopRule {
+                calls: Arc::clone(&calls),
+                skip_if_unchanged,
+            }) as Arc<dyn PhysicalOptimizerRule + Send + Sync>
+        };
+        let mut config = SessionConfig::new();
+        config.options_mut().optimizer.skip_unchanged_physical_rules = skip_enabled;
+        // The same rule twice, which is the shape a custom rule list takes
+        // when a rewrite between the two passes may or may not fire.
+        let state = SessionStateBuilder::new()
+            .with_config(config)
+            .with_default_features()
+            .with_physical_optimizer_rules(vec![rule(), rule()])
+            .build();
+        let ctx = SessionContext::new_with_state(state);
+        let logical_plan = LogicalPlanBuilder::empty(false).build()?;
+        ctx.state().create_physical_plan(&logical_plan).await?;
+        Ok(calls.load(AtomicOrdering::Relaxed))
+    }
+
+    /// A rule that opted in is called once instead of twice: the second entry
+    /// receives the exact plan the first returned.
+    #[tokio::test]
+    async fn skip_unchanged_skips_the_repeated_pass() -> Result<()> {
+        assert_eq!(run_repeated_rule(true, true).await?, SKIPPED_CALLS);
+        Ok(())
+    }
+
+    /// Off by default, and opting in without the config flag changes nothing:
+    /// both entries run, exactly as before this feature existed.
+    #[tokio::test]
+    async fn skip_unchanged_is_inert_unless_both_sides_agree() -> Result<()> {
+        assert_eq!(run_repeated_rule(false, true).await?, 2);
+        assert_eq!(run_repeated_rule(true, false).await?, 2);
+        assert_eq!(run_repeated_rule(false, false).await?, 2);
+        Ok(())
+    }
+
+    /// The memo is per optimization run, not per rule instance: planning a
+    /// second query must not let the first query's plan suppress a call.
+    #[tokio::test]
+    async fn skip_unchanged_does_not_leak_between_plans() -> Result<()> {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut config = SessionConfig::new();
+        config.options_mut().optimizer.skip_unchanged_physical_rules = true;
+        let state = SessionStateBuilder::new()
+            .with_config(config)
+            .with_default_features()
+            .with_physical_optimizer_rules(vec![Arc::new(CountingNoopRule {
+                calls: Arc::clone(&calls),
+                skip_if_unchanged: true,
+            })])
+            .build();
+        let ctx = SessionContext::new_with_state(state);
+        let logical_plan = LogicalPlanBuilder::empty(false).build()?;
+        ctx.state().create_physical_plan(&logical_plan).await?;
+        ctx.state().create_physical_plan(&logical_plan).await?;
+        // Once per plan; a rule-level memo would have suppressed the second.
+        // The rule is listed once here, so the debug self-check never fires.
+        assert_eq!(calls.load(AtomicOrdering::Relaxed), 2);
         Ok(())
     }
 
