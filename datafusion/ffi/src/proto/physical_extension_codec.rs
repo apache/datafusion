@@ -26,7 +26,7 @@ use datafusion_expr::{
 };
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_proto::physical_plan::{
-    DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
+    DefaultPhysicalProtoConverter, PhysicalExtensionCodec, PhysicalPlanDecodeContext,
     PhysicalProtoConverterExtension,
 };
 
@@ -148,10 +148,13 @@ unsafe extern "C" fn try_decode_fn_wrapper(
         .collect::<Result<Vec<_>>>();
     let inputs = sresult_return!(inputs);
 
-    let plan = sresult_return!(codec.try_decode(
+    // The caller's decode context cannot cross the FFI boundary, so decode
+    // with a root context for this side's codec.
+    let decode_ctx = PhysicalPlanDecodeContext::new(task_ctx.as_ref(), codec.as_ref());
+    let plan = sresult_return!(codec.try_decode_with_ctx(
         buf.as_ref(),
         &inputs,
-        task_ctx.as_ref(),
+        &decode_ctx,
         &DefaultPhysicalProtoConverter {},
     ));
 
@@ -458,7 +461,7 @@ pub(crate) mod tests {
     use datafusion_functions_window::rank::{Rank, RankType};
     use datafusion_physical_plan::ExecutionPlan;
     use datafusion_proto::physical_plan::{
-        DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
+        DefaultPhysicalProtoConverter, PhysicalExtensionCodec, PhysicalPlanDecodeContext,
         PhysicalProtoConverterExtension,
     };
 
@@ -634,6 +637,64 @@ pub(crate) mod tests {
         let returned_exec = foreign_codec.try_decode(
             &bytes,
             &input_execs,
+            ctx.task_ctx().as_ref(),
+            &DefaultPhysicalProtoConverter {},
+        )?;
+
+        assert!(returned_exec.is::<EmptyExec>());
+
+        Ok(())
+    }
+
+    /// A codec whose `try_decode` fails and that only decodes through
+    /// `try_decode_with_ctx`.
+    #[derive(Debug)]
+    struct ContextOnlyCodec;
+
+    impl PhysicalExtensionCodec for ContextOnlyCodec {
+        fn try_decode(
+            &self,
+            _buf: &[u8],
+            _inputs: &[Arc<dyn ExecutionPlan>],
+            _ctx: &TaskContext,
+            _proto_converter: &dyn PhysicalProtoConverterExtension,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            exec_err!("ContextOnlyCodec decodes through try_decode_with_ctx")
+        }
+
+        fn try_decode_with_ctx(
+            &self,
+            _buf: &[u8],
+            _inputs: &[Arc<dyn ExecutionPlan>],
+            _ctx: &PhysicalPlanDecodeContext<'_>,
+            _proto_converter: &dyn PhysicalProtoConverterExtension,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(create_test_exec())
+        }
+
+        fn try_encode(
+            &self,
+            _node: Arc<dyn ExecutionPlan>,
+            _buf: &mut Vec<u8>,
+            _proto_converter: &dyn PhysicalProtoConverterExtension,
+        ) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn ffi_physical_extension_codec_decodes_through_try_decode_with_ctx() -> Result<()> {
+        let codec = Arc::new(ContextOnlyCodec);
+        let (ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
+
+        let mut ffi_codec =
+            FFI_PhysicalExtensionCodec::new(codec, None, task_ctx_provider);
+        ffi_codec.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_codec: Arc<dyn PhysicalExtensionCodec> = (&ffi_codec).into();
+
+        let returned_exec = foreign_codec.try_decode(
+            &[],
+            &[create_test_exec()],
             ctx.task_ctx().as_ref(),
             &DefaultPhysicalProtoConverter {},
         )?;
