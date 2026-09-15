@@ -192,19 +192,20 @@ fn try_create_array_map(
     Ok(Some((array_map, batch, left_values)))
 }
 
-/// Correlation-scope hash map over only the build rows whose scalar `NOT IN`
-/// value key is NULL, used by correlated null-aware `LeftMark` joins.
+/// The build rows whose scalar `NOT IN` value key is NULL, used by correlated
+/// null-aware joins (see [`NullAwareMode`]).
 ///
-/// Such rows produce a NULL (UNKNOWN) mark whenever *any* probe row shares
-/// their correlation scope, so every probe row must be tested against them.
-/// Restricting this map to the NULL-valued build rows keeps that lookup
+/// Such rows are UNKNOWN whenever *any* probe row in their correlation scope
+/// passes the join filter, so every probe row must be tested against them.
+/// Restricting this lookup to the NULL-valued build rows keeps it
 /// proportional to the number of NULLs instead of enumerating every scope
 /// match of every probe row.
-pub(super) struct NullValueScopeMap {
+pub(super) struct NullValueBuildRows {
     /// Hash table keyed by the correlation scope values of the NULL-valued
     /// build rows. Stored positions index into `scope_values`/`build_indices`,
-    /// not the full build batch.
-    pub(super) map: Box<dyn JoinHashMapType>,
+    /// not the full build batch. `None` when the join has no correlation
+    /// scope keys, so every probe row is in scope.
+    pub(super) scope_map: Option<Box<dyn JoinHashMapType>>,
     /// Correlation scope key values of the NULL-valued build rows.
     pub(super) scope_values: Vec<ArrayRef>,
     /// Maps positions in `map`/`scope_values` back to row indices in the full
@@ -215,19 +216,23 @@ pub(super) struct NullValueScopeMap {
 /// Null-aware (`NOT IN`) semantics of a hash join, derived from
 /// [`HashJoinExec::null_aware`] and the join type.
 ///
-/// Only these three combinations are legal (see [`Self::try_new`]), so the
+/// Only these combinations are legal (see [`Self::try_new`]), so the
 /// stream matches on this instead of re-checking `null_aware && join_type == ..`.
+///
+/// A `correlated` join has correlation scope keys (`on[1..]`, see
+/// [`HashJoinExec::null_aware`]) or a join filter, or both. A NULL then makes
+/// `NOT IN` UNKNOWN only for the build rows whose scope and filter keep that
+/// NULL, so the join records the decision per build row in the null-indices
+/// bitmap instead of in shared probe-side flags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum NullAwareMode {
-    /// Uncorrelated `build.key NOT IN (probe.key)`: emits build rows, and
-    /// none of them once any probe key is NULL.
-    LeftAnti,
+    /// `build.key NOT IN (probe.key)`: emits build rows. When uncorrelated,
+    /// none of them are emitted once any probe key is NULL.
+    LeftAnti { correlated: bool },
     /// Uncorrelated `probe.key NOT IN (build.key)`: emits probe rows, and
     /// none of them once any build key is NULL.
     RightAnti,
-    /// `NOT IN` as a nullable mark column on the build rows. `correlated`
-    /// means `on[1..]` are correlation scope keys (see
-    /// [`HashJoinExec::null_aware`]).
+    /// `NOT IN` as a nullable mark column on the build rows.
     LeftMark { correlated: bool },
 }
 
@@ -239,13 +244,12 @@ impl NullAwareMode {
         num_keys: usize,
         has_filter: bool,
     ) -> Result<Self> {
+        let correlated = num_keys > 1 || has_filter;
         let mode = match (join_type, partition_mode) {
-            (JoinType::LeftAnti, _) => Self::LeftAnti,
+            (JoinType::LeftAnti, _) => Self::LeftAnti { correlated },
             // `PartitionMode::CollectLeft` is safe because `RightAnti` is probe-driven
             (JoinType::RightAnti, PartitionMode::CollectLeft) => Self::RightAnti,
-            (JoinType::LeftMark, _) => Self::LeftMark {
-                correlated: num_keys > 1,
-            },
+            (JoinType::LeftMark, _) => Self::LeftMark { correlated },
             _ => {
                 return plan_err!(
                     "null_aware can only be true for LeftAnti joins and RightAnti joins with `CollectLeft` `PartitionMode`, or LeftMark joins, got {join_type} with {partition_mode}"
@@ -253,10 +257,14 @@ impl NullAwareMode {
             }
         };
         match mode {
-            Self::LeftAnti | Self::RightAnti if num_keys != 1 => plan_err!(
+            Self::RightAnti if num_keys != 1 => plan_err!(
                 "null_aware {join_type} joins only support single column join key, got {num_keys} columns"
             ),
-            Self::LeftMark { .. } if partition_mode == PartitionMode::Partitioned => {
+            // Correlated joins share the per-build-row null bitmap across all
+            // probe partitions.
+            Self::LeftMark { .. } | Self::LeftAnti { correlated: true }
+                if partition_mode == PartitionMode::Partitioned =>
+            {
                 plan_err!(
                     "null_aware joins require PartitionMode::CollectLeft, got PartitionMode::Partitioned"
                 )
@@ -267,6 +275,14 @@ impl NullAwareMode {
             _ => Ok(mode),
         }
     }
+
+    /// Whether this join decides UNKNOWN per build row (see [`NullAwareMode`]).
+    pub(super) fn is_correlated(self) -> bool {
+        matches!(
+            self,
+            Self::LeftAnti { correlated: true } | Self::LeftMark { correlated: true }
+        )
+    }
 }
 
 /// HashTable and input data for the left (build side) of a join
@@ -274,17 +290,16 @@ pub(super) struct JoinLeftData {
     /// The hash table with indices into `batch`
     /// Arc is used to allow sharing with SharedBuildAccumulator for hash map pushdown
     pub(super) map: Arc<Map>,
-    /// Hash table over correlated scope keys for scalar null-aware mark joins.
+    /// Hash table over correlated scope keys for correlated null-aware joins.
     ///
-    /// For null-aware `LeftMark`, key 0 is the scalar `NOT IN` value key and
-    /// keys 1..N are correlated equality scope keys. This map covers all build
-    /// rows and is probed only with NULL-valued probe rows; the complementary
-    /// direction uses `null_value_scope_map`.
-    null_aware_mark_scope_map: Option<Box<dyn JoinHashMapType>>,
-    /// Scope map restricted to the build rows whose value key is NULL (see
-    /// [`NullValueScopeMap`]). `None` when the build side has no NULL value
-    /// keys.
-    null_value_scope_map: Option<NullValueScopeMap>,
+    /// Key 0 is the scalar `NOT IN` value key and keys 1..N are correlated
+    /// equality scope keys. This map covers all build rows and is probed only
+    /// with NULL-valued probe rows; the complementary direction uses
+    /// `null_value_build_rows`. `None` when there are no scope keys.
+    null_aware_scope_map: Option<Box<dyn JoinHashMapType>>,
+    /// The build rows whose value key is NULL (see [`NullValueBuildRows`]).
+    /// `None` when the build side has no NULL value keys.
+    null_value_build_rows: Option<NullValueBuildRows>,
     /// The input rows for the build side
     batch: RecordBatch,
     /// The build side on expressions values
@@ -318,12 +333,12 @@ impl JoinLeftData {
         &self.map
     }
 
-    pub(super) fn null_aware_mark_scope_map(&self) -> Option<&dyn JoinHashMapType> {
-        self.null_aware_mark_scope_map.as_deref()
+    pub(super) fn null_aware_scope_map(&self) -> Option<&dyn JoinHashMapType> {
+        self.null_aware_scope_map.as_deref()
     }
 
-    pub(super) fn null_value_scope_map(&self) -> Option<&NullValueScopeMap> {
-        self.null_value_scope_map.as_ref()
+    pub(super) fn null_value_build_rows(&self) -> Option<&NullValueBuildRows> {
+        self.null_value_build_rows.as_ref()
     }
 
     /// returns a reference to the build side batch
@@ -878,13 +893,16 @@ pub struct HashJoinExec {
     /// Flag to indicate if this join uses null-aware equality semantics.
     ///
     /// Set for the physical lowering of scalar `NOT IN` subqueries (producing
-    /// `JoinType::LeftAnti` when uncorrelated or `JoinType::LeftMark` when
-    /// correlated). When `true`, NULLs in the join keys follow SQL `NOT IN`
-    /// three-valued logic rather than ordinary equi-join semantics.
+    /// `JoinType::LeftAnti` at the top level of a filter or `JoinType::LeftMark`
+    /// inside a larger expression). When `true`, NULLs in the join keys follow
+    /// SQL `NOT IN` three-valued logic rather than ordinary equi-join semantics.
+    /// A join filter holds the non-equality part of a correlated subquery, and
+    /// only the probe rows that pass it take part in the three-valued logic.
     ///
     /// Key-ordering convention (relied on positionally, not enforced): for a
-    /// null-aware `LeftMark` join with more than one key, `on[0]` is the scalar
-    /// `NOT IN` value key and `on[1..N]` are the correlated equality scope keys.
+    /// null-aware `LeftAnti` or `LeftMark` join with more than one key, `on[0]`
+    /// is the scalar `NOT IN` value key and `on[1..N]` are the correlated
+    /// equality scope keys.
     /// Reordering these keys would silently produce wrong results, which is why
     /// such joins are pinned to `PartitionMode::CollectLeft` (the only key
     /// reorderer acts solely on `PartitionMode::Partitioned`).
@@ -2858,11 +2876,8 @@ async fn collect_left_input(
     let schema = left_stream.schema();
 
     // The extra scope maps + null bitmap are only built for correlated
-    // null-aware LeftMark joins (`on_left[1..]` are correlation scope keys).
-    let with_null_aware_mark_state = matches!(
-        null_aware,
-        Some(NullAwareMode::LeftMark { correlated: true })
-    );
+    // null-aware joins (see `NullAwareMode`).
+    let with_null_aware_row_state = null_aware.is_some_and(NullAwareMode::is_correlated);
 
     let is_phj_candidate = is_perfect_hash_join_candidate(&on_left, &schema)?;
 
@@ -2992,42 +3007,42 @@ async fn collect_left_input(
         BooleanBufferBuilder::new(0)
     };
 
-    let null_indices_bitmap = if with_null_aware_mark_state {
+    let null_indices_bitmap = if with_null_aware_row_state {
         allocate_bitmap()?
     } else {
         BooleanBufferBuilder::new(0)
     };
 
-    let (null_aware_mark_scope_map, null_value_scope_map) = if with_null_aware_mark_state
-    {
-        // Null-aware `LeftMark` convention: `on_left[0]` is the value key and
-        // `on_left[1..]` the scope keys, so the scope map needs more than one key.
-        debug_assert!(
-            on_left.len() > 1,
-            "null-aware LeftMark needs on_left[0]=value, on_left[1..]=scope, got {} key(s)",
-            on_left.len()
-        );
-        // Scope-only NULL marking uses a HashMap (the primary join map may use
-        // ArrayMap for full-key matches, but scope keys have arbitrary shape).
-        let mut scope_map = new_join_hashmap(num_rows, &mut reservation, &metrics)?;
+    let (null_aware_scope_map, null_value_build_rows) = if with_null_aware_row_state {
+        // Null-aware convention: `on_left[0]` is the value key and
+        // `on_left[1..]` the (possibly empty) correlation scope keys.
+        let scope_keys = &on_left[1..];
+        let scope_map = if scope_keys.is_empty() {
+            None
+        } else {
+            // Scope-only NULL marking uses a HashMap (the primary join map may
+            // use ArrayMap for full-key matches, but scope keys have arbitrary
+            // shape).
+            let mut scope_map = new_join_hashmap(num_rows, &mut reservation, &metrics)?;
 
-        let mut hashes_buffer = vec![0; batch.num_rows()];
-        update_hash(
-            &on_left[1..],
-            &batch,
-            &mut *scope_map,
-            0,
-            &random_state,
-            &mut hashes_buffer,
-            0,
-            true,
-            NullEquality::NullEqualsNothing,
-        )?;
+            let mut hashes_buffer = vec![0; batch.num_rows()];
+            update_hash(
+                scope_keys,
+                &batch,
+                &mut *scope_map,
+                0,
+                &random_state,
+                &mut hashes_buffer,
+                0,
+                true,
+                NullEquality::NullEqualsNothing,
+            )?;
+            Some(scope_map)
+        };
 
-        // Build the dedicated scope map over the NULL-valued build rows (see
-        // `NullValueScopeMap`).
+        // Collect the NULL-valued build rows (see `NullValueBuildRows`).
         let value_key = &left_values[0];
-        let null_value_scope_map = if value_key.null_count() > 0 {
+        let null_value_build_rows = if value_key.logical_null_count() > 0 {
             let null_mask = arrow::compute::is_null(value_key.as_ref())?;
             let build_indices = UInt64Array::from_iter_values(
                 null_mask.values().set_indices().map(|i| i as u64),
@@ -3048,14 +3063,19 @@ async fn collect_left_input(
             reservation.try_grow(retained_size)?;
             metrics.build_mem_used.add(retained_size);
 
-            let null_rows = build_indices.len();
-            let mut map = new_join_hashmap(null_rows, &mut reservation, &metrics)?;
-            let mut hashes_buffer = vec![0; null_rows];
-            create_hashes(&scope_values, &random_state, &mut hashes_buffer)?;
-            map.update_from_iter(Box::new(hashes_buffer.iter().enumerate().rev()), 0);
+            let scope_map = if scope_values.is_empty() {
+                None
+            } else {
+                let null_rows = build_indices.len();
+                let mut map = new_join_hashmap(null_rows, &mut reservation, &metrics)?;
+                let mut hashes_buffer = vec![0; null_rows];
+                create_hashes(&scope_values, &random_state, &mut hashes_buffer)?;
+                map.update_from_iter(Box::new(hashes_buffer.iter().enumerate().rev()), 0);
+                Some(map)
+            };
 
-            Some(NullValueScopeMap {
-                map,
+            Some(NullValueBuildRows {
+                scope_map,
                 scope_values,
                 build_indices,
             })
@@ -3063,7 +3083,7 @@ async fn collect_left_input(
             None
         };
 
-        (Some(scope_map), null_value_scope_map)
+        (scope_map, null_value_build_rows)
     } else {
         (None, None)
     };
@@ -3106,8 +3126,8 @@ async fn collect_left_input(
 
     let data = JoinLeftData {
         map,
-        null_aware_mark_scope_map,
-        null_value_scope_map,
+        null_aware_scope_map,
+        null_value_build_rows,
         batch,
         values: left_values,
         visited_indices_bitmap: Mutex::new(visited_indices_bitmap),
@@ -8825,13 +8845,14 @@ mod tests {
             ),
         ];
 
-        // Try to create null-aware anti join with 2 columns (should fail)
+        // Try to create null-aware right anti join with 2 columns (should fail).
+        // A multi-column `LeftAnti` is a correlated `NOT IN` and is accepted.
         let result = HashJoinExec::try_new(
             left,
             right,
             on,
             None,
-            &JoinType::LeftAnti,
+            &JoinType::RightAnti,
             None,
             PartitionMode::CollectLeft,
             NullEquality::NullEqualsNothing,
@@ -8841,7 +8862,7 @@ mod tests {
         assert!(result.is_err());
         assert!(
             result.unwrap_err().to_string().contains(
-                "null_aware LeftAnti joins only support single column join key"
+                "null_aware RightAnti joins only support single column join key"
             )
         );
     }
