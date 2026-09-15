@@ -1793,7 +1793,7 @@ fn build_predicate_expression(
                 Operator::Or
             };
             let mut sorted_list: Vec<_> = in_list.list().to_vec();
-            sorted_list.sort_by_key(|a| a.to_string());
+            sorted_list.sort_by_cached_key(|a| a.to_string());
             let change_expr = sorted_list
                 .iter()
                 .map(|e| {
