@@ -35,7 +35,9 @@ use arrow::{
     datatypes::UInt32Type,
 };
 use datafusion_common::{Result, ScalarValue, arrow_datafusion_err, instant::Instant};
-use datafusion_expr_common::accumulator::{Accumulator, AggregateMetric};
+use datafusion_expr_common::accumulator::{
+    Accumulator, AggregateMetric, AggregateMetrics,
+};
 use datafusion_expr_common::groups_accumulator::{
     EmitTo, GroupSelection, GroupsAccumulator,
 };
@@ -105,12 +107,11 @@ pub struct GroupsAccumulatorAdapter {
     /// distinct groups.
     allocation_bytes: usize,
 
+    /// Metrics supplied by the aggregate execution operator.
+    metrics: Option<Arc<dyn AggregateMetrics>>,
+
     /// Optional aggregate-owned metric timed once for a grouped update batch.
-    ///
-    /// The cache is shared with factories that install metrics on only the
-    /// first accumulator. This avoids resolving the same expression metric for
-    /// every group while allowing `convert_to_state(&self)` to use it.
-    grouped_update_metric: Arc<OnceLock<Option<Arc<dyn AggregateMetric>>>>,
+    grouped_update_metric: OnceLock<Option<Arc<dyn AggregateMetric>>>,
 }
 
 /// Maximum number of prepared group inputs retained while timing an
@@ -148,27 +149,24 @@ impl GroupsAccumulatorAdapter {
     where
         F: Fn() -> Result<Box<dyn Accumulator>> + Send + 'static,
     {
-        Self::new_with_grouped_update_metric_cache(factory, Arc::new(OnceLock::new()))
-    }
-
-    /// Creates an adapter with a metric cache shared by its accumulator factory.
-    ///
-    /// The factory must initialize the cache before returning its first
-    /// metric-enabled accumulator. Later accumulators may be created without
-    /// metrics because this adapter records the grouped batch timing.
-    pub fn new_with_grouped_update_metric_cache<F>(
-        factory: F,
-        grouped_update_metric: Arc<OnceLock<Option<Arc<dyn AggregateMetric>>>>,
-    ) -> Self
-    where
-        F: Fn() -> Result<Box<dyn Accumulator>> + Send + 'static,
-    {
         Self {
             factory: Box::new(factory),
             states: vec![],
             allocation_bytes: 0,
-            grouped_update_metric,
+            metrics: None,
+            grouped_update_metric: OnceLock::new(),
         }
+    }
+
+    /// Creates an accumulator with this adapter's optional metrics.
+    fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        let mut accumulator = (self.factory)()?;
+        if let Some(metrics) = &self.metrics {
+            accumulator.set_metrics(Arc::clone(metrics));
+        }
+        self.grouped_update_metric
+            .get_or_init(|| accumulator.grouped_update_batch_metric());
+        Ok(accumulator)
     }
 
     /// Ensure that self.accumulators has total_num_groups
@@ -180,9 +178,7 @@ impl GroupsAccumulatorAdapter {
         // instantiate new accumulators
         let new_accumulators = total_num_groups - self.states.len();
         for _ in 0..new_accumulators {
-            let accumulator = (self.factory)()?;
-            self.grouped_update_metric
-                .get_or_init(|| accumulator.grouped_update_batch_metric());
+            let accumulator = self.create_accumulator()?;
             let state = AccumulatorState::new(accumulator);
             self.add_allocation(state.size());
             self.states.push(state);
@@ -408,6 +404,10 @@ impl GroupsAccumulatorAdapter {
 }
 
 impl GroupsAccumulator for GroupsAccumulatorAdapter {
+    fn set_metrics(&mut self, metrics: Arc<dyn AggregateMetrics>) {
+        self.metrics = Some(metrics);
+    }
+
     fn update_batch(
         &mut self,
         values: &[ArrayRef],
@@ -453,7 +453,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         if selected_len == 0 {
             // ScalarValue::iter_to_array needs at least one value to infer the
             // output type, so evaluate a temporary empty accumulator.
-            let mut accumulator = (self.factory)()?;
+            let mut accumulator = self.create_accumulator()?;
             return Ok(ScalarValue::iter_to_array([accumulator.evaluate()?])?.slice(0, 0));
         }
 
@@ -543,7 +543,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         // If there are no rows, return empty arrays
         if num_rows == 0 {
             // create empty accumulator to get the state types
-            let empty_state = (self.factory)()?.state()?;
+            let empty_state = self.create_accumulator()?.state()?;
             let empty_arrays = empty_state
                 .into_iter()
                 .map(|state_val| new_empty_array(&state_val.data_type()))
@@ -564,12 +564,10 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
             for row_idx in chunk_start..chunk_end {
                 // Create the empty accumulator and prepare adapter-owned input
                 // outside the aggregate submetric.
-                let accumulator = (self.factory)()?;
+                let accumulator = self.create_accumulator()?;
                 if row_idx == 0 {
-                    let metric = self
-                        .grouped_update_metric
-                        .get_or_init(|| accumulator.grouped_update_batch_metric());
-                    grouped_update_metric.clone_from(metric);
+                    grouped_update_metric =
+                        self.grouped_update_metric.get().and_then(Clone::clone);
                 }
                 let values_to_accumulate =
                     slice_and_maybe_filter(values, opt_filter, &[row_idx, row_idx + 1])?;
@@ -692,6 +690,15 @@ mod tests {
     }
 
     #[derive(Debug)]
+    struct CountingMetrics(Arc<AtomicUsize>);
+
+    impl AggregateMetrics for CountingMetrics {
+        fn metric(&self, _subphase: &'static str) -> Arc<dyn AggregateMetric> {
+            Arc::new(CountingMetric(Arc::clone(&self.0)))
+        }
+    }
+
+    #[derive(Debug)]
     struct DurationMetric(Arc<AtomicU64>);
 
     impl AggregateMetric for DurationMetric {
@@ -735,6 +742,57 @@ mod tests {
         fn merge_batch(&mut self, _states: &[ArrayRef]) -> Result<()> {
             Ok(())
         }
+    }
+
+    #[derive(Debug)]
+    struct MetricsAwareAccumulator {
+        metric: Option<Arc<dyn AggregateMetric>>,
+    }
+
+    impl Accumulator for MetricsAwareAccumulator {
+        fn set_metrics(&mut self, metrics: Arc<dyn AggregateMetrics>) {
+            self.metric = Some(metrics.metric("update"));
+        }
+
+        fn update_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
+            self.metric
+                .as_ref()
+                .expect("adapter must supply metrics to every group")
+                .add_duration(Duration::ZERO);
+            Ok(())
+        }
+
+        fn evaluate(&mut self) -> Result<ScalarValue> {
+            Ok(ScalarValue::Int64(None))
+        }
+
+        fn size(&self) -> usize {
+            size_of_val(self)
+        }
+
+        fn state(&mut self) -> Result<Vec<ScalarValue>> {
+            Ok(vec![ScalarValue::Int64(None)])
+        }
+
+        fn merge_batch(&mut self, _states: &[ArrayRef]) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn adapter_supplies_metrics_to_every_group() -> Result<()> {
+        let metric_updates = Arc::new(AtomicUsize::new(0));
+        let mut adapter = GroupsAccumulatorAdapter::new(|| {
+            Ok(Box::new(MetricsAwareAccumulator { metric: None })
+                as Box<dyn Accumulator>)
+        });
+        adapter.set_metrics(Arc::new(CountingMetrics(Arc::clone(&metric_updates))));
+
+        let values: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
+        adapter.update_batch(&[values], &[0, 1], None, 2)?;
+
+        assert_eq!(metric_updates.load(Ordering::Relaxed), 2);
+        Ok(())
     }
 
     #[test]

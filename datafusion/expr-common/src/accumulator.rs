@@ -71,8 +71,9 @@ pub trait AggregateMetrics: Debug + Send + Sync {
 pub trait Accumulator: Send + Sync + Debug + std::any::Any {
     /// Supplies optional metrics owned by this aggregate expression.
     ///
-    /// The default preserves compatibility for accumulators without internal
-    /// submetrics.
+    /// The grouped accumulator adapter supplies these metrics to every
+    /// accumulator it creates. The default preserves compatibility for
+    /// accumulators without internal submetrics.
     fn set_metrics(&mut self, _metrics: Arc<dyn AggregateMetrics>) {}
 
     /// Updates the accumulator's state from its input.
