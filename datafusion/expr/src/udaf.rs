@@ -1747,17 +1747,15 @@ pub enum DistinctHandling {
     /// The result is the same with or without `DISTINCT`, so the planner
     /// is free to drop it. `min`, `max`, `bool_and`, `bit_or`, ...
     Ignored,
-    /// `DISTINCT` is applied, so the planner must leave it alone. Either the
-    /// accumulator reads `AccumulatorArgs::is_distinct` and deduplicates its
-    /// input (`count`, `sum`, `avg`, `var_samp`, `array_agg`, ...), or it
-    /// rejects `DISTINCT` and relies on `SingleDistinctToGroupBy` to
-    /// deduplicate the input first (`stddev`, `approx_median`, ...). The latter
-    /// works only when that rewrite applies; otherwise the query errors. This
-    /// is the default.
+    /// The accumulator reads `AccumulatorArgs::is_distinct` and deduplicates
+    /// its input, so the planner must leave the flag alone. `count`, `sum`,
+    /// `avg`, `var_samp`, `array_agg`, ... This is the default.
     Honored,
-    /// The accumulator does not implement `DISTINCT` and nothing deduplicates
-    /// the input for it, so `f(DISTINCT ...)` either errors or silently
-    /// returns the non-distinct answer. `corr`, `regr_*`, `nth_value`, ...
+    /// The accumulator does not implement `DISTINCT`: it does not read
+    /// `is_distinct`, or it rejects `DISTINCT` with an error. The planner has
+    /// to deduplicate the input first (today `SingleDistinctToGroupBy` does
+    /// that for single-argument functions) or reject the query. `stddev`,
+    /// `approx_median`, `corr`, `regr_*`, `nth_value`, ...
     Unsupported,
 }
 
