@@ -34,7 +34,7 @@
 //! itself — see [`from_proto`] and [`to_proto`]. It is the schema source of
 //! truth for [`datafusion-proto`].
 //!
-//! It also hosts [`ProtoDecoderRegistry`](registry::ProtoDecoderRegistry), the
+//! It also hosts [`ProtoDecoderRegistry`], the
 //! one store of extension decoders every serializable kind shares, for the same
 //! layering reason: it sits below every crate that owns one of those traits.
 //!
