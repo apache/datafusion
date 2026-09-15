@@ -109,7 +109,7 @@ impl UnKnownColumn {
     /// Reconstruct an [`UnKnownColumn`] from its protobuf representation.
     pub fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalExprNode,
-        _ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+        _ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_, crate::proto::ExprDecodeSession<'_>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         use datafusion_physical_expr_common::expect_expr_variant;
         use datafusion_proto_models::protobuf;
@@ -144,7 +144,6 @@ mod proto_tests {
     use crate::proto_test_util::{StubEncoder, UnreachableDecoder, column_node};
     use arrow::datatypes::Schema;
     use datafusion_common::DataFusionError;
-    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
     use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
     use datafusion_proto_models::protobuf::{self, physical_expr_node};
 
@@ -187,7 +186,8 @@ mod proto_tests {
         let schema = Schema::empty();
         // UnKnownColumn has no child exprs so the decoder is never called.
         let decoder = UnreachableDecoder;
-        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let session = crate::proto_test_util::TestSession::default();
+        let ctx = session.ctx(&schema, &decoder);
 
         let decoded = UnKnownColumn::try_from_proto(&node, &ctx).unwrap();
         let col = decoded
@@ -202,7 +202,8 @@ mod proto_tests {
         let node = column_node("a");
         let schema = Schema::empty();
         let decoder = UnreachableDecoder;
-        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let session = crate::proto_test_util::TestSession::default();
+        let ctx = session.ctx(&schema, &decoder);
         let err = UnKnownColumn::try_from_proto(&node, &ctx).unwrap_err();
         assert!(matches!(
             err,
@@ -227,7 +228,8 @@ mod proto_tests {
         let schema = Schema::empty();
         // UnKnownColumn has no child exprs so the decoder is never called.
         let decoder = UnreachableDecoder;
-        let dec_ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let session = crate::proto_test_util::TestSession::default();
+        let dec_ctx = session.ctx(&schema, &decoder);
 
         let decoded = UnKnownColumn::try_from_proto(&node, &dec_ctx).unwrap();
         let col = decoded

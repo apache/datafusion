@@ -79,12 +79,11 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::physical_planning_context::ScalarSubqueryResults;
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::physical_expr::proto_decode::{
-    PhysicalExprDecode, PhysicalExprDecodeCtx,
-};
-use datafusion_physical_expr_common::physical_expr::proto_encode::{
-    PhysicalExprEncode, PhysicalExprEncodeCtx,
-};
+pub use datafusion_physical_expr::proto::ExprDecodeSession;
+use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecode;
+pub use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncode;
+pub use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
 use datafusion_proto_models::protobuf::physical_plan_node::PhysicalPlanType;
 use datafusion_proto_models::protobuf::{
     PhysicalExprNode, PhysicalExtensionNode, PhysicalPlanNode,
@@ -414,8 +413,16 @@ impl<'a> ExecutionPlanDecodeCtx<'a> {
     /// The decode counterpart of
     /// [`ExecutionPlanEncodeCtx::expr_ctx`], for calling conversions such as
     /// [`Partitioning::try_from_proto`](datafusion_physical_expr::Partitioning::try_from_proto).
-    pub fn expr_ctx<'s>(&'s self, input_schema: &'s Schema) -> PhysicalExprDecodeCtx<'s> {
-        PhysicalExprDecodeCtx::new(input_schema, self)
+    pub fn expr_ctx<'s>(
+        &'s self,
+        input_schema: &'s Schema,
+    ) -> PhysicalExprDecodeCtx<'s, ExprDecodeSession<'s>> {
+        let task_ctx = self.task_ctx();
+        PhysicalExprDecodeCtx::new(
+            input_schema,
+            self,
+            ExprDecodeSession::new(task_ctx, task_ctx.session_config().options()),
+        )
     }
 }
 
