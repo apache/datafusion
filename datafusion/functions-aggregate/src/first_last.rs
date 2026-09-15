@@ -1303,8 +1303,8 @@ impl AggregateUDFImpl for LastValue {
 
     // TODO: whether this is `DistinctHandling::Ignored` depends on `ORDER BY`.
     // `last_value(DISTINCT x ORDER BY y)` deduplicates `x` and leaves the `y`
-    // ordering meaningless, while `last_value(DISTINCT x ORDER BY x)` is just
-    // `max(x)`. Left at the default `Honored` until that is settled, even
+    // ordering meaningless, while `last_value(DISTINCT x ORDER BY x)` is
+    // `max(x)` when `x` has no NULL. Left at the default `Honored` until that is settled, even
     // though the accumulator ignores `is_distinct` today.
 }
 
