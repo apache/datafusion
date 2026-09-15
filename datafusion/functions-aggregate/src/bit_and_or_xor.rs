@@ -323,7 +323,7 @@ impl AggregateUDFImpl for BitwiseOperation {
     fn distinct_handling(&self) -> DistinctHandling {
         match self.operation {
             // Bitwise AND/OR are idempotent: duplicates cannot change the
-            // result, so building a per-group `HashSet` buys nothing.
+            // result. Only XOR has a distinct accumulator.
             BitwiseOperationType::And | BitwiseOperationType::Or => {
                 DistinctHandling::Ignored
             }
