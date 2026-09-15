@@ -2281,10 +2281,11 @@ SET datafusion.execution.target_partitions = 4;
 #
 # Each ingredient below is load-bearing:
 #
-# * The `IN (<subquery>)` sits in the SELECT list, not in a WHERE clause, so
-#   `decorrelate_predicate_subquery` (which runs earlier) leaves it alone and it
-#   is still a subquery expression by the time extraction runs. A subquery in
-#   WHERE would be flattened into the main plan, where the old scan could see it.
+# * The subquery must still be a subquery expression when extraction runs.
+#   `decorrelate_predicate_subquery` runs earlier and now flattens `IN` and
+#   `EXISTS` in a SELECT list too, so a plain uncorrelated `IN` is gone before
+#   extraction. This subquery is correlated and has a `LIMIT`, which that rule
+#   cannot pull up, so the rule leaves it alone.
 # * The alias inside the subquery is literally `__datafusion_extracted_1`. Rename
 #   it to anything outside the reserved prefix and there is nothing to collide
 #   with -- the query then passes with or without the fix and guards nothing.
@@ -2295,11 +2296,12 @@ SET datafusion.execution.target_partitions = 4;
 # Without the fix, extraction reuses `__datafusion_extracted_1` and planning
 # aborts with: Optimizer rule 'push_down_leaf_projections' failed Schema error:
 # Schema contains duplicate unqualified field name __datafusion_extracted_1.
-# With the fix, generated aliases remain distinct, as the plan below shows.
+# With the fix, the generator starts at 2, so the alias made inside the subquery
+# is `__datafusion_extracted_2` and the two names stay distinct.
 #
-# Keep this as `EXPLAIN` under `logical_plan_only`: the logical plan exposes both
-# the collision-free extracted aliases and the mark joins used to preserve the
-# three-valued semantics of `IN` in a projection.
+# Keep this as `EXPLAIN` under `logical_plan_only`: an `InSubquery` expression
+# that survives decorrelation has no physical plan, so only the logical plan can
+# show the collision-free extracted aliases.
 #####################
 
 statement ok
@@ -2313,30 +2315,28 @@ SELECT
         SELECT id
         FROM (
             SELECT id, s['label'] AS __datafusion_extracted_1
-            FROM simple_struct
-            WHERE s['value'] > 120
+            FROM simple_struct inner_t
+            WHERE s['value'] > 120 AND inner_t.id = outer_t.id
         )
         WHERE __datafusion_extracted_1 <> 'delta'
+        LIMIT 1
     ) AS has_matching_label
-FROM simple_struct;
+FROM simple_struct outer_t;
 ----
 logical_plan
-01)Projection: simple_struct.id, __correlated_sq_1.mark IS NOT DISTINCT FROM Boolean(true) OR __correlated_sq_2.mark IS NOT DISTINCT FROM Boolean(true) AND __correlated_sq_1.mark IS DISTINCT FROM Boolean(true) AND Boolean(NULL) AS has_matching_label
-02)--LeftMark Join:
-03)----LeftMark Join:
-04)------LeftMark Join: simple_struct.id = __correlated_sq_1.id
-05)--------TableScan: simple_struct projection=[id]
-06)--------SubqueryAlias: __correlated_sq_1
-07)----------Projection: simple_struct.id
-08)------------Filter: __datafusion_extracted_4 > Int64(120) AND __datafusion_extracted_1 != Utf8("delta")
-09)--------------Projection: get_field(simple_struct.s, Utf8("value")) AS __datafusion_extracted_4, simple_struct.id, get_field(simple_struct.s, Utf8("label")) AS __datafusion_extracted_1
-10)----------------TableScan: simple_struct projection=[id, s], partial_filters=[get_field(simple_struct.s, Utf8("value")) > Int64(120)]
-11)------EmptyRelation: rows=0
-12)----SubqueryAlias: __correlated_sq_3
-13)------Projection: simple_struct.id
-14)--------Filter: __datafusion_extracted_6 > Int64(120) AND __datafusion_extracted_1 != Utf8("delta")
-15)----------Projection: get_field(simple_struct.s, Utf8("value")) AS __datafusion_extracted_6, simple_struct.id, get_field(simple_struct.s, Utf8("label")) AS __datafusion_extracted_1
-16)------------TableScan: simple_struct projection=[id, s], partial_filters=[Boolean(true), get_field(simple_struct.s, Utf8("value")) > Int64(120)]
+01)Projection: outer_t.id, outer_t.id IN (<subquery>) AS has_matching_label
+02)--Subquery:
+03)----Projection: inner_t.id
+04)------Projection: inner_t.id, __datafusion_extracted_1
+05)--------SubqueryAlias: inner_t
+06)----------Projection: simple_struct.id, simple_struct.s, __datafusion_extracted_1
+07)------------Limit: skip=0, fetch=1
+08)--------------Filter: __datafusion_extracted_2 > Int64(120) AND __datafusion_extracted_1 != Utf8("delta")
+09)----------------Filter: simple_struct.id = outer_ref(outer_t.id)
+10)------------------Projection: get_field(simple_struct.s, Utf8("value")) AS __datafusion_extracted_2, get_field(simple_struct.s, Utf8("label")) AS __datafusion_extracted_1, simple_struct.id, simple_struct.s
+11)--------------------TableScan: simple_struct, partial_filters=[simple_struct.id = outer_ref(outer_t.id), get_field(simple_struct.s, Utf8("value")) > Int64(120)]
+12)--SubqueryAlias: outer_t
+13)----TableScan: simple_struct projection=[id]
 
 statement ok
 set datafusion.explain.logical_plan_only = false;
