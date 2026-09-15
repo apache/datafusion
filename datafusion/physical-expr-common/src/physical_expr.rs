@@ -520,6 +520,14 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// constructors; both sides of the round-trip are fallible and named
     /// consistently.
     ///
+    /// Decoding is deliberately *not* a method here: it is a constructor, so
+    /// it has no `self` to dispatch on, and the wire name it needs cannot be an
+    /// associated constant without making `PhysicalExpr` not dyn-compatible.
+    /// Built-in expressions write an inherent `try_from_proto`; third-party
+    /// expressions implement `PhysicalExprFromProto` (in
+    /// `datafusion-physical-expr`), which pairs the constructor with the name it
+    /// is registered and encoded under.
+    ///
     /// [`PhysicalExprNode`]: datafusion_proto_models::protobuf::PhysicalExprNode
     #[cfg(feature = "proto")]
     fn try_to_proto(

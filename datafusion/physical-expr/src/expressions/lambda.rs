@@ -61,9 +61,11 @@ impl Hash for LambdaExpr {
 }
 
 #[cfg(feature = "proto")]
-impl LambdaExpr {
+impl crate::proto::PhysicalExprFromProto for LambdaExpr {
+    const NAME: &'static str = "datafusion.LambdaExpr";
+
     /// Reconstruct a [`LambdaExpr`] from a proto node.
-    pub fn try_from_proto(
+    fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalExprNode,
         ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_, crate::proto::ExprDecodeSession<'_>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
@@ -516,6 +518,7 @@ mod tests {
 #[cfg(all(test, feature = "proto"))]
 mod proto_tests {
     use super::*;
+    use crate::proto::PhysicalExprFromProto;
     use crate::proto_test_util::{
         StubDecoder, StubEncoder, UnreachableDecoder, column_node,
     };

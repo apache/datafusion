@@ -41,7 +41,7 @@ use datafusion_physical_plan::expressions::{
 };
 use datafusion_physical_plan::joins::HashExpr;
 use datafusion_physical_plan::proto::ExecutionPlanDecodeCtx;
-use datafusion_physical_plan::proto::ExprDecodeSession;
+use datafusion_physical_plan::proto::{ExprDecodeSession, PhysicalExprFromProto};
 use datafusion_physical_plan::repartition::RangeExpr;
 use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
 use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};

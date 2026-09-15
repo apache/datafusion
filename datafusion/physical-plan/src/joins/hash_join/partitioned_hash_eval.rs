@@ -233,7 +233,9 @@ impl PhysicalExpr for HashExpr {
 }
 
 #[cfg(feature = "proto")]
-impl HashExpr {
+impl datafusion_physical_expr::proto::PhysicalExprFromProto for HashExpr {
+    const NAME: &'static str = "datafusion.HashExpr";
+
     /// Reconstruct a [`HashExpr`] from its protobuf representation.
     ///
     /// Takes the whole [`PhysicalExprNode`], the exact inverse of what
@@ -244,7 +246,7 @@ impl HashExpr {
     /// [`PhysicalExprNode`]: datafusion_proto_models::protobuf::PhysicalExprNode
     /// [`PhysicalExpr::try_to_proto`]: datafusion_physical_expr_common::physical_expr::PhysicalExpr::try_to_proto
     /// [`PhysicalExprDecodeCtx::decode`]: datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx::decode
-    pub fn try_from_proto(
+    fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalExprNode,
         ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_, datafusion_physical_expr::proto::ExprDecodeSession<'_>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
@@ -585,6 +587,7 @@ mod tests {
         use super::*;
         use arrow::datatypes::{DataType, Field};
         use datafusion_common::internal_datafusion_err;
+        use datafusion_physical_expr::proto::PhysicalExprFromProto;
         use datafusion_physical_expr_common::physical_expr::proto_decode::{
             PhysicalExprDecode, PhysicalExprDecodeCtx,
         };

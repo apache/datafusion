@@ -66,7 +66,7 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::physical_planning_context::ScalarSubqueryResults;
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 use datafusion_physical_expr::PhysicalExpr;
-pub use datafusion_physical_expr::proto::ExprDecodeSession;
+pub use datafusion_physical_expr::proto::{ExprDecodeSession, PhysicalExprFromProto};
 use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecode;
 pub use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
 use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncode;

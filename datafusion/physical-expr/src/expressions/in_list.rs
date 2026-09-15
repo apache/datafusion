@@ -68,8 +68,10 @@ impl Debug for InListExpr {
 }
 
 #[cfg(feature = "proto")]
-impl InListExpr {
-    pub fn try_from_proto(
+impl crate::proto::PhysicalExprFromProto for InListExpr {
+    const NAME: &'static str = "datafusion.InListExpr";
+
+    fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalExprNode,
         ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_, crate::proto::ExprDecodeSession<'_>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
@@ -3964,6 +3966,7 @@ mod tests {
 mod proto_tests {
     use super::*;
     use crate::expressions::{Column, col, lit};
+    use crate::proto::PhysicalExprFromProto;
     use crate::proto_test_util::{
         StubDecoder, StubEncoder, UnreachableDecoder, column_node,
     };
