@@ -581,3 +581,69 @@ DROP TABLE outer_corr_table;
 
 statement ok
 DROP TABLE outer_table;
+
+#############
+## Regression: constant (non-column) value expression in `NOT IN (subquery)`
+##
+## When the `NOT IN` predicate is not the whole `WHERE` clause, decorrelation
+## produces a mark join instead of an anti join. `3 NOT IN (1, NULL)` is
+## UNKNOWN, so the mark column must be NULL for every outer row: `NOT mark` is
+## then UNKNOWN and the row only survives via the other disjunct.
+#############
+
+statement ok
+CREATE TABLE nmconst_t1(id INT) AS VALUES (1), (2);
+
+statement ok
+CREATE TABLE nmconst_t2(id INT) AS VALUES (1), (NULL);
+
+# Q3: `NOT mark` is UNKNOWN for both rows, so only `id = 1` passes.
+query I
+SELECT id FROM nmconst_t1 WHERE 3 NOT IN (SELECT id FROM nmconst_t2) OR id = 1 ORDER BY id;
+----
+1
+
+# Q4: the predicate is UNKNOWN for every row, so `IS NULL` is TRUE for both.
+query I
+SELECT id FROM nmconst_t1 WHERE (3 NOT IN (SELECT id FROM nmconst_t2)) IS NULL ORDER BY id;
+----
+1
+2
+
+# Control: no NULL in the subquery => `3 NOT IN {1}` is TRUE, never UNKNOWN.
+query I
+SELECT id FROM nmconst_t1
+WHERE (3 NOT IN (SELECT id FROM nmconst_t2 WHERE id IS NOT NULL)) IS NULL
+ORDER BY id;
+----
+
+query I
+SELECT id FROM nmconst_t1
+WHERE 3 NOT IN (SELECT id FROM nmconst_t2 WHERE id IS NOT NULL) OR id = 1
+ORDER BY id;
+----
+1
+2
+
+# Control: the constant matches a subquery row => FALSE (not UNKNOWN).
+query I
+SELECT id FROM nmconst_t1 WHERE (1 NOT IN (SELECT id FROM nmconst_t2)) IS NULL ORDER BY id;
+----
+
+query I
+SELECT id FROM nmconst_t1 WHERE 1 NOT IN (SELECT id FROM nmconst_t2) OR id = 1 ORDER BY id;
+----
+1
+
+# Positive `IN` form: `3 IN (1, NULL)` is UNKNOWN, so the mark is NULL.
+query I
+SELECT id FROM nmconst_t1 WHERE (3 IN (SELECT id FROM nmconst_t2)) IS NULL ORDER BY id;
+----
+1
+2
+
+statement ok
+DROP TABLE nmconst_t1;
+
+statement ok
+DROP TABLE nmconst_t2;
