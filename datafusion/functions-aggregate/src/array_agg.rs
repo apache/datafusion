@@ -955,56 +955,59 @@ impl DistinctArrayAggAccumulator {
             .then(|| self.distinct_metric.clone())
             .flatten();
         let distinct_start = distinct_metric.as_ref().map(|_| Instant::now());
-        self.ensure_state(col.data_type())?;
+        let result = (|| {
+            self.ensure_state(col.data_type())?;
 
-        // Encode the entire incoming batch into rows_buffer in one pass.
-        let DistinctState {
-            converter,
-            group_rows,
-            counts,
-            row_hashes,
-            rows_buffer,
-        } = self.state.as_mut().unwrap();
-        rows_buffer.clear();
-        converter.append(rows_buffer, std::slice::from_ref(col))?;
+            // Encode the entire incoming batch into rows_buffer in one pass.
+            let DistinctState {
+                converter,
+                group_rows,
+                counts,
+                row_hashes,
+                rows_buffer,
+            } = self.state.as_mut().unwrap();
+            rows_buffer.clear();
+            converter.append(rows_buffer, std::slice::from_ref(col))?;
 
-        // Pre-compute all hashes for the batch in one SIMD-friendly pass.
-        self.hashes_buffer.clear();
-        self.hashes_buffer.resize(col.len(), 0);
-        create_hashes(
-            std::slice::from_ref(col),
-            &self.random_state,
-            &mut self.hashes_buffer,
-        )?;
+            // Pre-compute all hashes for the batch in one SIMD-friendly pass.
+            self.hashes_buffer.clear();
+            self.hashes_buffer.resize(col.len(), 0);
+            create_hashes(
+                std::slice::from_ref(col),
+                &self.random_state,
+                &mut self.hashes_buffer,
+            )?;
 
-        for (row_idx, &hash) in self.hashes_buffer.iter().enumerate() {
-            let row = rows_buffer.row(row_idx);
-            let entry = self.map.find_mut(hash, |&(h, group_idx)| {
-                h == hash && group_rows[group_idx].row() == row
-            });
-            match entry {
-                Some((_, group_idx)) => {
-                    // Already known: just increment the live refcount.
-                    counts[*group_idx] += 1;
-                }
-                None => {
-                    // New distinct value: own the encoded row, record it.
-                    let new_group_idx = group_rows.len();
-                    group_rows.push(row.owned());
-                    counts.push(1);
-                    row_hashes.push(hash);
-                    self.map.insert_accounted(
-                        (hash, new_group_idx),
-                        |&(h, _)| h,
-                        &mut self.map_size,
-                    );
+            for (row_idx, &hash) in self.hashes_buffer.iter().enumerate() {
+                let row = rows_buffer.row(row_idx);
+                let entry = self.map.find_mut(hash, |&(h, group_idx)| {
+                    h == hash && group_rows[group_idx].row() == row
+                });
+                match entry {
+                    Some((_, group_idx)) => {
+                        // Already known: just increment the live refcount.
+                        counts[*group_idx] += 1;
+                    }
+                    None => {
+                        // New distinct value: own the encoded row, record it.
+                        let new_group_idx = group_rows.len();
+                        group_rows.push(row.owned());
+                        counts.push(1);
+                        row_hashes.push(hash);
+                        self.map.insert_accounted(
+                            (hash, new_group_idx),
+                            |&(h, _)| h,
+                            &mut self.map_size,
+                        );
+                    }
                 }
             }
-        }
+            Ok(())
+        })();
         if let (Some(metric), Some(start)) = (distinct_metric, distinct_start) {
             metric.add_duration(start.elapsed());
         }
-        Ok(())
+        result
     }
 }
 
@@ -1744,6 +1747,26 @@ mod tests {
 
         accumulator.update_batch(&[Arc::new(Int32Array::from(vec![1]))])?;
 
+        assert_eq!(metric_updates.load(Ordering::Relaxed), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_accumulator_records_metric_on_update_error() -> Result<()> {
+        use arrow::array::StringArray;
+
+        let metric_updates = Arc::new(AtomicUsize::new(0));
+        let mut accumulator =
+            DistinctArrayAggAccumulator::try_new(&DataType::Int32, None, false)?;
+        accumulator.set_metrics(Arc::new(CountingMetrics(Arc::clone(&metric_updates))));
+
+        accumulator.update_batch(&[Arc::new(Int32Array::from(vec![1]))])?;
+        metric_updates.store(0, Ordering::Relaxed);
+
+        let result =
+            accumulator.update_batch(&[Arc::new(StringArray::from(vec!["bad"]))]);
+
+        assert!(result.is_err());
         assert_eq!(metric_updates.load(Ordering::Relaxed), 1);
         Ok(())
     }
