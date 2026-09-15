@@ -362,11 +362,11 @@ fn check_aggregation_in_scalar_subquery(
     inner_plan: &LogicalPlan,
     agg: &Aggregate,
 ) -> Result<()> {
-    if agg.aggr_expr.is_empty() {
-        return plan_err!(
-            "Correlated scalar subquery must be aggregated to return at most one row"
-        );
-    }
+    // The grouping is what makes the subquery scalar, not the aggregation. An
+    // empty GROUP BY returns one row, and a GROUP BY on only correlated columns
+    // returns at most one row per set of outer values. So subqueries without
+    // aggregate expressions are allowed as long as the GROUP BY check below
+    // passes.
     if !agg.group_expr.is_empty() {
         let correlated_exprs = get_correlated_expressions(inner_plan)?;
         let inner_subquery_cols =
