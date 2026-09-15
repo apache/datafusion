@@ -887,7 +887,7 @@ impl RangeExpr {
     /// Reconstructs a [`RangeExpr`] from its protobuf representation.
     pub fn try_from_proto(
         node: &protobuf::PhysicalExprNode,
-        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_, datafusion_physical_expr::proto::ExprDecodeSession<'_>>,
     ) -> Result<PhysicalExprRef> {
         let protobuf::PhysicalExprNode {
             expr_id: _,

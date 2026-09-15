@@ -41,6 +41,7 @@ use datafusion_physical_plan::expressions::{
 };
 use datafusion_physical_plan::joins::HashExpr;
 use datafusion_physical_plan::proto::ExecutionPlanDecodeCtx;
+use datafusion_physical_plan::proto::ExprDecodeSession;
 use datafusion_physical_plan::repartition::RangeExpr;
 use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
 use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
@@ -258,10 +259,7 @@ pub fn parse_physical_expr_with_converter(
         proto_converter,
     };
     let decode_ctx =
-        datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx::new(
-            input_schema,
-            &decoder,
-        );
+        datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx::new(input_schema, &decoder, ExprDecodeSession::new(ctx.task_ctx(), ctx.task_ctx().session_config().options()));
 
     let pexpr: Arc<dyn PhysicalExpr> = match expr_type {
         // Migrated expressions take the whole `PhysicalExprNode` and unwrap
@@ -415,10 +413,7 @@ pub fn parse_protobuf_partitioning(
         proto_converter,
     };
     let decode_ctx =
-        datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx::new(
-            input_schema,
-            &decoder,
-        );
+        datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx::new(input_schema, &decoder, ExprDecodeSession::new(ctx.task_ctx(), ctx.task_ctx().session_config().options()));
     partitioning
         .map(|partitioning| Partitioning::try_from_proto(partitioning, &decode_ctx))
         .transpose()
