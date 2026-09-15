@@ -91,11 +91,6 @@ impl OrderedAggregateTable<PartialMarker> {
 
     /// Materializes all groups proven complete by the input ordering, leaving
     /// the active ordered-key range in the table.
-    ///
-    /// For `GROUP BY a, b` ordered by `a`, seeing a new `a` completes every group
-    /// with the previous `a`. Remove that entire prefix once: removing only
-    /// `batch_size` groups at a time repeatedly shifts the remaining hash table
-    /// and accumulator indexes. The stream slices the materialized batch instead.
     pub(in crate::aggregates) fn take_completed_state_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
