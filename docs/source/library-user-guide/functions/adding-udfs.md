@@ -1118,7 +1118,7 @@ impl Accumulator for GeometricMean {
 
 ### Declaring how an Aggregate UDF treats `DISTINCT`
 
-By default DataFusion assumes an aggregate honours the `DISTINCT` modifier, which means the accumulator is expected to
+By default DataFusion assumes an aggregate honors the `DISTINCT` modifier, which means the accumulator is expected to
 read `AccumulatorArgs::is_distinct` and deduplicate its input. Override
 [`AggregateUDFImpl::distinct_handling`] when that is not what your function does:
 
