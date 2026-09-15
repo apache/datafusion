@@ -109,7 +109,11 @@ pub(crate) fn apply_file_schema_type_coercions_with_rle(
         .collect();
 
     // Early return if no transformation needed
-    if !needs_view_transform && !needs_string_transform && !needs_nested_transform && !needs_dict_transform {
+    if !needs_view_transform
+        && !needs_string_transform
+        && !needs_nested_transform
+        && !needs_dict_transform
+    {
         return None;
     }
 
