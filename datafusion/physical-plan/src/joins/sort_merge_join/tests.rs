@@ -34,6 +34,7 @@ use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn};
 use crate::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
 use crate::metrics::{ExecutionPlanMetricsSet, SpillMetrics};
 use crate::projection::{ProjectionExec, ProjectionExpr};
+use crate::sorts::sort::SortExec;
 use crate::spill::spill_manager::SpillManager;
 use crate::test::TestMemoryExec;
 use crate::test::exec::BarrierExec;
@@ -55,11 +56,12 @@ use bytes::Bytes;
 use datafusion_common::JoinType::*;
 use datafusion_common::instant::Instant;
 use datafusion_common::{
-    JoinSide, internal_err,
-    test_util::{batches_to_sort_string, batches_to_string},
+    DataFusionError, JoinType, NullEquality, Result, ScalarValue, assert_batches_eq,
+    assert_contains,
 };
 use datafusion_common::{
-    JoinType, NullEquality, Result, ScalarValue, assert_batches_eq, assert_contains,
+    JoinSide, internal_err,
+    test_util::{batches_to_sort_string, batches_to_string},
 };
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::config::SessionConfig;
@@ -67,7 +69,7 @@ use datafusion_execution::disk_manager::{
     DiskManager, DiskManagerBuilder, DiskManagerMode,
 };
 use datafusion_execution::memory_pool::{
-    MemoryConsumer, MemoryPool, MemoryReservation, UnboundedMemoryPool,
+    FairSpillPool, MemoryConsumer, MemoryPool, MemoryReservation, UnboundedMemoryPool,
 };
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_execution::spill_file::{SpillFile, SpillWriter, TempFileFactory};
@@ -75,6 +77,7 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::expressions::Literal;
+use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_expr_common::physical_expr::PhysicalExprRef;
 use futures::{Stream, StreamExt};
 use insta::assert_snapshot;
@@ -2544,6 +2547,122 @@ async fn stream_registers_as_a_spillable_consumer() -> Result<()> {
     assert!(
         can_spill,
         "the sort-merge join stream must register as able to spill"
+    );
+    Ok(())
+}
+
+/// Runs the join under a `FairSpillPool` too small for its buffered side, on
+/// top of a sort that competes with it for that pool.
+///
+/// The buffered side is a single equal-key group larger than the pool, so the
+/// join spills part of it and holds the rest while it drains the streamed
+/// side. The streamed side is an in-memory sort of several batches whose merge
+/// asks the pool for every chunk it pulls in. Registered as unspillable, the
+/// join would take every byte the sort has not claimed before it starts
+/// spilling, and that merge would fail to allocate. As a spillable consumer
+/// it is held to its fair share and both finish.
+#[tokio::test]
+async fn fair_spill_pool_leaves_room_for_the_streamed_sort() -> Result<()> {
+    // Measured window: the join passes as a spillable consumer from 240 KB
+    // up, and still starves the sort as an unspillable one up to 704 KB.
+    const POOL_SIZE: usize = 384 * 1024;
+    const GROUP_KEY: i32 = i32::MAX;
+    const STREAMED_BATCHES: usize = 2;
+    const STREAMED_ROWS: usize = 512;
+    const BUFFERED_BATCHES: usize = 32;
+    const BUFFERED_ROWS: usize = 1024;
+
+    // Unsorted: every batch carries one row of the buffered group's key, which
+    // the sort moves to the end, so the join holds the whole buffered group
+    // while it pulls the streamed side through the sort's merge.
+    let streamed = build_table_from_batches(
+        (0..STREAMED_BATCHES)
+            .map(|batch| {
+                let base = (batch * STREAMED_ROWS) as i32;
+                let a: Vec<i32> = (0..STREAMED_ROWS as i32).map(|i| base + i).collect();
+                let b: Vec<i32> = (0..STREAMED_ROWS as i32)
+                    .map(|i| {
+                        if i == 0 {
+                            GROUP_KEY
+                        } else {
+                            STREAMED_ROWS as i32 - i
+                        }
+                    })
+                    .collect();
+                let c: Vec<i32> =
+                    (0..STREAMED_ROWS as i32).map(|i| base + i + 1).collect();
+                build_table_i32(("a1", &a), ("b1", &b), ("c1", &c))
+            })
+            .collect(),
+    );
+    let ordering = LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::new(
+        Column::new_with_schema("b1", &streamed.schema())?,
+    ))])
+    .unwrap();
+    let streamed = Arc::new(SortExec::new(ordering, streamed)) as Arc<dyn ExecutionPlan>;
+
+    // Already sorted: one group, larger than the pool.
+    let buffered = build_table_from_batches(
+        (0..BUFFERED_BATCHES)
+            .map(|batch| {
+                let base = (batch * BUFFERED_ROWS) as i32;
+                let a: Vec<i32> = (0..BUFFERED_ROWS as i32).map(|i| base + i).collect();
+                let b = vec![GROUP_KEY; BUFFERED_ROWS];
+                let c: Vec<i32> = (0..BUFFERED_ROWS as i32).map(|i| base - i).collect();
+                build_table_i32(("a2", &a), ("b2", &b), ("c2", &c))
+            })
+            .collect(),
+    );
+
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &streamed.schema())?) as _,
+        Arc::new(Column::new_with_schema("b2", &buffered.schema())?) as _,
+    )];
+    let session_config = SessionConfig::default()
+        .with_batch_size(128)
+        // Keep the sort in memory and merging chunk by chunk rather than
+        // sorting one concatenated batch in place.
+        .with_sort_in_place_threshold_bytes(0)
+        .with_sort_spill_reservation_bytes(0);
+
+    let run = |runtime| async {
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(session_config.clone())
+                .with_runtime(runtime),
+        );
+        let join = join(
+            Arc::clone(&streamed),
+            Arc::clone(&buffered),
+            on.clone(),
+            Inner,
+        )?;
+        let batches = common::collect(join.execute(0, task_ctx)?).await?;
+        let metrics = join.metrics().unwrap();
+        Ok::<_, DataFusionError>((batches, metrics.spill_count().unwrap()))
+    };
+
+    let fair = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::new(FairSpillPool::new(POOL_SIZE)))
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+        )
+        .build_arc()?;
+    let (spilled, spill_count) = run(fair).await?;
+    assert!(
+        spill_count > 0,
+        "the join must have spilled its buffered side"
+    );
+    assert_eq!(
+        spilled.iter().map(|b| b.num_rows()).sum::<usize>(),
+        STREAMED_BATCHES * BUFFERED_BATCHES * BUFFERED_ROWS
+    );
+
+    let (unbounded, spill_count) = run(RuntimeEnvBuilder::new().build_arc()?).await?;
+    assert_eq!(spill_count, 0);
+    assert_eq!(
+        batches_to_sort_string(&spilled),
+        batches_to_sort_string(&unbounded)
     );
     Ok(())
 }
@@ -6388,7 +6507,7 @@ impl SpillFile for PendingSpillFile {
             tokio::fs::read(&path)
                 .await
                 .map(Bytes::from)
-                .map_err(datafusion_common::DataFusionError::IoError)
+                .map_err(DataFusionError::IoError)
         })
         .flat_map(
             |read_result| -> Pin<Box<dyn Stream<Item = Result<Bytes>> + Send>> {
