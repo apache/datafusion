@@ -21,6 +21,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::simplify_expressions::ExprSimplifier;
+use crate::utils::replace_qualified_name;
 
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
@@ -29,10 +30,9 @@ use datafusion_common::{
     Column, DFSchemaRef, HashMap, Result, ScalarValue, assert_or_internal_err, plan_err,
 };
 use datafusion_expr::expr::Alias;
+use datafusion_expr::expr_rewriter::strip_outer_reference;
 use datafusion_expr::simplify::SimplifyContext;
-use datafusion_expr::utils::{
-    collect_subquery_cols, conjunction, find_join_exprs, split_conjunction,
-};
+use datafusion_expr::utils::{collect_subquery_cols, conjunction, split_conjunction};
 use datafusion_expr::{
     BinaryExpr, Cast, EmptyRelation, Expr, ExprSchemable, FetchType, LogicalPlan,
     LogicalPlanBuilder, Operator, expr, lit,
@@ -183,7 +183,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         .filter(|e| e.contains_outer())
                         .all(|&e| can_pullup_over_aggregation(e));
                 let (mut join_filters, subquery_filters) =
-                    find_join_exprs(subquery_filter_exprs)?;
+                    find_join_exprs(subquery_filter_exprs);
                 if let Some(in_predicate) = &self.in_predicate_opt {
                     // in_predicate may be already included in the join filters, remove it from the join filters first.
                     join_filters = remove_duplicated_filter(join_filters, in_predicate)?;
@@ -480,6 +480,60 @@ fn collect_local_correlated_cols(
     }
 }
 
+/// Extracts correlated predicates, such as a comparison between a column from the
+/// subquery and a column from the outer scope.
+///
+/// Preserves [`Expr::OuterReferenceColumn`] markers so callers can distinguish
+/// inner and outer columns when qualifying join filters (see [`build_join_filter`]).
+///
+/// # Arguments
+///
+/// * `exprs` - Subquery filter predicates to classify.
+///
+/// # Return value
+///
+/// Tuple of (correlated join filters, remaining subquery filters). Correlated
+/// self-equalities are discarded from both lists.
+pub(crate) fn find_join_exprs(exprs: Vec<&Expr>) -> (Vec<Expr>, Vec<Expr>) {
+    let mut joins = vec![];
+    let mut others = vec![];
+    for filter in exprs {
+        // Predicates containing outer references become join filters.
+        if filter.contains_outer() {
+            // Check equality before stripping markers: inner and outer columns
+            // with the same qualified name still belong to different scopes.
+            if !matches!(filter, Expr::BinaryExpr(BinaryExpr { left, op: Operator::Eq, right }) if left.eq(right))
+            {
+                joins.push(filter.clone());
+            }
+        } else {
+            others.push(filter.clone());
+        }
+    }
+    (joins, others)
+}
+
+/// Combines join filters and qualifies their inner columns with the subquery alias.
+///
+/// Aliasing must precede stripping outer references so inner and outer columns
+/// with the same qualified name remain distinguishable.
+pub(crate) fn build_join_filter<'a>(
+    join_filters: Vec<Expr>,
+    correlated_cols: impl IntoIterator<Item = &'a Column>,
+    subquery_alias: &str,
+) -> Result<Option<Expr>> {
+    let correlated_cols = correlated_cols
+        .into_iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    conjunction(join_filters)
+        .map(|filter| {
+            replace_qualified_name(filter, &correlated_cols, subquery_alias)
+                .map(strip_outer_reference)
+        })
+        .transpose()
+}
+
 fn remove_duplicated_filter(
     filters: Vec<Expr>,
     in_predicate: &Expr,
@@ -496,6 +550,7 @@ fn remove_duplicated_filter(
 
     Ok(filters
         .into_iter()
+        .map(strip_outer_reference)
         .filter(|filter| {
             if filter == in_predicate {
                 return false;
@@ -651,4 +706,39 @@ fn filter_exprs_evaluation_result_on_empty_batch(
         None
     };
     Ok(pull_up_expr)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::DataType;
+    use datafusion_expr::{col, out_ref_col};
+
+    #[test]
+    fn test_find_join_exprs_preserves_outer_references() {
+        let outer = out_ref_col(DataType::Int32, "t.a");
+        let correlated = col("t.a").eq(outer.clone());
+        let self_equality = outer.clone().eq(outer);
+        let local = col("t.b").gt(lit(2));
+
+        assert_eq!(
+            find_join_exprs(vec![&correlated, &self_equality, &local]),
+            (vec![correlated], vec![local])
+        );
+    }
+
+    #[test]
+    fn test_build_join_filter() -> Result<()> {
+        assert_eq!(build_join_filter(vec![], [], "sq")?, None);
+
+        let column = Column::from("t.a");
+        let outer = out_ref_col(DataType::Int32, "t.a");
+        let filters = vec![col("t.a").eq(outer.clone()), outer.gt(lit(1))];
+
+        assert_eq!(
+            build_join_filter(filters, [&column, &column], "sq")?,
+            Some(col("sq.a").eq(col("t.a")).and(col("t.a").gt(lit(1))))
+        );
+        Ok(())
+    }
 }

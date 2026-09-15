@@ -2737,3 +2737,138 @@ b 400
 
 statement ok
 DROP TABLE metrics;
+
+# Regression tests for #25258 - Unaliased set comparison subqueries return wrong results
+
+statement ok
+SET datafusion.explain.logical_plan_only = true;
+
+statement ok
+CREATE TABLE emp (id INT, name TEXT, salary INT);
+
+statement ok
+INSERT INTO emp VALUES
+(1,'Alice',5000),
+(2,'Bob',6000),
+(3,'Carol',7000),
+(4,'Dave',8000),
+(5,'Eve',9000),
+(6,'Frank',10000);
+
+## Un-aliased
+
+query I
+SELECT id
+FROM emp
+WHERE salary > ANY (SELECT salary FROM emp WHERE id <= 3);
+----
+2
+3
+4
+5
+6
+
+query TT
+EXPLAIN SELECT id
+FROM emp
+WHERE salary > ANY (SELECT salary FROM emp WHERE id <= 3);
+----
+logical_plan
+01)Projection: emp.id
+02)--LeftMark Join:  Filter: emp.salary > __correlated_sq_3.salary IS TRUE
+03)----Projection: emp.id, emp.salary
+04)------LeftMark Join:  Filter: emp.salary > __correlated_sq_2.salary IS NULL
+05)--------Projection: emp.id, emp.salary
+06)----------Filter: __correlated_sq_1.mark
+07)------------LeftMark Join:  Filter: emp.salary > __correlated_sq_1.salary IS TRUE
+08)--------------TableScan: emp projection=[id, salary]
+09)--------------SubqueryAlias: __correlated_sq_1
+10)----------------Projection: emp.salary
+11)------------------Filter: emp.id <= Int32(3)
+12)--------------------TableScan: emp projection=[id, salary]
+13)--------SubqueryAlias: __correlated_sq_2
+14)----------Projection: emp.salary
+15)------------Filter: emp.id <= Int32(3)
+16)--------------TableScan: emp projection=[id, salary]
+17)----SubqueryAlias: __correlated_sq_3
+18)------Projection: emp.salary
+19)--------Filter: emp.id <= Int32(3)
+20)----------TableScan: emp projection=[id, salary]
+
+query I
+SELECT id
+FROM emp
+WHERE salary > ALL (SELECT salary FROM emp WHERE id <= 2);
+----
+3
+4
+5
+6
+
+query TT
+EXPLAIN SELECT id
+FROM emp
+WHERE salary > ALL (SELECT salary FROM emp WHERE id <= 2);
+----
+logical_plan
+01)Projection: emp.id
+02)--Filter: NOT __correlated_sq_3.mark
+03)----Projection: emp.id, __correlated_sq_3.mark
+04)------LeftMark Join:  Filter: emp.salary > __correlated_sq_3.salary IS NULL
+05)--------Projection: emp.id, emp.salary
+06)----------LeftMark Join:  Filter: emp.salary > __correlated_sq_2.salary IS NULL
+07)------------LeftAnti Join:  Filter: emp.salary > __correlated_sq_1.salary IS FALSE
+08)--------------TableScan: emp projection=[id, salary]
+09)--------------SubqueryAlias: __correlated_sq_1
+10)----------------Projection: emp.salary
+11)------------------Filter: emp.id <= Int32(2)
+12)--------------------TableScan: emp projection=[id, salary]
+13)------------SubqueryAlias: __correlated_sq_2
+14)--------------Projection: emp.salary
+15)----------------Filter: emp.id <= Int32(2)
+16)------------------TableScan: emp projection=[id, salary]
+17)--------SubqueryAlias: __correlated_sq_3
+18)----------Projection: emp.salary
+19)------------Filter: emp.id <= Int32(2)
+20)--------------TableScan: emp projection=[id, salary]
+
+query I
+SELECT id
+FROM emp
+WHERE salary = ANY (SELECT salary FROM emp WHERE id <= 2);
+----
+1
+2
+
+query TT
+EXPLAIN SELECT id
+FROM emp
+WHERE salary = ANY (SELECT salary FROM emp WHERE id <= 2);
+----
+logical_plan
+01)Projection: emp.id
+02)--LeftMark Join:  Filter: emp.salary = __correlated_sq_3.salary IS TRUE
+03)----Projection: emp.id, emp.salary
+04)------LeftMark Join:  Filter: emp.salary = __correlated_sq_2.salary IS NULL
+05)--------Projection: emp.id, emp.salary
+06)----------Filter: __correlated_sq_1.mark
+07)------------LeftMark Join:  Filter: emp.salary = __correlated_sq_1.salary IS TRUE
+08)--------------TableScan: emp projection=[id, salary]
+09)--------------SubqueryAlias: __correlated_sq_1
+10)----------------Projection: emp.salary
+11)------------------Filter: emp.id <= Int32(2)
+12)--------------------TableScan: emp projection=[id, salary]
+13)--------SubqueryAlias: __correlated_sq_2
+14)----------Projection: emp.salary
+15)------------Filter: emp.id <= Int32(2)
+16)--------------TableScan: emp projection=[id, salary]
+17)----SubqueryAlias: __correlated_sq_3
+18)------Projection: emp.salary
+19)--------Filter: emp.id <= Int32(2)
+20)----------TableScan: emp projection=[id, salary]
+
+statement ok
+DROP TABLE emp;
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
