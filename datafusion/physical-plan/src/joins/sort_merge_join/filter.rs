@@ -153,27 +153,21 @@ pub fn get_filter_columns(
     left_columns: &[ArrayRef],
     right_columns: &[ArrayRef],
 ) -> Vec<ArrayRef> {
-    let mut filter_columns = vec![];
+    let Some(f) = join_filter else {
+        return vec![];
+    };
 
-    if let Some(f) = join_filter {
-        let left_columns: Vec<ArrayRef> = f
-            .column_indices()
-            .iter()
-            .filter(|col_index| col_index.side == JoinSide::Left)
-            .map(|i| Arc::clone(&left_columns[i.index]))
-            .collect();
-        let right_columns: Vec<ArrayRef> = f
-            .column_indices()
-            .iter()
-            .filter(|col_index| col_index.side == JoinSide::Right)
-            .map(|i| Arc::clone(&right_columns[i.index]))
-            .collect();
-
-        filter_columns.extend(left_columns);
-        filter_columns.extend(right_columns);
-    }
-
-    filter_columns
+    // The filter's intermediate schema lists its columns in `column_indices`
+    // order, which need not put every left column before every right one
+    // (a filter swapped along with the join's inputs does the opposite).
+    f.column_indices()
+        .iter()
+        .filter_map(|col_index| match col_index.side {
+            JoinSide::Left => Some(Arc::clone(&left_columns[col_index.index])),
+            JoinSide::Right => Some(Arc::clone(&right_columns[col_index.index])),
+            JoinSide::None => None,
+        })
+        .collect()
 }
 
 /// Determines if current index is the last occurrence of a row

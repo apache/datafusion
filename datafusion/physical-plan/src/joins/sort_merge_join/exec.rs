@@ -583,82 +583,27 @@ impl ExecutionPlan for SortMergeJoinExec {
             "Invalid SortMergeJoinExec, partition count mismatch {left_partitions}!={right_partitions},\
                  consider using RepartitionExec"
         );
-        let (on_left, on_right) = self.on.iter().cloned().unzip();
-        let (streamed, buffered, on_streamed, on_buffered) =
-            if SortMergeJoinExec::probe_side(&self.join_type) == JoinSide::Left {
-                (
-                    Arc::clone(&self.left),
-                    Arc::clone(&self.right),
-                    on_left,
-                    on_right,
-                )
-            } else {
-                (
-                    Arc::clone(&self.right),
-                    Arc::clone(&self.left),
-                    on_right,
-                    on_left,
-                )
-            };
-
         // execute children plans
-        let streamed = streamed.execute(partition, Arc::clone(&context))?;
-        let buffered = buffered.execute(partition, Arc::clone(&context))?;
+        let left = self.left.execute(partition, Arc::clone(&context))?;
+        let right = self.right.execute(partition, Arc::clone(&context))?;
+        let (on_left, on_right) = self.on.iter().cloned().unzip();
 
-        let batch_size = context.session_config().batch_size();
-        let reservation = MemoryConsumer::new(format!("SMJStream[{partition}]"))
-            .register(context.memory_pool());
-        let spill_manager = SpillManager::new(
-            context.runtime_env(),
-            SpillMetrics::new(&self.metrics, partition),
-            buffered.schema(),
-        )
-        .with_compression_type(context.session_config().spill_compression());
-
-        let joined = if matches!(
-            self.join_type,
-            JoinType::LeftSemi
-                | JoinType::LeftAnti
-                | JoinType::RightSemi
-                | JoinType::RightAnti
-                | JoinType::LeftMark
-                | JoinType::RightMark
-        ) {
-            BitwiseSortMergeJoinStream::try_new(
-                Arc::clone(&self.schema),
-                self.sort_options.clone(),
-                self.null_equality,
-                streamed,
-                buffered,
-                on_streamed,
-                on_buffered,
-                self.filter.clone(),
-                self.join_type,
-                batch_size,
+        let joined = sort_merge_join_stream(
+            SortMergeJoinInputs {
+                schema: Arc::clone(&self.schema),
+                sort_options: self.sort_options.clone(),
+                null_equality: self.null_equality,
+                left,
+                right,
+                on_left,
+                on_right,
+                filter: self.filter.clone(),
+                join_type: self.join_type,
                 partition,
-                &self.metrics,
-                reservation,
-                spill_manager,
-                context.runtime_env(),
-            )
-        } else {
-            MaterializingSortMergeJoinStream::try_new(
-                Arc::clone(&self.schema),
-                self.sort_options.clone(),
-                self.null_equality,
-                streamed,
-                buffered,
-                on_streamed,
-                on_buffered,
-                self.filter.clone(),
-                self.join_type,
-                batch_size,
-                SortMergeJoinMetrics::new(partition, &self.metrics),
-                reservation,
-                spill_manager,
-                context.runtime_env(),
-            )
-        }?;
+            },
+            &self.metrics,
+            &context,
+        )?;
 
         let Some(projection) = self.projection.clone() else {
             return Ok(joined);
@@ -943,5 +888,112 @@ impl SortMergeJoinExec {
             )?
             .with_projection(projection)?,
         ))
+    }
+}
+
+/// The two sorted inputs of one partition of a sort-merge join, and how to
+/// join them.
+pub(crate) struct SortMergeJoinInputs {
+    /// The join schema (before any projection)
+    pub(crate) schema: SchemaRef,
+    /// Sort options of the join keys, one per key, that both inputs are sorted with
+    pub(crate) sort_options: Vec<SortOptions>,
+    pub(crate) null_equality: NullEquality,
+    /// Left input, sorted on `on_left` with `sort_options`
+    pub(crate) left: SendableRecordBatchStream,
+    /// Right input, sorted on `on_right` with `sort_options`
+    pub(crate) right: SendableRecordBatchStream,
+    pub(crate) on_left: Vec<PhysicalExprRef>,
+    pub(crate) on_right: Vec<PhysicalExprRef>,
+    pub(crate) filter: Option<JoinFilter>,
+    pub(crate) join_type: JoinType,
+    pub(crate) partition: usize,
+}
+
+/// Joins two sorted inputs with the sort-merge join algorithm.
+///
+/// Picks the streamed and buffered side by join type and the join stream
+/// implementation by join type family, exactly as [`SortMergeJoinExec`] does;
+/// the hash join's sort-merge fallback uses this too. The stream's metrics are
+/// registered in `metrics`; its buffered side spills through the context's
+/// disk manager under the memory pool's control.
+pub(crate) fn sort_merge_join_stream(
+    inputs: SortMergeJoinInputs,
+    metrics: &ExecutionPlanMetricsSet,
+    context: &Arc<TaskContext>,
+) -> Result<SendableRecordBatchStream> {
+    let SortMergeJoinInputs {
+        schema,
+        sort_options,
+        null_equality,
+        left,
+        right,
+        on_left,
+        on_right,
+        filter,
+        join_type,
+        partition,
+    } = inputs;
+
+    let (streamed, buffered, on_streamed, on_buffered) =
+        if SortMergeJoinExec::probe_side(&join_type) == JoinSide::Left {
+            (left, right, on_left, on_right)
+        } else {
+            (right, left, on_right, on_left)
+        };
+
+    let batch_size = context.session_config().batch_size();
+    let reservation = MemoryConsumer::new(format!("SMJStream[{partition}]"))
+        .register(context.memory_pool());
+    let spill_manager = SpillManager::new(
+        context.runtime_env(),
+        SpillMetrics::new(metrics, partition),
+        buffered.schema(),
+    )
+    .with_compression_type(context.session_config().spill_compression());
+
+    if matches!(
+        join_type,
+        JoinType::LeftSemi
+            | JoinType::LeftAnti
+            | JoinType::RightSemi
+            | JoinType::RightAnti
+            | JoinType::LeftMark
+            | JoinType::RightMark
+    ) {
+        BitwiseSortMergeJoinStream::try_new(
+            schema,
+            sort_options,
+            null_equality,
+            streamed,
+            buffered,
+            on_streamed,
+            on_buffered,
+            filter,
+            join_type,
+            batch_size,
+            partition,
+            metrics,
+            reservation,
+            spill_manager,
+            context.runtime_env(),
+        )
+    } else {
+        MaterializingSortMergeJoinStream::try_new(
+            schema,
+            sort_options,
+            null_equality,
+            streamed,
+            buffered,
+            on_streamed,
+            on_buffered,
+            filter,
+            join_type,
+            batch_size,
+            SortMergeJoinMetrics::new(partition, metrics),
+            reservation,
+            spill_manager,
+            context.runtime_env(),
+        )
     }
 }
