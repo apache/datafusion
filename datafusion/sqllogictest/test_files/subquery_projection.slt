@@ -251,3 +251,88 @@ DROP TABLE n2;
 
 statement ok
 DROP TABLE n3;
+
+# Nullable key expressions over non-nullable columns.
+#
+# `nn.id` and `nn.s` are not nullable, but a key expression over them can still
+# be NULL. `NULLIF(id, 1)` is NULL for `id = 1`, and `TRY_CAST(s AS INT)` is
+# NULL when the text is not a number. The join must be null-aware for these
+# keys, so the mark is NULL and `IN` gives UNKNOWN.
+
+statement ok
+CREATE TABLE nn(id INT NOT NULL, s VARCHAR NOT NULL) AS VALUES (1, '1'), (2, 'x'), (4, '4');
+
+statement ok
+CREATE TABLE r3(id INT NOT NULL) AS VALUES (1), (2);
+
+statement ok
+CREATE TABLE r3n(id INT NOT NULL) AS VALUES (1), (2), (5);
+
+# The nullable key expression keeps the plan at one null-aware mark join.
+query TT
+EXPLAIN SELECT id, NULLIF(id, 1) IN (SELECT id FROM r3) AS m FROM nn;
+----
+logical_plan
+01)Projection: nn.id, __correlated_sq_1.mark AS m
+02)--LeftMark Join: nullif(CAST(nn.id AS Int64), Int64(1)) = __correlated_sq_1.r3.id null_aware
+03)----TableScan: nn projection=[id]
+04)----SubqueryAlias: __correlated_sq_1
+05)------Projection: CAST(r3.id AS Int64)
+06)--------TableScan: r3 projection=[id]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, mark@1 as m]
+02)--HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(nullif(nn.id,Int64(1))@1, r3.id@0)], projection=[id@0, mark@2], null_aware
+03)----ProjectionExec: expr=[id@0 as id, nullif(CAST(id@0 AS Int64), 1) as nullif(nn.id,Int64(1))]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)----ProjectionExec: expr=[CAST(id@0 AS Int64) as r3.id]
+06)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# `NULLIF(id, 1)` is NULL for `id = 1`, and `r3` has no NULL, so the answer is
+# UNKNOWN for that row.
+query IB rowsort
+SELECT id, NULLIF(id, 1) IN (SELECT id FROM r3) AS m FROM nn;
+----
+1 NULL
+2 true
+4 false
+
+# `TRY_CAST('x' AS INT)` is NULL, so the answer is UNKNOWN for that row.
+query IB rowsort
+SELECT id, TRY_CAST(s AS INT) IN (SELECT id FROM r3) AS m FROM nn;
+----
+1 true
+2 NULL
+4 false
+
+# The same on the subquery side: the output of the subquery holds a NULL, so a
+# row with no match is UNKNOWN.
+query IB rowsort
+SELECT id, id IN (SELECT NULLIF(id, 5) FROM r3n) AS m FROM nn;
+----
+1 true
+2 true
+4 NULL
+
+# `NOT IN` reads the same mark column, negated.
+query IB rowsort
+SELECT id, NULLIF(id, 1) NOT IN (SELECT id FROM r3) AS m FROM nn;
+----
+1 NULL
+2 false
+4 true
+
+# The `NOT IN` filter path builds a LeftAnti join and reads the key nullability
+# the same way. UNKNOWN does not pass a filter, so `id = 1` drops out.
+query I rowsort
+SELECT id FROM nn WHERE NULLIF(id, 1) NOT IN (SELECT id FROM r3);
+----
+4
+
+statement ok
+DROP TABLE nn;
+
+statement ok
+DROP TABLE r3;
+
+statement ok
+DROP TABLE r3n;

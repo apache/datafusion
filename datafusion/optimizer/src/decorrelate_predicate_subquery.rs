@@ -29,7 +29,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
-    Column, DFSchemaRef, ExprSchema, NullEquality, Result, ScalarValue,
+    Column, DFSchema, ExprSchema, NullEquality, Result, ScalarValue,
     assert_or_internal_err, plan_err,
 };
 use datafusion_expr::expr::{Exists, InSubquery};
@@ -37,8 +37,8 @@ use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::{conjunction, expr_to_columns, split_conjunction_owned};
 use datafusion_expr::{
-    BinaryExpr, Expr, Filter, LogicalPlan, LogicalPlanBuilder, Operator, exists,
-    in_subquery, lit, not, not_exists, not_in_subquery, when,
+    BinaryExpr, Expr, ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder, Operator,
+    exists, in_subquery, lit, not, not_exists, not_in_subquery, when,
 };
 
 use log::debug;
@@ -473,19 +473,45 @@ fn mark_join_detailed(
     )
 }
 
-/// Check if join keys in the join filter may contain NULL values
+/// Check if the join keys can be NULL.
 ///
-/// Returns true if any join key column is nullable on either side.
-/// This is used to optimize null-aware anti joins: if all join keys are non-nullable,
-/// we can use a regular anti join instead of the more expensive null-aware variant.
+/// A null-aware join is more expensive than the plain join. It is necessary
+/// only when a join key can be NULL, because only then can the join find an
+/// UNKNOWN result. The caller gives the join keys that
+/// [`split_eq_and_noneq_join_predicate`] found, plus the residual filter that
+/// the split could not turn into keys.
+///
+/// The keys are full expressions, not only columns. An expression can be NULL
+/// although all of its columns are not nullable. Examples are `NULLIF(id, 1)`,
+/// `TRY_CAST(s AS INT)` and a `CASE` expression with no `ELSE` branch. Thus
+/// this function asks each key expression for its nullability against the
+/// schema of its own side. A key that a cast wraps, such as
+/// `CAST(id AS Int64)`, keeps the nullability of the expression in it.
+///
+/// The hash join cannot use the residual filter as keys, so there is no key
+/// expression to ask. For the residual this function keeps the older and less
+/// exact test: it reports true if the residual refers to any nullable column.
+/// The result for a filter with no equality pair is thus never less
+/// conservative than before.
 fn join_keys_may_be_null(
-    join_filter: &Expr,
-    left_schema: &DFSchemaRef,
-    right_schema: &DFSchemaRef,
+    equijoin_keys: &[(Expr, Expr)],
+    residual: Option<&Expr>,
+    left_schema: &DFSchema,
+    right_schema: &DFSchema,
 ) -> Result<bool> {
-    // Extract columns from the join filter
+    for (left_key, right_key) in equijoin_keys {
+        if left_key.nullable(left_schema)? || right_key.nullable(right_schema)? {
+            return Ok(true);
+        }
+    }
+
+    let Some(residual) = residual else {
+        return Ok(false);
+    };
+
+    // Extract columns from the residual filter
     let mut columns = std::collections::HashSet::new();
-    expr_to_columns(join_filter, &mut columns)?;
+    expr_to_columns(residual, &mut columns)?;
 
     // Check if any column is nullable
     for col in columns {
@@ -659,32 +685,39 @@ fn build_join(
             sub_query_alias.clone()
         };
 
-        let mark_filter_is_hashable_only =
-            if join_type == JoinType::LeftMark && in_predicate_opt.is_some() {
-                let (_, residual_filter) = split_eq_and_noneq_join_predicate(
-                    join_filter.clone(),
-                    left.schema(),
-                    right_projected.schema(),
-                )?;
-                residual_filter.is_none()
-            } else {
-                false
-            };
-
-        // Put null-aware semantics into the nullable mark column when the
-        // predicate can be implemented by hash keys. The mark column is then
-        // exact under SQL three-valued logic, which lets a projected `IN` use
-        // this join on its own. Non-equality correlated filters stay on the
-        // legacy path because hash join execution cannot mark UNKNOWN
-        // candidates for residual predicates.
-        let null_aware = join_type == JoinType::LeftMark
-            && in_predicate_opt.is_some()
-            && mark_filter_is_hashable_only
-            && join_keys_may_be_null(
-                &join_filter,
+        let mark_split = if join_type == JoinType::LeftMark && in_predicate_opt.is_some()
+        {
+            Some(split_eq_and_noneq_join_predicate(
+                join_filter.clone(),
                 left.schema(),
                 right_projected.schema(),
-            )?;
+            )?)
+        } else {
+            None
+        };
+
+        // Only a filter that the hash join can turn into keys gives an exact
+        // mark. A residual predicate leaves the UNKNOWN rows unmarked.
+        let hashable_only_split = mark_split
+            .as_ref()
+            .filter(|(_, residual_filter)| residual_filter.is_none());
+        let mark_filter_is_hashable_only = hashable_only_split.is_some();
+
+        // Put null-aware semantics into the nullable mark column when the
+        // predicate can be implemented by hash keys and a key can be NULL. The
+        // mark column is then exact under SQL three-valued logic, which lets a
+        // projected `IN` use this join on its own. Non-equality correlated
+        // filters stay on the legacy path because hash join execution cannot
+        // mark UNKNOWN candidates for residual predicates.
+        let null_aware = match hashable_only_split {
+            Some((equijoin_keys, residual_filter)) => join_keys_may_be_null(
+                equijoin_keys,
+                residual_filter.as_ref(),
+                left.schema(),
+                right_projected.schema(),
+            )?,
+            None => false,
+        };
 
         let new_plan = LogicalPlanBuilder::from(left.clone())
             .join_detailed_with_options(
@@ -714,11 +747,23 @@ fn build_join(
     // - NOT EXISTS: Uses two-valued logic, regular anti join is correct
     // We can distinguish them: NOT IN has in_predicate_opt, NOT EXISTS does not
     //
-    // Additionally, if the join keys are non-nullable on both sides, we don't need
-    // null-aware semantics because NULLs cannot exist in the data.
-    let null_aware = join_type == JoinType::LeftAnti
-        && in_predicate_opt.is_some()
-        && join_keys_may_be_null(&join_filter, left.schema(), sub_query_alias.schema())?;
+    // Additionally, if no join key can be NULL on either side, we don't need
+    // null-aware semantics because NULLs cannot exist in the keys.
+    let null_aware = if join_type == JoinType::LeftAnti && in_predicate_opt.is_some() {
+        let (equijoin_keys, residual_filter) = split_eq_and_noneq_join_predicate(
+            join_filter.clone(),
+            left.schema(),
+            sub_query_alias.schema(),
+        )?;
+        join_keys_may_be_null(
+            &equijoin_keys,
+            residual_filter.as_ref(),
+            left.schema(),
+            sub_query_alias.schema(),
+        )?
+    } else {
+        false
+    };
 
     // join our sub query into the main plan
     let new_plan = if null_aware {
@@ -827,6 +872,15 @@ mod tests {
             Field::new("grp", DataType::Int32, true),
         ]);
         table_scan(Some(name), &schema, None)?.build()
+    }
+
+    /// `CASE WHEN test.c = 1 THEN NULL ELSE test.c END`: an expression that can
+    /// be NULL although `test.c` is not nullable. `NULLIF(c, 1)` and
+    /// `TRY_CAST(c AS INT)` have the same shape, but the optimizer crate cannot
+    /// depend on the function crates.
+    fn nullable_key_expr() -> Result<Expr> {
+        when(col("test.c").eq(lit(1u32)), lit(ScalarValue::UInt32(None)))
+            .otherwise(col("test.c"))
     }
 
     fn has_null_aware_left_mark_join(plan: &LogicalPlan) -> bool {
@@ -1509,6 +1563,58 @@ mod tests {
               SubqueryAlias: __correlated_sq_1 [id:Int32;N]
                 Projection: inner_t.id [id:Int32;N]
                   TableScan: inner_t [id:Int32;N, grp:Int32;N]
+        "
+        )
+    }
+
+    /// A key expression can be NULL although none of its columns is nullable.
+    /// The mark join must then be null-aware, so the mark is NULL for the rows
+    /// that give UNKNOWN.
+    #[test]
+    fn in_subquery_in_projection_with_nullable_key_expr() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![
+                in_subquery(nullable_key_expr()?, test_subquery_with_name("sq")?)
+                    .alias("is_present"),
+            ])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: __correlated_sq_1.mark AS is_present [is_present:Boolean;N]
+          LeftMark Join:  Filter: CASE WHEN test.c = UInt32(1) THEN UInt32(NULL) ELSE test.c END = __correlated_sq_1.c null_aware [a:UInt32, b:UInt32, c:UInt32, mark:Boolean;N]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            Projection: __correlated_sq_1.c [c:UInt32]
+              SubqueryAlias: __correlated_sq_1 [c:UInt32]
+                Projection: sq.c [c:UInt32]
+                  TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    /// The `NOT IN` filter path builds a `LeftAnti` join. It reads the key
+    /// nullability the same way, so a nullable key expression over columns that
+    /// are not nullable also makes that join null-aware.
+    #[test]
+    fn not_in_subquery_filter_with_nullable_key_expr() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(not_in_subquery(
+                nullable_key_expr()?,
+                test_subquery_with_name("sq")?,
+            ))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.b [b:UInt32]
+          LeftAnti Join:  Filter: CASE WHEN test.c = UInt32(1) THEN UInt32(NULL) ELSE test.c END = __correlated_sq_1.c null_aware [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            SubqueryAlias: __correlated_sq_1 [c:UInt32]
+              Projection: sq.c [c:UInt32]
+                TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
