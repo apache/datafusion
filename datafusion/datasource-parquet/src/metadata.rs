@@ -23,11 +23,11 @@ use crate::{Int96Coercer, apply_file_schema_type_coercions};
 use arrow::array::{Array, ArrayRef, BooleanArray};
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::{and, sum};
-use arrow::datatypes::{DataType, Schema, SchemaRef, TimeUnit};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    ColumnStatistics, DataFusionError, HashMap, Result, ScalarValue, Statistics,
+    ColumnStatistics, DataFusionError, HashMap, HashSet, Result, ScalarValue, Statistics,
     internal_datafusion_err,
 };
 use datafusion_execution::cache::cache_manager::{
@@ -146,6 +146,8 @@ pub struct DFParquetMetadata<'a> {
     pub coerce_int96: Option<TimeUnit>,
     /// Optional timezone applied to INT96-coerced timestamps.
     pub coerce_int96_tz: Option<Arc<str>>,
+    /// If true, promote string/binary columns with dictionary pages to `Dictionary(Int32, ...)`.
+    enable_rle_to_dictionary: bool,
 }
 
 impl<'a> DFParquetMetadata<'a> {
@@ -163,7 +165,14 @@ impl<'a> DFParquetMetadata<'a> {
             page_index_policy: None,
             coerce_int96: None,
             coerce_int96_tz: None,
+            enable_rle_to_dictionary: false,
         }
+    }
+
+    /// Promote string/binary columns with dictionary pages to `Dictionary(Int32, ...)`.
+    pub fn with_enable_rle_to_dictionary(mut self, enable: bool) -> Self {
+        self.enable_rle_to_dictionary = enable;
+        self
     }
 
     /// Set a hint for the number of trailing bytes to prefetch from the end
@@ -439,6 +448,68 @@ impl<'a> DFParquetMetadata<'a> {
                     .coerce()
             })
             .unwrap_or(schema);
+
+        let schema = if self.enable_rle_to_dictionary {
+            let schema_descr = file_metadata.schema_descr();
+            // Top-level columns that have a dictionary page in at least one row group.
+            let dict_cols: HashSet<String> = metadata
+                .row_groups()
+                .iter()
+                .flat_map(|rg| {
+                    rg.columns()
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(col_idx, col)| {
+                            col.dictionary_page_offset()?;
+                            let col_desc = schema_descr.column(col_idx);
+                            let parts = col_desc.path().parts();
+                            // Skip nested columns: their leaf name doesn't match the
+                            // Arrow top-level field name.
+                            (parts.len() == 1).then(|| parts[0].clone())
+                        })
+                })
+                .collect();
+            if dict_cols.is_empty() {
+                schema
+            } else {
+                let promoted: Vec<_> = schema
+                    .fields()
+                    .iter()
+                    .map(|field| {
+                        if !dict_cols.contains(field.name()) {
+                            return Arc::clone(field);
+                        }
+                        let dict_value_type = match field.data_type() {
+                            DataType::Utf8 => Some(DataType::Utf8),
+                            DataType::LargeUtf8 => Some(DataType::LargeUtf8),
+                            DataType::Binary => Some(DataType::Binary),
+                            DataType::LargeBinary => Some(DataType::LargeBinary),
+                            _ => None,
+                        };
+                        dict_value_type.map_or_else(
+                            || Arc::clone(field),
+                            |value_type| {
+                                Arc::new(
+                                    Field::new(
+                                        field.name(),
+                                        DataType::Dictionary(
+                                            Box::new(DataType::Int32),
+                                            Box::new(value_type),
+                                        ),
+                                        field.is_nullable(),
+                                    )
+                                    .with_metadata(field.metadata().clone()),
+                                )
+                            },
+                        )
+                    })
+                    .collect();
+                Schema::new_with_metadata(promoted, schema.metadata().clone())
+            }
+        } else {
+            schema
+        };
+
         Ok(schema)
     }
 
