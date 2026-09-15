@@ -33,7 +33,7 @@ use crate::{
 
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow_schema::{FieldRef, SortOptions};
-use datafusion_common::{Result, exec_err};
+use datafusion_common::{Result, assert_or_internal_err, exec_err};
 use datafusion_expr::{
     LimitEffect, PartitionEvaluator, ReversedUDWF, SetMonotonicity, WindowFrame,
     WindowFunctionDefinition, WindowUDF,
@@ -623,6 +623,20 @@ pub fn get_best_fitting_window(
             .map(|e| e.get_reverse_expr())
             .collect::<Option<Vec<_>>>()
         {
+            // The rebuilt exec derives its schema from `WindowExpr::field()`, so a
+            // reversal that renames the output field would silently change this
+            // node's schema while parent nodes still reference the old column
+            // names. Catch that here, where the culprit is identifiable.
+            for (reversed, original) in reversed_window_expr.iter().zip(window_exprs) {
+                let (reversed_field, original_field) =
+                    (reversed.field()?, original.field()?);
+                assert_or_internal_err!(
+                    reversed_field.name() == original_field.name(),
+                    "Reversing window expression changed its output field name from {} to {}",
+                    original_field.name(),
+                    reversed_field.name()
+                );
+            }
             reversed_window_expr
         } else {
             // Cannot take reverse of any of the window expr
