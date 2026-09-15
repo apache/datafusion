@@ -863,7 +863,9 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
 }
 
 #[cfg(feature = "proto")]
-impl PiecewiseMergeJoinExec {
+impl crate::proto::ExecutionPlanFromProto for PiecewiseMergeJoinExec {
+    const NAME: &'static str = "datafusion.PiecewiseMergeJoinExec";
+
     /// Reconstruct a [`PiecewiseMergeJoinExec`] from its protobuf representation.
     ///
     /// The exact inverse of [`ExecutionPlan::try_to_proto`]. Every other field of
@@ -871,7 +873,7 @@ impl PiecewiseMergeJoinExec {
     /// derived by [`PiecewiseMergeJoinExec::try_new`], so it is not on the wire.
     ///
     /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
-    pub fn try_from_proto(
+    fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {

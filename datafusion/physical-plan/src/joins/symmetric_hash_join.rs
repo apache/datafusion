@@ -785,13 +785,15 @@ impl ExecutionPlan for SymmetricHashJoinExec {
 }
 
 #[cfg(feature = "proto")]
-impl SymmetricHashJoinExec {
+impl crate::proto::ExecutionPlanFromProto for SymmetricHashJoinExec {
+    const NAME: &'static str = "datafusion.SymmetricHashJoinExec";
+
     /// Reconstruct a [`SymmetricHashJoinExec`] from its protobuf representation.
     ///
     /// The exact inverse of [`ExecutionPlan::try_to_proto`].
     ///
     /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
-    pub fn try_from_proto(
+    fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {

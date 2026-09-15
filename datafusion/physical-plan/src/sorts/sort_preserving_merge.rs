@@ -526,8 +526,10 @@ impl ExecutionPlan for SortPreservingMergeExec {
 }
 
 #[cfg(feature = "proto")]
-impl SortPreservingMergeExec {
-    pub fn try_from_proto(
+impl crate::proto::ExecutionPlanFromProto for SortPreservingMergeExec {
+    const NAME: &'static str = "datafusion.SortPreservingMergeExec";
+
+    fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -595,6 +597,7 @@ impl SortPreservingMergeExec {
 #[cfg(all(test, feature = "proto"))]
 mod proto_tests {
     use super::*;
+    use crate::proto::ExecutionPlanFromProto;
     use crate::proto::{ExecutionPlanDecodeCtx, ExecutionPlanEncodeCtx};
     use crate::proto_test_util::{
         StubPlanDecoder, StubPlanEncoder, UnreachablePlanDecoder, column_node,

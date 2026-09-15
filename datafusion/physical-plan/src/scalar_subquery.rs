@@ -322,9 +322,11 @@ impl ExecutionPlan for ScalarSubqueryExec {
 }
 
 #[cfg(feature = "proto")]
-impl ScalarSubqueryExec {
+impl crate::proto::ExecutionPlanFromProto for ScalarSubqueryExec {
+    const NAME: &'static str = "datafusion.ScalarSubqueryExec";
+
     /// Reconstruct a [`ScalarSubqueryExec`] from its protobuf representation.
-    pub fn try_from_proto(
+    fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {

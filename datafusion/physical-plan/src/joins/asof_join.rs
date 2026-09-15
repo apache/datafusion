@@ -635,9 +635,11 @@ impl ExecutionPlan for AsOfJoinExec {
 }
 
 #[cfg(feature = "proto")]
-impl AsOfJoinExec {
+impl crate::proto::ExecutionPlanFromProto for AsOfJoinExec {
+    const NAME: &'static str = "datafusion.AsOfJoinExec";
+
     /// Reconstruct an [`AsOfJoinExec`] from its protobuf representation.
-    pub fn try_from_proto(
+    fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {

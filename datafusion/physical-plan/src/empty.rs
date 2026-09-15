@@ -240,9 +240,11 @@ impl ExecutionPlan for EmptyExec {
 }
 
 #[cfg(feature = "proto")]
-impl EmptyExec {
+impl crate::proto::ExecutionPlanFromProto for EmptyExec {
+    const NAME: &'static str = "datafusion.EmptyExec";
+
     /// Reconstruct an [`EmptyExec`] from its protobuf representation.
-    pub fn try_from_proto(
+    fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         _ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {

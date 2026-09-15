@@ -315,8 +315,10 @@ impl ExecutionPlan for GlobalLimitExec {
 }
 
 #[cfg(feature = "proto")]
-impl GlobalLimitExec {
-    pub fn try_from_proto(
+impl crate::proto::ExecutionPlanFromProto for GlobalLimitExec {
+    const NAME: &'static str = "datafusion.GlobalLimitExec";
+
+    fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -586,8 +588,10 @@ impl ExecutionPlan for LocalLimitExec {
 }
 
 #[cfg(feature = "proto")]
-impl LocalLimitExec {
-    pub fn try_from_proto(
+impl crate::proto::ExecutionPlanFromProto for LocalLimitExec {
+    const NAME: &'static str = "datafusion.LocalLimitExec";
+
+    fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {

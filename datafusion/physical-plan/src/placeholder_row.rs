@@ -240,9 +240,11 @@ impl ExecutionPlan for PlaceholderRowExec {
 }
 
 #[cfg(feature = "proto")]
-impl PlaceholderRowExec {
+impl crate::proto::ExecutionPlanFromProto for PlaceholderRowExec {
+    const NAME: &'static str = "datafusion.PlaceholderRowExec";
+
     /// Reconstruct a [`PlaceholderRowExec`] from its protobuf representation.
-    pub fn try_from_proto(
+    fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         _ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {

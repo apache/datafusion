@@ -243,9 +243,11 @@ impl ExecutionPlan for ExplainExec {
 }
 
 #[cfg(feature = "proto")]
-impl ExplainExec {
+impl crate::proto::ExecutionPlanFromProto for ExplainExec {
+    const NAME: &'static str = "datafusion.ExplainExec";
+
     /// Reconstruct an [`ExplainExec`] from its protobuf representation.
-    pub fn try_from_proto(
+    fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         _ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {

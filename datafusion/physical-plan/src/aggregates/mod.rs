@@ -2486,13 +2486,15 @@ fn encode_aggregate_expr(
 }
 
 #[cfg(feature = "proto")]
-impl AggregateExec {
+impl crate::proto::ExecutionPlanFromProto for AggregateExec {
+    const NAME: &'static str = "datafusion.AggregateExec";
+
     /// Reconstruct an [`AggregateExec`] from its protobuf representation.
     ///
     /// Grouping expressions are decoded against the child schema. Aggregate
     /// arguments, ordering, filters, and the dynamic filter are decoded against
     /// the aggregate input schema carried in the protobuf node.
-    pub fn try_from_proto(
+    fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {

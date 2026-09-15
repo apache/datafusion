@@ -366,6 +366,35 @@ impl PhysicalExprDecode for ExecutionPlanDecodeCtx<'_> {
     }
 }
 
+/// The decode half of [`ExecutionPlan::try_to_proto`]: a plan type that can
+/// be rebuilt from the `PhysicalPlanNode` its `try_to_proto` wrote.
+///
+/// Every self-serializing plan implements this. Built-in plans are dispatched
+/// to their `try_from_proto` by their `PhysicalPlanType` variant, so for them
+/// [`NAME`](Self::NAME) is informational. Not every built-in can: a plan whose
+/// wire variant is chosen one level down (`DataSourceExec` and `DataSinkExec`,
+/// by source and sink; `LazyMemoryExec`, by generator) or that shares a
+/// variant with another plan (`BoundedWindowAggExec` with `WindowAggExec`) is
+/// still decoded by a typed arm in `datafusion-proto`.
+pub trait ExecutionPlanFromProto: ExecutionPlan + Sized {
+    /// The plan type's name.
+    ///
+    /// For an extension plan this is the wire discriminator and the registry
+    /// key: namespace it with the owning crate (`"my-crate.MyExec"`) so that a
+    /// collision between two independent crates surfaces as a registration
+    /// error rather than as a wrong decode. Built-in plans use their type name
+    /// under the `datafusion.` namespace; it never reaches the wire for them.
+    const NAME: &'static str;
+
+    /// Reconstruct the plan from the `PhysicalPlanNode` written by
+    /// [`ExecutionPlan::try_to_proto`]. Child nodes are decoded through `ctx`,
+    /// which also carries the decoding session.
+    fn try_from_proto(
+        node: &PhysicalPlanNode,
+        ctx: &ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>>;
+}
+
 /// Assert that a [`PhysicalPlanNode`] carries the expected `PhysicalPlanType`
 /// variant, returning a reference to the inner payload, else an `internal_err!`.
 /// Mirrors `expect_expr_variant!` on the expression side. Field access on the

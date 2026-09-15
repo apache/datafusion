@@ -953,7 +953,9 @@ impl ExecutionPlan for FilterExec {
 }
 
 #[cfg(feature = "proto")]
-impl FilterExec {
+impl crate::proto::ExecutionPlanFromProto for FilterExec {
+    const NAME: &'static str = "datafusion.FilterExec";
+
     /// Reconstruct a [`FilterExec`] from its protobuf representation.
     ///
     /// The exact inverse of [`ExecutionPlan::try_to_proto`]: it takes the whole
@@ -961,7 +963,7 @@ impl FilterExec {
     ///
     /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
     /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
-    pub fn try_from_proto(
+    fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
