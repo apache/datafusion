@@ -188,7 +188,12 @@ tested in the same way using the [doc_comment] crate. See the end of
 
 ## Documentation Link Checks
 
-Run the internal markdown link check locally:
+`./dev/rust_lint.sh` runs the internal markdown link check. If `lychee` is
+missing, the script installs the version pinned in
+`ci/scripts/utils/tool_versions.sh`. It uses an existing installation as is,
+even if the version differs from the pin.
+
+To run the check on its own:
 
 ```shell
 source ci/scripts/utils/tool_versions.sh
@@ -200,6 +205,7 @@ Notes:
 
 - The script is run with `bash` and is compatible with the default Bash on macOS (no `mapfile` dependency).
 - The CI configuration currently checks internal markdown links only. External `http(s)` and `mailto` links are excluded to avoid flaky failures.
+- The check only reports broken links. `./dev/rust_lint.sh --write` does not change them.
 
 When a link is broken, lychee prints the file and URL/path that failed. For example:
 

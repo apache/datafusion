@@ -29,6 +29,7 @@ in the community:
 
 | Benchmark Suite       | Description                                                        |
 |-----------------------|--------------------------------------------------------------------|
+| `asof_join`           | ASOF join benchmarks across size, ordering, grouping, match direction, and payload width |
 | `clickbench`          | ClickBench benchmark                                               |
 | `clickbench extended` | 12 additional, more complex queries against the Clickbench dataset |
 | `clickbench_sorted`   | ClickBench benchmark using a pre-sorted hits file.                 |

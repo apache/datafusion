@@ -30,8 +30,8 @@ use arrow::error::ArrowError;
 use datafusion_common::config::{ConfigField, ConfigFileType, CsvOptions};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::{
-    DEFAULT_CSV_EXTENSION, DataFusionError, GetExt, Result, Statistics, exec_err,
-    not_impl_err,
+    DEFAULT_CSV_EXTENSION, DataFusionError, GetExt, Result, Statistics,
+    exec_datafusion_err, exec_err, not_impl_err,
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_datasource::TableSchema;
@@ -540,6 +540,21 @@ impl CsvFormat {
         let mut record_number = -1;
         let initial_records_to_read = records_to_read;
 
+        // Compile once rather than per chunk, and report a malformed pattern
+        // instead of panicking on it.
+        let null_regex = self
+            .options
+            .null_regex
+            .as_ref()
+            .map(|null_regex| {
+                Regex::new(null_regex).map_err(|e| {
+                    exec_datafusion_err!(
+                        "Unable to parse CSV null regex '{null_regex}': {e}"
+                    )
+                })
+            })
+            .transpose()?;
+
         pin_mut!(stream);
 
         while let Some(chunk) = stream.next().await.transpose()? {
@@ -557,10 +572,8 @@ impl CsvFormat {
                 .with_quote(self.options.quote)
                 .with_truncated_rows(self.options.truncated_rows.unwrap_or(false));
 
-            if let Some(null_regex) = &self.options.null_regex {
-                let regex = Regex::new(null_regex.as_str())
-                    .expect("Unable to parse CSV null regex.");
-                format = format.with_null_regex(regex);
+            if let Some(regex) = &null_regex {
+                format = format.with_null_regex(regex.clone());
             }
 
             if let Some(escape) = self.options.escape {
