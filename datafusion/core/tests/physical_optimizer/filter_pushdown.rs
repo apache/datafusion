@@ -1752,8 +1752,10 @@ fn test_aggregate_pushdown_preserves_duplicate_grouping_columns() {
     assert_eq!(filters[0][1].predicate.to_string(), "id@0 = x");
 }
 
-/// A semi join key that is not a plain column cannot be mapped to the other
-/// side, so a filter on that output key only reaches the emitted side.
+/// A semi join whose emitted-side key is an expression has no output column
+/// that is a join key, so a filter on the emitted column stays on that side.
+/// When the emitted-side key is a plain column, the filter is transferred to
+/// the other side, rewritten over that side's key expression.
 #[test]
 fn test_hashjoin_parent_filter_pushdown_semi_join_expression_key() {
     use datafusion_physical_expr::expressions::CastExpr;
@@ -1763,7 +1765,10 @@ fn test_hashjoin_parent_filter_pushdown_semi_join_expression_key() {
     let key = || Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>;
     let cast_key =
         || Arc::new(CastExpr::new(key(), DataType::Utf8, None)) as Arc<dyn PhysicalExpr>;
-    for on in [(cast_key(), key()), (key(), cast_key())] {
+    for (on, transferred) in [
+        ((cast_key(), key()), None),
+        ((key(), cast_key()), Some("CAST(id@0 AS Utf8) = x")),
+    ] {
         let join = HashJoinExec::try_new(
             TestScanBuilder::new(Arc::clone(&schema)).build(),
             TestScanBuilder::new(Arc::clone(&schema)).build(),
@@ -1785,8 +1790,14 @@ fn test_hashjoin_parent_filter_pushdown_semi_join_expression_key() {
             .unwrap()
             .parent_filters();
         assert!(matches!(filters[0][0].discriminant, PushedDown::Yes));
-        assert!(matches!(filters[1][0].discriminant, PushedDown::No));
         assert_eq!(filters[0][0].predicate.to_string(), "id@0 = x");
+        match transferred {
+            Some(expected) => {
+                assert!(matches!(filters[1][0].discriminant, PushedDown::Yes));
+                assert_eq!(filters[1][0].predicate.to_string(), expected);
+            }
+            None => assert!(matches!(filters[1][0].discriminant, PushedDown::No)),
+        }
     }
 }
 
@@ -1895,7 +1906,9 @@ fn test_from_child_with_allowed_indices_rejects_unresolvable_name() {
 }
 
 /// A join's output projection must map to child positions even when a child
-/// contains multiple columns with the same name.
+/// contains multiple columns with the same name. Position 0 on each side is
+/// the join key, so a filter on it is also transferred to the other side's
+/// key; the same-named non-key column at position 1 stays on its own side.
 #[test]
 fn test_hashjoin_parent_filter_pushdown_duplicate_child_columns() {
     use datafusion_physical_plan::filter_pushdown::{FilterPushdownPhase, PushedDown};
@@ -1937,11 +1950,16 @@ fn test_hashjoin_parent_filter_pushdown_duplicate_child_columns() {
                 .parent_filters();
             let side = input_index / 2;
             assert!(matches!(filters[side][0].discriminant, PushedDown::Yes));
-            assert!(matches!(filters[1 - side][0].discriminant, PushedDown::No));
             assert_eq!(
                 filters[side][0].predicate.to_string(),
                 format!("id@{} = x", input_index % 2)
             );
+            if input_index % 2 == 0 {
+                assert!(matches!(filters[1 - side][0].discriminant, PushedDown::Yes));
+                assert_eq!(filters[1 - side][0].predicate.to_string(), "id@0 = x");
+            } else {
+                assert!(matches!(filters[1 - side][0].discriminant, PushedDown::No));
+            }
         }
     }
 }
@@ -2814,7 +2832,7 @@ async fn test_hashjoin_dynamic_filter_transferred_through_nested_join() {
     // The bottom scan carries the lower join's own filter, which still lists
     // all four `mid` keys, and the upper join's filter rewritten over `x`.
     insta::assert_snapshot!(
-        format!("{}", format_plan_for_test(&plan)),
+        format_plan_for_test(&plan).to_string(),
         @r"
     - SortExec: expr=[x@3 ASC NULLS LAST], preserve_partitioning=[false]
     -   HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t@0, m@0)]
