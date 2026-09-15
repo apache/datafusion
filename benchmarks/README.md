@@ -979,6 +979,32 @@ Several queries are included to test sort merge joins under various workloads.
 
 ./bench.sh run smj
 ```
+
+## Projection Subquery
+
+This benchmark measures `IN`, `NOT IN` and `EXISTS` subqueries that sit in the `SELECT` list instead of a filter
+(see <https://github.com/apache/datafusion/issues/25341>).
+
+A projected `IN` must return `NULL`, and not `false`, when there is no match and the inner side holds a `NULL`.
+The decorrelation therefore turns one projected `IN` into more than one mark join.
+If a mark join has no hashable join predicate, it runs as a nested-loop join, and the cost grows with the outer row count times the inner row count.
+
+Every query projects the boolean subquery result and aggregates it, so the measured cost is the plan and not the size of the output.
+Query `q07` correlates on `<` instead of `=`, so it stays on the nested-loop path.
+It is the control: its time must not change when the hashable shapes get faster.
+
+The two tables are built inline by the suite's load SQL, so there is no data step.
+Set `PSQ_ROWS` to change the row count in each table.
+The default is 30,000, which keeps the nested-loop plans at a few hundred milliseconds.
+The checked-in result files hold the counts for that default, so `--result-mode validate` needs it.
+
+### Example Run
+
+```bash
+# No need to generate data: the suite's load SQL builds the two tables inline
+
+./bench.sh run projection_subquery
+```
 ## Cancellation
 
 Test performance of cancelling queries.

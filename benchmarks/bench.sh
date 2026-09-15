@@ -112,6 +112,10 @@ parquet_row_filter_skip: Per-RG fully-matched RowFilter skip on Parquet (apache/
                           range filter + pushdown, so most row groups are fully matched and the per-row RowFilter is skipped on them
                           (subgroups via BENCH_SUBGROUP: skip = clustered key so the skip fires, control = scrambled key so it never fires)
                           (data generated inline by the suite's load SQL; knobs: PRED_ROWS, RG_SIZE)
+projection_subquery:    IN / NOT IN / EXISTS subqueries in the SELECT list (see https://github.com/apache/datafusion/issues/25341); each query projects the
+                          boolean subquery result and aggregates it, so the cost is the decorrelation plan and not the output size
+                          (q07 correlates on '<' instead of '=', so it keeps the nested-loop plan and acts as the control)
+                          (data generated inline by the suite's load SQL; knob: PSQ_ROWS)
 
 # ClickBench Benchmarks
 clickbench_1:           ClickBench queries against a single parquet file
@@ -270,6 +274,10 @@ main() {
                 parquet_row_filter_skip)
                     # Data is generated inline by the suite's load SQL (COPY).
                     echo "parquet_row_filter_skip: no external data to generate"
+                    ;;
+                projection_subquery)
+                    # Data is generated inline by the suite's load SQL.
+                    echo "projection_subquery: no external data to generate"
                     ;;
                 asof_join)
                     data_asof_join
@@ -517,6 +525,9 @@ main() {
                     ;;
                 parquet_row_filter_skip)
                     run_parquet_row_filter_skip
+                    ;;
+                projection_subquery)
+                    run_projection_subquery
                     ;;
                 asof_join)
                     run_asof_join
@@ -929,6 +940,24 @@ run_parquet_row_filter_skip() {
       ${BENCH_SUBGROUP:+BENCH_SUBGROUP="${BENCH_SUBGROUP}"} \
       PRED_ROWS="${PRED_ROWS:-10000000}" \
       RG_SIZE="${RG_SIZE:-1000000}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
+}
+
+# Runs the projection_subquery suite: IN / NOT IN / EXISTS subqueries that sit
+# in the SELECT list instead of a filter (see
+# https://github.com/apache/datafusion/issues/25341). The load SQL builds the
+# two tables inline, so there is no data step. Each query projects the boolean
+# subquery result and aggregates it, so the measured cost is the decorrelation
+# plan and not the size of the output. Query 07 correlates on '<' instead of
+# '=', so it keeps the nested-loop plan and acts as the control.
+# Knob (string-substituted into the load SQL, not engine config):
+#   PSQ_ROWS  rows in each of the two tables (default 30_000; the checked-in
+#             result files hold the counts for that value)
+run_projection_subquery() {
+    echo "Running projection_subquery benchmark (rows=${PSQ_ROWS:-30000})..."
+    debug_run env BENCH_NAME=projection_subquery \
+      PSQ_ROWS="${PSQ_ROWS:-30000}" \
       ${QUERY:+BENCH_QUERY="${QUERY}"}  \
       bash -c "$SQL_CARGO_COMMAND"
 }
