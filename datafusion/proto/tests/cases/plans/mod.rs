@@ -37,6 +37,7 @@ mod aggregates;
 mod dispatch;
 mod dynamic_filters;
 mod exprs;
+mod extensions;
 mod filters;
 mod joins;
 mod leaves;

@@ -56,7 +56,21 @@
 //! `physical-expr-common`, *below* `datafusion-expr`) cannot do this, which is
 //! why `ScalarFunctionExpr` remains special-cased there.
 //!
+//! # Extension plans
+//!
+//! Third-party plans have no `PhysicalPlanType` variant of their own; they all
+//! share `PhysicalExtensionNode`, whose payload is opaque bytes. Such a plan
+//! rides the same hooks: its `try_to_proto` builds a `PhysicalExtensionNode`
+//! carrying its payload, its children (through
+//! [`ExecutionPlanEncodeCtx::encode_children`]) and its
+//! [`ExecutionPlanFromProto::NAME`], and its `try_from_proto` reads that node
+//! back. The name lets the decoding session select the decoder directly rather
+//! than by trying every registered `PhysicalExtensionCodec` in turn. See
+//! [`registry`].
+//!
 //! [`ExecutionPlan`]: crate::ExecutionPlan
+
+pub mod registry;
 
 use std::sync::Arc;
 
@@ -75,6 +89,8 @@ use datafusion_physical_expr_common::physical_expr::proto_encode::{
 use datafusion_proto_models::protobuf::{PhysicalExprNode, PhysicalPlanNode};
 
 use crate::ExecutionPlan;
+
+pub use registry::ExecutionPlanRegistry;
 
 /// Internal dispatch trait backing [`ExecutionPlanEncodeCtx`].
 ///
@@ -343,6 +359,14 @@ impl<'a> ExecutionPlanDecodeCtx<'a> {
         self.decoder.decode_udwf(name, payload)
     }
 
+    /// Deserialize a slice of child plans.
+    pub fn decode_children(
+        &self,
+        nodes: &[PhysicalPlanNode],
+    ) -> Result<Vec<Arc<dyn ExecutionPlan>>> {
+        nodes.iter().map(|node| self.decode_child(node)).collect()
+    }
+
     /// An expression-level decode context backed by this plan context, bound to
     /// `input_schema`.
     ///
@@ -371,11 +395,70 @@ impl PhysicalExprDecode for ExecutionPlanDecodeCtx<'_> {
 ///
 /// Every self-serializing plan implements this. Built-in plans are dispatched
 /// to their `try_from_proto` by their `PhysicalPlanType` variant, so for them
-/// [`NAME`](Self::NAME) is informational. Not every built-in can: a plan whose
-/// wire variant is chosen one level down (`DataSourceExec` and `DataSinkExec`,
-/// by source and sink; `LazyMemoryExec`, by generator) or that shares a
-/// variant with another plan (`BoundedWindowAggExec` with `WindowAggExec`) is
-/// still decoded by a typed arm in `datafusion-proto`.
+/// [`NAME`](Self::NAME) is informational. A third-party plan shares the single
+/// `PhysicalExtensionNode` variant with every other extension, so it is
+/// dispatched by `NAME` instead: its `try_to_proto` writes the name on the
+/// `PhysicalExtensionNode`, and it is registered in an
+/// [`ExecutionPlanRegistry`] attached to the session that will decode it:
+///
+/// ```
+/// # use std::any::Any;
+/// # use std::fmt::Formatter;
+/// # use std::sync::Arc;
+/// # use datafusion_common::Result;
+/// # use datafusion_execution::config::SessionConfig;
+/// # use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream};
+/// # use datafusion_physical_plan::proto::{
+/// #     ExecutionPlanDecodeCtx, ExecutionPlanEncodeCtx, ExecutionPlanRegistry,
+/// #     ExecutionPlanFromProto,
+/// # };
+/// # use datafusion_proto_models::protobuf::PhysicalPlanNode;
+/// # #[derive(Debug)]
+/// # struct MyExec { properties: Arc<PlanProperties> }
+/// # impl DisplayAs for MyExec {
+/// #     fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result { write!(f, "MyExec") }
+/// # }
+/// # impl ExecutionPlan for MyExec {
+/// #     fn name(&self) -> &str { "MyExec" }
+/// #     fn properties(&self) -> &Arc<PlanProperties> { &self.properties }
+/// #     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> { vec![] }
+/// #     fn apply_expressions(&self, _f: &mut dyn FnMut(&Arc<dyn datafusion_physical_expr::PhysicalExpr>) -> Result<datafusion_common::tree_node::TreeNodeRecursion>) -> Result<datafusion_common::tree_node::TreeNodeRecursion> { Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue) }
+/// #     fn with_new_children(self: Arc<Self>, _: Vec<Arc<dyn ExecutionPlan>>) -> Result<Arc<dyn ExecutionPlan>> { Ok(self) }
+/// #     fn execute(&self, _: usize, _: Arc<datafusion_execution::TaskContext>) -> Result<SendableRecordBatchStream> { unimplemented!() }
+/// #     fn try_to_proto(&self, ctx: &ExecutionPlanEncodeCtx<'_>) -> Result<Option<PhysicalPlanNode>> {
+/// #         use datafusion_proto_models::protobuf::{PhysicalExtensionNode, physical_plan_node::PhysicalPlanType};
+/// #         Ok(Some(PhysicalPlanNode {
+/// #             physical_plan_type: Some(PhysicalPlanType::Extension(PhysicalExtensionNode {
+/// #                 node: vec![],
+/// #                 inputs: ctx.encode_children(self.children())?,
+/// #                 plan_name: Some(Self::NAME.to_string()),
+/// #             })),
+/// #         }))
+/// #     }
+/// # }
+/// impl ExecutionPlanFromProto for MyExec {
+///     const NAME: &'static str = "my-crate.MyExec";
+///
+///     fn try_from_proto(
+///         node: &PhysicalPlanNode,
+///         ctx: &ExecutionPlanDecodeCtx<'_>,
+///     ) -> Result<Arc<dyn ExecutionPlan>> {
+///         let extension = datafusion_physical_plan::expect_plan_variant!(
+///             node,
+///             datafusion_proto_models::protobuf::physical_plan_node::PhysicalPlanType::Extension,
+///             "Extension",
+///         );
+///         let children = ctx.decode_children(&extension.inputs)?;
+///         // ... rebuild `MyExec` from `extension.node` (the payload) and `children` ...
+/// #       unimplemented!()
+///     }
+/// }
+///
+/// let mut registry = ExecutionPlanRegistry::new();
+/// registry.register::<MyExec>()?;
+/// let config = SessionConfig::new().with_extension(Arc::new(registry));
+/// # Ok::<(), datafusion_common::DataFusionError>(())
+/// ```
 pub trait ExecutionPlanFromProto: ExecutionPlan + Sized {
     /// The plan type's name.
     ///
@@ -387,8 +470,11 @@ pub trait ExecutionPlanFromProto: ExecutionPlan + Sized {
     const NAME: &'static str;
 
     /// Reconstruct the plan from the `PhysicalPlanNode` written by
-    /// [`ExecutionPlan::try_to_proto`]. Child nodes are decoded through `ctx`,
-    /// which also carries the decoding session.
+    /// [`ExecutionPlan::try_to_proto`].
+    ///
+    /// Match the `Extension` variant (`expect_plan_variant!`), read the
+    /// payload from `node` and decode `inputs` with
+    /// [`ExecutionPlanDecodeCtx::decode_children`].
     fn try_from_proto(
         node: &PhysicalPlanNode,
         ctx: &ExecutionPlanDecodeCtx<'_>,
@@ -412,4 +498,77 @@ macro_rules! expect_plan_variant {
             }
         }
     }};
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proto_test_util::registry_test_plan::RegisteredExec;
+    use crate::proto_test_util::{
+        StubPlanDecoder, StubPlanEncoder, encoded_child_node, stub_child,
+    };
+    use datafusion_proto_models::protobuf::PhysicalExtensionNode;
+    use datafusion_proto_models::protobuf::physical_plan_node::PhysicalPlanType;
+
+    /// The wire node a `RegisteredExec` with one child encodes to.
+    fn encode(plan: &RegisteredExec, encoder: &StubPlanEncoder) -> PhysicalExtensionNode {
+        let node = plan
+            .try_to_proto(&ExecutionPlanEncodeCtx::new(encoder))
+            .expect("encode must succeed")
+            .expect("an extension plan must serialize itself");
+        match node.physical_plan_type {
+            Some(PhysicalPlanType::Extension(extension)) => extension,
+            other => panic!("expected an extension node, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_extension_plan_stamps_its_name_and_recurses_into_children() {
+        let encoder = StubPlanEncoder::ok();
+        let extension = encode(
+            &RegisteredExec::new("payload", vec![stub_child()]),
+            &encoder,
+        );
+
+        assert_eq!(extension.plan_name.as_deref(), Some(RegisteredExec::NAME));
+        assert_eq!(extension.node, b"payload");
+        // The child rode the central serializer rather than being dropped.
+        assert_eq!(encoder.plan_calls(), 1);
+        assert_eq!(extension.inputs, vec![encoded_child_node()]);
+    }
+
+    #[test]
+    fn an_extension_plan_propagates_a_child_failure() {
+        let encoder = StubPlanEncoder::failing_on_plan(1);
+        let err = RegisteredExec::new("payload", vec![stub_child()])
+            .try_to_proto(&ExecutionPlanEncodeCtx::new(&encoder))
+            .expect_err("a failing child encode must fail the plan");
+        assert!(
+            err.to_string().contains("stub plan encode failure"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn extension_plan_round_trips_through_the_hooks() {
+        let encoder = StubPlanEncoder::ok();
+        let extension = encode(
+            &RegisteredExec::new("payload", vec![stub_child()]),
+            &encoder,
+        );
+        let node = PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::Extension(extension)),
+        };
+
+        let decoder = StubPlanDecoder::ok();
+        let decoded =
+            RegisteredExec::try_from_proto(&node, &ExecutionPlanDecodeCtx::new(&decoder))
+                .expect("decode must succeed");
+
+        let decoded = decoded
+            .downcast_ref::<RegisteredExec>()
+            .expect("decoded plan must be a RegisteredExec");
+        assert_eq!(decoded.payload, "payload");
+        assert_eq!(decoded.children.len(), 1);
+    }
 }
