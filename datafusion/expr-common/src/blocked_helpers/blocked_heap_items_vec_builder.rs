@@ -1,5 +1,5 @@
 use crate::blocked_helpers::blocked_custom_heap_allocated_input_builder::{BlockedCustomHeapAllocatedInputBuilder, HeapAllocatedBlock, HeapAllocatedBlockIterable, HeapAllocatedBlockProvider, HeapAllocatedBlockProviderFinish, HeapAllocatedBlockWithSlice};
-use crate::blocked_helpers::take_n_helpers_heap_allocated::HeapAllocatedBlockBuilder;
+use crate::blocked_helpers::take_n_helpers_heap_allocated::HeapAllocatedBlockBuilderProvider;
 use crate::blocked_helpers::{GetHeapAllocatedSize, OnlyOnStackSize};
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::ArrowNativeType;
@@ -129,53 +129,54 @@ impl<T: Clone> HeapAllocatedBlockIterable for Vec<T> {
     }
 }
 
-impl<T: Clone> HeapAllocatedBlockBuilder for Vec<T> {
+impl<T: Clone> HeapAllocatedBlockBuilderProvider for HeapVecBlockProvider<T> {
     type Output = Vec<T>;
 
-    fn with_capacity(capacity: usize) -> Self {
+    fn with_capacity(&self, capacity: usize) -> Self::Block {
         Vec::with_capacity(capacity)
     }
 
-    fn len(&self) -> usize {
-        self.as_slice().len()
+    fn len(&self, block: &Self::Block) -> usize {
+        block.len()
     }
 
-    fn truncate(&mut self, len: usize) {
-        Vec::truncate(self, len)
+    fn truncate(&self, block: &mut Self::Block, len: usize) {
+        block.truncate(len)
     }
 
-    fn append_range(&mut self, src: &Self, range: Range<usize>) {
-        self.extend_from_slice(&src[range])
+    fn append_range(&self, dest: &mut Self::Block, src: &Self::Block, range: Range<usize>) {
+        dest.extend_from_slice(&src[range])
     }
 
     fn calculate_memory_of_range<
-        HeapAllocatedSize: GetHeapAllocatedSize<<Self::Output as HeapAllocatedBlock>::Item>,
+        HeapAllocatedSize: GetHeapAllocatedSize<<Self::Block as HeapAllocatedBlock>::Item>,
     >(
         &self,
+        block: &Self::Block,
         range: Range<usize>,
     ) -> usize {
-        self[range]
+        block[range]
             .iter()
             .map(|item| HeapAllocatedSize::get_heap_allocated_size(item))
             .sum()
     }
 
-    fn shift_down(&mut self, offset: usize, len: usize) {
+    fn shift_down(&self, block: &mut Self::Block, offset: usize, len: usize) {
         if offset > 0 {
             // truncate first so drain does not memmove elements we are about to drop
-            self.truncate(offset + len);
-            self.drain(..offset);
+            block.truncate(offset + len);
+            block.drain(..offset);
         }
 
-        Vec::truncate(self, len)
+        block.truncate(len);
     }
 
-    fn allocated_size(&self) -> usize {
-        size_of::<T>() * self.capacity()
+    fn block_allocated_size(&self, block: &Self::Block) -> usize {
+        size_of::<T>() * block.capacity()
     }
 
-    fn finish(self) -> Vec<T> {
-        self
+    fn finish(&self, block: Self::Block) -> Vec<T> {
+        block
     }
 }
 

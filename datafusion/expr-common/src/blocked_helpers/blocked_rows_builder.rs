@@ -2,7 +2,9 @@ use super::blocked_custom_input_builder_with_lifetime::{
     BlockWithLifetime, BlockWithLifetimeProvider, BlockedCustomInputBuilderWithLifetime,
 };
 use arrow::row::{RowConverter, Rows};
-use std::ops::{Deref, DerefMut};
+use std::ops::{Deref, DerefMut, Range};
+use crate::blocked_helpers::BlockProvider;
+use crate::blocked_helpers::take_n_helpers::BlockBuilderProvider;
 
 #[derive(Debug)]
 pub struct BlockedRowsBuilder<const FIXED_BLOCK_SIZING: bool>(
@@ -93,6 +95,48 @@ impl BlockWithLifetime for Rows {
 
     fn index(&self, index: usize) -> Self::Item<'_> {
         self.row(index)
+    }
+}
+
+impl BlockBuilderProvider for RowsBlockProvider {
+    type Block = Rows;
+    type Output = Rows;
+
+    fn with_capacity(&self, capacity: usize) -> Self::Block {
+        self.row_converter.empty_rows(capacity, 0)
+    }
+
+    fn len(&self, block: &Self::Block) -> usize {
+        block.num_rows()
+    }
+
+    fn truncate(&self, block: &mut Self::Block, len: usize) {
+        // TODO - change it to a more efficient implementation that just change the length of the data
+        let mut new_block = self.row_converter.empty_rows(len, block.lengths().take(len).sum());
+        new_block.extend(block.iter().take(len));
+
+        *block = new_block
+    }
+
+    fn append_range(&self, dest: &mut Self::Block, src: &Self::Block, range: Range<usize>) {
+        // TODO - implement nth on the Rows iterator so the skip here does not actually iterate over the rows, or implement slice
+        dest.extend(src.iter().skip(range.start).take(range.end - range.start));
+    }
+
+    fn shift_down(&self, block: &mut Self::Block, offset: usize, len: usize) {
+        // TODO - change it to a more efficient implementation that that just copy and truncate
+        let mut new_block = self.row_converter.empty_rows(len, block.lengths().skip(offset).take(len).sum());
+        new_block.extend(block.iter().skip(offset).take(len));
+
+        *block = new_block
+    }
+
+    fn block_allocated_size(&self, block: &Self::Block) -> usize {
+        block.allocated_size()
+    }
+
+    fn finish(&self, block: Self::Block) -> Self::Output {
+        block
     }
 }
 

@@ -1,5 +1,5 @@
 use crate::blocked_helpers::take_n_helpers::{
-    BlockBuilder, create_adjusted_block_size_iter_for_fixed_blocks, take_n_from_blocks,
+  BlockBuilderProvider, create_adjusted_block_size_iter_for_fixed_blocks, take_n_from_blocks,
 };
 use crate::groups_accumulator::{BlockedGroupSelection, BlocksIndex};
 use arrow::array::NullBufferBuilder;
@@ -8,6 +8,7 @@ use arrow::util::bit_util::apply_bitwise_binary_op;
 use datafusion_common::utils::proxy::VecDequeAllocExt;
 use std::collections::VecDeque;
 use std::ops::{Index, Range};
+use crate::blocked_helpers::BlockProvider;
 
 #[derive(Debug)]
 pub struct BlockedNullsBuilder<const FIXED_BLOCK_SIZING: bool> {
@@ -459,9 +460,10 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedNullsBuilder<FIXED_BLOCK_SIZING> {
         assert_eq!(FIXED_BLOCK_SIZING, adjusted_block_size_iter.is_none());
 
         let (taken, layout) = if let Some(iter) = adjusted_block_size_iter {
-            take_n_from_blocks(&mut self.blocks, self.len, n, None, iter)
+            take_n_from_blocks(&NullBufferBuilderProvider, &mut self.blocks, self.len, n, None, iter)
         } else {
             take_n_from_blocks(
+                &NullBufferBuilderProvider,
                 &mut self.blocks,
                 self.len,
                 n,
@@ -482,35 +484,38 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedNullsBuilder<FIXED_BLOCK_SIZING> {
         taken.filter(|b| b.null_count() > 0)
     }
 }
+struct NullBufferBuilderProvider;
 
-impl BlockBuilder for NullBufferBuilder {
+impl BlockBuilderProvider for NullBufferBuilderProvider {
+    type Block = NullBufferBuilder;
+
     type Output = Option<NullBuffer>;
 
-    fn with_capacity(capacity: usize) -> Self {
+    fn with_capacity(&self, capacity: usize) -> Self::Block {
         NullBufferBuilder::new(capacity)
     }
 
-    fn len(&self) -> usize {
-        self.len()
+    fn len(&self, block: &Self::Block) -> usize {
+        block.len()
     }
 
-    fn truncate(&mut self, len: usize) {
-        self.truncate(len)
+    fn truncate(&self, block: &mut Self::Block, len: usize) {
+        block.truncate(len)
     }
 
-    fn append_range(&mut self, src: &Self, range: Range<usize>) {
+    fn append_range(&self, dest: &mut Self::Block, src: &Self::Block, range: Range<usize>) {
         let Some(src_slice) = src.as_slice() else {
-            self.append_n_non_nulls(range.len());
+            dest.append_n_non_nulls(range.len());
             return;
         };
 
-        let offset_write = self.len();
+        let offset_write = dest.len();
         let len = range.end - range.start;
         // allocate new bits as 0
-        self.append_n_nulls(len);
+        dest.append_n_nulls(len);
         // copy bits from to_set into self.buffer a word at a time
         apply_bitwise_binary_op(
-            self.as_slice_mut().expect("must be materialized"),
+            dest.as_slice_mut().expect("must be materialized"),
             offset_write,
             src_slice,
             range.start,
@@ -519,9 +524,9 @@ impl BlockBuilder for NullBufferBuilder {
         );
     }
 
-    fn shift_down(&mut self, offset: usize, len: usize) {
+    fn shift_down(&self, block: &mut Self::Block, offset: usize, len: usize) {
         if offset == 0 {
-            self.truncate(len);
+            self.truncate(block, len);
             return;
         }
 
@@ -529,7 +534,7 @@ impl BlockBuilder for NullBufferBuilder {
         let bit_offset = offset % 8;
         let dst_bytes = len.div_ceil(8);
 
-        if let Some(bytes) = self.as_slice_mut() {
+        if let Some(bytes) = block.as_slice_mut() {
             let src_bytes = bytes.len();
 
             if bit_offset == 0 {
@@ -559,15 +564,15 @@ impl BlockBuilder for NullBufferBuilder {
         }
 
         // truncate is enough for both materialized (since we just shifted) and non-materialized (since all are the same value) case
-        self.truncate(len)
+        self.truncate(block, len)
     }
 
-    fn allocated_size(&self) -> usize {
-        self.allocated_size()
+    fn block_allocated_size(&self, block: &Self::Block) -> usize {
+        block.allocated_size()
     }
 
-    fn finish(self) -> Self::Output {
-        self.build()
+    fn finish(&self, block: Self::Block) -> Self::Output {
+        block.build()
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::blocked_helpers::take_n_helpers::{BlockBuilder, take_n_from_blocks};
+use crate::blocked_helpers::take_n_helpers::{BlockBuilderProvider, take_n_from_blocks};
 use crate::groups_accumulator::BlocksIndex;
 use arrow::array::{AsArray, BooleanBufferBuilder, new_empty_array};
 use arrow::buffer::BooleanBuffer;
@@ -6,6 +6,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::utils::proxy::VecDequeAllocExt;
 use std::collections::VecDeque;
 use std::ops::{Index, Range};
+use crate::blocked_helpers::BlockProvider;
 
 #[derive(Debug)]
 pub struct BlockedBooleanBuilder<const FIXED_BLOCK_SIZING: bool> {
@@ -246,6 +247,7 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedBooleanBuilder<FIXED_BLOCK_SIZING> {
         assert_eq!(FIXED_BLOCK_SIZING, adjusted_block_size_iter.is_none());
         if let Some(adjusted_block_size_iter) = adjusted_block_size_iter {
             let (taken, layout) = take_n_from_blocks(
+                &BooleanBufferBuilderProvider,
                 &mut self.blocks,
                 self.len,
                 n,
@@ -293,7 +295,7 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedBooleanBuilder<FIXED_BLOCK_SIZING> {
                     // pulled into the previous block
                     self.blocks[index].truncate(0);
                 } else {
-                    self.blocks[index].shift_down(n, block_len - n);
+                    BooleanBufferBuilderProvider.shift_down(&mut self.blocks[index], n, block_len - n);
                 }
 
                 let next_index = index + 1;
@@ -340,28 +342,31 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedBooleanBuilder<FIXED_BLOCK_SIZING> {
     }
 }
 
-impl BlockBuilder for BooleanBufferBuilder {
+struct BooleanBufferBuilderProvider;
+
+impl BlockBuilderProvider for BooleanBufferBuilderProvider {
+    type Block = BooleanBufferBuilder;
     type Output = BooleanBuffer;
 
-    fn with_capacity(capacity: usize) -> Self {
+    fn with_capacity(&self, capacity: usize) -> Self::Block {
         BooleanBufferBuilder::new(capacity)
     }
 
-    fn len(&self) -> usize {
-        BooleanBufferBuilder::len(self)
+    fn len(&self, block: &Self::Block) -> usize {
+        BooleanBufferBuilder::len(block)
     }
 
-    fn truncate(&mut self, len: usize) {
-        BooleanBufferBuilder::truncate(self, len)
+    fn truncate(&self, block: &mut Self::Block, len: usize) {
+        BooleanBufferBuilder::truncate(block, len)
     }
 
-    fn append_range(&mut self, src: &Self, range: Range<usize>) {
-        self.append_packed_range(range, src.as_slice())
+    fn append_range(&self, dest: &mut Self::Block, src: &Self::Block, range: Range<usize>) {
+        dest.append_packed_range(range, src.as_slice())
     }
 
-    fn shift_down(&mut self, offset: usize, len: usize) {
+    fn shift_down(&self, block: &mut Self::Block, offset: usize, len: usize) {
         if offset == 0 {
-            BooleanBufferBuilder::truncate(self, len);
+            BooleanBufferBuilder::truncate(block, len);
             return;
         }
 
@@ -370,7 +375,7 @@ impl BlockBuilder for BooleanBufferBuilder {
         let dst_bytes = len.div_ceil(8);
 
         {
-            let bytes = self.as_slice_mut();
+            let bytes = block.as_slice_mut();
             let src_bytes = bytes.len();
 
             if bit_offset == 0 {
@@ -399,15 +404,15 @@ impl BlockBuilder for BooleanBufferBuilder {
             }
         }
 
-        BooleanBufferBuilder::truncate(self, len);
+        block.truncate(len);
     }
 
-    fn allocated_size(&self) -> usize {
-        allocated_size_for_builder(self)
+    fn block_allocated_size(&self, block: &Self::Block) -> usize {
+        allocated_size_for_builder(block)
     }
 
-    fn finish(self) -> BooleanBuffer {
-        self.build()
+    fn finish(&self, block: Self::Block) -> Self::Output {
+        block.build()
     }
 }
 

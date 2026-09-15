@@ -1,7 +1,7 @@
 use super::blocked_custom_input_builder::{
     Block, BlockProvider, BlockProviderFinish, BlockWithSlice, BlockedCustomInputBuilder,
 };
-use crate::blocked_helpers::take_n_helpers::BlockBuilder;
+use crate::blocked_helpers::take_n_helpers::BlockBuilderProvider;
 use crate::groups_accumulator::BlocksIndex;
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::ArrowNativeType;
@@ -147,40 +147,55 @@ impl<T: Copy> BlockWithSlice for MmapVec<T> {
     }
 }
 
-impl<T: Copy> BlockBuilder for MmapVec<T> {
+pub(crate) struct MmapVecProvider<T>(PhantomData<T>);
+impl<T: Copy> BlockProvider for MmapVecProvider<T> {
+    type Block = MmapVec<T>;
+
+    fn new_block(&self) -> Self::Block {
+        self.with_capacity(0)
+    }
+
+    fn allocated_size(&self) -> usize {
+        0
+    }
+}
+
+impl<T: Copy> BlockBuilderProvider for MmapVecProvider<T> {
+    type Block = MmapVec<T>;
+
     type Output = MmapVec<T>;
 
-    fn with_capacity(capacity: usize) -> Self {
+    fn with_capacity(&self, capacity: usize) -> Self::Block {
         MmapVec {
             data: Vec::with_capacity(capacity),
         }
     }
 
-    fn len(&self) -> usize {
-        self.data.len()
+    fn len(&self, block: &Self::Block) -> usize {
+        block.data.len()
     }
 
-    fn truncate(&mut self, len: usize) {
-        self.data.truncate(len)
+    fn truncate(&self, block: &mut Self::Block, len: usize) {
+        block.data.truncate(len)
     }
 
-    fn append_range(&mut self, src: &Self, range: Range<usize>) {
-        self.data.extend_from_slice(&src.data[range])
+    fn append_range(&self, dest: &mut Self::Block, src: &Self::Block, range: Range<usize>) {
+        dest.data.extend_from_slice(&src.data[range])
     }
 
-    fn shift_down(&mut self, offset: usize, len: usize) {
+    fn shift_down(&self, block: &mut Self::Block, offset: usize, len: usize) {
         if offset > 0 {
-            self.data.copy_within(offset..offset + len, 0);
+            block.data.copy_within(offset..offset + len, 0);
         }
-        self.data.truncate(len)
+        block.data.truncate(len)
     }
 
-    fn allocated_size(&self) -> usize {
-        size_of::<T>() * self.data.capacity()
+    fn block_allocated_size(&self, block: &Self::Block) -> usize {
+        size_of::<T>() * block.data.capacity()
     }
 
-    fn finish(self) -> MmapVec<T> {
-        self
+    fn finish(&self, block: Self::Block) -> Self::Output {
+        block
     }
 }
 
@@ -373,39 +388,40 @@ impl<T: Copy> IndexMut<usize> for CopyItemBlockedVecBuilder<true, T> {
 }
 
 /// Still used by the builders that keep `Vec` blocks (e.g. the bytes buffer builder)
-impl<T: Copy> BlockBuilder for Vec<T> {
-    type Output = Vec<T>;
+impl<T: Copy> BlockBuilderProvider for VecBlockProvider<T> {
+    type Block = MmapVec<T>;
+    type Output = MmapVec<T>;
 
-    fn with_capacity(capacity: usize) -> Self {
-        Vec::with_capacity(capacity)
+    fn with_capacity(&self, capacity: usize) -> Self::Block {
+        MmapVec { data: Vec::with_capacity(capacity) }
     }
 
-    fn len(&self) -> usize {
-        self.as_slice().len()
+    fn len(&self, block: &Self::Block) -> usize {
+        block.data.len()
     }
 
-    fn truncate(&mut self, len: usize) {
-        Vec::truncate(self, len)
+    fn truncate(&self, block: &mut Self::Block, len: usize) {
+        block.data.truncate(len)
     }
 
-    fn append_range(&mut self, src: &Self, range: Range<usize>) {
-        self.extend_from_slice(&src[range])
+    fn append_range(&self, dest: &mut Self::Block, src: &Self::Block, range: Range<usize>) {
+        dest.data.extend_from_slice(&src.data[range])
     }
 
-    fn shift_down(&mut self, offset: usize, len: usize) {
+    fn shift_down(&self, block: &mut Self::Block, offset: usize, len: usize) {
         if offset > 0 {
-            self.copy_within(offset..offset + len, 0);
+            block.data.copy_within(offset..offset + len, 0);
         }
 
-        Vec::truncate(self, len)
+        block.data.truncate(len);
     }
 
-    fn allocated_size(&self) -> usize {
-        size_of::<T>() * self.capacity()
+    fn block_allocated_size(&self, block: &Self::Block) -> usize {
+        size_of::<T>() * block.data.capacity()
     }
 
-    fn finish(self) -> Vec<T> {
-        self
+    fn finish(&self, block: Self::Block) -> Self::Output {
+        block
     }
 }
 

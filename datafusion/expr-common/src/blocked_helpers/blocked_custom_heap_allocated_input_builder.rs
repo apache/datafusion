@@ -1,6 +1,6 @@
 use crate::blocked_helpers::take_n_helpers::create_adjusted_block_size_iter_for_fixed_blocks;
 use crate::blocked_helpers::take_n_helpers_heap_allocated::{
-    HeapAllocatedBlockBuilder, take_n_from_heap_blocks,
+    HeapAllocatedBlockBuilderProvider, take_n_from_heap_blocks,
 };
 use crate::blocked_helpers::{GetHeapAllocatedSize, OnlyOnStackSize};
 use crate::groups_accumulator::BlocksIndex;
@@ -553,16 +553,17 @@ impl<
         &mut self,
         n: usize,
         adjusted_block_size_iter: Option<impl Iterator<Item = usize> + Clone>,
-    ) -> <CustomBlockProvider::Block as HeapAllocatedBlockBuilder>::Output
+    ) -> <CustomBlockProvider as HeapAllocatedBlockBuilderProvider>::Output
     where
-      CustomBlockProvider::Block: HeapAllocatedBlockBuilder,
-    HeapAllocatedSize: GetHeapAllocatedSize<<<CustomBlockProvider::Block as HeapAllocatedBlockBuilder>::Output as HeapAllocatedBlock>::Item>,
+      CustomBlockProvider: HeapAllocatedBlockBuilderProvider,
+    HeapAllocatedSize: GetHeapAllocatedSize<<CustomBlockProvider::Block as HeapAllocatedBlock>::Item>,
     {
         assert_eq!(FIXED_BLOCK_SIZING, adjusted_block_size_iter.is_none());
 
         let (taken, layout) = if Self::should_track_blocks_heap_allocation() {
             if let Some(iter) = adjusted_block_size_iter {
-                take_n_from_heap_blocks::<CustomBlockProvider::Block, HeapAllocatedSize>(
+                take_n_from_heap_blocks::<CustomBlockProvider, HeapAllocatedSize>(
+                    &self.blocks_provider,
                     &mut self.blocks,
                     &mut self.blocks_heap_allocated_sizes,
                     self.len,
@@ -571,7 +572,8 @@ impl<
                     iter,
                 )
             } else {
-                take_n_from_heap_blocks::<CustomBlockProvider::Block, HeapAllocatedSize>(
+                take_n_from_heap_blocks::<CustomBlockProvider, HeapAllocatedSize>(
+                    &self.blocks_provider,
                     &mut self.blocks,
                     &mut self.blocks_heap_allocated_sizes,
                     self.len,
@@ -586,7 +588,8 @@ impl<
             }
         } else {
             if let Some(iter) = adjusted_block_size_iter {
-                take_n_from_heap_blocks::<CustomBlockProvider::Block, OnlyOnStackSize>(
+                take_n_from_heap_blocks::<CustomBlockProvider, OnlyOnStackSize>(
+                    &self.blocks_provider,
                     &mut self.blocks,
                     &mut VecDeque::new(),
                     self.len,
@@ -595,7 +598,8 @@ impl<
                     iter,
                 )
             } else {
-                take_n_from_heap_blocks::<CustomBlockProvider::Block, OnlyOnStackSize>(
+                take_n_from_heap_blocks::<CustomBlockProvider, OnlyOnStackSize>(
+                    &self.blocks_provider,
                     &mut self.blocks,
                     &mut VecDeque::new(),
                     self.len,
@@ -639,10 +643,13 @@ impl<
     HeapAllocatedSize: GetHeapAllocatedSize<<CustomBlockProvider::Block as HeapAllocatedBlock>::Item>,
 > BlockedCustomHeapAllocatedInputBuilder<true, CustomBlockProvider, HeapAllocatedSize>
 {
-    pub fn take_n_fixed(&mut self, n: usize) -> <CustomBlockProvider::Block as HeapAllocatedBlockBuilder>::Output
+    pub fn take_n_fixed(
+        &mut self,
+        n: usize,
+    ) -> <CustomBlockProvider as HeapAllocatedBlockBuilderProvider>::Output
     where
-      CustomBlockProvider::Block: HeapAllocatedBlockBuilder,
-      HeapAllocatedSize: GetHeapAllocatedSize<<<CustomBlockProvider::Block as HeapAllocatedBlockBuilder>::Output as HeapAllocatedBlock>::Item>,
+      CustomBlockProvider: HeapAllocatedBlockBuilderProvider,
+      HeapAllocatedSize: GetHeapAllocatedSize<<CustomBlockProvider::Block as HeapAllocatedBlock>::Item>,
     {
         self.take_n(n, None::<std::iter::Empty<_>>)
     }

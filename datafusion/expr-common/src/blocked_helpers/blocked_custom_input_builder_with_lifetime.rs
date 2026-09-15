@@ -1,5 +1,5 @@
 use crate::blocked_helpers::take_n_helpers::{
-    BlockBuilder, create_adjusted_block_size_iter_for_fixed_blocks, take_n_from_blocks,
+    BlockBuilderProvider, create_adjusted_block_size_iter_for_fixed_blocks, take_n_from_blocks,
 };
 use crate::groups_accumulator::BlocksIndex;
 use datafusion_common::utils::proxy::VecDequeAllocExt;
@@ -95,6 +95,10 @@ impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider: BlockWithLifetimeProvi
 
     pub fn is_empty(&self) -> bool {
         self.len == 0
+    }
+
+    pub fn block_size(&self) -> usize {
+        self.block_size
     }
 
     pub fn allocated_size(&self) -> usize {
@@ -390,16 +394,17 @@ impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider: BlockWithLifetimeProvi
         &mut self,
         n: usize,
         adjusted_block_size_iter: Option<impl Iterator<Item = usize> + Clone>,
-    ) -> <CustomBlockProvider::Block as BlockBuilder>::Output
+    ) -> <CustomBlockProvider as BlockBuilderProvider>::Output
     where
-        CustomBlockProvider::Block: BlockBuilder,
+        CustomBlockProvider: BlockBuilderProvider<Block = <CustomBlockProvider as BlockWithLifetimeProvider>::Block>,
     {
         assert_eq!(FIXED_BLOCK_SIZING, adjusted_block_size_iter.is_none());
 
         let (taken, layout) = if let Some(iter) = adjusted_block_size_iter {
-            take_n_from_blocks(&mut self.blocks, self.len, n, None, iter)
+            take_n_from_blocks(&self.blocks_provider, &mut self.blocks, self.len, n, None, iter)
         } else {
             take_n_from_blocks(
+                &self.blocks_provider,
                 &mut self.blocks,
                 self.len,
                 n,
@@ -435,5 +440,46 @@ impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider: BlockWithLifetimeProvi
         self.len = 0;
         self.current_block_index = 0;
         self.finished_blocks_allocated_memory = 0;
+    }
+}
+
+impl<CustomBlockProvider: BlockWithLifetimeProvider>
+    BlockedCustomInputBuilderWithLifetime<true, CustomBlockProvider>
+{
+    pub fn next_block_index(&self) -> BlocksIndex {
+        let next = BlocksIndex::new(self.current_block_index, self.current_block_len());
+        debug_assert_eq!(
+            next,
+            BlocksIndex::from_index_in_fixed_block_size(self.len(), self.block_size)
+        );
+        next
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use arrow::array::UInt8Array;
+    use arrow::datatypes::DataType;
+    use arrow::row::{SortField, RowConverter};
+    use super::*;
+
+    #[test]
+    fn next_block_index_should_be_correct() {
+        use crate::blocked_helpers::blocked_rows_builder::RowsBlockProvider;
+
+        let block_size = 4;
+
+        let row_converter = RowConverter::new(vec![SortField::new(DataType::UInt8)]).unwrap();
+
+        let single_item = row_converter.convert_columns(&[Arc::new(UInt8Array::from(vec![1]))]).unwrap();
+        let provider = RowsBlockProvider::new(row_converter);
+        let mut builder = BlockedCustomInputBuilderWithLifetime::<true, _>::new(4, provider);
+
+        for i in 0..block_size * 3 {
+            assert_eq!(i, builder.len());
+            assert_eq!(builder.next_block_index(), BlocksIndex::from_index_in_fixed_block_size(builder.len(), block_size));
+            builder.push(single_item.row(0));
+        }
     }
 }

@@ -1,5 +1,5 @@
 use crate::blocked_helpers::take_n_helpers::{
-    BlockBuilder, create_adjusted_block_size_iter_for_fixed_blocks, take_n_from_blocks,
+    BlockBuilderProvider, create_adjusted_block_size_iter_for_fixed_blocks, take_n_from_blocks,
 };
 use crate::groups_accumulator::BlocksIndex;
 use datafusion_common::utils::proxy::VecDequeAllocExt;
@@ -425,16 +425,17 @@ impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider: BlockProvider>
         &mut self,
         n: usize,
         adjusted_block_size_iter: Option<impl Iterator<Item = usize> + Clone>,
-    ) -> <CustomBlockProvider::Block as BlockBuilder>::Output
+    ) -> <CustomBlockProvider as BlockBuilderProvider>::Output
     where
-        CustomBlockProvider::Block: BlockBuilder,
+        CustomBlockProvider: BlockBuilderProvider<Block = <CustomBlockProvider as BlockProvider>::Block>,
     {
         assert_eq!(FIXED_BLOCK_SIZING, adjusted_block_size_iter.is_none());
 
         let (taken, layout) = if let Some(iter) = adjusted_block_size_iter {
-            take_n_from_blocks(&mut self.blocks, self.len, n, None, iter)
+            take_n_from_blocks(&self.blocks_provider, &mut self.blocks, self.len, n, None, iter)
         } else {
             take_n_from_blocks(
+                &self.blocks_provider,
                 &mut self.blocks,
                 self.len,
                 n,
@@ -468,9 +469,9 @@ impl<CustomBlockProvider: BlockProvider>
     pub fn take_n_fixed(
         &mut self,
         n: usize,
-    ) -> <CustomBlockProvider::Block as BlockBuilder>::Output
+    ) -> <CustomBlockProvider as BlockBuilderProvider>::Output
     where
-        CustomBlockProvider::Block: BlockBuilder,
+        CustomBlockProvider: BlockBuilderProvider<Block = <CustomBlockProvider as BlockProvider>::Block>,
     {
         self.take_n(n, None::<std::iter::Empty<_>>)
     }

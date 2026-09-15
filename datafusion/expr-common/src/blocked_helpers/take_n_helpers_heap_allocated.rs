@@ -1,5 +1,5 @@
-use crate::blocked_helpers::GetHeapAllocatedSize;
-use crate::blocked_helpers::blocked_custom_heap_allocated_input_builder::HeapAllocatedBlock;
+use crate::blocked_helpers::{BlockProvider, GetHeapAllocatedSize};
+use crate::blocked_helpers::blocked_custom_heap_allocated_input_builder::{HeapAllocatedBlock, HeapAllocatedBlockProvider};
 use crate::blocked_helpers::take_n_helpers::layout_unchanged;
 use std::collections::VecDeque;
 use std::ops::Range;
@@ -7,39 +7,40 @@ use std::ops::Range;
 /// A single block inside a blocked builder
 ///
 /// Implemented per element type so the block re-layout logic can be shared
-pub trait HeapAllocatedBlockBuilder: Sized {
+pub trait HeapAllocatedBlockBuilderProvider: HeapAllocatedBlockProvider {
     /// What a block turns into once it is emitted
-    type Output: HeapAllocatedBlock;
+    type Output;
 
     /// Must not allocate when `capacity` is 0
-    fn with_capacity(capacity: usize) -> Self;
+    fn with_capacity(&self, capacity: usize) -> Self::Block;
 
-    fn len(&self) -> usize;
+    fn len(&self, block: &Self::Block) -> usize;
 
-    fn is_empty(&self) -> bool {
-        self.len() == 0
+    fn is_empty(&self, block: &Self::Block) -> bool {
+        self.len(block) == 0
     }
 
     /// Drops everything from `len` onward, keeps the allocation
-    fn truncate(&mut self, len: usize);
+    fn truncate(&self, block: &mut Self::Block, len: usize);
 
     /// Appends `src[range]` to the end of self
-    fn append_range(&mut self, src: &Self, range: Range<usize>);
+    fn append_range(&self, dest: &mut Self::Block, src: &Self::Block, range: Range<usize>);
 
     fn calculate_memory_of_range<
-        HeapAllocatedSize: GetHeapAllocatedSize<<Self::Output as HeapAllocatedBlock>::Item>,
+        HeapAllocatedSize: GetHeapAllocatedSize<<Self::Block as HeapAllocatedBlock>::Item>,
     >(
         &self,
+        block: &Self::Block,
         range: Range<usize>,
     ) -> usize;
 
     /// Moves the items in `[offset, offset + len)` down to the start of the buffer
     /// and shrinks self to `len`, reusing the same allocation
-    fn shift_down(&mut self, offset: usize, len: usize);
+    fn shift_down(&self, block: &mut Self::Block, offset: usize, len: usize);
 
-    fn allocated_size(&self) -> usize;
+    fn block_allocated_size(&self, block: &Self::Block) -> usize;
 
-    fn finish(self) -> Self::Output;
+    fn finish(&self, block: Self::Block) -> Self::Output;
 }
 
 /// The state a blocked builder has to write back after a re-layout
@@ -74,10 +75,11 @@ pub fn create_adjusted_block_size_iter_for_fixed_blocks(
 ///
 /// See `BlockedBooleanBuilder::take_n` for what the adjusted sizes mean
 pub(crate) fn take_n_from_heap_blocks<
-    B: HeapAllocatedBlockBuilder,
-    HeapAllocatedSize: GetHeapAllocatedSize<<B::Output as HeapAllocatedBlock>::Item>,
+    B: HeapAllocatedBlockBuilderProvider,
+    HeapAllocatedSize: GetHeapAllocatedSize<<B::Block as HeapAllocatedBlock>::Item>,
 >(
-    blocks: &mut VecDeque<B>,
+    provider: &B,
+    blocks: &mut VecDeque<B::Block>,
     blocks_sizes: &mut VecDeque<usize>,
     len: usize,
     n: usize,
@@ -86,9 +88,9 @@ pub(crate) fn take_n_from_heap_blocks<
 ) -> (B::Output, BlocksLayout) {
     assert!(n <= len, "n ({n}) must be <= len ({len}) than");
     assert!(
-        n <= blocks[0].len(),
+        n <= provider.len(&blocks[0]),
         "n ({n}) must be lower than the first block ({}), instead use `take_block` and take_n with the remainder",
-        blocks[0].len()
+        provider.len(&blocks[0])
     );
 
     if HeapAllocatedSize::HAS_HEAP_ALLOCATION {
@@ -114,21 +116,21 @@ pub(crate) fn take_n_from_heap_blocks<
     if n == 0
         && layout_unchanged(
             adjusted_block_size_iter.clone(),
-            blocks.iter().map(|b| b.len()),
+            blocks.iter().map(|b| provider.len(b)),
         )
     {
-        ensure_writable_tail::<_, HeapAllocatedSize>(blocks, blocks_sizes, block_size);
+        ensure_writable_tail::<_, HeapAllocatedSize>(provider, blocks, blocks_sizes, block_size);
 
-        let layout = layout_for::<_, HeapAllocatedSize>(blocks, blocks_sizes, prev_len);
+        let layout = layout_for::<_, HeapAllocatedSize>(provider, blocks, blocks_sizes, prev_len);
 
-        return (B::with_capacity(0).finish(), layout);
+        return (provider.finish(provider.with_capacity(0)), layout);
     }
 
     // Only the first block goes
-    if n == blocks[0].len()
+    if n == provider.len(&blocks[0])
         && layout_unchanged(
             adjusted_block_size_iter.clone(),
-            blocks.iter().skip(1).map(|b| b.len()),
+            blocks.iter().skip(1).map(|b| provider.len(b)),
         )
     {
         let taken = blocks.pop_front().expect("must have block");
@@ -138,17 +140,17 @@ pub(crate) fn take_n_from_heap_blocks<
             blocks_sizes.pop_front().expect("must have block");
         }
 
-        ensure_writable_tail::<_, HeapAllocatedSize>(blocks, blocks_sizes, block_size);
+        ensure_writable_tail::<_, HeapAllocatedSize>(provider, blocks, blocks_sizes, block_size);
 
         let layout =
-            layout_for::<_, HeapAllocatedSize>(blocks, blocks_sizes, prev_len - n);
+            layout_for::<_, HeapAllocatedSize>(provider, blocks, blocks_sizes, prev_len - n);
 
-        return (taken.finish(), layout);
+        return (provider.finish(taken), layout);
     }
 
     // The emitted items are always fully contained in the first block
-    let mut taken = B::with_capacity(n);
-    taken.append_range(&blocks[0], 0..n);
+    let mut taken = provider.with_capacity(n);
+    provider.append_range(&mut taken, &blocks[0], 0..n);
 
     // Read cursor into the old layout, starts right after the emitted items
     let mut src_index = 0;
@@ -160,7 +162,7 @@ pub(crate) fn take_n_from_heap_blocks<
     let mut sum = 0;
 
     // Reused for swapping blocks out of the deque, a 0 capacity block holds no buffer
-    let mut placeholder = B::with_capacity(0);
+    let mut placeholder = provider.with_capacity(0);
 
     for new_block_size in adjusted_block_size_iter {
         sum += new_block_size;
@@ -169,12 +171,12 @@ pub(crate) fn take_n_from_heap_blocks<
             // An empty destination block, nothing has to be read for it
             // (the bytes of a block whose values are all empty or null for example)
             if dst_index < src_index {
-                blocks[dst_index].truncate(0);
+                provider.truncate(&mut blocks[dst_index], 0);
                 if HeapAllocatedSize::HAS_HEAP_ALLOCATION {
                     blocks_sizes[dst_index] = 0;
                 }
             } else {
-                blocks.insert(dst_index, B::with_capacity(0));
+                blocks.insert(dst_index, provider.with_capacity(0));
                 if HeapAllocatedSize::HAS_HEAP_ALLOCATION {
                     blocks_sizes.insert(dst_index, 0);
                 }
@@ -185,7 +187,7 @@ pub(crate) fn take_n_from_heap_blocks<
         }
 
         // Skip over source blocks that were fully read
-        while src_index < blocks.len() && src_offset >= blocks[src_index].len() {
+        while src_index < blocks.len() && src_offset >= provider.len(&blocks[src_index]) {
             src_index += 1;
             src_offset = 0;
         }
@@ -200,26 +202,26 @@ pub(crate) fn take_n_from_heap_blocks<
         debug_assert!(dst_index <= src_index);
 
         if dst_index == src_index {
-            let remaining_in_src = blocks[src_index].len() - src_offset;
+            let remaining_in_src = provider.len(&blocks[src_index]) - src_offset;
 
             if new_block_size < remaining_in_src {
                 // The old block is being split, its tail is still needed by later
                 // destinations so it cannot be shifted down in place
                 // Give the split off part its own slot and push the old block one to the right
-                let mut split = B::with_capacity(new_block_size);
+                let mut split = provider.with_capacity(new_block_size);
                 let mut split_mem_size = 0;
                 {
                     let src_block = &blocks[src_index];
                     let src_block_range = src_offset..src_offset + new_block_size;
 
                     if HeapAllocatedSize::HAS_HEAP_ALLOCATION {
-                        split_mem_size = src_block
-                            .calculate_memory_of_range::<HeapAllocatedSize>(
-                                src_block_range.clone(),
-                            );
+                        split_mem_size = provider.calculate_memory_of_range::<HeapAllocatedSize>(
+                            src_block,
+                            src_block_range.clone(),
+                        );
                     }
 
-                    split.append_range(src_block, src_block_range);
+                    provider.append_range(&mut split, src_block, src_block_range);
                 }
 
                 blocks.insert(dst_index, split);
@@ -234,20 +236,23 @@ pub(crate) fn take_n_from_heap_blocks<
             }
 
             if HeapAllocatedSize::HAS_HEAP_ALLOCATION {
-                let items_to_be_removed = blocks[dst_index].len() - remaining_in_src;
+                let items_to_be_removed = provider.len(&blocks[dst_index]) - remaining_in_src;
 
                 // If more items to remove than keep, calculate the keep
                 let updated_mem_size = if items_to_be_removed > remaining_in_src {
-                    blocks[dst_index].calculate_memory_of_range::<HeapAllocatedSize>(
-                        src_offset..src_offset + remaining_in_src,
-                    )
+
+                        provider.calculate_memory_of_range::<HeapAllocatedSize>(
+                            &blocks[dst_index],
+                            src_offset..src_offset + remaining_in_src,
+                        )
                 } else {
                     // If more items to keep than remove, calculate the remove
                     let size_will_be_removed =
-                        blocks[dst_index].calculate_memory_of_range::<HeapAllocatedSize>(
-                            src_offset + remaining_in_src..blocks[dst_index].len(),
-                        ) + blocks[dst_index]
-                            .calculate_memory_of_range::<HeapAllocatedSize>(
+                        provider.calculate_memory_of_range::<HeapAllocatedSize>(
+                            &blocks[dst_index],
+                            src_offset + remaining_in_src..provider.len(&blocks[dst_index]),
+                        ) + provider.calculate_memory_of_range::<HeapAllocatedSize>(
+                            &blocks[dst_index],
                                 0..src_offset,
                             );
 
@@ -259,7 +264,7 @@ pub(crate) fn take_n_from_heap_blocks<
 
             // The whole tail of this block belongs to the destination, shift it down
             // over the items that were consumed and reuse the same allocation
-            blocks[dst_index].shift_down(src_offset, remaining_in_src);
+            provider.shift_down(&mut blocks[dst_index], src_offset, remaining_in_src);
 
             src_index += 1;
             src_offset = 0;
@@ -270,16 +275,16 @@ pub(crate) fn take_n_from_heap_blocks<
             }
         } else {
             // This slot held a block that is already fully read, reuse it as an empty destination
-            blocks[dst_index].truncate(0);
+            provider.truncate(&mut blocks[dst_index], 0);
             if HeapAllocatedSize::HAS_HEAP_ALLOCATION {
                 blocks_sizes[dst_index] = 0;
             }
         }
 
-        let mut remaining = new_block_size - blocks[dst_index].len();
+        let mut remaining = new_block_size - provider.len(&blocks[dst_index]);
 
         while remaining > 0 {
-            while src_index < blocks.len() && src_offset >= blocks[src_index].len() {
+            while src_index < blocks.len() && src_offset >= provider.len(&blocks[src_index]) {
                 src_index += 1;
                 src_offset = 0;
             }
@@ -298,13 +303,13 @@ pub(crate) fn take_n_from_heap_blocks<
                 let src_block_range = src_offset..src_offset + to_copy;
 
                 if HeapAllocatedSize::HAS_HEAP_ALLOCATION {
-                    blocks_sizes[dst_index] += placeholder
-                        .calculate_memory_of_range::<HeapAllocatedSize>(
+                    blocks_sizes[dst_index] += provider.calculate_memory_of_range::<HeapAllocatedSize>(
+                        &placeholder,
                             src_block_range.clone(),
                         );
                 }
 
-                blocks[dst_index].append_range(&placeholder, src_block_range);
+                provider.append_range(&mut blocks[dst_index], &placeholder, src_block_range);
             }
 
             std::mem::swap(&mut blocks[src_index], &mut placeholder);
@@ -328,29 +333,30 @@ pub(crate) fn take_n_from_heap_blocks<
         blocks_sizes.truncate(dst_index);
     }
 
-    ensure_writable_tail::<_, HeapAllocatedSize>(blocks, blocks_sizes, block_size);
+    ensure_writable_tail::<_, HeapAllocatedSize>(provider, blocks, blocks_sizes, block_size);
 
-    let layout = layout_for::<_, HeapAllocatedSize>(blocks, blocks_sizes, sum);
+    let layout = layout_for::<_, HeapAllocatedSize>(provider, blocks, blocks_sizes, sum);
 
-    (taken.finish(), layout)
+    (provider.finish(taken), layout)
 }
 
 /// There must always be a block that the next push can go into,
 /// with a fixed block size that means the back block must not be full
 fn ensure_writable_tail<
-    B: HeapAllocatedBlockBuilder,
-    HeapAllocatedSize: GetHeapAllocatedSize<<B::Output as HeapAllocatedBlock>::Item>,
+    B: HeapAllocatedBlockBuilderProvider,
+    HeapAllocatedSize: GetHeapAllocatedSize<<B::Block as HeapAllocatedBlock>::Item>,
 >(
-    blocks: &mut VecDeque<B>,
+    provider: &B,
+    blocks: &mut VecDeque<B::Block>,
     blocks_sizes: &mut VecDeque<usize>,
     block_size: Option<usize>,
 ) {
     let tail_is_full = block_size.is_some_and(|block_size| {
-        blocks.back().is_some_and(|block| block.len() == block_size)
+        blocks.back().is_some_and(|block| provider.len(block) == block_size)
     });
 
     if blocks.is_empty() || tail_is_full {
-        blocks.push_back(B::with_capacity(block_size.unwrap_or(0)));
+        blocks.push_back(provider.with_capacity(block_size.unwrap_or(0)));
         if HeapAllocatedSize::HAS_HEAP_ALLOCATION {
             // 0 since block capacity is not the actual heap items
             blocks_sizes.push_back(0);
@@ -362,10 +368,11 @@ fn ensure_writable_tail<
 ///
 /// TODO - avoid calculating the size for each block all over again, can just get the memory size and subtract the taken one
 fn layout_for<
-    B: HeapAllocatedBlockBuilder,
-    HeapAllocatedSize: GetHeapAllocatedSize<<B::Output as HeapAllocatedBlock>::Item>,
+    B: HeapAllocatedBlockBuilderProvider,
+    HeapAllocatedSize: GetHeapAllocatedSize<<B::Block as HeapAllocatedBlock>::Item>,
 >(
-    blocks: &VecDeque<B>,
+    provider: &B,
+    blocks: &VecDeque<B::Block>,
     blocks_sizes: &VecDeque<usize>,
     len: usize,
 ) -> BlocksLayout {
@@ -379,13 +386,13 @@ fn layout_for<
                 .iter()
                 .zip(blocks_sizes.iter())
                 .take(finished_blocks_count)
-                .map(|(block, size)| block.allocated_size() + *size)
+                .map(|(block, size)| provider.block_allocated_size(block) + *size)
                 .sum()
         } else {
             blocks
                 .iter()
                 .take(finished_blocks_count)
-                .map(|block| block.allocated_size())
+                .map(|block| provider.block_allocated_size(block))
                 .sum()
         },
         block_heap_allocated_size: blocks_sizes.clone(),
