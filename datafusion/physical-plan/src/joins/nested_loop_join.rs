@@ -1204,8 +1204,7 @@ async fn collect_left_input(
 ) -> Result<LeftLoad> {
     let schema = stream.schema();
     let metrics = join_metrics;
-    let mut chunks: Vec<RecordBatch> = Vec::new();
-    let mut coalescer = chunk_coalescer(&schema, target_batch_size);
+    let mut batches: Vec<RecordBatch> = Vec::new();
 
     while let Some(batch) = stream.next().await {
         let batch = batch?;
@@ -1216,10 +1215,7 @@ async fn collect_left_input(
                 metrics.build_mem_used.add(batch_size);
                 metrics.build_input_batches.add(1);
                 metrics.build_input_rows.add(batch.num_rows());
-                coalescer.push_batch(batch)?;
-                while let Some(chunk) = coalescer.next_completed_batch() {
-                    chunks.push(chunk);
-                }
+                batches.push(batch);
             }
             Err(e) if is_spillable_oom(&e, spill_manager.as_ref()) => {
                 // Do not keep the operator timer running while the spill path
@@ -1228,14 +1224,10 @@ async fn collect_left_input(
                 let spill_manager = spill_manager.expect("checked by is_spillable_oom");
                 metrics.build_input_batches.add(1);
                 metrics.build_input_rows.add(batch.num_rows());
-                coalescer.finish_buffered_batch()?;
-                while let Some(chunk) = coalescer.next_completed_batch() {
-                    chunks.push(chunk);
-                }
                 let spilled = spill_left_input(
                     spill_manager,
                     Arc::clone(&schema),
-                    chunks,
+                    batches,
                     Some(batch),
                     stream,
                     metrics,
@@ -1257,10 +1249,9 @@ async fn collect_left_input(
     // polling the child stream above.
     let build_timer = metrics.build_time.timer();
 
-    coalescer.finish_buffered_batch()?;
-    while let Some(chunk) = coalescer.next_completed_batch() {
-        chunks.push(chunk);
-    }
+    // Compacted only once the whole side is reserved, so a load that spills never has a
+    // partially built chunk to materialize while the pool is exhausted.
+    let chunks = coalesce_chunks(batches, &schema, target_batch_size)?;
 
     // Reserve memory for visited_left_side bitmap if required by join type
     let visited_left_side = if with_visited_left_side {
@@ -1342,21 +1333,16 @@ fn is_spillable_oom(
         )
 }
 
-/// Chunks are `target_batch_size` rows; a batch already at or above half that passes through
-/// without being copied.
-fn chunk_coalescer(schema: &SchemaRef, target_batch_size: usize) -> BatchCoalescer {
-    BatchCoalescer::new(Arc::clone(schema), target_batch_size)
-        .with_biggest_coalesce_batch_size(Some(target_batch_size / 2))
-}
-
-/// Compacts already-buffered batches into chunks. Every input must be reserved by the caller:
-/// the copy this makes is bounded by the input, so the pass that reserved it bounds the copy.
+/// Compacts a fully buffered build side into `target_batch_size`-row chunks; a batch already at
+/// or above half that passes through without being copied. Concatenation completes one chunk at
+/// a time, so the unreserved copy in flight is at most one chunk, like any operator's output batch.
 fn coalesce_chunks(
     batches: Vec<RecordBatch>,
     schema: &SchemaRef,
     target_batch_size: usize,
 ) -> Result<Vec<RecordBatch>> {
-    let mut coalescer = chunk_coalescer(schema, target_batch_size);
+    let mut coalescer = BatchCoalescer::new(Arc::clone(schema), target_batch_size)
+        .with_biggest_coalesce_batch_size(Some(target_batch_size / 2));
     let mut chunks = Vec::with_capacity(batches.len());
     for batch in batches {
         coalescer.push_batch(batch)?;
@@ -1371,16 +1357,14 @@ fn coalesce_chunks(
     Ok(chunks)
 }
 
-/// Write the already-completed chunks, the batch that hit the limit, and the remainder of the
-/// same stream to one spill file. Nothing is reserved past this point, so the remainder is
-/// written batch by batch as it arrives instead of being coalesced, which would hold up to a
-/// chunk's worth of unreserved rows; the memory-limited replay coalesces each pass it reads
-/// back, after reserving it.
+/// Write the batches buffered so far, the batch that hit the limit, and the remainder of the
+/// same stream to one spill file, each as it arrived. Nothing is copied or coalesced here, so the
+/// spill allocates nothing beyond the file writer while the pool is exhausted.
 /// Returns `None` when the left side carried no rows at all, which needs no spill file.
 async fn spill_left_input(
     spill_manager: SpillManager,
     schema: SchemaRef,
-    chunks: Vec<RecordBatch>,
+    batches: Vec<RecordBatch>,
     pending: Option<RecordBatch>,
     mut stream: SendableRecordBatchStream,
     metrics: BuildProbeJoinMetrics,
@@ -1390,10 +1374,10 @@ async fn spill_left_input(
     let mut spill_file =
         spill_manager.create_in_progress_file("NestedLoopJoin left spill")?;
 
-    for batch in chunks {
+    for batch in batches {
         spill_file.append_batch(&batch)?;
     }
-    // The in-memory chunks are spilled and dropped, so their reservation goes back to the pool
+    // The buffered batches are spilled and dropped, so their reservation goes back to the pool
     // before the rest of the stream is drained.
     reservation.free();
     if let Some(batch) = pending.filter(|b| b.num_rows() > 0) {
@@ -1447,7 +1431,7 @@ enum NLJState {
 }
 /// Outcome of the single pass over the left (build) input.
 pub(crate) enum LeftLoad {
-    /// The left side fit the memory budget and is buffered as one batch.
+    /// The left side fit the memory budget and is buffered as chunks.
     InMemory(Arc<JoinLeftData>),
     /// The budget ran out, so the left side was spilled during that same pass. Every partition
     /// shares this handle, and each left chunk pass re-opens the file.
@@ -1887,7 +1871,6 @@ impl FallbackCoordinator {
                         &mut reservation,
                         carryover,
                         Arc::clone(&left_schema),
-                        task_context.session_config().batch_size(),
                         build_time.clone(),
                     );
                     let load_result = {
@@ -1985,7 +1968,6 @@ impl FallbackCoordinator {
         reservation: &mut MemoryReservation,
         carryover: Option<RecordBatch>,
         left_schema: SchemaRef,
-        target_batch_size: usize,
         build_time: Time,
     ) -> Result<LoadOutcome> {
         // The previous chunk's bytes were moved into its `JoinLeftData`, so
@@ -2042,8 +2024,9 @@ impl FallbackCoordinator {
         }
 
         let _build_timer = build_time.timer();
-        // Every batch of the pass is reserved above, so compacting it here stays within budget.
-        let chunks = coalesce_chunks(pending_batches, &left_schema, target_batch_size)?;
+        // Kept as read back: compacting the pass would copy it while its reserved inputs are
+        // still live, on top of a pool that is already full.
+        let chunks = pending_batches;
         let n_rows: usize = chunks.iter().map(|c| c.num_rows()).sum();
         let visited_left_side = if self.with_visited_bitmap {
             let buffer_size = n_rows.div_ceil(8);
