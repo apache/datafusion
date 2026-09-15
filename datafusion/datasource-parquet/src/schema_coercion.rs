@@ -676,7 +676,7 @@ mod tests {
             "m",
             "entries",
             Field::new("keys", DataType::Utf8View, false),
-            Field::new("values", DataType::Utf8View, true),
+            Field::new("values", DataType::Utf8, true),
             false,
             true,
         )]);
@@ -684,7 +684,7 @@ mod tests {
             "m",
             "key_value",
             Field::new("key", DataType::Utf8View, false),
-            Field::new("value", DataType::Utf8View, true),
+            Field::new("value", DataType::Utf8, true),
             false,
             true,
         )]);
