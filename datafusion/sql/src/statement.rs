@@ -29,7 +29,7 @@ use crate::planner::{
 };
 use crate::utils::normalize_ident;
 
-use arrow::datatypes::{Field, FieldRef, Fields};
+use arrow::datatypes::{Field, FieldRef, Fields, Metadata};
 use datafusion_common::error::_plan_err;
 use datafusion_common::format::ExplainStatementOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
@@ -2928,7 +2928,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let mut planner_context =
             PlannerContext::new().with_prepare_param_data_types(prepare_param_data_types);
         planner_context.set_table_schema(Some(DFSchemaRef::new(
-            DFSchema::from_unqualified_fields(fields.clone(), Default::default())?,
+            DFSchema::from_unqualified_fields(fields.clone(), Metadata::new())?,
         )));
         let source = self.query_to_plan(*source, &mut planner_context)?;
         if fields.len() != source.schema().fields().len() {

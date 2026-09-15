@@ -1437,7 +1437,7 @@ mod tests {
     use std::cmp::Ordering;
     use std::fmt::{Debug, Formatter};
 
-    use arrow::datatypes::{Field, Schema, SchemaRef};
+    use arrow::datatypes::{Field, Metadata, Schema, SchemaRef};
     use async_trait::async_trait;
 
     use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
@@ -4263,7 +4263,7 @@ mod tests {
                 let schema = Arc::new(
                     DFSchema::new_with_metadata(
                         vec![(None, Field::new("a", DataType::Int64, false).into())],
-                        Default::default(),
+                        Metadata::new(),
                     )
                     .unwrap(),
                 );

@@ -299,7 +299,7 @@ impl ConcatBuilder for ConcatStringViewBuilder {
         let array = unsafe {
             StringViewArray::new_unchecked(
                 ScalarBuffer::from(self.views),
-                buffers,
+                buffers.into(),
                 null_buffer,
             )
         };
@@ -948,7 +948,7 @@ impl StringViewArrayBuilder {
         let array = unsafe {
             StringViewArray::new_unchecked(
                 ScalarBuffer::from(self.views),
-                self.completed,
+                self.completed.into(),
                 null_buffer,
             )
         };

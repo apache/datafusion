@@ -662,9 +662,9 @@ mod tests {
         +-----------------------------------+-----------------+---------------------+------+------------------+
         | filename                          | file_size_bytes | metadata_size_bytes | hits | extra            |
         +-----------------------------------+-----------------+---------------------+------+------------------+
-        | alltypes_plain.parquet            | 1851            | 8794                | 1    | page_index=false |
-        | alltypes_tiny_pages.parquet       | 454233          | 268970              | 2    | page_index=true  |
-        | lz4_raw_compressed_larger.parquet | 380836          | 1331                | 1    | page_index=false |
+        | alltypes_plain.parquet            | 1851            | 8970                | 1    | page_index=false |
+        | alltypes_tiny_pages.parquet       | 454233          | 269562              | 2    | page_index=true  |
+        | lz4_raw_compressed_larger.parquet | 380836          | 1347                | 1    | page_index=false |
         +-----------------------------------+-----------------+---------------------+------+------------------+
         ");
 
@@ -693,9 +693,9 @@ mod tests {
         +-----------------------------------+-----------------+---------------------+------+------------------+
         | filename                          | file_size_bytes | metadata_size_bytes | hits | extra            |
         +-----------------------------------+-----------------+---------------------+------+------------------+
-        | alltypes_plain.parquet            | 1851            | 8794                | 4    | page_index=false |
-        | alltypes_tiny_pages.parquet       | 454233          | 268970              | 2    | page_index=true  |
-        | lz4_raw_compressed_larger.parquet | 380836          | 1331                | 2    | page_index=false |
+        | alltypes_plain.parquet            | 1851            | 8970                | 4    | page_index=false |
+        | alltypes_tiny_pages.parquet       | 454233          | 269562              | 2    | page_index=true  |
+        | lz4_raw_compressed_larger.parquet | 380836          | 1347                | 2    | page_index=false |
         +-----------------------------------+-----------------+---------------------+------+------------------+
         ");
 
@@ -862,14 +862,14 @@ mod tests {
             ])?
             .sort(vec![col("filename").sort(true, false)])?;
         let rbs = df.collect().await?;
-        assert_snapshot!(batches_to_string(&rbs),@r"
+        assert_snapshot!(batches_to_string(&rbs),@r#"
         +---------------------+-----------+-----------------+------+------+
         | metadata_size_bytes | filename  | file_size_bytes | etag | hits |
         +---------------------+-----------+-----------------+------+------+
-        | 212                 | 0.parquet | 3642            | 0    | 2    |
-        | 212                 | 1.parquet | 3642            | 1    | 2    |
+        | 216                 | 0.parquet | 3620            | "0"  | 2    |
+        | 216                 | 1.parquet | 3620            | "1"  | 2    |
         +---------------------+-----------+-----------------+------+------+
-        ");
+        "#);
 
         Ok(())
     }
