@@ -26,6 +26,9 @@
 # tool that has a pinned version in `ci/scripts/utils/tool_versions.sh`, it
 # installs that pinned version. An already installed tool is used as is.
 #
+# The ASF status-check validator runs with `python3` from PATH and needs the
+# PyYAML package. This script checks both but does not install Python packages.
+#
 #
 #
 # For each lint scripts:
@@ -88,6 +91,22 @@ done
 SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# `ci/scripts/check_asf_yaml_status_checks.py` runs with `python3` from PATH
+# and imports PyYAML. Report a missing prerequisite before any tool is
+# installed or any formatter runs.
+ensure_python_with_yaml() {
+  if ! command -v python3 &> /dev/null; then
+    echo "[${SCRIPT_NAME}] python3 was not found on PATH. Install Python 3 to run ci/scripts/check_asf_yaml_status_checks.py." >&2
+    exit 1
+  fi
+  if ! python3 -c 'import yaml' &> /dev/null; then
+    echo "[${SCRIPT_NAME}] PyYAML is not installed for $(command -v python3). Install it in your active Python environment with: python3 -m pip install pyyaml" >&2
+    exit 1
+  fi
+}
+
+ensure_python_with_yaml
+
 # Load the tool versions shared with CI (for example, LYCHEE_VERSION).
 source "${SCRIPT_DIR}/../ci/scripts/utils/tool_versions.sh"
 
@@ -114,6 +133,7 @@ declare -a WRITE_STEPS=(
 
 declare -a READONLY_STEPS=(
   "ci/scripts/check_no_cargo_install_in_workflows.sh|false"
+  "ci/scripts/check_asf_yaml_status_checks.py|false"
   "ci/scripts/markdown_link_check.sh|false"
   "ci/scripts/rust_docs.sh|false"
 )

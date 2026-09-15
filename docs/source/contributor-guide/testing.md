@@ -220,6 +220,37 @@ Rust doc comments are validated by rustdoc in CI and can be checked locally with
 bash ci/scripts/rust_docs.sh
 ```
 
+## ASF Status Check Validation
+
+`.asf.yaml` lists the GitHub Actions jobs that must pass before a PR can merge.
+If a job is renamed and `.asf.yaml` still requires the old name, PRs wait for a
+status that never arrives. `ci/scripts/check_asf_yaml_status_checks.py` compares
+the required names with the jobs in `.github/workflows` and fails on a mismatch.
+
+`./dev/rust_lint.sh` runs this check. It needs `python3` with [PyYAML] on your
+`PATH`. If either is missing, the suite stops with a setup error before any
+formatter runs. The script does not install Python packages. To install PyYAML
+in a virtual environment:
+
+```shell
+python3 -m venv venv
+source venv/bin/activate
+python3 -m pip install pyyaml
+```
+
+To run the check on its own:
+
+```shell
+python3 ci/scripts/check_asf_yaml_status_checks.py
+```
+
+Notes:
+
+- The check reads local files only. It does not call the GitHub API and does not change `.asf.yaml` or the workflows.
+- The `venv` directory is ignored by git.
+
+[pyyaml]: https://pypi.org/project/PyYAML/
+
 ## Benchmarks
 
 ### Criterion Benchmarks
