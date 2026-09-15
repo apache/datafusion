@@ -247,6 +247,7 @@ impl From<Column> for protobuf::Column {
         Self {
             relation: c.relation.map(|relation| protobuf::ColumnRelation {
                 relation: relation.to_string(),
+                parts: relation.to_vec(),
             }),
             name: c.name,
         }
@@ -292,6 +293,7 @@ impl TryFrom<&DFSchema> for protobuf::DfSchema {
                     field: Some(field.as_ref().try_into()?),
                     qualifier: qualifier.map(|r| protobuf::ColumnRelation {
                         relation: r.to_string(),
+                        parts: r.to_vec(),
                     }),
                 })
             })

@@ -3,6 +3,8 @@
 pub struct ColumnRelation {
     #[prost(string, tag = "1")]
     pub relation: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "2")]
+    pub parts: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Column {
