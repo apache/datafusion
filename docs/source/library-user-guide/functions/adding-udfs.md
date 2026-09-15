@@ -1126,12 +1126,11 @@ read `AccumulatorArgs::is_distinct` and deduplicate its input. Override
   accumulator has already seen is a no-op. `min`, `max`, `bool_and` and `bit_or` are all in this group. The optimizer
   then plans `f(DISTINCT x)` as `f(x)`, which skips both the per-group hash set and the extra grouping stage that
   `SingleDistinctToGroupBy` would otherwise introduce.
-- Return `DistinctHandling::Unsupported` when the result depends on duplicates, the accumulator does not deduplicate
-  its input, and nothing deduplicates it first, so `f(DISTINCT x)` errors or silently returns the non-distinct answer.
-  Today this is a declaration only; rejecting such queries at planning time is a follow-up change.
-- Leave the default `DistinctHandling::Honored` otherwise. That includes an accumulator that rejects `DISTINCT` with an
-  error but relies on `SingleDistinctToGroupBy` to deduplicate the input first, as `stddev` does: the query works when
-  that rewrite applies and errors when it does not.
+- Return `DistinctHandling::Unsupported` when the accumulator does not implement `DISTINCT`: it does not read
+  `is_distinct`, or it rejects `DISTINCT` with an error. The planner must then deduplicate the input first or reject
+  the query. Today this is a declaration only; rejecting such queries at planning time is a follow-up change.
+- Leave the default `DistinctHandling::Honored` when the accumulator reads `AccumulatorArgs::is_distinct` and
+  deduplicates its input itself.
 
 Getting this wrong changes query results, so only claim `Ignored` if your merge is genuinely idempotent.
 
