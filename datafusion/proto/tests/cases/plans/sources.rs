@@ -44,6 +44,7 @@ use datafusion::physical_plan::expressions::{
     BinaryExpr, Column, PhysicalSortExpr, col, lit,
 };
 use datafusion::physical_plan::filter::FilterExecBuilder;
+use datafusion::physical_plan::proto::ExprDecodeSession;
 use datafusion::physical_plan::{
     ExecutionPlan, Partitioning, PhysicalExpr, RangePartitioning, SplitPoint, Statistics,
     displayable,
@@ -743,7 +744,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             &self,
             buf: &[u8],
             inputs: &[Arc<dyn PhysicalExpr>],
-            _ctx: &PhysicalExprDecodeCtx<'_>,
+            _ctx: &PhysicalExprDecodeCtx<'_, ExprDecodeSession<'_>>,
         ) -> Result<Arc<dyn PhysicalExpr>> {
             if buf == b"CustomPredicateExpr" {
                 Ok(Arc::new(CustomPredicateExpr {

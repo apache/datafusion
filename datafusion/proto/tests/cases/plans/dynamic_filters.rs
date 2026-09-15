@@ -45,6 +45,7 @@ use datafusion::physical_plan::expressions::{
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
+use datafusion::physical_plan::proto::ExprDecodeSession;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr,
@@ -1030,7 +1031,7 @@ impl PhysicalExtensionCodec for WrapperCodec {
         &self,
         buf: &[u8],
         _inputs: &[Arc<dyn PhysicalExpr>],
-        ctx: &PhysicalExprDecodeCtx<'_>,
+        ctx: &PhysicalExprDecodeCtx<'_, ExprDecodeSession<'_>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         let proto = WrapperExprProto::decode(buf)
             .map_err(|e| internal_datafusion_err!("decode WrapperExprProto: {e}"))?;
