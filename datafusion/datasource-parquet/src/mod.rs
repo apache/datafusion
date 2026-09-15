@@ -27,6 +27,7 @@
 pub mod access_plan;
 mod bloom_filter;
 mod decoder_projection;
+mod eager_pruning;
 pub mod file_format;
 pub mod metadata;
 mod metrics;
@@ -53,6 +54,7 @@ mod writer;
 
 pub use access_plan::{ParquetAccessPlan, ParquetRowSelection, RowGroupAccess};
 pub use bloom_filter::BloomFilterStatistics;
+pub use eager_pruning::{EagerPruningStats, EagerPruningSummary};
 pub use file_format::*;
 pub use metrics::ParquetFileMetrics;
 pub use page_filter::PagePruningAccessPlanFilter;

@@ -407,6 +407,17 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
                 .transpose()?,
             max_row_group_size: to_usize(proto.max_row_group_size, "max_row_group_size")?,
             max_in_list_size: to_usize(proto.max_in_list_size, "max_in_list_size")?,
+            eager_pruning: proto.eager_pruning.parse()?,
+            eager_pruning_file_limit: proto
+                .eager_pruning_file_limit_opt
+                .as_ref()
+                .map(|opt| match opt {
+                    parquet_options::EagerPruningFileLimitOpt::EagerPruningFileLimit(
+                        limit,
+                    ) => to_usize(*limit, "eager_pruning_file_limit"),
+                })
+                .transpose()?
+                .unwrap_or_else(|| ParquetOptions::default().eager_pruning_file_limit),
             created_by: proto.created_by.clone(),
             column_index_truncate_length: proto
                 .column_index_truncate_length_opt

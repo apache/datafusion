@@ -24,6 +24,7 @@ use self::early_stop::EarlyStoppingStream;
 #[cfg(feature = "parquet_encryption")]
 use self::encryption::EncryptionContext;
 use crate::access_plan::PreparedAccessPlan;
+use crate::bloom_filter::load_row_group_bloom_filters;
 use crate::decoder_projection::DecoderProjection;
 use crate::metrics::{ByteProgress, RowFilterSkippedFullyMatchedMetric};
 use crate::page_filter::PagePruningAccessPlanFilter;
@@ -32,10 +33,10 @@ use crate::push_decoder::{
     RowGroupPruner,
 };
 use crate::row_group_filter::{RowGroupAccessPlanFilter, row_group_in_range};
+use crate::schema_coercion::coerce_physical_file_schema;
 use crate::{
-    BloomFilterStatistics, Int96Coercer, ParquetAccessPlan, ParquetFileMetrics,
+    BloomFilterStatistics, ParquetAccessPlan, ParquetFileMetrics,
     ParquetFileReaderFactory, ParquetRowSelection, ParquetVirtualColumn,
-    apply_file_schema_type_coercions,
 };
 use arrow::array::RecordBatch;
 use arrow::datatypes::DataType;
@@ -73,14 +74,11 @@ use datafusion_common::config::EncryptionFactoryOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
 use futures::{FutureExt, StreamExt, future::BoxFuture, stream::BoxStream};
-use log::debug;
 use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::parquet_column;
-use parquet::basic::Type;
-use parquet::bloom_filter::Sbbf;
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader, RowGroupMetaData};
 
 /// Morselizer-level state for virtual columns, precomputed once per scan
@@ -984,25 +982,14 @@ impl MetadataLoadedParquetOpen {
         // desired schema (for example if we want to instruct the parquet
         // reader to read strings using Utf8View instead). Update if necessary
         let mut metadata_dirty = false;
-        if let Some(merged) = apply_file_schema_type_coercions(
+        if let Some(coerced) = coerce_physical_file_schema(
             &prepared.logical_file_schema,
             &physical_file_schema,
+            reader_metadata.parquet_schema(),
+            prepared.coerce_int96.as_ref(),
+            prepared.coerce_int96_tz.clone(),
         ) {
-            physical_file_schema = Arc::new(merged);
-            options = options.with_schema(Arc::clone(&physical_file_schema));
-            metadata_dirty = true;
-        }
-
-        if let Some(ref coerce) = prepared.coerce_int96
-            && let Some(merged) = Int96Coercer::new(
-                reader_metadata.parquet_schema(),
-                &physical_file_schema,
-                coerce,
-            )
-            .with_timezone(prepared.coerce_int96_tz.clone())
-            .coerce()
-        {
-            physical_file_schema = Arc::new(merged);
+            physical_file_schema = coerced;
             options = options.with_schema(Arc::clone(&physical_file_schema));
             metadata_dirty = true;
         }
@@ -1269,52 +1256,16 @@ impl RowGroupsPrunedParquetOpen {
                 mem::replace(&mut prepared.async_file_reader, replacement_reader),
                 reader_metadata,
             );
-            let parquet_columns: Vec<(String, usize, Type, i32)> = predicate
-                .literal_columns()
-                .into_iter()
-                .filter_map(|column_name| {
-                    let parquet_schema = builder.parquet_schema();
-                    let (column_idx, _) = parquet_column(
-                        parquet_schema,
-                        &prepared.physical_file_schema,
-                        &column_name,
-                    )?;
-                    Some((
-                        column_name,
-                        column_idx,
-                        parquet_schema.column(column_idx).physical_type(),
-                        parquet_schema.column(column_idx).type_length(),
-                    ))
-                })
-                .collect();
-
-            for idx in self.row_groups.row_group_indexes() {
-                let mut row_group_filters =
-                    BloomFilterStatistics::with_capacity(parquet_columns.len());
-                for (column_name, column_idx, physical_type, type_length) in
-                    &parquet_columns
-                {
-                    let bf: Sbbf = match builder
-                        .get_row_group_column_bloom_filter(idx, *column_idx)
-                        .await
-                    {
-                        Ok(Some(bf)) => bf,
-                        Ok(None) => continue,
-                        Err(e) => {
-                            debug!("Ignoring error reading bloom filter: {e}");
-                            prepared.file_metrics.predicate_evaluation_errors.add(1);
-                            continue;
-                        }
-                    };
-                    row_group_filters.insert(
-                        column_name,
-                        bf,
-                        *physical_type,
-                        *type_length,
-                    );
-                }
-                row_group_bloom_filters[idx] = row_group_filters;
-            }
+            let row_group_indexes: Vec<usize> =
+                self.row_groups.row_group_indexes().collect();
+            row_group_bloom_filters = load_row_group_bloom_filters(
+                &mut builder,
+                predicate,
+                &prepared.physical_file_schema,
+                &row_group_indexes,
+                &prepared.file_metrics.predicate_evaluation_errors,
+            )
+            .await;
         }
 
         Ok(BloomFiltersLoadedParquetOpen {
@@ -1718,10 +1669,10 @@ fn row_group_bytes(rg_meta: &RowGroupMetaData) -> u64 {
     u64::try_from(rg_meta.compressed_size()).unwrap_or(0)
 }
 
-type ConstantColumns = HashMap<String, ScalarValue>;
+pub(crate) type ConstantColumns = HashMap<String, ScalarValue>;
 
 /// Extract constant column values from statistics, keyed by column name in the logical file schema.
-fn constant_columns_from_stats(
+pub(crate) fn constant_columns_from_stats(
     statistics: Option<&Statistics>,
     file_schema: &SchemaRef,
 ) -> ConstantColumns {
@@ -1788,7 +1739,7 @@ fn constant_value_from_stats(
 /// Returns an error if an invalid parquet access extension is provided.
 ///
 /// Note: file_name is only used for error messages
-fn create_initial_plan(
+pub(crate) fn create_initial_plan(
     file_name: &str,
     extensions: &datafusion_datasource::FileExtensions,
     rg_metadata: &[RowGroupMetaData],
@@ -1853,7 +1804,7 @@ pub(crate) fn build_pruning_predicates(
 
 /// Returns a `ArrowReaderMetadata` with the page index loaded, loading
 /// it from the underlying `AsyncFileReader` if necessary.
-async fn load_page_index<T: AsyncFileReader>(
+pub(crate) async fn load_page_index<T: AsyncFileReader>(
     reader_metadata: ArrowReaderMetadata,
     input: &mut T,
     options: ArrowReaderOptions,
