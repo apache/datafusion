@@ -102,11 +102,15 @@ impl OptimizerRule for EliminateAggregateDistinct {
 
 /// Whether the node has at least one `DISTINCT` and every one is `Ignored`.
 ///
-/// Stripping only some of them would change which plans
-/// [`crate::single_distinct_to_groupby::SingleDistinctToGroupBy`] rewrites,
-/// since that rule keys off how many distinct aggregates a node has and
-/// whether they share one argument. This is conservative: `min(DISTINCT x),
-/// count(DISTINCT y)` keeps the `min` flag though no rewrite is possible.
+/// If only some of them were stripped, an `Honored` `DISTINCT` could stay
+/// beside a stripped aggregate. A stripped aggregate carries an alias, and
+/// [`crate::single_distinct_to_groupby::SingleDistinctToGroupBy`] does not
+/// rewrite a node whose `aggr_expr` contains an alias. So `min(DISTINCT x),
+/// count(DISTINCT x)` would lose the rewrite that `count` needs. When every
+/// `DISTINCT` is `Ignored`, none is left after stripping, so that rule has
+/// nothing to rewrite. This is conservative: `min(DISTINCT x),
+/// count(DISTINCT y)` keeps the `min` flag. That flag costs nothing at run
+/// time, because `min` ignores `is_distinct` when it selects its accumulator.
 fn can_strip_every_distinct(aggr_expr: &[Expr]) -> Result<bool> {
     let mut found_distinct = false;
     let mut all_ignored = true;
