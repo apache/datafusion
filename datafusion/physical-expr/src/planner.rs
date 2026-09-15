@@ -689,6 +689,16 @@ pub fn create_physical_expr(
                 Arc::clone(schema_field),
             )))
         }
+        // Window and aggregate functions are evaluated by dedicated plan
+        // nodes, never by a physical expression. Reaching this point means
+        // the function is in a position where it cannot be evaluated, so
+        // report that instead of dumping the internal representation.
+        Expr::WindowFunction(_) => plan_err!(
+            "Window function '{e}' is not supported in this position. Window functions are supported in the SELECT list, ORDER BY, DISTINCT ON and QUALIFY"
+        ),
+        Expr::AggregateFunction(_) => plan_err!(
+            "Aggregate function '{e}' is not supported in this position. Aggregate functions are supported in the SELECT list, HAVING and ORDER BY of a query with GROUP BY"
+        ),
         other => {
             not_impl_err!("Physical plan does not support logical expression {other:?}")
         }

@@ -22,7 +22,9 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::string_in_list::{SetMembership, StringInListPruningExpr};
+use crate::in_list::{SetMembership, unwrap_scalar};
+use crate::primitive_in_list::PrimitiveInListDomain;
+use crate::string_in_list::{BinaryInListPruningExpr, StringInListPruningExpr};
 
 use arrow::array::AsArray;
 use arrow::{
@@ -461,8 +463,8 @@ impl<'a> PruningPredicateBuilder<'a> {
     /// | Condition | Pruning representation |
     /// | --- | --- |
     /// | `N <= min(20, C)` | Existing per-value rewrite |
-    /// | `20 < N <= C`, literal strings with optional NULLs on a string column | Compact pruning expression |
-    /// | `20 < N <= C`, other lists | Existing per-value rewrite |
+    /// | `20 < N <= C`, supported ordered literals with optional NULLs | Compact pruning expression |
+    /// | `20 < N <= C`, unsupported lists | Existing per-value rewrite |
     /// | `N > C` | Unhandled-predicate hook, normally "keep the container" |
     ///
     /// Empty lists also use the unhandled-predicate hook. A cap of zero disables
@@ -470,9 +472,13 @@ impl<'a> PruningPredicateBuilder<'a> {
     /// pruning (such as Bloom filters). The default cap is [`MAX_IN_LIST_SIZE`]
     /// (20), so the compact path requires an explicitly raised cap.
     ///
+    /// Compact domains support strings, binary values, integers, decimals,
+    /// dates, times, timestamps, and durations. Floating-point values are
+    /// excluded because NaN and signed zero do not follow the required order.
+    ///
     /// The compact form covers `IN` and `NOT IN` alike, including lists with
     /// NULL members. Raising the cap can still build large comparison trees for
-    /// other eligible lists.
+    /// unsupported lists.
     ///
     /// Query engines typically pass
     /// `datafusion.execution.parquet.max_in_list_size` here.
@@ -1497,8 +1503,25 @@ fn build_is_null_column_expr(
     }
 }
 
-/// Keep large literal string lists compact instead of building a per-value
-/// tree: an OR tree for `IN`, an AND chain for `NOT IN`.
+/// Values collected for one supported compact IN-list representation.
+enum CompactInListDomain {
+    String(Vec<String>),
+    Binary(Vec<Box<[u8]>>),
+    Primitive(PrimitiveInListDomain),
+}
+
+impl CompactInListDomain {
+    fn is_empty(&self) -> bool {
+        match self {
+            Self::String(values) => values.is_empty(),
+            Self::Binary(values) => values.is_empty(),
+            Self::Primitive(values) => values.is_empty(),
+        }
+    }
+}
+
+/// Keep large literal lists of supported ordered types compact instead of
+/// building a per-value tree: an OR tree for `IN`, an AND chain for `NOT IN`.
 ///
 /// `IN` excludes a container whose interval is disjoint from the domain. That
 /// matches the per-value OR tree except for inverted bounds, which the compact
@@ -1510,8 +1533,9 @@ fn build_is_null_column_expr(
 /// everywhere, including absent and inverted bounds.
 ///
 /// A NULL list member makes `NOT IN` and an all-NULL `IN` list never TRUE. For
-/// other `IN` lists, NULL does not change which rows can make the predicate TRUE.
-fn build_string_in_list_expr(
+/// other `IN` lists, NULL does not change which rows can make the predicate TRUE,
+/// but prevents inversion from proving that a container is fully matched.
+fn build_compact_in_list_expr(
     in_list: &phys_expr::InListExpr,
     schema: &Schema,
     required_columns: &mut RequiredColumns,
@@ -1528,42 +1552,79 @@ fn build_string_in_list_expr(
         DataType::Dictionary(_, value) => value.as_ref(),
         data_type => data_type,
     };
-    if field.name() != column.name() || !data_type.is_string() {
+    if field.name() != column.name() {
         return None;
     }
-    let mut values = Vec::with_capacity(in_list.list().len());
+    let mut domain = if data_type.is_string() {
+        CompactInListDomain::String(Vec::with_capacity(in_list.list().len()))
+    } else if matches!(
+        data_type,
+        DataType::Binary | DataType::LargeBinary | DataType::BinaryView
+    ) {
+        CompactInListDomain::Binary(Vec::with_capacity(in_list.list().len()))
+    } else {
+        CompactInListDomain::Primitive(PrimitiveInListDomain::new(
+            data_type,
+            in_list.list().len(),
+        )?)
+    };
     let mut contains_null = false;
     for expr in in_list.list() {
-        if let Some(value) = extract_string_literal(expr) {
-            values.push(value.to_owned());
-        } else if expr
-            .downcast_ref::<phys_expr::Literal>()
-            .is_some_and(|literal| literal.value().is_null())
-        {
+        let literal = expr.downcast_ref::<phys_expr::Literal>()?;
+        let value = unwrap_scalar(literal.value());
+        if value.is_null() {
             contains_null = true;
         } else {
-            return None;
+            match &mut domain {
+                CompactInListDomain::String(values) => {
+                    values.push(unpack_string(value)?.to_owned());
+                }
+                CompactInListDomain::Binary(values) => {
+                    values.push(extract_binary(value)?.into());
+                }
+                CompactInListDomain::Primitive(values) => values.push(value)?,
+            }
         }
     }
 
     // Pruning asks only whether the predicate can be TRUE. UNKNOWN and FALSE
     // both reject a row, so NOT IN with a NULL member and an all-NULL IN list
     // can never match. IN can otherwise ignore NULL and search its non-null domain.
-    if contains_null && (membership == SetMembership::NotIn || values.is_empty()) {
+    if contains_null && (membership == SetMembership::NotIn || domain.is_empty()) {
         properties.has_filter_semantics_only = true;
         return Some(Arc::new(phys_expr::Literal::new(ScalarValue::Boolean(
             Some(false),
         ))));
     }
-    let min = required_columns
-        .min_column_expr(column, in_list.expr(), field)
-        .ok()?;
-    let max = required_columns
-        .max_column_expr(column, in_list.expr(), field)
-        .ok()?;
-    let non_null =
-        build_is_null_column_expr(in_list.expr(), schema, required_columns, true)?;
-    let may_match = Arc::new(StringInListPruningExpr::new(membership, min, max, values));
+    // Roll back appended statistics columns if the compact rewrite cannot be
+    // completed. `RequiredColumns::stat_column_expr` only appends entries.
+    let required_columns_len = required_columns.columns.len();
+    let statistics = (|| {
+        let min = required_columns
+            .min_column_expr(column, in_list.expr(), field)
+            .ok()?;
+        let max = required_columns
+            .max_column_expr(column, in_list.expr(), field)
+            .ok()?;
+        let non_null =
+            build_is_null_column_expr(in_list.expr(), schema, required_columns, true)?;
+        Some((min, max, non_null))
+    })();
+    let Some((min, max, non_null)) = statistics else {
+        required_columns.columns.truncate(required_columns_len);
+        return None;
+    };
+    let may_match = match domain {
+        CompactInListDomain::String(values) => {
+            Arc::new(StringInListPruningExpr::new(membership, min, max, values))
+                as PhysicalExprRef
+        }
+        CompactInListDomain::Binary(values) => {
+            Arc::new(BinaryInListPruningExpr::new(membership, min, max, values))
+                as PhysicalExprRef
+        }
+        CompactInListDomain::Primitive(values) => values.into_expr(membership, min, max),
+    };
     if contains_null {
         properties.has_filter_semantics_only = true;
     }
@@ -1575,9 +1636,9 @@ fn build_string_in_list_expr(
 }
 
 /// Default maximum number of entries in an `IN (...)` list eligible for
-/// statistics pruning. Eligible literal string lists above this threshold use a
-/// compact sorted domain instead of per-value min/max checks, for both `IN` and
-/// `NOT IN`.
+/// statistics pruning. Eligible literal lists of supported ordered types above
+/// this threshold use a compact sorted domain instead of per-value min/max
+/// checks, for both `IN` and `NOT IN`.
 /// Callers can raise the cap via [`PredicateRewriter::with_max_in_list_size`], and
 /// query engines can wire it from the
 /// `datafusion.execution.parquet.max_in_list_size` config option.
@@ -1665,9 +1726,9 @@ impl PredicateRewriter {
 /// Returns the pruning predicate as an [`PhysicalExpr`]
 ///
 /// `max_in_list_size` is the largest `IN (...)` list eligible for statistics
-/// pruning. Large literal string lists use a compact representation, for both
-/// `IN` and `NOT IN`; other eligible lists use per-value checks. Longer lists
-/// fall back to `unhandled_hook`.
+/// pruning. Large literal lists of supported ordered types use a compact
+/// representation for both `IN` and `NOT IN`; unsupported lists use per-value
+/// checks. Longer lists fall back to `unhandled_hook`.
 fn build_predicate_expression(
     expr: &Arc<dyn PhysicalExpr>,
     schema: &SchemaRef,
@@ -1716,7 +1777,7 @@ fn build_predicate_expression(
         if in_list.list().len() > MAX_IN_LIST_SIZE
             && in_list.list().len() <= max_in_list_size
             && let Some(pruning_expr) =
-                build_string_in_list_expr(in_list, schema, required_columns, properties)
+                build_compact_in_list_expr(in_list, schema, required_columns, properties)
         {
             return pruning_expr;
         }
@@ -2085,6 +2146,15 @@ fn extract_string_literal(expr: &Arc<dyn PhysicalExpr>) -> Option<&str> {
     None
 }
 
+fn extract_binary(value: &ScalarValue) -> Option<&[u8]> {
+    match value {
+        ScalarValue::Binary(value)
+        | ScalarValue::LargeBinary(value)
+        | ScalarValue::BinaryView(value) => value.as_deref(),
+        _ => None,
+    }
+}
+
 /// Wrap a string in a `Literal` whose `ScalarValue` matches `target_type`
 fn string_literal_as(value: String, target_type: &DataType) -> Arc<dyn PhysicalExpr> {
     let utf8 = ScalarValue::Utf8(Some(value));
@@ -2327,8 +2397,8 @@ mod tests {
             BinaryArray, DictionaryArray, Int32Array, Int64Array, StringArray,
             UInt64Array,
         },
-        buffer::NullBuffer,
-        datatypes::{Int32Type, TimeUnit},
+        buffer::{NullBuffer, ScalarBuffer},
+        datatypes::{Int32Type, Int64Type, TimeUnit, i256},
     };
     use datafusion_expr::expr::InList;
     use datafusion_expr::{BinaryExpr, Expr, cast, is_null, try_cast};
@@ -3602,13 +3672,8 @@ mod tests {
         Ok(())
     }
 
-    // With the configurable cap, a caller that raises
-    // `max_in_list_size` above the default gets the IN list rewritten
-    // into a per-value min/max chain instead of falling through to `true`.
-    // This verifies both `PredicateRewriter::with_max_in_list_size` and the
-    // recursive OR path inside `build_predicate_expression`.
     #[test]
-    fn row_group_predicate_in_list_rewritten_at_raised_cap() -> Result<()> {
+    fn row_group_predicate_in_list_compacted_at_raised_cap() -> Result<()> {
         let schema =
             Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
         // 25 items — above the default 20, below a raised cap of 32.
@@ -3617,19 +3682,9 @@ mod tests {
         let rewriter = PredicateRewriter::new().with_max_in_list_size(32);
         let predicate_expr =
             rewriter.rewrite_predicate_to_statistics_predicate(&physical, &schema);
-        // At the raised cap, IN is rewritten into per-value min/max checks
-        // OR'd together; the resulting predicate must not collapse to
-        // `true` (which is what the default cap produces).
-        assert_ne!(
-            predicate_expr.to_string(),
-            "true",
-            "IN(25) with raised cap must rewrite into a statistics-based predicate, not fall through to `true`"
-        );
-        // Sanity: the rewritten predicate references per-value literals.
         assert!(
-            predicate_expr.to_string().contains(" <= 1 ")
-                && predicate_expr.to_string().contains(" <= 25 "),
-            "rewritten predicate should include per-value bounds for each IN entry, got: {predicate_expr}"
+            predicate_expr.to_string().contains("IN_SET_INTERSECTS"),
+            "raised-cap predicate should use compact pruning, got: {predicate_expr}"
         );
         Ok(())
     }
@@ -3657,7 +3712,7 @@ mod tests {
     // The high-level [`PruningPredicateBuilder`] should thread
     // `max_in_list_size` all the way through: a 25-item IN with the default
     // cap must fall through to the unhandled hook (`predicate_expr = true`),
-    // while a raised cap produces a real per-value statistics predicate.
+    // while a raised cap produces a compact statistics predicate.
     #[test]
     fn pruning_predicate_builder_threads_max_in_list_size() -> Result<()> {
         let schema =
@@ -3677,8 +3732,6 @@ mod tests {
             "default cap must fall through to `true` for 25-item IN"
         );
 
-        // Raising the cap produces a real statistics predicate with per-
-        // value bounds.
         let raised_pp = PruningPredicateBuilder::new()
             .with_file_schema(Arc::clone(&schema))
             .with_max_in_list_size(32)
@@ -3689,8 +3742,8 @@ mod tests {
             "raised cap must produce a real statistics predicate for 25-item IN"
         );
         assert!(
-            raised_expr.contains(" <= 1 ") && raised_expr.contains(" <= 25 "),
-            "raised-cap predicate should include per-value bounds, got: {raised_expr}"
+            raised_expr.contains("IN_SET_INTERSECTS"),
+            "raised-cap predicate should use compact pruning, got: {raised_expr}"
         );
         Ok(())
     }
@@ -3719,7 +3772,7 @@ mod tests {
         Ok(())
     }
 
-    fn large_string_pruning_predicate(
+    fn large_in_list_pruning_predicate(
         expr: PhysicalExprRef,
         schema: SchemaRef,
     ) -> Result<PruningPredicate> {
@@ -3727,6 +3780,388 @@ mod tests {
             .with_file_schema(schema)
             .with_max_in_list_size(10_000)
             .try_build(expr)
+    }
+
+    fn assert_per_value_fallback(
+        predicate: &PruningPredicate,
+        expected_literals: &[ScalarValue],
+    ) -> Result<()> {
+        let expression = predicate.predicate_expr();
+        let display = expression.to_string();
+        assert_ne!(display, "true");
+        assert!(!display.contains("IN_SET_INTERSECTS"));
+        assert!(!display.contains("NOT_IN_SET_MAY_MATCH"));
+        assert!(display.contains("_min"));
+        assert!(display.contains("_max"));
+        let mut nodes = 0;
+        let mut literals = vec![];
+        expression.apply(|expr| {
+            nodes += 1;
+            if let Some(literal) = expr.downcast_ref::<phys_expr::Literal>() {
+                literals.push(literal.value().clone());
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        assert!(nodes > 7, "expected a per-value tree, got {expression}");
+        for expected in expected_literals {
+            assert!(
+                literals.contains(expected),
+                "expected literal {expected} in per-value tree {expression}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn compact_extraction_unwraps_encoded_binary_literals() {
+        let value = ScalarValue::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int16, false)),
+            Arc::new(Field::new("values", DataType::Binary, true)),
+            Box::new(ScalarValue::Binary(Some(vec![1, 2]))),
+        );
+        assert_eq!(extract_binary(unwrap_scalar(&value)), Some(&[1, 2][..]));
+    }
+
+    fn ordered_scalar(data_type: &DataType, value: Option<i64>) -> ScalarValue {
+        match data_type {
+            DataType::Int8 => ScalarValue::Int8(value.map(|value| value as i8)),
+            DataType::Int16 => ScalarValue::Int16(value.map(|value| value as i16)),
+            DataType::Int32 => ScalarValue::Int32(value.map(|value| value as i32)),
+            DataType::Int64 => ScalarValue::Int64(value),
+            DataType::UInt8 => ScalarValue::UInt8(value.map(|value| value as u8)),
+            DataType::UInt16 => ScalarValue::UInt16(value.map(|value| value as u16)),
+            DataType::UInt32 => ScalarValue::UInt32(value.map(|value| value as u32)),
+            DataType::UInt64 => ScalarValue::UInt64(value.map(|value| value as u64)),
+            DataType::Decimal32(precision, scale) => ScalarValue::Decimal32(
+                value.map(|value| value as i32),
+                *precision,
+                *scale,
+            ),
+            DataType::Decimal64(precision, scale) => {
+                ScalarValue::Decimal64(value, *precision, *scale)
+            }
+            DataType::Decimal128(precision, scale) => {
+                ScalarValue::Decimal128(value.map(i128::from), *precision, *scale)
+            }
+            DataType::Decimal256(precision, scale) => {
+                ScalarValue::Decimal256(value.map(i256::from), *precision, *scale)
+            }
+            DataType::Date32 => ScalarValue::Date32(value.map(|value| value as i32)),
+            DataType::Date64 => ScalarValue::Date64(value),
+            DataType::Time32(TimeUnit::Second) => {
+                ScalarValue::Time32Second(value.map(|value| value as i32))
+            }
+            DataType::Time32(TimeUnit::Millisecond) => {
+                ScalarValue::Time32Millisecond(value.map(|value| value as i32))
+            }
+            DataType::Time64(TimeUnit::Microsecond) => {
+                ScalarValue::Time64Microsecond(value)
+            }
+            DataType::Time64(TimeUnit::Nanosecond) => {
+                ScalarValue::Time64Nanosecond(value)
+            }
+            DataType::Timestamp(TimeUnit::Second, timezone) => {
+                ScalarValue::TimestampSecond(value, timezone.clone())
+            }
+            DataType::Timestamp(TimeUnit::Millisecond, timezone) => {
+                ScalarValue::TimestampMillisecond(value, timezone.clone())
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, timezone) => {
+                ScalarValue::TimestampMicrosecond(value, timezone.clone())
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, timezone) => {
+                ScalarValue::TimestampNanosecond(value, timezone.clone())
+            }
+            DataType::Duration(TimeUnit::Second) => ScalarValue::DurationSecond(value),
+            DataType::Duration(TimeUnit::Millisecond) => {
+                ScalarValue::DurationMillisecond(value)
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                ScalarValue::DurationMicrosecond(value)
+            }
+            DataType::Duration(TimeUnit::Nanosecond) => {
+                ScalarValue::DurationNanosecond(value)
+            }
+            DataType::Binary => {
+                ScalarValue::Binary(value.map(|value| vec![0xff, value as u8]))
+            }
+            DataType::LargeBinary => {
+                ScalarValue::LargeBinary(value.map(|value| vec![0xff, value as u8]))
+            }
+            DataType::BinaryView => {
+                ScalarValue::BinaryView(value.map(|value| vec![0xff, value as u8]))
+            }
+            DataType::Dictionary(key_type, value_type) => ScalarValue::Dictionary(
+                key_type.clone(),
+                Box::new(ordered_scalar(value_type, value)),
+            ),
+            data_type => panic!("unsupported test type {data_type:?}"),
+        }
+    }
+
+    fn ordered_statistics(data_type: &DataType) -> ContainerStats {
+        let statistics_type = match data_type {
+            DataType::Dictionary(_, value_type) => value_type.as_ref(),
+            data_type => data_type,
+        };
+        let min = [Some(0), Some(1), Some(1), Some(50), None, Some(41), Some(4)];
+        let max = [Some(0), Some(1), Some(2), Some(51), Some(2), None, Some(2)];
+        ContainerStats::new()
+            .with_min(
+                ScalarValue::iter_to_array(
+                    min.into_iter()
+                        .map(|value| ordered_scalar(statistics_type, value)),
+                )
+                .unwrap(),
+            )
+            .with_max(
+                ScalarValue::iter_to_array(
+                    max.into_iter()
+                        .map(|value| ordered_scalar(statistics_type, value)),
+                )
+                .unwrap(),
+            )
+            .with_null_counts([Some(0); 7])
+            .with_row_counts([Some(1); 7])
+    }
+
+    #[test]
+    fn large_ordered_in_lists_use_compact_pruning() -> Result<()> {
+        let types = [
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+            DataType::UInt64,
+            DataType::Decimal32(9, 2),
+            DataType::Decimal64(18, 3),
+            DataType::Decimal128(30, 4),
+            DataType::Decimal256(60, 5),
+            DataType::Date32,
+            DataType::Date64,
+            DataType::Time32(TimeUnit::Second),
+            DataType::Time32(TimeUnit::Millisecond),
+            DataType::Time64(TimeUnit::Microsecond),
+            DataType::Time64(TimeUnit::Nanosecond),
+            DataType::Timestamp(TimeUnit::Second, None),
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            DataType::Duration(TimeUnit::Second),
+            DataType::Duration(TimeUnit::Millisecond),
+            DataType::Duration(TimeUnit::Microsecond),
+            DataType::Duration(TimeUnit::Nanosecond),
+            DataType::Binary,
+            DataType::LargeBinary,
+            DataType::BinaryView,
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int64)),
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Binary)),
+        ];
+
+        for data_type in types {
+            let schema =
+                Arc::new(Schema::new(vec![Field::new("c1", data_type.clone(), true)]));
+            let values = (0..21)
+                .map(|index| {
+                    Arc::new(phys_expr::Literal::new(ordered_scalar(
+                        &data_type,
+                        Some(index * 2),
+                    ))) as PhysicalExprRef
+                })
+                .collect::<Vec<_>>();
+            let stats = TestStatistics::new().with("c1", ordered_statistics(&data_type));
+
+            for (negated, expected) in [
+                (false, [true, false, true, false, true, false, true]),
+                (true, [false, true, true, true, true, true, true]),
+            ] {
+                let expr = phys_expr::in_list(
+                    Arc::new(phys_expr::Column::new("c1", 0)),
+                    values.clone(),
+                    &negated,
+                    &schema,
+                )?;
+                let predicate = large_in_list_pruning_predicate(expr, schema.clone())?;
+                assert!(
+                    predicate.predicate_expr().to_string().contains(if negated {
+                        "NOT_IN_SET_MAY_MATCH"
+                    } else {
+                        "IN_SET_INTERSECTS"
+                    }),
+                    "type={data_type:?}, negated={negated}"
+                );
+                assert_eq!(
+                    predicate.prune(&stats)?,
+                    expected,
+                    "type={data_type:?}, negated={negated}"
+                );
+                assert_eq!(predicate.required_columns.columns.len(), 4);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn large_float_in_list_keeps_per_value_rewrite() -> Result<()> {
+        let data_type = DataType::Float64;
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", data_type.clone(), true)]));
+        let values = (0..21)
+            .map(|value| {
+                Arc::new(phys_expr::Literal::new(ScalarValue::Float64(Some(
+                    value as f64,
+                )))) as PhysicalExprRef
+            })
+            .collect::<Vec<_>>();
+        for negated in [false, true] {
+            let expr = phys_expr::in_list(
+                Arc::new(phys_expr::Column::new("c1", 0)),
+                values.clone(),
+                &negated,
+                &schema,
+            )?;
+            let predicate = large_in_list_pruning_predicate(expr, Arc::clone(&schema))?;
+            assert_per_value_fallback(
+                &predicate,
+                &[
+                    ScalarValue::Float64(Some(0.0)),
+                    ScalarValue::Float64(Some(20.0)),
+                ],
+            )?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn large_fixed_size_binary_in_list_keeps_per_value_rewrite() -> Result<()> {
+        let data_type = DataType::FixedSizeBinary(2);
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", data_type.clone(), true)]));
+        let values = (0..21)
+            .map(|value| {
+                Arc::new(phys_expr::Literal::new(ScalarValue::FixedSizeBinary(
+                    2,
+                    Some(vec![0xff, value]),
+                ))) as PhysicalExprRef
+            })
+            .collect::<Vec<_>>();
+        for negated in [false, true] {
+            let expr = phys_expr::in_list(
+                Arc::new(phys_expr::Column::new("c1", 0)),
+                values.clone(),
+                &negated,
+                &schema,
+            )?;
+            let predicate = large_in_list_pruning_predicate(expr, Arc::clone(&schema))?;
+            assert_per_value_fallback(
+                &predicate,
+                &[
+                    ScalarValue::FixedSizeBinary(2, Some(vec![0xff, 0])),
+                    ScalarValue::FixedSizeBinary(2, Some(vec![0xff, 20])),
+                ],
+            )?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn large_primitive_in_list_preserves_dictionary_nulls() -> Result<()> {
+        let data_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int64));
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", data_type.clone(), true)]));
+        let values = (0..21)
+            .map(|value| {
+                Arc::new(phys_expr::Literal::new(ordered_scalar(
+                    &data_type,
+                    Some(value * 2),
+                ))) as PhysicalExprRef
+            })
+            .collect::<Vec<_>>();
+        let expr = phys_expr::in_list(
+            Arc::new(phys_expr::Column::new("c1", 0)),
+            values,
+            &false,
+            &schema,
+        )?;
+        let predicate = large_in_list_pruning_predicate(expr, schema)?;
+
+        // The invalid dictionary values have nonzero payloads outside the
+        // domain. They must remain missing bounds after dictionary casting.
+        let dictionary_values = Arc::new(arrow::array::PrimitiveArray::<Int64Type>::new(
+            ScalarBuffer::from(vec![50, 51, -1, -1]),
+            Some(NullBuffer::from(vec![false, true, true, false])),
+        ));
+        let dictionary = |keys| -> Result<ArrayRef> {
+            Ok(Arc::new(DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(keys),
+                dictionary_values.clone(),
+            )?))
+        };
+        let stats = TestStatistics::new().with(
+            "c1",
+            ContainerStats::new()
+                .with_min(dictionary(vec![Some(0), Some(2)])?)
+                .with_max(dictionary(vec![Some(1), Some(3)])?)
+                .with_null_counts([Some(0); 2])
+                .with_row_counts([Some(1); 2]),
+        );
+        assert_eq!(predicate.prune(&stats)?, [true, true]);
+        Ok(())
+    }
+
+    #[test]
+    fn large_binary_in_list_preserves_dictionary_nulls() -> Result<()> {
+        let data_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary));
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", data_type.clone(), true)]));
+        let values = (0..21)
+            .map(|value| {
+                Arc::new(phys_expr::Literal::new(ordered_scalar(
+                    &data_type,
+                    Some(value * 2),
+                ))) as PhysicalExprRef
+            })
+            .collect::<Vec<_>>();
+        let expr = phys_expr::in_list(
+            Arc::new(phys_expr::Column::new("c1", 0)),
+            values,
+            &false,
+            &schema,
+        )?;
+        let predicate = large_in_list_pruning_predicate(expr, schema)?;
+
+        // BinaryView casts currently lose NULLs in dictionary values. Use
+        // nonempty invalid payloads so the test fails if they become bounds.
+        let payloads = [vec![0xff, 50], vec![0xff, 51], vec![0], vec![0]];
+        let (offsets, values, _) =
+            BinaryArray::from_iter_values(payloads.iter().map(Vec::as_slice))
+                .into_parts();
+        let dictionary_values: ArrayRef = Arc::new(BinaryArray::new(
+            offsets,
+            values,
+            Some(NullBuffer::from(vec![false, true, true, false])),
+        ));
+        let dictionary = |keys| -> Result<ArrayRef> {
+            Ok(Arc::new(DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(keys),
+                Arc::clone(&dictionary_values),
+            )?))
+        };
+        let stats = TestStatistics::new().with(
+            "c1",
+            ContainerStats::new()
+                .with_min(dictionary(vec![Some(0), Some(2)])?)
+                .with_max(dictionary(vec![Some(1), Some(3)])?)
+                .with_null_counts([Some(0); 2])
+                .with_row_counts([Some(1); 2]),
+        );
+        assert_eq!(predicate.prune(&stats)?, [true, true]);
+        Ok(())
     }
 
     #[test]
@@ -3758,7 +4193,7 @@ mod tests {
                     &schema,
                 )?;
                 let predicate =
-                    large_string_pruning_predicate(Arc::clone(&expr), schema)?;
+                    large_in_list_pruning_predicate(Arc::clone(&expr), schema)?;
                 let last_value = format!("k{:06}", (count - 1) * 10);
                 let stats = TestStatistics::new().with(
                     "c1",
@@ -3845,7 +4280,7 @@ mod tests {
             &false,
             &schema,
         )?;
-        let predicate = large_string_pruning_predicate(expr, schema)?;
+        let predicate = large_in_list_pruning_predicate(expr, schema)?;
         // NULL dictionary values can have nonempty payloads. Neither payload
         // may become a bound when a valid key references the NULL value.
         let (offsets, values, _) =
@@ -3906,7 +4341,7 @@ mod tests {
         ]);
         let expr = col("c1").in_list(values, false);
         let predicate =
-            large_string_pruning_predicate(logical2physical(&expr, &schema), schema)?;
+            large_in_list_pruning_predicate(logical2physical(&expr, &schema), schema)?;
         let stats = TestStatistics::new().with(
             "c1",
             ContainerStats::new_utf8(
@@ -3992,7 +4427,7 @@ mod tests {
     }
 
     #[test]
-    fn large_string_in_list_compacts_null_literals() -> Result<()> {
+    fn large_in_list_compacts_null_literals() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, true)]));
         let values = (0..21).map(|i| lit(format!("a{i:03}"))).collect::<Vec<_>>();
         let stats = TestStatistics::new().with(
@@ -4020,7 +4455,7 @@ mod tests {
         let positive_or = col("c1")
             .in_list(with_null.clone(), false)
             .or(col("c1").eq(lit("middle")));
-        let predicate = large_string_pruning_predicate(
+        let predicate = large_in_list_pruning_predicate(
             logical2physical(&positive_or, &schema),
             Arc::clone(&schema),
         )?;
@@ -4037,7 +4472,7 @@ mod tests {
             assert_eq!(default.prune(&stats)?, [true, true]);
             assert!(default.can_be_inverted_for_full_match());
 
-            let raised = large_string_pruning_predicate(physical, Arc::clone(&schema))?;
+            let raised = large_in_list_pruning_predicate(physical, Arc::clone(&schema))?;
             assert!(!raised.can_be_inverted_for_full_match());
             if negated {
                 assert!(is_always_false(raised.predicate_expr()), "{expr}");
@@ -4058,7 +4493,7 @@ mod tests {
             std::iter::repeat_n(lit(ScalarValue::Utf8(None)), 21).collect::<Vec<_>>();
         for negated in [false, true] {
             let expr = col("c1").in_list(all_null.clone(), negated);
-            let predicate = large_string_pruning_predicate(
+            let predicate = large_in_list_pruning_predicate(
                 logical2physical(&expr, &schema),
                 Arc::clone(&schema),
             )?;
@@ -4071,11 +4506,17 @@ mod tests {
             Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
         let mut integer_values = (0..21).map(lit).collect::<Vec<_>>();
         integer_values.push(lit(ScalarValue::Int32(None)));
-        let integer_predicate = large_string_pruning_predicate(
+        let integer_predicate = large_in_list_pruning_predicate(
             logical2physical(&col("c1").in_list(integer_values, false), &integer_schema),
             integer_schema,
         )?;
-        assert!(integer_predicate.can_be_inverted_for_full_match());
+        assert!(
+            integer_predicate
+                .predicate_expr()
+                .to_string()
+                .contains("IN_SET_INTERSECTS")
+        );
+        assert!(!integer_predicate.can_be_inverted_for_full_match());
 
         // The compact false predicate has the same filter result as the original
         // NOT IN expression, which returns UNKNOWN for values outside the list.
@@ -4085,6 +4526,66 @@ mod tests {
             vec![Arc::new(StringArray::from(vec!["middle", "other"]))],
         )?;
         assert_eq!(not_in.evaluate(&batch)?.into_array(2)?.null_count(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn compact_binary_and_primitive_null_lists_are_always_false() -> Result<()> {
+        let cases = [
+            (
+                DataType::Binary,
+                (0..21)
+                    .map(|value| ScalarValue::Binary(Some(vec![value])))
+                    .collect::<Vec<_>>(),
+                ScalarValue::Binary(None),
+            ),
+            (
+                DataType::Int32,
+                (0..21)
+                    .map(|value| ScalarValue::Int32(Some(value)))
+                    .collect(),
+                ScalarValue::Int32(None),
+            ),
+        ];
+
+        for (data_type, values, null) in cases {
+            let schema =
+                Arc::new(Schema::new(vec![Field::new("c1", data_type.clone(), true)]));
+            let column = Arc::new(phys_expr::Column::new("c1", 0));
+
+            let mut with_null = values;
+            with_null.push(null.clone());
+            let not_in = phys_expr::in_list(
+                Arc::clone(&column) as PhysicalExprRef,
+                with_null
+                    .into_iter()
+                    .map(|value| {
+                        Arc::new(phys_expr::Literal::new(value)) as PhysicalExprRef
+                    })
+                    .collect(),
+                &true,
+                &schema,
+            )?;
+            let predicate = large_in_list_pruning_predicate(not_in, Arc::clone(&schema))?;
+            assert!(is_always_false(predicate.predicate_expr()));
+            assert!(!predicate.can_be_inverted_for_full_match());
+            assert!(predicate.required_columns.columns.is_empty());
+
+            let all_null = phys_expr::in_list(
+                column,
+                std::iter::repeat_n(null, 21)
+                    .map(|value| {
+                        Arc::new(phys_expr::Literal::new(value)) as PhysicalExprRef
+                    })
+                    .collect(),
+                &false,
+                &schema,
+            )?;
+            let predicate = large_in_list_pruning_predicate(all_null, schema)?;
+            assert!(is_always_false(predicate.predicate_expr()));
+            assert!(!predicate.can_be_inverted_for_full_match());
+            assert!(predicate.required_columns.columns.is_empty());
+        }
         Ok(())
     }
 
@@ -4158,7 +4659,7 @@ mod tests {
                 &true,
                 &schema,
             )?;
-            let predicate = large_string_pruning_predicate(expr, schema)?;
+            let predicate = large_in_list_pruning_predicate(expr, schema)?;
             assert_eq!(
                 predicate.predicate_expr().to_string(),
                 "c1_null_count@3 != row_count@2 AND NOT_IN_SET_MAY_MATCH(c1_min@0, c1_max@1, 21 values)",
@@ -4208,7 +4709,7 @@ mod tests {
         let not_in =
             col("c1").in_list((0..21).map(|i| lit(format!("a{i:03}"))).collect(), true);
         let other = col("c2").in_list((0..21).map(|i| lit(i * 10)).collect(), false);
-        let predicate = large_string_pruning_predicate(
+        let predicate = large_in_list_pruning_predicate(
             logical2physical(&not_in.or(other), &schema),
             Arc::clone(&schema),
         )?;
@@ -4248,13 +4749,13 @@ mod tests {
     fn large_string_not_in_list_inverts_without_false_full_match() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, true)]));
         let values = (0..21).map(|i| lit(format!("a{i:03}"))).collect::<Vec<_>>();
-        let forward = large_string_pruning_predicate(
+        let forward = large_in_list_pruning_predicate(
             logical2physical(&col("c1").in_list(values.clone(), true), &schema),
             Arc::clone(&schema),
         )?;
         // NOT(c1 NOT IN (...)) OR c1 IS NULL, the shape row_group_filter builds
         // once PhysicalExprSimplifier turns NOT(NOT IN) back into IN.
-        let inverted = large_string_pruning_predicate(
+        let inverted = large_in_list_pruning_predicate(
             logical2physical(
                 &col("c1").in_list(values, false).or(col("c1").is_null()),
                 &schema,
@@ -4300,7 +4801,7 @@ mod tests {
             values.iter().map(|value| lit(value.clone())).collect(),
             true,
         );
-        let compact = large_string_pruning_predicate(
+        let compact = large_in_list_pruning_predicate(
             logical2physical(&not_in, &schema),
             Arc::clone(&schema),
         )?;
@@ -4312,7 +4813,7 @@ mod tests {
             .map(|value| col("c1").not_eq(lit(value.clone())))
             .reduce(Expr::and)
             .unwrap();
-        let per_value = large_string_pruning_predicate(
+        let per_value = large_in_list_pruning_predicate(
             logical2physical(&chain, &schema),
             Arc::clone(&schema),
         )?;

@@ -29,8 +29,9 @@ use datafusion::physical_plan::expressions::{
 };
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::{
-    HashJoinExec, NestedLoopJoinExec, PartitionMode, PiecewiseMergeJoinExec,
-    SortMergeJoinExec, StreamJoinPartitionMode, SymmetricHashJoinExec,
+    AsOfJoinExec, AsOfMatchExpr, HashJoinExec, NestedLoopJoinExec, PartitionMode,
+    PiecewiseMergeJoinExec, SortMergeJoinExec, StreamJoinPartitionMode,
+    SymmetricHashJoinExec,
 };
 use datafusion::prelude::SessionContext;
 use datafusion_common::ScalarValue;
@@ -83,6 +84,41 @@ fn roundtrip_hash_join() -> Result<()> {
                 *partition_mode,
                 NullEquality::NullEqualsNothing,
                 false,
+            )?))?;
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn roundtrip_asof_join() -> Result<()> {
+    let left_schema = Arc::new(Schema::new(vec![
+        Field::new("symbol", DataType::Utf8, true),
+        Field::new("ts", DataType::Int64, true),
+        Field::new("id", DataType::Int32, false),
+    ]));
+    let right_schema = Arc::new(Schema::new(vec![
+        Field::new("symbol", DataType::Utf8, true),
+        Field::new("ts", DataType::Int64, true),
+        Field::new("price", DataType::Int32, false),
+    ]));
+    let on = vec![(
+        Arc::new(Column::new("symbol", 0)) as _,
+        Arc::new(Column::new("symbol", 0)) as _,
+    )];
+
+    for projection in [None, Some(vec![]), Some(vec![0, 5])] {
+        for op in [Operator::Lt, Operator::LtEq, Operator::Gt, Operator::GtEq] {
+            roundtrip_test(Arc::new(AsOfJoinExec::try_new(
+                Arc::new(EmptyExec::new(Arc::clone(&left_schema))),
+                Arc::new(EmptyExec::new(Arc::clone(&right_schema))),
+                on.clone(),
+                AsOfMatchExpr::new(
+                    Arc::new(Column::new("ts", 1)),
+                    op,
+                    Arc::new(Column::new("ts", 1)),
+                ),
+                projection.clone(),
             )?))?;
         }
     }
@@ -572,9 +608,10 @@ fn piecewise_join(
 /// orderings and plan properties inside `try_new`, so only the six constructor
 /// arguments travel on the wire. Cover the full cartesian product of the two
 /// enum-valued ones: every range operator against every supported join type --
-/// the four classic ones plus the two left existence joins, whose output schema is
-/// the buffered side alone. (Right existence joins and Mark joins are rejected by
-/// `try_new`, so this is the complete set.)
+/// the four classic ones plus the four existence joins, whose output schema is
+/// one side alone (buffered for `LeftSemi`/`LeftAnti`, streamed for
+/// `RightSemi`/`RightAnti`). Mark joins are rejected by `try_new`, so this is
+/// the complete set.
 #[test]
 fn roundtrip_piecewise_merge_join() -> Result<()> {
     let (schema_buffered, schema_streamed) = piecewise_schemas();
@@ -591,6 +628,8 @@ fn roundtrip_piecewise_merge_join() -> Result<()> {
             JoinType::Full,
             JoinType::LeftSemi,
             JoinType::LeftAnti,
+            JoinType::RightSemi,
+            JoinType::RightAnti,
         ] {
             let result = roundtrip_test_and_return(
                 Arc::new(PiecewiseMergeJoinExec::try_new(
@@ -615,17 +654,17 @@ fn roundtrip_piecewise_merge_join() -> Result<()> {
             // Both the name and the index have to survive on the correct side.
             assert_eq!(result.on.0.to_string(), "a@2");
             assert_eq!(result.on.1.to_string(), "b@0");
-            // The existence joins output the buffered side alone (3 fields) while the
-            // classic ones output both sides (3 + 2). The before/after comparison
+            // The left existence joins output the buffered side alone (3 fields),
+            // the right existence joins the streamed side alone (2 fields), and the
+            // classic joins output both sides (3 + 2). The before/after comparison
             // inside the helper already covers the schema; this pins the expected
-            // width absolutely, so the existence output contract is stated rather
+            // width absolutely, so each existence output contract is stated rather
             // than merely preserved.
-            let expected_fields =
-                if matches!(join_type, JoinType::LeftSemi | JoinType::LeftAnti) {
-                    3
-                } else {
-                    5
-                };
+            let expected_fields = match join_type {
+                JoinType::LeftSemi | JoinType::LeftAnti => 3,
+                JoinType::RightSemi | JoinType::RightAnti => 2,
+                _ => 5,
+            };
             assert_eq!(
                 result.schema().fields().len(),
                 expected_fields,
@@ -866,17 +905,10 @@ fn piecewise_merge_join_rejects_unsupported_join_type_on_the_wire() -> Result<()
         .expect("a plan just encoded by try_to_proto must decode as a PhysicalPlanNode");
 
     // (wire value, description, expected error fragment)
-    let cases: [(i32, &str, &str); 5] = [
-        (
-            protobuf::JoinType::Rightsemi as i32,
-            "RightSemi",
-            "Existence join RightSemi is currently not supported",
-        ),
-        (
-            protobuf::JoinType::Rightanti as i32,
-            "RightAnti",
-            "Existence join RightAnti is currently not supported",
-        ),
+    // RightSemi/RightAnti are supported (see `piecewise_merge_join_existence_wire_layout`
+    // and `right_existence_join.rs`); only the Mark joins and unknown variants remain
+    // unsupported on the wire.
+    let cases: [(i32, &str, &str); 3] = [
         (
             protobuf::JoinType::Leftmark as i32,
             "LeftMark",

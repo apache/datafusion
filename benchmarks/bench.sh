@@ -106,7 +106,7 @@ wide_schema:            Small-projection queries on a wide synthetic dataset (10
                           (runs both 'wide' and 'narrow' subgroups: narrow is an internal baseline; the wide-vs-narrow ratio is the signal)
 predicate_eval:         Conjunctive (AND) filter-evaluation micro-benchmarks; each subgroup is a different predicate pattern, to test how an
                           adaptive predicate-ordering system behaves across them (see https://github.com/apache/datafusion/issues/11262)
-                          (subgroups via BENCH_SUBGROUP: costsel, cost, selectivity, cardinality, width, scale, neutral, correlation, drift)
+                          (subgroups via BENCH_SUBGROUP: costsel, cost, selectivity, cardinality, width, scale, neutral, correlation, drift, nulls)
                           (toggle a system under test with its native DATAFUSION_* env var; size data with PRED_ROWS, string width with PRED_FILL)
 parquet_row_filter_skip: Per-RG fully-matched RowFilter skip on Parquet (apache/datafusion#23696); clustered string key + low-selectivity
                           range filter + pushdown, so most row groups are fully matched and the per-row RowFilter is skipped on them
@@ -160,6 +160,7 @@ imdb:                   Join Order Benchmark (JOB) using the IMDB dataset conver
 
 # Micro-Benchmarks (specific operators and features)
 cancellation:           How long cancelling a query takes
+asof_join:              ASOF join workloads varying size, ordering, grouping, match direction, and payload width
 nlj:                    Benchmark for simple nested loop joins, testing various join scenarios
 hj:                     Benchmark for simple hash joins, testing various join scenarios
 smj:                    Benchmark for simple sort merge joins, testing various join scenarios
@@ -238,6 +239,7 @@ main() {
                     data_clickbench_1
                     data_clickbench_partitioned
                     data_imdb
+                    data_asof_join
                     # nlj uses range() function, no data generation needed
                     ;;
                 tpch)
@@ -268,6 +270,9 @@ main() {
                 parquet_row_filter_skip)
                     # Data is generated inline by the suite's load SQL (COPY).
                     echo "parquet_row_filter_skip: no external data to generate"
+                    ;;
+                asof_join)
+                    data_asof_join
                     ;;
                 tpcds)
                     data_tpcds
@@ -479,6 +484,7 @@ main() {
                     run_h2o_join "BIG" "PARQUET" "join"
                     run_imdb
                     run_external_aggr
+                    run_asof_join
                     run_nlj
                     run_hj
                     run_tpcds
@@ -511,6 +517,9 @@ main() {
                     ;;
                 parquet_row_filter_skip)
                     run_parquet_row_filter_skip
+                    ;;
+                asof_join)
+                    run_asof_join
                     ;;
                 tpcds)
                     run_tpcds
@@ -876,7 +885,11 @@ run_push_down_topk() {
 # micro-benchmarks where each subgroup is a different predicate pattern, used to
 # test how an adaptive predicate-ordering system behaves across them (see
 # https://github.com/apache/datafusion/issues/11262). Data is generated inline
-# by the suite's load SQL, so there is no data step.
+# by the suite's load SQL, so there is no data step (drift q82 and q83 share 16
+# small Parquet files written into sql_benchmarks/predicate_eval/scratch/, which
+# is gitignored; q82 reads them with target_partitions=1, so the selectivity flip
+# lands halfway through one stream, and q83 with 16, so each stream gets one whole
+# file and a fixed profile).
 #
 # By default the suite measures DataFusion's built-in left-deep AND short-circuit
 # and sets no engine config of its own. To evaluate a system under test, export
@@ -885,7 +898,7 @@ run_push_down_topk() {
 #   DATAFUSION_EXECUTION_ADAPTIVE_FILTER_REORDERING=true ./bench.sh run predicate_eval
 # Suite-specific knobs (string-substituted into the load SQL, not engine config):
 #   BENCH_SUBGROUP   run one subgroup (costsel, cost, selectivity, cardinality,
-#                    width, scale, neutral, correlation, drift)
+#                    width, scale, neutral, correlation, drift, nulls)
 #   PRED_ROWS        synthetic row count (default 1_000_000; the scale subgroup
 #                    overrides this per query)
 #   PRED_FILL        filler chars per marker = string-column width knob
@@ -1626,6 +1639,51 @@ run_topk_sorted_tpch() {
     echo "Running sorted topk tpch benchmark..."
 
     $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" --sorted --limit 100 ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Generates the pre-sorted Parquet inputs for the ASOF join benchmark.
+data_asof_join() {
+    ASOF_DIR="${DATA_DIR}/asof_join"
+    LEFT_FILE="${ASOF_DIR}/q07_left.parquet"
+    RIGHT_FILE="${ASOF_DIR}/q07_right.parquet"
+
+    if [ -f "${LEFT_FILE}" ] && [ -f "${RIGHT_FILE}" ]; then
+        echo "ASOF join benchmark data already exists at ${ASOF_DIR}"
+        return
+    fi
+
+    mkdir -p "${ASOF_DIR}"
+    echo "Generating ASOF join benchmark data at ${ASOF_DIR}..."
+    (
+        cd "${DATAFUSION_DIR}"
+        debug_run $CARGO_COMMAND -p datafusion-cli -- -c "
+            COPY (
+                SELECT value / 10 AS group_key,
+                       value % 10 + 1 AS ts,
+                       value AS payload
+                FROM range(100000)
+                ORDER BY group_key, ts
+            )
+            TO '${LEFT_FILE}' STORED AS PARQUET;
+
+            COPY (
+                SELECT value / 10 AS group_key,
+                       value % 10 AS ts,
+                       value AS payload
+                FROM range(100000)
+                ORDER BY group_key, ts
+            )
+            TO '${RIGHT_FILE}' STORED AS PARQUET;
+        "
+    )
+}
+
+# Runs the ASOF join benchmark
+run_asof_join() {
+    RESULTS_FILE="${RESULTS_DIR}/asof_join.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running ASOF join benchmark..."
+    debug_run $CARGO_COMMAND --bin benchmark_runner -- asof_join --iterations 5 --path "${DATA_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Runs the nlj benchmark

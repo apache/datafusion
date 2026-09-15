@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -199,3 +199,36 @@ query B
 select null !~* 'abc';
 ----
 NULL
+
+# Empty flags behave like omitted flags for literals and table columns.
+query ???
+SELECT regexp_match('foobarbaz', 'b..', ''),
+       regexp_match('fooBAR', 'b..', ''),
+       regexp_match('foobarbaz', '', '');
+----
+[bar] NULL []
+
+statement ok
+CREATE TABLE regexp_empty_flags (str VARCHAR, pattern VARCHAR, flags VARCHAR) AS VALUES
+    ('foobarbaz', 'b..', ''),
+    ('fooBAR', 'b..', ''),
+    ('fooBAR', 'b..', 'i'),
+    ('foobarbaz', '', ''),
+    (NULL, 'b..', ''),
+    ('foobarbaz', NULL, ''),
+    ('foobarbaz', 'b..', NULL);
+
+query ??
+SELECT regexp_match(str, pattern, flags), regexp_match(str, 'b..', '')
+FROM regexp_empty_flags;
+----
+[bar] [bar]
+NULL NULL
+[BAR] NULL
+[] [bar]
+NULL NULL
+NULL [bar]
+[bar] [bar]
+
+statement ok
+DROP TABLE regexp_empty_flags;

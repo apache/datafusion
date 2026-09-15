@@ -38,13 +38,15 @@ use crate::logical_plan::{
 };
 use crate::select_expr::SelectExpr;
 use crate::utils::{
-    can_hash, columnize_expr, compare_sort_expr, expand_qualified_wildcard,
-    expand_wildcard, expr_to_columns, find_valid_equijoin_key_pair,
-    group_window_expr_by_sort_keys,
+    can_hash, check_all_columns_from_schema, columnize_expr, compare_sort_expr,
+    expand_qualified_wildcard, expand_wildcard, expr_to_columns,
+    find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
+    split_conjunction_owned,
 };
 use crate::{
-    DmlStatement, ExplainOption, Expr, ExprSchemable, Operator, RecursiveQuery,
-    Statement, TableProviderFilterPushDown, TableSource, WriteOp, and, binary_expr, lit,
+    BinaryExpr, DmlStatement, ExplainOption, Expr, ExprSchemable, Operator,
+    RecursiveQuery, Statement, TableProviderFilterPushDown, TableSource, WriteOp, and,
+    binary_expr, lit,
 };
 
 use super::dml::InsertOp;
@@ -1007,23 +1009,67 @@ impl LogicalPlanBuilder {
         )
     }
 
-    /// Apply a left-preserving ASOF join using equality expressions and one
-    /// ordered match condition.
-    pub fn asof_join(
+    /// Apply a left-preserving ASOF join using an optional equality condition
+    /// and one ordered match condition.
+    ///
+    /// When present, `on_expr` must contain equality comparisons combined with
+    /// `AND`. Each comparison must have one operand that references only the
+    /// left input and one that references only `right`; their order does not
+    /// matter. `match_condition` must be a single `<`, `<=`, `>`, or `>=`
+    /// comparison whose left operand references only the left input and whose
+    /// right operand references only `right`.
+    pub fn asof_join_on(
         self,
         right: LogicalPlan,
-        on: Vec<(Expr, Expr)>,
-        match_condition: AsOfMatch,
+        on_expr: Option<Expr>,
+        match_condition: Expr,
     ) -> Result<Self> {
-        self.asof_join_with_constraint(right, on, match_condition, JoinConstraint::On)
+        let on = on_expr
+            .into_iter()
+            .flat_map(split_conjunction_owned)
+            .map(|predicate| {
+                let Expr::BinaryExpr(BinaryExpr {
+                    left,
+                    op: Operator::Eq,
+                    right: right_expr,
+                }) = predicate
+                else {
+                    return plan_err!(
+                        "ASOF ON accepts only equality conditions combined with AND"
+                    );
+                };
+                find_valid_equijoin_key_pair(
+                    &left,
+                    &right_expr,
+                    self.plan.schema(),
+                    right.schema(),
+                )?
+                .ok_or_else(|| {
+                    plan_datafusion_err!(
+                        "Each ASOF equality condition must compare one left expression with one right expression"
+                    )
+                })
+            })
+            .collect::<Result<_>>()?;
+        self.asof_join_with_constraint(
+            right,
+            on,
+            AsOfMatch::try_from(match_condition)?,
+            JoinConstraint::On,
+        )
     }
 
-    /// Apply a left-preserving ASOF join using `USING` equality keys.
+    /// Apply a left-preserving ASOF join using `USING` equality keys and one
+    /// ordered match condition.
+    ///
+    /// Every key in `using_keys` must resolve in both inputs.
+    /// `match_condition` follows the same operand and operator requirements as
+    /// [`asof_join_on`](Self::asof_join_on).
     pub fn asof_join_using(
         self,
         right: LogicalPlan,
         using_keys: Vec<Column>,
-        match_condition: AsOfMatch,
+        match_condition: Expr,
     ) -> Result<Self> {
         let on = using_keys
             .into_iter()
@@ -1033,7 +1079,12 @@ impl LogicalPlanBuilder {
                 Ok((Expr::Column(left), Expr::Column(right)))
             })
             .collect::<Result<_>>()?;
-        self.asof_join_with_constraint(right, on, match_condition, JoinConstraint::Using)
+        self.asof_join_with_constraint(
+            right,
+            on,
+            AsOfMatch::try_from(match_condition)?,
+            JoinConstraint::Using,
+        )
     }
 
     fn asof_join_with_constraint(
@@ -1043,6 +1094,17 @@ impl LogicalPlanBuilder {
         match_condition: AsOfMatch,
         join_constraint: JoinConstraint,
     ) -> Result<Self> {
+        let left_columns = match_condition.left.column_refs();
+        let right_columns = match_condition.right.column_refs();
+        if left_columns.is_empty()
+            || right_columns.is_empty()
+            || !check_all_columns_from_schema(&left_columns, self.plan.schema())?
+            || !check_all_columns_from_schema(&right_columns, right.schema())?
+        {
+            return plan_err!(
+                "ASOF MATCH_CONDITION left operand must reference only the left input and right operand only the right input"
+            );
+        }
         let normalize = |expr, schema: &DFSchema| {
             normalize_col_with_schemas_and_ambiguity_check(expr, &[&[schema]], &[])
         };
@@ -1485,28 +1547,19 @@ impl LogicalPlanBuilder {
                 )
             })
             .unzip();
-        if is_all {
-            LogicalPlanBuilder::from(left_plan)
-                .join_detailed(
-                    right_plan,
-                    join_type,
-                    join_keys,
-                    None,
-                    NullEquality::NullEqualsNull,
-                )?
-                .build()
-        } else {
-            LogicalPlanBuilder::from(left_plan)
-                .distinct()?
-                .join_detailed(
-                    right_plan,
-                    join_type,
-                    join_keys,
-                    None,
-                    NullEquality::NullEqualsNull,
-                )?
-                .build()
+        let mut left_builder = LogicalPlanBuilder::from(left_plan);
+        if !is_all {
+            left_builder = left_builder.distinct()?;
         }
+        left_builder
+            .join_detailed(
+                right_plan,
+                join_type,
+                join_keys,
+                None,
+                NullEquality::NullEqualsNull,
+            )?
+            .build()
     }
 
     /// Build the plan
@@ -2915,6 +2968,70 @@ mod tests {
     }
 
     #[test]
+    fn asof_join_on_extracts_and_validates_conditions() -> Result<()> {
+        let values = vec![vec![lit(1), lit(2)]];
+        let left = LogicalPlanBuilder::values(values.clone())?
+            .alias("l")?
+            .build()?;
+        let right = LogicalPlanBuilder::values(values)?.alias("r")?.build()?;
+
+        let plan = LogicalPlanBuilder::from(left.clone())
+            .asof_join_on(
+                right.clone(),
+                Some(
+                    col("r.column1")
+                        .eq(col("l.column1"))
+                        .and(col("l.column2").eq(col("r.column2"))),
+                ),
+                col("l.column2").gt_eq(col("r.column2")),
+            )?
+            .build()?;
+        let LogicalPlan::AsOfJoin(join) = plan else {
+            panic!("expected ASOF join")
+        };
+        assert_eq!(
+            join.on,
+            vec![
+                (col("l.column1"), col("r.column1")),
+                (col("l.column2"), col("r.column2")),
+            ]
+        );
+        assert_eq!(
+            join.match_condition.as_ref(),
+            &AsOfMatch::new(col("l.column2"), Operator::GtEq, col("r.column2"))
+        );
+
+        let invalid_on = LogicalPlanBuilder::from(left.clone())
+            .asof_join_on(
+                right.clone(),
+                Some(col("l.column1").gt(col("r.column1"))),
+                col("l.column2").gt_eq(col("r.column2")),
+            )
+            .expect_err("non-equality ASOF ON should fail");
+        assert_snapshot!(invalid_on.strip_backtrace(), @r#"Error during planning: ASOF ON accepts only equality conditions combined with AND"#);
+
+        let invalid_match = LogicalPlanBuilder::from(left.clone())
+            .asof_join_on(
+                right.clone(),
+                Some(col("l.column1").eq(col("r.column1"))),
+                col("l.column2").eq(col("r.column2")),
+            )
+            .expect_err("equality ASOF MATCH_CONDITION should fail");
+        assert_snapshot!(invalid_match.strip_backtrace(), @r#"Error during planning: ASOF MATCH_CONDITION requires <, <=, >, or >=, found ="#);
+
+        let reversed_match = LogicalPlanBuilder::from(left)
+            .asof_join_on(
+                right,
+                Some(col("l.column1").eq(col("r.column1"))),
+                col("r.column2").gt_eq(col("l.column2")),
+            )
+            .expect_err("reversed ASOF MATCH_CONDITION should fail");
+        assert_snapshot!(reversed_match.strip_backtrace(), @r#"Error during planning: ASOF MATCH_CONDITION left operand must reference only the left input and right operand only the right input"#);
+
+        Ok(())
+    }
+
+    #[test]
     fn plan_builder_from_logical_plan() -> Result<()> {
         let plan =
             table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?
@@ -3010,6 +3127,50 @@ mod tests {
             err.strip_backtrace(),
             @"Error during planning: Window function calls cannot be nested: 'sum(employee_csv.salary) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING' is nested inside 'sum(sum(employee_csv.salary) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn plan_builder_filter_rejects_window_functions() -> Result<()> {
+        // https://github.com/apache/datafusion/issues/4610
+        let sum_over = |arg| {
+            Expr::from(expr::WindowFunction::new(
+                crate::WindowFunctionDefinition::AggregateUDF(
+                    crate::test::function_stub::sum_udaf(),
+                ),
+                vec![arg],
+            ))
+        };
+        let scan = || table_scan(Some("employee_csv"), &employee_schema(), Some(vec![4]));
+
+        let err = scan()?
+            .filter(sum_over(col("salary")).gt(lit(10)))
+            .expect_err("window functions in a filter should be rejected");
+        assert_snapshot!(
+            err.strip_backtrace(),
+            @"Error during planning: Window function calls are not allowed in filter predicates: 'sum(employee_csv.salary) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+        );
+
+        let err = scan()?
+            .having(sum_over(col("salary")).gt(lit(10)))
+            .expect_err("window functions in a having should be rejected");
+        assert_snapshot!(
+            err.strip_backtrace(),
+            @"Error during planning: Window function calls are not allowed in filter predicates: 'sum(employee_csv.salary) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+        );
+
+        // computing the window function first and filtering on its result is
+        // the supported form
+        let plan = scan()?
+            .window(vec![sum_over(col("salary")).alias("total")])?
+            .filter(col("total").gt(lit(10)))?
+            .build()?;
+        assert_snapshot!(plan, @r"
+        Filter: total > Int32(10)
+          WindowAggr: windowExpr=[[sum(employee_csv.salary) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS total]]
+            TableScan: employee_csv projection=[salary]
+        ");
 
         Ok(())
     }

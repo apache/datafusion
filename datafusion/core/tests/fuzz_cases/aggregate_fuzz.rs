@@ -299,9 +299,11 @@ async fn streaming_aggregate_test() {
     }
 }
 
-/// Perform batch and streaming aggregation with same input
-/// and verify outputs of `AggregateExec` with pipeline breaking stream `GroupedHashAggregateStream`
-/// and non-pipeline breaking stream `BoundedAggregateStream` produces same result.
+/// Perform batch and streaming aggregation with same input and verify that the
+/// two `AggregateExec` variants produce the same result: the pipeline breaking
+/// one over unordered input (`PartialHashAggregateStream`) and the
+/// non-pipeline breaking one over ordered input
+/// (`OrderedPartialAggregateStream`).
 async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str>) {
     let schema = input1[0].schema();
     let session_config = SessionConfig::new().with_batch_size(50);
