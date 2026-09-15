@@ -1229,8 +1229,8 @@ impl AggregateExec {
         // A direction-less limit is a soft hint pushed by
         // `LimitedDistinctAggregation`, which only pushes it while
         // `is_unordered_unfiltered_group_by_distinct()` holds. That predicate is
-        // not stable: a later rule such as `EnforceSorting` can insert the sort
-        // a window function requires below this aggregate, which gives the
+        // not stable: a later rule such as `EnsureRequirements` can insert the
+        // sort a window function requires below this aggregate, which gives the
         // rebuilt aggregate an output ordering and makes the predicate false
         // without ever supplying a direction. Falling back to the regular
         // grouped streams is correct in that case, because they treat the limit

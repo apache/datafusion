@@ -7522,8 +7522,8 @@ set datafusion.optimizer.enable_distinct_aggregation_soft_limit = true;
 statement ok
 set datafusion.optimizer.repartition_aggregations = true;
 
-# A window function in the projection makes `EnforceSorting` add a sort below the
-# distinct aggregation, so the aggregation ends up with an output ordering after
+# A window function in the projection makes `EnsureRequirements` add a sort below
+# the distinct aggregation, so the aggregation ends up with an output ordering after
 # `LimitedDistinctAggregation` pushed a direction-less limit into it. The query
 # must still execute and return the distinct rows.
 statement ok
