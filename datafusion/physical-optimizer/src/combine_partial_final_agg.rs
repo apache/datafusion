@@ -48,6 +48,7 @@ impl CombinePartialFinalAggregate {
 }
 
 impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
+    #[expect(deprecated)]
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,

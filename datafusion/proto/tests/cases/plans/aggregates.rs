@@ -197,6 +197,7 @@ fn decode_aggregate_without_output_schema() -> Result<()> {
 }
 
 #[test]
+#[expect(deprecated)]
 fn roundtrip_aggregate_with_limit() -> Result<()> {
     let field_a = Field::new("a", DataType::Int64, false);
     let field_b = Field::new("b", DataType::Int64, false);

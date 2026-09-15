@@ -242,6 +242,7 @@ async fn agg_grouped_topk_yields(
     let value_col = col("value", &inf.schema())?;
     let group = binary(value_col.clone(), Divide, lit(1000000i64), &inf.schema())?;
 
+    #[expect(deprecated)]
     let aggr = Arc::new(
         AggregateExec::try_new(
             AggregateMode::Single,

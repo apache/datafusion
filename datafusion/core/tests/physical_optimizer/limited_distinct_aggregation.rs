@@ -129,6 +129,7 @@ async fn limited_distinct_aggregate_stream_respects_soft_limit() -> Result<()> {
         output_rows: usize,
     }
 
+    #[expect(deprecated)]
     fn collect_aggregate_runtime_metrics(
         plan: &Arc<dyn ExecutionPlan>,
         metrics: &mut Vec<AggregateRuntimeMetric>,

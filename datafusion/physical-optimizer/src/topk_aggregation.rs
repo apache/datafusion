@@ -42,6 +42,7 @@ impl TopKAggregation {
         Self {}
     }
 
+    #[expect(deprecated)]
     fn transform_agg(
         aggr: &AggregateExec,
         order_by: &str,
