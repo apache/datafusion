@@ -1,0 +1,1589 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## Timezone characterization suite
+##
+## This file is a *characterization* suite: it records what DataFusion actually
+## does today for timestamps with time zones, so that any change to those
+## semantics shows up as a diff here instead of silently shipping.
+##
+## Some of what is recorded below is known to be wrong, or at least known to
+## disagree with PostgreSQL. Those cases carry a comment saying so and, where
+## one exists, a link to the issue. Nothing here is "fixed" by this file --
+## when a fix lands, the expected output changes and the comment goes away.
+##
+## Related issues:
+##   https://github.com/apache/datafusion/issues/10368
+##   https://github.com/apache/datafusion/issues/10602
+##   https://github.com/apache/datafusion/issues/12218
+##   https://github.com/apache/datafusion/issues/12892
+##   https://github.com/apache/datafusion/issues/13212
+##   https://github.com/apache/datafusion/issues/25084
+##   https://github.com/apache/datafusion/issues/25095
+##   https://github.com/apache/datafusion/issues/25166
+##   https://github.com/apache/datafusion/issues/25167
+##   https://github.com/apache/datafusion/issues/25170
+##
+## Cross-engine notes below quote PostgreSQL with the session `TimeZone` named
+## in the comment. The subset the two engines agree on is machine checked
+## against a real PostgreSQL in CI by
+## test_files/pg_compat/pg_compat_timestamptz.slt, added in
+## https://github.com/apache/datafusion/pull/25164.
+##########
+
+##########
+## SECTION 0: session time zone unset
+##
+## NOTE: with `datafusion.execution.time_zone` unset, `::timestamptz` and
+## `TIMESTAMP WITH TIME ZONE` produce a time zone *naive* `Timestamp(ns)`.
+## The offset in the input string is still honoured (the value is normalized
+## to UTC) but the resulting type carries no zone at all, so the "with time
+## zone" in the syntax is not reflected in the type. PostgreSQL always
+## produces `timestamp with time zone` here.
+##
+## See https://github.com/apache/datafusion/issues/25166
+##########
+
+statement ok
+RESET datafusion.execution.time_zone
+
+query T
+SELECT arrow_typeof('2024-07-01 12:00:00'::timestamp)
+----
+Timestamp(ns)
+
+query TP
+SELECT arrow_typeof('2024-07-01 12:00:00'::timestamptz), '2024-07-01 12:00:00'::timestamptz
+----
+Timestamp(ns) 2024-07-01T12:00:00
+
+query TP
+SELECT arrow_typeof(TIMESTAMP '2024-07-01 12:00:00'), TIMESTAMP '2024-07-01 12:00:00'
+----
+Timestamp(ns) 2024-07-01T12:00:00
+
+query TP
+SELECT arrow_typeof(TIMESTAMP WITH TIME ZONE '2024-07-01 12:00:00'), TIMESTAMP WITH TIME ZONE '2024-07-01 12:00:00'
+----
+Timestamp(ns) 2024-07-01T12:00:00
+
+query TP
+SELECT arrow_typeof('2024-07-01 12:00:00Z'::timestamptz), '2024-07-01 12:00:00Z'::timestamptz
+----
+Timestamp(ns) 2024-07-01T12:00:00
+
+# The offset is applied (12:00+05:30 -> 06:30 UTC) even though the result type
+# is naive, so the value is a UTC instant wearing no label.
+query TP
+SELECT arrow_typeof('2024-07-01 12:00:00+05:30'::timestamptz), '2024-07-01 12:00:00+05:30'::timestamptz
+----
+Timestamp(ns) 2024-07-01T06:30:00
+
+statement ok
+CREATE TABLE c_unset AS VALUES ('2024-07-01 12:00:00'::timestamptz), ('2024-01-15 12:00:00'::timestamptz)
+
+query T
+SELECT arrow_typeof(column1) FROM c_unset LIMIT 1
+----
+Timestamp(ns)
+
+query P rowsort
+SELECT column1 FROM c_unset
+----
+2024-01-15T12:00:00
+2024-07-01T12:00:00
+
+statement ok
+DROP TABLE c_unset
+
+##########
+## SECTION 1: session time zone +00:00
+##########
+
+statement ok
+SET datafusion.execution.time_zone = '+00:00'
+
+query T
+SELECT arrow_typeof('2024-07-01 12:00:00'::timestamp)
+----
+Timestamp(ns)
+
+query TP
+SELECT arrow_typeof('2024-07-01 12:00:00'::timestamptz), '2024-07-01 12:00:00'::timestamptz
+----
+Timestamp(ns, "+00:00") 2024-07-01T12:00:00Z
+
+# `TIMESTAMP '...'` is unaffected by the session time zone: it is always naive.
+query TP
+SELECT arrow_typeof(TIMESTAMP '2024-07-01 12:00:00'), TIMESTAMP '2024-07-01 12:00:00'
+----
+Timestamp(ns) 2024-07-01T12:00:00
+
+query TP
+SELECT arrow_typeof(TIMESTAMP WITH TIME ZONE '2024-07-01 12:00:00'), TIMESTAMP WITH TIME ZONE '2024-07-01 12:00:00'
+----
+Timestamp(ns, "+00:00") 2024-07-01T12:00:00Z
+
+query TP
+SELECT arrow_typeof('2024-07-01 12:00:00+05:30'::timestamptz), '2024-07-01 12:00:00+05:30'::timestamptz
+----
+Timestamp(ns, "+00:00") 2024-07-01T06:30:00Z
+
+statement ok
+CREATE TABLE c_utc AS VALUES ('2024-07-01 12:00:00'::timestamptz), ('2024-01-15 12:00:00'::timestamptz)
+
+query T
+SELECT arrow_typeof(column1) FROM c_utc LIMIT 1
+----
+Timestamp(ns, "+00:00")
+
+query P rowsort
+SELECT column1 FROM c_utc
+----
+2024-01-15T12:00:00Z
+2024-07-01T12:00:00Z
+
+##########
+## SECTION 2: session time zone +05:30 (fixed, non whole hour offset)
+##########
+
+statement ok
+SET datafusion.execution.time_zone = '+05:30'
+
+query TP
+SELECT arrow_typeof('2024-07-01 12:00:00'::timestamptz), '2024-07-01 12:00:00'::timestamptz
+----
+Timestamp(ns, "+05:30") 2024-07-01T12:00:00+05:30
+
+query TP
+SELECT arrow_typeof(TIMESTAMP WITH TIME ZONE '2024-07-01 12:00:00'), TIMESTAMP WITH TIME ZONE '2024-07-01 12:00:00'
+----
+Timestamp(ns, "+05:30") 2024-07-01T12:00:00+05:30
+
+query TP
+SELECT arrow_typeof(TIMESTAMP '2024-07-01 12:00:00'), TIMESTAMP '2024-07-01 12:00:00'
+----
+Timestamp(ns) 2024-07-01T12:00:00
+
+query TP
+SELECT arrow_typeof('2024-07-01 12:00:00Z'::timestamptz), '2024-07-01 12:00:00Z'::timestamptz
+----
+Timestamp(ns, "+05:30") 2024-07-01T17:30:00+05:30
+
+statement ok
+CREATE TABLE c_0530 AS VALUES ('2024-07-01 12:00:00'::timestamptz), ('2024-01-15 12:00:00'::timestamptz)
+
+query T
+SELECT arrow_typeof(column1) FROM c_0530 LIMIT 1
+----
+Timestamp(ns, "+05:30")
+
+query P rowsort
+SELECT column1 FROM c_0530
+----
+2024-01-15T12:00:00+05:30
+2024-07-01T12:00:00+05:30
+
+##########
+## SECTION 3: session time zone America/Denver (named zone, observes DST)
+##########
+
+statement ok
+SET datafusion.execution.time_zone = 'America/Denver'
+
+query TP
+SELECT arrow_typeof('2024-07-01 12:00:00'::timestamptz), '2024-07-01 12:00:00'::timestamptz
+----
+Timestamp(ns, "America/Denver") 2024-07-01T12:00:00-06:00
+
+query TP
+SELECT arrow_typeof(TIMESTAMP WITH TIME ZONE '2024-07-01 12:00:00'), TIMESTAMP WITH TIME ZONE '2024-07-01 12:00:00'
+----
+Timestamp(ns, "America/Denver") 2024-07-01T12:00:00-06:00
+
+query TP
+SELECT arrow_typeof(TIMESTAMP '2024-07-01 12:00:00'), TIMESTAMP '2024-07-01 12:00:00'
+----
+Timestamp(ns) 2024-07-01T12:00:00
+
+# Winter (MST, -07:00) vs summer (MDT, -06:00): the same wall clock string maps
+# to a different UTC instant depending on the date. Matches PostgreSQL.
+query TP
+SELECT arrow_typeof('2024-01-15 12:00:00'::timestamptz), '2024-01-15 12:00:00'::timestamptz
+----
+Timestamp(ns, "America/Denver") 2024-01-15T12:00:00-07:00
+
+statement ok
+CREATE TABLE c_denver AS VALUES ('2024-07-01 12:00:00'::timestamptz), ('2024-01-15 12:00:00'::timestamptz)
+
+query T
+SELECT arrow_typeof(column1) FROM c_denver LIMIT 1
+----
+Timestamp(ns, "America/Denver")
+
+query P rowsort
+SELECT column1 FROM c_denver
+----
+2024-01-15T12:00:00-07:00
+2024-07-01T12:00:00-06:00
+
+##########
+## SECTION 4: session time zone Europe/Brussels
+##########
+
+statement ok
+SET datafusion.execution.time_zone = 'Europe/Brussels'
+
+query TP
+SELECT arrow_typeof('2024-07-01 12:00:00'::timestamptz), '2024-07-01 12:00:00'::timestamptz
+----
+Timestamp(ns, "Europe/Brussels") 2024-07-01T12:00:00+02:00
+
+query TP
+SELECT arrow_typeof(TIMESTAMP WITH TIME ZONE '2024-07-01 12:00:00'), TIMESTAMP WITH TIME ZONE '2024-07-01 12:00:00'
+----
+Timestamp(ns, "Europe/Brussels") 2024-07-01T12:00:00+02:00
+
+query TP
+SELECT arrow_typeof('2024-01-15 12:00:00'::timestamptz), '2024-01-15 12:00:00'::timestamptz
+----
+Timestamp(ns, "Europe/Brussels") 2024-01-15T12:00:00+01:00
+
+statement ok
+CREATE TABLE c_brussels AS VALUES ('2024-07-01 12:00:00'::timestamptz), ('2024-01-15 12:00:00'::timestamptz)
+
+query T
+SELECT arrow_typeof(column1) FROM c_brussels LIMIT 1
+----
+Timestamp(ns, "Europe/Brussels")
+
+query P rowsort
+SELECT column1 FROM c_brussels
+----
+2024-01-15T12:00:00+01:00
+2024-07-01T12:00:00+02:00
+
+statement ok
+RESET datafusion.execution.time_zone
+
+##########
+## SECTION 5: AT TIME ZONE
+##########
+
+# 5a. AT TIME ZONE applied to a tz-NAIVE value.
+# DataFusion reinterprets the wall clock as being in the named zone and returns
+# a tz-aware value. This agrees with PostgreSQL, which also returns
+# `timestamp with time zone` here: PostgreSQL renders the same instant as
+# `2024-07-01 18:00:00+00` under TimeZone='UTC'.
+query TP
+SELECT arrow_typeof(TIMESTAMP '2024-07-01 12:00:00' AT TIME ZONE 'America/Denver'),
+       TIMESTAMP '2024-07-01 12:00:00' AT TIME ZONE 'America/Denver'
+----
+Timestamp(ns, "America/Denver") 2024-07-01T12:00:00-06:00
+
+# DIVERGES FROM POSTGRESQL (instant). With a fixed-offset *string* the two
+# engines use opposite sign conventions: DataFusion reads `'+05:30'` as
+# UTC+05:30, so the value below is 06:30 UTC, while PostgreSQL reads the string
+# POSIX-style (west positive) and answers `2024-07-01 17:30:00+00`. PostgreSQL's
+# `AT TIME ZONE INTERVAL '05:30'` matches DataFusion instead. The same
+# convention applies on a real column further down (5c).
+# See https://github.com/apache/datafusion/issues/25170
+query TP
+SELECT arrow_typeof(TIMESTAMP '2024-07-01 12:00:00' AT TIME ZONE '+05:30'),
+       TIMESTAMP '2024-07-01 12:00:00' AT TIME ZONE '+05:30'
+----
+Timestamp(ns, "+05:30") 2024-07-01T12:00:00+05:30
+
+# 5b. AT TIME ZONE applied to a tz-AWARE value.
+#
+# DIVERGES FROM POSTGRESQL (type, not instant). PostgreSQL's
+# `timestamptz AT TIME ZONE zone` *drops* the zone and returns
+# `timestamp without time zone` holding the wall clock reading in `zone`: for
+# the first query below PostgreSQL returns the naive values
+# `2024-01-15 13:00:00` / `2024-07-01 14:00:00`. DataFusion keeps the value
+# tz-aware and merely relabels which zone it is rendered in, so the instant is
+# preserved but the type is not what a PostgreSQL user expects, and a
+# subsequent cast or comparison behaves differently as a result.
+# See https://github.com/apache/datafusion/issues/12218
+query TP rowsort
+SELECT arrow_typeof(column1 AT TIME ZONE 'Europe/Brussels'),
+       column1 AT TIME ZONE 'Europe/Brussels'
+FROM c_utc
+----
+Timestamp(ns, "Europe/Brussels") 2024-01-15T13:00:00+01:00
+Timestamp(ns, "Europe/Brussels") 2024-07-01T14:00:00+02:00
+
+query TP rowsort
+SELECT arrow_typeof(column1 AT TIME ZONE 'America/Denver'),
+       column1 AT TIME ZONE 'America/Denver'
+FROM c_denver
+----
+Timestamp(ns, "America/Denver") 2024-01-15T12:00:00-07:00
+Timestamp(ns, "America/Denver") 2024-07-01T12:00:00-06:00
+
+# KNOWN WRONG. The composed idiom `tstz AT TIME ZONE zone` followed by a cast
+# to naive is the standard PostgreSQL way to read a wall clock in a named zone.
+# PostgreSQL (TimeZone='UTC') answers `2024-07-01 12:00:00`. DataFusion with
+# the session zone unset answers `2024-07-02T00:00:00` -- six hours *later*
+# than the input instant rather than six hours earlier, because the literal is
+# naive (SECTION 0), `AT TIME ZONE` then relabels rather than converts it, and
+# `::timestamp` finally renders the result back in UTC. Three separate
+# behaviours from this file compose into an answer that is a whole day out.
+# See https://github.com/apache/datafusion/issues/12218 and
+# https://github.com/apache/datafusion/issues/25166
+query P
+SELECT ('2024-07-01T18:00:00Z'::timestamptz AT TIME ZONE 'America/Denver')::timestamp
+----
+2024-07-02T00:00:00
+
+# 5c. AT TIME ZONE on real naive columns (not const folded)
+statement ok
+CREATE TABLE naive_col AS VALUES ('2024-07-01 12:00:00'::timestamp), ('2024-01-15 12:00:00'::timestamp)
+
+query TP rowsort
+SELECT arrow_typeof(column1 AT TIME ZONE 'America/Denver'),
+       column1 AT TIME ZONE 'America/Denver'
+FROM naive_col
+----
+Timestamp(ns, "America/Denver") 2024-01-15T12:00:00-07:00
+Timestamp(ns, "America/Denver") 2024-07-01T12:00:00-06:00
+
+# DIVERGES FROM POSTGRESQL: DataFusion reads the offset string '+05:30' as east
+# of UTC (ISO 8601). PostgreSQL reads a bare offset string POSIX-style, as west
+# of UTC, and DuckDB rejects it.
+# See https://github.com/apache/datafusion/issues/25170
+query TP rowsort
+SELECT arrow_typeof(column1 AT TIME ZONE '+05:30'),
+       column1 AT TIME ZONE '+05:30'
+FROM naive_col
+----
+Timestamp(ns, "+05:30") 2024-01-15T12:00:00+05:30
+Timestamp(ns, "+05:30") 2024-07-01T12:00:00+05:30
+
+##########
+## SECTION 6: casts in all four directions
+##########
+
+# 6a. naive -> named: the wall clock is reinterpreted in the target zone
+query TP rowsort
+SELECT arrow_typeof(arrow_cast(column1, 'Timestamp(Nanosecond, Some("America/Denver"))')),
+       arrow_cast(column1, 'Timestamp(Nanosecond, Some("America/Denver"))')
+FROM naive_col
+----
+Timestamp(ns, "America/Denver") 2024-01-15T12:00:00-07:00
+Timestamp(ns, "America/Denver") 2024-07-01T12:00:00-06:00
+
+# 6b. named -> naive
+#
+# DIVERGES FROM POSTGRESQL. DataFusion always yields the *UTC* wall clock and
+# ignores `datafusion.execution.time_zone` entirely (see SECTION 7 for the same
+# cast under a non-UTC session zone). PostgreSQL yields the wall clock in the
+# session `TimeZone`: under TimeZone='America/Denver' the value below reads
+# `2024-07-01 12:00:00`, not `2024-07-01 18:00:00`.
+# See https://github.com/apache/datafusion/issues/12218
+query TP rowsort
+SELECT arrow_typeof(column1::timestamp), column1::timestamp FROM c_denver
+----
+Timestamp(ns) 2024-01-15T19:00:00
+Timestamp(ns) 2024-07-01T18:00:00
+
+# 6c. named -> other named: instant preserving
+query TP rowsort
+SELECT arrow_typeof(arrow_cast(column1, 'Timestamp(Nanosecond, Some("Europe/Brussels"))')),
+       arrow_cast(column1, 'Timestamp(Nanosecond, Some("Europe/Brussels"))')
+FROM c_denver
+----
+Timestamp(ns, "Europe/Brussels") 2024-01-15T20:00:00+01:00
+Timestamp(ns, "Europe/Brussels") 2024-07-01T20:00:00+02:00
+
+# 6d. naive -> fixed offset
+query TP rowsort
+SELECT arrow_typeof(arrow_cast(column1, 'Timestamp(Nanosecond, Some("+05:30"))')),
+       arrow_cast(column1, 'Timestamp(Nanosecond, Some("+05:30"))')
+FROM naive_col
+----
+Timestamp(ns, "+05:30") 2024-01-15T12:00:00+05:30
+Timestamp(ns, "+05:30") 2024-07-01T12:00:00+05:30
+
+# 6e. named -> fixed offset
+query TP rowsort
+SELECT arrow_typeof(arrow_cast(column1, 'Timestamp(Nanosecond, Some("+05:30"))')),
+       arrow_cast(column1, 'Timestamp(Nanosecond, Some("+05:30"))')
+FROM c_denver
+----
+Timestamp(ns, "+05:30") 2024-01-16T00:30:00+05:30
+Timestamp(ns, "+05:30") 2024-07-01T23:30:00+05:30
+
+##########
+## SECTION 7: round trips
+##########
+
+statement ok
+SET datafusion.execution.time_zone = 'America/Denver'
+
+# naive -> aware -> naive.
+#
+# KNOWN WRONG. The round trip is not the identity under a non-UTC session zone:
+# `::timestamptz` interprets the naive value in the session zone (Denver) and
+# `::timestamp` then renders it in UTC, so the value moves by the offset.
+# PostgreSQL round trips exactly, because both halves use the session TimeZone.
+# See https://github.com/apache/datafusion/issues/12218
+query PP rowsort
+SELECT column1 AS orig, column1::timestamptz::timestamp AS roundtrip FROM naive_col
+----
+2024-01-15T12:00:00 2024-01-15T19:00:00
+2024-07-01T12:00:00 2024-07-01T18:00:00
+
+query B rowsort
+SELECT column1 = column1::timestamptz::timestamp AS eq FROM naive_col
+----
+false
+false
+
+# aware -> naive -> aware, same problem in the other direction.
+# See https://github.com/apache/datafusion/issues/12218
+query PP rowsort
+SELECT column1 AS orig, column1::timestamp::timestamptz AS roundtrip FROM c_denver
+----
+2024-01-15T12:00:00-07:00 2024-01-15T19:00:00-07:00
+2024-07-01T12:00:00-06:00 2024-07-01T18:00:00-06:00
+
+query B rowsort
+SELECT column1 = column1::timestamp::timestamptz AS eq FROM c_denver
+----
+false
+false
+
+# The round trip *is* the identity when the session zone is UTC
+statement ok
+SET datafusion.execution.time_zone = '+00:00'
+
+query B rowsort
+SELECT column1 = column1::timestamptz::timestamp AS eq FROM naive_col
+----
+true
+true
+
+statement ok
+RESET datafusion.execution.time_zone
+
+##########
+## SECTION 8: comparison and equality across tz-aware and tz-naive
+##
+## The pins here record two behaviours. A tz-naive side is read in the other
+## operand's zone, where PostgreSQL uses the session zone:
+## https://github.com/apache/datafusion/issues/13212
+## And `'...Z'::timestamptz` is tz-naive while the session zone is unset
+## (SECTION 0): https://github.com/apache/datafusion/issues/25166
+##
+## The unwrap_cast bug, https://github.com/apache/datafusion/issues/25095, needs an explicit
+## CAST of a tz-naive column compared against a literal under a non-UTC session
+## zone. No query in this section has that shape.
+##########
+
+statement ok
+CREATE TABLE cmp_utc AS
+SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("+00:00"))') AS ts
+FROM (VALUES ('2024-07-01T00:00:00Z'), ('2024-07-01T06:00:00Z'), ('2024-07-01T12:00:00Z'), ('2024-07-01T18:00:00Z'))
+
+statement ok
+CREATE TABLE cmp_denver AS
+SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("America/Denver"))') AS ts
+FROM (VALUES ('2024-07-01T00:00:00Z'), ('2024-07-01T06:00:00Z'), ('2024-07-01T12:00:00Z'), ('2024-07-01T18:00:00Z'))
+
+query TP rowsort
+SELECT arrow_typeof(ts), ts FROM cmp_utc
+----
+Timestamp(ns, "+00:00") 2024-07-01T00:00:00Z
+Timestamp(ns, "+00:00") 2024-07-01T06:00:00Z
+Timestamp(ns, "+00:00") 2024-07-01T12:00:00Z
+Timestamp(ns, "+00:00") 2024-07-01T18:00:00Z
+
+query TP rowsort
+SELECT arrow_typeof(ts), ts FROM cmp_denver
+----
+Timestamp(ns, "America/Denver") 2024-06-30T18:00:00-06:00
+Timestamp(ns, "America/Denver") 2024-07-01T00:00:00-06:00
+Timestamp(ns, "America/Denver") 2024-07-01T06:00:00-06:00
+Timestamp(ns, "America/Denver") 2024-07-01T12:00:00-06:00
+
+# tz-aware column compared to a tz-naive literal, session tz unset.
+#
+# DIVERGES FROM POSTGRESQL. DataFusion coerces the naive literal into the
+# *column's* time zone, so `'2024-07-01 12:00:00'` means noon in Denver when
+# compared against a Denver column. PostgreSQL coerces the naive literal using
+# the *session* TimeZone, so under TimeZone='UTC' the same literal means noon
+# UTC and a different row matches. The two engines only agree when the session
+# zone happens to equal the column's zone.
+query P rowsort
+SELECT ts FROM cmp_utc WHERE ts = '2024-07-01 12:00:00'
+----
+2024-07-01T12:00:00Z
+
+query P rowsort
+SELECT ts FROM cmp_utc WHERE ts > '2024-07-01 06:00:00'
+----
+2024-07-01T12:00:00Z
+2024-07-01T18:00:00Z
+
+# CONCRETE DIVERGENCE. DataFusion returns the row whose *Denver-local* reading
+# is noon, i.e. the 18:00Z instant (rendered below as 12:00:00-06:00).
+# PostgreSQL under TimeZone='UTC' reads the literal as noon UTC and returns the
+# 12:00Z instant instead -- a different row for the same query text.
+query P rowsort
+SELECT ts FROM cmp_denver WHERE ts = '2024-07-01 12:00:00'
+----
+2024-07-01T12:00:00-06:00
+
+# DataFusion returns ONE row; PostgreSQL under TimeZone='UTC' returns TWO
+# (12:00Z and 18:00Z), because it reads the bare literal as 06:00 UTC rather
+# than 06:00 Denver.
+query P rowsort
+SELECT ts FROM cmp_denver WHERE ts > '2024-07-01 06:00:00'
+----
+2024-07-01T12:00:00-06:00
+
+# The same comparisons under a non-UTC session time zone. Note that the results
+# are IDENTICAL to the ones above: `datafusion.execution.time_zone` has no
+# effect on how a naive literal is coerced for comparison against a tz-aware
+# column. In PostgreSQL, changing TimeZone changes which rows match.
+statement ok
+SET datafusion.execution.time_zone = 'America/Denver'
+
+query P rowsort
+SELECT ts FROM cmp_utc WHERE ts = '2024-07-01 12:00:00'
+----
+2024-07-01T12:00:00Z
+
+query P rowsort
+SELECT ts FROM cmp_denver WHERE ts = '2024-07-01 12:00:00'
+----
+2024-07-01T12:00:00-06:00
+
+query P rowsort
+SELECT ts FROM cmp_denver WHERE ts > '2024-07-01 06:00:00'
+----
+2024-07-01T12:00:00-06:00
+
+statement ok
+RESET datafusion.execution.time_zone
+
+# tz-naive column compared to a tz-aware literal
+query P rowsort
+SELECT column1 FROM naive_col WHERE column1 = '2024-07-01T12:00:00Z'::timestamptz
+----
+2024-07-01T12:00:00
+
+# DIVERGES FROM POSTGRESQL: the tz-naive literal is read in the column's zone
+# (America/Denver), so it matches the July row. PostgreSQL reads a tz-naive
+# value in the session zone instead.
+# See https://github.com/apache/datafusion/issues/13212
+query B rowsort
+SELECT column1 = TIMESTAMP '2024-07-01 12:00:00' AS eq FROM c_denver
+----
+false
+true
+
+# KNOWN WRONG, and the sharpest form of the problem: with the session zone
+# unset, `'...Z'::timestamptz` is tz-naive (SECTION 0), so when it is then
+# compared against a zoned column the explicit `Z` in the literal is
+# effectively discarded and the wall clock is re-read in the column's zone.
+# The query below asks for the row at 06:00 UTC and gets the row at 12:00 UTC.
+# PostgreSQL returns the 06:00Z row. See
+# https://github.com/apache/datafusion/issues/25166
+query P
+SELECT ts FROM cmp_denver WHERE ts = '2024-07-01T06:00:00Z'::timestamptz
+----
+2024-07-01T06:00:00-06:00
+
+# Setting a session zone makes the literal tz-aware and the same query correct
+statement ok
+SET datafusion.execution.time_zone = '+00:00'
+
+query P
+SELECT ts FROM cmp_denver WHERE ts = '2024-07-01T06:00:00Z'::timestamptz
+----
+2024-07-01T00:00:00-06:00
+
+statement ok
+RESET datafusion.execution.time_zone
+
+# EXPLAIN of the pushdown path, so that any optimizer change to the
+# cast/comparison rewrite (unwrap_cast, simplify_expressions) shows up here.
+statement ok
+set datafusion.explain.logical_plan_only = true
+
+query TT
+EXPLAIN SELECT ts FROM cmp_denver WHERE ts = '2024-07-01 12:00:00'
+----
+logical_plan
+01)Filter: cmp_denver.ts = TimestampNanosecond(1719856800000000000, Some("America/Denver"))
+02)--TableScan: cmp_denver projection=[ts]
+
+query TT
+EXPLAIN SELECT ts FROM cmp_denver WHERE ts > TIMESTAMP '2024-07-01 06:00:00'
+----
+logical_plan
+01)Filter: cmp_denver.ts > TimestampNanosecond(1719835200000000000, Some("America/Denver"))
+02)--TableScan: cmp_denver projection=[ts]
+
+query TT
+EXPLAIN SELECT ts FROM cmp_utc WHERE ts < '2024-07-01T18:00:00Z'::timestamptz
+----
+logical_plan
+01)Filter: cmp_utc.ts < TimestampNanosecond(1719856800000000000, Some("+00:00"))
+02)--TableScan: cmp_utc projection=[ts]
+
+# The literal is folded into the column's time zone rather than being left as a
+# cast on the column. Under a Denver session zone the folded constant is the
+# same as above, confirming the session zone is ignored on this path.
+statement ok
+SET datafusion.execution.time_zone = 'America/Denver'
+
+query TT
+EXPLAIN SELECT ts FROM cmp_utc WHERE ts = '2024-07-01 12:00:00'
+----
+logical_plan
+01)Filter: cmp_utc.ts = TimestampNanosecond(1719835200000000000, Some("+00:00"))
+02)--TableScan: cmp_utc projection=[ts]
+
+statement ok
+RESET datafusion.execution.time_zone
+
+statement ok
+set datafusion.explain.logical_plan_only = false
+
+##########
+## SECTION 9: date_bin / date_trunc / date_part on tz-aware input
+##########
+
+statement ok
+CREATE TABLE day_denver AS
+SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("America/Denver"))') AS ts
+FROM (VALUES ('2024-07-01T00:00:00Z'), ('2024-07-01T06:00:00Z'), ('2024-07-01T12:00:00Z'), ('2024-07-01T18:00:00Z'))
+
+# KNOWN INCONSISTENCY (internal to DataFusion): `date_bin` bins on the
+# underlying UTC instant, while `date_trunc` truncates in the value's own time
+# zone. For the same input they therefore return different answers, even though
+# both return a value typed in the column's zone.
+#
+# PostgreSQL's `date_bin` also bins on the instant relative to the supplied
+# origin, so DataFusion's `date_bin` agrees with it. PostgreSQL's `date_trunc`
+# truncates in the *session* TimeZone (or an explicit third argument), not in
+# the value's zone, so `date_trunc` is where the two engines part company.
+# See https://github.com/apache/datafusion/issues/25167
+query PP rowsort
+SELECT date_bin(INTERVAL '1 day', ts), date_trunc('day', ts) FROM day_denver
+----
+2024-06-30T18:00:00-06:00 2024-06-30T00:00:00-06:00
+2024-06-30T18:00:00-06:00 2024-07-01T00:00:00-06:00
+2024-06-30T18:00:00-06:00 2024-07-01T00:00:00-06:00
+2024-06-30T18:00:00-06:00 2024-07-01T00:00:00-06:00
+
+query B rowsort
+SELECT date_bin(INTERVAL '1 day', ts) = date_trunc('day', ts) AS agree FROM day_denver
+----
+false
+false
+false
+false
+
+query TT
+SELECT arrow_typeof(date_bin(INTERVAL '1 day', ts)), arrow_typeof(date_trunc('day', ts)) FROM day_denver LIMIT 1
+----
+Timestamp(ns, "America/Denver") Timestamp(ns, "America/Denver")
+
+# The same disagreement, but sharper, in a zone whose offset is not a whole
+# multiple of the stride. In Denver both functions at least return *a*
+# midnight: `date_trunc` local midnight, `date_bin` UTC midnight rendered as
+# 18:00 local. Asia/Kolkata is UTC+05:30, so `date_bin` returns 05:30 local --
+# not a day boundary in the zone the value is typed as, and therefore a
+# GROUP BY key that lines up with no calendar the user asked for.
+# See https://github.com/apache/datafusion/issues/25167
+query PPP
+SELECT arrow_cast(TIMESTAMP '2024-01-01 12:00:00', 'Timestamp(Second, Some("Asia/Kolkata"))') AS t,
+       date_trunc('day', arrow_cast(TIMESTAMP '2024-01-01 12:00:00', 'Timestamp(Second, Some("Asia/Kolkata"))')) AS dtrunc,
+       date_bin(INTERVAL '1 day', arrow_cast(TIMESTAMP '2024-01-01 12:00:00', 'Timestamp(Second, Some("Asia/Kolkata"))')) AS dbin
+----
+2024-01-01T12:00:00+05:30 2024-01-01T00:00:00+05:30 2024-01-01T05:30:00+05:30
+
+# At hour granularity the two agree, because the Denver offset is a whole hour
+query PP rowsort
+SELECT date_bin(INTERVAL '1 hour', ts), date_trunc('hour', ts) FROM day_denver
+----
+2024-06-30T18:00:00-06:00 2024-06-30T18:00:00-06:00
+2024-07-01T00:00:00-06:00 2024-07-01T00:00:00-06:00
+2024-07-01T06:00:00-06:00 2024-07-01T06:00:00-06:00
+2024-07-01T12:00:00-06:00 2024-07-01T12:00:00-06:00
+
+# date_bin bins on the UTC instant and date_trunc truncates in the value's zone,
+# so their month boundaries differ. See
+# https://github.com/apache/datafusion/issues/25167
+query PP rowsort
+SELECT date_bin(INTERVAL '1 month', ts), date_trunc('month', ts) FROM day_denver
+----
+2024-06-30T18:00:00-06:00 2024-06-01T00:00:00-06:00
+2024-06-30T18:00:00-06:00 2024-07-01T00:00:00-06:00
+2024-06-30T18:00:00-06:00 2024-07-01T00:00:00-06:00
+2024-06-30T18:00:00-06:00 2024-07-01T00:00:00-06:00
+
+# date_bin with an explicit tz-aware origin
+query P rowsort
+SELECT date_bin(INTERVAL '1 day', ts, arrow_cast('2024-01-01T00:00:00Z', 'Timestamp(Nanosecond, Some("America/Denver"))')) FROM day_denver
+----
+2024-06-30T18:00:00-06:00
+2024-06-30T18:00:00-06:00
+2024-06-30T18:00:00-06:00
+2024-06-30T18:00:00-06:00
+
+# NOT A DIVERGENCE, but a trap. An explicit origin looks like a way to align
+# bins to local midnight, and it is -- until the zone's offset changes.
+# `date_bin` steps a fixed number of nanoseconds from a fixed instant, so it
+# cannot track a local day that is 23 or 25 hours long. The two rows below are
+# the same local time of day on either side of the America/Denver
+# spring-forward transition, and the origin is chosen so that bins land on
+# local midnight.
+#
+# PostgreSQL 15 (`date_bin`) and DuckDB 1.5.2 (`time_bucket` with an origin)
+# return exactly the same values, so this is inherent to instant-based binning.
+# `date_trunc` is included as a control: it gets both rows right.
+# See https://github.com/apache/datafusion/issues/25168
+statement ok
+CREATE TABLE dst_origin AS
+SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("America/Denver"))') AS ts
+FROM (VALUES ('2024-03-09T13:30:00Z'), ('2024-03-11T12:30:00Z'))
+
+query PPP
+SELECT ts,
+       date_bin(INTERVAL '1 day', ts, arrow_cast('2024-03-01T07:00:00Z', 'Timestamp(Nanosecond, Some("UTC"))')),
+       date_trunc('day', ts)
+FROM dst_origin ORDER BY ts
+----
+2024-03-09T06:30:00-07:00 2024-03-09T00:00:00-07:00 2024-03-09T00:00:00-07:00
+2024-03-11T06:30:00-06:00 2024-03-11T01:00:00-06:00 2024-03-11T00:00:00-06:00
+
+# The second row lands on 01:00 local, not midnight, one hour after the
+# transition. Use `date_trunc`, or the `to_local_time` idiom, instead of an
+# origin when you need local calendar bins.
+query B
+SELECT date_bin(INTERVAL '1 day', ts, arrow_cast('2024-03-01T07:00:00Z', 'Timestamp(Nanosecond, Some("UTC"))'))
+       = date_trunc('day', ts) AS origin_matches_local_midnight
+FROM dst_origin ORDER BY ts
+----
+true
+false
+
+# date_part reads the field in the value's own time zone. This matches
+# PostgreSQL whenever the session TimeZone equals the column's zone.
+query IIR rowsort
+SELECT date_part('hour', ts), date_part('day', ts), date_part('epoch', ts) FROM day_denver
+----
+0 1 1719813600
+12 1 1719856800
+18 30 1719792000
+6 1 1719835200
+
+query IIR rowsort
+SELECT date_part('hour', ts), date_part('day', ts), date_part('epoch', ts) FROM cmp_utc
+----
+0 1 1719792000
+12 1 1719835200
+18 1 1719856800
+6 1 1719813600
+
+query II rowsort
+SELECT extract(hour FROM ts), extract(doy FROM ts) FROM day_denver
+----
+0 183
+12 183
+18 182
+6 183
+
+# GAP vs PostgreSQL: `timezone_hour` and `timezone_minute` are standard SQL
+# date parts that PostgreSQL supports on `timestamptz` (returning 0 and 0 for
+# UTC, -6 and 0 for Denver in summer). DataFusion rejects them outright, so
+# there is no way to ask a tz-aware value for its own offset. Extracting the
+# offset via `date_part` is one of the things asked for in
+# https://github.com/apache/datafusion/issues/10368. They are implemented by
+# https://github.com/apache/datafusion/pull/25163; once that lands, these two
+# expectations become value queries.
+query error DataFusion error: Execution error: Date part 'timezone_hour' not supported
+SELECT date_part('timezone_hour', ts) FROM day_denver
+
+query error DataFusion error: Execution error: Date part 'timezone_minute' not supported
+SELECT date_part('timezone_minute', ts) FROM day_denver
+
+##########
+## SECTION 10: to_char / from_unixtime / to_unixtime / to_timestamp* / to_local_time
+##########
+
+# to_char renders in the value's own time zone
+query T rowsort
+SELECT to_char(ts, '%Y-%m-%d %H:%M:%S') FROM day_denver
+----
+2024-06-30 18:00:00
+2024-07-01 00:00:00
+2024-07-01 06:00:00
+2024-07-01 12:00:00
+
+query T rowsort
+SELECT to_char(ts, '%Y-%m-%d %H:%M:%S') FROM cmp_utc
+----
+2024-07-01 00:00:00
+2024-07-01 06:00:00
+2024-07-01 12:00:00
+2024-07-01 18:00:00
+
+query T rowsort
+SELECT to_char(ts, '%Y-%m-%dT%H:%M:%S%z') FROM day_denver
+----
+2024-06-30T18:00:00-0600
+2024-07-01T00:00:00-0600
+2024-07-01T06:00:00-0600
+2024-07-01T12:00:00-0600
+
+# from_unixtime with no zone argument returns a NAIVE timestamp, ignoring
+# `datafusion.execution.time_zone`. PostgreSQL's `to_timestamp(double)` returns
+# `timestamp with time zone`.
+# See https://github.com/apache/datafusion/issues/12892
+query TP
+SELECT arrow_typeof(from_unixtime(1719792000)), from_unixtime(1719792000)
+----
+Timestamp(s) 2024-07-01T00:00:00
+
+query TP
+SELECT arrow_typeof(from_unixtime(1719792000, 'America/Denver')), from_unixtime(1719792000, 'America/Denver')
+----
+Timestamp(s, "America/Denver") 2024-06-30T18:00:00-06:00
+
+query I rowsort
+SELECT to_unixtime(ts) FROM day_denver
+----
+1719792000
+1719813600
+1719835200
+1719856800
+
+query I rowsort
+SELECT to_unixtime(ts) FROM cmp_utc
+----
+1719792000
+1719813600
+1719835200
+1719856800
+
+# With the session zone unset, `to_timestamp*` return NAIVE timestamps even
+# when the input string carries an explicit offset. They do follow the session
+# zone when one is set (see the `to_timestamp` case at the end of this block),
+# so the return type of these functions is config dependent.
+query TP
+SELECT arrow_typeof(to_timestamp('2024-07-01T12:00:00Z')), to_timestamp('2024-07-01T12:00:00Z')
+----
+Timestamp(ns) 2024-07-01T12:00:00
+
+query TP
+SELECT arrow_typeof(to_timestamp_seconds('2024-07-01T12:00:00+05:30')), to_timestamp_seconds('2024-07-01T12:00:00+05:30')
+----
+Timestamp(s) 2024-07-01T06:30:00
+
+query TP
+SELECT arrow_typeof(to_timestamp_millis(1719792000000)), to_timestamp_millis(1719792000000)
+----
+Timestamp(ms) 2024-07-01T00:00:00
+
+query TP
+SELECT arrow_typeof(to_timestamp_micros(1719792000000000)), to_timestamp_micros(1719792000000000)
+----
+Timestamp(µs) 2024-07-01T00:00:00
+
+query TP
+SELECT arrow_typeof(to_timestamp_nanos(1719792000000000000)), to_timestamp_nanos(1719792000000000000)
+----
+Timestamp(ns) 2024-07-01T00:00:00
+
+statement ok
+SET datafusion.execution.time_zone = 'America/Denver'
+
+query T
+SELECT arrow_typeof(to_timestamp('2024-07-01T12:00:00Z'))
+----
+Timestamp(ns, "America/Denver")
+
+statement ok
+RESET datafusion.execution.time_zone
+
+# to_local_time drops the offset and keeps the wall clock reading. It is the
+# closest analogue of PostgreSQL's `timestamptz AT TIME ZONE zone`, except that
+# the zone is taken from the value rather than named by the caller.
+query TP rowsort
+SELECT arrow_typeof(to_local_time(ts)), to_local_time(ts) FROM day_denver
+----
+Timestamp(ns) 2024-06-30T18:00:00
+Timestamp(ns) 2024-07-01T00:00:00
+Timestamp(ns) 2024-07-01T06:00:00
+Timestamp(ns) 2024-07-01T12:00:00
+
+query TP rowsort
+SELECT arrow_typeof(to_local_time(ts)), to_local_time(ts) FROM cmp_utc
+----
+Timestamp(ns) 2024-07-01T00:00:00
+Timestamp(ns) 2024-07-01T06:00:00
+Timestamp(ns) 2024-07-01T12:00:00
+Timestamp(ns) 2024-07-01T18:00:00
+
+# Both sides of the fall-back hour collapse onto the same naive value: this is
+# lossy but correct, since 01:30 really does happen twice in Denver that day.
+query P
+SELECT to_local_time(arrow_cast('2024-11-03T07:30:00Z', 'Timestamp(Nanosecond, Some("America/Denver"))'))
+----
+2024-11-03T01:30:00
+
+query P
+SELECT to_local_time(arrow_cast('2024-11-03T08:30:00Z', 'Timestamp(Nanosecond, Some("America/Denver"))'))
+----
+2024-11-03T01:30:00
+
+##########
+## SECTION 11: now / current_date / current_time / make_date under a session tz
+##########
+
+statement ok
+SET datafusion.execution.time_zone = 'America/Denver'
+
+query T
+SELECT arrow_typeof(now())
+----
+Timestamp(ns, "America/Denver")
+
+query B
+SELECT now() = now()
+----
+true
+
+# `current_date` is a Date32 and `current_time` a Time64 with no zone. In
+# PostgreSQL `current_time` is `time with time zone`; DataFusion has no such
+# type, so the offset is simply not represented.
+query T
+SELECT arrow_typeof(current_date())
+----
+Date32
+
+query T
+SELECT arrow_typeof(current_time())
+----
+Time64(ns)
+
+query TD
+SELECT arrow_typeof(make_date(2024, 7, 1)), make_date(2024, 7, 1)
+----
+Date32 2024-07-01
+
+query B
+SELECT now() > '2000-01-01T00:00:00Z'::timestamptz
+----
+true
+
+statement ok
+SET datafusion.execution.time_zone = '+05:30'
+
+query T
+SELECT arrow_typeof(now())
+----
+Timestamp(ns, "+05:30")
+
+query T
+SELECT arrow_typeof(current_date())
+----
+Date32
+
+statement ok
+RESET datafusion.execution.time_zone
+
+# With the session zone unset, `now()` itself is tz-naive. PostgreSQL's `now()`
+# is always `timestamp with time zone`.
+query T
+SELECT arrow_typeof(now())
+----
+Timestamp(ns)
+
+##########
+## SECTION 12: timestamp +/- interval across DST, and '1 day' vs '24 hours'
+##########
+
+# America/Denver springs forward at 2024-03-10 02:00 local (09:00Z) and falls
+# back at 2024-11-03 02:00 local (08:00Z).
+# 2024-03-09 12:00 MST = 2024-03-09T19:00:00Z
+# 2024-11-02 12:00 MDT = 2024-11-02T18:00:00Z
+statement ok
+CREATE TABLE dst_span AS
+SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("America/Denver"))') AS ts
+FROM (VALUES ('2024-03-09T19:00:00Z'), ('2024-11-02T18:00:00Z'))
+
+# `INTERVAL '1 day'` keeps the local wall clock and absorbs the DST shift;
+# `INTERVAL '24 hours'` adds exactly 24 hours of elapsed time. This matches
+# PostgreSQL when PostgreSQL's session TimeZone equals the column's zone.
+query PPP rowsort
+SELECT ts, ts + INTERVAL '1 day', ts + INTERVAL '24 hours' FROM dst_span
+----
+2024-03-09T12:00:00-07:00 2024-03-10T12:00:00-06:00 2024-03-10T13:00:00-06:00
+2024-11-02T12:00:00-06:00 2024-11-03T12:00:00-07:00 2024-11-03T11:00:00-07:00
+
+query B rowsort
+SELECT ts + INTERVAL '1 day' = ts + INTERVAL '24 hours' AS same FROM dst_span
+----
+false
+false
+
+# DIVERGES FROM POSTGRESQL. The DST awareness of a day-valued interval is
+# scoped to the VALUE's time zone in DataFusion, but to the SESSION TimeZone in
+# PostgreSQL. The expression below subtracts 168 Denver calendar days (one of
+# which is 23 hours long) and so is `true` here; PostgreSQL under
+# TimeZone='UTC' subtracts a flat 168*24 hours and answers `false`. The two
+# only agree when the session zone matches the value's zone -- which is exactly
+# the alignment that test_files/pg_compat/pg_compat_timestamptz.slt sets up.
+query B
+SELECT (TIMESTAMP '2024-01-15 12:00:00' AT TIME ZONE 'America/Denver')
+     = (TIMESTAMP '2024-07-01 12:00:00' AT TIME ZONE 'America/Denver') - INTERVAL '168 days'
+----
+true
+
+# Subtraction across the same two boundaries (2024-03-10 12:00 MDT and
+# 2024-11-03 12:00 MST are each one calendar day *after* a transition).
+statement ok
+CREATE TABLE dst_span_back AS
+SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("America/Denver"))') AS ts
+FROM (VALUES ('2024-03-10T18:00:00Z'), ('2024-11-03T19:00:00Z'))
+
+query PPP rowsort
+SELECT ts, ts - INTERVAL '1 day', ts - INTERVAL '24 hours' FROM dst_span_back
+----
+2024-03-10T12:00:00-06:00 2024-03-09T12:00:00-07:00 2024-03-09T11:00:00-07:00
+2024-11-03T12:00:00-07:00 2024-11-02T12:00:00-06:00 2024-11-02T13:00:00-06:00
+
+query B rowsort
+SELECT ts - INTERVAL '1 day' = ts - INTERVAL '24 hours' AS same FROM dst_span_back
+----
+false
+false
+
+# The same arithmetic on a fixed-offset column, where no DST exists: the two
+# intervals are interchangeable.
+query PPP rowsort
+SELECT ts, ts + INTERVAL '1 day', ts + INTERVAL '24 hours' FROM cmp_utc
+----
+2024-07-01T00:00:00Z 2024-07-02T00:00:00Z 2024-07-02T00:00:00Z
+2024-07-01T06:00:00Z 2024-07-02T06:00:00Z 2024-07-02T06:00:00Z
+2024-07-01T12:00:00Z 2024-07-02T12:00:00Z 2024-07-02T12:00:00Z
+2024-07-01T18:00:00Z 2024-07-02T18:00:00Z 2024-07-02T18:00:00Z
+
+# On a tz-NAIVE value (session zone unset) the distinction disappears entirely,
+# because there is no zone to be DST-aware about.
+query P
+SELECT '2024-03-09T19:00:00Z'::timestamptz + INTERVAL '1 day'
+----
+2024-03-10T19:00:00
+
+query P
+SELECT '2024-03-09T19:00:00Z'::timestamptz + INTERVAL '24 hours'
+----
+2024-03-10T19:00:00
+
+query P rowsort
+SELECT ts + INTERVAL '1 month' FROM dst_span
+----
+2024-04-09T12:00:00-06:00
+2024-12-02T12:00:00-07:00
+
+##########
+## SECTION 13: aggregates, GROUP BY, ORDER BY, DISTINCT over tz-aware columns
+##########
+
+statement ok
+CREATE TABLE agg_denver AS
+SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("America/Denver"))') AS ts, column2 AS grp
+FROM (VALUES
+  ('2024-07-01T00:00:00Z', 1),
+  ('2024-07-01T06:00:00Z', 1),
+  ('2024-07-01T12:00:00Z', 2),
+  ('2024-07-01T12:00:00Z', 2),
+  ('2024-07-01T18:00:00Z', 2))
+
+query TPP
+SELECT arrow_typeof(min(ts)), min(ts), max(ts) FROM agg_denver
+----
+Timestamp(ns, "America/Denver") 2024-06-30T18:00:00-06:00 2024-07-01T12:00:00-06:00
+
+query IPP
+SELECT grp, min(ts), max(ts) FROM agg_denver GROUP BY grp ORDER BY grp
+----
+1 2024-06-30T18:00:00-06:00 2024-07-01T00:00:00-06:00
+2 2024-07-01T06:00:00-06:00 2024-07-01T12:00:00-06:00
+
+query PI
+SELECT ts, count(*) FROM agg_denver GROUP BY ts ORDER BY ts
+----
+2024-06-30T18:00:00-06:00 1
+2024-07-01T00:00:00-06:00 1
+2024-07-01T06:00:00-06:00 2
+2024-07-01T12:00:00-06:00 1
+
+query P
+SELECT DISTINCT ts FROM agg_denver ORDER BY ts
+----
+2024-06-30T18:00:00-06:00
+2024-07-01T00:00:00-06:00
+2024-07-01T06:00:00-06:00
+2024-07-01T12:00:00-06:00
+
+query I
+SELECT count(DISTINCT ts) FROM agg_denver
+----
+4
+
+query P
+SELECT ts FROM agg_denver ORDER BY ts DESC LIMIT 2
+----
+2024-07-01T12:00:00-06:00
+2024-07-01T06:00:00-06:00
+
+# ORDER BY a tz-naive projection of a tz-aware column. Because the cast is
+# monotonic in the instant, the ordering is unchanged. The tz-naive value is the
+# UTC wall clock, not the Denver wall clock: https://github.com/apache/datafusion/issues/12218
+query PP
+SELECT ts AS ts_aware, ts::timestamp AS ts_naive FROM agg_denver ORDER BY 2 LIMIT 3
+----
+2024-06-30T18:00:00-06:00 2024-07-01T00:00:00
+2024-07-01T00:00:00-06:00 2024-07-01T06:00:00
+2024-07-01T06:00:00-06:00 2024-07-01T12:00:00
+
+##########
+## SECTION 14: joins on tz-aware keys, including mixed time zones
+##########
+
+# Same zone on both sides
+query PP rowsort
+SELECT l.ts, r.ts FROM cmp_denver l JOIN cmp_denver r ON l.ts = r.ts
+----
+2024-06-30T18:00:00-06:00 2024-06-30T18:00:00-06:00
+2024-07-01T00:00:00-06:00 2024-07-01T00:00:00-06:00
+2024-07-01T06:00:00-06:00 2024-07-01T06:00:00-06:00
+2024-07-01T12:00:00-06:00 2024-07-01T12:00:00-06:00
+
+# Mixed: +00:00 on the left, America/Denver on the right. Both sides hold the
+# same UTC instants, so the join is instant based and matches all four rows.
+query TT
+SELECT arrow_typeof(l.ts), arrow_typeof(r.ts) FROM cmp_utc l JOIN cmp_denver r ON l.ts = r.ts LIMIT 1
+----
+Timestamp(ns, "+00:00") Timestamp(ns, "America/Denver")
+
+query PP rowsort
+SELECT l.ts, r.ts FROM cmp_utc l JOIN cmp_denver r ON l.ts = r.ts
+----
+2024-07-01T00:00:00Z 2024-06-30T18:00:00-06:00
+2024-07-01T06:00:00Z 2024-07-01T00:00:00-06:00
+2024-07-01T12:00:00Z 2024-07-01T06:00:00-06:00
+2024-07-01T18:00:00Z 2024-07-01T12:00:00-06:00
+
+query I
+SELECT count(*) FROM cmp_utc l JOIN cmp_denver r ON l.ts = r.ts
+----
+4
+
+# tz-aware joined against tz-naive: the naive side is treated as UTC
+query I
+SELECT count(*) FROM cmp_utc l JOIN naive_col r ON l.ts = r.column1
+----
+1
+
+##########
+## SECTION 15: UNION / CASE / COALESCE across mixed time zones (type coercion)
+##########
+
+# UNION of two differently-zoned tz-aware branches coerces to the first
+# branch's zone rather than to a canonical UTC.
+#
+# KNOWN WRONG in the second row: the second branch asks for the 06:00Z row but
+# returns the 12:00Z row, because its `'...Z'::timestamptz` literal is tz-naive
+# while the session zone is unset. This is the SECTION 8 comparison problem,
+# carried through the UNION. See https://github.com/apache/datafusion/issues/25166
+query TP rowsort
+SELECT arrow_typeof(ts), ts FROM (
+  SELECT ts FROM cmp_utc WHERE ts = '2024-07-01T00:00:00Z'::timestamptz
+  UNION ALL
+  SELECT ts FROM cmp_denver WHERE ts = '2024-07-01T06:00:00Z'::timestamptz
+)
+----
+Timestamp(ns, "+00:00") 2024-07-01T00:00:00Z
+Timestamp(ns, "+00:00") 2024-07-01T12:00:00Z
+
+# UNION of a tz-aware branch with a tz-naive branch keeps the zone. PostgreSQL
+# also resolves this to `timestamp with time zone`.
+query T
+SELECT arrow_typeof(c) FROM (
+  SELECT ts AS c FROM cmp_denver
+  UNION ALL
+  SELECT column1 AS c FROM naive_col
+) LIMIT 1
+----
+Timestamp(ns, "America/Denver")
+
+# KNOWN WRONG: the taken branch is `'2024-07-01T00:00:00Z'::timestamptz`, which
+# is naive here (SECTION 0). Coercing it to the other branch's zone RELABELS it
+# rather than converting it, so the answer is 2024-07-01T06:00:00Z -- six hours
+# later than the literal the user wrote. Same root cause as the comparison case
+# in SECTION 8: https://github.com/apache/datafusion/issues/25166 for the tz-naive literal,
+# and https://github.com/apache/datafusion/issues/13212 for the choice of zone.
+query TP
+SELECT arrow_typeof(x), x FROM (
+  SELECT CASE WHEN true THEN '2024-07-01T00:00:00Z'::timestamptz
+              ELSE arrow_cast('2024-07-01T00:00:00Z', 'Timestamp(Nanosecond, Some("America/Denver"))') END AS x
+)
+----
+Timestamp(ns, "America/Denver") 2024-07-01T00:00:00-06:00
+
+# KNOWN ODDITY: a CASE whose branches are a tz-naive `TIMESTAMP` literal and a
+# (session-zone-unset, therefore also naive) `::timestamptz` resolves to naive.
+# Under a session zone this same expression resolves to the zoned type, so the
+# result type of a CASE depends on the session config.
+query TP
+SELECT arrow_typeof(x), x FROM (
+  SELECT CASE WHEN false THEN '2024-07-01T00:00:00Z'::timestamptz
+              ELSE TIMESTAMP '2024-07-01 00:00:00' END AS x
+)
+----
+Timestamp(ns) 2024-07-01T00:00:00
+
+# The same expression under a session zone, showing that the result type (and
+# value) of a CASE over timestamps depends on the session config
+statement ok
+SET datafusion.execution.time_zone = 'America/Denver'
+
+query TP
+SELECT arrow_typeof(x), x FROM (
+  SELECT CASE WHEN false THEN '2024-07-01T00:00:00Z'::timestamptz
+              ELSE TIMESTAMP '2024-07-01 00:00:00' END AS x
+)
+----
+Timestamp(ns, "America/Denver") 2024-07-01T00:00:00-06:00
+
+statement ok
+RESET datafusion.execution.time_zone
+
+query TP
+SELECT arrow_typeof(coalesce(NULL, arrow_cast('2024-07-01T00:00:00Z', 'Timestamp(Nanosecond, Some("America/Denver"))'))),
+       coalesce(NULL, arrow_cast('2024-07-01T00:00:00Z', 'Timestamp(Nanosecond, Some("America/Denver"))'))
+----
+Timestamp(ns, "America/Denver") 2024-06-30T18:00:00-06:00
+
+query TP
+SELECT arrow_typeof(coalesce(
+         arrow_cast(NULL, 'Timestamp(Nanosecond, Some("+00:00"))'),
+         arrow_cast('2024-07-01T00:00:00Z', 'Timestamp(Nanosecond, Some("America/Denver"))'))),
+       coalesce(
+         arrow_cast(NULL, 'Timestamp(Nanosecond, Some("+00:00"))'),
+         arrow_cast('2024-07-01T00:00:00Z', 'Timestamp(Nanosecond, Some("America/Denver"))'))
+----
+Timestamp(ns, "America/Denver") 2024-06-30T18:00:00-06:00
+
+query TP
+SELECT arrow_typeof(greatest(
+         arrow_cast('2024-07-01T00:00:00Z', 'Timestamp(Nanosecond, Some("+00:00"))'),
+         arrow_cast('2024-07-01T06:00:00Z', 'Timestamp(Nanosecond, Some("America/Denver"))'))),
+       greatest(
+         arrow_cast('2024-07-01T00:00:00Z', 'Timestamp(Nanosecond, Some("+00:00"))'),
+         arrow_cast('2024-07-01T06:00:00Z', 'Timestamp(Nanosecond, Some("America/Denver"))'))
+----
+Timestamp(ns, "+00:00") 2024-07-01T06:00:00Z
+
+##########
+## SECTION 16: DST boundaries
+##
+## KNOWN WRONG, and the single largest divergence in this file: DataFusion
+## cannot represent an ambiguous or non-existent local time in a named zone at
+## all. Every route into a named zone -- a column cast, `AT TIME ZONE`, a
+## string literal, or `::timestamptz` under a session zone -- fails with an
+## error, where PostgreSQL resolves the value.
+##
+## PostgreSQL's answers, for reference:
+##   ambiguous 2024-11-03 01:30:00 America/Denver -> 2024-11-03 01:30:00-07
+##       (the second, standard-time occurrence)
+##   nonexistent 2024-03-10 02:30:00 America/Denver -> 2024-03-10 03:30:00-06
+##       (shifted forward out of the gap)
+##   ambiguous 2024-10-27 02:30:00 Europe/Brussels -> 2024-10-27 02:30:00+01
+##   nonexistent 2024-03-31 02:30:00 Europe/Brussels -> 2024-03-31 03:30:00+02
+##
+## Note that the column path and the literal path fail with *different* errors
+## even though the value is identical: the column path reports
+## "Cannot cast timezone to different timezone" from the Arrow cast kernel,
+## while the literal path is folded by `simplify_expressions` and reports
+## "error computing timezone offset" from the Arrow timestamp parser.
+##
+## See https://github.com/apache/datafusion/issues/25084 and the arrow-rs fix
+## https://github.com/apache/arrow-rs/pull/11038
+##########
+
+# --- US fall back: 2024-11-03 01:30:00 America/Denver occurs twice ---
+
+# The naive value itself is fine; only the move into a named zone fails.
+query P
+SELECT '2024-11-03 01:30:00'::timestamp
+----
+2024-11-03T01:30:00
+
+statement ok
+CREATE TABLE dst_ambiguous AS VALUES ('2024-11-03 01:30:00'::timestamp)
+
+# These expectations match only the stable `Arrow error: ...` tail. The wrapper
+# chain above it (optimizer rule, field context) is not what these cases pin,
+# and it changed in https://github.com/apache/datafusion/pull/24920.
+query error Arrow error: Cast error: Cannot cast timezone to different timezone
+SELECT column1 AT TIME ZONE 'America/Denver' FROM dst_ambiguous
+
+query error Arrow error: Cast error: Cannot cast timezone to different timezone
+SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("America/Denver"))') FROM dst_ambiguous
+
+# The same wall clock arriving as a string literal instead of a column
+query error Arrow\ error:\ Parser\ error:\ Error\ parsing\ timestamp\ from\ '2024\-11\-03T01:30:00':\ error\ computing\ timezone\ offset
+SELECT arrow_cast('2024-11-03T01:30:00', 'Timestamp(Nanosecond, Some("America/Denver"))')
+
+query error Arrow\ error:\ Cast\ error:\ Cannot\ cast\ timezone\ to\ different\ timezone
+SELECT TIMESTAMP '2024-11-03 01:30:00' AT TIME ZONE 'America/Denver'
+
+# Both instants are representable when the offset is spelled out explicitly --
+# it is only the *resolution* of a bare wall clock that fails. Note the two
+# rows differ solely in the rendered offset.
+query PP
+SELECT arrow_cast('2024-11-03T07:30:00Z', 'Timestamp(Nanosecond, Some("America/Denver"))'),
+       arrow_cast('2024-11-03T08:30:00Z', 'Timestamp(Nanosecond, Some("America/Denver"))')
+----
+2024-11-03T01:30:00-06:00 2024-11-03T01:30:00-07:00
+
+# --- US spring forward: 2024-03-10 02:30:00 America/Denver does not exist ---
+
+statement ok
+CREATE TABLE dst_nonexistent AS VALUES ('2024-03-10 02:30:00'::timestamp)
+
+query error Arrow error: Cast error: Cannot cast timezone to different timezone
+SELECT column1 AT TIME ZONE 'America/Denver' FROM dst_nonexistent
+
+query error Arrow error: Cast error: Cannot cast timezone to different timezone
+SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("America/Denver"))') FROM dst_nonexistent
+
+query error Arrow\ error:\ Parser\ error:\ Error\ parsing\ timestamp\ from\ '2024\-03\-10T02:30:00':\ error\ computing\ timezone\ offset
+SELECT arrow_cast('2024-03-10T02:30:00', 'Timestamp(Nanosecond, Some("America/Denver"))')
+
+query error Arrow\ error:\ Cast\ error:\ Cannot\ cast\ timezone\ to\ different\ timezone
+SELECT TIMESTAMP '2024-03-10 02:30:00' AT TIME ZONE 'America/Denver'
+
+statement ok
+SET datafusion.execution.time_zone = 'America/Denver'
+
+query error Arrow\ error:\ Parser\ error:\ Error\ parsing\ timestamp\ from\ '2024\-03\-10\ 02:30:00':\ error\ computing\ timezone\ offset
+SELECT '2024-03-10 02:30:00'::timestamptz
+
+query error Arrow\ error:\ Parser\ error:\ Error\ parsing\ timestamp\ from\ '2024\-11\-03\ 01:30:00':\ error\ computing\ timezone\ offset
+SELECT '2024-11-03 01:30:00'::timestamptz
+
+statement ok
+RESET datafusion.execution.time_zone
+
+# --- EU transitions: 2024-10-27 02:30:00 and 2024-03-31 02:30:00 in Brussels ---
+
+statement ok
+CREATE TABLE dst_eu AS VALUES ('2024-10-27 02:30:00'::timestamp), ('2024-03-31 02:30:00'::timestamp)
+
+query error Arrow error: Cast error: Cannot cast timezone to different timezone
+SELECT column1 AT TIME ZONE 'Europe/Brussels' FROM dst_eu
+
+query error Arrow error: Cast error: Cannot cast timezone to different timezone
+SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("Europe/Brussels"))') FROM dst_eu
+
+query error Arrow\ error:\ Parser\ error:\ Error\ parsing\ timestamp\ from\ '2024\-10\-27T02:30:00':\ error\ computing\ timezone\ offset
+SELECT arrow_cast('2024-10-27T02:30:00', 'Timestamp(Nanosecond, Some("Europe/Brussels"))')
+
+query error Arrow\ error:\ Parser\ error:\ Error\ parsing\ timestamp\ from\ '2024\-03\-31T02:30:00':\ error\ computing\ timezone\ offset
+SELECT arrow_cast('2024-03-31T02:30:00', 'Timestamp(Nanosecond, Some("Europe/Brussels"))')
+
+statement ok
+SET datafusion.execution.time_zone = 'Europe/Brussels'
+
+query error Arrow\ error:\ Parser\ error:\ Error\ parsing\ timestamp\ from\ '2024\-10\-27\ 02:30:00':\ error\ computing\ timezone\ offset
+SELECT '2024-10-27 02:30:00'::timestamptz
+
+query error Arrow\ error:\ Parser\ error:\ Error\ parsing\ timestamp\ from\ '2024\-03\-31\ 02:30:00':\ error\ computing\ timezone\ offset
+SELECT '2024-03-31 02:30:00'::timestamptz
+
+statement ok
+RESET datafusion.execution.time_zone
+
+# A tz-aware column crossing the fall-back boundary. Constructing the values
+# from explicit UTC instants sidesteps the failure above, so the behaviour of
+# date_trunc / date_bin / date_part / interval arithmetic across a repeated
+# hour can still be pinned down.
+statement ok
+CREATE TABLE dst_cross AS
+SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("America/Denver"))') AS ts
+FROM (VALUES ('2024-11-03T05:30:00Z'), ('2024-11-03T06:30:00Z'), ('2024-11-03T07:30:00Z'), ('2024-11-03T08:30:00Z'))
+
+# The last two rows render as the same local wall clock with different offsets;
+# date_part('hour') reports 1 for both, and date_trunc('day') maps both onto
+# the same local midnight. date_bin still bins on the UTC instant, which is the
+# inconsistency tracked in https://github.com/apache/datafusion/issues/25167
+query PPPI rowsort
+SELECT ts, date_trunc('day', ts), date_bin(INTERVAL '1 day', ts), date_part('hour', ts) FROM dst_cross
+----
+2024-11-02T23:30:00-06:00 2024-11-02T00:00:00-06:00 2024-11-02T18:00:00-06:00 23
+2024-11-03T00:30:00-06:00 2024-11-03T00:00:00-06:00 2024-11-02T18:00:00-06:00 0
+2024-11-03T01:30:00-06:00 2024-11-03T00:00:00-06:00 2024-11-02T18:00:00-06:00 1
+2024-11-03T01:30:00-07:00 2024-11-03T00:00:00-06:00 2024-11-02T18:00:00-06:00 1
+
+# Adding one hour walks through the repeated hour rather than skipping it
+query PP rowsort
+SELECT ts, ts + INTERVAL '1 hour' FROM dst_cross
+----
+2024-11-02T23:30:00-06:00 2024-11-03T00:30:00-06:00
+2024-11-03T00:30:00-06:00 2024-11-03T01:30:00-06:00
+2024-11-03T01:30:00-06:00 2024-11-03T01:30:00-07:00
+2024-11-03T01:30:00-07:00 2024-11-03T02:30:00-07:00
+
+##########
+## SECTION 17: a zone without DST (America/Phoenix) and a half hour zone
+## (Asia/Kolkata)
+##########
+
+statement ok
+CREATE TABLE phx AS
+SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("America/Phoenix"))') AS ts
+FROM (VALUES ('2024-01-15T12:00:00Z'), ('2024-07-01T12:00:00Z'))
+
+# Phoenix stays at -07:00 in both January and July
+query TP rowsort
+SELECT arrow_typeof(ts), ts FROM phx
+----
+Timestamp(ns, "America/Phoenix") 2024-01-15T05:00:00-07:00
+Timestamp(ns, "America/Phoenix") 2024-07-01T05:00:00-07:00
+
+query PP rowsort
+SELECT ts + INTERVAL '1 day', ts + INTERVAL '24 hours' FROM phx
+----
+2024-01-16T05:00:00-07:00 2024-01-16T05:00:00-07:00
+2024-07-02T05:00:00-07:00 2024-07-02T05:00:00-07:00
+
+query I rowsort
+SELECT date_part('hour', ts) FROM phx
+----
+5
+5
+
+statement ok
+CREATE TABLE kolkata AS
+SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("Asia/Kolkata"))') AS ts
+FROM (VALUES ('2024-01-15T12:00:00Z'), ('2024-07-01T12:00:00Z'))
+
+query TP rowsort
+SELECT arrow_typeof(ts), ts FROM kolkata
+----
+Timestamp(ns, "Asia/Kolkata") 2024-01-15T17:30:00+05:30
+Timestamp(ns, "Asia/Kolkata") 2024-07-01T17:30:00+05:30
+
+# `::timestamp` gives the UTC wall clock (12:00), not the Kolkata wall clock
+# (17:30). PostgreSQL gives the session-zone wall clock.
+# See https://github.com/apache/datafusion/issues/12218
+query PP rowsort
+SELECT ts AS aware, ts::timestamp AS naive FROM kolkata
+----
+2024-01-15T17:30:00+05:30 2024-01-15T12:00:00
+2024-07-01T17:30:00+05:30 2024-07-01T12:00:00
+
+query II rowsort
+SELECT date_part('hour', ts), date_part('minute', ts) FROM kolkata
+----
+17 30
+17 30
+
+# The half hour offset is where date_bin and date_trunc visibly disagree:
+# date_trunc('day') lands on local midnight, date_bin lands on 00:00 UTC,
+# which is 05:30 local. Same defect as the Kolkata case in SECTION 9, reached
+# from a UTC instant rather than a wall clock.
+# See https://github.com/apache/datafusion/issues/25167
+query PP rowsort
+SELECT date_trunc('day', ts), date_bin(INTERVAL '1 day', ts) FROM kolkata
+----
+2024-01-15T00:00:00+05:30 2024-01-15T05:30:00+05:30
+2024-07-01T00:00:00+05:30 2024-07-01T05:30:00+05:30
+
+query T rowsort
+SELECT to_char(ts, '%Y-%m-%d %H:%M:%S %z') FROM kolkata
+----
+2024-01-15 17:30:00 +0530
+2024-07-01 17:30:00 +0530
+
+##########
+## Cleanup
+##########
+
+statement ok
+DROP TABLE c_utc
+
+statement ok
+DROP TABLE c_0530
+
+statement ok
+DROP TABLE c_denver
+
+statement ok
+DROP TABLE c_brussels
+
+statement ok
+DROP TABLE naive_col
+
+statement ok
+DROP TABLE cmp_utc
+
+statement ok
+DROP TABLE cmp_denver
+
+statement ok
+DROP TABLE day_denver
+
+statement ok
+DROP TABLE dst_span
+
+statement ok
+DROP TABLE dst_span_back
+
+statement ok
+DROP TABLE agg_denver
+
+statement ok
+DROP TABLE dst_ambiguous
+
+statement ok
+DROP TABLE dst_nonexistent
+
+statement ok
+DROP TABLE dst_eu
+
+statement ok
+DROP TABLE dst_cross
+
+statement ok
+DROP TABLE phx
+
+statement ok
+DROP TABLE kolkata
