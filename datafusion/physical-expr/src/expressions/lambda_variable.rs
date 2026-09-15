@@ -52,32 +52,14 @@ impl Hash for LambdaVariable {
     }
 }
 
-impl LambdaVariable {
-    /// Create a new lambda variable expression
-    pub fn new(index: usize, field: FieldRef) -> Self {
-        Self { index, field }
-    }
+#[cfg(feature = "proto")]
+impl crate::proto::PhysicalExprFromProto for LambdaVariable {
+    const NAME: &'static str = "datafusion.LambdaVariable";
 
-    /// Get the variable's name
-    pub fn name(&self) -> &str {
-        self.field.name()
-    }
-
-    /// Get the variable's index
-    pub fn index(&self) -> usize {
-        self.index
-    }
-
-    /// Get the variable's field
-    pub fn field(&self) -> &FieldRef {
-        &self.field
-    }
-
-    #[cfg(feature = "proto")]
     /// Reconstruct a [`LambdaVariable`] from a proto node.
-    pub fn try_from_proto(
+    fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalExprNode,
-        _ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+        _ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_, crate::proto::ExprDecodeSession<'_>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         use datafusion_physical_expr_common::{
             expect_expr_variant, physical_expr::proto_decode::require_proto_field,
@@ -98,6 +80,28 @@ impl LambdaVariable {
                     .try_into()?,
             ),
         )))
+    }
+}
+
+impl LambdaVariable {
+    /// Create a new lambda variable expression
+    pub fn new(index: usize, field: FieldRef) -> Self {
+        Self { index, field }
+    }
+
+    /// Get the variable's name
+    pub fn name(&self) -> &str {
+        self.field.name()
+    }
+
+    /// Get the variable's index
+    pub fn index(&self) -> usize {
+        self.index
+    }
+
+    /// Get the variable's field
+    pub fn field(&self) -> &FieldRef {
+        &self.field
     }
 }
 
@@ -199,10 +203,10 @@ pub fn lambda_variable(name: &str, schema: &Schema) -> Result<Arc<dyn PhysicalEx
 #[cfg(all(test, feature = "proto"))]
 mod proto_tests {
     use super::*;
+    use crate::proto::PhysicalExprFromProto;
     use crate::proto_test_util::{StubEncoder, UnreachableDecoder, column_node};
     use arrow::datatypes::Field;
     use datafusion_common::DataFusionError;
-    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
     use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
     use datafusion_proto_models::protobuf::{self, physical_expr_node};
 
@@ -239,7 +243,8 @@ mod proto_tests {
         let node = column_node("a");
         let schema = Schema::empty();
         let decoder = UnreachableDecoder;
-        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let session = crate::proto_test_util::TestSession::default();
+        let ctx = session.ctx(&schema, &decoder);
 
         let err = LambdaVariable::try_from_proto(&node, &ctx).unwrap_err();
         assert!(
@@ -260,7 +265,8 @@ mod proto_tests {
         };
         let schema = Schema::empty();
         let decoder = UnreachableDecoder;
-        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let session = crate::proto_test_util::TestSession::default();
+        let ctx = session.ctx(&schema, &decoder);
 
         let err = LambdaVariable::try_from_proto(&node, &ctx).unwrap_err();
         assert!(
@@ -283,7 +289,8 @@ mod proto_tests {
 
         let schema = Schema::empty();
         let decoder = UnreachableDecoder;
-        let dec_ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let session = crate::proto_test_util::TestSession::default();
+        let dec_ctx = session.ctx(&schema, &decoder);
 
         let decoded = LambdaVariable::try_from_proto(&node, &dec_ctx).unwrap();
         let decoded = decoded

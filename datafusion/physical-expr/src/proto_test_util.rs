@@ -18,6 +18,10 @@
 //! Shared test helpers for proto serialization / deserialization in expression unit tests
 //! without depending on `datafusion-proto` (which would create circular deps).
 
+use crate::proto::ExprDecodeSession;
+use datafusion_common::config::ConfigOptions;
+use datafusion_expr::registry::MemoryFunctionRegistry;
+use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
 use std::cell::Cell;
 use std::sync::Arc;
 
@@ -41,6 +45,29 @@ pub(crate) fn column_node(name: &str) -> PhysicalExprNode {
                 index: 0,
             },
         )),
+    }
+}
+
+/// The session a unit-test decode context runs under: built-in decoders never
+/// read it, and the trait signature requires one. Each test owns its own.
+#[derive(Default)]
+pub(crate) struct TestSession {
+    functions: MemoryFunctionRegistry,
+    config: ConfigOptions,
+}
+
+impl TestSession {
+    /// A decode context over `schema` and `decoder`, bound to this session.
+    pub(crate) fn ctx<'a>(
+        &'a self,
+        schema: &'a Schema,
+        decoder: &'a dyn PhysicalExprDecode,
+    ) -> PhysicalExprDecodeCtx<'a, ExprDecodeSession<'a>> {
+        PhysicalExprDecodeCtx::new(
+            schema,
+            decoder,
+            ExprDecodeSession::new(&self.functions, &self.config),
+        )
     }
 }
 

@@ -233,7 +233,9 @@ impl PhysicalExpr for HashExpr {
 }
 
 #[cfg(feature = "proto")]
-impl HashExpr {
+impl datafusion_physical_expr::proto::PhysicalExprFromProto for HashExpr {
+    const NAME: &'static str = "datafusion.HashExpr";
+
     /// Reconstruct a [`HashExpr`] from its protobuf representation.
     ///
     /// Takes the whole [`PhysicalExprNode`], the exact inverse of what
@@ -244,9 +246,9 @@ impl HashExpr {
     /// [`PhysicalExprNode`]: datafusion_proto_models::protobuf::PhysicalExprNode
     /// [`PhysicalExpr::try_to_proto`]: datafusion_physical_expr_common::physical_expr::PhysicalExpr::try_to_proto
     /// [`PhysicalExprDecodeCtx::decode`]: datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx::decode
-    pub fn try_from_proto(
+    fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalExprNode,
-        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_, datafusion_physical_expr::proto::ExprDecodeSession<'_>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         use datafusion_proto_models::protobuf;
         let Some(protobuf::physical_expr_node::ExprType::HashExpr(hash_expr)) =
@@ -585,6 +587,7 @@ mod tests {
         use super::*;
         use arrow::datatypes::{DataType, Field};
         use datafusion_common::internal_datafusion_err;
+        use datafusion_physical_expr::proto::PhysicalExprFromProto;
         use datafusion_physical_expr_common::physical_expr::proto_decode::{
             PhysicalExprDecode, PhysicalExprDecodeCtx,
         };
@@ -607,7 +610,32 @@ mod tests {
             }
         }
 
-        struct TestDecoder;
+        /// Decodes `Column` nodes only, under a session nothing reads; each
+        /// test owns one.
+        #[derive(Default)]
+        struct TestDecoder {
+            functions: datafusion_expr::registry::MemoryFunctionRegistry,
+            config: datafusion_common::config::ConfigOptions,
+        }
+
+        impl TestDecoder {
+            fn ctx<'a>(
+                &'a self,
+                schema: &'a Schema,
+            ) -> PhysicalExprDecodeCtx<
+                'a,
+                datafusion_physical_expr::proto::ExprDecodeSession<'a>,
+            > {
+                PhysicalExprDecodeCtx::new(
+                    schema,
+                    self,
+                    datafusion_physical_expr::proto::ExprDecodeSession::new(
+                        &self.functions,
+                        &self.config,
+                    ),
+                )
+            }
+        }
 
         impl PhysicalExprDecode for TestDecoder {
             fn decode(
@@ -615,7 +643,7 @@ mod tests {
                 node: &protobuf::PhysicalExprNode,
                 schema: &Schema,
             ) -> Result<Arc<dyn PhysicalExpr>> {
-                let ctx = PhysicalExprDecodeCtx::new(schema, self);
+                let ctx = self.ctx(schema);
                 match &node.expr_type {
                     Some(protobuf::physical_expr_node::ExprType::Column(_)) => {
                         Column::try_from_proto(node, &ctx)
@@ -623,13 +651,6 @@ mod tests {
                     _ => internal_err!("test decoder cannot decode {node:?}"),
                 }
             }
-        }
-
-        fn test_decode_ctx<'a>(
-            schema: &'a Schema,
-            decoder: &'a TestDecoder,
-        ) -> PhysicalExprDecodeCtx<'a> {
-            PhysicalExprDecodeCtx::new(schema, decoder)
         }
 
         #[test]
@@ -666,8 +687,8 @@ mod tests {
                 Field::new("a", DataType::Int32, false),
                 Field::new("b", DataType::Utf8, true),
             ]);
-            let decoder = TestDecoder;
-            let ctx = test_decode_ctx(&schema, &decoder);
+            let decoder = TestDecoder::default();
+            let ctx = decoder.ctx(&schema);
             let proto = protobuf::PhysicalExprNode {
                 expr_id: None,
                 expr_type: Some(protobuf::physical_expr_node::ExprType::HashExpr(
@@ -725,8 +746,8 @@ mod tests {
         #[test]
         fn hash_expr_try_from_proto_rejects_wrong_node_type() {
             let schema = Schema::empty();
-            let decoder = TestDecoder;
-            let ctx = test_decode_ctx(&schema, &decoder);
+            let decoder = TestDecoder::default();
+            let ctx = decoder.ctx(&schema);
             let proto = protobuf::PhysicalExprNode {
                 expr_id: None,
                 expr_type: Some(protobuf::physical_expr_node::ExprType::Column(

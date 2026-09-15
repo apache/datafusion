@@ -67,6 +67,41 @@ impl Debug for InListExpr {
     }
 }
 
+#[cfg(feature = "proto")]
+impl crate::proto::PhysicalExprFromProto for InListExpr {
+    const NAME: &'static str = "datafusion.InListExpr";
+
+    fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_, crate::proto::ExprDecodeSession<'_>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_physical_expr_common::expect_expr_variant;
+        use datafusion_proto_models::protobuf;
+
+        let node = expect_expr_variant!(
+            node,
+            protobuf::physical_expr_node::ExprType::InList,
+            "InList",
+        );
+        let protobuf::PhysicalInListNode {
+            expr,
+            list,
+            negated,
+        } = &**node;
+
+        let expr =
+            ctx.decode_required_expression(expr.as_deref(), "InListExpr", "expr")?;
+        let list = ctx.decode_children_expressions(list)?;
+
+        Ok(Arc::new(InListExpr::try_new(
+            expr,
+            list,
+            *negated,
+            ctx.schema(),
+        )?))
+    }
+}
+
 /// Returns true if Arrow's vectorized `eq` kernel supports this data type.
 ///
 /// Supported: primitives, boolean, strings (Utf8/LargeUtf8/Utf8View),
@@ -250,37 +285,6 @@ impl InListExpr {
         };
 
         Ok(Self::new(expr, list, negated, static_filter))
-    }
-
-    #[cfg(feature = "proto")]
-    pub fn try_from_proto(
-        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
-        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
-    ) -> Result<Arc<dyn PhysicalExpr>> {
-        use datafusion_physical_expr_common::expect_expr_variant;
-        use datafusion_proto_models::protobuf;
-
-        let node = expect_expr_variant!(
-            node,
-            protobuf::physical_expr_node::ExprType::InList,
-            "InList",
-        );
-        let protobuf::PhysicalInListNode {
-            expr,
-            list,
-            negated,
-        } = &**node;
-
-        let expr =
-            ctx.decode_required_expression(expr.as_deref(), "InListExpr", "expr")?;
-        let list = ctx.decode_children_expressions(list)?;
-
-        Ok(Arc::new(InListExpr::try_new(
-            expr,
-            list,
-            *negated,
-            ctx.schema(),
-        )?))
     }
 }
 impl std::fmt::Display for InListExpr {
@@ -3962,12 +3966,12 @@ mod tests {
 mod proto_tests {
     use super::*;
     use crate::expressions::{Column, col, lit};
+    use crate::proto::PhysicalExprFromProto;
     use crate::proto_test_util::{
         StubDecoder, StubEncoder, UnreachableDecoder, column_node,
     };
     use arrow::datatypes::Field;
     use datafusion_common::DataFusionError;
-    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
     use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
     use datafusion_proto_models::protobuf::{
         PhysicalExprNode, PhysicalInListNode, physical_expr_node,
@@ -4057,7 +4061,8 @@ mod proto_tests {
         );
         let schema = Schema::new(vec![Field::new("decoded", DataType::Int32, true)]);
         let decoder = StubDecoder::ok();
-        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let session = crate::proto_test_util::TestSession::default();
+        let ctx = session.ctx(&schema, &decoder);
 
         let decoded = InListExpr::try_from_proto(&node, &ctx).unwrap();
         let in_list = decoded
@@ -4074,7 +4079,8 @@ mod proto_tests {
         let node = column_node("a");
         let schema = Schema::empty();
         let decoder = UnreachableDecoder;
-        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let session = crate::proto_test_util::TestSession::default();
+        let ctx = session.ctx(&schema, &decoder);
 
         let err = InListExpr::try_from_proto(&node, &ctx).unwrap_err();
         assert!(matches!(
@@ -4088,7 +4094,8 @@ mod proto_tests {
         let node = in_list_node(None, vec![column_node("b")], false);
         let schema = Schema::empty();
         let decoder = UnreachableDecoder;
-        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let session = crate::proto_test_util::TestSession::default();
+        let ctx = session.ctx(&schema, &decoder);
 
         let err = InListExpr::try_from_proto(&node, &ctx).unwrap_err();
         assert!(matches!(
@@ -4106,7 +4113,8 @@ mod proto_tests {
         );
         let schema = Schema::empty();
         let decoder = StubDecoder::failing_on(1);
-        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let session = crate::proto_test_util::TestSession::default();
+        let ctx = session.ctx(&schema, &decoder);
         let err = InListExpr::try_from_proto(&node, &ctx).unwrap_err();
         assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 1")));
     }
@@ -4121,7 +4129,8 @@ mod proto_tests {
         let schema = Schema::empty();
         // Call 1 is `expr`, Call 2 is the first element of `list`
         let decoder = StubDecoder::failing_on(2);
-        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let session = crate::proto_test_util::TestSession::default();
+        let ctx = session.ctx(&schema, &decoder);
         let err = InListExpr::try_from_proto(&node, &ctx).unwrap_err();
         assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 2")));
     }

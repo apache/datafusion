@@ -639,15 +639,17 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
 }
 
 #[cfg(feature = "proto")]
-impl DynamicFilterPhysicalExpr {
+impl crate::proto::PhysicalExprFromProto for DynamicFilterPhysicalExpr {
+    const NAME: &'static str = "datafusion.DynamicFilterPhysicalExpr";
+
     /// Reconstruct a [`DynamicFilterPhysicalExpr`] from a proto node.
     ///
     /// Called by the `ExprType::DynamicFilter` arm in `datafusion-proto`'s
     /// `parse_physical_expr_with_converter`. Follows the same
     /// `PhysicalExprDecodeCtx`-based pattern used by `Column`, `BinaryExpr`, etc.
-    pub fn try_from_proto(
+    fn try_from_proto(
         proto: &datafusion_proto_models::protobuf::PhysicalExprNode,
-        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_, crate::proto::ExprDecodeSession<'_>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         use datafusion_proto_models::protobuf::physical_expr_node::ExprType;
 

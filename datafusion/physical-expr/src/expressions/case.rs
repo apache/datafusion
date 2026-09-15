@@ -1465,11 +1465,13 @@ impl PhysicalExpr for CaseExpr {
 }
 
 #[cfg(feature = "proto")]
-impl CaseExpr {
+impl crate::proto::PhysicalExprFromProto for CaseExpr {
+    const NAME: &'static str = "datafusion.CaseExpr";
+
     /// Reconstruct a [`CaseExpr`] from its protobuf representation.
-    pub fn try_from_proto(
+    fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalExprNode,
-        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_, crate::proto::ExprDecodeSession<'_>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         use datafusion_physical_expr_common::expect_expr_variant;
         use datafusion_proto_models::protobuf;
@@ -3560,11 +3562,11 @@ mod tests {
 mod proto_tests {
     use super::*;
     use crate::expressions::col;
+    use crate::proto::PhysicalExprFromProto;
     use crate::proto_test_util::{
         StubDecoder, StubEncoder, UnreachableDecoder, column_node,
     };
     use arrow::datatypes::Field;
-    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
     use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
     use datafusion_proto_models::protobuf;
     use datafusion_proto_models::protobuf::{PhysicalExprNode, PhysicalWhenThen};
@@ -3672,7 +3674,8 @@ mod proto_tests {
         );
         let schema = Schema::empty();
         let decoder = StubDecoder::ok();
-        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let session = crate::proto_test_util::TestSession::default();
+        let ctx = session.ctx(&schema, &decoder);
 
         let decoded = CaseExpr::try_from_proto(&node, &ctx).unwrap();
         let case = decoded
@@ -3689,7 +3692,8 @@ mod proto_tests {
         let node = column_node("a");
         let schema = Schema::empty();
         let decoder = UnreachableDecoder;
-        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let session = crate::proto_test_util::TestSession::default();
+        let ctx = session.ctx(&schema, &decoder);
 
         let err = CaseExpr::try_from_proto(&node, &ctx).unwrap_err();
         assert!(
@@ -3706,7 +3710,8 @@ mod proto_tests {
         );
         let schema = Schema::empty();
         let decoder = UnreachableDecoder;
-        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let session = crate::proto_test_util::TestSession::default();
+        let ctx = session.ctx(&schema, &decoder);
 
         let err = CaseExpr::try_from_proto(&node, &ctx).unwrap_err();
         assert!(
@@ -3723,7 +3728,8 @@ mod proto_tests {
         );
         let schema = Schema::empty();
         let decoder = StubDecoder::ok();
-        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let session = crate::proto_test_util::TestSession::default();
+        let ctx = session.ctx(&schema, &decoder);
 
         let err = CaseExpr::try_from_proto(&node, &ctx).unwrap_err();
         assert!(
@@ -3743,7 +3749,8 @@ mod proto_tests {
         );
         let schema = Schema::empty();
         let decoder = StubDecoder::failing_on(2);
-        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let session = crate::proto_test_util::TestSession::default();
+        let ctx = session.ctx(&schema, &decoder);
 
         let err = CaseExpr::try_from_proto(&node, &ctx).unwrap_err();
         assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 2")));

@@ -69,6 +69,7 @@ use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::memory::LazyMemoryExec;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::proto::ExprDecodeSession;
 use datafusion_physical_plan::proto::{
     ExecutionPlanDecode, ExecutionPlanDecodeCtx, ExecutionPlanEncode,
     ExecutionPlanEncodeCtx,
@@ -1700,6 +1701,13 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync + Any {
 
     /// Decode a custom extension expression from `buf`.
     ///
+    /// Expressions can instead name themselves on the wire and be decoded by a
+    /// per-type decoder registered on the session — see
+    /// [`PhysicalExprFromProto`] and [`PhysicalExprRegistry`]. That path
+    /// resolves by name rather than by codec registration order, so two crates
+    /// claiming the same name collide at registration. This method stays the
+    /// fallback for everything unnamed or unregistered.
+    ///
     /// `inputs` holds the already-decoded children carried in the
     /// `PhysicalExtensionExprNode.inputs` field. If the codec instead embeds
     /// nested `PhysicalExprNode`s *inside* `buf`, decode them through
@@ -1712,11 +1720,13 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync + Any {
     /// cache-hits on its `expr_id` and re-shares one `Arc<dyn PhysicalExpr>`.
     ///
     /// [`parse_physical_expr`]: crate::physical_plan::from_proto::parse_physical_expr
+    /// [`PhysicalExprFromProto`]: datafusion_physical_plan::proto::PhysicalExprFromProto
+    /// [`PhysicalExprRegistry`]: datafusion_physical_plan::proto::PhysicalExprRegistry
     fn try_decode_expr(
         &self,
         _buf: &[u8],
         _inputs: &[Arc<dyn PhysicalExpr>],
-        _ctx: &PhysicalExprDecodeCtx<'_>,
+        _ctx: &PhysicalExprDecodeCtx<'_, ExprDecodeSession<'_>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         not_impl_err!("PhysicalExtensionCodec is not provided")
     }

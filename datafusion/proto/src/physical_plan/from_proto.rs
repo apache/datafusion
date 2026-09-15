@@ -23,7 +23,9 @@ use arrow::array::RecordBatch;
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Field, Schema};
 use arrow::ipc::reader::StreamReader;
-use datafusion_common::{Result, internal_datafusion_err, not_impl_err};
+use datafusion_common::{
+    DataFusionError, Result, config_datafusion_err, internal_datafusion_err, not_impl_err,
+};
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
@@ -41,6 +43,9 @@ use datafusion_physical_plan::expressions::{
 };
 use datafusion_physical_plan::joins::HashExpr;
 use datafusion_physical_plan::proto::ExecutionPlanDecodeCtx;
+use datafusion_physical_plan::proto::{
+    ExprDecodeSession, PhysicalExprFromProto, PhysicalExprRegistry,
+};
 use datafusion_physical_plan::repartition::RangeExpr;
 use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
 use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
@@ -258,10 +263,7 @@ pub fn parse_physical_expr_with_converter(
         proto_converter,
     };
     let decode_ctx =
-        datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx::new(
-            input_schema,
-            &decoder,
-        );
+        datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx::new(input_schema, &decoder, ExprDecodeSession::new(ctx.task_ctx(), ctx.task_ctx().session_config().options()));
 
     let pexpr: Arc<dyn PhysicalExpr> = match expr_type {
         // Migrated expressions take the whole `PhysicalExprNode` and unwrap
@@ -366,16 +368,43 @@ pub fn parse_physical_expr_with_converter(
             SqlSimilarToPattern::try_from_proto(proto, &decode_ctx)?
         }
         ExprType::Extension(extension) => {
+            // Lookup-order policy, the same one extension plans use: an
+            // expression that named itself on the wire and is registered on
+            // this session decodes itself, no codec involved. Anything else —
+            // no name, or a name this session has no decoder for — takes the
+            // codec path, which is also every node written before `expr_name`
+            // existed. `None` from the registry means no decoder claims the
+            // name; a decode *failure* is returned as-is rather than falling
+            // through to the codec.
+            let registry = ctx
+                .task_ctx()
+                .session_config()
+                .get_extension::<PhysicalExprRegistry>();
+            if let Some(expr_name) = extension.expr_name.as_deref()
+                && let Some(registry) = registry.as_ref()
+                && let Some(decoded) = registry.decode(expr_name, proto, &decode_ctx)
+            {
+                return decoded;
+            }
+
             let inputs: Vec<Arc<dyn PhysicalExpr>> = extension
                 .inputs
                 .iter()
                 .map(|e| proto_converter.proto_to_physical_expr(e, input_schema, ctx))
                 .collect::<Result<_>>()?;
-            ctx.codec().try_decode_expr(
-                extension.expr.as_slice(),
-                &inputs,
-                &decode_ctx,
-            )? as _
+            ctx.codec()
+                .try_decode_expr(extension.expr.as_slice(), &inputs, &decode_ctx)
+                .map_err(|e| match extension.expr_name.as_deref() {
+                    // The writer named the expression but this session has no
+                    // decoder for it: say so, rather than leaving only the
+                    // codec's error to explain a missing registration.
+                    Some(expr_name) => unregistered_extension_expr_err(
+                        expr_name,
+                        registry.as_deref(),
+                        &e,
+                    ),
+                    None => e,
+                })?
         }
         ExprType::Lambda(_) => LambdaExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::LambdaVariable(_) => {
@@ -415,10 +444,7 @@ pub fn parse_protobuf_partitioning(
         proto_converter,
     };
     let decode_ctx =
-        datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx::new(
-            input_schema,
-            &decoder,
-        );
+        datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx::new(input_schema, &decoder, ExprDecodeSession::new(ctx.task_ctx(), ctx.task_ctx().session_config().options()));
     partitioning
         .map(|partitioning| Partitioning::try_from_proto(partitioning, &decode_ctx))
         .transpose()
@@ -486,6 +512,37 @@ pub fn parse_record_batches(buf: &[u8]) -> Result<Vec<RecordBatch>> {
 struct ConverterDecoder<'a, 'b> {
     ctx: &'a PhysicalPlanDecodeContext<'b>,
     proto_converter: &'a dyn PhysicalProtoConverterExtension,
+}
+
+/// Error for a `PhysicalExtensionExprNode` that names its expression type but
+/// finds no decoder registered for that name and no codec able to decode it
+/// either.
+///
+/// Lists what *is* registered, because the usual cause is a session configured
+/// on the writing side but not on the reading one.
+fn unregistered_extension_expr_err(
+    expr_name: &str,
+    registry: Option<&PhysicalExprRegistry>,
+    codec_error: &DataFusionError,
+) -> DataFusionError {
+    let mut registered: Vec<&str> = registry
+        .map(|registry| registry.names().collect())
+        .unwrap_or_default();
+    registered.sort_unstable();
+    let registered = if registered.is_empty() {
+        "none".to_string()
+    } else {
+        registered.join(", ")
+    };
+    // Not an `Internal` error: the cause is a session that was not configured,
+    // not a bug in DataFusion, and `Internal` would tell the user to file one.
+    config_datafusion_err!(
+        "No decoder is registered for the extension PhysicalExpr '{expr_name}', and the \
+         PhysicalExtensionCodec failed with [{codec_error}]. Register the expression in \
+         the PhysicalExprRegistry attached to the decoding session's SessionConfig, or \
+         supply a PhysicalExtensionCodec that handles it. Registered extension \
+         expressions: {registered}"
+    )
 }
 
 impl datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecode

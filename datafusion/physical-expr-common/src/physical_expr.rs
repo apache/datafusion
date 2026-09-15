@@ -520,6 +520,14 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// constructors; both sides of the round-trip are fallible and named
     /// consistently.
     ///
+    /// Decoding is deliberately *not* a method here: it is a constructor, so
+    /// it has no `self` to dispatch on, and the wire name it needs cannot be an
+    /// associated constant without making `PhysicalExpr` not dyn-compatible.
+    /// Built-in expressions write an inherent `try_from_proto`; third-party
+    /// expressions implement `PhysicalExprFromProto` (in
+    /// `datafusion-physical-expr`), which pairs the constructor with the name it
+    /// is registered and encoded under.
+    ///
     /// [`PhysicalExprNode`]: datafusion_proto_models::protobuf::PhysicalExprNode
     #[cfg(feature = "proto")]
     fn try_to_proto(
@@ -599,6 +607,12 @@ pub mod proto_encode {
     /// wrap the existing `PhysicalExtensionCodec` +
     /// `PhysicalProtoConverterExtension` plumbing. Expression authors should
     /// use [`PhysicalExprEncodeCtx`] instead of calling this directly.
+    ///
+    /// **Not public API.** `pub` only because the implementors live in another
+    /// crate; `#[doc(hidden)]` records that, so encoding primitives can be
+    /// added here as the serialization hooks grow without breaking downstream
+    /// code.
+    #[doc(hidden)]
     pub trait PhysicalExprEncode {
         /// Encode an expression to a protobuf node.
         fn encode(&self, expr: &Arc<dyn PhysicalExpr>) -> Result<PhysicalExprNode>;
@@ -685,17 +699,36 @@ pub mod proto_decode {
     /// Wraps an internal [`PhysicalExprDecode`] trait object plus a borrowed
     /// schema. The trait stays an implementation detail of `datafusion-proto`;
     /// expression authors only see this struct.
-    pub struct PhysicalExprDecodeCtx<'a> {
+    pub struct PhysicalExprDecodeCtx<'a, S> {
         schema: &'a Schema,
         decoder: &'a dyn PhysicalExprDecode,
+        session: S,
     }
 
-    impl<'a> PhysicalExprDecodeCtx<'a> {
+    impl<'a, S> PhysicalExprDecodeCtx<'a, S> {
         /// Construct a new decode context. Typically called by
         /// `datafusion-proto`; expression authors receive
         /// `&PhysicalExprDecodeCtx`.
-        pub fn new(schema: &'a Schema, decoder: &'a dyn PhysicalExprDecode) -> Self {
-            Self { schema, decoder }
+        ///
+        /// `S` is the session the decode runs under, held by value. What a
+        /// decoder needs from a session — function lookup and configuration —
+        /// is defined in crates this one cannot name, so the type is left open
+        /// here and fixed by the layer that can name them
+        /// (`datafusion-physical-expr`'s `PhysicalExprFromProto`), the way an
+        /// iterator's `Item` is fixed by its consumer. Decoders that need no
+        /// session, such as
+        /// [`PhysicalSortExpr::try_from_proto`](crate::sort_expr::PhysicalSortExpr::try_from_proto),
+        /// stay generic over `S`.
+        pub fn new(
+            schema: &'a Schema,
+            decoder: &'a dyn PhysicalExprDecode,
+            session: S,
+        ) -> Self {
+            Self {
+                schema,
+                decoder,
+                session,
+            }
         }
 
         /// The schema bound to this decode context. Use it for column lookups,
@@ -704,12 +737,19 @@ pub mod proto_decode {
             self.schema
         }
 
+        /// The session this decode runs under, the expression-side counterpart
+        /// of `ExecutionPlanDecodeCtx::task_ctx`.
+        pub fn session(&self) -> &S {
+            &self.session
+        }
+
         /// Decode an expression node, recursing into child sub-expressions.
         ///
         /// Routes built-in `ExprType` variants through `datafusion-proto`'s
-        /// central match and forwards extension nodes to the registered codec
-        /// (today via [`PhysicalExtensionCodec::try_decode_expr`]; later via
-        /// a per-type registry — see #21835).
+        /// central match. An extension node that names itself on the wire and
+        /// is registered in the session's `PhysicalExprRegistry` goes to that
+        /// decoder; anything else falls back to
+        /// [`PhysicalExtensionCodec::try_decode_expr`].
         ///
         /// [`PhysicalExtensionCodec::try_decode_expr`]: https://docs.rs/datafusion-proto/latest/datafusion_proto/physical_plan/trait.PhysicalExtensionCodec.html#method.try_decode_expr
         pub fn decode(&self, node: &PhysicalExprNode) -> Result<Arc<dyn PhysicalExpr>> {
@@ -784,6 +824,13 @@ pub mod proto_decode {
     /// Internal dispatch trait. Implementors live in `datafusion-proto`.
     /// Expression authors should use [`PhysicalExprDecodeCtx`] instead of
     /// calling this directly.
+    ///
+    /// **Not public API.** `pub` only because the implementors live in another
+    /// crate; `#[doc(hidden)]` records that, so decoding primitives can be
+    /// added here as the serialization hooks grow without breaking downstream
+    /// code. New methods carry a default so downstream implementors keep
+    /// compiling.
+    #[doc(hidden)]
     pub trait PhysicalExprDecode {
         /// Decode a proto node into a concrete `PhysicalExpr`. The schema is
         /// passed alongside so implementations can support recursive children
