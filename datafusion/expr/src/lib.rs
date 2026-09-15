@@ -102,7 +102,7 @@ pub use datafusion_doc::{
     scalar_doc_sections, window_doc_sections,
 };
 pub use datafusion_expr_common::accumulator::{
-    Accumulator, AggregateMetric, AggregateMetrics,
+    Accumulator, AggregateMetric, AggregateMetricRecorder, AggregateMetrics,
 };
 pub use datafusion_expr_common::columnar_value::ColumnarValue;
 pub use datafusion_expr_common::groups_accumulator::{
