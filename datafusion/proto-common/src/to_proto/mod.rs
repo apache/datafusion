@@ -920,6 +920,8 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             statistics_enabled_opt: value.statistics_enabled.map(|v| protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled(v.to_string())),
             max_row_group_size: value.max_row_group_size as u64,
             max_in_list_size: value.max_in_list_size as u64,
+            eager_pruning: value.eager_pruning.to_string(),
+            eager_pruning_file_limit_opt: Some(protobuf::parquet_options::EagerPruningFileLimitOpt::EagerPruningFileLimit(value.eager_pruning_file_limit as u64)),
             created_by: value.created_by.clone(),
             column_index_truncate_length_opt: value.column_index_truncate_length.map(|v| protobuf::parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(v as u64)),
             statistics_truncate_length_opt: value.statistics_truncate_length.map(|v| protobuf::parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(v as u64)),

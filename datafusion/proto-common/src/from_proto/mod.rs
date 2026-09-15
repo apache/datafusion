@@ -1110,6 +1110,16 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                 .transpose()?,
             max_row_group_size: to_usize(value.max_row_group_size, "max_row_group_size")?,
             max_in_list_size: to_usize(value.max_in_list_size, "max_in_list_size")?,
+            eager_pruning: value.eager_pruning.parse()?,
+            eager_pruning_file_limit: value
+                .eager_pruning_file_limit_opt
+                .map(|opt| match opt {
+                    protobuf::parquet_options::EagerPruningFileLimitOpt::EagerPruningFileLimit(v) => {
+                        to_usize(v, "eager_pruning_file_limit")
+                    }
+                })
+                .transpose()?
+                .unwrap_or_else(|| ParquetOptions::default().eager_pruning_file_limit),
             created_by: value.created_by.clone(),
             column_index_truncate_length: value
                 .column_index_truncate_length_opt.as_ref()
@@ -1387,7 +1397,8 @@ pub(crate) fn csv_writer_options_from_proto(
 #[cfg(test)]
 mod tests {
     use datafusion_common::config::{
-        MaxRowGroupBytes, ParquetCdcOptions, ParquetOptions, TableParquetOptions,
+        EagerParquetPruning, MaxRowGroupBytes, ParquetCdcOptions, ParquetOptions,
+        TableParquetOptions,
     };
     use datafusion_common::parquet_config::DFParquetStatistics;
 
@@ -1544,6 +1555,36 @@ mod tests {
         assert_eq!(
             recovered.max_row_group_bytes.map(|v| v.get()),
             Some(64 * 1024 * 1024)
+        );
+    }
+
+    #[test]
+    fn test_parquet_options_eager_pruning_round_trip() {
+        let opts = ParquetOptions {
+            eager_pruning: EagerParquetPruning::PageIndex,
+            eager_pruning_file_limit: 7,
+            ..ParquetOptions::default()
+        };
+        let recovered = parquet_options_proto_round_trip(opts);
+        assert_eq!(recovered.eager_pruning, EagerParquetPruning::PageIndex);
+        assert_eq!(recovered.eager_pruning_file_limit, 7);
+    }
+
+    #[test]
+    fn test_parquet_options_eager_pruning_defaults_when_unset() {
+        // Messages without the eager pruning fields (e.g. written before they
+        // existed) decode to the config defaults, not to 0 / empty values
+        let mut proto: crate::protobuf_common::ParquetOptions =
+            (&ParquetOptions::default()).try_into().expect("to_proto");
+        proto.eager_pruning = String::new();
+        proto.eager_pruning_file_limit_opt = None;
+
+        let recovered = ParquetOptions::try_from(&proto).expect("from_proto");
+        let defaults = ParquetOptions::default();
+        assert_eq!(recovered.eager_pruning, defaults.eager_pruning);
+        assert_eq!(
+            recovered.eager_pruning_file_limit,
+            defaults.eager_pruning_file_limit
         );
     }
 

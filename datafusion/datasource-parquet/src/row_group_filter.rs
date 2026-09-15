@@ -90,10 +90,6 @@ impl RowGroupAccessPlanFilter {
     }
 
     /// Returns a reference to the inner access plan.
-    ///
-    /// Test-only accessor used by the shared assertion helpers in
-    /// [`crate::test_util`].
-    #[cfg(test)]
     pub(crate) fn access_plan(&self) -> &ParquetAccessPlan {
         &self.access_plan
     }

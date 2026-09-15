@@ -498,8 +498,21 @@ impl<'a> DFParquetMetadata<'a> {
         metadata: &ParquetMetaData,
         logical_file_schema: &SchemaRef,
     ) -> Result<Statistics> {
-        let row_groups_metadata = metadata.row_groups();
+        Self::statistics_from_row_groups(
+            metadata,
+            metadata.row_groups(),
+            logical_file_schema,
+        )
+    }
 
+    /// Like [`Self::statistics_from_parquet_metadata`], but only summarizes
+    /// `row_groups_metadata`, a subset of the row groups of the file described
+    /// by `metadata`.
+    pub(crate) fn statistics_from_row_groups(
+        metadata: &ParquetMetaData,
+        row_groups_metadata: &[RowGroupMetaData],
+        logical_file_schema: &SchemaRef,
+    ) -> Result<Statistics> {
         // Use Statistics::default() as opposed to Statistics::new_unknown()
         // because we are going to replace the column statistics below
         // and we don't want to initialize them twice.

@@ -866,6 +866,9 @@ pub struct ParquetOptions {
     pub max_row_group_size: u64,
     #[prost(uint64, tag = "38")]
     pub max_in_list_size: u64,
+    /// default = "disabled"
+    #[prost(string, tag = "39")]
+    pub eager_pruning: ::prost::alloc::string::String,
     #[prost(string, tag = "16")]
     pub created_by: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "35")]
@@ -898,6 +901,12 @@ pub struct ParquetOptions {
     pub bloom_filter_fpp_opt: ::core::option::Option<parquet_options::BloomFilterFppOpt>,
     #[prost(oneof = "parquet_options::BloomFilterNdvOpt", tags = "22")]
     pub bloom_filter_ndv_opt: ::core::option::Option<parquet_options::BloomFilterNdvOpt>,
+    /// Optional so that messages without it decode to the default (256) rather
+    /// than 0, which would skip eager pruning for every scan
+    #[prost(oneof = "parquet_options::EagerPruningFileLimitOpt", tags = "40")]
+    pub eager_pruning_file_limit_opt: ::core::option::Option<
+        parquet_options::EagerPruningFileLimitOpt,
+    >,
     #[prost(oneof = "parquet_options::CoerceInt96Opt", tags = "32")]
     pub coerce_int96_opt: ::core::option::Option<parquet_options::CoerceInt96Opt>,
     #[prost(oneof = "parquet_options::MaxPredicateCacheSizeOpt", tags = "33")]
@@ -961,6 +970,13 @@ pub mod parquet_options {
     pub enum BloomFilterNdvOpt {
         #[prost(uint64, tag = "22")]
         BloomFilterNdv(u64),
+    }
+    /// Optional so that messages without it decode to the default (256) rather
+    /// than 0, which would skip eager pruning for every scan
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum EagerPruningFileLimitOpt {
+        #[prost(uint64, tag = "40")]
+        EagerPruningFileLimit(u64),
     }
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum CoerceInt96Opt {
