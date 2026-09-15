@@ -932,19 +932,27 @@ impl PhysicalExpr for BinaryExpr {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_proto_models::protobuf;
 
-        // Linearize a nested binary expression tree of the same operator
-        // into a flat vector of operands to avoid deep recursion in proto.
-        let op = self.op;
-        let mut operand_refs: Vec<&Arc<dyn PhysicalExpr>> = vec![&self.right];
-        let mut current_expr: &BinaryExpr = self;
+        let Self {
+            left,
+            op,
+            right,
+            fail_on_overflow,
+        } = self;
+
+        // Linearize a nested binary expression tree with the same operator and
+        // overflow policy into flat operands to avoid deep recursion in proto.
+        let mut operand_refs: Vec<&Arc<dyn PhysicalExpr>> = vec![right];
+        let mut current_left = left;
         loop {
-            match current_expr.left.downcast_ref::<BinaryExpr>() {
-                Some(bin) if bin.op == op => {
+            match current_left.downcast_ref::<BinaryExpr>() {
+                Some(bin)
+                    if bin.op == *op && bin.fail_on_overflow == *fail_on_overflow =>
+                {
                     operand_refs.push(&bin.right);
-                    current_expr = bin;
+                    current_left = &bin.left;
                 }
                 _ => {
-                    operand_refs.push(&current_expr.left);
+                    operand_refs.push(current_left);
                     break;
                 }
             }
@@ -962,6 +970,7 @@ impl PhysicalExpr for BinaryExpr {
                     r: None,
                     op: format!("{op:?}"),
                     operands,
+                    fail_on_overflow: *fail_on_overflow,
                 }),
             )),
         }))
@@ -993,17 +1002,23 @@ impl BinaryExpr {
             protobuf::physical_expr_node::ExprType::BinaryExpr,
             "BinaryExpr",
         );
-        let op = Operator::from_proto_name(&node.op).ok_or_else(|| {
+        let protobuf::PhysicalBinaryExprNode {
+            l,
+            r,
+            op,
+            operands,
+            fail_on_overflow,
+        } = node.as_ref();
+        let op = Operator::from_proto_name(op).ok_or_else(|| {
             datafusion_common::DataFusionError::Internal(format!(
-                "Unsupported binary operator '{}'",
-                node.op
+                "Unsupported binary operator '{op}'"
             ))
         })?;
 
-        if !node.operands.is_empty() {
+        if !operands.is_empty() {
             // New linearized format: reduce the flat operands list back into
             // a nested binary expression tree.
-            let operands = ctx.decode_children_expressions(&node.operands)?;
+            let operands = ctx.decode_children_expressions(operands)?;
 
             if operands.len() < 2 {
                 return internal_err!(
@@ -1014,16 +1029,21 @@ impl BinaryExpr {
             Ok(operands
                 .into_iter()
                 .reduce(|left, right| {
-                    Arc::new(BinaryExpr::new(left, op, right)) as Arc<dyn PhysicalExpr>
+                    Arc::new(
+                        BinaryExpr::new(left, op, right)
+                            .with_fail_on_overflow(*fail_on_overflow),
+                    ) as Arc<dyn PhysicalExpr>
                 })
                 .expect("Binary expression could not be reduced to a single expression."))
         } else {
             // Legacy format with l/r fields.
             let left =
-                ctx.decode_required_expression(node.l.as_deref(), "BinaryExpr", "left")?;
+                ctx.decode_required_expression(l.as_deref(), "BinaryExpr", "left")?;
             let right =
-                ctx.decode_required_expression(node.r.as_deref(), "BinaryExpr", "right")?;
-            Ok(Arc::new(BinaryExpr::new(left, op, right)))
+                ctx.decode_required_expression(r.as_deref(), "BinaryExpr", "right")?;
+            Ok(Arc::new(
+                BinaryExpr::new(left, op, right).with_fail_on_overflow(*fail_on_overflow),
+            ))
         }
     }
 }
