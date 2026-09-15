@@ -1827,18 +1827,25 @@ where t1_id > 40 or not exists (select sum(t2_int) from t2 where t1.t1_id = t2.t
 22
 44
 
+statement ok
+CREATE TABLE dedup_outer(k INT) AS VALUES (1), (2);
+
+statement ok
+CREATE TABLE dedup_inner(k TEXT, v INT) AS VALUES ('1', 10), ('1', 20), ('01', 30), ('01', 40);
+
 # correlated_exists_groupless_count_agg_duplicate_match_dedup
-statement ok
-CREATE TABLE dedup_outer(k INT) AS VALUES (1);
-
-statement ok
-CREATE TABLE dedup_inner(k TEXT) AS VALUES ('1'), ('01');
-
 query I
-SELECT o.k
-FROM dedup_outer o
-WHERE EXISTS (
+SELECT o.k FROM dedup_outer o WHERE EXISTS (
   SELECT count(*) FROM dedup_inner i WHERE CAST(i.k AS INT) = o.k
+)
+----
+1
+2
+
+# correlated_not_exists_groupless_count_agg_duplicate_match_dedup
+query I
+SELECT o.k FROM dedup_outer o WHERE NOT EXISTS (
+  SELECT count(*) FROM dedup_inner i WHERE CAST(i.k AS INT) = o.k HAVING count(*) = 0
 )
 ----
 1
