@@ -28,7 +28,9 @@ use std::task::{Context, Poll};
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{Result, internal_err, resources_err};
-use datafusion_execution::memory_pool::{MemoryReservation, MergeMemoryPool};
+use datafusion_execution::memory_pool::{
+    MemoryLimit, MemoryReservation, MergeMemoryPool,
+};
 
 use crate::sorts::builder::try_grow_reservation_to_at_least;
 use crate::sorts::sort::get_reserved_bytes_for_record_batch_size;
@@ -158,7 +160,7 @@ pub(crate) struct MultiLevelMergeBuilder {
     /// Workspace retained across retries and intermediate spill passes.
     merge_pool: Option<Arc<MergeMemoryPool>>,
     /// Limit concurrent merge buffers while leaving unused quota to replay.
-    spill_merge_memory_limit: Option<usize>,
+    spill_merge_memory_limit: MemoryLimit,
     fetch: Option<usize>,
     enable_round_robin_tie_breaker: bool,
 }
@@ -198,7 +200,7 @@ impl MultiLevelMergeBuilder {
             batch_size,
             reservation,
             merge_pool: None,
-            spill_merge_memory_limit: None,
+            spill_merge_memory_limit: MemoryLimit::Infinite,
             enable_round_robin_tie_breaker,
             fetch,
         }
@@ -210,7 +212,7 @@ impl MultiLevelMergeBuilder {
     }
 
     /// Bound fan-in, not temporary workspace used before the merge starts.
-    pub(super) fn with_spill_merge_memory_limit(mut self, limit: Option<usize>) -> Self {
+    pub(super) fn with_spill_merge_memory_limit(mut self, limit: MemoryLimit) -> Self {
         self.spill_merge_memory_limit = limit;
         self
     }
@@ -225,31 +227,33 @@ impl MultiLevelMergeBuilder {
     async fn create_stream(mut self) -> Result<SendableRecordBatchStream> {
         let mut allow_minimum_over_cap = false;
         loop {
-            let (mut stream, batch_size_limit) =
-                match self.merge_sorted_runs_within_mem_limit(allow_minimum_over_cap)? {
-                    MergeStep::Stream {
-                        stream,
-                        batch_size_limit,
-                    } => (stream, batch_size_limit),
-                    MergeStep::SplitThenRetry(index) => {
-                        // Couldn't reserve memory for the minimum of 2 streams. Re-spill
-                        // the larger of the two we're trying to merge with half its batch
-                        // size so its largest batch shrinks, lowering the per-stream
-                        // reservation, then retry. Makes the merge resilient to skewed
-                        // (very wide) rows.
-                        let retry_unsplittable = self.spill_merge_memory_limit.is_some()
+            let (mut stream, batch_size_limit) = match self
+                .merge_sorted_runs_within_mem_limit(allow_minimum_over_cap)?
+            {
+                MergeStep::Stream {
+                    stream,
+                    batch_size_limit,
+                } => (stream, batch_size_limit),
+                MergeStep::SplitThenRetry(index) => {
+                    // Couldn't reserve memory for the minimum of 2 streams. Re-spill
+                    // the larger of the two we're trying to merge with half its batch
+                    // size so its largest batch shrinks, lowering the per-stream
+                    // reservation, then retry. Makes the merge resilient to skewed
+                    // (very wide) rows.
+                    let retry_unsplittable =
+                        !matches!(self.spill_merge_memory_limit, MemoryLimit::Infinite)
                             && !allow_minimum_over_cap;
-                        if !self
-                            .split_spill_file_in_half(index, retry_unsplittable)
-                            .await?
-                        {
-                            // A single row may exceed the replay fan-in cap while
-                            // the minimum merge still fits the actual shared pool.
-                            allow_minimum_over_cap = true;
-                        }
-                        continue;
+                    if !self
+                        .split_spill_file_in_half(index, retry_unsplittable)
+                        .await?
+                    {
+                        // A single row may exceed the replay fan-in cap while
+                        // the minimum merge still fits the actual shared pool.
+                        allow_minimum_over_cap = true;
                     }
-                };
+                    continue;
+                }
+            };
             allow_minimum_over_cap = false;
 
             // TODO - add a threshold for number of files to disk even if empty and reading from disk so
@@ -524,9 +528,16 @@ impl MultiLevelMergeBuilder {
         // those bytes cover the first N spill files without additional pool
         // allocation, preventing starvation under memory pressure.
         let mut total_needed: usize = 0;
+        let mut accepted_memory: usize = 0;
+        let check_headroom =
+            matches!(self.spill_merge_memory_limit, MemoryLimit::Unknown);
 
         for (spill, _) in &self.sorted_spill_files {
-            if number_of_spills_to_read_for_current_phase >= max_spill_files {
+            if number_of_spills_to_read_for_current_phase >= max_spill_files
+                || (allow_minimum_over_cap
+                    && number_of_spills_to_read_for_current_phase
+                        >= minimum_number_of_required_streams)
+            {
                 break;
             }
 
@@ -537,9 +548,10 @@ impl MultiLevelMergeBuilder {
             ) * buffer_len;
             total_needed += per_spill;
 
-            let exceeds_merge_limit = self
-                .spill_merge_memory_limit
-                .is_some_and(|limit| total_needed > limit);
+            let exceeds_merge_limit = matches!(
+                self.spill_merge_memory_limit,
+                MemoryLimit::Finite(limit) if total_needed > limit
+            );
             // Only the minimum merge may exceed the cap after splitting fails
             // to shrink a run. Keep read-ahead disabled and ask the real pool
             // for every byte; later streams must still fit the normal cap.
@@ -547,16 +559,30 @@ impl MultiLevelMergeBuilder {
                 && buffer_len == 1
                 && number_of_spills_to_read_for_current_phase
                     < minimum_number_of_required_streams;
+            let mut lacks_headroom = false;
             let admission = if exceeds_merge_limit && !allow_over_cap {
                 resources_err!(
                     "Spill merge requires {total_needed} bytes, exceeding its fan-in memory limit"
                 )
+            } else if check_headroom && !allow_over_cap {
+                // Legacy wrappers and custom pools may not report an allowance.
+                // Ask the actual pool for merge buffers plus equal replay space,
+                // then return the spare bytes before exposing the merge stream.
+                let admission = match total_needed.checked_mul(2) {
+                    Some(with_headroom) => {
+                        try_grow_reservation_to_at_least(reservation, with_headroom)
+                    }
+                    None => resources_err!("Spill merge headroom exceeds usize::MAX"),
+                };
+                lacks_headroom = admission.is_err();
+                admission
             } else {
                 try_grow_reservation_to_at_least(reservation, total_needed)
             };
             match admission {
                 Ok(_) => {
                     number_of_spills_to_read_for_current_phase += 1;
+                    accepted_memory = total_needed;
                 }
                 // If we can't grow the reservation, we need to stop
                 Err(err) => {
@@ -579,7 +605,7 @@ impl MultiLevelMergeBuilder {
 
                         // buffer_len == 1 and we still can't seat the minimum of 2 streams.
                         if number_of_spills_to_read_for_current_phase == 0 {
-                            if exceeds_merge_limit {
+                            if exceeds_merge_limit || lacks_headroom {
                                 // Replay has not started, so re-splitting may use the
                                 // full pool to shrink a batch above the fan-in cap.
                                 return Ok(SpillFilesToMerge::SplitThenRetry(0));
@@ -607,6 +633,12 @@ impl MultiLevelMergeBuilder {
                     break;
                 }
             }
+        }
+
+        if check_headroom {
+            // `total_needed` may include a rejected candidate. Keep only the
+            // buffers that were admitted, releasing temporary replay headroom.
+            reservation.shrink(reservation.size() - accepted_memory);
         }
 
         let spills = self
@@ -663,7 +695,7 @@ impl MultiLevelMergeBuilder {
         reservation
             .try_grow(get_reserved_bytes_for_record_batch_size(old_max, old_max))?;
 
-        if self.spill_merge_memory_limit.is_some() {
+        if !matches!(self.spill_merge_memory_limit, MemoryLimit::Infinite) {
             // A maximum-sized singleton cannot shrink. Find it without writing
             // another file: the original runs may already fill the disk quota.
             // Use an unbuffered reader so no background read outlives this guard.
@@ -1091,8 +1123,13 @@ mod tests {
 
     /// A run can exceed the fan-in cap while still fitting the pool used to
     /// split it before replay. The resulting merge must honor the smaller cap.
+    #[rstest::rstest]
+    #[case::finite(false)]
+    #[case::unknown(true)]
     #[tokio::test]
-    async fn spill_merge_memory_limit_splits_an_oversized_first_run() -> Result<()> {
+    async fn spill_merge_memory_limit_splits_an_oversized_first_run(
+        #[case] unknown_limit: bool,
+    ) -> Result<()> {
         let env = Arc::new(RuntimeEnv::default());
         let schema = test_schema();
         let spill_manager = build_spill_manager(&env, &schema);
@@ -1103,7 +1140,13 @@ mod tests {
         let merge_limit = first.max_record_batch_memory;
         // Even one original run needs twice this cap. The full pool can hold
         // it during re-splitting, but must not be used to raise merge fan-in.
-        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(8 * merge_limit));
+        let pool_size = if unknown_limit { 2 } else { 8 } * merge_limit;
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(pool_size));
+        let merge_limit_setting = if unknown_limit {
+            MemoryLimit::Unknown
+        } else {
+            MemoryLimit::Finite(merge_limit)
+        };
         let builder = build_merge_builder(
             spill_manager,
             Arc::clone(&schema),
@@ -1111,7 +1154,7 @@ mod tests {
             &pool,
             rows as usize,
         )
-        .with_spill_merge_memory_limit(Some(merge_limit));
+        .with_spill_merge_memory_limit(merge_limit_setting);
         let mut stream = builder.create_spillable_merge_stream();
         let mut batches = vec![];
         while let Some(batch) = stream.next().await {
@@ -1129,8 +1172,13 @@ mod tests {
         Ok(())
     }
 
+    #[rstest::rstest]
+    #[case::finite(false)]
+    #[case::unknown(true)]
     #[tokio::test]
-    async fn spill_merge_memory_limit_allows_only_an_indivisible_minimum() -> Result<()> {
+    async fn spill_merge_memory_limit_allows_only_an_indivisible_minimum(
+        #[case] unknown_limit: bool,
+    ) -> Result<()> {
         let env = Arc::new(RuntimeEnv::default());
         let schema = test_schema();
         let spill_manager = build_spill_manager(&env, &schema);
@@ -1138,10 +1186,16 @@ mod tests {
             .map(|value| make_sorted_spill_file(&spill_manager, &schema, vec![value]))
             .collect::<Vec<_>>();
         let batch_memory = spills[0].max_record_batch_memory;
-        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(8 * batch_memory));
+        let pool_size = if unknown_limit { 6 } else { 8 } * batch_memory;
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(pool_size));
+        let merge_limit = if unknown_limit {
+            MemoryLimit::Unknown
+        } else {
+            MemoryLimit::Finite(3 * batch_memory)
+        };
         let mut builder =
             build_merge_builder(spill_manager, Arc::clone(&schema), spills, &pool, 8192)
-                .with_spill_merge_memory_limit(Some(3 * batch_memory));
+                .with_spill_merge_memory_limit(merge_limit);
 
         assert!(!builder.split_spill_file_in_half(0, true).await?);
         assert_eq!(builder.sorted_spill_files.len(), 3);
@@ -1175,8 +1229,49 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn unknown_spill_merge_limit_releases_headroom_after_rejected_candidate() -> Result<()>
+    {
+        let env = Arc::new(RuntimeEnv::default());
+        let schema = test_schema();
+        let spill_manager = build_spill_manager(&env, &schema);
+        let spills = (0..3)
+            .map(|value| make_sorted_spill_file(&spill_manager, &schema, vec![value]))
+            .collect::<Vec<_>>();
+        let batch_memory = spills[0].max_record_batch_memory;
+        let pool: Arc<dyn MemoryPool> =
+            Arc::new(GreedyMemoryPool::new(10 * batch_memory));
+        let mut builder = build_merge_builder(spill_manager, schema, spills, &pool, 1)
+            .with_spill_merge_memory_limit(MemoryLimit::Unknown);
+        let mut reservation = builder.reservation.new_empty();
+        let SpillFilesToMerge::Ready(spills, buffer_len) =
+            builder.get_sorted_spill_files_to_merge(1, 2, &mut reservation, false)?
+        else {
+            panic!("two streams and replay headroom should fit the pool");
+        };
+        assert_eq!(buffer_len, 1);
+        assert_eq!(spills.len(), 2);
+        assert_eq!(builder.sorted_spill_files.len(), 1);
+        // The third candidate failed its 12-batch reservation. Release the
+        // successful probe's spare four batches, retaining only two inputs.
+        assert_eq!(reservation.size(), 4 * batch_memory);
+        let replay = builder.reservation.new_empty();
+        replay.try_grow(6 * batch_memory)?;
+        assert_eq!(pool.reserved(), 10 * batch_memory);
+        drop((replay, reservation, spills, builder));
+        assert_eq!(pool.reserved(), 0);
+        assert_eq!(env.disk_manager.spilling_progress().current_bytes, 0);
+        assert_eq!(env.disk_manager.spilling_progress().active_files_count, 0);
+        Ok(())
+    }
+
+    #[rstest::rstest]
+    #[case::finite(false)]
+    #[case::unknown(true)]
     #[tokio::test]
-    async fn spill_merge_memory_limit_still_enforces_the_actual_pool() -> Result<()> {
+    async fn spill_merge_memory_limit_still_enforces_the_actual_pool(
+        #[case] unknown_limit: bool,
+    ) -> Result<()> {
         let env = Arc::new(RuntimeEnv::default());
         let schema = test_schema();
         let spill_manager = build_spill_manager(&env, &schema);
@@ -1184,9 +1279,14 @@ mod tests {
         let second = make_sorted_spill_file(&spill_manager, &schema, vec![2]);
         let batch_memory = first.max_record_batch_memory;
         let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(3 * batch_memory));
+        let merge_limit = if unknown_limit {
+            MemoryLimit::Unknown
+        } else {
+            MemoryLimit::Finite(batch_memory)
+        };
         let builder =
             build_merge_builder(spill_manager, schema, vec![first, second], &pool, 8192)
-                .with_spill_merge_memory_limit(Some(batch_memory));
+                .with_spill_merge_memory_limit(merge_limit);
         let mut stream = builder.create_spillable_merge_stream();
         let error = stream.next().await.unwrap().unwrap_err();
         assert!(error.to_string().contains("cannot be split further"));
@@ -1206,6 +1306,7 @@ mod tests {
         #[case] batch_size: usize,
         #[case] mixed_batches: bool,
         #[case] data_type: DataType,
+        #[values(false, true)] unknown_limit: bool,
     ) -> Result<()> {
         use arrow::array::{ArrayRef, StringArray, StringViewArray};
 
@@ -1262,8 +1363,13 @@ mod tests {
         assert!(4 * runs[0].max_record_batch_memory > POOL_BYTES / 2);
         assert!(4 * runs[0].max_record_batch_memory <= POOL_BYTES);
         let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(POOL_BYTES));
+        let merge_limit = if unknown_limit {
+            MemoryLimit::Unknown
+        } else {
+            MemoryLimit::Finite(POOL_BYTES / 2)
+        };
         let builder = build_merge_builder(manager, schema, runs, &pool, batch_size)
-            .with_spill_merge_memory_limit(Some(POOL_BYTES / 2));
+            .with_spill_merge_memory_limit(merge_limit);
         let mut stream = builder.create_spillable_merge_stream();
         let mut expected = 0;
         while let Some(batch) = stream.next().await {

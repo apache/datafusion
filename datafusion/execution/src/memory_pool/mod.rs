@@ -238,7 +238,8 @@ pub trait MemoryPool: Any + Send + Sync + std::fmt::Debug + Display {
     /// memory after the call. Allocations must still use [`Self::try_grow`].
     /// The default is [`MemoryLimit::Unknown`] because the global pool limit
     /// need not be available to every consumer. Transparent wrappers should
-    /// delegate this method to their inner pool.
+    /// delegate this method to their inner pool. Callers must handle unknown
+    /// allowances without assuming that the consumer has unlimited memory.
     fn memory_limit_for(&self, _consumer: &MemoryConsumer) -> MemoryLimit {
         MemoryLimit::Unknown
     }

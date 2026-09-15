@@ -297,8 +297,8 @@ impl OrderedSingleSpillContext {
             .memory_pool()
             .memory_limit_for(reservation.consumer())
         {
-            MemoryLimit::Finite(limit) => Some(limit / 2),
-            MemoryLimit::Infinite | MemoryLimit::Unknown => None,
+            MemoryLimit::Finite(limit) => MemoryLimit::Finite(limit / 2),
+            limit => limit,
         };
         let merge_reservation = reservation.new_empty();
         let merged = StreamingMergeBuilder::new()

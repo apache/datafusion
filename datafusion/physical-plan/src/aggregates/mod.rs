@@ -3256,7 +3256,10 @@ mod tests {
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{DataFusionError, internal_err};
     use datafusion_execution::config::SessionConfig;
-    use datafusion_execution::memory_pool::FairSpillPool;
+    use datafusion_execution::memory_pool::{
+        FairSpillPool, MemoryConsumer, MemoryLimit, MemoryPool, MemoryReservation,
+        PeakRecordingPool,
+    };
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
     use datafusion_expr::{
@@ -3461,6 +3464,55 @@ mod tests {
         ))
     }
 
+    /// A custom wrapper written before `memory_limit_for` was added. It forwards
+    /// the older API and deliberately inherits the unknown consumer allowance.
+    #[derive(Debug)]
+    struct LegacyMemoryPool(Arc<dyn MemoryPool>);
+
+    impl std::fmt::Display for LegacyMemoryPool {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            self.0.fmt(f)
+        }
+    }
+
+    impl MemoryPool for LegacyMemoryPool {
+        fn name(&self) -> &str {
+            "legacy"
+        }
+
+        fn register(&self, consumer: &MemoryConsumer) {
+            self.0.register(consumer);
+        }
+
+        fn unregister(&self, consumer: &MemoryConsumer) {
+            self.0.unregister(consumer);
+        }
+
+        fn grow(&self, reservation: &MemoryReservation, additional: usize) {
+            self.0.grow(reservation, additional);
+        }
+
+        fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
+            self.0.shrink(reservation, shrink);
+        }
+
+        fn try_grow(
+            &self,
+            reservation: &MemoryReservation,
+            additional: usize,
+        ) -> Result<()> {
+            self.0.try_grow(reservation, additional)
+        }
+
+        fn reserved(&self) -> usize {
+            self.0.reserved()
+        }
+
+        fn memory_limit(&self) -> MemoryLimit {
+            self.0.memory_limit()
+        }
+    }
+
     // This high-cardinality memory test would create quadratic collision scratch
     // space; small group-value tests cover forced hash-collision correctness.
     #[cfg(not(feature = "force_hash_collisions"))]
@@ -3473,6 +3525,8 @@ mod tests {
     async fn migrated_aggregate_spill_merge_leaves_memory_for_replay(
         #[case] mode: AggregateMode,
         #[case] ordered: bool,
+        #[values(false, true)] wrapped: bool,
+        #[values(false, true)] with_peer: bool,
     ) -> Result<()> {
         use arrow::array::{ListArray, StringArray};
         use arrow::buffer::OffsetBuffer;
@@ -3565,12 +3619,26 @@ mod tests {
             Arc::new(input),
             Arc::clone(&schema),
         )?;
+        // Keep the aggregate's allowance at 2 MiB even with a second consumer.
+        // Falling back to half the global limit would consume its entire share.
+        let pool_limit = MEMORY_LIMIT * if with_peer { 2 } else { 1 };
+        let mut inner: Arc<dyn MemoryPool> = Arc::new(FairSpillPool::new(pool_limit));
+        if wrapped {
+            inner = Arc::new(LegacyMemoryPool(inner));
+        }
+        let pool = Arc::new(PeakRecordingPool::new(inner));
+        let memory_pool = Arc::clone(&pool) as Arc<dyn MemoryPool>;
+        let _peer = with_peer.then(|| {
+            MemoryConsumer::new("other spilling operator")
+                .with_can_spill(true)
+                .register(&memory_pool)
+        });
         let context = Arc::new(
             TaskContext::default()
                 .with_session_config(migrated_hash_session_config(BATCH_SIZE))
                 .with_runtime(
                     RuntimeEnvBuilder::new()
-                        .with_memory_pool(Arc::new(FairSpillPool::new(MEMORY_LIMIT)))
+                        .with_memory_pool(memory_pool)
                         .build_arc()?,
                 ),
         );
@@ -3589,7 +3657,7 @@ mod tests {
         }
         let result = collect(stream.into())
             .await
-            .unwrap_or_else(|error| panic!("{mode:?}, ordered={ordered}: {error}"));
+            .unwrap_or_else(|error| panic!("{mode:?}, ordered={ordered}, wrapped={wrapped}, with_peer={with_peer}: {error}"));
         let mut seen = HashSet::new();
         for batch in &result {
             assert!(
@@ -3625,6 +3693,7 @@ mod tests {
             }
         }
         assert_eq!(seen.len(), 2 * KEYS_PER_PREFIX);
+        assert!(pool.peak_reserved() <= MEMORY_LIMIT);
         let metrics = aggregate.metrics().unwrap();
         assert!(metrics.spill_count().unwrap() > 1);
         assert!(metrics.spilled_rows().unwrap() > 0);
@@ -3636,12 +3705,13 @@ mod tests {
         Ok(())
     }
 
+    #[rstest::rstest]
     #[tokio::test]
-    async fn migrated_aggregate_spill_merge_allows_indivisible_rows() -> Result<()> {
+    async fn migrated_aggregate_spill_merge_allows_indivisible_rows(
+        #[values(false, true)] wrapped: bool,
+    ) -> Result<()> {
         use arrow::array::StringArray;
-        use datafusion_execution::memory_pool::{
-            GreedyMemoryPool, MemoryPool, PeakRecordingPool,
-        };
+        use datafusion_execution::memory_pool::GreedyMemoryPool;
 
         const KEY_BYTES: usize = 350_000;
         const GROUPS: usize = 24;
@@ -3679,9 +3749,12 @@ mod tests {
             Arc::new(input),
             schema,
         )?;
-        let pool = Arc::new(PeakRecordingPool::new(Arc::new(GreedyMemoryPool::new(
-            MEMORY_LIMIT,
-        ))));
+        let mut inner: Arc<dyn MemoryPool> =
+            Arc::new(GreedyMemoryPool::new(MEMORY_LIMIT));
+        if wrapped {
+            inner = Arc::new(LegacyMemoryPool(inner));
+        }
+        let pool = Arc::new(PeakRecordingPool::new(inner));
         let context = Arc::new(
             TaskContext::default()
                 .with_session_config(migrated_hash_session_config(1))
