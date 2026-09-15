@@ -1104,7 +1104,7 @@ mod tests {
     }
 
     #[test]
-    fn test_date_trunc_fixed_offset_matches_named_timezone() {
+    fn test_date_trunc_fixed_offset_fast_path_produces_same_results() {
         // A fixed-offset timezone (e.g. "+05:45") must produce the same results
         // as the IANA zone with the same offset (e.g. "Asia/Kathmandu"), for
         // coarse granularities that go through the integer calendar path.
