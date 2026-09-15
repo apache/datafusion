@@ -34,6 +34,7 @@ use datafusion_expr::{
 use datafusion_macros::user_doc;
 
 use crate::approx_percentile_cont::ApproxPercentileAccumulator;
+use crate::utils::{PercentileParam, PercentileParamState};
 
 make_udaf_expr_and_func!(
     ApproxMedian,
@@ -138,7 +139,11 @@ impl AggregateUDFImpl for ApproxMedian {
             Ok(Box::new(NoopAccumulator::default()))
         } else {
             Ok(Box::new(ApproxPercentileAccumulator::new(
-                0.5_f64,
+                PercentileParam {
+                    aggregate_fn_name: "APPROX_MEDIAN".to_string(),
+                    state: PercentileParamState::Resolved(0.5_f64),
+                },
+                false,
                 acc_args.expr_fields[0].data_type().clone(),
             )))
         }
