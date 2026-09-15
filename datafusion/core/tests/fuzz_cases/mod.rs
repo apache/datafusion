@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod aggregate_chain_fuzz;
 #[expect(clippy::needless_pass_by_value)]
 mod aggregate_fuzz;
 mod distinct_count_string_fuzz;
