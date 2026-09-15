@@ -288,6 +288,147 @@ impl TestFile {
             })
             .sum()
     }
+
+    /// Builds the same `[s, n]` fixture as [`Self::new`], but with `created_by`
+    /// recorded in the footer as `created_by` and with the `null_count` field
+    /// removed from the row-group statistics exactly as parquet-rs < 53.1.0
+    /// wrote it: "s" omits its null count from the row groups that truly have
+    /// zero nulls (groups 0 and 2, keeping the count of 3 in group 1), while
+    /// the non-null "n" column omits its count from every group.
+    fn with_missing_null_counts(created_by: &str) -> Self {
+        let batch = record_batch!(
+            (
+                "s",
+                Utf8,
+                vec![
+                    Some("a"),
+                    Some("b"),
+                    Some("c"),
+                    None,
+                    None,
+                    None,
+                    Some("g"),
+                    Some("h"),
+                    Some("i"),
+                ]
+            ),
+            ("n", Int32, [1, 2, 3, 10, 11, 12, 20, 21, 22])
+        )
+        .unwrap();
+        let schema = batch.schema();
+        let properties = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(3))
+            .set_data_page_row_count_limit(3)
+            .set_write_batch_size(3)
+            .set_dictionary_enabled(false)
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .set_created_by(created_by.to_string())
+            .build();
+        let mut original = Vec::new();
+        let mut writer =
+            ArrowWriter::try_new(&mut original, Arc::clone(&schema), Some(properties))
+                .unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let original = Bytes::from(original);
+        let metadata = read_metadata(&original);
+        assert_eq!(metadata.num_row_groups(), 3);
+
+        let strip_int32_null_count = |stats: &ParquetStatistics| -> Option<i32> {
+            stats.min_bytes_opt().and_then(|bytes| {
+                let bytes: &[u8; 4] = bytes.try_into().ok()?;
+                Some(i32::from_le_bytes(*bytes))
+            })
+        };
+
+        let mut row_groups = metadata.row_groups().to_vec();
+        for (group_idx, group) in row_groups.iter_mut().enumerate() {
+            let mut columns = group.columns().to_vec();
+
+            // "s": the null count is only omitted where it is zero
+            if group_idx != 1 {
+                let stats = columns[0].statistics().unwrap();
+                columns[0] = columns[0]
+                    .clone()
+                    .into_builder()
+                    .set_statistics(ParquetStatistics::byte_array(
+                        stats
+                            .min_bytes_opt()
+                            .map(|bytes| ByteArray::from(bytes.to_vec())),
+                        stats
+                            .max_bytes_opt()
+                            .map(|bytes| ByteArray::from(bytes.to_vec())),
+                        stats.distinct_count_opt(),
+                        None,
+                        stats.is_min_max_deprecated(),
+                    ))
+                    .build()
+                    .unwrap();
+            }
+
+            // "n": never null, so the zero count is omitted everywhere
+            let stats = columns[1].statistics().unwrap();
+            columns[1] = columns[1]
+                .clone()
+                .into_builder()
+                .set_statistics(ParquetStatistics::int32(
+                    strip_int32_null_count(stats),
+                    strip_int32_null_count(stats),
+                    stats.distinct_count_opt(),
+                    None,
+                    stats.is_min_max_deprecated(),
+                ))
+                .build()
+                .unwrap();
+
+            *group = group
+                .clone()
+                .into_builder()
+                .set_column_metadata(columns)
+                .build()
+                .unwrap();
+        }
+        let metadata = metadata.into_builder().set_row_groups(row_groups).build();
+
+        // Keep the real data pages and serialize the replacement row-group
+        // statistics at their actual file offsets.
+        let mut bytes = Vec::new();
+        let mut tracked = TrackedWrite::new(&mut bytes);
+        tracked
+            .write_all(&original[..footer_start(&original)])
+            .unwrap();
+        ParquetMetaDataWriter::new_with_tracked(tracked, &metadata)
+            .finish()
+            .unwrap();
+
+        let bytes = Bytes::from(bytes);
+        let metadata = read_metadata(&bytes);
+        assert_eq!(metadata.file_metadata().created_by(), Some(created_by));
+        // Sanity check: the counts really are missing from the metadata
+        for (i, group) in metadata.row_groups().iter().enumerate() {
+            assert_eq!(
+                group
+                    .column(0)
+                    .statistics()
+                    .and_then(|stats| stats.null_count_opt()),
+                if i == 1 { Some(3) } else { None },
+                "unexpected 's' null count in row group {i}"
+            );
+            assert!(
+                group
+                    .column(1)
+                    .statistics()
+                    .and_then(|stats| stats.null_count_opt())
+                    .is_none(),
+                "expected missing 'n' null count in row group {i}"
+            );
+        }
+        Self {
+            bytes,
+            schema,
+            metadata: Arc::new(metadata),
+        }
+    }
 }
 
 fn footer_start(bytes: &[u8]) -> usize {
@@ -813,4 +954,94 @@ fn undefined_logical_byte_array_order_is_not_a_bound() {
             &metrics(),
         );
     assert!(pages.should_scan(0));
+}
+
+/// Writers that are known to omit a `null_count` when it is zero.
+const OLD_WRITERS: [&str; 2] = ["parquet-rs version 53.0.0", "datafusion version 42.0.0"];
+
+/// Writers that always record null counts, or whose created_by is unparsable.
+const OTHER_WRITERS: [&str; 3] = [
+    "parquet-rs version 53.1.0",
+    "parquet-mr version 1.13.1",
+    "custom string",
+];
+
+/// A missing row-group `null_count` must be read exactly the way the writer
+/// meant it: exactly zero for parquet-rs < 53.1.0 / DataFusion < 42.1.0, and
+/// unknown for every other writer.
+#[test]
+fn missing_null_counts_are_zero_only_for_writers_that_omitted_them() {
+    let cases: Vec<(&str, bool)> = OLD_WRITERS
+        .iter()
+        .map(|writer| (*writer, true))
+        .chain(OTHER_WRITERS.iter().map(|writer| (*writer, false)))
+        .collect();
+
+    for (created_by, is_old_writer) in cases {
+        let file = TestFile::with_missing_null_counts(created_by);
+
+        // File-level statistics feed aggregate (`COUNT`), file-level filter
+        // pruning and sort pushdown. "s" has 3 nulls in total; "n" has none.
+        let statistics = file.statistics();
+        assert_eq!(
+            statistics.column_statistics[0].null_count,
+            if is_old_writer {
+                Precision::Exact(3)
+            } else {
+                Precision::Inexact(3)
+            },
+            "'s' null count for {created_by}"
+        );
+        // "n" gates sort pushdown: `try_pushdown_sort` only claims Exact when
+        // the projected sort column's null count is Precision::Exact(0).
+        assert_eq!(
+            statistics.column_statistics[1].null_count,
+            if is_old_writer {
+                Precision::Exact(0)
+            } else {
+                Precision::Absent
+            },
+            "'n' null count for {created_by}"
+        );
+
+        // Static row-group pruning: `s IS NULL` skips the groups whose null
+        // count is known to be zero and keeps the group that has nulls.
+        let (physical, predicate) = file.predicate(&col("s").is_null());
+        let row_groups = file.row_group_plan(&predicate);
+        assert_eq!(
+            row_groups.row_group_indexes(),
+            if is_old_writer {
+                vec![1] // groups 0 and 2 have exactly zero nulls
+            } else {
+                vec![0, 1, 2] // unknown counts can't be pruned
+            },
+            "row groups scanned for {created_by}"
+        );
+        // Whatever is pruned away, the query must still return every null row.
+        assert_eq!(file.matching_rows(&physical, row_groups), 3);
+
+        // Runtime pruning (e.g. dynamic TopK row-group pruning) must agree.
+        let mut runtime_pruner = RowGroupPruner::new(
+            Arc::clone(&physical),
+            Arc::clone(&file.schema),
+            Arc::clone(&file.metadata),
+            Count::new(),
+            Count::new(),
+            MAX_IN_LIST_SIZE,
+        );
+        assert_eq!(
+            runtime_pruner.should_prune(&[0]),
+            is_old_writer,
+            "should_prune group 0 for {created_by}"
+        );
+        assert!(
+            !runtime_pruner.should_prune(&[1]),
+            "row group with nulls must be scanned for {created_by}"
+        );
+        assert_eq!(
+            runtime_pruner.should_prune(&[2]),
+            is_old_writer,
+            "should_prune group 2 for {created_by}"
+        );
+    }
 }

@@ -20,7 +20,10 @@ use std::sync::Arc;
 
 use super::{ParquetAccessPlan, ParquetFileMetrics, RowGroupAccess};
 use crate::bloom_filter::BloomFilterStatistics;
-use crate::metadata::{has_untrusted_byte_array_stats, has_untrusted_min_max_order};
+use crate::metadata::{
+    has_untrusted_byte_array_stats, has_untrusted_min_max_order,
+    missing_null_counts_are_zero,
+};
 use crate::pruning::build_inverted_predicate;
 use arrow::array::{ArrayRef, BooleanArray, UInt64Array};
 use arrow::compute::nullif;
@@ -31,7 +34,7 @@ use datafusion_datasource::FileRange;
 use datafusion_pruning::PruningPredicate;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::basic::ColumnOrder;
-use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
+use parquet::file::metadata::{FileMetaData, ParquetMetaData, RowGroupMetaData};
 use parquet::schema::types::SchemaDescriptor;
 
 /// Reduces the [`ParquetAccessPlan`] based on row group level metadata.
@@ -278,9 +281,9 @@ impl RowGroupAccessPlanFilter {
             arrow_schema,
             parquet_schema,
             groups,
-            None,
             predicate,
             metrics,
+            None,
         );
     }
 
@@ -304,9 +307,9 @@ impl RowGroupAccessPlanFilter {
             arrow_schema,
             file_metadata.schema_descr(),
             metadata.row_groups(),
-            file_metadata.column_orders().map(Vec::as_slice),
             predicate,
             metrics,
+            Some(file_metadata),
         );
     }
 
@@ -315,9 +318,9 @@ impl RowGroupAccessPlanFilter {
         arrow_schema: &Schema,
         parquet_schema: &SchemaDescriptor,
         groups: &[RowGroupMetaData],
-        column_orders: Option<&[ColumnOrder]>,
         predicate: &PruningPredicate,
         metrics: &ParquetFileMetrics,
+        file_metadata: Option<&FileMetaData>,
     ) {
         // scoped timer updates on drop
         let _timer_guard = metrics.statistics_eval_time.timer();
@@ -330,11 +333,29 @@ impl RowGroupAccessPlanFilter {
             .map(|&i| &groups[i])
             .collect::<Vec<_>>();
 
+        // A missing null count is exactly zero for old parquet-rs writers, but
+        // unknown for everything else. When no footer metadata is available
+        // (this only happens in tests), fall back to the StatisticsConverter
+        // default that treats a missing count as zero to preserve the original
+        // pruning behavior.
+        let missing_null_counts_as_zero = file_metadata
+            .map(missing_null_counts_are_zero)
+            .unwrap_or(true);
+
+        // The footer also records the comparison order of string and binary
+        // bounds; `prune_by_statistics` has no footer and passes `None`.
+        let column_orders = file_metadata
+            .and_then(|metadata| metadata.column_orders())
+            .map(Vec::as_slice);
+
         let pruning_stats = RowGroupPruningStatistics {
             parquet_schema,
             column_orders,
             row_group_metadatas,
             arrow_schema,
+
+            missing_null_counts_as_zero,
+
         };
 
         // try to prune the row groups in a single call
@@ -351,10 +372,17 @@ impl RowGroupAccessPlanFilter {
                     }
                 }
 
-                // Check if any of the matched row groups are fully contained by the predicate
+                // Fully matched row groups require a stronger proof: every row
+                // must pass the predicate. When no footer is available, fall
+                // back to false (not true) so that the fully-matched claim
+                // stays sound for limit pruning.
+                let fully_matched_flag = file_metadata
+                    .map(missing_null_counts_are_zero)
+                    .unwrap_or(false);
                 self.identify_fully_matched_row_groups(
                     &fully_contained_candidates_original_idx,
                     &pruning_stats,
+                    fully_matched_flag,
                     groups,
                     predicate,
                     metrics,
@@ -380,6 +408,7 @@ impl RowGroupAccessPlanFilter {
         &mut self,
         candidate_row_group_indices: &[usize],
         pruning_stats: &RowGroupPruningStatistics<'_>,
+        fully_matched_missing_null_counts_as_zero: bool,
         groups: &[RowGroupMetaData],
         predicate: &PruningPredicate,
         metrics: &ParquetFileMetrics,
@@ -402,6 +431,15 @@ impl RowGroupAccessPlanFilter {
                 .map(|&i| &groups[i])
                 .collect::<Vec<_>>(),
             arrow_schema,
+
+            // Fully matched row groups require a stronger proof: every row
+            // must pass the predicate. Use the flag derived from the footer
+            // metadata, which for old parquet-rs writers confirms that a
+            // missing count is genuinely zero. Without footer metadata, use
+            // false so the claim stays sound for limit pruning.
+            missing_null_counts_as_zero: fully_matched_missing_null_counts_as_zero,
+
+
         };
 
         let Ok(inverted_values) = inverted_predicate.prune(&inverted_pruning_stats)

@@ -45,8 +45,8 @@ use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::{parquet_column, parquet_to_arrow_schema};
 use parquet::basic::{ColumnOrder, SortOrder, Type as PhysicalType};
 use parquet::file::metadata::{
-    PageIndexPolicy, ParquetMetaData, ParquetMetaDataPushDecoder, ParquetMetaDataReader,
-    RowGroupMetaData, SortingColumn,
+    FileMetaData, PageIndexPolicy, ParquetMetaData, ParquetMetaDataPushDecoder,
+    ParquetMetaDataReader, RowGroupMetaData, SortingColumn,
 };
 use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
@@ -110,6 +110,35 @@ pub(crate) fn has_untrusted_byte_array_stats<'a>(
                     })
                 }))
     })
+}
+
+/// Whether a missing Parquet row-group `null_count` can be treated as exactly
+/// zero for a file written by the writer recorded in `created_by`.
+///
+/// parquet-rs before 53.1.0 (fixed in apache/arrow-rs#6490) did not record a
+/// `null_count` when it was zero, so for those writers a missing count is
+/// exactly zero. Files written by DataFusion < 42.1.0 could link such a
+/// parquet-rs, so their missing counts are exactly zero as well.
+///
+/// For every other writer a missing `null_count` is unknown. Treating it as
+/// zero would let `IS NULL` / `COUNT` pruning and limit pruning return the
+/// wrong results, so those files must be handled conservatively.
+pub(crate) fn missing_null_counts_are_zero(file_metadata: &FileMetaData) -> bool {
+    let Some((writer, version)) = file_metadata
+        .created_by()
+        .and_then(|s| s.split_once(" version "))
+    else {
+        return false;
+    };
+    let mut parts = version.split(['.', ' ', '-']).map(str::parse::<u64>);
+    let (Some(Ok(major)), Some(Ok(minor))) = (parts.next(), parts.next()) else {
+        return false;
+    };
+    match writer {
+        "parquet-rs" => (major, minor) < (53, 1),
+        "datafusion" => (major, minor) < (42, 1),
+        _ => false,
+    }
 }
 
 /// Handles fetching Parquet file schema, metadata and statistics
@@ -519,6 +548,7 @@ impl<'a> DFParquetMetadata<'a> {
         statistics.num_rows = Precision::Exact(num_rows);
 
         let file_metadata = metadata.file_metadata();
+        let missing_null_counts_as_zero = missing_null_counts_are_zero(file_metadata);
         let mut physical_file_schema = parquet_to_arrow_schema(
             file_metadata.schema_descr(),
             file_metadata.key_value_metadata(),
@@ -551,10 +581,23 @@ impl<'a> DFParquetMetadata<'a> {
                         file_metadata.schema_descr(),
                     ) {
                         Ok(stats_converter) => {
+
+                            // A missing null_count is only exactly zero for
+                            // writers known to omit it (i.e. old parquet-rs).
+                            // For every other writer a missing count is
+                            // unknown, and must not surface as an exact zero
+                            // in file statistics used by pruning, aggregates
+                            // and sort pushdown.
+                            let stats_converter = stats_converter
+                                .with_missing_null_counts_as_zero(
+                                    missing_null_counts_as_zero,
+                                );
+
                             // An omitted count must not become an exact zero in
                             // file statistics used for pruning and aggregates.
                             let stats_converter =
                                 stats_converter.with_missing_null_counts_as_zero(false);
+
                             let parquet_index = stats_converter.parquet_column_index();
                             if parquet_index.is_some_and(|index| {
                                 has_untrusted_min_max_order(
@@ -1192,6 +1235,93 @@ mod tests {
     use arrow::array::Int32Array;
     use arrow::compute::SortOptions;
     use arrow::datatypes::Field;
+    use parquet::schema::types::Type as ParquetType;
+
+    /// Builds `FileMetaData` for a single-column INT32 schema with the given
+    /// `created_by` string.
+    fn file_metadata_with_created_by(created_by: Option<&str>) -> FileMetaData {
+        let schema = Arc::new(SchemaDescriptor::new(Arc::new(
+            ParquetType::group_type_builder("schema")
+                .with_fields(vec![Arc::new(
+                    ParquetType::primitive_type_builder("a", PhysicalType::INT32)
+                        .build()
+                        .unwrap(),
+                )])
+                .build()
+                .unwrap(),
+        )));
+        FileMetaData::new(1, 0, created_by.map(str::to_string), None, schema, None)
+    }
+
+    #[test]
+    fn test_missing_null_counts_are_zero() {
+        // parquet-rs < 53.1.0 omitted null counts that are zero
+        for created_by in [
+            "parquet-rs version 5.1.0",
+            "parquet-rs version 52.0.1",
+            "parquet-rs version 53.0.0",
+            "parquet-rs version 53.0.0 (build abc)",
+        ] {
+            assert!(
+                missing_null_counts_are_zero(&file_metadata_with_created_by(Some(
+                    created_by
+                ))),
+                "expected {created_by:?} missing counts to be treated as zero"
+            );
+        }
+        // parquet-rs >= 53.1.0 always records null counts
+        for created_by in [
+            "parquet-rs version 53.1.0",
+            "parquet-rs version 59.3.0",
+            "parquet-rs version 60.0.0",
+        ] {
+            assert!(
+                !missing_null_counts_are_zero(&file_metadata_with_created_by(Some(
+                    created_by
+                ))),
+                "expected {created_by:?} missing counts to stay unknown"
+            );
+        }
+        // DataFusion < 42.1.0 may link a parquet-rs that omits zero null counts
+        for created_by in [
+            "datafusion version 5.1.0",
+            "datafusion version 41.1.2",
+            "datafusion version 42.0.0",
+        ] {
+            assert!(
+                missing_null_counts_are_zero(&file_metadata_with_created_by(Some(
+                    created_by
+                ))),
+                "expected {created_by:?} missing counts to be treated as zero"
+            );
+        }
+        // DataFusion >= 42.1.0 always records null counts
+        for created_by in ["datafusion version 42.1.0", "datafusion version 55.1.0"] {
+            assert!(
+                !missing_null_counts_are_zero(&file_metadata_with_created_by(Some(
+                    created_by
+                ))),
+                "expected {created_by:?} missing counts to stay unknown"
+            );
+        }
+        // Unknown writers, unparsable versions and absent created_by are
+        // conservative: missing counts stay unknown
+        for created_by in [
+            None,
+            Some("parquet-mr version 1.13.1"),
+            Some("duckdb version 1.1.0"),
+            Some("custom string"),
+            Some("parquet-rs"),
+            Some("parquet-rs version not-a-version"),
+            Some("datafusion version 42"),
+        ] {
+            let metadata = file_metadata_with_created_by(created_by);
+            assert!(
+                !missing_null_counts_are_zero(&metadata),
+                "expected {created_by:?} missing counts to stay unknown"
+            );
+        }
+    }
 
     #[test]
     fn test_lex_ordering_to_sorting_columns_uses_writer_schema() -> Result<()> {

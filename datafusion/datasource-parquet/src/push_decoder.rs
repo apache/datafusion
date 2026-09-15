@@ -62,6 +62,7 @@ use datafusion_pruning::{PruningPredicate, PruningPredicateBuilder};
 use crate::ParquetFileMetrics;
 use crate::access_plan::PreparedAccessPlan;
 use crate::decoder_projection::DecoderProjection;
+use crate::metadata::missing_null_counts_are_zero;
 use crate::metrics::{ByteProgress, RowFilterSkippedFullyMatchedMetric};
 use crate::row_filter::{
     PrebuiltRowFilterCandidate, prebuild_row_filter_candidates, row_filter_from_prebuilt,
@@ -244,15 +245,19 @@ impl RowGroupPruner {
             .iter()
             .map(|&i| self.parquet_metadata.row_group(i))
             .collect::<Vec<_>>();
+        let file_metadata = self.parquet_metadata.file_metadata();
         let stats = RowGroupPruningStatistics {
-            parquet_schema: self.parquet_metadata.file_metadata().schema_descr(),
-            column_orders: self
-                .parquet_metadata
-                .file_metadata()
-                .column_orders()
-                .map(Vec::as_slice),
+            parquet_schema: file_metadata.schema_descr(),
+            column_orders: file_metadata.column_orders().map(Vec::as_slice),
             row_group_metadatas,
             arrow_schema: self.arrow_schema.as_ref(),
+
+            // Match the static row-group pruning behavior: a missing null count
+            // is exactly zero for old parquet-rs / DataFusion writers and
+            // unknown for everyone else. Runtime pruning only needs to prove a
+            // row group *cannot* contain matching rows, so this is sound.
+            missing_null_counts_as_zero: missing_null_counts_are_zero(file_metadata),
+
         };
 
         match pp.prune(&stats) {
