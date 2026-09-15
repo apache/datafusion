@@ -11109,7 +11109,7 @@ mod tests {
             Box::new(ScalarValue::Float32(None)),
         );
         let err = scalar.eq_array(&run_array, 0).unwrap_err();
-        let expected = "Internal error: could not cast array of type RunEndEncoded(\"run_ends\": non-null Int16, \"values\": Float32) to arrow_array::array::run_array::RunArray<arrow_array::types::Int32Type>";
+        let expected = "Internal error: could not cast array of type RunEndEncoded(non-null Int16, Float32) to arrow_array::array::run_array::RunArray<arrow_array::types::Int32Type>";
         assert!(err.to_string().starts_with(expected));
     }
 

@@ -180,11 +180,7 @@ impl ContextProvider for MockContextProvider {
             ])),
             "string_with_extension" => Ok(Schema::new(vec![
                 Field::new("value", DataType::Utf8, false).with_metadata(
-                    [(
-                        "ARROW:extension:name".to_string(),
-                        "example.string".to_string(),
-                    )]
-                    .into(),
+                    Metadata::new().with("ARROW:extension:name", "example.string"),
                 ),
             ])),
             "orders" => Ok(Schema::new(vec![
@@ -231,15 +227,12 @@ impl ContextProvider for MockContextProvider {
                 Field::new(
                     "left",
                     DataType::List(Arc::new(
-                        Field::new_list_field(DataType::Int64, true).with_metadata(
-                            [("PARQUET:field_id".to_string(), "2".to_string())].into(),
-                        ),
+                        Field::new_list_field(DataType::Int64, true)
+                            .with_metadata(Metadata::new().with("PARQUET:field_id", "2")),
                     )),
                     false,
                 )
-                .with_metadata(
-                    [("PARQUET:field_id".to_string(), "1".to_string())].into(),
-                ),
+                .with_metadata(Metadata::new().with("PARQUET:field_id", "1")),
             ])),
             "lineitem" => Ok(Schema::new(vec![
                 Field::new("l_orderkey", DataType::UInt32, false),

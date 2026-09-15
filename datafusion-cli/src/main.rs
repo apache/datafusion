@@ -662,9 +662,9 @@ mod tests {
         +-----------------------------------+-----------------+---------------------+------+------------------+
         | filename                          | file_size_bytes | metadata_size_bytes | hits | extra            |
         +-----------------------------------+-----------------+---------------------+------+------------------+
-        | alltypes_plain.parquet            | 1851            | 8970                | 1    | page_index=false |
-        | alltypes_tiny_pages.parquet       | 454233          | 269562              | 2    | page_index=true  |
-        | lz4_raw_compressed_larger.parquet | 380836          | 1347                | 1    | page_index=false |
+        | alltypes_plain.parquet            | 1851            | 8938                | 1    | page_index=false |
+        | alltypes_tiny_pages.parquet       | 454233          | 268826              | 2    | page_index=true  |
+        | lz4_raw_compressed_larger.parquet | 380836          | 1315                | 1    | page_index=false |
         +-----------------------------------+-----------------+---------------------+------+------------------+
         ");
 
@@ -693,9 +693,9 @@ mod tests {
         +-----------------------------------+-----------------+---------------------+------+------------------+
         | filename                          | file_size_bytes | metadata_size_bytes | hits | extra            |
         +-----------------------------------+-----------------+---------------------+------+------------------+
-        | alltypes_plain.parquet            | 1851            | 8970                | 4    | page_index=false |
-        | alltypes_tiny_pages.parquet       | 454233          | 269562              | 2    | page_index=true  |
-        | lz4_raw_compressed_larger.parquet | 380836          | 1347                | 2    | page_index=false |
+        | alltypes_plain.parquet            | 1851            | 8938                | 4    | page_index=false |
+        | alltypes_tiny_pages.parquet       | 454233          | 268826              | 2    | page_index=true  |
+        | lz4_raw_compressed_larger.parquet | 380836          | 1315                | 2    | page_index=false |
         +-----------------------------------+-----------------+---------------------+------+------------------+
         ");
 

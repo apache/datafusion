@@ -1964,7 +1964,7 @@ mod tests {
         ]);
         acc.update_batch(&[Arc::clone(&input), input])?;
 
-        assert_eq!(acc.size(), 2295);
+        assert_eq!(acc.size(), 2135);
 
         Ok(())
     }

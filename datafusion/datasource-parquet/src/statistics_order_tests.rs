@@ -35,9 +35,11 @@ use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::basic::{ColumnOrder, LogicalType, SortOrder, Type as PhysicalType};
 use parquet::data_type::{ByteArray, FixedLenByteArray};
+use parquet::file::metadata::page_index::{PageIndex, PageIndexBuilder};
 use parquet::file::metadata::{
-    ColumnChunkMetaData, FileMetaData, PageIndexPolicy, ParquetMetaData,
-    ParquetMetaDataReader, ParquetMetaDataWriter, RowGroupMetaData,
+    ColumnChunkMetaData, ColumnIndexBuilder, FileMetaData, OffsetIndexBuilder,
+    PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader, ParquetMetaDataWriter,
+    RowGroupMetaData,
 };
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
 use parquet::file::statistics::Statistics as ParquetStatistics;
@@ -111,30 +113,6 @@ impl TestFile {
             };
         }
 
-        // As of arrow 60 `PageIndex` cannot be constructed outside the
-        // parquet crate (https://github.com/apache/arrow-rs/issues/10824),
-        // so give the first
-        // row group's string column an untrusted-looking page index by
-        // patching the serialized index bytes instead: replace the
-        // unsigned-order min "az" with the equal-length "é", which
-        // unsigned-compares above "az". A pruner that wrongly trusts these
-        // bounds under a missing or unknown column order would exclude the
-        // matching "az" row, which the assertions below catch.
-        let original =
-            if matches!(order, StatisticsOrder::Missing | StatisticsOrder::Unknown) {
-                let column = metadata.row_group(0).column(0);
-                let start = column.column_index_offset().unwrap() as usize;
-                let len = column.column_index_length().unwrap() as usize;
-                let mut patched = original.to_vec();
-                let index_bytes = &mut patched[start..start + len];
-                let pos = index_bytes.windows(2).position(|w| w == b"az").unwrap();
-                index_bytes[pos..pos + 2].copy_from_slice("é".as_bytes());
-                Bytes::from(patched)
-            } else {
-                original
-            };
-        let metadata = read_metadata(&original);
-
         // Signed-byte comparison gives ["aé", "b"] for the first row
         // group's ["aé", "az", "b"]. The endpoints are not inverted in
         // unsigned order, but the interval wrongly excludes "az".
@@ -159,8 +137,26 @@ impl TestFile {
             .build()
             .unwrap();
 
-        // `into_builder` keeps the page index parsed from `original` above.
-        let metadata = metadata.into_builder().set_row_groups(row_groups).build();
+        // Give the first row group's string column the same untrusted-looking
+        // bounds in its page index when the column order is missing or unknown.
+        let mut page_index = metadata
+            .page_index()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<PageIndex>()
+            .unwrap()
+            .clone()
+            .into_builder();
+        if matches!(order, StatisticsOrder::Missing | StatisticsOrder::Unknown) {
+            let mut index = ColumnIndexBuilder::new(PhysicalType::BYTE_ARRAY);
+            index.append(false, "aé".as_bytes().to_vec(), b"b".to_vec(), 0, None);
+            page_index.put_column_index(index.build().unwrap(), 0, 0);
+        }
+        let metadata = metadata
+            .into_builder()
+            .set_row_groups(row_groups)
+            .set_page_index(Some(Arc::new(page_index.build())))
+            .build();
 
         // Keep the real data pages, and serialize the replacement statistics
         // and page indexes at their actual file offsets.
@@ -552,12 +548,28 @@ fn single_column_metadata(
     statistics: ParquetStatistics,
     order: Option<ColumnOrder>,
 ) -> ParquetMetaData {
+    let physical_type = parquet_type.get_physical_type();
     let schema = Arc::new(SchemaDescriptor::new(Arc::new(
         ParquetType::group_type_builder("schema")
             .with_fields(vec![Arc::new(parquet_type)])
             .build()
             .unwrap(),
     )));
+    // Attach a single-page column and offset index mirroring `statistics`.
+    let mut column_index = ColumnIndexBuilder::new(physical_type);
+    column_index.append(
+        false,
+        statistics.min_bytes_opt().unwrap().to_vec(),
+        statistics.max_bytes_opt().unwrap().to_vec(),
+        0,
+        None,
+    );
+    let mut offset_index = OffsetIndexBuilder::new();
+    offset_index.append_row_count(3);
+    offset_index.append_offset_and_size(0, 1);
+    let mut page_index = PageIndexBuilder::new(1, 1);
+    page_index.put_column_index(column_index.build().unwrap(), 0, 0);
+    page_index.put_offset_index(offset_index.build(), 0, 0);
     let column = ColumnChunkMetaData::builder(schema.column(0))
         .set_num_values(3)
         .set_statistics(statistics)
@@ -568,14 +580,13 @@ fn single_column_metadata(
         .set_column_metadata(vec![column])
         .build()
         .unwrap();
-    // TODO: attach a single-page column and offset index mirroring
-    // `statistics` once `PageIndex` values can again be constructed outside
-    // the parquet crate (https://github.com/apache/arrow-rs/issues/10824),
-    // and restore the page-pruning assertions that relied on it.
     ParquetMetaData::new(
         FileMetaData::new(1, 3, None, None, schema, order.map(|order| vec![order])),
         vec![group],
     )
+    .into_builder()
+    .set_page_index(Some(Arc::new(page_index.build())))
+    .build()
 }
 
 #[test]
@@ -663,13 +674,9 @@ fn fixed_byte_array_and_uuid_orders_guard_bounds_but_not_null_counts() {
                             &metadata,
                             &metrics(),
                         );
-                // The metadata carries no page index (see
-                // `single_column_metadata`), so page pruning is a no-op.
-                // TODO: restore `pages.should_scan(0) == !trusted` (modern
-                // page indexes are independent of legacy row-group bounds,
-                // but still need a recognized footer order) once a page index
-                // can be attached again.
-                assert!(pages.should_scan(0));
+                // Modern page indexes are independent of legacy row-group
+                // bounds, but still need a recognized footer order.
+                assert_eq!(pages.should_scan(0), !trusted);
             }
         }
     }
