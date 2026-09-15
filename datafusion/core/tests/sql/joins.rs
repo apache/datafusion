@@ -548,6 +548,33 @@ async fn asof_join_broadcasts_multi_partition_right_input() -> Result<()> {
 }
 
 #[tokio::test]
+async fn asof_join_projection_drops_output_ordering() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_asof_test_tables(&ctx)?;
+    let plan = ctx
+        .sql(
+            "SELECT t.trade_id, p.price FROM trades t ASOF JOIN \
+             (SELECT ts, price FROM prices WHERE symbol = 'A') p \
+             MATCH_CONDITION (t.ts >= p.ts)",
+        )
+        .await?
+        .create_physical_plan()
+        .await?;
+    let asof = find_asof_exec(&plan).expect("physical ASOF join must be present");
+
+    assert_eq!(
+        asof.schema()
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect::<Vec<_>>(),
+        vec!["trade_id", "price"]
+    );
+    assert!(asof.output_ordering().is_none());
+    Ok(())
+}
+
+#[tokio::test]
 async fn asof_join_explain_names_equality_and_match_conditions() -> Result<()> {
     let ctx = SessionContext::new();
     register_asof_test_tables(&ctx)?;
