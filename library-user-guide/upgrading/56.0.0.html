@@ -717,6 +717,44 @@ instead of specifically accepting a <code class="docutils literal notranslate"><
 the exact non-generic function signature of <code class="docutils literal notranslate"><span class="pre">DataFrame::from_columns</span></code> may need
 to be updated to account for the new generic API.</p>
 </section>
+<section id="physical-filter-pushdown-resolves-columns-by-position">
+<h3>Physical filter pushdown resolves columns by position<a class="headerlink" href="#physical-filter-pushdown-resolves-columns-by-position" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">datafusion_physical_plan::filter_pushdown::ChildFilterDescription::from_child</span></code>
+and <code class="docutils literal notranslate"><span class="pre">FilterDescription::from_children</span></code> now resolve filter columns by position
+instead of looking them up by name. This prevents incorrect results when a
+child schema contains duplicate column names. <code class="docutils literal notranslate"><span class="pre">from_child</span></code> requires the child
+field at each referenced position to have the same name as the filter column.</p>
+<p><code class="docutils literal notranslate"><span class="pre">ChildFilterDescription::from_child_with_allowed_indices</span></code> is deprecated but
+preserves its previous name-based mapping to the first matching child field.
+Migrate to <code class="docutils literal notranslate"><span class="pre">from_child_with_column_mapping</span></code> because name resolution is ambiguous
+when the child schema contains duplicate field names.</p>
+<p><strong>Migration guide:</strong></p>
+<p>Use <code class="docutils literal notranslate"><span class="pre">from_child</span></code> (or <code class="docutils literal notranslate"><span class="pre">from_children</span></code> for multiple children) when the parent and
+child schemas have matching column positions and names. When a node projects,
+reorders, or renames columns, use <code class="docutils literal notranslate"><span class="pre">from_child_with_column_mapping</span></code> with an
+explicit map from parent output indices to child input indices. Columns absent
+from the mapping cannot be pushed down.</p>
+<p>For example, if the parent outputs <code class="docutils literal notranslate"><span class="pre">[a,</span> <span class="pre">b]</span></code> and the child outputs <code class="docutils literal notranslate"><span class="pre">[b,</span> <span class="pre">a]</span></code>, a
+filter on <code class="docutils literal notranslate"><span class="pre">a&#64;0</span></code> must map to child column <code class="docutils literal notranslate"><span class="pre">a&#64;1</span></code>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">collections</span><span class="p">::{</span><span class="n">HashMap</span><span class="p">,</span><span class="w"> </span><span class="n">HashSet</span><span class="p">};</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion_physical_plan</span><span class="p">::</span><span class="n">filter_pushdown</span><span class="p">::</span><span class="n">ChildFilterDescription</span><span class="p">;</span>
+
+<span class="c1">// Before: allow parent column 0 and resolve &quot;a&quot; by name in the child.</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">description</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ChildFilterDescription</span><span class="p">::</span><span class="n">from_child_with_allowed_indices</span><span class="p">(</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="n">parent_filters</span><span class="p">,</span>
+<span class="w">    </span><span class="n">HashSet</span><span class="p">::</span><span class="n">from</span><span class="p">([</span><span class="mi">0</span><span class="p">]),</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="n">child</span><span class="p">,</span>
+<span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="c1">// After: explicitly map parent column 0 to child column 1.</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">description</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ChildFilterDescription</span><span class="p">::</span><span class="n">from_child_with_column_mapping</span><span class="p">(</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="n">parent_filters</span><span class="p">,</span>
+<span class="w">    </span><span class="n">HashMap</span><span class="p">::</span><span class="n">from</span><span class="p">([(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">)]),</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="n">child</span><span class="p">,</span>
+<span class="p">)</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
 </section>
 </section>
 
@@ -780,6 +818,7 @@ to be updated to account for the new generic API.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#api-change-for-floor-and-ceil-udf">API change for <code class="docutils literal notranslate"><span class="pre">floor</span></code> and <code class="docutils literal notranslate"><span class="pre">ceil</span></code> UDF</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#map-extract-element-at-return-an-empty-list-for-absent-keys"><code class="docutils literal notranslate"><span class="pre">map_extract</span></code> / <code class="docutils literal notranslate"><span class="pre">element_at</span></code> return an empty list for absent keys</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dataframe-from-columns-accepts-intoiterator"><code class="docutils literal notranslate"><span class="pre">DataFrame::from_columns</span></code> accepts <code class="docutils literal notranslate"><span class="pre">IntoIterator</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#physical-filter-pushdown-resolves-columns-by-position">Physical filter pushdown resolves columns by position</a></li>
 </ul>
 </li>
 </ul>
