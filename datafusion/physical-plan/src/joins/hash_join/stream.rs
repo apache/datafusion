@@ -377,7 +377,7 @@ pub(super) struct HashJoinStream {
     /// Metrics
     join_metrics: BuildProbeJoinMetrics,
     integer_prefilter_state: Option<(PrefilterState, MemoryReservation)>,
-    integer_prefilter_pruned_rows: Count,
+    probe_prefilter_rows_pruned: Count,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
     /// Defines the null equality for the join.
@@ -567,7 +567,7 @@ impl HashJoinStream {
         null_aware: Option<NullAwareMode>,
         fetch: Option<usize>,
         integer_prefilter_state: Option<(PrefilterState, MemoryReservation)>,
-        integer_prefilter_pruned_rows: Count,
+        probe_prefilter_rows_pruned: Count,
     ) -> Self {
         // Create output buffer with coalescing and optional fetch limit.
         let output_buffer =
@@ -583,7 +583,7 @@ impl HashJoinStream {
             random_state,
             join_metrics,
             integer_prefilter_state,
-            integer_prefilter_pruned_rows,
+            probe_prefilter_rows_pruned,
             column_indices,
             null_equality,
             state,
@@ -826,18 +826,15 @@ impl HashJoinStream {
                         batch.num_rows(),
                         valid_keys.is_some(),
                     );
-                    let lookup_keys = if bytes
-                        .is_some_and(|bytes| reservation.try_resize(bytes).is_ok())
+                    let lookup_keys = if state.should_filter(batch.num_rows())
+                        && bytes
+                            .is_some_and(|bytes| reservation.try_resize(bytes).is_ok())
                     {
-                        let (mask, pruned) = state.filter(
-                            filter,
-                            keys_values[0].as_ref(),
-                            valid_keys.as_ref(),
-                        );
-                        self.integer_prefilter_pruned_rows.add(pruned);
-                        if mask.is_some() {
+                        if let Some(mask) = state.filter(filter, keys_values[0].as_ref())
+                        {
+                            self.probe_prefilter_rows_pruned.add(mask.null_count());
                             let lookup =
-                                NullBuffer::union(valid_keys.as_ref(), mask.as_ref());
+                                NullBuffer::union(valid_keys.as_ref(), Some(&mask));
                             drop(mask);
                             reservation.resize(
                                 lookup

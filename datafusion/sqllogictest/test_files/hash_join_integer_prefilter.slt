@@ -77,7 +77,7 @@ query TT
 EXPLAIN ANALYZE SELECT * FROM build b FULL JOIN probe p ON b.k = p.k;
 ----
 Plan with Metrics
-01)HashJoinExec: mode=CollectLeft, join_type=Full, on=[(k@0, k@0)], metrics=[output_rows=10, <slt:ignore>array_map_created_count=0, <slt:ignore>integer_prefilter_created_count=1, integer_prefilter_pruned_rows=3, <slt:ignore>]
+01)HashJoinExec: mode=CollectLeft, join_type=Full, on=[(k@0, k@0)], metrics=[output_rows=10, <slt:ignore>array_map_created_count=0, <slt:ignore>integer_prefilter_created_count=1, probe_prefilter_rows_pruned=3, <slt:ignore>]
 02)--DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
 03)--DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
 
@@ -135,14 +135,14 @@ SELECT p.label FROM build b RIGHT SEMI JOIN probe p ON b.k = p.k;
 hit_a
 hit_b
 
-# IS NULL around IN requires a null-aware mark join. The rejected 2048 key on
-# its probe side must not change SQL's three-valued result.
+# IS NULL around IN requires a null-aware mark join, which bypasses the
+# prefilter and preserves SQL's three-valued result.
 query TT
 EXPLAIN ANALYZE SELECT p.label FROM probe p
 WHERE (p.k IN (SELECT k FROM build)) IS NULL;
 ----
 Plan with Metrics
-<slt:ignore>HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(k@0, k@0)], <slt:ignore>null_aware, metrics=[output_rows=6, <slt:ignore>array_map_created_count=0, <slt:ignore>integer_prefilter_created_count=1, integer_prefilter_pruned_rows=1, <slt:ignore>]
+<slt:ignore>HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(k@0, k@0)], <slt:ignore>null_aware, metrics=[output_rows=6, <slt:ignore>array_map_created_count=0, <slt:ignore>integer_prefilter_created_count=0, probe_prefilter_rows_pruned=0, <slt:ignore>]
 <slt:ignore>
 
 query T rowsort
@@ -189,7 +189,7 @@ query TT
 EXPLAIN ANALYZE SELECT * FROM build b FULL JOIN probe p ON b.k = p.k;
 ----
 Plan with Metrics
-01)HashJoinExec: mode=CollectLeft, join_type=Full, on=[(k@0, k@0)], metrics=[output_rows=10, <slt:ignore>array_map_created_count=0, <slt:ignore>integer_prefilter_created_count=0, integer_prefilter_pruned_rows=0, <slt:ignore>]
+01)HashJoinExec: mode=CollectLeft, join_type=Full, on=[(k@0, k@0)], metrics=[output_rows=10, <slt:ignore>array_map_created_count=0, <slt:ignore>integer_prefilter_created_count=0, probe_prefilter_rows_pruned=0, <slt:ignore>]
 02)--DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
 03)--DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
 
@@ -206,6 +206,18 @@ zero_a hit_a
 zero_a hit_b
 zero_b hit_a
 zero_b hit_b
+
+# A zero range disables bitmap construction without disabling the feature.
+statement ok
+SET datafusion.execution.join_integer_prefilter_max_key_range = 0;
+
+query TT
+EXPLAIN ANALYZE SELECT * FROM build b FULL JOIN probe p ON b.k = p.k;
+----
+Plan with Metrics
+01)HashJoinExec: mode=CollectLeft, join_type=Full, on=[(k@0, k@0)], metrics=[output_rows=10, <slt:ignore>array_map_created_count=0, <slt:ignore>integer_prefilter_created_count=0, probe_prefilter_rows_pruned=0, <slt:ignore>]
+02)--DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
+03)--DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
 
 statement ok
 RESET datafusion.execution.enable_join_integer_prefilter;

@@ -16,116 +16,115 @@
 // under the License.
 
 //! Full in-memory HashJoin execution, including build, with fixed Int32 workloads.
-//! Covers inner, semi, and anti joins with key-only and payload-bearing inputs.
+//! All inputs carry an Int32 data column and a Utf8 payload column.
 //! Session settings use the standard DataFusion environment configuration.
 
 use std::hint::black_box;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Int32Array, Int64Array, StringArray};
+use arrow::array::{ArrayRef, Int32Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::{JoinType, NullEquality};
 use datafusion_execution::TaskContext;
 use datafusion_execution::config::SessionConfig;
 use datafusion_physical_expr::expressions::col;
-use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion_physical_plan::test::TestMemoryExec;
-use futures::StreamExt;
+use datafusion_physical_plan::{ExecutionPlan, collect};
 use tokio::runtime::Runtime;
 
-const BUILD_ROWS: usize = 8_192;
-const PROBE_ROWS: usize = 1_048_576;
 const BATCH_SIZE: usize = 8_192;
-const SHORT_PROBE_ROWS: usize = 4_096;
-const PHASE_ROWS: usize = PROBE_ROWS / 2;
-const HIT_EVERY: usize = 16;
-const SPARSE_KEY_STEP: i32 = 16;
+const BUILD_ROWS: usize = 20_000;
+const PROBE_ROWS: usize = 1_000_000;
+const LARGE_BUILD_ROWS: usize = 100_000;
+const SPARSE_KEY_STEP: i32 = 10;
 const DENSE_KEY_STEP: i32 = 1;
-const WIDE_KEY_STEP: i32 = 64;
-const NON_NULL_EVERY: usize = 1_024;
-const PAYLOAD_BYTES: usize = 64;
+const HIT_EVERY: usize = 10;
 
 #[derive(Clone, Copy)]
 enum Pattern {
     AllHit,
-    InRange,
-    OutOfRange,
+    InterleavedLowHit,
+    ClusteredLowHit,
     HighToLow,
-    LowToHigh,
-    ShortProbe,
-    NullHeavyHits,
-    NullHeavyMisses,
 }
 
 fn make_batches(
     rows: usize,
+    build_rows: usize,
     key_step: i32,
     pattern: Pattern,
     schema: &SchemaRef,
 ) -> Vec<RecordBatch> {
+    let mut hits = 0;
     (0..rows)
         .step_by(BATCH_SIZE)
         .map(|start| {
             let end = (start + BATCH_SIZE).min(rows);
-            let keys = Int32Array::from_iter((start..end).map(|row| {
-                if matches!(pattern, Pattern::NullHeavyHits | Pattern::NullHeavyMisses) {
-                    return (row % NON_NULL_EVERY == 0).then(|| {
-                        (row % (BUILD_ROWS - 1)) as i32 * key_step
-                            + i32::from(matches!(pattern, Pattern::NullHeavyMisses))
-                    });
-                }
-                let high_hit = match pattern {
+            let keys = Int32Array::from_iter_values((start..end).map(|row| {
+                let hit = match pattern {
                     Pattern::AllHit => true,
-                    Pattern::HighToLow => row < PHASE_ROWS,
-                    Pattern::LowToHigh => row >= PHASE_ROWS,
-                    _ => false,
+                    Pattern::InterleavedLowHit => row % HIT_EVERY == 0,
+                    Pattern::ClusteredLowHit => row < rows / HIT_EVERY,
+                    Pattern::HighToLow => row < rows / 2 || row % HIT_EVERY == 0,
                 };
-                Some(if high_hit || row % HIT_EVERY == 0 {
-                    (row % BUILD_ROWS) as i32 * key_step
-                } else if matches!(pattern, Pattern::OutOfRange) {
-                    (BUILD_ROWS + row % BUILD_ROWS) as i32 * key_step
+                if hit {
+                    let key = (hits % build_rows) as i32 * key_step;
+                    hits += 1;
+                    key
                 } else {
                     // Every hole stays strictly between the build min and max.
-                    (row % (BUILD_ROWS - 1)) as i32 * key_step + 1
-                })
+                    (row % (build_rows - 1)) as i32 * key_step + 1
+                }
             }));
-            let mut columns: Vec<ArrayRef> = vec![Arc::new(keys)];
-            if schema.fields().len() > 1 {
-                columns.push(Arc::new(Int64Array::from_iter_values(
-                    (start..end).map(|row| row as i64),
-                )));
-                columns.push(Arc::new(StringArray::from_iter_values(
-                    (start..end).map(|row| format!("{row:0PAYLOAD_BYTES$}")),
-                )));
-            }
+            let columns: Vec<ArrayRef> = vec![
+                Arc::new(keys),
+                Arc::new(Int32Array::from_iter_values(
+                    (start..end).map(|row| row as i32),
+                )),
+                Arc::new(StringArray::from_iter_values(
+                    (start..end).map(|row| format!("{row}")),
+                )),
+            ];
             RecordBatch::try_new(Arc::clone(schema), columns).unwrap()
         })
         .collect()
 }
 
 fn make_join(
-    build: &Arc<dyn ExecutionPlan>,
-    probe: &Arc<dyn ExecutionPlan>,
+    build_batches: &[RecordBatch],
+    probe_batches: &[RecordBatch],
     join_type: JoinType,
-) -> HashJoinExec {
-    HashJoinExec::try_new(
-        Arc::clone(build),
-        Arc::clone(probe),
-        vec![(
-            col("key", &build.schema()).unwrap(),
-            col("key", &probe.schema()).unwrap(),
-        )],
+) -> Arc<dyn ExecutionPlan> {
+    let schema = build_batches[0].schema();
+    let build = TestMemoryExec::try_new_exec(
+        &[build_batches.to_vec()],
+        Arc::clone(&schema),
         None,
-        &join_type,
-        None,
-        PartitionMode::CollectLeft,
-        NullEquality::NullEqualsNothing,
-        false,
     )
-    .unwrap()
+    .unwrap();
+    let probe = TestMemoryExec::try_new_exec(
+        &[probe_batches.to_vec()],
+        Arc::clone(&schema),
+        None,
+    )
+    .unwrap();
+    Arc::new(
+        HashJoinExec::try_new(
+            build,
+            probe,
+            vec![(col("key", &schema).unwrap(), col("key", &schema).unwrap())],
+            None,
+            &join_type,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    )
 }
 
 fn bench_hash_join_probe(c: &mut Criterion) {
@@ -134,185 +133,147 @@ fn bench_hash_join_probe(c: &mut Criterion) {
         .unwrap()
         .with_batch_size(BATCH_SIZE);
     let context = Arc::new(TaskContext::default().with_session_config(config));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("key", DataType::Int32, false),
+        Field::new("data", DataType::Int32, false),
+        Field::new("payload", DataType::Utf8, false),
+    ]));
     let mut group = c.benchmark_group("hash_join_probe");
-    // Default PHJ settings select ArrayMap only for the dense case. Sparse keys
-    // span 131,057 values; wide keys span 524,225.
-    for (name, pattern, key_step, join_type, with_payload) in [
+    for (name, join_type, pattern, build_rows, probe_rows, key_step) in [
         (
-            "low_hit_in_range",
-            Pattern::InRange,
+            "right_semi_interleaved_10pct",
+            JoinType::RightSemi,
+            Pattern::InterleavedLowHit,
+            BUILD_ROWS,
+            PROBE_ROWS,
             SPARSE_KEY_STEP,
-            JoinType::Inner,
-            false,
         ),
         (
-            "low_hit_out_of_range",
-            Pattern::OutOfRange,
-            SPARSE_KEY_STEP,
-            JoinType::Inner,
-            false,
-        ),
-        (
-            "high_to_low",
-            Pattern::HighToLow,
-            SPARSE_KEY_STEP,
-            JoinType::Inner,
-            false,
-        ),
-        (
-            "low_to_high",
-            Pattern::LowToHigh,
-            SPARSE_KEY_STEP,
-            JoinType::Inner,
-            false,
-        ),
-        (
-            "all_hit",
+            "right_semi_all_hit",
+            JoinType::RightSemi,
             Pattern::AllHit,
+            BUILD_ROWS,
+            PROBE_ROWS,
             SPARSE_KEY_STEP,
-            JoinType::Inner,
-            false,
         ),
         (
-            "short_probe",
-            Pattern::ShortProbe,
+            "right_anti_interleaved_10pct",
+            JoinType::RightAnti,
+            Pattern::InterleavedLowHit,
+            BUILD_ROWS,
+            PROBE_ROWS,
             SPARSE_KEY_STEP,
-            JoinType::Inner,
-            false,
         ),
         (
-            "dense",
-            Pattern::OutOfRange,
+            "right_anti_all_hit",
+            JoinType::RightAnti,
+            Pattern::AllHit,
+            BUILD_ROWS,
+            PROBE_ROWS,
+            SPARSE_KEY_STEP,
+        ),
+        (
+            "inner_interleaved_10pct",
+            JoinType::Inner,
+            Pattern::InterleavedLowHit,
+            BUILD_ROWS,
+            PROBE_ROWS,
+            SPARSE_KEY_STEP,
+        ),
+        (
+            "inner_all_hit",
+            JoinType::Inner,
+            Pattern::AllHit,
+            BUILD_ROWS,
+            PROBE_ROWS,
+            SPARSE_KEY_STEP,
+        ),
+        (
+            "right_semi_clustered_10pct",
+            JoinType::RightSemi,
+            Pattern::ClusteredLowHit,
+            BUILD_ROWS,
+            PROBE_ROWS,
+            SPARSE_KEY_STEP,
+        ),
+        (
+            "right_anti_clustered_10pct",
+            JoinType::RightAnti,
+            Pattern::ClusteredLowHit,
+            BUILD_ROWS,
+            PROBE_ROWS,
+            SPARSE_KEY_STEP,
+        ),
+        (
+            "right_semi_high_to_low",
+            JoinType::RightSemi,
+            Pattern::HighToLow,
+            BUILD_ROWS,
+            PROBE_ROWS,
+            SPARSE_KEY_STEP,
+        ),
+        (
+            "right_anti_high_to_low",
+            JoinType::RightAnti,
+            Pattern::HighToLow,
+            BUILD_ROWS,
+            PROBE_ROWS,
+            SPARSE_KEY_STEP,
+        ),
+        (
+            "right_semi_single_batch_all_hit",
+            JoinType::RightSemi,
+            Pattern::AllHit,
+            BUILD_ROWS,
+            BATCH_SIZE,
+            SPARSE_KEY_STEP,
+        ),
+        (
+            "right_semi_dense_100k_all_hit",
+            JoinType::RightSemi,
+            Pattern::AllHit,
+            LARGE_BUILD_ROWS,
+            PROBE_ROWS,
             DENSE_KEY_STEP,
-            JoinType::Inner,
-            false,
         ),
         (
-            "wide_range",
-            Pattern::InRange,
-            WIDE_KEY_STEP,
-            JoinType::Inner,
-            false,
-        ),
-        (
-            "right_semi_low_hit",
-            Pattern::InRange,
-            SPARSE_KEY_STEP,
+            "right_semi_sparse_100k_all_hit",
             JoinType::RightSemi,
-            false,
-        ),
-        (
-            "right_anti_low_hit",
-            Pattern::InRange,
+            Pattern::AllHit,
+            LARGE_BUILD_ROWS,
+            PROBE_ROWS,
             SPARSE_KEY_STEP,
-            JoinType::RightAnti,
-            false,
-        ),
-        (
-            "inner_low_hit_payload",
-            Pattern::InRange,
-            SPARSE_KEY_STEP,
-            JoinType::Inner,
-            true,
-        ),
-        (
-            "right_semi_low_hit_payload",
-            Pattern::InRange,
-            SPARSE_KEY_STEP,
-            JoinType::RightSemi,
-            true,
-        ),
-        (
-            "right_anti_low_hit_payload",
-            Pattern::InRange,
-            SPARSE_KEY_STEP,
-            JoinType::RightAnti,
-            true,
-        ),
-        (
-            "null_heavy_hits",
-            Pattern::NullHeavyHits,
-            SPARSE_KEY_STEP,
-            JoinType::Inner,
-            false,
-        ),
-        (
-            "null_heavy_misses",
-            Pattern::NullHeavyMisses,
-            SPARSE_KEY_STEP,
-            JoinType::Inner,
-            false,
         ),
     ] {
-        let nullable =
-            matches!(pattern, Pattern::NullHeavyHits | Pattern::NullHeavyMisses);
-        let mut fields = vec![Field::new("key", DataType::Int32, nullable)];
-        if with_payload {
-            fields.push(Field::new("row_id", DataType::Int64, false));
-            fields.push(Field::new("payload", DataType::Utf8, false));
-        }
-        let schema = Arc::new(Schema::new(fields));
-        let rows = if matches!(pattern, Pattern::ShortProbe) {
-            SHORT_PROBE_ROWS
-        } else {
-            PROBE_ROWS
+        let build =
+            make_batches(build_rows, build_rows, key_step, Pattern::AllHit, &schema);
+        let probe = make_batches(probe_rows, build_rows, key_step, pattern, &schema);
+        let run = || {
+            let join = make_join(&build, &probe, join_type);
+            rt.block_on(collect(join, Arc::clone(&context))).unwrap()
         };
+
         let hits = match pattern {
-            Pattern::AllHit => rows,
-            Pattern::HighToLow | Pattern::LowToHigh => {
-                PHASE_ROWS + PHASE_ROWS / HIT_EVERY
+            Pattern::AllHit => probe_rows,
+            Pattern::InterleavedLowHit | Pattern::ClusteredLowHit => {
+                probe_rows / HIT_EVERY
             }
-            Pattern::NullHeavyHits => rows / NON_NULL_EVERY,
-            Pattern::NullHeavyMisses => 0,
-            _ => rows / HIT_EVERY,
+            Pattern::HighToLow => probe_rows / 2 + probe_rows / 2 / HIT_EVERY,
         };
-        let expected = if join_type == JoinType::RightAnti {
-            rows - hits
+        let expected_rows = if join_type == JoinType::RightAnti {
+            probe_rows - hits
         } else {
             hits
         };
-        let expected_columns =
-            schema.fields().len() * if join_type == JoinType::Inner { 2 } else { 1 };
-        let build: Arc<dyn ExecutionPlan> = TestMemoryExec::try_new_exec(
-            &[make_batches(BUILD_ROWS, key_step, Pattern::AllHit, &schema)],
-            Arc::clone(&schema),
-            None,
-        )
-        .unwrap();
-        let probe: Arc<dyn ExecutionPlan> = TestMemoryExec::try_new_exec(
-            &[make_batches(rows, key_step, pattern, &schema)],
-            Arc::clone(&schema),
-            None,
-        )
-        .unwrap();
+        let output = run();
+        assert_eq!(
+            output.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            expected_rows,
+            "{name}",
+        );
+        drop(output);
 
-        let diagnostic = make_join(&build, &probe, join_type);
-        let output_rows = rt.block_on(async {
-            let mut stream = diagnostic.execute(0, Arc::clone(&context)).unwrap();
-            let mut output_rows = 0;
-            while let Some(batch) = stream.next().await {
-                let batch = batch.unwrap();
-                assert_eq!(batch.num_columns(), expected_columns, "{name}");
-                output_rows += batch.num_rows();
-            }
-            output_rows
-        });
-        assert_eq!(output_rows, expected, "{name}");
-
-        group.bench_function(name, |b| {
-            b.iter_batched(
-                || make_join(&build, &probe, join_type),
-                |join| {
-                    rt.block_on(async {
-                        let mut stream = join.execute(0, Arc::clone(&context)).unwrap();
-                        while let Some(batch) = stream.next().await {
-                            black_box(batch.unwrap());
-                        }
-                    })
-                },
-                BatchSize::LargeInput,
-            );
-        });
+        group.bench_function(name, |b| b.iter(|| black_box(run())));
     }
     group.finish();
 }
