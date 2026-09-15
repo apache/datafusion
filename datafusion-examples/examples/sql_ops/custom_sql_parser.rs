@@ -18,6 +18,11 @@
 //! This example demonstrates extending the DataFusion SQL parser to support
 //! custom DDL statements, specifically `CREATE FOREIGN CATALOG`.
 //!
+//! Note: DataFusion supports `CREATE EXTERNAL CATALOG` out-of-the-box making use of
+//! [`CatalogProviderFactory`](datafusion::catalog::CatalogProviderFactory). This example
+//! is a partial reimplementation of the existing functionality to demonstrate how to extend the
+//! SQL parser.
+//!
 //! ### Custom Syntax
 //! ```sql
 //! CREATE FOREIGN CATALOG my_catalog
@@ -296,28 +301,23 @@ impl<'a> CustomParser<'a> {
     }
 
     pub fn parse_statement(&mut self) -> Result<CustomStatement> {
-        if self.is_create_foreign_catalog() {
-            return self.parse_create_foreign_catalog();
+        if let Some(cfc) = self.parse_create_foreign_catalog()? {
+            return Ok(CustomStatement::CreateForeignCatalog(cfc));
         }
+
         Ok(CustomStatement::DFStatement(Box::new(
             self.df_parser.parse_statement()?,
         )))
     }
 
-    fn is_create_foreign_catalog(&self) -> bool {
-        let t1 = &self.df_parser.parser.peek_nth_token(0).token;
-        let t2 = &self.df_parser.parser.peek_nth_token(1).token;
-        let t3 = &self.df_parser.parser.peek_nth_token(2).token;
-
-        matches!(t1, Token::Word(w) if w.keyword == Keyword::CREATE)
-            && matches!(t2, Token::Word(w) if w.keyword == Keyword::FOREIGN)
-            && matches!(t3, Token::Word(w) if w.value.to_uppercase() == "CATALOG")
-    }
-
-    fn parse_create_foreign_catalog(&mut self) -> Result<CustomStatement> {
-        // Consume prefix tokens: CREATE FOREIGN CATALOG
-        for _ in 0..3 {
-            self.df_parser.parser.next_token();
+    /// Parses a `CREATE FOREIGN CATALOG` statement.
+    fn parse_create_foreign_catalog(&mut self) -> Result<Option<CreateForeignCatalog>> {
+        if !self.df_parser.parser.parse_keywords(&[
+            Keyword::CREATE,
+            Keyword::FOREIGN,
+            Keyword::CATALOG,
+        ]) {
+            return Ok(None);
         }
 
         let name = self
@@ -373,16 +373,13 @@ impl<'a> CustomParser<'a> {
             }
         }
 
-        Ok(CustomStatement::CreateForeignCatalog(
-            CreateForeignCatalog {
-                name,
-                catalog_type: catalog_type
-                    .ok_or_else(|| plan_datafusion_err!("Missing STORED AS"))?,
-                location: location
-                    .ok_or_else(|| plan_datafusion_err!("Missing LOCATION"))?,
-                options,
-            },
-        ))
+        Ok(Some(CreateForeignCatalog {
+            name,
+            catalog_type: catalog_type
+                .ok_or_else(|| plan_datafusion_err!("Missing STORED AS"))?,
+            location: location.ok_or_else(|| plan_datafusion_err!("Missing LOCATION"))?,
+            options,
+        }))
     }
 
     /// Parse options in the form: (key [=] value, key [=] value, ...)
