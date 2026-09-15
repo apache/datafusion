@@ -32,7 +32,9 @@ use crate::joins::hash_join::exec::{JoinLeftData, NullAwareMode};
 use crate::joins::hash_join::shared_bounds::{
     PartitionBounds, PartitionBuildData, SharedBuildAccumulator,
 };
+use crate::joins::integer_prefilter::PrefilterState;
 use crate::joins::utils::{OnceFut, equal_rows_arr, matchable_join_keys};
+use crate::metrics::Count;
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
     RecordBatchStream, SendableRecordBatchStream, handle_state,
@@ -53,6 +55,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, internal_datafusion_err, internal_err,
 };
+use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr::PhysicalExprRef;
 
 use datafusion_common::hash_utils::RandomState;
@@ -184,6 +187,8 @@ pub(super) struct ProcessProbeBatchState {
     /// exist and cannot match (`NullEquality::NullEqualsNothing`); NULL rows
     /// are skipped during JoinHashMap lookups
     valid_keys: Option<NullBuffer>,
+    /// Original validity combined with integer membership, for lookup only.
+    lookup_keys: Option<NullBuffer>,
     /// Starting offset for JoinHashMap lookups
     offset: MapOffset,
     /// Max joined probe-side index from current batch
@@ -345,6 +350,8 @@ pub(super) struct HashJoinStream {
     random_state: RandomState,
     /// Metrics
     join_metrics: BuildProbeJoinMetrics,
+    integer_prefilter_state: Option<(PrefilterState, MemoryReservation)>,
+    integer_prefilter_pruned_rows: Count,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
     /// Defines the null equality for the join.
@@ -533,6 +540,8 @@ impl HashJoinStream {
         mode: PartitionMode,
         null_aware: Option<NullAwareMode>,
         fetch: Option<usize>,
+        integer_prefilter_state: Option<(PrefilterState, MemoryReservation)>,
+        integer_prefilter_pruned_rows: Count,
     ) -> Self {
         // Create output buffer with coalescing and optional fetch limit.
         let output_buffer =
@@ -547,6 +556,8 @@ impl HashJoinStream {
             right,
             random_state,
             join_metrics,
+            integer_prefilter_state,
+            integer_prefilter_pruned_rows,
             column_indices,
             null_equality,
             state,
@@ -744,6 +755,10 @@ impl HashJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
+        // The previous batch's lookup mask has been released with its state.
+        if let Some((_, reservation)) = &self.integer_prefilter_state {
+            reservation.free();
+        }
         match ready!(self.right.poll_next_unpin(cx)) {
             None => {
                 // Release the probe-side input pipeline's resources. The schema
@@ -772,6 +787,51 @@ impl HashJoinStream {
                     None
                 };
 
+                let lookup_keys = if let (Some((state, reservation)), Some(filter)) = (
+                    self.integer_prefilter_state.as_mut(),
+                    self.build_side
+                        .try_as_ready()?
+                        .left_data
+                        .integer_prefilter
+                        .as_ref(),
+                ) {
+                    let timer = self.join_metrics.join_time.timer();
+                    let bytes = PrefilterState::mask_memory_size(
+                        batch.num_rows(),
+                        valid_keys.is_some(),
+                    );
+                    let lookup_keys = if bytes
+                        .is_some_and(|bytes| reservation.try_resize(bytes).is_ok())
+                    {
+                        let (mask, pruned) = state.filter(
+                            filter,
+                            keys_values[0].as_ref(),
+                            valid_keys.as_ref(),
+                        );
+                        self.integer_prefilter_pruned_rows.add(pruned);
+                        if mask.is_some() {
+                            let lookup =
+                                NullBuffer::union(valid_keys.as_ref(), mask.as_ref());
+                            drop(mask);
+                            reservation.resize(
+                                lookup
+                                    .as_ref()
+                                    .map_or(0, |mask| mask.inner().inner().capacity()),
+                            );
+                            lookup
+                        } else {
+                            reservation.free();
+                            valid_keys.clone()
+                        }
+                    } else {
+                        valid_keys.clone()
+                    };
+                    timer.done();
+                    lookup_keys
+                } else {
+                    valid_keys.clone()
+                };
+
                 self.join_metrics.input_batches.add(1);
                 self.join_metrics.input_rows.add(batch.num_rows());
 
@@ -780,6 +840,7 @@ impl HashJoinStream {
                         batch,
                         values: keys_values,
                         valid_keys,
+                        lookup_keys,
                         offset: (0, None),
                         joined_probe_idx: None,
                     });
@@ -864,7 +925,7 @@ impl HashJoinStream {
                 &state.values,
                 self.null_equality,
                 &self.hashes_buffer,
-                state.valid_keys.as_ref(),
+                state.lookup_keys.as_ref(),
                 self.batch_size,
                 state.offset,
                 &mut self.probe_indices_buffer,
