@@ -1752,3 +1752,21 @@ limit 2;
 
 statement ok
 drop table list_cast_limit;
+
+# GROUP BY / DISTINCT over a zero-field struct key must not panic on emit
+query ?I
+select arrow_cast(null, 'Struct()') as s, count(*) from (values (1),(2),(3)) group by 1;
+----
+NULL 3
+
+query ?
+select distinct arrow_cast(null, 'Struct()') as s from (values (1),(2));
+----
+NULL
+
+query ?I rowsort
+select named_struct('a', column1, 'z', arrow_cast(null, 'Struct()')) as s, count(*)
+from (values (1),(2),(1)) group by 1;
+----
+{a: 1, z: NULL} 2
+{a: 2, z: NULL} 1
