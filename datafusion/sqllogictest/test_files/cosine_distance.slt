@@ -165,3 +165,21 @@ query RT
 select cosine_distance([1.0, 0.0], [0.0, 1.0]), arrow_typeof(cosine_distance([1.0, 0.0], [0.0, 1.0]));
 ----
 1 Float64
+
+# cosine_distance scales each vector before multiplying, so finite inputs
+# whose products overflow or underflow still give the correct distance
+query RRR
+select
+  cosine_distance([CAST(3e200 AS DOUBLE), CAST(4e200 AS DOUBLE)], [CAST(3e200 AS DOUBLE), CAST(4e200 AS DOUBLE)]),
+  cosine_distance([CAST(1e-200 AS DOUBLE), CAST(2e-200 AS DOUBLE)], [CAST(1e-200 AS DOUBLE), CAST(2e-200 AS DOUBLE)]),
+  cosine_distance([CAST(1e200 AS DOUBLE), CAST(0 AS DOUBLE)], [CAST(-1e-200 AS DOUBLE), CAST(0 AS DOUBLE)]);
+----
+0 0 2
+
+# non-finite inputs propagate as before
+query RR
+select
+  cosine_distance([CAST('NaN' AS DOUBLE), 1.0], [1.0, 1.0]),
+  cosine_distance([CAST('Infinity' AS DOUBLE), 1.0], [1.0, 1.0]);
+----
+NaN NaN
