@@ -1792,8 +1792,9 @@ fn build_predicate_expression(
             } else {
                 Operator::Or
             };
-            let change_expr = in_list
-                .list()
+            let mut sorted_list: Vec<_> = in_list.list().to_vec();
+            sorted_list.sort_by_key(|a| a.to_string());
+            let change_expr = sorted_list
                 .iter()
                 .map(|e| {
                     Arc::new(phys_expr::BinaryExpr::new(
