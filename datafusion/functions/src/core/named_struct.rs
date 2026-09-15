@@ -162,8 +162,10 @@ impl ScalarUDFImpl for NamedStructFunc {
 
         let values: Vec<ColumnarValue> = args
             .args
-            .chunks_exact(2)
-            .map(|chunk| chunk[1].clone())
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|[_name, value]| value.clone())
             .collect();
         let arrays = ColumnarValue::values_to_arrays(&values)?;
         Ok(ColumnarValue::Array(Arc::new(StructArray::new(

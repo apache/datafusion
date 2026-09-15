@@ -302,7 +302,7 @@ fn simplify_get_field_over_struct_constructor(args: &[Expr]) -> Option<Expr> {
             return None;
         }
         let mut matched = None;
-        for pair in ctor_args.chunks_exact(2) {
+        for [name_expr, value_expr] in ctor_args.as_chunks::<2>().0 {
             // Every name must be a literal string: a non-literal name appearing
             // *before* the first match could evaluate to `field_name` at runtime
             // and become the real first match (Arrow's `column_by_name` returns
@@ -313,13 +313,13 @@ fn simplify_get_field_over_struct_constructor(args: &[Expr]) -> Option<Expr> {
             // — it can never precede the first match — so bailing there is a
             // deliberate approximation we accept to keep this check simple, not a
             // correctness requirement.
-            let Expr::Literal(name, _) = &pair[0] else {
+            let Expr::Literal(name, _) = name_expr else {
                 return None;
             };
             let name = name.try_as_str().flatten()?;
             // `column_by_name` resolves to the first match, so do the same.
             if matched.is_none() && name == field_name {
-                matched = Some(&pair[1]);
+                matched = Some(value_expr);
             }
         }
         matched?.clone()
