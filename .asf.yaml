@@ -111,6 +111,35 @@ github:
     branch-55:
       required_pull_request_reviews:
         required_approving_review_count: 1
+  # Manage the existing main-branch queue through ASF, as in datafusion-comet.
+  # These parameters preserve the queue configuration set up by ASF Infra.
+  # After this ruleset is applied and verified, retire the legacy merge-queue
+  # setting in classic branch protection (INFRA-27154).
+  rulesets:
+    - name: Merge Queue
+      target: branch
+      enforcement: active
+      bypass_actors:
+        # apache/root (ASF Infra) can recover a blocked queue.
+        - actor_id: 118420
+          actor_type: Team
+          bypass_mode: always
+      conditions:
+        ref_name:
+          include:
+            - "~DEFAULT_BRANCH"
+          exclude: []
+      rules:
+        - type: merge_queue
+          parameters:
+            merge_method: SQUASH
+            grouping_strategy: ALLGREEN
+            max_entries_to_build: 5
+            # Preserve one PR per squash commit for ASF attribution.
+            min_entries_to_merge: 1
+            max_entries_to_merge: 1
+            min_entries_to_merge_wait_minutes: 5
+            check_response_timeout_minutes: 60
   pull_requests:
     # enable updating head branches of pull requests
     allow_update_branch: true
