@@ -17,20 +17,19 @@
 
 //! [`ScalarUDFImpl`] definitions for map_extract functions.
 
-use crate::utils::{get_map_entry_field, make_scalar_function};
-use arrow::array::{
-    Array, ArrayRef, ListArray, MapArray, MutableArrayData, make_array, new_empty_array,
-};
+use crate::utils::get_map_entry_field;
+use arrow::array::{Array, ArrayRef, ListArray, MapArray, UInt32Array};
 use arrow::buffer::OffsetBuffer;
-use arrow::compute::SortOptions;
+use arrow::compute::take;
 use arrow::datatypes::{DataType, Field};
-use arrow_ord::ord::make_comparator;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, cast::as_map_array, exec_err};
+use datafusion_expr::function::Hint;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
 };
+use datafusion_functions::utils::{make_scalar_function, map_lookup};
 use datafusion_macros::user_doc;
 use std::sync::Arc;
 
@@ -119,7 +118,11 @@ impl ScalarUDFImpl for MapExtract {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(map_extract_inner)(&args.args)
+        // A scalar key is passed through as a single row rather than expanded
+        // to the batch size; the lookup applies it to every map row.
+        make_scalar_function(map_extract_inner, vec![Hint::Pad, Hint::AcceptsSingular])(
+            &args.args,
+        )
     }
 
     fn aliases(&self) -> &[String] {
@@ -149,79 +152,34 @@ fn general_map_extract_inner(
     map_array: &MapArray,
     query_keys_array: &dyn Array,
 ) -> Result<ArrayRef> {
-    let keys = map_array.keys();
-    let values = map_array.values();
-    let field = Arc::new(Field::new_list_field(map_array.value_type().clone(), true));
-    let map_offsets = map_array.value_offsets();
-    if map_offsets.first() == map_offsets.last() {
-        return Ok(Arc::new(ListArray::new(
-            field,
-            OffsetBuffer::new_zeroed(map_array.len()),
-            new_empty_array(values.data_type()),
-            map_array.nulls().cloned(),
-        )));
-    }
-
-    // Compare keys by index using a single comparator for the batch.
-    let compare =
-        make_comparator(keys.as_ref(), query_keys_array, SortOptions::default())?;
-    let mut offsets = Vec::with_capacity(map_array.len() + 1);
-    offsets.push(0_i32);
-
-    let original_data = values.to_data();
-    // There is at most one output value per map row.
-    let mut mutable = MutableArrayData::new(
-        vec![&original_data],
-        false,
-        map_array.len().min(values.len()),
-    );
-
-    for (row_index, offset_window) in map_offsets.windows(2).enumerate() {
-        let start = offset_window[0] as usize;
-        let end = offset_window[1] as usize;
-        let mut offset = offsets[row_index];
-
-        if map_array.is_valid(row_index)
-            && let Some(index) = (start..end).find(|&i| compare(i, row_index).is_eq())
-        {
-            mutable.try_extend(0, index, index + 1)?;
-            offset += 1;
-        }
-
-        // A missing key results in an empty list.
-        offsets.push(offset);
-    }
-
-    let data = mutable.freeze();
-
+    let indices = map_lookup(map_array, query_keys_array)?;
+    // Each matched row contributes one list element. Every other row is an
+    // empty list, or NULL when the map itself is NULL.
+    let lengths = indices.iter().map(|index| usize::from(index.is_some()));
+    let mut matched = Vec::with_capacity(indices.len() - indices.null_count());
+    matched.extend(indices.iter().flatten());
+    let values = take(
+        map_array.values().as_ref(),
+        &UInt32Array::from(matched),
+        None,
+    )?;
     Ok(Arc::new(ListArray::new(
-        field,
-        OffsetBuffer::<i32>::new(offsets.into()),
-        make_array(data),
+        Arc::new(Field::new_list_field(map_array.value_type().clone(), true)),
+        OffsetBuffer::from_lengths(lengths),
+        values,
         map_array.nulls().cloned(),
     )))
 }
 
 fn map_extract_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [map_arg, key_arg] = take_function_args("map_extract", args)?;
-
-    let map_array = match map_arg.data_type() {
-        DataType::Map(_, _) => as_map_array(&map_arg)?,
-        DataType::Null => return Ok(Arc::clone(map_arg)),
-        _ => return exec_err!("The first argument in map_extract must be a map"),
-    };
-
-    let key_type = map_array.key_type();
-
-    if key_type != key_arg.data_type() {
-        return exec_err!(
-            "The key type {} does not match the map key type {}",
-            key_arg.data_type(),
-            key_type
-        );
+    match map_arg.data_type() {
+        DataType::Map(_, _) => {
+            general_map_extract_inner(as_map_array(map_arg.as_ref())?, key_arg.as_ref())
+        }
+        DataType::Null => Ok(Arc::clone(map_arg)),
+        _ => exec_err!("The first argument in map_extract must be a map"),
     }
-
-    general_map_extract_inner(map_array, key_arg)
 }
 
 #[cfg(test)]
