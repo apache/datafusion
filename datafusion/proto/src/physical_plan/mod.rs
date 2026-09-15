@@ -1399,10 +1399,10 @@ pub trait PhysicalPlanNodeExt: Sized {
             .map(|i| proto_converter.proto_to_execution_plan(i, ctx))
             .collect::<Result<_>>()?;
 
-        let extension_node = ctx.codec().try_decode(
+        let extension_node = ctx.codec().try_decode_with_ctx(
             extension.node.as_slice(),
             &inputs,
-            ctx.task_ctx(),
+            ctx,
             proto_converter,
         )?;
 
@@ -1664,6 +1664,29 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync + Any {
         ctx: &TaskContext,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>>;
+
+    /// Decode a custom extension plan from `buf`, with access to the full
+    /// decode context.
+    ///
+    /// Implement this instead of relying on [`Self::try_decode`] when the codec
+    /// decodes nested expressions or plans itself, for example through
+    /// [`PhysicalProtoConverterExtension::proto_to_physical_expr`], and pass
+    /// `ctx` on to those calls. A context built with
+    /// [`PhysicalPlanDecodeContext::new`] starts empty, so it lacks state that
+    /// only exists while decoding the surrounding plan, such as the results of an
+    /// enclosing `ScalarSubqueryExec` that a `ScalarSubqueryExpr` is bound to.
+    ///
+    /// The default implementation calls [`Self::try_decode`] with
+    /// `ctx.task_ctx()`, so codecs that only implement `try_decode` keep working.
+    fn try_decode_with_ctx(
+        &self,
+        buf: &[u8],
+        inputs: &[Arc<dyn ExecutionPlan>],
+        ctx: &PhysicalPlanDecodeContext<'_>,
+        proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.try_decode(buf, inputs, ctx.task_ctx(), proto_converter)
+    }
 
     fn try_encode(
         &self,
@@ -2105,6 +2128,18 @@ impl PhysicalExtensionCodec for ComposedPhysicalExtensionCodec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.decode_protobuf(buf, |codec, data| {
             codec.try_decode(data, inputs, ctx, proto_converter)
+        })
+    }
+
+    fn try_decode_with_ctx(
+        &self,
+        buf: &[u8],
+        inputs: &[Arc<dyn ExecutionPlan>],
+        ctx: &PhysicalPlanDecodeContext<'_>,
+        proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.decode_protobuf(buf, |codec, data| {
+            codec.try_decode_with_ctx(data, inputs, ctx, proto_converter)
         })
     }
 
