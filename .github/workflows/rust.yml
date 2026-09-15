@@ -78,6 +78,29 @@ jobs:
       - name: Prepare cargo build
         # `--locked` asserts that Cargo.lock is up to date with the manifest.
         run: cargo xtask ci step check workspace
+      - name: Archive Cargo check artifacts
+        id: archive-check
+        continue-on-error: true
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/cargo-check"
+          # Preserve source timestamps so Cargo can reuse workspace crates.
+          git ls-files -z | tar --null -T - -cf "$RUNNER_TEMP/cargo-check/check-workspace.tar" target
+          # -C incremental=false creates per-crate caches named "false".
+          tar --anchored --no-wildcards-match-slash \
+            --exclude='registry/src/*/*/false' \
+            -cf "$RUNNER_TEMP/cargo-check/check-registry.tar" -C "$CARGO_HOME" registry
+      - name: Upload Cargo check artifacts
+        if: steps.archive-check.outcome == 'success'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: cargo-check
+          path: ${{ runner.temp }}/cargo-check/
+          compression-level: 1
+          retention-days: 1
+          if-no-files-found: error
+          overwrite: true
 
   # Check datafusion-common features
   #
@@ -116,6 +139,8 @@ jobs:
   linux-datafusion-substrait-features:
     name: cargo check datafusion-substrait features
     needs: linux-build-lib
+    env:
+      CARGO_INCREMENTAL: "0"
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -125,11 +150,18 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+      - name: Download Cargo check artifacts
+        id: download-check
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
-          save-if: false # set in linux-test
-          shared-key: "amd-ci"
+          name: cargo-check
+          path: ${{ runner.temp }}/cargo-check
+      - name: Restore Cargo check artifacts
+        if: steps.download-check.outcome == 'success'
+        run: |
+          tar -xf "$RUNNER_TEMP/cargo-check/check-workspace.tar"
+          tar -xf "$RUNNER_TEMP/cargo-check/check-registry.tar" -C "$CARGO_HOME"
       - name: Check datafusion-substrait (default features)
         run: cargo xtask ci step check datafusion-substrait default
         #
@@ -215,6 +247,8 @@ jobs:
   linux-cargo-check-datafusion:
     name: cargo check datafusion features
     needs: linux-build-lib
+    env:
+      CARGO_INCREMENTAL: "0"
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -225,11 +259,18 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+      - name: Download Cargo check artifacts
+        id: download-check
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
-          save-if: false # set in linux-test
-          shared-key: "amd-ci"
+          name: cargo-check
+          path: ${{ runner.temp }}/cargo-check
+      - name: Restore Cargo check artifacts
+        if: steps.download-check.outcome == 'success'
+        run: |
+          tar -xf "$RUNNER_TEMP/cargo-check/check-workspace.tar"
+          tar -xf "$RUNNER_TEMP/cargo-check/check-registry.tar" -C "$CARGO_HOME"
       - name: Check datafusion (default features)
         run: cargo xtask ci step check datafusion default
       #
