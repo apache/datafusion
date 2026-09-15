@@ -214,6 +214,10 @@ impl MemoryPool for PeakRecordingPool {
     fn memory_limit(&self) -> MemoryLimit {
         self.inner.memory_limit()
     }
+
+    fn memory_limit_for(&self, consumer: &MemoryConsumer) -> MemoryLimit {
+        self.inner.memory_limit_for(consumer)
+    }
 }
 
 #[cfg(test)]

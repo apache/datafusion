@@ -63,7 +63,9 @@ use datafusion_common::{
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::memory_pool::{
+    MemoryConsumer, MemoryLimit, MemoryPool, MemoryReservation,
+};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::expressions::Column;
@@ -373,6 +375,9 @@ pub(crate) struct GroupedHashAggregateStream {
     /// The memory reservation for this grouping
     reservation: MemoryReservation,
 
+    /// The pool used to determine the consumer's allowance for spill replay.
+    memory_pool: Arc<dyn MemoryPool>,
+
     /// The behavior to trigger when out of memory occurs
     oom_mode: OutOfMemoryMode,
 
@@ -627,6 +632,7 @@ impl GroupedHashAggregateStream {
             filter_expressions,
             group_by: agg_group_by,
             reservation,
+            memory_pool: Arc::clone(context.memory_pool()),
             oom_mode,
             group_values,
             current_group_indices: Default::default(),
@@ -1359,6 +1365,15 @@ impl GroupedHashAggregateStream {
             // Mark that we're switching to stream merging mode.
             self.spill_state.is_stream_merging = true;
 
+            // Leave room for aggregate state to grow while replaying the merged
+            // spill rows. Both reservations share this consumer's allowance.
+            let merge_memory_limit = match self
+                .memory_pool
+                .memory_limit_for(self.reservation.consumer())
+            {
+                MemoryLimit::Finite(limit) => MemoryLimit::Finite(limit / 2),
+                limit => limit,
+            };
             self.input = StreamingMergeBuilder::new()
                 .with_schema(Arc::clone(&self.spill_state.spill_schema))
                 .with_spill_manager(self.spill_state.spill_manager.clone())
@@ -1367,6 +1382,7 @@ impl GroupedHashAggregateStream {
                 .with_metrics(self.baseline_metrics.clone())
                 .with_batch_size(self.batch_size)
                 .with_reservation(self.reservation.new_empty())
+                .with_spill_merge_memory_limit(merge_memory_limit)
                 .build()?;
             self.input_done = false;
 

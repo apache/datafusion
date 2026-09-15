@@ -251,6 +251,11 @@ impl MemoryPool for MergeMemoryPool {
     fn memory_limit(&self) -> MemoryLimit {
         self.parent.memory_limit()
     }
+
+    fn memory_limit_for(&self, _consumer: &MemoryConsumer) -> MemoryLimit {
+        let state = self.state.lock();
+        self.parent.memory_limit_for(state.reservation.consumer())
+    }
 }
 
 #[cfg(test)]

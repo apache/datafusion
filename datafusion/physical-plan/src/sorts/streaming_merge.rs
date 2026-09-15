@@ -31,7 +31,8 @@ use datafusion_common::human_readable_size;
 use datafusion_common::{Result, assert_or_internal_err, internal_err};
 use datafusion_execution::SpillFile;
 use datafusion_execution::memory_pool::{
-    MemoryConsumer, MemoryPool, MemoryReservation, MergeMemoryPool, UnboundedMemoryPool,
+    MemoryConsumer, MemoryLimit, MemoryPool, MemoryReservation, MergeMemoryPool,
+    UnboundedMemoryPool,
 };
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use std::sync::Arc;
@@ -96,6 +97,8 @@ pub struct StreamingMergeBuilder<'a> {
     fetch: Option<usize>,
     reservation: Option<MemoryReservation>,
     merge_pool: Option<Arc<MergeMemoryPool>>,
+    /// Optional fan-in budget when spill replay shares a consumer with its parent.
+    spill_merge_memory_limit: Option<MemoryLimit>,
     enable_round_robin_tie_breaker: bool,
 }
 
@@ -161,6 +164,14 @@ impl<'a> StreamingMergeBuilder<'a> {
         self
     }
 
+    /// Limit spill-merge fan-in while leaving room for concurrent replay.
+    /// An unknown limit checks headroom through temporary pool reservations.
+    /// Temporary re-splitting workspace still uses the original memory pool.
+    pub(crate) fn with_spill_merge_memory_limit(mut self, limit: MemoryLimit) -> Self {
+        self.spill_merge_memory_limit = Some(limit);
+        self
+    }
+
     /// See [SortPreservingMergeExec::with_round_robin_repartition] for more
     /// information.
     ///
@@ -194,6 +205,7 @@ impl<'a> StreamingMergeBuilder<'a> {
             batch_size,
             reservation,
             merge_pool,
+            spill_merge_memory_limit,
             fetch,
             expressions,
             enable_round_robin_tie_breaker,
@@ -235,6 +247,9 @@ impl<'a> StreamingMergeBuilder<'a> {
                 enable_round_robin_tie_breaker,
             )
             .with_merge_pool(merge_pool)
+            .with_spill_merge_memory_limit(
+                spill_merge_memory_limit.unwrap_or(MemoryLimit::Infinite),
+            )
             .create_spillable_merge_stream());
         }
 
