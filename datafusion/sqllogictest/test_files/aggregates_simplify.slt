@@ -582,5 +582,20 @@ physical_plan
 03)----AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[min(distinct_simplify_t.v) FILTER (WHERE distinct_simplify_t.v > Int32(3)) as min(DISTINCT distinct_simplify_t.v) FILTER (WHERE distinct_simplify_t.v > Int64(3))]
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
+# min/max(DISTINCT) over floats now sees the raw values. Before this rule, the
+# inner group by of SingleDistinctToGroupBy turned -0.0 into 0.0 in its hash
+# key, so max(DISTINCT v) printed 0.0 here. Now it agrees with max(v).
+# The R column type prints -0.0 as 0, so compare the text form.
+statement ok
+CREATE TABLE distinct_simplify_float_t (v DOUBLE) AS VALUES (-1.0), (-0.0), (-0.0);
+
+query TTTT
+SELECT cast(min(DISTINCT v) AS VARCHAR), cast(max(DISTINCT v) AS VARCHAR), cast(min(v) AS VARCHAR), cast(max(v) AS VARCHAR) FROM distinct_simplify_float_t;
+----
+-1.0 -0.0 -1.0 -0.0
+
+statement ok
+DROP TABLE distinct_simplify_float_t;
+
 statement ok
 DROP TABLE distinct_simplify_t;
