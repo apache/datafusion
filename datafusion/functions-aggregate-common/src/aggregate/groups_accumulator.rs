@@ -25,7 +25,6 @@ pub mod prim_op;
 
 use std::mem::{size_of, size_of_val};
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
 
 use arrow::array::new_empty_array;
 use arrow::{
@@ -34,9 +33,9 @@ use arrow::{
     compute::take_arrays,
     datatypes::UInt32Type,
 };
-use datafusion_common::{Result, ScalarValue, arrow_datafusion_err, instant::Instant};
+use datafusion_common::{Result, ScalarValue, arrow_datafusion_err};
 use datafusion_expr_common::accumulator::{
-    Accumulator, AggregateMetric, AggregateMetrics,
+    Accumulator, AggregateMetric, AggregateMetricRecorder, AggregateMetrics,
 };
 use datafusion_expr_common::groups_accumulator::{
     EmitTo, GroupSelection, GroupsAccumulator,
@@ -283,9 +282,10 @@ impl GroupsAccumulatorAdapter {
 
         let mut sizes_pre = 0;
         let mut sizes_post = 0;
-        let mut aggregate_duration = Duration::ZERO;
+        let has_grouped_update_metric = grouped_update_metric.is_some();
+        let mut metric_recorder = AggregateMetricRecorder::new(grouped_update_metric);
         let result: Result<()> = (|| {
-            if grouped_update_metric.is_none() {
+            if !has_grouped_update_metric {
                 // Keep the pre-metrics single-pass path for accumulators that
                 // do not expose an aggregate-owned submetric.
                 for (&group_idx, offsets) in
@@ -343,20 +343,20 @@ impl GroupsAccumulatorAdapter {
                     sizes_pre += self.states[*group_idx].size();
                 }
 
-                let start = grouped_update_metric.as_ref().map(|_| Instant::now());
-                let mut successful_groups = 0;
-                let mut chunk_result = Ok(());
-                for (group_idx, values) in &values_to_accumulate {
-                    chunk_result =
-                        f(self.states[*group_idx].accumulator.as_mut(), values);
-                    if chunk_result.is_err() {
-                        break;
+                let (successful_groups, chunk_result) = {
+                    let _timer = metric_recorder.timer();
+                    let mut successful_groups = 0;
+                    let mut chunk_result = Ok(());
+                    for (group_idx, values) in &values_to_accumulate {
+                        chunk_result =
+                            f(self.states[*group_idx].accumulator.as_mut(), values);
+                        if chunk_result.is_err() {
+                            break;
+                        }
+                        successful_groups += 1;
                     }
-                    successful_groups += 1;
-                }
-                if let Some(start) = start {
-                    aggregate_duration += start.elapsed();
-                }
+                    (successful_groups, chunk_result)
+                };
                 for (index, (group_idx, _)) in values_to_accumulate.iter().enumerate() {
                     let state = &mut self.states[*group_idx];
                     if index < successful_groups {
@@ -371,9 +371,6 @@ impl GroupsAccumulatorAdapter {
             Ok(())
         })();
 
-        if let Some(metric) = grouped_update_metric {
-            metric.add_duration(aggregate_duration);
-        }
         self.adjust_allocation(sizes_pre, sizes_post);
         result
     }
@@ -563,8 +560,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
 
         // Each row has its respective group
         let mut results = vec![];
-        let mut grouped_update_metric = None;
-        let mut aggregate_duration = Duration::ZERO;
+        let mut metric_recorder = None;
         for chunk_start in (0..num_rows).step_by(GROUPED_METRIC_PREPARATION_CHUNK_SIZE) {
             let chunk_end =
                 (chunk_start + GROUPED_METRIC_PREPARATION_CHUNK_SIZE).min(num_rows);
@@ -575,8 +571,9 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
                 // outside the aggregate submetric.
                 let accumulator = self.create_accumulator()?;
                 if row_idx == 0 {
-                    grouped_update_metric =
-                        self.grouped_update_metric.get().and_then(Clone::clone);
+                    metric_recorder = Some(AggregateMetricRecorder::new(
+                        self.grouped_update_metric.get().and_then(Clone::clone),
+                    ));
                 }
                 let values_to_accumulate =
                     slice_and_maybe_filter(values, opt_filter, &[row_idx, row_idx + 1])?;
@@ -584,15 +581,16 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
             }
 
             // Time only aggregate-owned deduplication, once per bounded chunk.
-            let start = grouped_update_metric.as_ref().map(|_| Instant::now());
-            let update_result: Result<()> = prepared.iter_mut().try_for_each(
-                |(accumulator, values_to_accumulate)| {
-                    accumulator.update_batch_grouped(values_to_accumulate)
-                },
-            );
-            if let Some(start) = start {
-                aggregate_duration += start.elapsed();
-            }
+            let update_result: Result<()> = {
+                let _timer = metric_recorder
+                    .as_mut()
+                    .and_then(AggregateMetricRecorder::timer);
+                prepared
+                    .iter_mut()
+                    .try_for_each(|(accumulator, values_to_accumulate)| {
+                        accumulator.update_batch_grouped(values_to_accumulate)
+                    })
+            };
             update_result?;
 
             for (mut accumulator, _) in prepared {
@@ -606,10 +604,6 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
                     results[idx].push(state_val);
                 }
             }
-        }
-
-        if let Some(metric) = grouped_update_metric {
-            metric.add_duration(aggregate_duration);
         }
 
         let arrays = results
@@ -845,6 +839,29 @@ mod tests {
         let values: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3, 4]));
         let filter = BooleanArray::from(vec![true, false, true, false]);
         accumulator.update_batch(&[values], &[0, 0, 1, 1], Some(&filter), 2)?;
+
+        assert_eq!(metric_updates.load(Ordering::Relaxed), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn adapter_grouped_update_records_zero_duration_for_empty_batch() -> Result<()> {
+        let metric_updates = Arc::new(AtomicUsize::new(0));
+        let mut accumulator = GroupsAccumulatorAdapter::new({
+            let metric_updates = Arc::clone(&metric_updates);
+            move || {
+                Ok(Box::new(TimedAccumulator {
+                    metric: Arc::new(CountingMetric(Arc::clone(&metric_updates))),
+                }) as Box<dyn Accumulator>)
+            }
+        });
+
+        let values: ArrayRef = Arc::new(Int64Array::from(vec![1]));
+        accumulator.update_batch(&[values], &[0], None, 1)?;
+        metric_updates.store(0, Ordering::Relaxed);
+
+        let empty_values: ArrayRef = Arc::new(Int64Array::from(Vec::<i64>::new()));
+        accumulator.update_batch(&[empty_values], &[], None, 1)?;
 
         assert_eq!(metric_updates.load(Ordering::Relaxed), 1);
         Ok(())
@@ -1106,6 +1123,31 @@ mod tests {
                     .map(AccumulatorState::size)
                     .sum::<usize>()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn adapter_convert_to_state_records_metric_on_update_error() -> Result<()> {
+        let created = Arc::new(AtomicUsize::new(0));
+        let metric_updates = Arc::new(AtomicUsize::new(0));
+        let metric: Arc<dyn AggregateMetric> =
+            Arc::new(CountingMetric(Arc::clone(&metric_updates)));
+        let accumulator = GroupsAccumulatorAdapter::new({
+            let created = Arc::clone(&created);
+            move || {
+                let group = created.fetch_add(1, Ordering::Relaxed);
+                Ok(Box::new(FailOnceAccumulator {
+                    fail_first_update: group == 1,
+                    successful_group_rows: None,
+                    allocation_bytes: 0,
+                    metric: Some(Arc::clone(&metric)),
+                }) as Box<dyn Accumulator>)
+            }
+        });
+
+        let values: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
+        assert!(accumulator.convert_to_state(&[values], None).is_err());
+        assert_eq!(metric_updates.load(Ordering::Relaxed), 1);
         Ok(())
     }
 

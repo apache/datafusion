@@ -18,7 +18,7 @@
 //! Accumulator module contains the trait definition for aggregation function's accumulators.
 
 use arrow::array::ArrayRef;
-use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_common::{Result, ScalarValue, instant::Instant, internal_err};
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
@@ -41,6 +41,55 @@ pub trait AggregateMetric: Debug + Send + Sync + std::panic::RefUnwindSafe {
 pub trait AggregateMetrics: Debug + Send + Sync {
     /// Returns the metric for an aggregate-owned internal subphase.
     fn metric(&self, subphase: &'static str) -> Arc<dyn AggregateMetric>;
+}
+
+/// Publishes aggregate-owned timing when dropped.
+///
+/// Create this before the operation that may return an error, and scope each
+/// [`Self::timer`] to only the aggregate-owned work. All timed intervals are
+/// combined into one metric update when the recorder is dropped.
+pub struct AggregateMetricRecorder {
+    metric: Option<Arc<dyn AggregateMetric>>,
+    duration: Duration,
+}
+
+impl AggregateMetricRecorder {
+    /// Creates a recorder for an optional aggregate-owned metric.
+    pub fn new(metric: Option<Arc<dyn AggregateMetric>>) -> Self {
+        Self {
+            metric,
+            duration: Duration::ZERO,
+        }
+    }
+
+    /// Starts timing one aggregate-owned interval.
+    pub fn timer(&mut self) -> Option<AggregateMetricTimer<'_>> {
+        self.metric.as_ref()?;
+        Some(AggregateMetricTimer {
+            duration: &mut self.duration,
+            start: Instant::now(),
+        })
+    }
+}
+
+impl Drop for AggregateMetricRecorder {
+    fn drop(&mut self) {
+        if let Some(metric) = &self.metric {
+            metric.add_duration(self.duration);
+        }
+    }
+}
+
+/// One aggregate-owned interval recorded by [`AggregateMetricRecorder`].
+pub struct AggregateMetricTimer<'a> {
+    duration: &'a mut Duration,
+    start: Instant,
+}
+
+impl Drop for AggregateMetricTimer<'_> {
+    fn drop(&mut self) {
+        *self.duration += self.start.elapsed();
+    }
 }
 
 /// Tracks an aggregate function's state.

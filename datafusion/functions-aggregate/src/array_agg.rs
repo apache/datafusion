@@ -38,14 +38,13 @@ use datafusion_common::scalar::copy_array_data;
 use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::utils::proxy::HashTableAllocExt;
 use datafusion_common::{
-    Result, ScalarValue, assert_eq_or_internal_err, exec_err, instant::Instant,
-    internal_err,
+    Result, ScalarValue, assert_eq_or_internal_err, exec_err, internal_err,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateMetric, AggregateMetrics, AggregateUDFImpl, Documentation,
-    EmitTo, GroupsAccumulator, Signature, Volatility,
+    Accumulator, AggregateMetric, AggregateMetricRecorder, AggregateMetrics,
+    AggregateUDFImpl, Documentation, EmitTo, GroupsAccumulator, Signature, Volatility,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filter_to_nulls;
 use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
@@ -954,8 +953,9 @@ impl DistinctArrayAggAccumulator {
         let distinct_metric = record_metric
             .then(|| self.distinct_metric.clone())
             .flatten();
-        let distinct_start = distinct_metric.as_ref().map(|_| Instant::now());
-        let result = (|| {
+        let mut metric_recorder = AggregateMetricRecorder::new(distinct_metric);
+        (|| {
+            let _timer = metric_recorder.timer();
             self.ensure_state(col.data_type())?;
 
             // Encode the entire incoming batch into rows_buffer in one pass.
@@ -1003,11 +1003,7 @@ impl DistinctArrayAggAccumulator {
                 }
             }
             Ok(())
-        })();
-        if let (Some(metric), Some(start)) = (distinct_metric, distinct_start) {
-            metric.add_duration(start.elapsed());
-        }
-        result
+        })()
     }
 }
 
@@ -1026,21 +1022,19 @@ impl DistinctArrayAggAccumulator {
         let distinct_metric = record_metric
             .then(|| self.distinct_metric.clone())
             .flatten();
-        let distinct_start = distinct_metric.as_ref().map(|_| Instant::now());
+        let mut metric_recorder = AggregateMetricRecorder::new(distinct_metric);
 
         // The DISTINCT state is `List<value>`. This calls the update
         // implementation once per state row, so record the submetric once for
         // the entire merge rather than once per row.
-        let result = states[0]
-            .as_list::<i32>()
-            .iter()
-            .flatten()
-            .try_for_each(|val| self.update_batch_impl(&[val], false));
-
-        if let (Some(metric), Some(start)) = (distinct_metric, distinct_start) {
-            metric.add_duration(start.elapsed());
+        {
+            let _timer = metric_recorder.timer();
+            states[0]
+                .as_list::<i32>()
+                .iter()
+                .flatten()
+                .try_for_each(|val| self.update_batch_impl(&[val], false))
         }
-        result
     }
 }
 
