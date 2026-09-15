@@ -34,7 +34,7 @@ pub use piecewise_merge_join::PiecewiseMergeJoinExec;
 pub use sort_merge_join::SortMergeJoinExec;
 pub use symmetric_hash_join::SymmetricHashJoinExec;
 mod asof_join;
-pub mod chain;
+mod chain;
 mod cross_join;
 mod hash_join;
 mod integer_prefilter;

@@ -15,10 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fmt;
 use std::mem::size_of;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::vec;
 
@@ -28,11 +27,12 @@ use crate::execution_plan::{
 };
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
-    FilterPushdownPropagation,
+    FilterPushdownPropagation, PushedDownPredicate,
 };
 use crate::joins::Map;
 use crate::joins::array_map::ArrayMap;
 use crate::joins::hash_join::inlist_builder::build_struct_inlist_values;
+use crate::joins::hash_join::probe_completion::{ProbeCompletion, ProbeSideSummary};
 use crate::joins::hash_join::shared_bounds::{
     ColumnBounds, PartitionBounds, PushdownStrategy, SharedBuildAccumulator,
 };
@@ -77,7 +77,7 @@ use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use arrow_schema::{DataType, Schema};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::utils::memory::{RecordBatchMemoryCounter, estimate_memory_size};
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, assert_or_internal_err, internal_err,
@@ -296,9 +296,9 @@ pub(super) struct JoinLeftData {
     visited_indices_bitmap: SharedBitmapBuilder,
     /// Shared bitmap builder for null marks
     null_indices_bitmap: SharedBitmapBuilder,
-    /// Counter of running probe-threads, potentially
-    /// able to update `visited_indices_bitmap`
-    probe_threads_counter: AtomicUsize,
+    /// Tracks which probe partition finishes last and what the partitions
+    /// collectively saw. See [`ProbeCompletion`] for the invariant it upholds.
+    probe_completion: ProbeCompletion,
     /// We need to keep this field to maintain accurate memory accounting, even though we don't directly use it.
     /// Without holding onto this reservation, the recorded memory usage would become inconsistent with actual usage.
     /// This could hide potential out-of-memory issues, especially when upstream operators increase their memory consumption.
@@ -311,12 +311,6 @@ pub(super) struct JoinLeftData {
     /// Membership testing strategy for filter pushdown
     /// Contains either InList values for small build sides or hash table reference for large build sides
     pub(super) membership: PushdownStrategy,
-    /// Shared atomic flag indicating if any probe partition saw data (for null-aware anti/mark joins)
-    /// This is shared across all probe partitions to provide global knowledge
-    pub(super) probe_side_non_empty: AtomicBool,
-    /// Shared atomic flag indicating if any probe partition saw NULL in join keys (for null-aware anti joins)
-    pub(super) probe_side_has_null: AtomicBool,
-
     // For RightAnti joins, where the build side is a smaller subquery, truthy if has null for the single join key
     pub(super) build_side_has_null: bool,
 }
@@ -376,10 +370,29 @@ impl JoinLeftData {
         &self.membership
     }
 
-    /// Decrements the counter of running threads, and returns `true`
-    /// if caller is the last running thread
-    pub(super) fn report_probe_completed(&self) -> bool {
-        self.probe_threads_counter.fetch_sub(1, Ordering::Relaxed) == 1
+    /// Records what a probe partition saw in one batch, for the null-aware
+    /// rules evaluated in the final stage.
+    pub(super) fn record_probe_batch(&self, non_empty: bool, has_null: bool) {
+        self.probe_completion.record_batch(non_empty, has_null);
+    }
+
+    /// Whether some probe partition has already recorded a NULL join key.
+    ///
+    /// Only an early-exit hint for the probe phase: it may lag behind sibling
+    /// partitions. Final-stage decisions must use the [`ProbeSideSummary`]
+    /// returned by [`Self::report_probe_completed`] instead.
+    pub(super) fn probe_side_has_null_hint(&self) -> bool {
+        self.probe_completion.saw_null_key_hint()
+    }
+
+    /// Marks this probe partition as finished, returning `Some` for the last
+    /// one together with what every partition saw.
+    ///
+    /// The summary is reachable only through this call, which is what stops
+    /// the final stage from reading the shared flags before its own
+    /// decrement. See [`ProbeCompletion`] for why that ordering matters.
+    pub(super) fn report_probe_completed(&self) -> Option<ProbeSideSummary> {
+        self.probe_completion.report_completed()
     }
 }
 
@@ -967,6 +980,73 @@ impl HashJoinExec {
         let right_keys: Vec<_> = on.iter().map(|(_, r)| Arc::clone(r)).collect();
         // Initialize with a placeholder expression (true) that will be updated when the hash table is built
         Arc::new(DynamicFilterPhysicalExpr::new(right_keys, lit(true)))
+    }
+
+    /// Join types whose output rows all carry a matching key on both sides.
+    ///
+    /// For these a parent filter over one side's join keys can be transferred
+    /// to the other side's input: an input row that fails the transferred
+    /// filter can only pair with rows that fail the original, so pruning it
+    /// changes nothing, and once the transferred filter is applied exactly on
+    /// one side every output row satisfies the original. Outer, anti and mark
+    /// joins also emit unmatched rows, whose key on the other side is absent,
+    /// so the transferred filter is not exact for them.
+    fn supports_key_transfer(join_type: JoinType) -> bool {
+        matches!(
+            join_type,
+            JoinType::Inner | JoinType::LeftSemi | JoinType::RightSemi
+        )
+    }
+
+    /// Maps each output column that is a plain `Column` join key on one side
+    /// to the key expression on the other side, as `(to_right, to_left)`.
+    ///
+    /// `column_indices` are the (projected) output columns of this join. A key
+    /// column that appears in several `on` pairs maps to the first of them.
+    fn key_transfer_maps(
+        &self,
+        column_indices: &[ColumnIndex],
+    ) -> (KeyTransferMap, KeyTransferMap) {
+        // A transferred filter compares the other side's key with literals
+        // typed for this side's key. The planner coerces both keys to one
+        // type, and `try_new` does not check it, so make the assumption
+        // explicit here.
+        debug_assert!(
+            self.on.iter().all(|(left_key, right_key)| {
+                left_key.data_type(&self.left.schema()).ok()
+                    == right_key.data_type(&self.right.schema()).ok()
+            }),
+            "join key data types differ: {:?}",
+            self.on
+        );
+        let mut to_right = HashMap::new();
+        let mut to_left = HashMap::new();
+        for (output_idx, ci) in column_indices.iter().enumerate() {
+            let (map, other_key) = match ci.side {
+                JoinSide::Left => (
+                    &mut to_right,
+                    self.on
+                        .iter()
+                        .find(|(left_key, _)| is_column_at(left_key, ci.index))
+                        .map(|(_, right_key)| right_key),
+                ),
+                JoinSide::Right => (
+                    &mut to_left,
+                    self.on
+                        .iter()
+                        .find(|(_, right_key)| is_column_at(right_key, ci.index))
+                        .map(|(left_key, _)| left_key),
+                ),
+                // Only mark joins produce mark columns, and
+                // `supports_key_transfer` excludes them; this arm is here for
+                // exhaustiveness.
+                JoinSide::None => continue,
+            };
+            if let Some(other_key) = other_key {
+                map.insert(output_idx, Arc::clone(other_key));
+            }
+        }
+        (to_right, to_left)
     }
 
     fn allow_join_dynamic_filter_pushdown(&self, config: &ConfigOptions) -> bool {
@@ -1835,13 +1915,14 @@ impl ExecutionPlan for HashJoinExec {
         // 1. `lr_is_preserved` gates whether a side is eligible at all.
         // 2. For each filter, we check that all column references belong to the
         //    target child (using `column_indices` to map output column positions
-        //    to join sides). This is critical for correctness: name-based matching
-        //    alone (as done by `ChildFilterDescription::from_child`) can incorrectly
-        //    push filters when different join sides have columns with the same name
-        //    (e.g. nested mark joins both producing "mark" columns).
+        //    to join sides). Columns are mapped by position, never by name:
+        //    different join sides, or a nested join on one side, can produce
+        //    columns with the same name (e.g. nested mark joins both producing
+        //    "mark" columns, or several `id` columns).
         let (left_preserved, right_preserved) = lr_is_preserved(self.join_type);
 
-        // Build the set of allowed column indices for each side
+        // Map each output position to its input position, accounting for the
+        // join's projection.
         let column_indices: Vec<ColumnIndex> = match self.projection.as_ref() {
             Some(projection) => projection
                 .iter()
@@ -1850,74 +1931,53 @@ impl ExecutionPlan for HashJoinExec {
             None => self.column_indices.clone(),
         };
 
-        let (mut left_allowed, mut right_allowed) = (HashSet::new(), HashSet::new());
-        column_indices
-            .iter()
-            .enumerate()
-            .for_each(|(output_idx, ci)| {
-                match ci.side {
-                    JoinSide::Left => left_allowed.insert(output_idx),
-                    JoinSide::Right => right_allowed.insert(output_idx),
-                    // Mark columns - don't allow pushdown to either side
-                    JoinSide::None => false,
-                };
-            });
-
-        // For semi joins, filters on output join keys can also be pushed to the
-        // non-output side: every emitted row has an equal key there. This is not
-        // true for anti joins, whose emitted rows have no match.
-        match self.join_type {
-            JoinType::LeftSemi => {
-                let left_key_indices: HashSet<usize> = self
-                    .on
-                    .iter()
-                    .filter_map(|(left_key, _)| {
-                        left_key.downcast_ref::<Column>().map(|c| c.index())
-                    })
-                    .collect();
-                for (output_idx, ci) in column_indices.iter().enumerate() {
-                    if ci.side == JoinSide::Left && left_key_indices.contains(&ci.index) {
-                        right_allowed.insert(output_idx);
-                    }
+        let (mut left_mapping, mut right_mapping) = (HashMap::new(), HashMap::new());
+        for (output_idx, ci) in column_indices.iter().enumerate() {
+            match ci.side {
+                JoinSide::Left => {
+                    left_mapping.insert(output_idx, ci.index);
                 }
-            }
-            JoinType::RightSemi => {
-                let right_key_indices: HashSet<usize> = self
-                    .on
-                    .iter()
-                    .filter_map(|(_, right_key)| {
-                        right_key.downcast_ref::<Column>().map(|c| c.index())
-                    })
-                    .collect();
-                for (output_idx, ci) in column_indices.iter().enumerate() {
-                    if ci.side == JoinSide::Right && right_key_indices.contains(&ci.index)
-                    {
-                        left_allowed.insert(output_idx);
-                    }
+                JoinSide::Right => {
+                    right_mapping.insert(output_idx, ci.index);
                 }
+                // Mark columns cannot be pushed to either side.
+                JoinSide::None => {}
             }
-            _ => {}
         }
 
-        let left_child = if left_preserved {
-            ChildFilterDescription::from_child_with_allowed_indices(
-                &parent_filters,
-                left_allowed,
-                self.left(),
-            )?
+        // Transfer filters across the equi-join keys: a parent filter over one
+        // side's join-key columns holds for every matching row of the other
+        // side too, so it is also pushed there, rewritten over that side's key
+        // expressions. This is how a dynamic filter from a join above reaches
+        // the scans on both sides of this join, and how a semi join prunes its
+        // non-output side. Like the plain column routing, a transfer only
+        // targets a side that `lr_is_preserved` permits.
+        let (to_right, to_left) = if Self::supports_key_transfer(self.join_type) {
+            self.key_transfer_maps(&column_indices)
         } else {
-            ChildFilterDescription::all_unsupported(&parent_filters)
+            Default::default()
+        };
+        let describe_child = |preserved: bool,
+                              column_mapping: HashMap<usize, usize>,
+                              key_map: &KeyTransferMap,
+                              child: &Arc<dyn ExecutionPlan>|
+         -> Result<ChildFilterDescription> {
+            if !preserved {
+                return Ok(ChildFilterDescription::all_unsupported(&parent_filters));
+            }
+            let mut description = ChildFilterDescription::from_child_with_column_mapping(
+                &parent_filters,
+                column_mapping,
+                child,
+            )?;
+            transfer_key_filters(&parent_filters, key_map, &mut description)?;
+            Ok(description)
         };
 
-        let mut right_child = if right_preserved {
-            ChildFilterDescription::from_child_with_allowed_indices(
-                &parent_filters,
-                right_allowed,
-                self.right(),
-            )?
-        } else {
-            ChildFilterDescription::all_unsupported(&parent_filters)
-        };
+        let left_child =
+            describe_child(left_preserved, left_mapping, &to_left, self.left())?;
+        let mut right_child =
+            describe_child(right_preserved, right_mapping, &to_right, self.right())?;
 
         // Add dynamic filters in Post phase if enabled. Skip when this join
         // already carries a dynamic filter from a previous pass — the shared
@@ -2528,6 +2588,73 @@ mod proto_tests {
     }
 }
 
+/// Output column index of a join, mapped to the equivalent join-key expression
+/// on the other side of the join (in that side's input schema).
+type KeyTransferMap = HashMap<usize, PhysicalExprRef>;
+
+fn is_column_at(expr: &PhysicalExprRef, index: usize) -> bool {
+    expr.downcast_ref::<Column>()
+        .is_some_and(|column| column.index() == index)
+}
+
+/// Marks every parent filter whose columns are all join keys in `key_map` as
+/// supported for `child`, rewritten over the other side's key expressions.
+///
+/// `key_map` only holds columns of the other side, so a filter it rewrites is
+/// one the plain column analysis marked unsupported for `child`. A filter that
+/// references any other column is left as that analysis routed it. A filter
+/// with no columns comes back unchanged and was already accepted, so
+/// rewriting it is a no-op.
+fn transfer_key_filters(
+    parent_filters: &[Arc<dyn PhysicalExpr>],
+    key_map: &KeyTransferMap,
+    child: &mut ChildFilterDescription,
+) -> Result<()> {
+    if key_map.is_empty() {
+        return Ok(());
+    }
+    for (filter, pushed) in parent_filters.iter().zip(child.parent_filters.iter_mut()) {
+        if let Some(transferred) = transfer_filter_across_keys(filter, key_map)? {
+            *pushed = PushedDownPredicate::supported(transferred);
+        }
+    }
+    Ok(())
+}
+
+/// Rewrites `filter` over the other side's join keys, or returns `None` when
+/// it references a column that is not a transferable key.
+///
+/// A [`DynamicFilterPhysicalExpr`] comes out as a view sharing the original's
+/// state with its key columns remapped, so it keeps tracking the build side.
+fn transfer_filter_across_keys(
+    filter: &Arc<dyn PhysicalExpr>,
+    key_map: &KeyTransferMap,
+) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+    let mut all_keys = true;
+    let transformed = Arc::clone(filter).transform_down(|expr| {
+        let Some(column) = expr.downcast_ref::<Column>() else {
+            return Ok(Transformed::no(expr));
+        };
+        match key_map.get(&column.index()) {
+            // The replacement is in the other side's input schema, so its
+            // columns are not output indices of this join: `Jump` over it.
+            // Descending would substitute again whenever the key column's
+            // index is also an output index, e.g. `CAST(k@0 AS Int64)` for
+            // output column 0, and never terminate.
+            Some(other_key) => Ok(Transformed::new(
+                Arc::clone(other_key),
+                true,
+                TreeNodeRecursion::Jump,
+            )),
+            None => {
+                all_keys = false;
+                Ok(Transformed::new(expr, false, TreeNodeRecursion::Stop))
+            }
+        }
+    })?;
+    Ok(all_keys.then_some(transformed.data))
+}
+
 /// Determines which sides of a join are "preserved" for filter pushdown.
 ///
 /// A preserved side means filters on that side's columns can be safely pushed
@@ -2539,7 +2666,11 @@ fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
         JoinType::Left => (true, false),
         JoinType::Right => (false, true),
         JoinType::Full => (false, false),
-        // Callers restrict the non-output side of semi joins to join-key columns.
+        // A semi join emits only matched rows, so pruning either input by a
+        // filter its output satisfies is exact. The non-output side has no
+        // output columns, so the column routing sends it nothing but
+        // column-free filters; key filters reach it through the transfer in
+        // `HashJoinExec::gather_filters_for_pushdown`.
         JoinType::LeftSemi | JoinType::RightSemi => (true, true),
         JoinType::LeftAnti | JoinType::LeftMark => (true, false),
         JoinType::RightAnti | JoinType::RightMark => (false, true),
@@ -3037,12 +3168,10 @@ async fn collect_left_input(
         values: left_values,
         visited_indices_bitmap: Mutex::new(visited_indices_bitmap),
         null_indices_bitmap: Mutex::new(null_indices_bitmap),
-        probe_threads_counter: AtomicUsize::new(probe_threads_count),
+        probe_completion: ProbeCompletion::new(probe_threads_count),
         _reservation: reservation,
         bounds,
         membership,
-        probe_side_non_empty: AtomicBool::new(false),
-        probe_side_has_null: AtomicBool::new(false),
         build_side_has_null: build_has_null,
     };
 
@@ -3502,6 +3631,25 @@ mod tests {
         }
     }
 
+    #[track_caller]
+    fn assert_ratio_metric(
+        metrics: &MetricsSet,
+        metric_name: &str,
+        expected_part: usize,
+        expected_total: usize,
+    ) {
+        let Some(MetricValue::Ratio { ratio_metrics, .. }) =
+            metrics.sum_by_name(metric_name)
+        else {
+            panic!("should have {metric_name} metrics")
+        };
+        assert_eq!(
+            (ratio_metrics.part(), ratio_metrics.total()),
+            (expected_part, expected_total),
+            "{metric_name} (part, total) mismatch",
+        );
+    }
+
     fn build_schema_and_on() -> Result<(SchemaRef, SchemaRef, JoinOn)> {
         let left_schema = Arc::new(Schema::new(vec![
             Field::new("a1", DataType::Int32, true),
@@ -3548,6 +3696,7 @@ mod tests {
     use datafusion_physical_expr::{
         EquivalenceProperties, PhysicalSortExpr, RangePartitioning, SplitPoint,
     };
+    use datafusion_physical_expr_common::metrics::MetricValue;
     use futures::StreamExt;
     use hashbrown::HashTable;
     use insta::{allow_duplicates, assert_snapshot};
@@ -4552,6 +4701,128 @@ mod tests {
         let batch = build_table_i32(a, b, c);
         let schema = batch.schema();
         TestMemoryExec::try_new_exec(&[vec![batch.clone(), batch]], schema, None).unwrap()
+    }
+
+    /// `probe_hit_rate` and `avg_fanout` must count each probe row once, even
+    /// when a probe batch is processed in several chunks. Every probe row matches
+    /// all 3 build rows, so any `batch_size` below 9 splits the probe batch into
+    /// chunks, and some splits cut a single row's matches across chunks.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn join_probe_metrics_count_each_probe_row_once(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![2, 2, 2]),
+            ("c1", &vec![3, 4, 5]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30]),
+            ("b1", &vec![2, 2, 2]),
+            ("c2", &vec![30, 40, 50]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        )];
+
+        let (columns, batches, metrics) = join_collect(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
+
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches), @r"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b1 | c2 |
+            +----+----+----+----+----+----+
+            | 1  | 2  | 3  | 10 | 2  | 30 |
+            | 2  | 2  | 4  | 10 | 2  | 30 |
+            | 3  | 2  | 5  | 10 | 2  | 30 |
+            | 1  | 2  | 3  | 20 | 2  | 40 |
+            | 2  | 2  | 4  | 20 | 2  | 40 |
+            | 3  | 2  | 5  | 20 | 2  | 40 |
+            | 1  | 2  | 3  | 30 | 2  | 50 |
+            | 2  | 2  | 4  | 30 | 2  | 50 |
+            | 3  | 2  | 5  | 30 | 2  | 50 |
+            +----+----+----+----+----+----+
+            ");
+        }
+
+        assert_join_metrics!(metrics, 9);
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
+        assert_ratio_metric(&metrics, "probe_hit_rate", 3, 3);
+        assert_ratio_metric(&metrics, "avg_fanout", 9, 3);
+
+        Ok(())
+    }
+
+    /// Complements `join_probe_metrics_count_each_probe_row_once`: with unique
+    /// build keys each probe row has at most one match, so chunks always split
+    /// between probe rows. A probe row that starts a new chunk must still be
+    /// counted, even though the lookup offset already points at it.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn join_probe_metrics_count_probe_row_starting_new_chunk(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![4, 5, 6]),
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 25, 30]),
+            ("b1", &vec![4, 4, 4, 40]),
+            ("c2", &vec![70, 80, 85, 90]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        )];
+
+        let (columns, batches, metrics) = join_collect(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
+
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches), @"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b1 | c2 |
+            +----+----+----+----+----+----+
+            | 1  | 4  | 7  | 10 | 4  | 70 |
+            | 1  | 4  | 7  | 20 | 4  | 80 |
+            | 1  | 4  | 7  | 25 | 4  | 85 |
+            +----+----+----+----+----+----+
+            ");
+        }
+
+        assert_join_metrics!(metrics, 3);
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
+        assert_ratio_metric(&metrics, "probe_hit_rate", 3, 4);
+        assert_ratio_metric(&metrics, "avg_fanout", 3, 3);
+
+        Ok(())
     }
 
     #[apply(hash_join_exec_configs)]
@@ -8019,6 +8290,278 @@ mod tests {
             ++
             ++
             ");
+        }
+        Ok(())
+    }
+
+    /// Builds a two-partition probe side for the cross-partition null-aware
+    /// tests: partition 0 holds the only NULL key, partition 1 holds none.
+    fn build_two_partition_probe_with_null_in_partition_0() -> Arc<dyn ExecutionPlan> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c2", DataType::Int32, true),
+            Field::new("dummy", DataType::Int32, true),
+        ]));
+        let partition_0 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(1), None])),
+                Arc::new(Int32Array::from(vec![Some(100), Some(400)])),
+            ],
+        )
+        .unwrap();
+        let partition_1 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(2)])),
+                Arc::new(Int32Array::from(vec![Some(200)])),
+            ],
+        )
+        .unwrap();
+        TestMemoryExec::try_new_exec(
+            &[vec![partition_0], vec![partition_1]],
+            schema,
+            None,
+        )
+        .unwrap()
+    }
+
+    /// Builds the dictionary-encoded twin of
+    /// [`build_two_partition_probe_with_null_in_partition_0`]: the same two
+    /// probe partitions, but the join key is a dictionary and partition 0's
+    /// NULL exists only logically.
+    ///
+    /// Every dictionary key is a physically valid index; one of them points at
+    /// a NULL dictionary value. The array therefore reports
+    /// `null_count() == 0` while `logical_null_count() > 0`, which is the case
+    /// that a physical-NULL check silently misses.
+    fn build_two_partition_dict_probe_with_logical_null_in_partition_0()
+    -> Arc<dyn ExecutionPlan> {
+        let dict_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int32));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c2", dict_type, true),
+            Field::new("dummy", DataType::Int32, true),
+        ]));
+
+        // Dictionary values: [1, NULL]; keys: [0, 1] => logical [1, NULL].
+        let with_logical_null: ArrayRef = Arc::new(DictionaryArray::new(
+            Int32Array::from(vec![0, 1]),
+            Arc::new(Int32Array::from(vec![Some(1), None])),
+        ));
+        assert_eq!(
+            with_logical_null.null_count(),
+            0,
+            "the probe NULL must be logical only, or this test stops covering \
+             the logical_null_count path"
+        );
+        assert!(
+            with_logical_null.logical_null_count() > 0,
+            "the probe key must carry a logical NULL"
+        );
+
+        let partition_0 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                with_logical_null,
+                Arc::new(Int32Array::from(vec![Some(100), Some(400)])),
+            ],
+        )
+        .unwrap();
+
+        // Dictionary values: [2]; keys: [0] => logical [2], no NULL anywhere.
+        let partition_1 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(DictionaryArray::new(
+                    Int32Array::from(vec![0]),
+                    Arc::new(Int32Array::from(vec![Some(2)])),
+                )),
+                Arc::new(Int32Array::from(vec![Some(200)])),
+            ],
+        )
+        .unwrap();
+
+        TestMemoryExec::try_new_exec(
+            &[vec![partition_0], vec![partition_1]],
+            schema,
+            None,
+        )
+        .unwrap()
+    }
+
+    /// Drains the probe partitions of `join` one after another in the given
+    /// order and returns everything they emitted.
+    async fn collect_partitions_in_order(
+        join: &HashJoinExec,
+        order: &[usize],
+        task_ctx: &Arc<TaskContext>,
+    ) -> Result<Vec<RecordBatch>> {
+        let mut batches = vec![];
+        for &partition in order {
+            let stream = join.execute(partition, Arc::clone(task_ctx))?;
+            batches.extend(common::collect(stream).await?);
+        }
+        Ok(batches)
+    }
+
+    /// A NULL probe key silences a null-aware anti join even when the
+    /// partition that saw it is not the one emitting the final build rows.
+    ///
+    /// `CollectLeft` with several probe partitions is what the planner
+    /// produces for `NOT IN`, and only the last partition to finish emits the
+    /// build rows, reading what its siblings recorded. Both finishing orders
+    /// must produce no rows.
+    ///
+    /// These partitions are drained sequentially, so this covers the
+    /// cross-partition plumbing, not the concurrent race that motivated
+    /// [`ProbeCompletion`]. The interleavings are model-checked in
+    /// `probe_completion::loom_tests` instead.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_anti_join_probe_null_in_other_partition(
+        batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        for order in [[0, 1], [1, 0]] {
+            let left = build_table_two_cols(
+                ("c1", &vec![Some(1), Some(2), Some(3), Some(4)]),
+                ("dummy", &vec![Some(10), Some(20), Some(30), Some(40)]),
+            );
+            let right = build_two_partition_probe_with_null_in_partition_0();
+
+            let on = vec![(
+                Arc::new(Column::new_with_schema("c1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("c2", &right.schema())?) as _,
+            )];
+
+            let join = HashJoinExec::try_new(
+                left,
+                right,
+                on,
+                None,
+                &JoinType::LeftAnti,
+                None,
+                PartitionMode::CollectLeft,
+                NullEquality::NullEqualsNothing,
+                true, // null_aware = true
+            )?;
+
+            let batches = collect_partitions_in_order(&join, &order, &task_ctx).await?;
+            let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+            assert_eq!(
+                rows, 0,
+                "probe order {order:?} emitted rows although a probe partition saw NULL"
+            );
+        }
+        Ok(())
+    }
+
+    /// The dictionary counterpart of
+    /// [`test_null_aware_anti_join_probe_null_in_other_partition`], where the
+    /// silencing probe NULL exists only logically.
+    ///
+    /// A dictionary key that points at a NULL dictionary value has
+    /// `null_count() == 0`, so only the `logical_null_count()` check in
+    /// `null_aware_skip_probe_batch` records it. This pins that check to the
+    /// cross-partition summary: the partition holding the logical NULL is not
+    /// the one that emits the build rows, in either drain order.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_anti_join_probe_logical_null_in_other_partition(
+        batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        for order in [[0, 1], [1, 0]] {
+            // Build keys are dictionary-encoded too, and NULL-free.
+            let left = build_table_dict_key(
+                "c1",
+                vec![Some(1), Some(2), Some(3), Some(4)],
+                vec![0, 1, 2, 3],
+                "dummy",
+                vec![Some(10), Some(20), Some(30), Some(40)],
+            );
+            let right = build_two_partition_dict_probe_with_logical_null_in_partition_0();
+
+            let on = vec![(
+                Arc::new(Column::new_with_schema("c1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("c2", &right.schema())?) as _,
+            )];
+
+            let join = HashJoinExec::try_new(
+                left,
+                right,
+                on,
+                None,
+                &JoinType::LeftAnti,
+                None,
+                PartitionMode::CollectLeft,
+                NullEquality::NullEqualsNothing,
+                true, // null_aware = true
+            )?;
+
+            let batches = collect_partitions_in_order(&join, &order, &task_ctx).await?;
+            let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+            assert_eq!(
+                rows, 0,
+                "probe order {order:?} emitted rows although a probe partition saw a logical NULL"
+            );
+        }
+        Ok(())
+    }
+
+    /// The null-aware mark join counterpart of
+    /// [`test_null_aware_anti_join_probe_null_in_other_partition`]: an
+    /// unmatched build row must get an UNKNOWN (NULL) mark when the NULL probe
+    /// key was seen by a sibling partition, whichever partition finishes last.
+    ///
+    /// Sequentially drained, with the same caveat as that test.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_left_mark_probe_null_in_other_partition(
+        batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        for order in [[0, 1], [1, 0]] {
+            let left = build_table_two_cols(
+                ("c1", &vec![Some(1), Some(4)]),
+                ("dummy", &vec![Some(10), Some(40)]),
+            );
+            let right = build_two_partition_probe_with_null_in_partition_0();
+
+            let on = vec![(
+                Arc::new(Column::new_with_schema("c1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("c2", &right.schema())?) as _,
+            )];
+
+            let join = HashJoinExec::try_new(
+                left,
+                right,
+                on,
+                None,
+                &JoinType::LeftMark,
+                None,
+                PartitionMode::CollectLeft,
+                NullEquality::NullEqualsNothing,
+                true, // null_aware = true
+            )?;
+
+            let batches = collect_partitions_in_order(&join, &order, &task_ctx).await?;
+
+            // c1=1 matches probe row 1 (mark true); c1=4 is unmatched and the
+            // probe side had a NULL, so its mark is UNKNOWN.
+            allow_duplicates! {
+                assert_snapshot!(batches_to_sort_string(&batches), @r"
+                +----+-------+------+
+                | c1 | dummy | mark |
+                +----+-------+------+
+                | 1  | 10    | true |
+                | 4  | 40    |      |
+                +----+-------+------+
+                ");
+            }
         }
         Ok(())
     }

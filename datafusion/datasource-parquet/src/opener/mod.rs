@@ -1401,6 +1401,11 @@ impl RowGroupsPrunedParquetOpen {
                     reader_metadata.parquet_schema(),
                     file_metadata.as_ref(),
                     &prepared.file_metrics,
+                    if prepared.preserve_order {
+                        None
+                    } else {
+                        prepared.limit
+                    },
                 );
             access_plan = page_pruning_result.access_plan;
             ParquetFileMetrics::add_page_index_pages_skipped_by_fully_matched(
@@ -1408,6 +1413,12 @@ impl RowGroupsPrunedParquetOpen {
                 prepared.partition_index,
                 &prepared.file_name,
                 page_pruning_result.pages_skipped_by_fully_matched,
+            );
+            ParquetFileMetrics::add_limit_pruned_rows(
+                &prepared.metrics,
+                prepared.partition_index,
+                &prepared.file_name,
+                page_pruning_result.limit_pruned_rows,
             );
         }
 
@@ -1909,7 +1920,7 @@ mod test {
     use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory, path::Path};
     use parquet::arrow::{ArrowSchemaConverter, ArrowWriter};
     use parquet::file::metadata::{ColumnChunkMetaData, FileMetaData, ParquetMetaData};
-    use parquet::file::properties::WriterProperties;
+    use parquet::file::properties::{EnabledStatistics, WriterProperties};
     use parquet::schema::types::SchemaDescPtr;
     use std::collections::VecDeque;
     use std::sync::Arc;
@@ -2245,6 +2256,12 @@ mod test {
         /// Set reverse row groups flag.
         fn with_reverse_row_groups(mut self, enable: bool) -> Self {
             self.reverse_row_groups = enable;
+            self
+        }
+
+        /// Set whether the scan must preserve file order.
+        fn with_preserve_order(mut self, enable: bool) -> Self {
+            self.preserve_order = enable;
             self
         }
 
@@ -3831,6 +3848,46 @@ mod test {
 
         let values = collect_int32_values(open_file(&opener, file).await.unwrap()).await;
         assert_eq!(values, vec![3, 4, 5, 6]);
+    }
+
+    #[tokio::test]
+    async fn test_page_limit_pruning_preserves_order() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let batch =
+            record_batch!(("a", Int32, vec![0, 10, 0, 5, 6, 7, 0, 8, 0])).unwrap();
+        let schema = batch.schema();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(9))
+            .set_data_page_row_count_limit(3)
+            .set_write_batch_size(3)
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .build();
+        let data_len = write_parquet_batches(
+            Arc::clone(&store),
+            "test.parquet",
+            vec![batch],
+            Some(props),
+        )
+        .await;
+        let file = PartitionedFile::new(
+            "test.parquet".to_string(),
+            u64::try_from(data_len).unwrap(),
+        );
+        let predicate = logical2physical(&col("a").gt_eq(lit(5)), &schema);
+
+        let opener = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(schema)
+            .with_predicate(predicate)
+            .with_pushdown_filters(true)
+            .with_row_group_stats_pruning(true)
+            .with_enable_page_index(true)
+            .with_preserve_order(true)
+            .with_limit(3)
+            .build();
+
+        let values = collect_int32_values(open_file(&opener, file).await.unwrap()).await;
+        assert_eq!(values, vec![10, 5, 6]);
     }
 
     #[tokio::test]

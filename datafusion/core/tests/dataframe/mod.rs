@@ -1585,6 +1585,75 @@ async fn join() -> Result<()> {
 }
 
 #[tokio::test]
+async fn join_asof() -> Result<()> {
+    let ctx = SessionContext::new();
+    let left = ctx
+        .read_batch(record_batch!(
+            ("symbol", Utf8, ["A", "A", "B"]),
+            ("ts", Int64, [1, 4, 2]),
+            ("trade_id", Int32, [1, 2, 3])
+        )?)?
+        .alias("trades")?;
+    let right = ctx
+        .read_batch(record_batch!(
+            ("symbol", Utf8, ["A", "A", "B"]),
+            ("ts", Int64, [2, 4, 1]),
+            ("price", Int32, [20, 40, 101])
+        )?)?
+        .alias("prices")?;
+
+    let results = left
+        .clone()
+        .join_asof(
+            right.clone(),
+            Some(col("trades.symbol").eq(col("prices.symbol"))),
+            col("trades.ts").gt_eq(col("prices.ts")),
+        )?
+        .select(vec![col("trade_id"), col("price")])?
+        .sort(vec![col("trade_id").sort(true, true)])?
+        .collect()
+        .await?;
+
+    assert_batches_eq!(
+        [
+            "+----------+-------+",
+            "| trade_id | price |",
+            "+----------+-------+",
+            "| 1        |       |",
+            "| 2        | 40    |",
+            "| 3        | 101   |",
+            "+----------+-------+",
+        ],
+        &results
+    );
+
+    let results = left
+        .join_asof_using(
+            right,
+            vec![datafusion_common::Column::from_name("symbol")],
+            col("trades.ts").gt_eq(col("prices.ts")),
+        )?
+        .select(vec![col("symbol"), col("trade_id"), col("price")])?
+        .sort(vec![col("trade_id").sort(true, true)])?
+        .collect()
+        .await?;
+
+    assert_batches_eq!(
+        [
+            "+--------+----------+-------+",
+            "| symbol | trade_id | price |",
+            "+--------+----------+-------+",
+            "| A      | 1        |       |",
+            "| A      | 2        | 40    |",
+            "| B      | 3        | 101   |",
+            "+--------+----------+-------+",
+        ],
+        &results
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn join_coercion_unnamed() -> Result<()> {
     let ctx = SessionContext::new();
 
@@ -5331,6 +5400,25 @@ async fn consecutive_projection_same_schema() -> Result<()> {
     "
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn window_function_in_group_by_is_rejected() -> Result<()> {
+    // https://github.com/apache/datafusion/issues/4610
+    //
+    // The SQL planner rejects this placement itself, but the DataFrame API
+    // has no such check, so the physical planner's backstop is what reports it
+    let err = test_table()
+        .await?
+        .aggregate(vec![row_number()], vec![count(col("c1"))])?
+        .collect()
+        .await
+        .expect_err("a window function cannot be a grouping expression");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Window function 'row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING' is not supported in this position. Window functions are supported in the SELECT list, ORDER BY, DISTINCT ON and QUALIFY"
+    );
     Ok(())
 }
 
