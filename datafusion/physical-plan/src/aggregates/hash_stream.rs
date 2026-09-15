@@ -1395,7 +1395,7 @@ mod tests {
                 .with_log(false),
         );
 
-        let aggregate_exec = AggregateExec::try_new(
+        let aggregate_exec = AggregateExec::actual_try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::new_single(group_expr),
             aggr_expr,

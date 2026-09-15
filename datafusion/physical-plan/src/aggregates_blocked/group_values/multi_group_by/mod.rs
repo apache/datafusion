@@ -70,29 +70,20 @@ const VALUE_MASK: u64 = 0x7FFFFFFFFFFFFFFF;
 /// incoming rows.
 ///
 /// [`GroupValuesColumn`]: crate::aggregates::group_values::GroupValuesColumn
-pub trait BlockedGroupColumn<const IS_FIXED_GROUP_SIZE: bool>: Send + Sync {
+pub trait BlockedGroupColumn<const IS_FIXED_BLOCK_SIZE: bool>: Send + Sync {
     fn batch_size(&self) -> usize;
 
-    /// Returns equal if the row stored in this builder at `lhs_row` is equal to
-    /// the row in `array` at `rhs_row`
-    ///
-    /// Note that this comparison returns true if both elements are NULL
+    /// Same as `GroupColumn::equal_to` but with BlocksIndex rather than flat index
+    /// Get blocks index rather than flat index to avoid extra computation when inserting and searching (BlocksIndex can be implemented as flat usize though)
     fn equal_to(&self, lhs_row: BlocksIndex, array: &ArrayRef, rhs_row: usize) -> bool;
 
     /// Appends the row at `row` in `array` to this builder
     fn append_val(&mut self, array: &ArrayRef, row: usize) -> Result<()>;
 
-    /// The vectorized version equal to
-    ///
-    /// When found nth row stored in this builder at `lhs_row`
-    /// is equal to the row in `array` at `rhs_row`,
-    /// it will record the `true` result at the corresponding
-    /// position in `equal_to_results`.
-    ///
-    /// And if found nth result in `equal_to_results` is already
-    /// `false`, the check for nth row will be skipped.
+    /// Same as `GroupColumn::vectorized_equal_to`, but with BlocksIndex rather than flat index
     fn vectorized_equal_to(
         &self,
+        // Get blocks index rather than flat index to avoid extra computation when inserting and searching (BlocksIndex can be implemented as flat usize though)
         lhs_rows: &[BlocksIndex],
         array: &ArrayRef,
         rhs_rows: &[usize],
@@ -113,22 +104,30 @@ pub trait BlockedGroupColumn<const IS_FIXED_GROUP_SIZE: bool>: Send + Sync {
     /// Returns the number of bytes used by this [`BlockedGroupColumn`]
     fn size(&self) -> usize;
 
-    /// Builds a new array from selected stored rows without changing this
-    /// column. Rows are returned in selection order.
+    /// Same as `GroupColumn::values_preserving` but with BlocksIndex rather than flat index in the group selection
     fn values_preserving(&self, selection: BlockedGroupSelection<'_>) -> Result<ArrayRef>;
 
     /// Builds a new array from the first `n` stored rows, shifting the
     /// remaining rows to the start of the builder
+    ///
+    /// n must be smaller than block size and len, and greater than 0
+    ///
+    /// the `adjusted_block_size_iter` argument is for nested implementation and how many items in each block should exists after the take.
     fn take_n(&mut self, n: usize,
-              // adjusted_block_size_iter: Option<Box<dyn ClonableIter<Item = usize>>>,
+              // TODO - need to figure out how to do that in rust since Clone requires `Sized` but we want to be able to clone the
+              //        iterator as we need to have the same block sizing for both the values and the nulls for some implementations
+          // adjusted_block_size_iter: Option<Box<dyn Iterator<Item = usize> + Clone>>,
     ) -> ArrayRef;
 
-    /// Take next block
+    /// Take next block, if no blocks return `None`
     fn take_next_block(&mut self) -> Option<ArrayRef>;
 
     /// Builds a new array from all of the stored rows
+    ///
+    /// returns blocks of array, each block is of size `block_size` except the last one
     fn take_all(self: Box<Self>) -> Vec<ArrayRef>;
 
+    /// When the block sizing is externally managed (when `IS_FIXED_BLOCK_SIZE` is `false`) this call signals that a new block has started.
     fn start_new_block(&mut self);
 }
 

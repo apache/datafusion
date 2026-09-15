@@ -4419,7 +4419,7 @@ mod tests {
                 .alias("no_first_emit(value)")
                 .build()?,
         )];
-        let aggregate = Arc::new(AggregateExec::try_new(
+        let aggregate = Arc::new(AggregateExec::actual_try_new(
             AggregateMode::Single,
             group_by,
             aggregates,
@@ -4735,7 +4735,7 @@ mod tests {
             "test setup: the input is ordered by the group key"
         );
 
-        let partial_reduce = AggregateExec::try_new(
+        let partial_reduce = AggregateExec::actual_try_new(
             AggregateMode::PartialReduce,
             PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]),
             vec![Arc::new(
@@ -4919,7 +4919,7 @@ mod tests {
 
         let empty_input =
             TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(&schema), None)?;
-        let partial = AggregateExec::try_new(
+        let partial = AggregateExec::actual_try_new(
             AggregateMode::Partial,
             group_by.clone(),
             aggregates.clone(),
