@@ -141,10 +141,13 @@ impl ScalarUDFImpl for NamedStructFunc {
             .map(|(name, data_type)| Ok(Field::new(name, data_type.to_owned(), true)))
             .collect::<Result<Vec<Field>>>()?;
 
+        // The constructed struct row is never NULL: `invoke_with_args` builds
+        // the `StructArray` without a null buffer, so the output field is
+        // non-nullable and `named_struct(...) IS NOT NULL` folds to `true`.
         Ok(Field::new(
             self.name(),
             DataType::Struct(Fields::from(return_fields)),
-            true,
+            false,
         )
         .into())
     }
@@ -162,8 +165,10 @@ impl ScalarUDFImpl for NamedStructFunc {
 
         let values: Vec<ColumnarValue> = args
             .args
-            .chunks_exact(2)
-            .map(|chunk| chunk[1].clone())
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|[_name, value]| value.clone())
             .collect();
         let arrays = ColumnarValue::values_to_arrays(&values)?;
         Ok(ColumnarValue::Array(Arc::new(StructArray::new(

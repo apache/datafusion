@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt;
 use std::mem::size_of;
 use std::sync::{Arc, OnceLock};
@@ -1886,13 +1886,14 @@ impl ExecutionPlan for HashJoinExec {
         // 1. `lr_is_preserved` gates whether a side is eligible at all.
         // 2. For each filter, we check that all column references belong to the
         //    target child (using `column_indices` to map output column positions
-        //    to join sides). This is critical for correctness: name-based matching
-        //    alone (as done by `ChildFilterDescription::from_child`) can incorrectly
-        //    push filters when different join sides have columns with the same name
-        //    (e.g. nested mark joins both producing "mark" columns).
+        //    to join sides). Columns are mapped by position, never by name:
+        //    different join sides, or a nested join on one side, can produce
+        //    columns with the same name (e.g. nested mark joins both producing
+        //    "mark" columns, or several `id` columns).
         let (left_preserved, right_preserved) = lr_is_preserved(self.join_type);
 
-        // Build the set of allowed column indices for each side
+        // Map each output position to its input position, accounting for the
+        // join's projection.
         let column_indices: Vec<ColumnIndex> = match self.projection.as_ref() {
             Some(projection) => projection
                 .iter()
@@ -1901,18 +1902,19 @@ impl ExecutionPlan for HashJoinExec {
             None => self.column_indices.clone(),
         };
 
-        let (mut left_allowed, mut right_allowed) = (HashSet::new(), HashSet::new());
-        column_indices
-            .iter()
-            .enumerate()
-            .for_each(|(output_idx, ci)| {
-                match ci.side {
-                    JoinSide::Left => left_allowed.insert(output_idx),
-                    JoinSide::Right => right_allowed.insert(output_idx),
-                    // Mark columns - don't allow pushdown to either side
-                    JoinSide::None => false,
-                };
-            });
+        let (mut left_mapping, mut right_mapping) = (HashMap::new(), HashMap::new());
+        for (output_idx, ci) in column_indices.iter().enumerate() {
+            match ci.side {
+                JoinSide::Left => {
+                    left_mapping.insert(output_idx, ci.index);
+                }
+                JoinSide::Right => {
+                    right_mapping.insert(output_idx, ci.index);
+                }
+                // Mark columns cannot be pushed to either side.
+                JoinSide::None => {}
+            }
+        }
 
         // Transfer filters across the equi-join keys: a parent filter over one
         // side's join-key columns holds for every matching row of the other
@@ -1927,27 +1929,26 @@ impl ExecutionPlan for HashJoinExec {
             Default::default()
         };
         let describe_child = |preserved: bool,
-                              allowed: HashSet<usize>,
+                              column_mapping: HashMap<usize, usize>,
                               key_map: &KeyTransferMap,
                               child: &Arc<dyn ExecutionPlan>|
          -> Result<ChildFilterDescription> {
             if !preserved {
                 return Ok(ChildFilterDescription::all_unsupported(&parent_filters));
             }
-            let mut description =
-                ChildFilterDescription::from_child_with_allowed_indices(
-                    &parent_filters,
-                    allowed,
-                    child,
-                )?;
+            let mut description = ChildFilterDescription::from_child_with_column_mapping(
+                &parent_filters,
+                column_mapping,
+                child,
+            )?;
             transfer_key_filters(&parent_filters, key_map, &mut description)?;
             Ok(description)
         };
 
         let left_child =
-            describe_child(left_preserved, left_allowed, &to_left, self.left())?;
+            describe_child(left_preserved, left_mapping, &to_left, self.left())?;
         let mut right_child =
-            describe_child(right_preserved, right_allowed, &to_right, self.right())?;
+            describe_child(right_preserved, right_mapping, &to_right, self.right())?;
 
         // Add dynamic filters in Post phase if enabled. Skip when this join
         // already carries a dynamic filter from a previous pass — the shared

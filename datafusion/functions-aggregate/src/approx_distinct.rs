@@ -359,9 +359,8 @@ impl GroupHll {
                 );
             }
             let mut delta = 0;
-            for chunk in bytes.chunks_exact(size_of::<u64>()) {
-                let h = u64::from_le_bytes(chunk.try_into().unwrap());
-                delta += self.add_hash(h);
+            for chunk in bytes.as_chunks::<{ size_of::<u64>() }>().0 {
+                delta += self.add_hash(u64::from_le_bytes(*chunk));
             }
             Ok(delta)
         }
