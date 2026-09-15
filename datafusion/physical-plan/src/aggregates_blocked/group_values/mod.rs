@@ -51,6 +51,7 @@ mod metrics;
 mod null_builder;
 mod single_group_by;
 mod multi_group_by;
+mod row;
 
 pub(crate) use metrics::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
@@ -60,6 +61,7 @@ use single_group_by::boolean::GroupValuesBoolean;
 use single_group_by::primitive::GroupValuesPrimitive;
 use single_group_by::bytes::GroupValuesBytes;
 use single_group_by::bytes_view::GroupValuesBytesView;
+use row::BlockedGroupValuesRows;
 use crate::aggregates_blocked::group_values::multi_group_by::BlockedGroupValuesColumn;
 
 /// Stores the group values during hash aggregation.
@@ -209,6 +211,7 @@ pub trait BlockedGroupValues: Send {
 }
 
 
+// This is just an adapter until all is implemented
 pub struct BlockedGroupValuesAdapter {
     block_size: usize,
     inner: Box<dyn crate::aggregates::group_values::GroupValues>,
@@ -386,8 +389,6 @@ pub fn new_group_values(
             Ok(Box::new(BlockedGroupValuesColumn::<true>::try_new(schema, block_size)?))
         }
     } else {
-        let mapped_group_ordering: crate::aggregates::order::GroupOrdering = group_ordering.clone().into();
-        let mapped = crate::aggregates::group_values::new_group_values(schema, &mapped_group_ordering)?;
-        Ok(Box::new(BlockedGroupValuesAdapter::new(block_size, mapped)))
+        Ok(Box::new(BlockedGroupValuesRows::try_new(schema, block_size)?))
     }
 }
