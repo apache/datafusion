@@ -364,6 +364,25 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_submetrics_reuse_metric_identity_for_one_subphase() {
+        let metrics = ExecutionPlanMetricsSet::new();
+        let submetrics = aggregate_sub_metrics(&metrics, 0, ["array_agg(DISTINCT a)"]);
+
+        let first = submetrics[0].metric("distinct");
+        let second = submetrics[0].metric("distinct");
+        first.add_duration(Duration::from_nanos(1));
+        second.add_duration(Duration::from_nanos(2));
+
+        let metrics = metrics.clone_inner();
+        let matching_metrics = metrics
+            .iter()
+            .filter(|metric| metric.value().name() == "agg_expr_0_internal_distinct_time")
+            .collect::<Vec<_>>();
+        assert_eq!(matching_metrics.len(), 1);
+        assert_eq!(matching_metrics[0].value().as_usize(), 3);
+    }
+
+    #[test]
     fn aggregate_submetrics_preserve_zero_duration_per_recording() {
         let metrics = ExecutionPlanMetricsSet::new();
         let submetrics = aggregate_sub_metrics(&metrics, 0, ["array_agg(DISTINCT a)"]);

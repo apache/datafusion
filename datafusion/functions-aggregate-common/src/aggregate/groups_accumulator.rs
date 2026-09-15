@@ -292,18 +292,27 @@ impl GroupsAccumulatorAdapter {
                     groups_with_rows.iter().zip(offsets.windows(2))
                 {
                     sizes_pre += self.states[group_idx].size();
-                    let values_to_accumulate = slice_and_maybe_filter(
+                    let values_to_accumulate = match slice_and_maybe_filter(
                         &values,
                         opt_filter.as_ref().map(|f| f.as_boolean()),
                         offsets,
-                    )?;
-                    f(
+                    ) {
+                        Ok(values) => values,
+                        Err(error) => {
+                            sizes_post += self.states[group_idx].size();
+                            return Err(error);
+                        }
+                    };
+                    let update_result = f(
                         self.states[group_idx].accumulator.as_mut(),
                         &values_to_accumulate,
-                    )?;
+                    );
                     let state = &mut self.states[group_idx];
-                    state.indices.clear();
+                    if update_result.is_ok() {
+                        state.indices.clear();
+                    }
                     sizes_post += state.size();
+                    update_result?;
                 }
                 return Ok(());
             }
@@ -348,12 +357,13 @@ impl GroupsAccumulatorAdapter {
                 if let Some(start) = start {
                     aggregate_duration += start.elapsed();
                 }
-                for (group_idx, _) in values_to_accumulate.iter().take(successful_groups)
-                {
+                for (index, (group_idx, _)) in values_to_accumulate.iter().enumerate() {
                     let state = &mut self.states[*group_idx];
-                    // Clear every successfully applied group before propagating
-                    // an error from a later group.
-                    state.indices.clear();
+                    if index < successful_groups {
+                        // Clear every successfully applied group before
+                        // propagating an error from a later group.
+                        state.indices.clear();
+                    }
                     sizes_post += state.size();
                 }
                 chunk_result?;
@@ -364,9 +374,8 @@ impl GroupsAccumulatorAdapter {
         if let Some(metric) = grouped_update_metric {
             metric.add_duration(aggregate_duration);
         }
-        result?;
         self.adjust_allocation(sizes_pre, sizes_post);
-        Ok(())
+        result
     }
 
     /// Increment the allocation by `n`
@@ -980,6 +989,8 @@ mod tests {
     struct FailOnceAccumulator {
         fail_first_update: bool,
         successful_group_rows: Option<Arc<AtomicUsize>>,
+        allocation_bytes: usize,
+        metric: Option<Arc<dyn AggregateMetric>>,
     }
 
     impl Accumulator for FailOnceAccumulator {
@@ -990,8 +1001,13 @@ mod tests {
             }
             if let Some(rows) = &self.successful_group_rows {
                 rows.fetch_add(values[0].len(), Ordering::Relaxed);
+                self.allocation_bytes = 1024;
             }
             Ok(())
+        }
+
+        fn grouped_update_batch_metric(&self) -> Option<Arc<dyn AggregateMetric>> {
+            self.metric.clone()
         }
 
         fn evaluate(&mut self) -> Result<ScalarValue> {
@@ -999,7 +1015,7 @@ mod tests {
         }
 
         fn size(&self) -> usize {
-            size_of_val(self)
+            size_of_val(self) + self.allocation_bytes
         }
 
         fn state(&mut self) -> Result<Vec<ScalarValue>> {
@@ -1024,19 +1040,72 @@ mod tests {
                     fail_first_update: group == 1,
                     successful_group_rows: (group == 0)
                         .then(|| Arc::clone(&successful_group_rows)),
+                    allocation_bytes: 0,
+                    metric: None,
                 }) as Box<dyn Accumulator>)
             }
         });
 
+        accumulator.make_accumulators_if_needed(2)?;
         let values: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
         assert!(
             accumulator
                 .update_batch(&[Arc::clone(&values)], &[0, 1], None, 2)
                 .is_err()
         );
+        assert_eq!(
+            accumulator.size(),
+            accumulator.states.allocated_size()
+                + accumulator
+                    .states
+                    .iter()
+                    .map(AccumulatorState::size)
+                    .sum::<usize>()
+        );
         accumulator.update_batch(&[values], &[0, 1], None, 2)?;
 
         assert_eq!(successful_group_rows.load(Ordering::Relaxed), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn adapter_reconciles_allocation_after_later_error_with_grouped_metric() -> Result<()>
+    {
+        let created = Arc::new(AtomicUsize::new(0));
+        let successful_group_rows = Arc::new(AtomicUsize::new(0));
+        let metric: Arc<dyn AggregateMetric> =
+            Arc::new(CountingMetric(Arc::new(AtomicUsize::new(0))));
+        let mut accumulator = GroupsAccumulatorAdapter::new({
+            let created = Arc::clone(&created);
+            let successful_group_rows = Arc::clone(&successful_group_rows);
+            move || {
+                let group = created.fetch_add(1, Ordering::Relaxed);
+                Ok(Box::new(FailOnceAccumulator {
+                    fail_first_update: group == 1,
+                    successful_group_rows: (group == 0)
+                        .then(|| Arc::clone(&successful_group_rows)),
+                    allocation_bytes: 0,
+                    metric: Some(Arc::clone(&metric)),
+                }) as Box<dyn Accumulator>)
+            }
+        });
+
+        accumulator.make_accumulators_if_needed(2)?;
+        let values: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
+        assert!(
+            accumulator
+                .update_batch(&[values], &[0, 1], None, 2)
+                .is_err()
+        );
+        assert_eq!(
+            accumulator.size(),
+            accumulator.states.allocated_size()
+                + accumulator
+                    .states
+                    .iter()
+                    .map(AccumulatorState::size)
+                    .sum::<usize>()
+        );
         Ok(())
     }
 

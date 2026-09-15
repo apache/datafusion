@@ -193,8 +193,9 @@ impl<'a> GroupSelection<'a> {
 pub trait GroupsAccumulator: Send + std::any::Any {
     /// Supplies optional metrics owned by this aggregate expression.
     ///
-    /// The default preserves compatibility for accumulators without internal
-    /// submetrics.
+    /// Call this immediately after construction and before the accumulator is
+    /// used; replacing metrics after use is unsupported. The default preserves
+    /// compatibility for accumulators without internal submetrics.
     fn set_metrics(&mut self, _metrics: Arc<dyn AggregateMetrics>) {}
 
     /// Updates the accumulator's state from its arguments, encoded as
