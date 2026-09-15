@@ -326,30 +326,37 @@ fn date_to_scalar(date: NaiveDate, target_type: &DataType) -> Option<ScalarValue
             let naive_midnight = date.and_hms_opt(0, 0, 0)?;
             let tz: Option<Tz> = tz_opt.clone().and_then(|s| s.parse().ok());
 
+            // Midnight has no representation when the date falls outside the
+            // unit's range, or when the zone skips it. Reporting no bound keeps
+            // the caller on the original predicate; a NULL bound here would make
+            // the rewritten comparison NULL on every row.
             match unit {
                 Second => ScalarValue::TimestampSecond(
-                    TimestampSecondType::from_naive_datetime(naive_midnight, tz.as_ref()),
+                    Some(TimestampSecondType::from_naive_datetime(
+                        naive_midnight,
+                        tz.as_ref(),
+                    )?),
                     tz_opt.clone(),
                 ),
                 Millisecond => ScalarValue::TimestampMillisecond(
-                    TimestampMillisecondType::from_naive_datetime(
+                    Some(TimestampMillisecondType::from_naive_datetime(
                         naive_midnight,
                         tz.as_ref(),
-                    ),
+                    )?),
                     tz_opt.clone(),
                 ),
                 Microsecond => ScalarValue::TimestampMicrosecond(
-                    TimestampMicrosecondType::from_naive_datetime(
+                    Some(TimestampMicrosecondType::from_naive_datetime(
                         naive_midnight,
                         tz.as_ref(),
-                    ),
+                    )?),
                     tz_opt.clone(),
                 ),
                 Nanosecond => ScalarValue::TimestampNanosecond(
-                    TimestampNanosecondType::from_naive_datetime(
+                    Some(TimestampNanosecondType::from_naive_datetime(
                         naive_midnight,
                         tz.as_ref(),
-                    ),
+                    )?),
                     tz_opt.clone(),
                 ),
             }
