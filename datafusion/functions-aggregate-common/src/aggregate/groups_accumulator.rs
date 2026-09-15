@@ -111,10 +111,6 @@ pub struct GroupsAccumulatorAdapter {
     /// first accumulator. This avoids resolving the same expression metric for
     /// every group while allowing `convert_to_state(&self)` to use it.
     grouped_update_metric: Arc<OnceLock<Option<Arc<dyn AggregateMetric>>>>,
-
-    /// The portion of [`Self::allocation_bytes`] that is the scratch
-    /// [`AccumulatorState::indices`] capacity held by [`Self::states`].
-    indices_allocation_bytes: usize,
 }
 
 /// Maximum number of prepared group inputs retained while timing an
@@ -172,7 +168,6 @@ impl GroupsAccumulatorAdapter {
             states: vec![],
             allocation_bytes: 0,
             grouped_update_metric,
-            indices_allocation_bytes: 0,
         }
     }
 
@@ -239,9 +234,20 @@ impl GroupsAccumulatorAdapter {
         // figure out which input rows correspond to which groups.
         // Note that self.state.indices starts empty for all groups
         // (it is cleared out below)
+        // Charge retained scratch capacity only when a push grows a vector,
+        // avoiding another pass over every group after indexing.
+        let mut indices_allocation_delta = 0;
         for (idx, group_index) in group_indices.iter().enumerate() {
-            self.states[*group_index].indices.push(idx as u32);
+            let indices = &mut self.states[*group_index].indices;
+            if indices.len() < indices.capacity() {
+                indices.push(idx as u32);
+            } else {
+                let size_pre = indices.allocated_size();
+                indices.push(idx as u32);
+                indices_allocation_delta += indices.allocated_size() - size_pre;
+            }
         }
+        self.add_allocation(indices_allocation_delta);
 
         // groups_with_rows holds a list of group indexes that have
         // any rows that need to be accumulated, stored in order of
@@ -257,12 +263,8 @@ impl GroupsAccumulatorAdapter {
         let mut offsets = vec![0];
 
         let mut offset_so_far = 0;
-        let mut indices_allocation_bytes = 0;
         for (group_index, state) in self.states.iter_mut().enumerate() {
             let indices = &state.indices;
-            // this pass already visits every group, so totalling the scratch
-            // capacity here costs a field read rather than a `size()` call
-            indices_allocation_bytes += indices.allocated_size();
             if indices.is_empty() {
                 continue;
             }
@@ -273,13 +275,6 @@ impl GroupsAccumulatorAdapter {
             offsets.push(offset_so_far);
         }
         let batch_indices = batch_indices.into();
-
-        // The push loop above is the only place `indices` grows. Charge the
-        // growth since the previous batch here: the pre/post deltas below
-        // observe the identical capacity on both sides, because `f` does not
-        // touch `indices` and the `clear()` after it retains the capacity.
-        self.adjust_allocation(self.indices_allocation_bytes, indices_allocation_bytes);
-        self.indices_allocation_bytes = indices_allocation_bytes;
 
         // reorder the values and opt_filter by batch_indices so that
         // all values for each group are contiguous, then invoke the
@@ -395,15 +390,8 @@ impl GroupsAccumulatorAdapter {
     }
 
     /// Release the allocation held by a state that is being emitted.
-    ///
-    /// [`AccumulatorState::size`] covers the scratch `indices` capacity, so
-    /// this also drops it from [`Self::indices_allocation_bytes`] to keep that
-    /// running total equal to the capacity still held by [`Self::states`].
     fn free_state_allocation(&mut self, state: &AccumulatorState) {
         self.free_allocation(state.size());
-        self.indices_allocation_bytes = self
-            .indices_allocation_bytes
-            .saturating_sub(state.indices.allocated_size());
     }
 
     /// Adjusts the allocation for something that started with
@@ -747,6 +735,32 @@ mod tests {
         fn merge_batch(&mut self, _states: &[ArrayRef]) -> Result<()> {
             Ok(())
         }
+    }
+
+    #[test]
+    fn adapter_charges_retained_indices_once_and_releases_them() -> Result<()> {
+        let mut adapter = GroupsAccumulatorAdapter::new(|| {
+            Ok(Box::new(TimedAccumulator {
+                metric: Arc::new(CountingMetric(Arc::new(AtomicUsize::new(0)))),
+            }) as Box<dyn Accumulator>)
+        });
+        adapter.make_accumulators_if_needed(1)?;
+        let allocation_before_update = adapter.size();
+        let values: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3, 4]));
+
+        adapter.update_batch(&[Arc::clone(&values)], &[0, 0, 0, 0], None, 1)?;
+        let retained_indices = adapter.states[0].indices.allocated_size();
+        assert!(retained_indices > 0);
+        assert!(adapter.states[0].indices.is_empty());
+        assert_eq!(adapter.size(), allocation_before_update + retained_indices);
+
+        let allocation_after_first_update = adapter.size();
+        adapter.update_batch(&[values], &[0, 0, 0, 0], None, 1)?;
+        assert_eq!(adapter.size(), allocation_after_first_update);
+
+        adapter.evaluate(EmitTo::All)?;
+        assert_eq!(adapter.size(), 0);
+        Ok(())
     }
 
     #[test]
