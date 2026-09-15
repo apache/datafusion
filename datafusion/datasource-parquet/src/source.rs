@@ -16,7 +16,7 @@ use crate::opener::build_virtual_columns_state;
 use crate::row_filter::can_expr_be_pushed_down_with_schemas;
 use arrow_schema::Fields;
 use arrow_schema::extension::ExtensionType;
-use arrow_schema::{DataType, Field};
+use arrow_schema::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::config::EncryptionFactoryOptions;
@@ -750,6 +750,46 @@ impl FileSource for ParquetSource {
         Ok(Some(Arc::new(source)))
     }
 
+    fn try_pushdown_dictionary_encoding(
+        &self,
+        column_indices: &[usize],
+    ) -> datafusion_common::Result<Option<Arc<dyn FileSource>>> {
+        if column_indices.is_empty() || self.schema_provider.is_some() {
+            return Ok(None);
+        }
+
+        let file_schema = self.table_schema.file_schema();
+        let mut fields = file_schema.fields().to_vec();
+        for &index in column_indices {
+            let Some(field) = fields.get_mut(index) else {
+                // Partition and virtual columns follow file columns in the table
+                // schema, but do not have a native Parquet dictionary page.
+                return Ok(None);
+            };
+            let DataType::Utf8View = field.data_type() else {
+                return Ok(None);
+            };
+            if field.extension_type_name().is_some() {
+                return Ok(None);
+            }
+            *field = Arc::new(field.as_ref().clone().with_data_type(
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            ));
+        }
+
+        let file_schema = Arc::new(Schema::new_with_metadata(
+            fields,
+            file_schema.metadata().clone(),
+        ));
+        let mut source = self.clone();
+        source.table_schema = TableSchema::builder(file_schema)
+            .with_table_partition_cols(self.table_schema.table_partition_cols().clone())
+            .with_virtual_columns(self.table_schema.virtual_columns().clone())
+            .build();
+        source.table_parquet_options.global.enable_rle_to_dictionary = true;
+        Ok(Some(Arc::new(source)))
+    }
+
     fn projection(&self) -> Option<&ProjectionExprs> {
         Some(&self.projection)
     }
@@ -1398,7 +1438,9 @@ fn table_schema_with_row_index_col(table_schema: &TableSchema) -> (TableSchema, 
 mod tests {
     use super::*;
     use arrow::datatypes::Schema;
+    use datafusion_common::Result;
     use datafusion_physical_expr::expressions::lit;
+    use std::collections::HashMap;
 
     #[test]
     fn partition_metrics_exclude_derived_plan_metrics() {
@@ -1457,6 +1499,103 @@ mod tests {
 
         let source = source.with_reverse_row_groups(false);
         assert!(!source.reverse_row_groups());
+    }
+
+    #[test]
+    fn dictionary_encoding_pushdown_is_selective_and_preserves_metadata() -> Result<()> {
+        let field_metadata = HashMap::from([("field-key".into(), "field-value".into())]);
+        let schema_metadata =
+            HashMap::from([("schema-key".into(), "schema-value".into())]);
+        let file_schema = Arc::new(Schema::new_with_metadata(
+            vec![
+                Field::new("group_key", DataType::Utf8View, true)
+                    .with_metadata(field_metadata.clone()),
+                Field::new("untouched", DataType::Utf8View, false),
+                Field::new("measure", DataType::Int64, false),
+            ],
+            schema_metadata.clone(),
+        ));
+        let source = ParquetSource::new(file_schema);
+
+        let encoded = source
+            .try_pushdown_dictionary_encoding(&[0])?
+            .expect("Utf8View file column should support dictionary output");
+        let encoded = encoded
+            .downcast_ref::<ParquetSource>()
+            .expect("rewritten source should remain ParquetSource");
+        let encoded_schema = encoded.table_schema().file_schema();
+
+        assert_eq!(
+            encoded_schema.field(0).data_type(),
+            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
+        );
+        assert_eq!(encoded_schema.field(0).metadata(), &field_metadata);
+        assert!(encoded_schema.field(0).is_nullable());
+        assert_eq!(encoded_schema.field(1).data_type(), &DataType::Utf8View);
+        assert_eq!(encoded_schema.field(2).data_type(), &DataType::Int64);
+        assert_eq!(encoded_schema.metadata(), &schema_metadata);
+        assert!(
+            encoded
+                .table_parquet_options
+                .global
+                .enable_rle_to_dictionary
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn dictionary_encoding_pushdown_rejects_non_file_columns_and_types() -> Result<()> {
+        let file_schema = Arc::new(Schema::new(vec![Field::new(
+            "measure",
+            DataType::Int64,
+            false,
+        )]));
+        let table_schema = TableSchema::builder(file_schema)
+            .with_table_partition_cols(vec![Arc::new(Field::new(
+                "partition",
+                DataType::Utf8,
+                false,
+            ))])
+            .build();
+        let source = ParquetSource::new(table_schema);
+
+        assert!(source.try_pushdown_dictionary_encoding(&[0])?.is_none());
+        assert!(source.try_pushdown_dictionary_encoding(&[1])?.is_none());
+        assert!(source.try_pushdown_dictionary_encoding(&[])?.is_none());
+        Ok(())
+    }
+
+    #[derive(Debug)]
+    struct TestSchemaProvider;
+
+    impl ParquetFileSchemaProvider for TestSchemaProvider {
+        fn schema(
+            &self,
+            _parquet_schema: &parquet::schema::types::SchemaDescriptor,
+        ) -> Result<Arc<Schema>> {
+            Ok(Arc::new(Schema::empty()))
+        }
+    }
+
+    #[test]
+    fn dictionary_encoding_pushdown_rejects_schema_overrides() -> Result<()> {
+        let extension_schema = Arc::new(Schema::new(vec![
+            Field::new("group_key", DataType::Utf8View, false).with_metadata(
+                HashMap::from([("ARROW:extension:name".into(), "example.string".into())]),
+            ),
+        ]));
+        let source = ParquetSource::new(extension_schema);
+        assert!(source.try_pushdown_dictionary_encoding(&[0])?.is_none());
+
+        let plain_schema = Arc::new(Schema::new(vec![Field::new(
+            "group_key",
+            DataType::Utf8View,
+            false,
+        )]));
+        let source = ParquetSource::new(plain_schema)
+            .with_schema_provider(Arc::new(TestSchemaProvider));
+        assert!(source.try_pushdown_dictionary_encoding(&[0])?.is_none());
+        Ok(())
     }
 
     #[test]

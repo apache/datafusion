@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use crate::aggregate_statistics::AggregateStatistics;
 use crate::combine_partial_final_agg::CombinePartialFinalAggregate;
+use crate::dictionary_aggregation::DictionaryAggregation;
 use crate::eliminate_constant_join::EliminateConstantJoin;
 use crate::ensure_coop::EnsureCooperative;
 use crate::ensure_requirements::EnsureRequirements;
@@ -185,6 +186,7 @@ impl PhysicalOptimizerContext for ConfigOnlyContext<'_> {
 /// | `EliminateConstantJoin`        | [`EliminateConstantJoin`]        | Replaces inner joins against a single row of literals with a filter.                          |
 /// | `join_selection`               | [`JoinSelection`]                | Chooses the join implementation, build side, and partition mode.                              |
 /// | `LimitedDistinctAggregation`   | [`LimitedDistinctAggregation`]   | Pushes limit hints into grouped distinct-style aggregations.                                  |
+/// | `DictionaryAggregation`        | [`DictionaryAggregation`]        | Preserves profitable file-native dictionaries through grouped aggregation.                    |
 /// | `FilterPushdown`               | [`FilterPushdown`]               | Pushes static filters toward data sources (pre-optimization phase).                           |
 /// | `WindowTopN`                   | [`WindowTopN`]                   | Replaces row-number window and filter patterns with per-partition TopK.                       |
 /// | `EnsureRequirements`           | [`EnsureRequirements`]           | Inserts the repartitioning and sorting needed to meet distribution and ordering requirements. |
@@ -241,6 +243,10 @@ impl PhysicalOptimizer {
             // as that rule may inject other operations in between the different AggregateExecs.
             // Applying the rule early means only directly-connected AggregateExecs must be examined.
             Arc::new(LimitedDistinctAggregation::new()),
+            // Preserve eligible Parquet dictionaries through grouped hash
+            // aggregation before distribution requirements insert exchanges
+            // between partial and final aggregates.
+            Arc::new(DictionaryAggregation::new()),
             // The FilterPushdown rule tries to push down filters as far as it can.
             // For example, it will push down filtering from a `FilterExec` to `DataSourceExec`.
             // Note that this does not push down dynamic filters (such as those created by a `SortExec` operator in TopK mode),

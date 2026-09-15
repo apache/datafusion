@@ -7,14 +7,14 @@ use crate::helpers::{
     expr_applicable_for_cols, filter_partitioned_file, pruned_partition_list,
 };
 use crate::{ListingOptions, ListingTableConfig};
-use arrow::datatypes::{Field, Metadata, Schema, SchemaBuilder, SchemaRef};
+use arrow::datatypes::{DataType, Field, Metadata, Schema, SchemaBuilder, SchemaRef};
 use async_trait::async_trait;
 use datafusion_catalog::{ScanArgs, ScanResult, Session, TableProvider};
 use datafusion_common::pruning::PrunableStatistics;
 use datafusion_common::stats::{Precision, is_known_empty};
 use datafusion_common::{
-    Constraints, DFSchema, SchemaExt, SplitPoint, Statistics, internal_datafusion_err,
-    plan_err, project_schema,
+    Constraints, DFSchema, PhysicalFileStatistics, SchemaExt, SplitPoint, Statistics,
+    internal_datafusion_err, plan_err, project_schema,
 };
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
@@ -627,6 +627,32 @@ impl TableProvider for ListingTable {
 }
 
 impl ListingTable {
+    fn physical_statistics_required(
+        &self,
+        state: &dyn Session,
+        projection: Option<&[usize]>,
+    ) -> bool {
+        if !state
+            .config_options()
+            .optimizer
+            .enable_dictionary_aggregation
+        {
+            return false;
+        }
+
+        let file_fields = self.file_schema.fields();
+        match projection {
+            Some(projection) => projection.iter().any(|index| {
+                file_fields
+                    .get(*index)
+                    .is_some_and(|field| field.data_type() == &DataType::Utf8View)
+            }),
+            None => file_fields
+                .iter()
+                .any(|field| field.data_type() == &DataType::Utf8View),
+        }
+    }
+
     fn scan_with_args_boxed<'a>(
         &'a self,
         state: &'a dyn Session,
@@ -667,6 +693,12 @@ impl ListingTable {
             filters.iter().cloned().partition(|filter| {
                 can_be_evaluated_for_partition_pruning(&table_partition_col_names, filter)
             });
+        // The dictionary aggregation rule rejects scans with data filters or
+        // limits, so avoid collecting its optional file metadata for plans it
+        // cannot rewrite. Partition-only filters remain eligible.
+        let physical_statistics_required = filters.is_empty()
+            && limit.is_none()
+            && self.physical_statistics_required(state, projection.as_deref());
 
         let declared_output_partitioning = self.options.output_partitioning.as_ref();
 
@@ -693,6 +725,7 @@ impl ListingTable {
                 &partition_filters,
                 &filters,
                 statistic_file_limit,
+                physical_statistics_required,
             )
             .await?;
 
@@ -946,8 +979,15 @@ impl ListingTable {
         filters: &'a [Expr],
         limit: Option<usize>,
     ) -> datafusion_common::Result<ListFilesResult> {
-        self.list_files_for_scan_inner(ctx, filters, &[], limit)
-            .await
+        let physical_statistics_required = self.physical_statistics_required(ctx, None);
+        self.list_files_for_scan_inner(
+            ctx,
+            filters,
+            &[],
+            limit,
+            physical_statistics_required,
+        )
+        .await
     }
 
     async fn list_files_for_scan_inner<'a>(
@@ -956,6 +996,7 @@ impl ListingTable {
         partition_filters: &'a [Expr],
         data_filters: &'a [Expr],
         limit: Option<usize>,
+        physical_statistics_required: bool,
     ) -> datafusion_common::Result<ListFilesResult> {
         // Declared layouts must retain their partition identities, including empty groups.
         if let Some(output_partitioning) = self.options.output_partitioning.as_ref() {
@@ -963,11 +1004,18 @@ impl ListingTable {
                 ctx,
                 output_partitioning,
                 partition_filters,
+                physical_statistics_required,
             )
             .await
         } else {
-            self.list_files_for_regular_scan(ctx, partition_filters, data_filters, limit)
-                .await
+            self.list_files_for_regular_scan(
+                ctx,
+                partition_filters,
+                data_filters,
+                limit,
+                physical_statistics_required,
+            )
+            .await
         }
     }
 
@@ -977,6 +1025,7 @@ impl ListingTable {
         store: &'a Arc<dyn ObjectStore>,
         listing_time_filters: &'a [Expr],
         file_limit: Option<usize>,
+        physical_statistics_required: bool,
     ) -> datafusion_common::Result<(FileGroup, bool)> {
         // list files (with partitions)
         let file_list = future::try_join_all(self.table_paths.iter().map(|table_path| {
@@ -1005,15 +1054,29 @@ impl ListingTable {
         let files = file_list
             .map(|part_file| async {
                 let part_file = part_file?;
-                let (statistics, ordering) = if ctx.config().collect_statistics() {
-                    self.do_collect_statistics_and_ordering(ctx, store, &part_file)
+                let (statistics, ordering, physical_statistics) =
+                    if ctx.config().collect_statistics() {
+                        self.do_collect_statistics_and_ordering(
+                            ctx,
+                            store,
+                            &part_file,
+                            physical_statistics_required,
+                        )
                         .await?
-                } else {
-                    (Arc::new(Statistics::new_unknown(&self.file_schema)), None)
-                };
-                Ok(part_file
+                    } else {
+                        (
+                            Arc::new(Statistics::new_unknown(&self.file_schema)),
+                            None,
+                            None,
+                        )
+                    };
+                let part_file = part_file
                     .with_statistics(statistics)
-                    .with_ordering(ordering))
+                    .with_ordering(ordering);
+                Ok(match physical_statistics {
+                    Some(statistics) => part_file.with_extension(statistics),
+                    None => part_file,
+                })
             })
             .boxed()
             .buffer_unordered(
@@ -1069,6 +1132,7 @@ impl ListingTable {
         filters: &'a [Expr],
         data_filters: &'a [Expr],
         limit: Option<usize>,
+        physical_statistics_required: bool,
     ) -> datafusion_common::Result<ListFilesResult> {
         let file_group_count = ctx.config().target_partitions();
         if file_group_count == 0 {
@@ -1088,7 +1152,13 @@ impl ListingTable {
             });
         };
         let (file_group, inexact_stats) = self
-            .collect_files_for_scan(ctx, &store, filters, limit)
+            .collect_files_for_scan(
+                ctx,
+                &store,
+                filters,
+                limit,
+                physical_statistics_required,
+            )
             .await?;
         let pruning_predicate = self.file_statistics_pruning_predicate(ctx, data_filters);
 
@@ -1145,6 +1215,7 @@ impl ListingTable {
         ctx: &'a dyn Session,
         output_partitioning: &LogicalPartitioning,
         filters: &'a [Expr],
+        physical_statistics_required: bool,
     ) -> datafusion_common::Result<ListFilesResult> {
         let Some(file_group_count) = output_partitioning.partition_count() else {
             return datafusion_common::not_impl_err!(
@@ -1167,8 +1238,9 @@ impl ListingTable {
                 partition_split_points: vec![],
             });
         };
-        let (file_group, inexact_stats) =
-            self.collect_files_for_scan(ctx, &store, &[], None).await?;
+        let (file_group, inexact_stats) = self
+            .collect_files_for_scan(ctx, &store, &[], None, physical_statistics_required)
+            .await?;
         let mut file_groups = file_group.split_files(file_group_count);
         if !file_groups.is_empty() {
             file_groups.resize_with(file_group_count, || FileGroup::new(vec![]));
@@ -1242,47 +1314,77 @@ impl ListingTable {
         ctx: &dyn Session,
         store: &Arc<dyn ObjectStore>,
         part_file: &PartitionedFile,
-    ) -> datafusion_common::Result<(Arc<Statistics>, Option<LexOrdering>)> {
+        physical_statistics_required: bool,
+    ) -> datafusion_common::Result<(
+        Arc<Statistics>,
+        Option<LexOrdering>,
+        Option<PhysicalFileStatistics>,
+    )> {
         let path = TableScopedPath {
             table: part_file.table_reference.clone(),
             path: part_file.object_meta.location.clone(),
         };
         let meta = &part_file.object_meta;
-
         // Check cache first. The key stays `{table, path}` for cheap lookups;
         // the cached value carries the schema fingerprint to prevent reusing
         // stats computed under a different file schema.
         if let Some(cache) = &self.collected_statistics
             && let Some(cached) = cache.get(&path)
             && cached.is_valid_for(meta, &self.file_schema_fingerprint)
+            && (!physical_statistics_required || cached.physical_statistics.is_some())
         {
             // Return cached statistics and ordering
-            return Ok((Arc::clone(&cached.statistics), cached.ordering.clone()));
+            return Ok((
+                Arc::clone(&cached.statistics),
+                cached.ordering.clone(),
+                physical_statistics_required
+                    .then(|| cached.physical_statistics.clone())
+                    .flatten(),
+            ));
         }
 
         // Cache miss or invalid: fetch both statistics and ordering in a single metadata read
-        let file_meta = self
-            .options
-            .format
-            .infer_stats_and_ordering(ctx, store, Arc::clone(&self.file_schema), meta)
-            .await?;
+        let file_meta = if physical_statistics_required {
+            self.options
+                .format
+                .infer_stats_and_ordering_with_physical_statistics(
+                    ctx,
+                    store,
+                    Arc::clone(&self.file_schema),
+                    meta,
+                )
+                .await?
+        } else {
+            self.options
+                .format
+                .infer_stats_and_ordering(ctx, store, Arc::clone(&self.file_schema), meta)
+                .await?
+        };
 
         let statistics = Arc::new(file_meta.statistics);
 
         // Store in cache
         if let Some(cache) = &self.collected_statistics {
-            cache.put(
-                &path,
-                CachedFileMetadata::new(
-                    meta.clone(),
-                    Arc::clone(&self.file_schema_fingerprint),
-                    Arc::clone(&statistics),
-                    file_meta.ordering.clone(),
-                ),
+            let cached = CachedFileMetadata::new(
+                meta.clone(),
+                Arc::clone(&self.file_schema_fingerprint),
+                Arc::clone(&statistics),
+                file_meta.ordering.clone(),
             );
+            let cached = match &file_meta.physical_statistics {
+                Some(physical_statistics) => {
+                    cached.with_physical_statistics(physical_statistics.clone())
+                }
+                None => cached,
+            };
+            cache.put(&path, cached);
         }
 
-        Ok((statistics, file_meta.ordering))
+        Ok((
+            statistics,
+            file_meta.ordering,
+            file_meta.physical_statistics,
+        ))
     }
 }
 

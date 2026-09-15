@@ -88,7 +88,9 @@ pub use partitioning::{SplitPoint, validate_range_split_points};
 pub use scalar::{ScalarType, ScalarValue};
 pub use schema_reference::SchemaReference;
 pub use spans::{Location, Span, Spans};
-pub use stats::{ColumnStatistics, Statistics};
+pub use stats::{
+    ColumnStatistics, PhysicalColumnStatistics, PhysicalFileStatistics, Statistics,
+};
 pub use table_reference::{ResolvedTableReference, TableReference};
 pub use unnest::{NullHandling, RecursionUnnestOption, UnnestOptions};
 pub use utils::project_schema;
