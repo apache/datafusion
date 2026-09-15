@@ -198,14 +198,29 @@ fn general_cosine_distance<O: OffsetSizeTrait>(arrays: &[ArrayRef]) -> Result<Ar
         let vals2 = slice2.values();
 
         let (mut dot, mut sq1, mut sq2) = dot_and_squares(vals1, vals2, 1.0, 1.0);
-        if needs_norm_scale(sq1, len1) || needs_norm_scale(sq2, len1) || !dot.is_finite()
-        {
-            // Cosine distance does not change when either vector is multiplied
-            // by a positive factor, so scale each vector to keep the products in
-            // range.
-            let scale1 = norm_scale(vals1.iter().copied()).unwrap_or(1.0);
-            let scale2 = norm_scale(vals2.iter().copied()).unwrap_or(1.0);
-            (dot, sq1, sq2) = dot_and_squares(vals1, vals2, scale1, scale2);
+        // Cosine distance does not change when either vector is multiplied by a
+        // positive factor, so scale only a vector whose own sum of squares is
+        // out of range, and recompute only if there is something to scale. A
+        // vector whose sum is in range can stay unscaled: its products cannot
+        // overflow, and its underflow error is already negligible.
+        let rescale_both = !dot.is_finite();
+        let scale1 = if rescale_both || needs_norm_scale(sq1, len1) {
+            norm_scale(vals1.iter().copied())
+        } else {
+            None
+        };
+        let scale2 = if rescale_both || needs_norm_scale(sq2, len1) {
+            norm_scale(vals2.iter().copied())
+        } else {
+            None
+        };
+        if scale1.is_some() || scale2.is_some() {
+            (dot, sq1, sq2) = dot_and_squares(
+                vals1,
+                vals2,
+                scale1.unwrap_or(1.0),
+                scale2.unwrap_or(1.0),
+            );
         }
 
         if sq1 == 0.0 || sq2 == 0.0 {
