@@ -689,6 +689,7 @@ impl MultiLevelMergeBuilder {
             .pop()
             .expect("index is in bounds, so the vec is non-empty");
         let old_max = target.max_record_batch_memory;
+        let mut max_batch_rows = old_batch_size;
 
         // Reserve enough to hold a single stream of this file while we re-spill it.
         let reservation = self.reservation.new_empty();
@@ -706,8 +707,10 @@ impl MultiLevelMergeBuilder {
             let mut all_singletons = true;
             let mut max_is_singleton = false;
             let mut decoded_max = 0;
+            max_batch_rows = 0;
             while let Some(batch) = source.next().await {
                 let batch = batch?;
+                max_batch_rows = max_batch_rows.max(batch.num_rows());
                 all_singletons &= batch.num_rows() == 1;
                 decoded_max = decoded_max.max(batch.get_sliced_size()?);
                 if batch.num_rows() == 1
@@ -734,7 +737,7 @@ impl MultiLevelMergeBuilder {
                 let batch_size_limit = if all_singletons || max_is_singleton {
                     1
                 } else {
-                    old_batch_size
+                    old_batch_size.min(max_batch_rows).max(1)
                 };
                 self.sorted_spill_files.push((target, batch_size_limit));
                 self.sorted_spill_files.swap(index, last);
@@ -789,9 +792,11 @@ impl MultiLevelMergeBuilder {
         // Record the halved batch size as a *per-run* limit rather than lowering the
         // global batch size. Merges that don't touch this run keep the full batch
         // size. a merge that reads it caps its output at this limit so the merged run
-        // can't rebuild a full-size batch and reintroduce the skew.
+        // can't rebuild a full-size batch and reintroduce the skew. Actual batches
+        // can be shorter than the configured limit; use their size so the merge
+        // cannot accumulate extra split batches outside its reservation.
         let new_batch_size_limit = if shrank {
-            (old_batch_size / 2).max(1)
+            (old_batch_size / 2).min(max_batch_rows.div_ceil(2)).max(1)
         } else {
             // The cap exception only covers indivisible input rows, not a
             // larger output batch formed by concatenating those rows.
@@ -1150,11 +1155,11 @@ mod tests {
     #[tokio::test]
     async fn spill_merge_memory_limit_splits_an_oversized_first_run(
         #[case] unknown_limit: bool,
+        #[values(128, 129, 4096)] rows: i64,
     ) -> Result<()> {
         let env = Arc::new(RuntimeEnv::default());
         let schema = test_schema();
         let spill_manager = build_spill_manager(&env, &schema);
-        let rows: i64 = 4096;
         let first = make_sorted_spill_file(&spill_manager, &schema, (0..rows).collect());
         let second =
             make_sorted_spill_file(&spill_manager, &schema, (rows..2 * rows).collect());
@@ -1173,13 +1178,19 @@ mod tests {
             Arc::clone(&schema),
             vec![first, second],
             &pool,
-            rows as usize,
+            8192,
         )
         .with_spill_merge_memory_limit(merge_limit_setting);
         let mut stream = builder.create_spillable_merge_stream();
         let mut batches = vec![];
         while let Some(batch) = stream.next().await {
-            batches.push(batch?);
+            let batch = batch?;
+            // Short input runs must not rebuild a larger output batch than
+            // the attached merge reservation can hold.
+            assert!(
+                crate::spill::get_record_batch_memory_size(&batch) <= pool.reserved()
+            );
+            batches.push(batch);
             assert!(pool.reserved() <= merge_limit);
         }
         let merged = concat_batches(&schema, &batches)?;
@@ -1190,6 +1201,8 @@ mod tests {
         }
         drop(stream);
         assert_eq!(pool.reserved(), 0);
+        assert_eq!(env.disk_manager.spilling_progress().current_bytes, 0);
+        assert_eq!(env.disk_manager.spilling_progress().active_files_count, 0);
         Ok(())
     }
 
@@ -1502,7 +1515,9 @@ mod tests {
         let mut expected = 0;
         while let Some(batch) = stream.next().await {
             let batch = batch?;
-            if !mixed_batches {
+            if mixed_batches {
+                assert!(batch.num_rows() <= 2);
+            } else {
                 assert_eq!(batch.num_rows(), 1);
             }
             for key in batch.column(0).as_string_view().iter() {
