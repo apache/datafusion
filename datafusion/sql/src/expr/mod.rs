@@ -16,6 +16,7 @@
 // under the License.
 
 use std::ops::ControlFlow;
+use std::sync::Arc;
 
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_expr::planner::{
@@ -756,24 +757,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             SQLExpr::AtTimeZone {
                 timestamp,
                 time_zone,
-            } => Ok(Expr::Cast(Cast::new(
-                Box::new(self.sql_expr_to_logical_expr_internal(
-                    *timestamp,
-                    schema,
-                    planner_context,
-                )?),
-                match *time_zone {
-                    SQLExpr::Value(ValueWithSpan {
-                        value: Value::SingleQuotedString(s),
-                        span: _,
-                    }) => DataType::Timestamp(TimeUnit::Nanosecond, Some(s.into())),
-                    _ => {
-                        return not_impl_err!(
-                            "Unsupported ast node in sqltorel: {time_zone:?}"
-                        );
-                    }
-                },
-            ))),
+            } => self.sql_at_time_zone_to_expr(
+                *timestamp,
+                *time_zone,
+                schema,
+                planner_context,
+            ),
             SQLExpr::Dictionary(fields) => {
                 self.try_plan_dictionary_literal(fields, schema, planner_context)
             }
@@ -909,6 +898,86 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 not_impl_err!("Only identifiers and literals are supported in tuples")
             }
         }
+    }
+
+    /// Plan `<timestamp> AT TIME ZONE '<tz>'`.
+    ///
+    /// The meaning of `AT TIME ZONE` depends on whether its input carries a
+    /// timezone, and it always returns the *other* kind of timestamp. This
+    /// follows PostgreSQL (and DuckDB):
+    ///
+    /// * a timezone-**naive** input is read as a wall clock in `tz`, and the
+    ///   result is the corresponding timezone-**aware** instant. That is a
+    ///   plain `CAST(expr AS Timestamp(unit, Some(tz)))`, because arrow's
+    ///   `Timestamp(_, None) -> Timestamp(_, Some(tz))` cast interprets the
+    ///   naive value as local time in `tz`.
+    /// * a timezone-**aware** input is an instant, and the result is the wall
+    ///   clock that instant has in `tz`, as a timezone-**naive** timestamp.
+    ///   The same cast is still the first half of that (casting between two
+    ///   aware types preserves the instant and only relabels the zone); the
+    ///   second half — dropping the zone while keeping the displayed value —
+    ///   is delegated to [`ExprPlanner::plan_at_time_zone`], which
+    ///   `datafusion-functions` implements with `to_local_time`.
+    ///
+    /// Anything that is not a timestamp (a string literal, for instance) takes
+    /// the naive path, since a `CAST` to a timezone-aware timestamp is the
+    /// natural reading of `AT TIME ZONE` for it.
+    ///
+    /// [`ExprPlanner::plan_at_time_zone`]: datafusion_expr::planner::ExprPlanner::plan_at_time_zone
+    fn sql_at_time_zone_to_expr(
+        &self,
+        timestamp: SQLExpr,
+        time_zone: SQLExpr,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let tz: Arc<str> = match time_zone {
+            SQLExpr::Value(ValueWithSpan {
+                value: Value::SingleQuotedString(s),
+                span: _,
+            }) => s.into(),
+            _ => {
+                return not_impl_err!("Unsupported ast node in sqltorel: {time_zone:?}");
+            }
+        };
+
+        let expr =
+            self.sql_expr_to_logical_expr_internal(timestamp, schema, planner_context)?;
+
+        // `AT TIME ZONE` does not change the precision of its input, so keep
+        // the input's `TimeUnit` when it has one.
+        let (unit, input_is_tz_aware) = match expr.get_type(schema)? {
+            DataType::Timestamp(unit, tz) => (unit, tz.is_some()),
+            _ => (TimeUnit::Nanosecond, false),
+        };
+
+        // Instant-preserving relabel into `tz` for an aware input; local-time
+        // interpretation for a naive one.
+        let relabeled = Expr::Cast(Cast::new(
+            Box::new(expr),
+            DataType::Timestamp(unit, Some(tz)),
+        ));
+
+        if !input_is_tz_aware {
+            return Ok(relabeled);
+        }
+
+        let mut args = vec![relabeled];
+        for planner in self.context_provider.get_expr_planners() {
+            match planner.plan_at_time_zone(args)? {
+                PlannerResult::Planned(expr) => return Ok(expr),
+                PlannerResult::Original(original) => {
+                    args = original;
+                }
+            }
+        }
+
+        plan_err!(
+            "AT TIME ZONE on a timezone-aware timestamp is not supported by any \
+             ExprPlanner. It needs the `to_local_time` function; register \
+             `datafusion_functions::datetime` (or its `DatetimeFunctionPlanner`) \
+             with the session"
+        )
     }
 
     fn sql_position_to_expr(

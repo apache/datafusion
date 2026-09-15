@@ -2870,6 +2870,10 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 Converts a timestamp with a timezone to a timestamp without a timezone (with no offset or timezone information). This function handles daylight saving time changes.
 
+A timestamp that already has no timezone is returned unchanged.
+
+`AT TIME ZONE` applied to a timezone-_aware_ timestamp is defined in terms of this function: it relabels the instant into the target timezone and then applies `to_local_time`. Wrapping such an expression in `to_local_time` is therefore redundant. The examples below instead apply `AT TIME ZONE` to timezone-_naive_ values, which is the form that produces a timezone-aware timestamp for `to_local_time` to strip.
+
 ```sql
 to_local_time(expression)
 ```
