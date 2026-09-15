@@ -24,6 +24,7 @@ use arrow::datatypes::FieldRef;
 use crate::percentile_cont::{
     PercentileCont, create_percentile_accumulator, create_percentile_groups_accumulator,
 };
+use crate::utils::{PercentileParam, PercentileParamState};
 use datafusion_common::Result;
 use datafusion_common::types::logical_float64;
 use datafusion_expr::GroupsAccumulator;
@@ -122,7 +123,11 @@ impl AggregateUDFImpl for Median {
     fn accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         create_percentile_accumulator(
             self.name(),
-            0.5,
+            PercentileParam {
+                aggregate_fn_name: "MEDIAN".to_string(),
+                state: PercentileParamState::Resolved(0.5),
+            },
+            false,
             args.expr_fields[0].data_type(),
             args.is_distinct,
         )
@@ -138,7 +143,11 @@ impl AggregateUDFImpl for Median {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         create_percentile_groups_accumulator(
             self.name(),
-            0.5,
+            PercentileParam {
+                aggregate_fn_name: "MEDIAN".to_string(),
+                state: PercentileParamState::Resolved(0.5),
+            },
+            false,
             args.expr_fields[0].data_type(),
         )
     }
