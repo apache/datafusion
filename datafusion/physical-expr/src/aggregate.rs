@@ -53,7 +53,7 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{AggregateUDF, Expr, ReversedUDAF, SetMonotonicity};
-use datafusion_expr_common::accumulator::Accumulator;
+use datafusion_expr_common::accumulator::{Accumulator, AggregateMetrics};
 use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
 use datafusion_expr_common::type_coercion::aggregates::check_arg_count;
 use datafusion_functions_aggregate_common::accumulator::{
@@ -747,6 +747,16 @@ impl AggregateFunctionExpr {
         self.fun.accumulator(acc_args)
     }
 
+    /// Creates an accumulator and supplies optional aggregate-owned metrics.
+    pub fn create_accumulator_with_metrics(
+        &self,
+        metrics: Arc<dyn AggregateMetrics>,
+    ) -> Result<Box<dyn Accumulator>> {
+        let mut accumulator = self.create_accumulator()?;
+        accumulator.set_metrics(metrics);
+        Ok(accumulator)
+    }
+
     /// the field of the final result of this aggregation.
     pub fn state_fields(&self) -> Result<Vec<FieldRef>> {
         let args = StateFieldsArgs {
@@ -926,6 +936,16 @@ impl AggregateFunctionExpr {
             exprs: &self.args,
         };
         self.fun.create_groups_accumulator(args)
+    }
+
+    /// Creates a groups accumulator and supplies optional aggregate-owned metrics.
+    pub fn create_groups_accumulator_with_metrics(
+        &self,
+        metrics: Arc<dyn AggregateMetrics>,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
+        let mut accumulator = self.create_groups_accumulator()?;
+        accumulator.set_metrics(metrics);
+        Ok(accumulator)
     }
 
     /// Construct an expression that calculates the aggregate in reverse.
