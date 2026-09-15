@@ -38,9 +38,8 @@ use datafusion_common::Result;
 use datafusion_common::nested_struct::requires_nested_struct_cast;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_functions::core::file_row_index::FileRowIndexFunc;
-use datafusion_functions::core::getfield::GetFieldFunc;
-use datafusion_physical_expr::expressions::{CastExpr, Column, Literal};
-use datafusion_physical_expr::utils::collect_columns;
+use datafusion_physical_expr::expressions::{CastExpr, Column};
+use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
 use datafusion_physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 
 use crate::nested_schema_pruning::{
@@ -64,7 +63,7 @@ pub(crate) struct ParquetReadPlan {
     pub projected_schema: SchemaRef,
 }
 
-/// Records a struct field access via `get_field(struct_col, 'field1', 'field2', ...)`.
+/// Records a nested input required by an expression, including UDF requirements.
 ///
 /// This allows the row filter to project only the specific Parquet leaf columns
 /// needed by the filter, rather than all leaves of the struct.
@@ -272,13 +271,11 @@ impl<'schema> PushdownChecker<'schema> {
     /// conversions still run.
     fn check_cast_struct_field_access(
         &mut self,
-        func: &ScalarFunctionExpr,
+        source: &Arc<dyn PhysicalExpr>,
+        field_path: &[String],
+        return_type: &DataType,
     ) -> Option<TreeNodeRecursion> {
         if !self.allow_struct_casts {
-            return None;
-        }
-        let (source, field_names) = func.args().split_first()?;
-        if field_names.is_empty() {
             return None;
         }
         let cast = source.downcast_ref::<CastExpr>()?;
@@ -290,7 +287,6 @@ impl<'schema> PushdownChecker<'schema> {
         ) {
             return None;
         }
-        let return_type = func.return_type();
         if DataType::is_nested(return_type) && !self.is_nested_type_supported(return_type)
         {
             return None;
@@ -298,21 +294,7 @@ impl<'schema> PushdownChecker<'schema> {
 
         // Every key must resolve through Struct fields in the cast target.
         // In particular, a key following a Map field is a runtime lookup.
-        let mut data_type = cast.cast_type();
-        for field_name in field_names {
-            let name = field_name
-                .downcast_ref::<Literal>()?
-                .value()
-                .try_as_str()
-                .flatten()?;
-            let DataType::Struct(fields) = data_type else {
-                return None;
-            };
-            data_type = fields
-                .iter()
-                .find(|field| field.name() == name)?
-                .data_type();
-        }
+        resolve_struct_field_type(cast.cast_type(), field_path)?;
 
         self.cast_accesses.push(CastColumnAccess {
             root_index: index,
@@ -368,6 +350,16 @@ impl<'schema> PushdownChecker<'schema> {
         self.allow_list_columns && is_list
     }
 
+    /// Selected structs must obey the same List/Map policy as direct fields.
+    fn subtree_is_pushable(&self, data_type: &DataType) -> bool {
+        match data_type {
+            DataType::Struct(fields) => fields
+                .iter()
+                .all(|field| self.subtree_is_pushable(field.data_type())),
+            other => !other.is_nested() || self.is_nested_type_supported(other),
+        }
+    }
+
     #[inline]
     pub(crate) fn prevents_pushdown(&self) -> bool {
         self.non_primitive_columns || self.projected_columns || self.has_unpushable_udfs
@@ -394,90 +386,109 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
     type Node = Arc<dyn PhysicalExpr>;
 
     fn f_down(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
-        // Handle struct field access like `s['foo']['bar'] > 10`.
-        //
-        // DataFusion represents nested field access as `get_field(Column("s"), "foo")`
-        // (or chained: `get_field(get_field(Column("s"), "foo"), "bar")`).
-        //
-        // We intercept the outermost `get_field` on the way *down* the tree so
-        // the visitor never reaches the raw `Column("s")` node. Without this,
-        // `check_single_column` would see that `s` is a Struct and reject it.
-        //
-        // The strategy:
-        //   1. Match `get_field` whose first arg is a `Column` (the struct root).
-        //   2. Check that the *resolved* return type is primitive — meaning we've
-        //      drilled all the way to a leaf (e.g. `s['foo']` → Utf8).
-        //   3. Record the root column index via `check_struct_field_column` and
-        //      return `Jump` to skip visiting the children (the Column and the
-        //      literal field-name args), since we've already handled them.
-        //
-        // If the return type is still nested (e.g. `s['nested_struct']` → Struct),
-        // we fall through and let normal traversal continue, which will
-        // eventually reject the expression when it hits the struct Column.
-        if let Some(func) =
-            ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(node.as_ref())
-        {
-            if let Some(recursion) = self.check_cast_struct_field_access(func) {
+        // Resolve capability-declaring accessors, including chains with
+        // different UDFs and argument layouts. Do not look through casts.
+        let mut source = node;
+        let mut paths = Vec::new();
+        while let Some(function) = source.downcast_ref::<ScalarFunctionExpr>() {
+            let Some(access) = function.struct_field_access() else {
+                break;
+            };
+            paths.push(access.field_path);
+            source = &function.args()[access.source_arg];
+        }
+        let field_path = paths.into_iter().rev().flatten().collect::<Vec<_>>();
+        if !field_path.is_empty() {
+            let return_type = node.data_type(self.file_schema)?;
+            if let Some(recursion) =
+                self.check_cast_struct_field_access(source, &field_path, &return_type)
+            {
                 return Ok(recursion);
             }
-            let args = func.args();
-
-            if let Some(column) = args.first().and_then(|a| a.downcast_ref::<Column>()) {
-                // for Map columns, get_field performs a runtime key lookup rather than a
-                // schema-level field access so the entire Map column must be read,
-                // we skip the struct field optimization and defer to normal Column traversal
-                let is_map_column = self
+            if let Some(column) = source.downcast_ref::<Column>() {
+                // Resolve by name: physical column indices may still refer to
+                // an unprojected schema. Map/List paths must remain opaque.
+                let leaf_type = self
                     .file_schema
-                    .index_of(column.name())
+                    .field_with_name(column.name())
                     .ok()
-                    .map(|idx| {
-                        matches!(
-                            self.file_schema.field(idx).data_type(),
-                            DataType::Map(_, _)
-                        )
-                    })
-                    .unwrap_or(false);
-
-                let return_type = func.return_type();
-
-                if !is_map_column
-                    && (!DataType::is_nested(return_type)
-                        || self.is_nested_type_supported(return_type))
+                    .and_then(|root| {
+                        resolve_struct_field_type(root.data_type(), &field_path)
+                    });
+                if leaf_type.is_some()
+                    && (!return_type.is_nested()
+                        || self.is_nested_type_supported(&return_type))
                 {
-                    // if any field name argument is not a string literal we cannot
-                    // determine the exact leaf path, so we fall back to reading the
-                    // entire struct root column
-                    let field_path = args[1..]
-                        .iter()
-                        .map(|arg| {
-                            arg.downcast_ref::<Literal>().and_then(|lit| {
-                                lit.value().try_as_str().flatten().map(|s| s.to_string())
-                            })
-                        })
-                        .collect();
-
-                    match field_path {
-                        Some(path) => {
-                            if let Some(recursion) =
-                                self.check_struct_field_column(column.name(), path)
-                            {
-                                return Ok(recursion);
-                            }
-                        }
-                        None => {
-                            // Could not resolve field path — fall back to
-                            // reading the entire struct root column.
-                            if let Some(recursion) =
-                                self.check_single_column(column.name())
-                            {
-                                return Ok(recursion);
-                            }
-                        }
+                    if let Some(recursion) =
+                        self.check_struct_field_column(column.name(), field_path)
+                    {
+                        return Ok(recursion);
                     }
-
                     return Ok(TreeNodeRecursion::Jump);
                 }
             }
+        }
+
+        if let Some(function) = node.downcast_ref::<ScalarFunctionExpr>()
+            && let Some(requirements) = function.required_input_fields(self.file_schema)
+            && !requirements.is_empty()
+            // Declaring dependencies cannot bypass the List/Map pushdown policy.
+            && requirements.iter().all(|requirement| {
+                let argument = &function.args()[requirement.arg_index];
+                let data_type = if let Some(column) = argument.downcast_ref::<Column>() {
+                    // Column indices can still refer to an earlier schema.
+                    self.file_schema
+                        .field_with_name(column.name())
+                        .map(|field| field.data_type().clone())
+                        .ok()
+                } else {
+                    reassign_expr_columns(Arc::clone(argument), self.file_schema)
+                        .and_then(|argument| argument.data_type(self.file_schema))
+                        .ok()
+                };
+                data_type.is_some_and(|data_type| {
+                    requirement.field_paths.iter().all(|path| {
+                        resolve_struct_field_type(&data_type, path)
+                            .is_some_and(|leaf| self.subtree_is_pushable(leaf))
+                    })
+                })
+            })
+        {
+            for (index, argument) in function.args().iter().enumerate() {
+                if let Some(requirement) =
+                    requirements.iter().find(|r| r.arg_index == index)
+                {
+                    if let Some(column) = argument.downcast_ref::<Column>() {
+                        for path in &requirement.field_paths {
+                            self.check_struct_field_column(column.name(), path.clone());
+                        }
+                        continue;
+                    }
+                    // A dependency declaration cannot remove conversions from
+                    // an argument. Runtime schema adaptation may have inserted a
+                    // cast; retain its entire target and evaluate it unchanged.
+                    if self.allow_struct_casts
+                        && let Some(cast) = argument.downcast_ref::<CastExpr>()
+                        && let Some(column) = cast.expr().downcast_ref::<Column>()
+                        && let Ok(root_index) = self.file_schema.index_of(column.name())
+                        && matches!(
+                            self.file_schema.field(root_index).data_type(),
+                            DataType::Struct(_)
+                        )
+                        && matches!(cast.cast_type(), DataType::Struct(_))
+                    {
+                        self.cast_accesses.push(CastColumnAccess {
+                            root_index,
+                            target_type: cast.cast_type().clone(),
+                        });
+                        continue;
+                    }
+                }
+                // Unspecified arguments and arbitrary argument expressions must
+                // still be evaluated, including columns and errors they depend on.
+                argument.visit(self)?;
+            }
+            return Ok(TreeNodeRecursion::Jump);
         }
 
         // Handle whole-column casts to a narrower nested type, e.g.
@@ -519,6 +530,21 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
 
         Ok(TreeNodeRecursion::Continue)
     }
+}
+
+/// Resolve literal names through structs, rejecting missing or ambiguous fields.
+fn resolve_struct_field_type<'a>(
+    data_type: &'a DataType,
+    path: &[String],
+) -> Option<&'a DataType> {
+    path.iter().try_fold(data_type, |data_type, name| {
+        let DataType::Struct(fields) = data_type else {
+            return None;
+        };
+        let mut matches = fields.iter().filter(|field| field.name() == name);
+        let field = matches.next()?;
+        matches.next().is_none().then_some(field.data_type())
+    })
 }
 
 /// Result of checking which columns are required for filter pushdown.
@@ -1137,6 +1163,472 @@ mod test {
     use parquet::file::metadata::ParquetMetaData;
     use std::collections::HashMap;
     use tempfile::NamedTempFile;
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct CustomStructLabel;
+
+    /// Computes a result from two fields and another argument, rather than
+    /// returning a field unchanged. Only the struct argument is restricted.
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct LabelScore {
+        requirements: Option<Vec<datafusion_expr::InputFieldRequirement>>,
+    }
+
+    impl datafusion_expr::ScalarUDFImpl for LabelScore {
+        fn name(&self) -> &str {
+            "label_score"
+        }
+
+        fn signature(&self) -> &datafusion_expr::Signature {
+            static SIGNATURE: std::sync::LazyLock<datafusion_expr::Signature> =
+                std::sync::LazyLock::new(|| {
+                    datafusion_expr::Signature::any(
+                        2,
+                        datafusion_expr::Volatility::Immutable,
+                    )
+                });
+            &SIGNATURE
+        }
+
+        fn return_type(&self, _: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int32)
+        }
+
+        fn required_input_fields(
+            &self,
+            args: datafusion_expr::ReturnFieldArgs,
+        ) -> Option<Vec<datafusion_expr::InputFieldRequirement>> {
+            // The source schema is available to the downstream implementation.
+            assert!(matches!(
+                args.arg_fields[1].data_type(),
+                DataType::Struct(_)
+            ));
+            self.requirements.clone()
+        }
+
+        fn invoke_with_args(
+            &self,
+            args: datafusion_expr::ScalarFunctionArgs,
+        ) -> Result<datafusion_expr::ColumnarValue> {
+            let id = args.args[0].to_array(args.number_rows)?;
+            let s = args.args[1].to_array(args.number_rows)?;
+            let id = id.as_any().downcast_ref::<Int32Array>().unwrap();
+            let s = s.as_any().downcast_ref::<StructArray>().unwrap();
+            let values = s
+                .column_by_name("value")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
+            let labels = s
+                .column_by_name("label")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            let scores = (0..s.len())
+                .map(|i| {
+                    (!s.is_null(i)
+                        && !id.is_null(i)
+                        && !values.is_null(i)
+                        && !labels.is_null(i))
+                    .then(|| id.value(i) + values.value(i) + labels.value(i).len() as i32)
+                })
+                .collect::<Int32Array>();
+            Ok(datafusion_expr::ColumnarValue::Array(Arc::new(scores)))
+        }
+    }
+
+    fn score_requirement() -> datafusion_expr::InputFieldRequirement {
+        datafusion_expr::InputFieldRequirement {
+            arg_index: 1,
+            field_paths: vec![vec!["value".into()], vec!["label".into()]],
+        }
+    }
+
+    #[test]
+    fn udf_input_requirements_respect_nested_pushdown_policy() {
+        #[derive(Debug, PartialEq, Eq, Hash)]
+        struct RequiredFieldsIsNull(Vec<String>);
+
+        impl datafusion_expr::ScalarUDFImpl for RequiredFieldsIsNull {
+            fn name(&self) -> &str {
+                "required_fields_is_null"
+            }
+
+            fn signature(&self) -> &datafusion_expr::Signature {
+                static SIGNATURE: std::sync::LazyLock<datafusion_expr::Signature> =
+                    std::sync::LazyLock::new(|| {
+                        datafusion_expr::Signature::any(
+                            1,
+                            datafusion_expr::Volatility::Immutable,
+                        )
+                    });
+                &SIGNATURE
+            }
+
+            fn return_type(&self, _: &[DataType]) -> Result<DataType> {
+                Ok(DataType::Boolean)
+            }
+
+            fn required_input_fields(
+                &self,
+                _: datafusion_expr::ReturnFieldArgs,
+            ) -> Option<Vec<datafusion_expr::InputFieldRequirement>> {
+                Some(vec![datafusion_expr::InputFieldRequirement {
+                    arg_index: 0,
+                    field_paths: vec![self.0.clone()],
+                }])
+            }
+
+            fn invoke_with_args(
+                &self,
+                args: datafusion_expr::ScalarFunctionArgs,
+            ) -> Result<datafusion_expr::ColumnarValue> {
+                Ok(datafusion_expr::ColumnarValue::Array(Arc::new(
+                    arrow::compute::is_null(
+                        args.args[0].to_array(args.number_rows)?.as_ref(),
+                    )?,
+                )))
+            }
+        }
+
+        let item = Arc::new(Field::new("item", DataType::Int32, true));
+        let map = DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(
+                    vec![
+                        Field::new("key", DataType::Utf8, false),
+                        Field::new("value", DataType::Int32, true),
+                    ]
+                    .into(),
+                ),
+                false,
+            )),
+            false,
+        );
+        for (data_type, leaf_type) in [
+            DataType::Int32,
+            DataType::Struct(vec![Field::new("value", DataType::Int32, true)].into()),
+            DataType::List(Arc::clone(&item)),
+            DataType::LargeList(Arc::clone(&item)),
+            DataType::FixedSizeList(item, 2),
+            map,
+        ]
+        .into_iter()
+        .flat_map(|leaf_type| {
+            let wrap = |data_type| {
+                DataType::Struct(
+                    vec![
+                        Field::new("primitive", DataType::Int32, true),
+                        Field::new("inner", data_type, true),
+                    ]
+                    .into(),
+                )
+            };
+            let wrapped = wrap(leaf_type.clone());
+            [leaf_type.clone(), wrapped.clone(), wrap(wrapped)]
+                .map(|data_type| (data_type, leaf_type.clone()))
+        }) {
+            for nested in [false, true] {
+                let (input_type, path) = if nested {
+                    (
+                        DataType::Struct(
+                            vec![Field::new("selected", data_type.clone(), true)].into(),
+                        ),
+                        vec!["selected".into()],
+                    )
+                } else {
+                    (data_type.clone(), vec![])
+                };
+                let schema = Schema::new(vec![
+                    Field::new("id", DataType::Int32, false),
+                    Field::new("s", input_type, true),
+                ]);
+                let expr = logical2physical(
+                    &datafusion_expr::ScalarUDF::from(RequiredFieldsIsNull(path))
+                        .call(vec![col("s")]),
+                    &schema,
+                );
+                for index in [0, 1] {
+                    // Index 0 simulates an expression from an earlier schema.
+                    let expr = Arc::clone(&expr)
+                        .with_new_children(vec![Arc::new(PhysicalColumn::new(
+                            "s", index,
+                        ))])
+                        .unwrap();
+                    for allow_lists in [false, true] {
+                        let mut checker =
+                            PushdownChecker::new(&schema, allow_lists, false);
+                        expr.visit(&mut checker).unwrap();
+                        let blocked = match &leaf_type {
+                            DataType::Map(_, _) => true,
+                            DataType::List(_)
+                            | DataType::LargeList(_)
+                            | DataType::FixedSizeList(_, _) => !allow_lists,
+                            _ => false,
+                        };
+                        assert_eq!(
+                            checker.prevents_pushdown(),
+                            blocked,
+                            "{data_type:?}, nested={nested}, index={index}, allow_lists={allow_lists}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn udf_input_requirements_prune_multiple_fields_and_preserve_other_arguments() {
+        let (file, schema, metadata) = write_id_struct_file_with_handle();
+        let descriptor = metadata.file_metadata().schema_descr();
+        for requirements in [
+            None,
+            Some(vec![score_requirement()]),
+            Some(vec![
+                datafusion_expr::InputFieldRequirement {
+                    arg_index: 0,
+                    field_paths: vec![vec![]],
+                },
+                score_requirement(),
+            ]),
+        ] {
+            let declare = requirements.is_some();
+            let udf = datafusion_expr::ScalarUDF::from(LabelScore { requirements })
+                .with_aliases(["score_alias"]);
+            let expr = logical2physical(&udf.call(vec![col("id"), col("s")]), &schema);
+            let plan =
+                build_projection_read_plan(vec![Arc::clone(&expr)], &schema, descriptor);
+            assert_eq!(
+                plan.projection_mask,
+                ProjectionMask::leaves(
+                    descriptor,
+                    if declare {
+                        vec![0, 1, 2]
+                    } else {
+                        vec![0, 1, 2, 3]
+                    }
+                )
+            );
+            let mut checker = PushdownChecker::new(&schema, false, false);
+            expr.visit(&mut checker).unwrap();
+            assert_eq!(checker.prevents_pushdown(), !declare);
+            let mut reader =
+                ParquetRecordBatchReaderBuilder::try_new(file.reopen().unwrap())
+                    .unwrap()
+                    .with_projection(plan.projection_mask)
+                    .build()
+                    .unwrap();
+            let batch = reader.next().unwrap().unwrap();
+            let result = expr
+                .evaluate(&batch)
+                .unwrap()
+                .into_array(batch.num_rows())
+                .unwrap();
+            assert_eq!(
+                result.as_ref(),
+                &Int32Array::from(vec![12, 23, 34]) as &dyn Array
+            );
+            let stale = Arc::clone(&expr)
+                .with_new_children(vec![
+                    Arc::new(datafusion_physical_expr::expressions::BinaryExpr::new(
+                        Arc::new(PhysicalColumn::new("id", 1)),
+                        datafusion_expr::Operator::Plus,
+                        Arc::new(datafusion_physical_expr::expressions::Literal::new(
+                            ScalarValue::Int32(Some(0)),
+                        )),
+                    )),
+                    Arc::new(PhysicalColumn::new("s", 0)),
+                ])
+                .unwrap();
+            let stale_plan = build_projection_read_plan(vec![stale], &schema, descriptor);
+            assert_eq!(stale_plan.projected_schema, plan.projected_schema);
+            // A second consumer of the whole struct overrides narrower requirements.
+            let plan = build_projection_read_plan(
+                vec![expr, Arc::new(PhysicalColumn::new("s", 1))],
+                &schema,
+                descriptor,
+            );
+            assert_eq!(
+                plan.projection_mask,
+                ProjectionMask::leaves(descriptor, [0, 1, 2, 3])
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_udf_input_requirements_keep_full_inputs() {
+        let (schema, metadata) = write_id_struct_file();
+        let descriptor = metadata.file_metadata().schema_descr();
+        let requirement = score_requirement();
+        for requirements in [
+            vec![datafusion_expr::InputFieldRequirement {
+                arg_index: 2,
+                ..requirement.clone()
+            }],
+            vec![requirement.clone(), requirement.clone()],
+            vec![datafusion_expr::InputFieldRequirement {
+                field_paths: vec![],
+                ..requirement.clone()
+            }],
+            vec![datafusion_expr::InputFieldRequirement {
+                field_paths: vec![vec!["missing".into()]],
+                ..requirement.clone()
+            }],
+            vec![datafusion_expr::InputFieldRequirement {
+                field_paths: vec![vec!["value".into(), "not_a_struct".into()]],
+                ..requirement
+            }],
+        ] {
+            let udf = datafusion_expr::ScalarUDF::from(LabelScore {
+                requirements: Some(requirements),
+            });
+            let expr = logical2physical(&udf.call(vec![col("id"), col("s")]), &schema);
+            let plan = build_projection_read_plan(vec![expr], &schema, descriptor);
+            assert_eq!(
+                plan.projection_mask,
+                ProjectionMask::leaves(descriptor, [0, 1, 2, 3])
+            );
+        }
+    }
+
+    #[test]
+    fn udf_input_requirements_preserve_argument_cast_errors() {
+        let (file, schema, metadata) = write_id_struct_file_with_handle();
+        let target = DataType::Struct(
+            vec![
+                Arc::new(Field::new("value", DataType::Int32, false)),
+                Arc::new(Field::new("label", DataType::Utf8, false)),
+                Arc::new(Field::new("pad", DataType::Int32, false)),
+            ]
+            .into(),
+        );
+        let expr = logical2physical(
+            &datafusion_expr::ScalarUDF::from(LabelScore {
+                requirements: Some(vec![score_requirement()]),
+            })
+            .call(vec![col("id"), datafusion_expr::cast(col("s"), target)]),
+            &schema,
+        );
+        // The UDF does not use pad, but its argument's explicit conversion does.
+        for allow_casts in [false, true] {
+            let mut checker = PushdownChecker::new(&schema, false, allow_casts);
+            expr.visit(&mut checker).unwrap();
+            assert_eq!(checker.prevents_pushdown(), !allow_casts);
+        }
+        let (plan, _) =
+            crate::row_filter::build_parquet_read_plan(&expr, &schema, &metadata)
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            plan.projection_mask,
+            ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [0, 1, 2, 3])
+        );
+        let mut reader = ParquetRecordBatchReaderBuilder::try_new(file.reopen().unwrap())
+            .unwrap()
+            .with_projection(plan.projection_mask)
+            .build()
+            .unwrap();
+        let batch = reader.next().unwrap().unwrap();
+        let error = expr.evaluate(&batch).unwrap_err();
+        assert!(error.to_string().contains("pad"), "{error}");
+    }
+
+    impl datafusion_expr::ScalarUDFImpl for CustomStructLabel {
+        fn name(&self) -> &str {
+            "custom_struct_label"
+        }
+
+        fn signature(&self) -> &datafusion_expr::Signature {
+            static SIGNATURE: std::sync::LazyLock<datafusion_expr::Signature> =
+                std::sync::LazyLock::new(|| {
+                    datafusion_expr::Signature::any(
+                        1,
+                        datafusion_expr::Volatility::Immutable,
+                    )
+                });
+            &SIGNATURE
+        }
+
+        fn return_type(&self, _: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Utf8)
+        }
+
+        fn struct_field_access(
+            &self,
+            _: &[Option<ScalarValue>],
+        ) -> Option<datafusion_expr::StructFieldAccess> {
+            Some(datafusion_expr::StructFieldAccess {
+                source_arg: 0,
+                field_path: vec!["label".into()],
+            })
+        }
+
+        fn invoke_with_args(
+            &self,
+            mut args: datafusion_expr::ScalarFunctionArgs,
+        ) -> Result<datafusion_expr::ColumnarValue> {
+            args.args
+                .push(datafusion_expr::ColumnarValue::Scalar(ScalarValue::Utf8(
+                    Some("label".into()),
+                )));
+            args.arg_fields
+                .push(Arc::new(Field::new("key", DataType::Utf8, false)));
+            get_field().invoke_with_args(args)
+        }
+    }
+
+    #[test]
+    fn custom_struct_accessor_prunes_leaves_and_allows_row_filter() {
+        let (schema, metadata) = write_id_struct_file();
+        let expr = logical2physical(
+            &datafusion_expr::ScalarUDF::from(CustomStructLabel).call(vec![col("s")]),
+            &schema,
+        );
+        let schema_descr = metadata.file_metadata().schema_descr();
+        let plan = build_projection_read_plan(vec![expr.clone()], &schema, schema_descr);
+        assert_eq!(
+            plan.projection_mask,
+            ProjectionMask::leaves(schema_descr, [2])
+        );
+        let mut checker = PushdownChecker::new(&schema, false, false);
+        expr.visit(&mut checker).unwrap();
+        assert!(!checker.prevents_pushdown());
+    }
+
+    #[test]
+    fn custom_struct_accessor_does_not_prune_map_entries() {
+        let map = DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(
+                    vec![
+                        Arc::new(Field::new("key", DataType::Utf8, false)),
+                        Arc::new(Field::new("value", DataType::Utf8, true)),
+                    ]
+                    .into(),
+                ),
+                false,
+            )),
+            false,
+        );
+        let schema = Arc::new(Schema::new(vec![Field::new("m", map, true)]));
+        let parquet_schema = ArrowSchemaConverter::new().convert(&schema).unwrap();
+        let expr = logical2physical(
+            &datafusion_expr::ScalarUDF::from(CustomStructLabel).call(vec![col("m")]),
+            &schema,
+        );
+        let mut checker = PushdownChecker::new(&schema, false, false);
+        expr.visit(&mut checker).unwrap();
+        assert!(checker.prevents_pushdown());
+        let plan = build_projection_read_plan(vec![expr], &schema, &parquet_schema);
+        assert_eq!(
+            plan.projection_mask,
+            ProjectionMask::leaves(&parquet_schema, [0, 1])
+        );
+    }
 
     #[test]
     fn projection_read_plan_preserves_full_struct() {
