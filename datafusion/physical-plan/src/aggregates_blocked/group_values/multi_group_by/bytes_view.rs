@@ -433,7 +433,7 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType> BlockedGroupColumn<FIXED_B
     }
 
     fn vectorized_equal_to(
-        &self,
+        &mut self,
         group_indices: &[BlocksIndex],
         array: &ArrayRef,
         rows: &[usize],
@@ -511,11 +511,13 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType> BlockedGroupColumn<FIXED_B
     /// remaining bytes are only re-blocked so that every views block still owns whole
     /// bytes blocks, which means rewriting the buffer index and offset of the remaining
     /// non inlined views
-    fn take_n(&mut self, n: usize) -> ArrayRef {
+    fn take_n(&mut self, n: usize, adjusted_block_size: Option<&[usize]>) -> ArrayRef {
+        assert_eq!(adjusted_block_size.is_none(), FIXED_BLOCK_SIZING);
+
         debug_assert!(self.len() >= n);
         let block_size = self.views.block_size();
-        let taken_views = self.views.take_n(n, None::<std::iter::Empty<_>>);
-        let nulls = self.nulls.take_n(n, None::<std::iter::Empty<_>>);
+        let taken_views = self.views.take_n(n, adjusted_block_size.map(|s| s.iter().copied()));
+        let nulls = self.nulls.take_n(n, adjusted_block_size.map(|s| s.iter().copied()));
 
         // Bytes are appended in value order, so the taken values own a prefix of the
         // bytes ending where the last non inlined taken value ends, in bytes block `b` of
@@ -829,14 +831,14 @@ mod tests {
         assert_eq!(stored(&builder, 4), owned(&values[4..]));
 
         // taking values releases exactly their bytes and keeps the rest addressable
-        let taken = builder.take_n(1);
+        let taken = builder.take_n(1, None);
         assert_eq!(strings(&taken), owned(&values[4..5]));
         assert_eq!(taken.as_string_view().data_buffers()[0].len(), value_len);
         assert_eq!(builder.bytes.len(), 7 * value_len);
         // the old bytes block boundary after value 5 is kept, value 8 moved into block 0
         assert_eq!(builder.num_bytes_blocks_per_block, Vec::from(vec![3, 2]));
         assert_eq!(stored(&builder, 4), owned(&values[5..]));
-        let taken = builder.take_n(1);
+        let taken = builder.take_n(1, None);
         assert_eq!(strings(&taken), owned(&values[5..6]));
         assert_eq!(stored(&builder, 4), owned(&values[6..]));
         for (row, value) in values.iter().enumerate().skip(6) {
@@ -844,7 +846,7 @@ mod tests {
             assert!(builder.equal_to(index, &input, row), "{value:?}");
         }
 
-        let taken = builder.take_n(3);
+        let taken = builder.take_n(3, None);
         assert_eq!(strings(&taken), owned(&values[6..9]));
         let blocks = Box::new(builder).take_all();
         let all: Vec<Option<String>> = blocks.iter().flat_map(strings).collect();
@@ -866,7 +868,7 @@ mod tests {
         let values = sample();
         let mut builder = fixed_with(4, &values);
 
-        let taken = builder.take_n(3);
+        let taken = builder.take_n(3, None);
         assert_eq!(strings(&taken), owned(&values[..3]));
         assert_eq!(builder.len(), 6);
         assert_eq!(stored(&builder, 4), owned(&values[3..]));
@@ -877,7 +879,7 @@ mod tests {
         assert!(!builder.equal_to(BlocksIndex::from_index_in_fixed_block_size(2, 4), &input, 1));
         builder.append_val(&input, 0).unwrap();
 
-        let taken = builder.take_n(0);
+        let taken = builder.take_n(0, None);
         assert_eq!(taken.len(), 0);
 
         let blocks = Box::new(builder).take_all();

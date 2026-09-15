@@ -269,7 +269,7 @@ where
     }
 
     fn vectorized_equal_to(
-        &self,
+        &mut self,
         lhs_rows: &[BlocksIndex],
         array: &ArrayRef,
         rhs_rows: &[usize],
@@ -384,11 +384,13 @@ where
         Some(Self::build_array(self.output_type, data))
     }
 
-    fn take_n(&mut self, n: usize) -> ArrayRef {
+    fn take_n(&mut self, n: usize, adjusted_block_size: Option<&[usize]>) -> ArrayRef {
+        assert_eq!(adjusted_block_size.is_none(), IS_FIXED_BLOCK);
+
         debug_assert!(self.len() >= n);
         // SAFETY: the offsets were constructed correctly
 
-        let data = unsafe { self.data.take_n_unchecked(n, None::<std::iter::Empty<_>>) };
+        let data = unsafe { self.data.take_n_unchecked(n, adjusted_block_size.map(|s| s.iter().copied())) };
 
         Self::build_array(self.output_type, data)
     }

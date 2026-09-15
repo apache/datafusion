@@ -84,7 +84,7 @@ impl<const IS_FIXED_BLOCK: bool, const NULLABLE: bool> BlockedGroupColumn<IS_FIX
     }
 
     fn vectorized_equal_to(
-        &self,
+        &mut self,
         lhs_rows: &[BlocksIndex],
         array: &ArrayRef,
         rhs_rows: &[usize],
@@ -219,18 +219,16 @@ impl<const IS_FIXED_BLOCK: bool, const NULLABLE: bool> BlockedGroupColumn<IS_FIX
         }
     }
 
-    fn take_n(&mut self, n: usize,
-              // adjusted_block_size_iter: Option<Box<dyn ClonableIter<Item=usize>>>,
-    ) -> ArrayRef {
+    fn take_n(&mut self, n: usize, adjusted_block_size: Option<&[usize]>) -> ArrayRef {
+        assert_eq!(adjusted_block_size.is_none(), IS_FIXED_BLOCK);
+
         let first_n_nulls = if NULLABLE { self.nulls.take_n(
             n,
-            // adjusted_block_size_iter.clone()
-            None::<std::iter::Empty<_>>,
+            adjusted_block_size.map(|s| s.iter().copied()),
         ) } else { None };
         let first_n_values = self.buffer.take_n(
             n,
-            // adjusted_block_size_iter
-            None::<std::iter::Empty<_>>,
+            adjusted_block_size.map(|s| s.iter().copied()),
         );
 
         Arc::new(BooleanArray::new(first_n_values, first_n_nulls))

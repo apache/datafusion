@@ -186,7 +186,7 @@ where
     }
 
     fn vectorized_equal_to(
-        &self,
+        &mut self,
         lhs_rows: &[BlocksIndex],
         array: &ArrayRef,
         rhs_rows: &[usize],
@@ -317,9 +317,11 @@ where
         }
     }
 
-    fn take_n(&mut self, n: usize) -> ArrayRef {
-        let first_n =self.group_values.take_n(n, None::<iter::Empty<_>>);
-        let first_n_nulls = if NULLABLE { self.nulls.take_n(n, None::<iter::Empty<_>>) } else { None };
+    fn take_n(&mut self, n: usize, adjusted_block_size: Option<&[usize]>) -> ArrayRef {
+        assert_eq!(adjusted_block_size.is_none(), IS_FIXED_BLOCK);
+
+        let first_n =self.group_values.take_n(n, adjusted_block_size.map(|s| s.iter().copied()));
+        let first_n_nulls = if NULLABLE { self.nulls.take_n(n, adjusted_block_size.map(|s| s.iter().copied())) } else { None };
 
         Arc::new(
             PrimitiveArray::<T>::new(ScalarBuffer::from(first_n), first_n_nulls)
