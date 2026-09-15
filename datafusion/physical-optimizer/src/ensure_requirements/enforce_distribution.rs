@@ -38,8 +38,8 @@ use crate::utils::{
     is_sort_preserving_merge,
 };
 
-use crate::optimizer::PhysicalOptimizerContext;
 use arrow::compute::SortOptions;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::Transformed;
@@ -1324,6 +1324,23 @@ fn enforce_distribution_relationships(
     }
 }
 
+/// Deprecated in favour of [`ensure_distribution_with_stats`].
+///
+/// This entry point allocates a fresh [`StatisticsContext`] per call, so a
+/// bottom-up traversal recomputes each shared subtree's statistics once per
+/// ancestor. Pass one context through the whole walk instead — see
+/// [`ensure_distribution_with_stats`].
+#[deprecated(
+    since = "56.0.0",
+    note = "use `ensure_distribution_with_stats` and share one `StatisticsContext` across the traversal"
+)]
+pub fn ensure_distribution(
+    dist_context: DistributionContext,
+    config: &ConfigOptions,
+) -> Result<Transformed<DistributionContext>> {
+    ensure_distribution_with_stats(dist_context, config, &StatisticsContext::new())
+}
+
 /// This function checks whether we need to add additional data exchange
 /// operators to satisfy distribution requirements. Since this function
 /// takes care of such requirements, we should avoid manually adding data
@@ -1332,13 +1349,20 @@ fn enforce_distribution_relationships(
 /// This function is intended to be used in a bottom up traversal, as it
 /// can first repartition (or newly partition) at the datasources -- these
 /// source partitions may be later repartitioned with additional data exchange operators.
+///
+/// `stats_ctx` carries the memoization cache used to answer the child
+/// statistics queries behind the repartition decisions. Share one context
+/// across the whole traversal so each subtree is computed once rather than
+/// once per ancestor. The cache is keyed by raw plan-node pointers, so reset
+/// it (via [`StatisticsContext::reset_cache`]) after any node whose plan
+/// pointer actually changed.
 #[expect(
     deprecated,
     reason = "HashPartitioned is accepted during the KeyPartitioned migration"
 )]
-pub fn ensure_distribution(
+pub fn ensure_distribution_with_stats(
     dist_context: DistributionContext,
-    context: &dyn PhysicalOptimizerContext,
+    config: &ConfigOptions,
     stats_ctx: &StatisticsContext,
 ) -> Result<Transformed<DistributionContext>> {
     let dist_context = update_children(dist_context)?;
@@ -1347,7 +1371,6 @@ pub fn ensure_distribution(
         return Ok(Transformed::no(dist_context));
     }
 
-    let config = context.config_options();
     let target_partitions = config.execution.target_partitions;
     // When `false`, round robin repartition will not be added to increase parallelism
     let enable_round_robin = config.optimizer.enable_round_robin_repartition;

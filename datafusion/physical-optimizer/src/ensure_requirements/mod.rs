@@ -214,7 +214,9 @@ impl PhysicalOptimizerRule for EnsureRequirements {
 
         // Phase 2: Combined distribution + sorting enforcement (single bottom-up pass)
         // For each node: distribution first, then sorting.
-        use super::enforce_distribution::{DistributionContext, ensure_distribution};
+        use super::enforce_distribution::{
+            DistributionContext, ensure_distribution_with_stats,
+        };
         use super::enforce_sorting::{PlanWithCorrespondingSort, ensure_sorting};
 
         // Step 2a: Distribution enforcement (bottom-up)
@@ -235,7 +237,7 @@ impl PhysicalOptimizerRule for EnsureRequirements {
         let dist_ctx = dist_ctx
             .transform_up(|ctx| {
                 let before = Arc::clone(&ctx.plan);
-                let result = ensure_distribution(ctx, context, &stats_ctx)?;
+                let result = ensure_distribution_with_stats(ctx, config, &stats_ctx)?;
                 if !Arc::ptr_eq(&before, &result.data.plan) {
                     stats_ctx.reset_cache();
                 }
