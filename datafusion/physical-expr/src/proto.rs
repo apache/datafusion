@@ -16,7 +16,9 @@
 // under the License.
 
 //! The decode half of [`PhysicalExpr::try_to_proto`]: [`PhysicalExprFromProto`],
-//! the contract every self-serializing expression implements.
+//! the contract every self-serializing expression implements, and the
+//! session-scoped [`PhysicalExprRegistry`] that routes extension expressions
+//! to theirs by name.
 //!
 //! These live here rather than next to the encode context in
 //! `datafusion-physical-expr-common` because a decoder may need the session,
@@ -26,10 +28,13 @@
 //! fixes it to [`ExprDecodeSession`], which bundles exactly those two.
 //! `datafusion-proto` builds one from the `TaskContext` it decodes under.
 
+use std::any::{TypeId, type_name};
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
-use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::{Result, config_err};
 use datafusion_expr::registry::FunctionRegistry;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 pub use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
@@ -82,7 +87,9 @@ impl std::fmt::Debug for ExprDecodeSession<'_> {
 /// are dispatched to their `try_from_proto` by their `ExprType` variant, so
 /// for them [`NAME`](Self::NAME) is informational. A third-party expression
 /// shares the single `PhysicalExtensionExprNode` variant with every other
-/// extension, so it is dispatched by `NAME` instead.
+/// extension, so it is dispatched by `NAME` instead: it writes the name
+/// in its `try_to_proto` and is registered in a
+/// [`PhysicalExprRegistry`] attached to the session that will decode it.
 ///
 /// The encode half is [`PhysicalExpr::try_to_proto`], which writes a
 /// `PhysicalExtensionExprNode` carrying the payload, the children (encoded
@@ -132,4 +139,121 @@ pub trait PhysicalExprFromProto: PhysicalExpr + Sized {
         node: &PhysicalExprNode,
         ctx: &PhysicalExprDecodeCtx<'_, ExprDecodeSession<'_>>,
     ) -> Result<Arc<dyn PhysicalExpr>>;
+}
+
+/// How the registry stores a decoder internally: a function pointer to the
+/// monomorphized [`PhysicalExprFromProto::try_from_proto`].
+///
+/// Deliberately private. [`PhysicalExprFromProto`] is the public contract,
+/// and [`PhysicalExprRegistry::decode`] is the public way to invoke one, so
+/// the storage can become something else (a `dyn` decoder object, to admit
+/// stateful or closure decoders — an FFI decoder carries a vtable and
+/// private data, which a bare `fn` never can) without a breaking change.
+type PhysicalExprDecoder = fn(
+    &PhysicalExprNode,
+    &PhysicalExprDecodeCtx<'_, ExprDecodeSession<'_>>,
+) -> Result<Arc<dyn PhysicalExpr>>;
+
+/// One registered decoder, plus the identity used to make re-registering
+/// the same type idempotent while a genuine name collision is an error.
+#[derive(Debug, Clone, Copy)]
+struct RegisteredExpr {
+    decoder: PhysicalExprDecoder,
+    type_id: TypeId,
+    type_name: &'static str,
+}
+
+/// A name-keyed set of extension [`PhysicalExpr`] decoders.
+///
+/// Build one, register every extension expression the session must
+/// decode, and attach it with `SessionConfig::with_extension`. A session
+/// carries at most one registry: attaching another replaces it, so compose
+/// everything into one registry first.
+///
+/// ```ignore
+/// let mut registry = PhysicalExprRegistry::new();
+/// registry.register::<MyExpr>()?;
+/// let config = SessionConfig::new().with_extension(Arc::new(registry));
+/// ```
+///
+/// Lookup is by name, so resolution does not depend on registration order
+/// and a collision between two crates surfaces as an error at registration
+/// rather than as a silent wrong decode.
+///
+/// A name absent from the registry falls back to
+/// `PhysicalExtensionCodec::try_decode_expr`. For nodes written before this
+/// mechanism existed that fallback is exactly the old behavior. For an
+/// expression whose `try_to_proto` writes its own payload it is not: the
+/// payload on the wire is then the expression's own message, and handing it to a codec
+/// that still recognizes the expression can decode it as the old message
+/// rather than failing. Register migrated expressions everywhere their
+/// plans are read.
+///
+#[derive(Debug, Clone, Default)]
+pub struct PhysicalExprRegistry {
+    decoders: HashMap<String, RegisteredExpr>,
+}
+
+impl PhysicalExprRegistry {
+    /// Create an empty registry.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register `T` under its [`PhysicalExprFromProto::NAME`].
+    ///
+    /// Registering the same type twice is a no-op. Registering a
+    /// *different* type under a name already taken is an error, so
+    /// collisions surface here rather than as a wrong decode later.
+    pub fn register<T: PhysicalExprFromProto>(&mut self) -> Result<()> {
+        let registered = RegisteredExpr {
+            decoder: T::try_from_proto,
+            type_id: TypeId::of::<T>(),
+            type_name: type_name::<T>(),
+        };
+        if T::NAME.is_empty() {
+            return config_err!(
+                "Cannot register the extension PhysicalExpr decoder for {} under an empty name",
+                registered.type_name
+            );
+        }
+        match self.decoders.entry(T::NAME.to_string()) {
+            Entry::Vacant(entry) => {
+                entry.insert(registered);
+                Ok(())
+            }
+            // Re-registering the same type is a no-op: sessions are often
+            // configured by more than one layer of an application.
+            Entry::Occupied(entry) if entry.get().type_id == registered.type_id => Ok(()),
+            Entry::Occupied(entry) => config_err!(
+                "Extension PhysicalExpr name '{}' is already registered by {}, cannot register {}. \
+                 Namespace the name with the owning crate to avoid the collision.",
+                entry.key(),
+                entry.get().type_name,
+                registered.type_name
+            ),
+        }
+    }
+
+    /// Decode `node` with the decoder registered under `name`.
+    ///
+    /// `None` means "no decoder claims this name" — the caller falls back
+    /// to the `PhysicalExtensionCodec` chain. `Some(Err(..))` means the
+    /// decoder that *does* own the name failed, which is fatal: falling
+    /// back there would let a codec decode the payload wrongly, the very thing
+    /// the name exists to prevent.
+    pub fn decode(
+        &self,
+        name: &str,
+        node: &PhysicalExprNode,
+        ctx: &PhysicalExprDecodeCtx<'_, ExprDecodeSession<'_>>,
+    ) -> Option<Result<Arc<dyn PhysicalExpr>>> {
+        let registered = self.decoders.get(name)?;
+        Some((registered.decoder)(node, ctx))
+    }
+
+    /// Every registered name, in arbitrary order.
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.decoders.keys().map(String::as_str)
+    }
 }
