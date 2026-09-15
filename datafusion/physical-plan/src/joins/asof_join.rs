@@ -91,7 +91,9 @@ use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::PhysicalSortExpr;
-use datafusion_physical_expr::expressions::Column as PhysicalColumn;
+use datafusion_physical_expr::expressions::{
+    Column as PhysicalColumn, NormalizeFloatZeroExpr,
+};
 use datafusion_physical_expr::projection::{ProjectionMapping, ProjectionRef};
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr_common::physical_expr::{
@@ -110,6 +112,7 @@ use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, Gauge, MetricBuilder, MetricsSet,
     RecordOutput, Time,
 };
+use crate::projection::{EmbeddedProjection, ProjectionExec, try_embed_projection};
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{
@@ -165,10 +168,8 @@ impl AsOfJoinExec {
     ///
     /// The match operator must be `<`, `<=`, `>`, or `>=`. Equality and match
     /// expressions must be deterministic, reference only their corresponding
-    /// input, and have matching input types. Equality types must support hashing;
-    /// floating-point equality keys are not supported because Arrow sorting
-    /// distinguishes signed zero while SQL equality does not. Projection indices
-    /// refer to the full left-then-right join schema.
+    /// input, and have matching input types. Equality types must support hashing.
+    /// Projection indices refer to the full left-then-right join schema.
     ///
     /// The logical ASOF constructor validates the corresponding pre-coercion
     /// contract. Keep the shared operator, side-ownership, and determinism checks
@@ -196,24 +197,33 @@ impl AsOfJoinExec {
             descending,
             nulls_first: true,
         };
-        let mut left_sort_exprs = on
-            .iter()
-            .map(|(left, _)| PhysicalSortExpr {
-                expr: Arc::clone(left),
+        let mut left_sort_exprs = Vec::with_capacity(on.len() + 1);
+        let mut right_sort_exprs = Vec::with_capacity(on.len() + 1);
+        for (left, right) in &on {
+            let left_expr = if left.data_type(&left_schema)?.is_floating() {
+                Arc::new(NormalizeFloatZeroExpr::new(Arc::clone(left))) as PhysicalExprRef
+            } else {
+                Arc::clone(left)
+            };
+            let right_expr = if right.data_type(&right_schema)?.is_floating() {
+                Arc::new(NormalizeFloatZeroExpr::new(Arc::clone(right)))
+                    as PhysicalExprRef
+            } else {
+                Arc::clone(right)
+            };
+            left_sort_exprs.push(PhysicalSortExpr {
+                expr: left_expr,
                 options: equality_options,
-            })
-            .collect::<Vec<_>>();
+            });
+            right_sort_exprs.push(PhysicalSortExpr {
+                expr: right_expr,
+                options: equality_options,
+            });
+        }
         left_sort_exprs.push(PhysicalSortExpr {
             expr: Arc::clone(&match_condition.left),
             options: match_options,
         });
-        let mut right_sort_exprs = on
-            .iter()
-            .map(|(_, right)| PhysicalSortExpr {
-                expr: Arc::clone(right),
-                options: equality_options,
-            })
-            .collect::<Vec<_>>();
         right_sort_exprs.push(PhysicalSortExpr {
             expr: Arc::clone(&match_condition.right),
             options: match_options,
@@ -248,6 +258,18 @@ impl AsOfJoinExec {
             right_fut: Default::default(),
             cache,
         })
+    }
+
+    /// Returns this join emitting only the columns in `projection`, in that order.
+    /// The indices address the join's own schema, before any projection.
+    pub fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
+        Self::try_new(
+            Arc::clone(&self.left),
+            Arc::clone(&self.right),
+            self.on.clone(),
+            self.match_condition.clone(),
+            projection,
+        )
     }
 
     fn compute_properties(
@@ -290,6 +312,12 @@ impl AsOfJoinExec {
             EmissionType::Incremental,
             Boundedness::Bounded,
         ))
+    }
+}
+
+impl EmbeddedProjection for AsOfJoinExec {
+    fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
+        self.with_projection(projection)
     }
 }
 
@@ -384,6 +412,16 @@ impl ExecutionPlan for AsOfJoinExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.left, &self.right]
+    }
+
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if self.projection.is_some() {
+            return Ok(None);
+        }
+        try_embed_projection(projection, self)
     }
 
     fn apply_expressions(
@@ -1433,11 +1471,6 @@ fn validate_asof_join(
                 "AsOfJoinExec equality expressions have unsupported hash type {left_type}"
             );
         }
-        if left_type.is_floating() {
-            return plan_err!(
-                "AsOfJoinExec equality expressions do not support floating-point type {left_type}"
-            );
-        }
     }
     let left_match_type = match_condition.left.data_type(&left_schema)?;
     let right_match_type = match_condition.right.data_type(&right_schema)?;
@@ -1484,6 +1517,7 @@ mod tests {
 
     use super::*;
     use crate::collect;
+    use crate::sorts::sort::SortExec;
     use crate::test::TestMemoryExec;
     use arrow::array::{Float64Array, Int32Array, Int64Array, StringArray};
     use arrow::datatypes::{DataType, Field};
@@ -1493,6 +1527,7 @@ mod tests {
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::ColumnarValue;
     use datafusion_physical_expr::expressions::{BinaryExpr, CastExpr};
+    use datafusion_physical_expr::projection::ProjectionExpr;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use insta::assert_snapshot;
 
@@ -1667,6 +1702,95 @@ mod tests {
         let metrics = exec.metrics().expect("ASOF metrics must be present");
         assert_eq!(metrics.output_rows(), Some(7));
         assert!(metrics.elapsed_compute().is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn embeds_output_projection() -> Result<()> {
+        let exec = Arc::new(test_exec()?.with_projection(None)?);
+        let input = Arc::clone(&exec) as Arc<dyn ExecutionPlan>;
+        let projection = ProjectionExec::try_new(
+            [
+                ProjectionExpr {
+                    expr: Arc::new(PhysicalColumn::new("id", 2)),
+                    alias: "id".to_string(),
+                },
+                ProjectionExpr {
+                    expr: Arc::new(PhysicalColumn::new("price", 5)),
+                    alias: "price".to_string(),
+                },
+            ],
+            input,
+        )?;
+
+        let embedded = exec
+            .try_swapping_with_projection(&projection)?
+            .expect("projection should be embedded");
+        let embedded_exec = embedded
+            .downcast_ref::<AsOfJoinExec>()
+            .expect("identity projection should be removed");
+        assert_eq!(embedded_exec.projection.as_deref(), Some(&[2, 5][..]));
+        assert_eq!(
+            embedded_exec
+                .schema()
+                .fields()
+                .iter()
+                .map(|field| field.name().as_str())
+                .collect::<Vec<_>>(),
+            vec!["id", "price"]
+        );
+
+        let batches = collect(embedded, Arc::new(TaskContext::default())).await?;
+        assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+-------+
+        | id | price |
+        +----+-------+
+        | 0  |       |
+        | 1  |       |
+        | 2  |       |
+        | 3  | 40    |
+        | 4  | 60    |
+        | 5  | 101   |
+        | 6  |       |
+        +----+-------+
+        ");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn empty_projection_preserves_row_count() -> Result<()> {
+        let exec = Arc::new(test_exec()?.with_projection(None)?);
+        let input = Arc::clone(&exec) as Arc<dyn ExecutionPlan>;
+        let projection = ProjectionExec::try_new(Vec::<ProjectionExpr>::new(), input)?;
+
+        let embedded = exec
+            .try_swapping_with_projection(&projection)?
+            .expect("empty projection should be embedded");
+        let embedded_exec = embedded
+            .downcast_ref::<AsOfJoinExec>()
+            .expect("empty projection should remove ProjectionExec");
+        assert_eq!(embedded_exec.projection.as_deref(), Some(&[][..]));
+        assert!(embedded_exec.schema().fields().is_empty());
+
+        let batches = collect(embedded, Arc::new(TaskContext::default())).await?;
+        assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 7);
+        assert!(batches.iter().all(|batch| batch.num_columns() == 0));
+        Ok(())
+    }
+
+    #[test]
+    fn declines_projection_when_already_embedded() -> Result<()> {
+        let exec = test_exec()?;
+        let input = Arc::clone(&exec) as Arc<dyn ExecutionPlan>;
+        let projection = ProjectionExec::try_new(
+            [ProjectionExpr {
+                expr: Arc::new(PhysicalColumn::new("id", 2)),
+                alias: "id".to_string(),
+            }],
+            input,
+        )?;
+
+        assert!(exec.try_swapping_with_projection(&projection)?.is_none());
         Ok(())
     }
 
@@ -1994,34 +2118,88 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn rejects_floating_equality_expressions() -> Result<()> {
-        let exec = test_exec()?;
+    #[tokio::test]
+    async fn floating_equality_keys_treat_signed_zero_as_equal() -> Result<()> {
+        let left_batch = RecordBatch::try_from_iter(vec![
+            ("key", Arc::new(Float64Array::from(vec![0.0])) as ArrayRef),
+            ("ts", Arc::new(Int64Array::from(vec![5])) as ArrayRef),
+            ("id", Arc::new(Int32Array::from(vec![1])) as ArrayRef),
+        ])?;
+        let right_batch = RecordBatch::try_from_iter(vec![
+            (
+                "key",
+                Arc::new(Float64Array::from(vec![-0.0, 0.0])) as ArrayRef,
+            ),
+            ("ts", Arc::new(Int64Array::from(vec![10, 1])) as ArrayRef),
+            (
+                "price",
+                Arc::new(Int32Array::from(vec![100, 10])) as ArrayRef,
+            ),
+        ])?;
         for data_type in [DataType::Float16, DataType::Float32, DataType::Float64] {
-            let left = Arc::new(CastExpr::new(
-                Arc::new(PhysicalColumn::new("ts", 1)),
-                data_type.clone(),
+            let left = TestMemoryExec::try_new_exec(
+                &[vec![left_batch.clone()]],
+                left_batch.schema(),
                 None,
-            ));
-            let right = Arc::new(CastExpr::new(
-                Arc::new(PhysicalColumn::new("ts", 1)),
-                data_type.clone(),
+            )?;
+            let right = TestMemoryExec::try_new_exec(
+                &[vec![right_batch.clone()]],
+                right_batch.schema(),
                 None,
-            ));
-            let error = AsOfJoinExec::try_new(
-                Arc::clone(&exec.left),
-                Arc::clone(&exec.right),
-                vec![(left, right)],
-                exec.match_condition.clone(),
-                Some(vec![0, 1, 2, 5]),
-            )
-            .expect_err("floating equality expressions must be rejected");
-            assert!(
-                error.to_string().contains(&format!(
-                    "equality expressions do not support floating-point type {data_type}"
+            )?;
+            let on: JoinOn = vec![(
+                Arc::new(CastExpr::new(
+                    Arc::new(PhysicalColumn::new("key", 0)),
+                    data_type.clone(),
+                    None,
                 )),
-                "unexpected error: {error}"
+                Arc::new(CastExpr::new(
+                    Arc::new(PhysicalColumn::new("key", 0)),
+                    data_type.clone(),
+                    None,
+                )),
+            )];
+            let match_condition = AsOfMatchExpr::new(
+                Arc::new(PhysicalColumn::new("ts", 1)),
+                Operator::GtEq,
+                Arc::new(PhysicalColumn::new("ts", 1)),
             );
+            let unsorted = AsOfJoinExec::try_new(
+                left,
+                right,
+                on.clone(),
+                match_condition.clone(),
+                Some(vec![2, 5]),
+            )?;
+            let left = Arc::new(SortExec::new(
+                unsorted.left_ordering.clone(),
+                Arc::clone(&unsorted.left),
+            ));
+            let right = Arc::new(SortExec::new(
+                unsorted.right_ordering.clone(),
+                Arc::clone(&unsorted.right),
+            ));
+            let exec = Arc::new(AsOfJoinExec::try_new(
+                left,
+                right,
+                on,
+                match_condition,
+                Some(vec![2, 5]),
+            )?);
+
+            let batches = collect(exec, Arc::new(TaskContext::default())).await?;
+            let prices = batches
+                .iter()
+                .flat_map(|batch| {
+                    batch
+                        .column(1)
+                        .as_any()
+                        .downcast_ref::<Int32Array>()
+                        .unwrap()
+                        .iter()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(prices, vec![Some(10)], "data type: {data_type}");
         }
         Ok(())
     }

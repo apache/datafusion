@@ -170,6 +170,17 @@ struct DerivedInputScope<'a> {
     schema: &'a DFSchema,
 }
 
+/// Left-side joins can be chained in the surrounding `FROM`, while right-side
+/// joins need nesting. ASOF inputs also preserve derived boundaries because
+/// their input shaping is part of candidate matching.
+#[derive(Clone, Copy)]
+enum JoinInputMode {
+    RegularLeft,
+    RegularRight,
+    AsOfLeft,
+    AsOfRight,
+}
+
 impl Unparser<'_> {
     pub fn plan_to_sql(&self, plan: &LogicalPlan) -> Result<ast::Statement> {
         let mut plan = normalize_union_schema(plan)?;
@@ -1452,25 +1463,14 @@ impl Unparser<'_> {
                     left_plan,
                     &mut table_scan_filters,
                 )?;
-                let left_plan = if already_projected {
-                    Self::unwrap_qualified_passthrough_join_projection(left_plan)
-                } else {
-                    left_plan
-                };
-
-                self.select_to_sql_recursively(
-                    left_plan.as_ref(),
+                let left_projection = self.unparse_join_input(
+                    &left_plan,
                     query,
                     select,
                     relation,
+                    already_projected,
+                    JoinInputMode::RegularLeft,
                 )?;
-
-                let left_projection: Option<Vec<ast::SelectItem>> = if !already_projected
-                {
-                    Some(select.pop_projections())
-                } else {
-                    None
-                };
 
                 let right_plan = Self::extract_join_input_table_scan_filters(
                     right_plan,
@@ -1478,19 +1478,14 @@ impl Unparser<'_> {
                 )?;
 
                 let mut right_relation = RelationBuilder::default();
-                if already_projected
-                    && let Some(nested_relation) =
-                        self.join_input_to_nested_relation(right_plan.as_ref(), query)?
-                {
-                    right_relation = nested_relation;
-                } else {
-                    self.select_to_sql_recursively(
-                        right_plan.as_ref(),
-                        query,
-                        select,
-                        &mut right_relation,
-                    )?;
-                }
+                let right_projection = self.unparse_join_input(
+                    &right_plan,
+                    query,
+                    select,
+                    &mut right_relation,
+                    already_projected,
+                    JoinInputMode::RegularRight,
+                )?;
 
                 let (join_filters, where_filters) = Self::split_join_on_and_where_filters(
                     join.join_type,
@@ -1507,13 +1502,6 @@ impl Unparser<'_> {
                     &join.on,
                     join_filters.as_ref(),
                 )?;
-
-                let right_projection: Option<Vec<ast::SelectItem>> = if !already_projected
-                {
-                    Some(select.pop_projections())
-                } else {
-                    None
-                };
 
                 match join.join_type {
                     JoinType::LeftSemi
@@ -1919,78 +1907,24 @@ impl Unparser<'_> {
         relation: &mut RelationBuilder,
     ) -> Result<()> {
         let already_projected = select.already_projected();
-        let left_plan =
-            Self::unwrap_qualified_passthrough_join_projection(Arc::clone(&join.left));
-        let inline_left_join = matches!(
-            left_plan.as_ref(),
-            LogicalPlan::Join(_) | LogicalPlan::AsOfJoin(_)
-        );
-        let left_projection = if already_projected {
-            None
-        } else if inline_left_join {
-            self.select_to_sql_recursively(left_plan.as_ref(), query, select, relation)?;
-            select.pop_projections();
-            Some(self.derived_input_projection(join.left.as_ref(), None)?)
-        } else if Self::asof_input_requires_derived(join.left.as_ref()) {
-            let qualifier = self.derive_asof_input(join.left.as_ref(), relation)?;
-            Some(self.derived_input_projection(join.left.as_ref(), qualifier.as_ref())?)
-        } else {
-            self.select_to_sql_recursively(join.left.as_ref(), query, select, relation)?;
-            Some(select.pop_projections())
-        };
-        if already_projected {
-            if inline_left_join {
-                self.select_to_sql_recursively(
-                    left_plan.as_ref(),
-                    query,
-                    select,
-                    relation,
-                )?;
-            } else if Self::asof_input_requires_derived(join.left.as_ref()) {
-                self.derive_asof_input(join.left.as_ref(), relation)?;
-            } else {
-                self.select_to_sql_recursively(
-                    join.left.as_ref(),
-                    query,
-                    select,
-                    relation,
-                )?;
-            }
-        }
+        let left_projection = self.unparse_join_input(
+            &join.left,
+            query,
+            select,
+            relation,
+            already_projected,
+            JoinInputMode::AsOfLeft,
+        )?;
 
         let mut right_relation = RelationBuilder::default();
-        let nested_right =
-            self.join_input_to_nested_relation(join.right.as_ref(), query)?;
-        let right_projection = if already_projected {
-            if let Some(nested_right) = nested_right {
-                right_relation = nested_right;
-            } else if Self::asof_input_requires_derived(join.right.as_ref()) {
-                self.derive_asof_input(join.right.as_ref(), &mut right_relation)?;
-            } else {
-                self.select_to_sql_recursively(
-                    join.right.as_ref(),
-                    query,
-                    select,
-                    &mut right_relation,
-                )?;
-            }
-            None
-        } else if let Some(nested_right) = nested_right {
-            right_relation = nested_right;
-            Some(self.derived_input_projection(join.right.as_ref(), None)?)
-        } else if Self::asof_input_requires_derived(join.right.as_ref()) {
-            let qualifier =
-                self.derive_asof_input(join.right.as_ref(), &mut right_relation)?;
-            Some(self.derived_input_projection(join.right.as_ref(), qualifier.as_ref())?)
-        } else {
-            self.select_to_sql_recursively(
-                join.right.as_ref(),
-                query,
-                select,
-                &mut right_relation,
-            )?;
-            Some(select.pop_projections())
-        };
+        let right_projection = self.unparse_join_input(
+            &join.right,
+            query,
+            select,
+            &mut right_relation,
+            already_projected,
+            JoinInputMode::AsOfRight,
+        )?;
         let Ok(Some(relation)) = right_relation.build() else {
             return internal_err!("Failed to build ASOF right relation");
         };
@@ -2330,7 +2264,76 @@ impl Unparser<'_> {
         )
     }
 
-    fn asof_input_requires_derived(plan: &LogicalPlan) -> bool {
+    fn unparse_join_input(
+        &self,
+        plan: &Arc<LogicalPlan>,
+        query: &mut Option<QueryBuilder>,
+        select: &mut SelectBuilder,
+        relation: &mut RelationBuilder,
+        already_projected: bool,
+        mode: JoinInputMode,
+    ) -> Result<Option<Vec<ast::SelectItem>>> {
+        let preserve_boundary =
+            matches!(mode, JoinInputMode::AsOfLeft | JoinInputMode::AsOfRight);
+        let is_left =
+            matches!(mode, JoinInputMode::RegularLeft | JoinInputMode::AsOfLeft);
+        let unwrapped_plan = if preserve_boundary || already_projected {
+            Self::unwrap_qualified_passthrough_join_projection(Arc::clone(plan))
+        } else {
+            Arc::clone(plan)
+        };
+        let inline_left_join = is_left
+            && matches!(
+                unwrapped_plan.as_ref(),
+                LogicalPlan::Join(_) | LogicalPlan::AsOfJoin(_)
+            );
+
+        if !is_left
+            && (preserve_boundary || already_projected)
+            && let Some(nested_relation) =
+                self.join_input_to_nested_relation(plan.as_ref(), query)?
+        {
+            *relation = nested_relation;
+            return if already_projected {
+                Ok(None)
+            } else {
+                Ok(Some(self.derived_input_projection(plan.as_ref(), None)?))
+            };
+        }
+
+        if preserve_boundary
+            && !inline_left_join
+            && Self::join_input_requires_derived(plan.as_ref())
+        {
+            let qualifier = self.derive_join_input(plan.as_ref(), relation)?;
+            return if already_projected {
+                Ok(None)
+            } else {
+                Ok(Some(self.derived_input_projection(
+                    plan.as_ref(),
+                    qualifier.as_ref(),
+                )?))
+            };
+        }
+
+        let recursive_plan = if inline_left_join {
+            unwrapped_plan.as_ref()
+        } else {
+            plan.as_ref()
+        };
+        self.select_to_sql_recursively(recursive_plan, query, select, relation)?;
+
+        if already_projected {
+            Ok(None)
+        } else if preserve_boundary && inline_left_join {
+            select.pop_projections();
+            Ok(Some(self.derived_input_projection(plan.as_ref(), None)?))
+        } else {
+            Ok(Some(select.pop_projections()))
+        }
+    }
+
+    fn join_input_requires_derived(plan: &LogicalPlan) -> bool {
         let simple_scan =
             |scan: &TableScan| scan.filters.is_empty() && scan.fetch.is_none();
         match plan {
@@ -2342,7 +2345,7 @@ impl Unparser<'_> {
         }
     }
 
-    fn derive_asof_input(
+    fn derive_join_input(
         &self,
         plan: &LogicalPlan,
         relation: &mut RelationBuilder,
