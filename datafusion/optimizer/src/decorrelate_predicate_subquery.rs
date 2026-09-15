@@ -20,7 +20,8 @@ use std::collections::BTreeSet;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use crate::decorrelate::PullUpCorrelatedExpr;
+use crate::analyzer::type_coercion::TypeCoercionRewriter;
+use crate::decorrelate::{PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR};
 use crate::extract_equijoin_predicate::split_eq_and_noneq_join_predicate;
 use crate::optimizer::ApplyOrder;
 use crate::utils::replace_qualified_name;
@@ -783,12 +784,15 @@ fn build_join(
 ) -> Result<Option<BuiltJoin>> {
     let mut pull_up = PullUpCorrelatedExpr::new()
         .with_in_predicate_opt(in_predicate_opt.cloned())
-        .with_exists_sub_query(in_predicate_opt.is_none());
+        .with_exists_sub_query(in_predicate_opt.is_none())
+        .with_need_handle_count_bug(true);
 
     let new_plan = subquery.clone().rewrite(&mut pull_up).data()?;
     if !pull_up.can_pull_up {
         return Ok(None);
     }
+
+    let count_bug_compensation = pull_up.collected_count_expr_map.get(&new_plan).cloned();
 
     let sub_query_alias = LogicalPlanBuilder::from(new_plan)
         .alias(alias.to_string())?
@@ -804,6 +808,27 @@ fn build_join(
         .map_or(Ok(None), |filter| {
             replace_qualified_name(filter, &all_correlated_cols, alias).map(Some)
         })?;
+
+    if let Some(expr_map) = count_bug_compensation
+        && !expr_map.is_empty()
+    {
+        return build_join_with_count_bug(
+            left,
+            sub_query_alias,
+            join_filter_opt,
+            in_predicate_opt,
+            join_type,
+            alias,
+            &expr_map,
+            pull_up.pull_up_having_expr.as_ref(),
+        )
+        .map(|plan| {
+            Some(BuiltJoin {
+                plan,
+                mark_is_three_valued_exact: false,
+            })
+        });
+    }
 
     // The two sides of the `IN` predicate: the value from the outer plan and
     // the subquery output it is compared with, renamed to the alias. A
@@ -1063,6 +1088,116 @@ fn build_join(
     }))
 }
 
+/// Builds the join for a correlated `EXISTS` subquery whose groupless
+/// aggregate requires count-bug compensation.
+#[expect(clippy::too_many_arguments)]
+fn build_join_with_count_bug(
+    left: &LogicalPlan,
+    sub_query_alias: LogicalPlan,
+    join_filter_opt: Option<Expr>,
+    in_predicate_opt: Option<&Expr>,
+    join_type: JoinType,
+    alias: &str,
+    expr_map: &crate::decorrelate::ExprResultMap,
+    pull_up_having_expr: Option<&Expr>,
+) -> Result<LogicalPlan> {
+    if in_predicate_opt.is_some() {
+        return not_impl_err!(
+            "build_join_with_count_bug: `IN`/`NOT IN` count-bug compensation is not implemented"
+        );
+    }
+
+    let joined = LogicalPlanBuilder::from(left.clone())
+        .join_on(sub_query_alias, JoinType::Left, join_filter_opt)?
+        .build()?;
+
+    let left_projection: Vec<Expr> = left
+        .schema()
+        .columns()
+        .into_iter()
+        .map(Expr::from)
+        .collect();
+
+    let indicator_col = Expr::Column(Column::new(Some(alias), UN_MATCHED_ROW_INDICATOR));
+
+    let having_arm = pull_up_having_expr.map(|f| f.clone().is_not_true());
+
+    let mut expr_rewrite = TypeCoercionRewriter::new(joined.schema());
+
+    // The subquery's HAVING clause, evaluated against an unmatched row's
+    // default aggregate values (e.g. count(*) defaults to 0, sum(x) to
+    // NULL), is usually `true`, but not once a second filter is combined
+    // into it, so it cannot be assumed.
+    let unmatched_having_default = match pull_up_having_expr {
+        Some(f) => f
+            .clone()
+            .transform_up(|e| {
+                if let Expr::Column(Column { name, .. }) = &e
+                    && let Some(default_value) = expr_map.get(name)
+                {
+                    return Ok(Transformed::yes(default_value.clone()));
+                }
+                Ok(Transformed::no(e))
+            })
+            .data()
+            .and_then(|simplified| simplified.rewrite(&mut expr_rewrite).data())?,
+        None => lit(true),
+    };
+
+    // EXISTS is true by default (the groupless aggregate always
+    // produces a row), unless either the row joined against a group
+    // whose HAVING predicate failed, or an unmatched row's own
+    // default aggregate values fail that same HAVING clause.
+    let exists_expr = match having_arm {
+        Some(when_expr) => {
+            when(indicator_col.clone().is_null(), unmatched_having_default)
+                .when(when_expr, lit(false))
+                .otherwise(lit(true))?
+                .rewrite(&mut expr_rewrite)
+                .data()?
+        }
+        None => lit(true),
+    };
+
+    // The correlation condition can match more than one subquery row per
+    // outer row (e.g. two rows that compare equal only after a `CAST`).
+    // A plain `LEFT JOIN` keeps every one of those matches, so `distinct`
+    // collapses them back down to the one row `LeftSemi`/`LeftAnti`/`LeftMark`
+    // would have produced without count-bug compensation.
+    let new_plan = match join_type {
+        JoinType::LeftMark | JoinType::RightMark => {
+            let mut proj_exprs = left_projection;
+            proj_exprs.push(exists_expr.alias_qualified(Some(alias), "mark"));
+            LogicalPlanBuilder::from(joined)
+                .project(proj_exprs)?
+                .distinct()?
+                .build()?
+        }
+        JoinType::LeftAnti => LogicalPlanBuilder::from(joined)
+            .filter(not(exists_expr))?
+            .project(left_projection)?
+            .distinct()?
+            .build()?,
+        JoinType::LeftSemi => LogicalPlanBuilder::from(joined)
+            .filter(exists_expr)?
+            .project(left_projection)?
+            .distinct()?
+            .build()?,
+        _ => {
+            return internal_err!(
+                "build_join_with_count_bug: unsupported join type {join_type:?}"
+            );
+        }
+    };
+
+    debug!(
+        "predicate subquery (count bug) optimized:\n{}",
+        new_plan.display_indent()
+    );
+
+    Ok(new_plan)
+}
+
 #[derive(Debug)]
 struct SubqueryInfo {
     query: Subquery,
@@ -1115,6 +1250,7 @@ mod tests {
         TableScanBuilder, and, binary_expr, col, cube, grouping_set, out_ref_col, rollup,
         table_scan,
     };
+    use datafusion_functions_aggregate::count::count_udaf;
 
     macro_rules! assert_optimized_plan_equal {
         (
@@ -1442,7 +1578,7 @@ mod tests {
             SubqueryAlias: __correlated_sq_2 [o_custkey:Int64]
               Projection: orders.o_custkey [o_custkey:Int64]
                 TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
-        "    
+        "
         )
     }
 
@@ -2855,6 +2991,38 @@ mod tests {
                   Projection: orders.o_custkey [o_custkey:Int64]
                     Filter: customer.c_custkey = orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
                       TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+        "
+        )
+    }
+
+    /// Test for correlated exists subquery filter with disjunction and count bug
+    #[test]
+    fn exists_subquery_disjunction_with_count_bug() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
+                .filter(out_ref_col(DataType::UInt32, "test.a").eq(col("sq.a")))?
+                .aggregate(Vec::<Expr>::new(), vec![count_udaf().call(vec![])])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(exists(sq).or(col("test.c").eq(lit(1))))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.b [b:UInt32]
+          Projection: test.a, test.b, test.c [a:UInt32, b:UInt32, c:UInt32]
+            Filter: __correlated_sq_1.mark OR test.c = Int32(1) [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
+              Distinct: [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
+                Projection: test.a, test.b, test.c, Boolean(true) AS mark [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
+                  Left Join:  Filter: test.a = __correlated_sq_1.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, __always_true:Boolean;N, count():Int64;N]
+                    TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+                    SubqueryAlias: __correlated_sq_1 [a:UInt32, __always_true:Boolean, count():Int64]
+                      Aggregate: groupBy=[[sq.a, Boolean(true) AS __always_true]], aggr=[[count()]] [a:UInt32, __always_true:Boolean, count():Int64]
+                        TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
