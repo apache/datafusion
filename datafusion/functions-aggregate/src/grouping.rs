@@ -115,8 +115,9 @@ impl AggregateUDFImpl for Grouping {
     fn distinct_handling(&self) -> DistinctHandling {
         // The result depends only on which grouping set a row belongs to, not
         // on how many rows share a value, so duplicates cannot change it.
-        // `ResolveGroupingFunction` replaces the call before execution either
-        // way, which is why the accumulator above is never built.
+        // `ResolveGroupingFunction` replaces the call before the optimizer
+        // runs, so this tag is not reachable from SQL and the accumulator
+        // above is never built.
         DistinctHandling::Ignored
     }
 }
