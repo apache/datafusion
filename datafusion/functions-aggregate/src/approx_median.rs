@@ -148,9 +148,9 @@ impl AggregateUDFImpl for ApproxMedian {
         self.doc()
     }
 
-    // Left at the default `Honored`. The accumulator rejects `DISTINCT` with
-    // `not_impl_err!`, so `f(DISTINCT x)` only works when
-    // `SingleDistinctToGroupBy` rewrites the node and deduplicates the input
-    // first. When it cannot, for example beside an `avg`, the query errors
-    // rather than returning the non-distinct answer.
+    fn distinct_handling(&self) -> datafusion_expr::DistinctHandling {
+        // The accumulator rejects `DISTINCT` with `not_impl_err!`, so the
+        // planner has to deduplicate the input first.
+        datafusion_expr::DistinctHandling::Unsupported
+    }
 }
