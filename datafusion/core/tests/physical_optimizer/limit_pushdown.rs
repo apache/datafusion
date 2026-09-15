@@ -162,6 +162,62 @@ fn transforms_streaming_table_exec_into_fetching_version_and_keeps_the_global_li
     Ok(())
 }
 
+#[test]
+fn preserves_required_ordering_when_reinserting_global_limit() -> Result<()> {
+    let schema = create_schema();
+    let projection =
+        projection_exec(Arc::clone(&schema), empty_exec(Arc::clone(&schema)))?;
+    let ordering = LexOrdering::new([PhysicalSortExpr::new(
+        col("c1", schema.as_ref())?,
+        SortOptions::default(),
+    )])
+    .unwrap();
+
+    let mut limit =
+        datafusion_physical_plan::limit::GlobalLimitExec::new(projection, 2, Some(5));
+    limit.set_required_ordering(Some(ordering.clone()));
+
+    let optimized =
+        LimitPushdown::new().optimize(Arc::new(limit), &ConfigOptions::new())?;
+    let limit = optimized
+        .as_ref()
+        .downcast_ref::<ProjectionExec>()
+        .unwrap()
+        .input()
+        .as_ref()
+        .downcast_ref::<datafusion_physical_plan::limit::GlobalLimitExec>()
+        .unwrap();
+
+    assert_eq!(limit.required_ordering().as_ref(), Some(&ordering));
+    Ok(())
+}
+
+#[test]
+fn preserves_required_ordering_when_reinserting_local_limit() -> Result<()> {
+    let schema = create_schema();
+    let projection =
+        projection_exec(Arc::clone(&schema), empty_exec(Arc::clone(&schema)))?;
+    let repartition = repartition_exec(projection)?;
+    let ordering = LexOrdering::new([PhysicalSortExpr::new(
+        col("c1", schema.as_ref())?,
+        SortOptions::default(),
+    )])
+    .unwrap();
+
+    let mut limit = datafusion_physical_plan::limit::LocalLimitExec::new(repartition, 5);
+    limit.set_required_ordering(Some(ordering.clone()));
+
+    let optimized =
+        LimitPushdown::new().optimize(Arc::new(limit), &ConfigOptions::new())?;
+    let limit = optimized
+        .as_ref()
+        .downcast_ref::<datafusion_physical_plan::limit::LocalLimitExec>()
+        .unwrap();
+
+    assert_eq!(limit.required_ordering().as_ref(), Some(&ordering));
+    Ok(())
+}
+
 fn join_on_columns(
     left_col: &str,
     right_col: &str,
