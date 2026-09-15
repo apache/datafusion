@@ -1601,6 +1601,403 @@ fn test_hashjoin_parent_filter_pushdown_same_column_names() {
     );
 }
 
+/// Repartition must preserve the second of two same-named columns when
+/// forwarding a predicate, in both physical pushdown phases.
+#[test]
+fn test_repartition_filter_pushdown_preserves_duplicate_column_indices() {
+    use datafusion_physical_plan::filter_pushdown::{FilterPushdownPhase, PushedDown};
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("id", DataType::Utf8, false),
+    ]));
+    let input = TestScanBuilder::new(schema).build();
+    let repartition =
+        RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(4)).unwrap();
+    let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+        Arc::new(Column::new("id", 1)),
+        Operator::Eq,
+        Arc::new(Literal::new(ScalarValue::from("x"))),
+    ));
+    for phase in [FilterPushdownPhase::Pre, FilterPushdownPhase::Post] {
+        let filters = repartition
+            .gather_filters_for_pushdown(
+                phase,
+                vec![Arc::clone(&predicate)],
+                &ConfigOptions::default(),
+            )
+            .unwrap()
+            .parent_filters();
+        assert_eq!(filters.len(), 1);
+        assert!(matches!(filters[0][0].discriminant, PushedDown::Yes));
+        assert_eq!(filters[0][0].predicate.to_string(), "id@1 = x", "{phase}");
+    }
+}
+
+/// Schema with two same-named columns, as produced by a nested join.
+fn duplicate_id_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("id", DataType::Utf8, false),
+    ]))
+}
+
+fn id_eq_x(index: usize) -> Arc<dyn PhysicalExpr> {
+    Arc::new(BinaryExpr::new(
+        Arc::new(Column::new("id", index)),
+        Operator::Eq,
+        Arc::new(Literal::new(ScalarValue::from("x"))),
+    ))
+}
+
+/// A filter with an embedded projection must map a parent predicate through
+/// the projection by position, in both physical pushdown phases.
+#[test]
+fn test_filter_with_projection_pushdown_preserves_duplicate_column_indices() {
+    use datafusion_physical_plan::filter_pushdown::{FilterPushdownPhase, PushedDown};
+
+    let input = TestScanBuilder::new(duplicate_id_schema()).build();
+    let filter = FilterExecBuilder::new(id_eq_x(0), input)
+        .apply_projection(Some(vec![1, 0]))
+        .unwrap()
+        .build()
+        .unwrap();
+    for phase in [FilterPushdownPhase::Pre, FilterPushdownPhase::Post] {
+        let filters = filter
+            .gather_filters_for_pushdown(
+                phase,
+                vec![id_eq_x(0), id_eq_x(1)],
+                &ConfigOptions::default(),
+            )
+            .unwrap()
+            .parent_filters();
+        assert_eq!(filters.len(), 1);
+        assert!(
+            matches!(filters[0][0].discriminant, PushedDown::Yes),
+            "{phase}"
+        );
+        assert!(
+            matches!(filters[0][1].discriminant, PushedDown::Yes),
+            "{phase}"
+        );
+        assert_eq!(filters[0][0].predicate.to_string(), "id@1 = x", "{phase}");
+        assert_eq!(filters[0][1].predicate.to_string(), "id@0 = x", "{phase}");
+    }
+}
+
+/// A projection whose outputs share an alias must expand a parent predicate
+/// to the expression at that output position, not the first same-named one.
+#[test]
+fn test_projection_pushdown_preserves_duplicate_aliases() {
+    use datafusion_physical_plan::filter_pushdown::{FilterPushdownPhase, PushedDown};
+
+    let input = TestScanBuilder::new(duplicate_id_schema()).build();
+    let projection = ProjectionExec::try_new(
+        vec![
+            (Arc::new(Column::new("id", 1)) as _, "id".to_string()),
+            (Arc::new(Column::new("id", 0)) as _, "id".to_string()),
+        ],
+        input,
+    )
+    .unwrap();
+    let filters = projection
+        .gather_filters_for_pushdown(
+            FilterPushdownPhase::Pre,
+            vec![id_eq_x(0), id_eq_x(1), id_eq_x(2)],
+            &ConfigOptions::default(),
+        )
+        .unwrap()
+        .parent_filters();
+    assert_eq!(filters.len(), 1);
+    assert!(matches!(filters[0][0].discriminant, PushedDown::Yes));
+    assert!(matches!(filters[0][1].discriminant, PushedDown::Yes));
+    assert!(matches!(filters[0][2].discriminant, PushedDown::No));
+    assert_eq!(filters[0][0].predicate.to_string(), "id@1 = x");
+    assert_eq!(filters[0][1].predicate.to_string(), "id@0 = x");
+}
+
+/// An aggregate grouping on two same-named columns must map a parent
+/// predicate on a grouping output to the input column that grouping reads.
+#[test]
+fn test_aggregate_pushdown_preserves_duplicate_grouping_columns() {
+    use datafusion_physical_plan::filter_pushdown::{FilterPushdownPhase, PushedDown};
+
+    let schema = duplicate_id_schema();
+    let input = TestScanBuilder::new(Arc::clone(&schema)).build();
+    let group_by = PhysicalGroupBy::new_single(vec![
+        (Arc::new(Column::new("id", 1)) as _, "id".to_string()),
+        (Arc::new(Column::new("id", 0)) as _, "id".to_string()),
+    ]);
+    let aggregate = AggregateExec::try_new(
+        AggregateMode::Partial,
+        group_by,
+        vec![],
+        vec![],
+        input,
+        schema,
+    )
+    .unwrap();
+    let filters = aggregate
+        .gather_filters_for_pushdown(
+            FilterPushdownPhase::Pre,
+            vec![id_eq_x(0), id_eq_x(1)],
+            &ConfigOptions::default(),
+        )
+        .unwrap()
+        .parent_filters();
+    assert_eq!(filters.len(), 1);
+    assert!(matches!(filters[0][0].discriminant, PushedDown::Yes));
+    assert!(matches!(filters[0][1].discriminant, PushedDown::Yes));
+    assert_eq!(filters[0][0].predicate.to_string(), "id@1 = x");
+    assert_eq!(filters[0][1].predicate.to_string(), "id@0 = x");
+}
+
+/// A semi join key that is not a plain column cannot be mapped to the other
+/// side, so a filter on that output key only reaches the emitted side.
+#[test]
+fn test_hashjoin_parent_filter_pushdown_semi_join_expression_key() {
+    use datafusion_physical_expr::expressions::CastExpr;
+    use datafusion_physical_plan::filter_pushdown::{FilterPushdownPhase, PushedDown};
+
+    let schema = duplicate_id_schema();
+    let key = || Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>;
+    let cast_key =
+        || Arc::new(CastExpr::new(key(), DataType::Utf8, None)) as Arc<dyn PhysicalExpr>;
+    for on in [(cast_key(), key()), (key(), cast_key())] {
+        let join = HashJoinExec::try_new(
+            TestScanBuilder::new(Arc::clone(&schema)).build(),
+            TestScanBuilder::new(Arc::clone(&schema)).build(),
+            vec![on],
+            None,
+            &JoinType::LeftSemi,
+            None,
+            PartitionMode::Partitioned,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap();
+        let filters = join
+            .gather_filters_for_pushdown(
+                FilterPushdownPhase::Pre,
+                vec![id_eq_x(0)],
+                &ConfigOptions::default(),
+            )
+            .unwrap()
+            .parent_filters();
+        assert!(matches!(filters[0][0].discriminant, PushedDown::Yes));
+        assert!(matches!(filters[1][0].discriminant, PushedDown::No));
+        assert_eq!(filters[0][0].predicate.to_string(), "id@0 = x");
+    }
+}
+
+/// The identity mapping used by schema-preserving nodes rejects a column
+/// whose name differs from the child field at the same position.
+#[test]
+fn test_from_child_rejects_column_name_mismatch() {
+    use datafusion_physical_plan::filter_pushdown::{
+        ChildFilterDescription, FilterDescription, PushedDown,
+    };
+
+    let input = TestScanBuilder::new(duplicate_id_schema()).build();
+    let mismatched: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+        Arc::new(Column::new("other", 0)),
+        Operator::Eq,
+        Arc::new(Literal::new(ScalarValue::from("x"))),
+    ));
+    let child =
+        ChildFilterDescription::from_child(&[mismatched, id_eq_x(0)], &input).unwrap();
+    let filters = FilterDescription::new().with_child(child).parent_filters();
+    assert!(matches!(filters[0][0].discriminant, PushedDown::No));
+    assert!(matches!(filters[0][1].discriminant, PushedDown::Yes));
+}
+
+/// An unsupported parent filter folded back into a projected FilterExec must
+/// reference an output column of the projection.
+#[test]
+fn test_filter_with_projection_rejects_out_of_range_parent_filter() {
+    use datafusion_physical_plan::filter_pushdown::{
+        ChildFilterPushdownResult, ChildPushdownResult, FilterPushdownPhase, PushedDown,
+    };
+
+    let input = TestScanBuilder::new(duplicate_id_schema()).build();
+    let filter = FilterExecBuilder::new(id_eq_x(0), input)
+        .apply_projection(Some(vec![1]))
+        .unwrap()
+        .build()
+        .unwrap();
+    let result = filter.handle_child_pushdown_result(
+        FilterPushdownPhase::Pre,
+        ChildPushdownResult {
+            parent_filters: vec![ChildFilterPushdownResult {
+                filter: id_eq_x(1),
+                child_results: vec![PushedDown::No],
+            }],
+            self_filters: vec![vec![]],
+        },
+        &ConfigOptions::default(),
+    );
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("is not in the FilterExec projection"),
+        "unexpected error: {err}"
+    );
+}
+
+/// The deprecated API preserves name lookup, including the first matching
+/// field for duplicate names and parent indices outside the child schema.
+#[test]
+#[expect(deprecated)]
+fn test_from_child_with_allowed_indices_preserves_name_resolution() {
+    use datafusion_physical_plan::filter_pushdown::{
+        ChildFilterDescription, FilterDescription, PushedDown,
+    };
+    use std::collections::HashSet;
+
+    let input = TestScanBuilder::new(duplicate_id_schema()).build();
+    let child = ChildFilterDescription::from_child_with_allowed_indices(
+        &[id_eq_x(0), id_eq_x(1), id_eq_x(3)],
+        HashSet::from([1, 3]),
+        &input,
+    )
+    .unwrap();
+    let filters = FilterDescription::new().with_child(child).parent_filters();
+    assert!(matches!(filters[0][0].discriminant, PushedDown::No));
+    assert!(matches!(filters[0][1].discriminant, PushedDown::Yes));
+    assert_eq!(filters[0][1].predicate.to_string(), "id@0 = x");
+    assert!(matches!(filters[0][2].discriminant, PushedDown::Yes));
+    assert_eq!(filters[0][2].predicate.to_string(), "id@0 = x");
+}
+
+/// An allowed position cannot make a column with an unknown name pushable.
+#[test]
+#[expect(deprecated)]
+fn test_from_child_with_allowed_indices_rejects_unresolvable_name() {
+    use datafusion_physical_plan::filter_pushdown::{
+        ChildFilterDescription, FilterDescription, PushedDown,
+    };
+    use std::collections::HashSet;
+
+    let input = TestScanBuilder::new(duplicate_id_schema()).build();
+    let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+        Arc::new(Column::new("missing", 1)),
+        Operator::Eq,
+        Arc::new(Literal::new(ScalarValue::from("x"))),
+    ));
+    let child = ChildFilterDescription::from_child_with_allowed_indices(
+        &[Arc::clone(&predicate)],
+        HashSet::from([1]),
+        &input,
+    )
+    .unwrap();
+    let filters = FilterDescription::new().with_child(child).parent_filters();
+    assert!(matches!(filters[0][0].discriminant, PushedDown::No));
+    assert_eq!(filters[0][0].predicate.to_string(), predicate.to_string());
+}
+
+/// A join's output projection must map to child positions even when a child
+/// contains multiple columns with the same name.
+#[test]
+fn test_hashjoin_parent_filter_pushdown_duplicate_child_columns() {
+    use datafusion_physical_plan::filter_pushdown::{FilterPushdownPhase, PushedDown};
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("id", DataType::Utf8, false),
+    ]));
+    for projection in [None, Some(vec![3, 1, 2, 0])] {
+        let output_indices = projection.clone().unwrap_or_else(|| vec![0, 1, 2, 3]);
+        let join = HashJoinExec::try_new(
+            TestScanBuilder::new(Arc::clone(&schema)).build(),
+            TestScanBuilder::new(Arc::clone(&schema)).build(),
+            vec![(
+                Arc::new(Column::new("id", 0)),
+                Arc::new(Column::new("id", 0)),
+            )],
+            None,
+            &JoinType::Inner,
+            projection,
+            PartitionMode::Partitioned,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap();
+        for (output_index, input_index) in output_indices.into_iter().enumerate() {
+            let predicate = Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("id", output_index)),
+                Operator::Eq,
+                Arc::new(Literal::new(ScalarValue::from("x"))),
+            ));
+            let filters = join
+                .gather_filters_for_pushdown(
+                    FilterPushdownPhase::Pre,
+                    vec![predicate],
+                    &ConfigOptions::default(),
+                )
+                .unwrap()
+                .parent_filters();
+            let side = input_index / 2;
+            assert!(matches!(filters[side][0].discriminant, PushedDown::Yes));
+            assert!(matches!(filters[1 - side][0].discriminant, PushedDown::No));
+            assert_eq!(
+                filters[side][0].predicate.to_string(),
+                format!("id@{} = x", input_index % 2)
+            );
+        }
+    }
+}
+
+/// Semi joins must use the paired join key, not a same-named non-key column
+/// on the other side. Exercise both directions and a reordered projection.
+#[test]
+fn test_hashjoin_parent_filter_pushdown_semi_join_key_mapping() {
+    use datafusion_physical_plan::filter_pushdown::{FilterPushdownPhase, PushedDown};
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("left_key", DataType::Utf8, false),
+        Field::new("right_key", DataType::Utf8, false),
+    ]));
+    for (join_type, output_key_index) in
+        [(JoinType::LeftSemi, 1), (JoinType::RightSemi, 0)]
+    {
+        let join = HashJoinExec::try_new(
+            TestScanBuilder::new(Arc::clone(&schema)).build(),
+            TestScanBuilder::new(Arc::clone(&schema)).build(),
+            vec![(
+                Arc::new(Column::new("left_key", 0)),
+                Arc::new(Column::new("right_key", 1)),
+            )],
+            None,
+            &join_type,
+            Some(vec![1, 0]),
+            PartitionMode::Partitioned,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap();
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new(
+                join.schema().field(output_key_index).name(),
+                output_key_index,
+            )),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::from("x"))),
+        ));
+        let filters = join
+            .gather_filters_for_pushdown(
+                FilterPushdownPhase::Pre,
+                vec![predicate],
+                &ConfigOptions::default(),
+            )
+            .unwrap()
+            .parent_filters();
+        for side in &filters {
+            assert!(matches!(side[0].discriminant, PushedDown::Yes));
+        }
+        assert_eq!(filters[0][0].predicate.to_string(), "left_key@0 = x");
+        assert_eq!(filters[1][0].predicate.to_string(), "right_key@1 = x");
+    }
+}
+
 #[test]
 fn test_hashjoin_parent_filter_pushdown_mark_join() {
     let left_schema = Arc::new(Schema::new(vec![
