@@ -52,6 +52,7 @@ use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr::utils::{Guarantee, LiteralGuarantee};
 use datafusion_physical_expr::{PhysicalExprRef, expressions as phys_expr};
 use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr_opt;
+use datafusion_physical_plan::joins::HashTableLookupExpr;
 use datafusion_physical_plan::{ColumnarValue, PhysicalExpr};
 
 /// Used to prove that arbitrary predicates (boolean expression) can not
@@ -1520,6 +1521,108 @@ impl CompactInListDomain {
     }
 }
 
+/// Builds the same kind of compact, sorted-domain "may match" expression as
+/// [`build_compact_in_list_expr`], but for a [`HashTableLookupExpr`] (a large join
+/// build side pushed down as an opaque hash-table lookup, not exposed via
+/// [`InListExpr`]): tests container min/max stats against the build-side values.
+///
+/// Always `IN` semantics (`lookup` never represents `NOT IN`) with nulls already
+/// stripped by [`HashTableLookupExpr::cached_pruning_scalars`], so this skips the
+/// negation/all-null-list handling `build_compact_in_list_expr` needs.
+///
+/// Deliberately **not** gated by `max_in_list_size`: that cap is for literal SQL
+/// `IN (...)` lists, and its small default (20) would defeat this for every build
+/// side big enough to reach here. `hash_join_dynamic_pruning_max_distinct_values`
+/// and `_max_size` bound this instead.
+///
+/// [`InListExpr`]: datafusion_physical_expr::expressions::InListExpr
+fn build_hash_lookup_pruning_expr(
+    lookup: &HashTableLookupExpr,
+    schema: &Schema,
+    required_columns: &mut RequiredColumns,
+) -> Option<Arc<dyn PhysicalExpr>> {
+    let (column_expr, values) = lookup.cached_pruning_scalars()?;
+    if values.is_empty() {
+        return None;
+    }
+    let column = column_expr.downcast_ref::<phys_expr::Column>()?;
+    let field = schema.fields().get(column.index())?;
+    if field.name() != column.name() {
+        return None;
+    }
+    let data_type = match field.data_type() {
+        DataType::Dictionary(_, value) => value.as_ref(),
+        data_type => data_type,
+    };
+    let mut domain = if data_type.is_string() {
+        CompactInListDomain::String(Vec::with_capacity(values.len()))
+    } else if matches!(
+        data_type,
+        DataType::Binary | DataType::LargeBinary | DataType::BinaryView
+    ) {
+        CompactInListDomain::Binary(Vec::with_capacity(values.len()))
+    } else {
+        CompactInListDomain::Primitive(PrimitiveInListDomain::new(
+            data_type,
+            values.len(),
+        )?)
+    };
+    for value in values.iter() {
+        let value = unwrap_scalar(value);
+        match &mut domain {
+            CompactInListDomain::String(vals) => {
+                vals.push(unpack_string(value)?.to_owned())
+            }
+            CompactInListDomain::Binary(vals) => vals.push(extract_binary(value)?.into()),
+            CompactInListDomain::Primitive(vals) => vals.push(value)?,
+        }
+    }
+    if domain.is_empty() {
+        return None;
+    }
+
+    // Roll back appended statistics columns if the rewrite cannot be completed.
+    // `RequiredColumns::stat_column_expr` only appends entries.
+    let required_columns_len = required_columns.columns.len();
+    let statistics = (|| {
+        let min = required_columns
+            .min_column_expr(column, &column_expr, field)
+            .ok()?;
+        let max = required_columns
+            .max_column_expr(column, &column_expr, field)
+            .ok()?;
+        let non_null =
+            build_is_null_column_expr(&column_expr, schema, required_columns, true)?;
+        Some((min, max, non_null))
+    })();
+    let Some((min, max, non_null)) = statistics else {
+        required_columns.columns.truncate(required_columns_len);
+        return None;
+    };
+    let may_match = match domain {
+        CompactInListDomain::String(values) => Arc::new(StringInListPruningExpr::new(
+            SetMembership::In,
+            min,
+            max,
+            values,
+        )) as PhysicalExprRef,
+        CompactInListDomain::Binary(values) => Arc::new(BinaryInListPruningExpr::new(
+            SetMembership::In,
+            min,
+            max,
+            values,
+        )) as PhysicalExprRef,
+        CompactInListDomain::Primitive(values) => {
+            values.into_expr(SetMembership::In, min, max)
+        }
+    };
+    Some(Arc::new(phys_expr::BinaryExpr::new(
+        non_null,
+        Operator::And,
+        may_match,
+    )))
+}
+
 /// Keep large literal lists of supported ordered types compact instead of
 /// building a per-value tree: an OR tree for `IN`, an AND chain for `NOT IN`.
 ///
@@ -1815,6 +1918,10 @@ fn build_predicate_expression(
         } else {
             return unhandled_hook.handle(expr);
         }
+    }
+    if let Some(lookup) = expr.downcast_ref::<HashTableLookupExpr>() {
+        return build_hash_lookup_pruning_expr(lookup, schema, required_columns)
+            .unwrap_or_else(|| unhandled_hook.handle(expr));
     }
 
     let (left, op, right) = {
@@ -7339,5 +7446,54 @@ mod tests {
         let expected =
             "c1_null_count@2 != row_count@3 AND c1_min@0 <= a AND a <= c1_max@1";
         assert_eq!(res.to_string(), expected);
+    }
+
+    #[test]
+    fn test_hash_lookup_pruning_via_min_max() {
+        use datafusion_physical_plan::joins::join_hash_map::{
+            JoinHashMapType, JoinHashMapU32,
+        };
+        use datafusion_physical_plan::joins::{Map, SeededRandomState};
+
+        let mut hash_map = JoinHashMapU32::with_capacity(3);
+        let hashes = [100u64, 200, 300];
+        JoinHashMapType::update_from_iter(
+            &mut hash_map,
+            Box::new(hashes.iter().enumerate()),
+            0,
+        );
+        let map = Arc::new(Map::HashMap(Box::new(hash_map)));
+
+        let schema = Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, true)]));
+        let column: Arc<dyn PhysicalExpr> = Arc::new(phys_expr::Column::new("b", 0));
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 30]));
+        let lookup: Arc<dyn PhysicalExpr> = Arc::new(HashTableLookupExpr::new(
+            vec![Arc::clone(&column)],
+            SeededRandomState::with_seed(1),
+            map,
+            "hash_lookup".to_string(),
+            Some(values),
+        ));
+
+        let predicate = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&schema))
+            .try_build(lookup)
+            .unwrap();
+
+        // No `with_contained` call anywhere: `contained()` always returns `None`,
+        // matching real row-group/file statistics (no bloom filter). Exclusion here
+        // can only come from the min/max-only rewrite, not from `LiteralGuarantee`.
+        let statistics = TestStatistics::new().with(
+            "b",
+            ContainerStats::new_i32(
+                vec![Some(5), Some(15), Some(100)],
+                vec![Some(8), Some(25), Some(200)],
+            ),
+        );
+
+        let result = predicate.prune(&statistics).unwrap();
+        // Container 0 ([5,8]) and container 2 ([100,200]) contain none of {10,20,30};
+        // container 1 ([15,25]) contains 20 - kept.
+        assert_eq!(result, vec![false, true, false]);
     }
 }
