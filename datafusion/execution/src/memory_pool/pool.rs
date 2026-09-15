@@ -21,7 +21,7 @@ use crate::memory_pool::{
 use datafusion_common::HashMap;
 use datafusion_common::{DataFusionError, Result, resources_datafusion_err};
 use log::debug;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use std::fmt::{Display, Formatter};
 use std::{
     num::NonZeroUsize,
@@ -340,8 +340,9 @@ impl TrackedConsumer {
     /// Grows the tracked consumer's reserved size,
     /// should be called after the pool has successfully performed the grow().
     fn grow(&self, additional: usize) {
-        self.reserved.fetch_add(additional, Ordering::Relaxed);
-        self.peak.fetch_max(self.reserved(), Ordering::Relaxed);
+        let reserved =
+            self.reserved.fetch_add(additional, Ordering::Relaxed) + additional;
+        self.peak.fetch_max(reserved, Ordering::Relaxed);
     }
 
     /// Reduce the tracked consumer's reserved size,
@@ -407,8 +408,12 @@ pub struct TrackConsumersPool<I> {
     inner: I,
     /// The amount of consumers to report(ordered top to bottom by reservation size)
     top: NonZeroUsize,
-    /// Maps consumer_id --> TrackedConsumer
-    tracked_consumers: Mutex<HashMap<usize, TrackedConsumer>>,
+    /// Maps consumer_id --> TrackedConsumer.
+    ///
+    /// Reservation updates only read the map and update the atomics in
+    /// `TrackedConsumer`. Structural changes and snapshots take the exclusive
+    /// write lock so reports cannot observe a partially updated consumer.
+    tracked_consumers: RwLock<HashMap<usize, TrackedConsumer>>,
 }
 
 impl<I: MemoryPool> Display for TrackConsumersPool<I> {
@@ -476,7 +481,7 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
     /// Returns a snapshot of all currently tracked consumers.
     pub fn metrics(&self) -> Vec<MemoryConsumerMetrics> {
         self.tracked_consumers
-            .lock()
+            .write()
             .values()
             .map(Into::into)
             .collect()
@@ -486,7 +491,7 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
     pub fn report_top(&self, top: usize) -> String {
         let mut consumers = self
             .tracked_consumers
-            .lock()
+            .write()
             .iter()
             .map(|(consumer_id, tracked_consumer)| {
                 (
@@ -525,7 +530,7 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
     fn register(&self, consumer: &MemoryConsumer) {
         self.inner.register(consumer);
 
-        let mut guard = self.tracked_consumers.lock();
+        let mut guard = self.tracked_consumers.write();
         let existing = guard.insert(
             consumer.id(),
             TrackedConsumer {
@@ -544,27 +549,29 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
 
     fn unregister(&self, consumer: &MemoryConsumer) {
         self.inner.unregister(consumer);
-        self.tracked_consumers.lock().remove(&consumer.id());
+        self.tracked_consumers.write().remove(&consumer.id());
     }
 
     fn grow(&self, reservation: &MemoryReservation, additional: usize) {
         self.inner.grow(reservation, additional);
-        self.tracked_consumers
-            .lock()
-            .entry(reservation.consumer().id())
-            .and_modify(|tracked_consumer| {
-                tracked_consumer.grow(additional);
-            });
+        if let Some(tracked_consumer) = self
+            .tracked_consumers
+            .read()
+            .get(&reservation.consumer().id())
+        {
+            tracked_consumer.grow(additional);
+        }
     }
 
     fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
         self.inner.shrink(reservation, shrink);
-        self.tracked_consumers
-            .lock()
-            .entry(reservation.consumer().id())
-            .and_modify(|tracked_consumer| {
-                tracked_consumer.shrink(shrink);
-            });
+        if let Some(tracked_consumer) = self
+            .tracked_consumers
+            .read()
+            .get(&reservation.consumer().id())
+        {
+            tracked_consumer.shrink(shrink);
+        }
     }
 
     fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> Result<()> {
@@ -584,12 +591,13 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
                 _ => e,
             })?;
 
-        self.tracked_consumers
-            .lock()
-            .entry(reservation.consumer().id())
-            .and_modify(|tracked_consumer| {
-                tracked_consumer.grow(additional);
-            });
+        if let Some(tracked_consumer) = self
+            .tracked_consumers
+            .read()
+            .get(&reservation.consumer().id())
+        {
+            tracked_consumer.grow(additional);
+        }
         Ok(())
     }
 
