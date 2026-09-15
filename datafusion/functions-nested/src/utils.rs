@@ -470,7 +470,8 @@ where
 /// squaring a small one underflows (`1e-200 * 1e-200` is zero), even when the
 /// norm itself is representable. The factor is a power of two, so scaling is
 /// exact whenever the scaled value is normal. A value that becomes subnormal is
-/// rounded, but it is then too small to change the result.
+/// rounded, so an `array_normalize` element that is itself subnormal can differ
+/// from the unscaled result in its last bit.
 ///
 /// Returns `None` when `values` is empty, all zero, or contains an infinity.
 /// The unscaled computation already gives the expected result for those inputs.
