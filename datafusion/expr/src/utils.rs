@@ -1503,6 +1503,38 @@ pub fn collect_subquery_cols(
     })
 }
 
+/// Determine the subquery-side expressions a join filter compares,
+/// stopping at the first subquery-referencing sub-expression rather than
+/// descending to the bare columns inside of it.
+///
+/// `t1.a = t2.b` yields `t2.b`, matching [`collect_subquery_cols`]. But
+/// `t1.a = CAST(t2.b AS INT)` yields `CAST(t2.b AS INT)` whole, not `t2.b`.
+/// The two differ whenever the correlated predicate wraps the subquery's
+/// column in an expression, in which case we need to evaluate the full
+/// expression before grouping, so that two column values which compare
+/// equal after the wrapping expression end up in the same group.
+pub fn collect_subquery_join_exprs(
+    exprs: &[Expr],
+    subquery_schema: &DFSchema,
+) -> Result<Vec<Expr>> {
+    let mut result: Vec<Expr> = vec![];
+    for expr in exprs {
+        expr.apply(|e| {
+            if e.column_refs()
+                .into_iter()
+                .all(|col| subquery_schema.has_column(col))
+                && !e.column_refs().is_empty()
+                && !result.contains(e)
+            {
+                result.push(e.clone());
+                return Ok(TreeNodeRecursion::Jump);
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+    }
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
