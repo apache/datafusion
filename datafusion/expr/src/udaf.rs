@@ -950,11 +950,11 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// Return [`DistinctHandling::Ignored`] for duplicate-insensitive
     /// functions so that `f(DISTINCT x)` is planned as `f(x)`.
     ///
-    /// Return [`DistinctHandling::Unsupported`] if the accumulator neither
-    /// reads `is_distinct` nor is reached only after the planner has already
-    /// deduplicated the input. Nothing reads this variant yet: rejecting such
-    /// queries at planning time, rather than silently returning the
-    /// non-distinct answer, is a follow-up change.
+    /// Return [`DistinctHandling::Unsupported`] if the accumulator does not
+    /// implement `DISTINCT`, that is, it does not read `is_distinct`, or it
+    /// rejects `DISTINCT` with an error. The planner then has to deduplicate
+    /// the input or reject the query. Nothing reads this variant yet:
+    /// rejecting such queries at planning time is a follow-up change.
     fn distinct_handling(&self) -> DistinctHandling {
         DistinctHandling::Honored
     }
