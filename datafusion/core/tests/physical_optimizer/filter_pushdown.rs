@@ -24,7 +24,7 @@ use arrow::{
 };
 use arrow_schema::SortOptions;
 use datafusion::{
-    assert_batches_eq,
+    assert_batches_eq, assert_batches_sorted_eq,
     logical_expr::Operator,
     physical_plan::{
         PhysicalExpr,
@@ -51,7 +51,7 @@ use datafusion_functions_aggregate::{
 };
 use datafusion_physical_expr::{
     LexOrdering, PhysicalSortExpr,
-    expressions::{DynamicFilterPhysicalExpr, cast, col},
+    expressions::{DynamicFilterPhysicalExpr, IsNullExpr, cast, col},
     utils::conjunction,
 };
 use datafusion_physical_expr::{
@@ -1752,6 +1752,115 @@ fn test_hashjoin_parent_filter_pushdown_semi_anti_join() {
     let predicate = Arc::new(Literal::new(ScalarValue::Boolean(Some(false))));
     let plan = Arc::new(FilterExec::try_new(predicate, join).unwrap());
     assert_parent_filter_remains(plan);
+}
+
+/// Under `NullEqualsNull` an inner join also emits rows whose keys are NULL
+/// on both sides, so `id` and `pid` are still identical in every output row
+/// (both NULL or equal). A parent filter over one side's key, including an
+/// `IS NULL` check, therefore transfers to the other side exactly as under
+/// `NullEqualsNothing`, and the NULL-keyed matches survive the transfer.
+#[tokio::test]
+async fn test_hashjoin_parent_filter_transfer_null_equals_null_inner_join() {
+    let build_side_schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Utf8, true),
+        Field::new("build_val", DataType::Utf8, false),
+    ]));
+    let build_batches = vec![
+        record_batch!(
+            ("id", Utf8, [Some("aa"), None, Some("bb")]),
+            ("build_val", Utf8, ["b1", "b2", "b3"])
+        )
+        .unwrap(),
+    ];
+    let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
+        .with_support(true)
+        .with_batches(build_batches)
+        .build();
+
+    let probe_side_schema = Arc::new(Schema::new(vec![
+        Field::new("pid", DataType::Utf8, true),
+        Field::new("probe_val", DataType::Utf8, false),
+    ]));
+    let probe_batches = vec![
+        record_batch!(
+            ("pid", Utf8, [Some("aa"), None, Some("bb"), None]),
+            ("probe_val", Utf8, ["p1", "p2", "p3", "p4"])
+        )
+        .unwrap(),
+    ];
+    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
+        .with_support(true)
+        .with_batches(probe_batches)
+        .build();
+
+    let on = vec![(
+        col("id", &build_side_schema).unwrap(),
+        col("pid", &probe_side_schema).unwrap(),
+    )];
+    let join = Arc::new(
+        HashJoinExec::try_new(
+            build_scan,
+            probe_scan,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            datafusion_common::NullEquality::NullEqualsNull,
+            false,
+        )
+        .unwrap(),
+    );
+    let join_schema = join.schema();
+
+    // id = 'aa' OR id IS NULL: keeps the 'aa' match and the NULL/NULL matches
+    let predicate = Arc::new(BinaryExpr::new(
+        col_lit_predicate("id", "aa", &join_schema),
+        Operator::Or,
+        Arc::new(IsNullExpr::new(col("id", &join_schema).unwrap())),
+    ));
+    let plan =
+        Arc::new(FilterExec::try_new(predicate, join).unwrap()) as Arc<dyn ExecutionPlan>;
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(Arc::clone(&plan), FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: id@0 = aa OR id@0 IS NULL
+        -   HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, pid@0)], NullsEqual: true
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id, build_val], file_type=test, pushdown_supported=true
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[pid, probe_val], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, pid@0)], NullsEqual: true
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id, build_val], file_type=test, pushdown_supported=true, predicate=id@0 = aa OR id@0 IS NULL
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[pid, probe_val], file_type=test, pushdown_supported=true, predicate=pid@0 = aa OR pid@0 IS NULL
+    "
+    );
+
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    let optimized = FilterPushdown::new().optimize(plan, &config).unwrap();
+    let session_ctx = SessionContext::new();
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    let batches = collect(optimized, session_ctx.task_ctx()).await.unwrap();
+    // The NULL build key matches both NULL probe keys; 'bb' is filtered out
+    // on both sides and the parent filter is gone.
+    #[rustfmt::skip]
+    let expected = [
+        "+----+-----------+-----+-----------+",
+        "| id | build_val | pid | probe_val |",
+        "+----+-----------+-----+-----------+",
+        "|    | b2        |     | p2        |",
+        "|    | b2        |     | p4        |",
+        "| aa | b1        | aa  | p1        |",
+        "+----+-----------+-----+-----------+",
+    ];
+    assert_batches_sorted_eq!(expected, &batches);
 }
 
 /// A parent filter over one side's join keys is transferred to the other side,
