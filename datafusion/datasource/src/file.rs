@@ -337,6 +337,27 @@ pub trait FileSource: Any + Send + Sync {
         Ok(None)
     }
 
+    /// Try to create a new [`FileSource`] that emits the specified table
+    /// columns using Arrow dictionary arrays.
+    ///
+    /// `column_indices` refer to the unprojected [`Self::table_schema`]. A
+    /// source must return `None` unless every requested column can be emitted
+    /// as a dictionary without changing row values, column order, field names,
+    /// nullability, or metadata. In particular, implementations should reject
+    /// partition and virtual columns unless they can provide the same native
+    /// dictionary representation as file columns.
+    ///
+    /// The default implementation reports that dictionary output is not
+    /// supported. This hook is intended for physical optimizers that already
+    /// established, from format-specific metadata, that preserving an encoded
+    /// representation is likely to be cheaper than decoding it.
+    fn try_pushdown_dictionary_encoding(
+        &self,
+        _column_indices: &[usize],
+    ) -> Result<Option<Arc<dyn FileSource>>> {
+        Ok(None)
+    }
+
     /// Deprecated: Set optional schema adapter factory.
     ///
     /// `SchemaAdapterFactory` has been removed. Use `PhysicalExprAdapterFactory` instead.

@@ -6,7 +6,7 @@ use std::fmt::{self, Formatter};
 use std::sync::Arc;
 
 use arrow::array::record_batch;
-use arrow::datatypes::{self as arrow_schema, SchemaRef};
+use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::Result;
