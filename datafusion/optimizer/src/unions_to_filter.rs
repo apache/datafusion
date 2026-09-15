@@ -309,9 +309,9 @@ fn wrap_branch(mut plan: LogicalPlan, wrappers: &[Wrapper]) -> Result<LogicalPla
 }
 
 fn align_plan_to_schema(
-    plan: LogicalPlan,
+    plan: Arc<LogicalPlan>,
     schema: datafusion_common::DFSchemaRef,
-) -> Result<LogicalPlan> {
+) -> Result<Arc<LogicalPlan>> {
     if plan.schema() == &schema {
         return Ok(plan);
     }
@@ -325,13 +325,11 @@ fn align_plan_to_schema(
                 plan.schema().qualified_field(i),
             ))
         })
-        .collect::<Vec<_>>();
+        .collect();
 
-    Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
-        expr,
-        Arc::new(plan),
-        schema,
-    )?))
+    Ok(Arc::new(LogicalPlan::Projection(
+        Projection::try_new_with_schema(expr, plan, schema)?,
+    )))
 }
 
 fn is_mergeable_predicate(expr: &Expr) -> bool {
