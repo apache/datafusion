@@ -97,3 +97,242 @@ FROM outer_values o;
 3 NULL
 4 true
 5 NULL
+
+# Plan shapes and NULL semantics of a projected IN subquery.
+#
+# `n1.id` holds a NULL, `n2.id` holds a NULL, and `n3.id` holds none. The mark
+# column of a LeftMark join carries the three-valued result on its own when the
+# join filter is hashable only, so one join per subquery is enough.
+
+statement ok
+CREATE TABLE n1(id INT, z INT) AS VALUES (1, 10), (2, 20), (NULL, 30), (4, 40);
+
+statement ok
+CREATE TABLE n2(id INT, z INT) AS VALUES (1, 5), (NULL, 50);
+
+statement ok
+CREATE TABLE n3(id INT) AS VALUES (1), (2);
+
+# One hash mark join per subquery. There is no materialization join, so no
+# nested loop join over outer x inner rows.
+query TT
+EXPLAIN SELECT id, id IN (SELECT id FROM n3) AS m3, id IN (SELECT id FROM n2) AS m2 FROM n1;
+----
+logical_plan
+01)Projection: n1.id, __correlated_sq_1.mark AS m3, __correlated_sq_2.mark AS m2
+02)--LeftMark Join: n1.id = __correlated_sq_2.id null_aware
+03)----LeftMark Join: n1.id = __correlated_sq_1.id null_aware
+04)------TableScan: n1 projection=[id]
+05)------SubqueryAlias: __correlated_sq_1
+06)--------TableScan: n3 projection=[id]
+07)----SubqueryAlias: __correlated_sq_2
+08)------TableScan: n2 projection=[id]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, mark@1 as m3, mark@2 as m2]
+02)--HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(id@0, id@0)], null_aware
+03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(id@0, id@0)], null_aware
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+06)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A non-equality correlation stays a residual join filter, so this query keeps
+# the three-join materialization.
+query TT
+EXPLAIN SELECT id, id IN (SELECT n2.id FROM n2 WHERE n2.z < n1.z) AS m FROM n1;
+----
+logical_plan
+01)Projection: n1.id, __correlated_sq_1.mark IS NOT DISTINCT FROM Boolean(true) OR (__correlated_sq_2.mark OR n1.id IS NULL AND __correlated_sq_3.mark) IS NOT DISTINCT FROM Boolean(true) AND __correlated_sq_1.mark IS DISTINCT FROM Boolean(true) AND Boolean(NULL) AS m
+02)--LeftMark Join:  Filter: __correlated_sq_3.z < n1.z
+03)----LeftMark Join:  Filter: __correlated_sq_2.z < n1.z
+04)------LeftMark Join: n1.id = __correlated_sq_1.id Filter: __correlated_sq_1.z < n1.z
+05)--------TableScan: n1 projection=[id, z]
+06)--------SubqueryAlias: __correlated_sq_1
+07)----------TableScan: n2 projection=[id, z]
+08)------SubqueryAlias: __correlated_sq_2
+09)--------Projection: n2.z
+10)----------Filter: n2.id IS NULL
+11)------------TableScan: n2 projection=[id, z]
+12)----SubqueryAlias: __correlated_sq_3
+13)------TableScan: n2 projection=[z]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, mark@1 IS NOT DISTINCT FROM true OR (mark@2 OR id@0 IS NULL AND mark@3) IS NOT DISTINCT FROM true AND mark@1 IS DISTINCT FROM true AND NULL as m]
+02)--NestedLoopJoinExec: join_type=RightMark, filter=z@1 < z@0, projection=[id@0, mark@2, mark@3, mark@4]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----NestedLoopJoinExec: join_type=RightMark, filter=z@1 < z@0
+05)------FilterExec: id@0 IS NULL, projection=[z@1]
+06)--------DataSourceExec: partitions=1, partition_sizes=[1]
+07)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(id@0, id@0)], filter=z@1 < z@0
+09)----------DataSourceExec: partitions=1, partition_sizes=[1]
+10)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query IB rowsort
+SELECT id, id IN (SELECT n2.id FROM n2 WHERE n2.z < n1.z) AS m FROM n1;
+----
+1 true
+2 false
+4 false
+NULL NULL
+
+query IBBB rowsort
+SELECT
+    id,
+    id IN (SELECT id FROM n3) AS m3,
+    EXISTS (SELECT 1 FROM n2 WHERE n2.id = n1.id) AS e2,
+    id NOT IN (SELECT id FROM n3 WHERE n3.id > 1) AS nn3
+FROM n1;
+----
+1 true true true
+2 true false false
+4 false false true
+NULL NULL false NULL
+
+query IB rowsort
+SELECT id, id IN (SELECT id FROM n2) AS m FROM n1;
+----
+1 true
+2 NULL
+4 NULL
+NULL NULL
+
+query IB rowsort
+SELECT id, id NOT IN (SELECT id FROM n2) AS m FROM n1;
+----
+1 false
+2 NULL
+4 NULL
+NULL NULL
+
+query IB rowsort
+SELECT id, id IN (SELECT id FROM n3) AS m FROM n1;
+----
+1 true
+2 true
+4 false
+NULL NULL
+
+query IT rowsort
+SELECT id, CASE WHEN NOT (id IN (SELECT id FROM n2)) THEN 'a' ELSE 'b' END AS c FROM n1;
+----
+1 b
+2 b
+4 b
+NULL b
+
+query IB rowsort
+SELECT z, sum(id) IN (SELECT id FROM n3) AS m FROM n1 GROUP BY z;
+----
+10 true
+20 true
+30 NULL
+40 false
+
+query IB rowsort
+SELECT id, COALESCE((id IN (SELECT id FROM n3))::boolean, false) AS matched FROM n1;
+----
+1 true
+2 true
+4 false
+NULL false
+
+query IT rowsort
+SELECT id, CASE WHEN id NOT IN (SELECT n2.id FROM n2 WHERE n2.z < n1.z) THEN 'a' ELSE 'b' END AS c FROM n1;
+----
+1 b
+2 a
+4 a
+NULL b
+
+statement ok
+DROP TABLE n1;
+
+statement ok
+DROP TABLE n2;
+
+statement ok
+DROP TABLE n3;
+
+# Nullable key expressions over non-nullable columns.
+#
+# `nn.id` and `nn.s` are not nullable, but a key expression over them can still
+# be NULL. `NULLIF(id, 1)` is NULL for `id = 1`, and `TRY_CAST(s AS INT)` is
+# NULL when the text is not a number. The join must be null-aware for these
+# keys, so the mark is NULL and `IN` gives UNKNOWN.
+
+statement ok
+CREATE TABLE nn(id INT NOT NULL, s VARCHAR NOT NULL) AS VALUES (1, '1'), (2, 'x'), (4, '4');
+
+statement ok
+CREATE TABLE r3(id INT NOT NULL) AS VALUES (1), (2);
+
+statement ok
+CREATE TABLE r3n(id INT NOT NULL) AS VALUES (1), (2), (5);
+
+# The nullable key expression keeps the plan at one null-aware mark join.
+query TT
+EXPLAIN SELECT id, NULLIF(id, 1) IN (SELECT id FROM r3) AS m FROM nn;
+----
+logical_plan
+01)Projection: nn.id, __correlated_sq_1.mark AS m
+02)--LeftMark Join: nullif(CAST(nn.id AS Int64), Int64(1)) = __correlated_sq_1.r3.id null_aware
+03)----TableScan: nn projection=[id]
+04)----SubqueryAlias: __correlated_sq_1
+05)------Projection: CAST(r3.id AS Int64)
+06)--------TableScan: r3 projection=[id]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, mark@1 as m]
+02)--HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(nullif(nn.id,Int64(1))@1, r3.id@0)], projection=[id@0, mark@2], null_aware
+03)----ProjectionExec: expr=[id@0 as id, nullif(CAST(id@0 AS Int64), 1) as nullif(nn.id,Int64(1))]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)----ProjectionExec: expr=[CAST(id@0 AS Int64) as r3.id]
+06)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# `NULLIF(id, 1)` is NULL for `id = 1`, and `r3` has no NULL, so the answer is
+# UNKNOWN for that row.
+query IB rowsort
+SELECT id, NULLIF(id, 1) IN (SELECT id FROM r3) AS m FROM nn;
+----
+1 NULL
+2 true
+4 false
+
+# `TRY_CAST('x' AS INT)` is NULL, so the answer is UNKNOWN for that row.
+query IB rowsort
+SELECT id, TRY_CAST(s AS INT) IN (SELECT id FROM r3) AS m FROM nn;
+----
+1 true
+2 NULL
+4 false
+
+# The same on the subquery side: the output of the subquery holds a NULL, so a
+# row with no match is UNKNOWN.
+query IB rowsort
+SELECT id, id IN (SELECT NULLIF(id, 5) FROM r3n) AS m FROM nn;
+----
+1 true
+2 true
+4 NULL
+
+# `NOT IN` reads the same mark column, negated.
+query IB rowsort
+SELECT id, NULLIF(id, 1) NOT IN (SELECT id FROM r3) AS m FROM nn;
+----
+1 NULL
+2 false
+4 true
+
+# The `NOT IN` filter path builds a LeftAnti join and reads the key nullability
+# the same way. UNKNOWN does not pass a filter, so `id = 1` drops out.
+query I rowsort
+SELECT id FROM nn WHERE NULLIF(id, 1) NOT IN (SELECT id FROM r3);
+----
+4
+
+statement ok
+DROP TABLE nn;
+
+statement ok
+DROP TABLE r3;
+
+statement ok
+DROP TABLE r3n;
