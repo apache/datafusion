@@ -60,6 +60,7 @@ use datafusion_common::{
     DataFusionError, Result, ScalarValue, internal_err, plan_err, project_schema,
 };
 use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::{
@@ -622,17 +623,20 @@ impl ExecutionPlan for FilterExec {
             context.task_id()
         );
         let metrics = FilterExecMetrics::new(&self.metrics, partition);
+        let reservation = MemoryConsumer::new(format!("FilterExecOutput[{partition}]"))
+            .register(context.memory_pool());
         Ok(Box::pin(FilterExecStream {
             schema: self.schema(),
             predicate: Arc::clone(&self.predicate),
             input: self.input.execute(partition, context)?,
             metrics,
             projection: self.projection.clone(),
-            batch_coalescer: LimitedBatchCoalescer::new(
+            batch_coalescer: LimitedBatchCoalescer::new_with_reservation(
                 self.schema(),
                 self.batch_size,
                 self.fetch,
-            ),
+                reservation,
+            )?,
         }))
     }
 
