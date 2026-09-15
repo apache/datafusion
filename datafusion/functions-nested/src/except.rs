@@ -169,26 +169,32 @@ fn general_except<OffsetSize: OffsetSizeTrait>(
 ) -> Result<GenericListArray<OffsetSize>> {
     let converter = RowConverter::new(vec![SortField::new(l.value_type())])?;
 
-    // Normalize -0.0 → +0.0 so RowConverter (IEEE 754 totalOrder) groups
-    // ±0 together for both the rhs lookup set and the lhs probe.
-    let l_values_norm = normalize_float_zero(l.values());
-    let r_values_norm = normalize_float_zero(r.values());
-
-    // Only convert the visible portion of the values array. For sliced
-    // ListArrays, values() returns the full underlying array but only
-    // elements between the first and last offset are referenced.
+    // ListArray::values() returns the full underlying array for sliced lists.
+    // Slice first so normalization only scans and, when -0.0 is present,
+    // allocates for values referenced by the logical array.
+    // Normalization keeps SQL signed-zero equality when rows are encoded.
     let l_first = l.offsets()[0].as_usize();
     let l_len = l.offsets()[l.len()].as_usize() - l_first;
-    let l_values = converter.convert_columns(&[l_values_norm.slice(l_first, l_len)])?;
+    let l_values_norm = if l_first == 0 && l_len == l.values().len() {
+        normalize_float_zero(l.values())
+    } else {
+        normalize_float_zero(&l.values().slice(l_first, l_len))
+    };
+    let l_rows = converter.convert_columns(&[l_values_norm.slice(0, l_len)])?;
 
     let r_first = r.offsets()[0].as_usize();
     let r_len = r.offsets()[r.len()].as_usize() - r_first;
-    let r_values = converter.convert_columns(&[r_values_norm.slice(r_first, r_len)])?;
+    let r_values_norm = if r_first == 0 && r_len == r.values().len() {
+        normalize_float_zero(r.values())
+    } else {
+        normalize_float_zero(&r.values().slice(r_first, r_len))
+    };
+    let r_rows = converter.convert_columns(&[r_values_norm.slice(0, r_len)])?;
 
     let mut offsets = Vec::<OffsetSize>::with_capacity(l.len() + 1);
     offsets.push(OffsetSize::usize_as(0));
 
-    let mut indices: Vec<usize> = Vec::with_capacity(l_values.num_rows());
+    let mut indices: Vec<usize> = Vec::with_capacity(l_rows.num_rows());
     let mut dedup = HashSet::new();
 
     let nulls = NullBuffer::union(l.nulls(), r.nulls());
@@ -207,13 +213,13 @@ fn general_except<OffsetSize: OffsetSizeTrait>(
         }
 
         for element_index in r_start.as_usize() - r_first..r_end.as_usize() - r_first {
-            let right_row = r_values.row(element_index);
+            let right_row = r_rows.row(element_index);
             dedup.insert(right_row);
         }
         for element_index in l_start.as_usize() - l_first..l_end.as_usize() - l_first {
-            let left_row = l_values.row(element_index);
+            let left_row = l_rows.row(element_index);
             if dedup.insert(left_row) {
-                indices.push(element_index + l_first);
+                indices.push(element_index);
             }
         }
 
@@ -245,9 +251,9 @@ fn general_except<OffsetSize: OffsetSizeTrait>(
 
 #[cfg(test)]
 mod tests {
-    use super::ArrayExcept;
-    use arrow::array::{Array, AsArray, Int32Array, ListArray};
-    use arrow::datatypes::{Field, Int32Type};
+    use super::{ArrayExcept, general_except};
+    use arrow::array::{Array, AsArray, Int32Array, LargeListArray, ListArray};
+    use arrow::datatypes::{DataType, Field, Float64Type, Int32Type};
     use datafusion_common::{Result, config::ConfigOptions};
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
     use std::sync::Arc;
@@ -300,6 +306,32 @@ mod tests {
         let row1 = row1.as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(row1.values().as_ref(), &[5]);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_except_sliced_float_large_lists() -> Result<()> {
+        let l = LargeListArray::from_iter_primitive::<Float64Type, _, _>(vec![
+            Some(vec![Some(99.0)]),
+            Some(vec![Some(-0.0), Some(0.0), Some(1.0), None, None]),
+            Some(vec![Some(-99.0)]),
+        ])
+        .slice(1, 1);
+        let r = LargeListArray::from_iter_primitive::<Float64Type, _, _>(vec![
+            Some(vec![Some(98.0)]),
+            Some(vec![Some(0.0), None]),
+            Some(vec![Some(-98.0)]),
+        ])
+        .slice(1, 1);
+        let DataType::LargeList(field) = l.data_type() else {
+            unreachable!()
+        };
+
+        let result = general_except::<i64>(&l, &r, field)?;
+        let values = result.value(0);
+        let values = values.as_primitive::<Float64Type>();
+        assert_eq!(values.len(), 1);
+        assert_eq!(values.value(0), 1.0);
         Ok(())
     }
 }

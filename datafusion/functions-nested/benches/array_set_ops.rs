@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, Int64Array, ListArray};
+use arrow::array::{ArrayRef, Float64Array, Int64Array, ListArray};
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field};
 use criterion::{
@@ -38,6 +38,11 @@ const SEED: u64 = 42;
 /// Extra rows on each side when building sliced arrays, so the underlying
 /// values buffer is much larger than the visible portion.
 const SLICE_PADDING: usize = 5000;
+/// Keep the visible slice at two values while varying the backing array from
+/// 8 KiB to 8 MiB.
+const SLICED_FLOAT_BACKING_VALUES: &[usize] = &[1024, 1024 * 1024];
+/// Keep the backing array at 8 MiB while varying the visible slice.
+const SLICED_FLOAT_VISIBLE_VALUES: &[usize] = &[2, 2048];
 
 fn criterion_benchmark(c: &mut Criterion) {
     bench_array_union(c);
@@ -47,6 +52,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     bench_array_union_sliced(c);
     bench_array_intersect_sliced(c);
     bench_array_distinct_sliced(c);
+    bench_array_distinct_sliced_float(c);
     bench_array_except_sliced(c);
 }
 
@@ -67,6 +73,23 @@ fn invoke_udf(udf: &impl ScalarUDFImpl, array1: &ArrayRef, array2: &ArrayRef) {
         })
         .unwrap(),
     );
+}
+
+fn invoke_unary_udf(
+    udf: &impl ScalarUDFImpl,
+    array: &ArrayRef,
+    number_rows: usize,
+) -> ColumnarValue {
+    black_box(
+        udf.invoke_with_args(ScalarFunctionArgs {
+            args: vec![ColumnarValue::Array(array.clone())],
+            arg_fields: vec![Field::new("arr", array.data_type().clone(), false).into()],
+            number_rows,
+            return_field: Field::new("result", array.data_type().clone(), false).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        })
+        .unwrap(),
+    )
 }
 
 fn bench_array_union(c: &mut Criterion) {
@@ -139,28 +162,7 @@ fn bench_array_distinct(c: &mut Criterion) {
             group.bench_with_input(
                 BenchmarkId::new(*duplicate_label, array_size),
                 &array_size,
-                |b, _| {
-                    b.iter(|| {
-                        black_box(
-                            udf.invoke_with_args(ScalarFunctionArgs {
-                                args: vec![ColumnarValue::Array(array.clone())],
-                                arg_fields: vec![
-                                    Field::new("arr", array.data_type().clone(), false)
-                                        .into(),
-                                ],
-                                number_rows: NUM_ROWS,
-                                return_field: Field::new(
-                                    "result",
-                                    array.data_type().clone(),
-                                    false,
-                                )
-                                .into(),
-                                config_options: Arc::new(ConfigOptions::default()),
-                            })
-                            .unwrap(),
-                        )
-                    })
-                },
+                |b, _| b.iter(|| invoke_unary_udf(&udf, &array, NUM_ROWS)),
             );
         }
     }
@@ -358,30 +360,80 @@ fn bench_array_distinct_sliced(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::from_parameter(array_size),
             &array_size,
-            |b, _| {
-                b.iter(|| {
-                    black_box(
-                        udf.invoke_with_args(ScalarFunctionArgs {
-                            args: vec![ColumnarValue::Array(array.clone())],
-                            arg_fields: vec![
-                                Field::new("arr", array.data_type().clone(), false)
-                                    .into(),
-                            ],
-                            number_rows: NUM_ROWS,
-                            return_field: Field::new(
-                                "result",
-                                array.data_type().clone(),
-                                false,
-                            )
-                            .into(),
-                            config_options: Arc::new(ConfigOptions::default()),
-                        })
-                        .unwrap(),
-                    )
-                })
-            },
+            |b, _| b.iter(|| invoke_unary_udf(&udf, &array, NUM_ROWS)),
         );
     }
+    group.finish();
+}
+
+fn create_sliced_float_array(backing_values: usize, visible_values: usize) -> ArrayRef {
+    assert!(visible_values > 0 && visible_values <= backing_values);
+
+    let values = Float64Array::from(
+        (0..backing_values)
+            .map(|i| if i.is_multiple_of(2) { -0.0 } else { 0.0 })
+            .collect::<Vec<_>>(),
+    );
+    let left_padding = (backing_values - visible_values) / 2;
+    let offsets = vec![
+        0,
+        left_padding as i32,
+        (left_padding + visible_values) as i32,
+        backing_values as i32,
+    ];
+    let array = ListArray::try_new(
+        Arc::new(Field::new("item", DataType::Float64, true)),
+        OffsetBuffer::new(offsets.into()),
+        Arc::new(values),
+        None,
+    )
+    .unwrap();
+
+    Arc::new(array.slice(1, 1))
+}
+
+fn create_unsliced_float_array(value_count: usize) -> ArrayRef {
+    let values = Float64Array::from(
+        (0..value_count)
+            .map(|i| if i.is_multiple_of(2) { -0.0 } else { 0.0 })
+            .collect::<Vec<_>>(),
+    );
+    Arc::new(ListArray::new(
+        Arc::new(Field::new("item", DataType::Float64, true)),
+        OffsetBuffer::new(vec![0, value_count as i32].into()),
+        Arc::new(values),
+        None,
+    ))
+}
+
+/// Keep the visible list fixed at one `-0.0` and one `0.0` while increasing
+/// the backing values buffer. This isolates work outside the logical slice.
+fn bench_array_distinct_sliced_float(c: &mut Criterion) {
+    let mut group = c.benchmark_group("array_distinct_sliced_float");
+    let udf = ArrayDistinct::new();
+
+    for &backing_values in SLICED_FLOAT_BACKING_VALUES {
+        let array = create_sliced_float_array(backing_values, 2);
+        group.bench_with_input(
+            BenchmarkId::new("backing_values", backing_values),
+            &backing_values,
+            |b, _| b.iter(|| invoke_unary_udf(&udf, &array, 1)),
+        );
+    }
+
+    for &visible_values in SLICED_FLOAT_VISIBLE_VALUES {
+        let array = create_sliced_float_array(1024 * 1024, visible_values);
+        group.bench_with_input(
+            BenchmarkId::new("visible_values", visible_values),
+            &visible_values,
+            |b, _| b.iter(|| invoke_unary_udf(&udf, &array, 1)),
+        );
+    }
+
+    let array = create_unsliced_float_array(1024);
+    group.bench_function("unsliced_values_1024", |b| {
+        b.iter(|| invoke_unary_udf(&udf, &array, 1))
+    });
     group.finish();
 }
 
