@@ -24,7 +24,7 @@ use datafusion_common::DataFusionError;
 use datafusion_common::config::{ConfigNonZeroUsize, SqlParserOptions};
 use datafusion_common::format::{ExplainFormat, ExplainStatementOptions};
 use datafusion_common::{Diagnostic, Span, sql_err};
-use sqlparser::ast::{ExprWithAlias, Ident, OrderByOptions};
+use sqlparser::ast::{ExprWithAlias, Ident, OrderByOptions, OrderBySort};
 use sqlparser::tokenizer::TokenWithSpan;
 use sqlparser::{
     ast::{
@@ -998,10 +998,10 @@ impl<'a> DFParser<'a> {
     pub fn parse_order_by_expr(&mut self) -> Result<OrderByExpr, DataFusionError> {
         let expr = self.parser.parse_expr()?;
 
-        let asc = if self.parser.parse_keyword(Keyword::ASC) {
-            Some(true)
+        let sort = if self.parser.parse_keyword(Keyword::ASC) {
+            Some(OrderBySort::Asc)
         } else if self.parser.parse_keyword(Keyword::DESC) {
-            Some(false)
+            Some(OrderBySort::Desc)
         } else {
             None
         };
@@ -1019,7 +1019,7 @@ impl<'a> DFParser<'a> {
 
         Ok(OrderByExpr {
             expr,
-            options: OrderByOptions { asc, nulls_first },
+            options: OrderByOptions { sort, nulls_first },
             with_fill: None,
         })
     }
@@ -1619,7 +1619,16 @@ mod tests {
                         quote_style: None,
                         span: Span::empty(),
                     }),
-                    options: OrderByOptions { asc, nulls_first },
+                    options: OrderByOptions {
+                        sort: asc.map(|asc| {
+                            if asc {
+                                OrderBySort::Asc
+                            } else {
+                                OrderBySort::Desc
+                            }
+                        }),
+                        nulls_first,
+                    },
                     with_fill: None,
                 }]],
                 ..make_create_external_table("foo.csv")
@@ -1643,7 +1652,7 @@ mod tests {
                         span: Span::empty(),
                     }),
                     options: OrderByOptions {
-                        asc: Some(true),
+                        sort: Some(OrderBySort::Asc),
                         nulls_first: None,
                     },
                     with_fill: None,
@@ -1655,7 +1664,7 @@ mod tests {
                         span: Span::empty(),
                     }),
                     options: OrderByOptions {
-                        asc: Some(false),
+                        sort: Some(OrderBySort::Desc),
                         nulls_first: Some(true),
                     },
                     with_fill: None,
@@ -1688,7 +1697,7 @@ mod tests {
                     })),
                 },
                 options: OrderByOptions {
-                    asc: Some(true),
+                    sort: Some(OrderBySort::Asc),
                     nulls_first: None,
                 },
                 with_fill: None,
@@ -1731,7 +1740,7 @@ mod tests {
                     })),
                 },
                 options: OrderByOptions {
-                    asc: Some(true),
+                    sort: Some(OrderBySort::Asc),
                     nulls_first: None,
                 },
                 with_fill: None,
@@ -1795,7 +1804,7 @@ mod tests {
                     })),
                 },
                 options: OrderByOptions {
-                    asc: Some(true),
+                    sort: Some(OrderBySort::Asc),
                     nulls_first: None,
                 },
                 with_fill: None,

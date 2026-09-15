@@ -596,6 +596,9 @@ physical_plan
 statement error This feature is not implemented: Calling array_agg: LIMIT not supported in function arguments: 1
 SELECT array_agg(c13 LIMIT 1) FROM aggregate_test_100
 
+statement error This feature is not implemented: Calling array_agg: WHERE not supported in function arguments: c2 > 1
+SELECT array_agg(c13 WHERE c2 > 1) FROM aggregate_test_100
+
 query error Error during planning: WITHIN GROUP is only supported for ordered-set aggregate functions
 SELECT array_agg(a_varchar) WITHIN GROUP (ORDER BY a_varchar)
 FROM (VALUES ('a'), ('d'), ('c'), ('a')) t(a_varchar);

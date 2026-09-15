@@ -241,6 +241,18 @@ statement error DataFusion error: This feature is not implemented: MERGE INSERT 
 merge into target using source on target.id = source.id
 when not matched then insert row;
 
+statement error DataFusion error: This feature is not implemented: MERGE UPDATE SET \* is not supported
+merge into target using source on target.id = source.id
+when matched then update set *;
+
+statement error DataFusion error: This feature is not implemented: MERGE INSERT \* is not supported
+merge into target using source on target.id = source.id
+when not matched then insert *;
+
+statement error DataFusion error: This feature is not implemented: MERGE DO NOTHING is not supported
+merge into target using source on target.id = source.id
+when matched then do nothing;
+
 statement ok
 drop table target;
 
