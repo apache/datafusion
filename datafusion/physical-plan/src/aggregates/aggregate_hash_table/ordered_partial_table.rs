@@ -89,26 +89,27 @@ impl OrderedAggregateTable<PartialMarker> {
         )
     }
 
-    /// Emits the next batch of partial state rows for groups proven complete by
-    /// the input ordering.
+    /// Materializes all groups proven complete by the input ordering, leaving
+    /// the active ordered-key range in the table.
     ///
-    /// For example, when the query is `GROUP BY a` and the input is ordered by
-    /// `a`, seeing a latest input row with `a = 3` means all groups with `a < 3`
-    /// are complete and safe to emit.
-    ///
-    /// Key steps:
-    /// 1. Ask `group_ordering` to decide how many groups can be emitted eagerly.
-    /// 2. Remove the emitted groups from `group_ordering`, `GroupValues`, and
-    ///    all `GroupsAccumulator`s.
-    ///
-    /// This may output small batches. Avoiding tiny batches is left to future
-    /// ordered-aggregation optimizations.
-    pub(in crate::aggregates) fn next_output_batch(
+    /// For `GROUP BY a, b` ordered by `a`, seeing a new `a` completes every group
+    /// with the previous `a`. Remove that entire prefix once: removing only
+    /// `batch_size` groups at a time repeatedly shifts the remaining hash table
+    /// and accumulator indexes. The stream slices the materialized batch instead.
+    pub(in crate::aggregates) fn take_completed_state_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
-        self.next_output_batch_inner(
+        if self.is_empty() {
+            return Ok(None);
+        }
+        let Some(emit_to) = self.group_ordering().emit_to() else {
+            return Ok(None);
+        };
+        self.materialize_groups(
+            emit_to,
             HashAggregateAccumulator::state,
             AccumulatorPhase::State,
         )
+        .map(Some)
     }
 }
