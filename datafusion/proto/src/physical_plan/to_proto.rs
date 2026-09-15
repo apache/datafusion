@@ -336,7 +336,15 @@ pub fn serialize_physical_expr_with_converter(
                 Ok(protobuf::PhysicalExprNode {
                     expr_id,
                     expr_type: Some(protobuf::physical_expr_node::ExprType::Extension(
-                        protobuf::PhysicalExtensionExprNode { expr: buf, inputs },
+                        protobuf::PhysicalExtensionExprNode {
+                            expr: buf,
+                            inputs,
+                            // The codec *is* the discriminator on this path,
+                            // so no name is written. Expressions that want
+                            // registry decoding write their own node from
+                            // `try_to_proto`.
+                            expr_name: None,
+                        },
                     )),
                 })
             }
