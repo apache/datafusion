@@ -7168,6 +7168,19 @@ select count(*) over (order by d, l) from (values (arrow_cast(1, 'Duration(Secon
 query error Error during planning: RANGE window frames are not supported for ORDER BY type List
 select count(*) over (order by d, l) from (values (arrow_cast(1, 'Duration(Second)'), [struct(1)]), (arrow_cast(1, 'Duration(Second)'), [struct(2)])) t(d, l)
 
+# the check mirrors the arrow comparison kernels, not `DataType::is_nested`:
+# the kernels unwrap a single dictionary layer, so a list of doubly
+# dictionary-encoded strings is also rejected at planning
+query error Error during planning: RANGE window frames are not supported for ORDER BY type List
+select count(*) over (order by d, l) from (values (arrow_cast(1, 'Duration(Second)'), [arrow_cast(arrow_cast('a', 'Dictionary(UInt32, Utf8)'), 'Dictionary(Int32, Dictionary(UInt32, Utf8))')])) t(d, l)
+
+# while a single dictionary layer compares fine
+query I
+select count(*) over (order by d, l) from (values (arrow_cast(1, 'Duration(Second)'), [arrow_cast('a', 'Dictionary(Int32, Utf8)')]), (arrow_cast(1, 'Duration(Second)'), [arrow_cast('b', 'Dictionary(Int32, Utf8)')])) t(d, l)
+----
+1
+2
+
 # Window functions are not allowed in WHERE or HAVING: both are evaluated before
 # window functions are computed, so they are rejected during planning
 # issue: https://github.com/apache/datafusion/issues/4610
