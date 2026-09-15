@@ -55,8 +55,8 @@ impl TreeNodeRewriter for ShortenInListSimplifier {
             )
         {
             let first_val = list[0].clone();
-            if negated {
-                return Ok(Transformed::yes(list.iter().skip(1).cloned().fold(
+            return if negated {
+                Ok(Transformed::yes(list.iter().skip(1).cloned().fold(
                     (*expr.clone()).not_eq(first_val),
                     |acc, y| {
                         // Note that `A and B and C and D` is a left-deep tree structure
@@ -78,16 +78,16 @@ impl TreeNodeRewriter for ShortenInListSimplifier {
                         // The code below maintain the left-deep tree structure.
                         acc.and((*expr.clone()).not_eq(y))
                     },
-                )));
+                )))
             } else {
-                return Ok(Transformed::yes(list.iter().skip(1).cloned().fold(
+                Ok(Transformed::yes(list.iter().skip(1).cloned().fold(
                     (*expr.clone()).eq(first_val),
                     |acc, y| {
                         // Same reasoning as above
                         acc.or((*expr.clone()).eq(y))
                     },
-                )));
-            }
+                )))
+            };
         }
 
         Ok(Transformed::no(expr))

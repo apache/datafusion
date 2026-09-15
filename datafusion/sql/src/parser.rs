@@ -756,9 +756,8 @@ impl<'a> DFParser<'a> {
                 let token = self.parser.peek_token();
                 if token == Token::EOF || token == Token::SemiColon {
                     break;
-                } else {
-                    return self.expected("end of statement or ;", &token)?;
                 }
+                return self.expected("end of statement or ;", &token)?;
             }
         }
 
@@ -1208,9 +1207,8 @@ impl<'a> DFParser<'a> {
                 let token = self.parser.peek_token();
                 if token == Token::EOF || token == Token::SemiColon {
                     break;
-                } else {
-                    return self.expected("end of statement or ;", &token)?;
                 }
+                return self.expected("end of statement or ;", &token)?;
             }
         }
 

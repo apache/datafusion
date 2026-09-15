@@ -429,7 +429,7 @@ impl<T: Send + SizedMessage + 'static> MemoryBufferedStream<T> {
                 // in order to consider aborting the stream
                 let item_or_err = tokio::select! {
                     biased;
-                    _ = batch_tx.closed() => break,
+                    () = batch_tx.closed() => break,
                     // Catch a panic in the input poll so it surfaces as a stream error
                     // instead of dropping `batch_tx` and looking like a clean EOF.
                     polled = AssertUnwindSafe(input.next()).catch_unwind() => {

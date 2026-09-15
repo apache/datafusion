@@ -425,12 +425,11 @@ fn derive_common_ordering_from_files(file_groups: &[FileGroup]) -> Option<LexOrd
                             "Cannot derive common ordering: no common prefix between orderings {current:?} and {ordering:?}"
                         );
                         return None;
-                    } else {
-                        let ordering =
-                            LexOrdering::new(current.as_ref()[..prefix_len].to_vec())
-                                .expect("prefix_len > 0, so ordering must be valid");
-                        CurrentOrderingState::SomeOrdering(ordering)
                     }
+                    let ordering =
+                        LexOrdering::new(current.as_ref()[..prefix_len].to_vec())
+                            .expect("prefix_len > 0, so ordering must be valid");
+                    CurrentOrderingState::SomeOrdering(ordering)
                 }
                 // If one file has ordering and another doesn't, no common ordering
                 // Return None and log a trace message explaining why

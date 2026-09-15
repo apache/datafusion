@@ -795,12 +795,12 @@ async fn stream_yields(
         result = join_handle => {
             match result {
                 Ok(Poll::Pending) => Yielded::ReadyOrPending,
-                Ok(Poll::Ready(Ok(_))) => Yielded::ReadyOrPending,
+                Ok(Poll::Ready(Ok(()))) => Yielded::ReadyOrPending,
                 Ok(Poll::Ready(Err(e))) => Yielded::Err(e),
                 Err(_) => Yielded::Err(exec_datafusion_err!("join error")),
             }
         },
-        _ = tokio::time::sleep(Duration::from_secs(10)) => {
+        () = tokio::time::sleep(Duration::from_secs(10)) => {
             Yielded::Timeout
         }
     };

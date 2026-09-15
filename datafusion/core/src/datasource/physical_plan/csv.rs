@@ -764,7 +764,7 @@ mod tests {
 
         // get name of first part
         let paths = fs::read_dir(&out_dir).unwrap();
-        let mut part_0_name: String = "".to_owned();
+        let mut part_0_name: String = String::new();
         for path in paths {
             let path = path.unwrap();
             let name = path

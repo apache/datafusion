@@ -51,20 +51,20 @@ impl TreeNodeRewriter for PhysicalColumnRewriter<'_> {
         node: Self::Node,
     ) -> datafusion_common::Result<Transformed<Self::Node>> {
         if let Some(column) = node.downcast_ref::<Column>() {
-            if let Some(new_column) = self.column_map.get(column) {
+            return if let Some(new_column) = self.column_map.get(column) {
                 // jump to prevent rewriting the new sub-expression again
-                return Ok(Transformed::new(
+                Ok(Transformed::new(
                     Arc::clone(new_column),
                     true,
                     TreeNodeRecursion::Jump,
-                ));
+                ))
             } else {
                 // Column not found in mapping
-                return Err(DataFusionError::Internal(format!(
+                Err(DataFusionError::Internal(format!(
                     "Column {column:?} not found in column mapping {:?}",
                     self.column_map
-                )));
-            }
+                )))
+            };
         }
         Ok(Transformed::no(node))
     }

@@ -210,7 +210,7 @@ mod tests {
                 assert_eq!(12, batch.num_columns());
                 assert_eq!(2, batch.num_rows());
             })
-            .fold(0, |acc, _| async move { acc + 1i32 })
+            .fold(0, |acc, ()| async move { acc + 1i32 })
             .await;
 
         assert_eq!(tt_batches, 50 /* 100/2 */);

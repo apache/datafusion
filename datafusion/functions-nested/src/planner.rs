@@ -85,13 +85,13 @@ impl ExprPlanner for NestedFunctionPlanner {
             let right_list_ndims = list_ndims(&right_type);
             // if both are list
             if left_list_ndims > 0 && right_list_ndims > 0 {
-                if op == BinaryOperator::AtArrow {
+                return if op == BinaryOperator::AtArrow {
                     // array1 @> array2 -> array_has_all(array1, array2)
-                    return Ok(PlannerResult::Planned(array_has_all(left, right)));
+                    Ok(PlannerResult::Planned(array_has_all(left, right)))
                 } else {
                     // array1 <@ array2 -> array_has_all(array2, array1)
-                    return Ok(PlannerResult::Planned(array_has_all(right, left)));
-                }
+                    Ok(PlannerResult::Planned(array_has_all(right, left)))
+                };
             }
         }
 
