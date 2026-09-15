@@ -69,6 +69,7 @@ use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::memory::LazyMemoryExec;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::proto::ExprDecodeSession;
 use datafusion_physical_plan::proto::{
     ExecutionPlanDecode, ExecutionPlanDecodeCtx, ExecutionPlanEncode,
     ExecutionPlanEncodeCtx,
@@ -1716,7 +1717,7 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync + Any {
         &self,
         _buf: &[u8],
         _inputs: &[Arc<dyn PhysicalExpr>],
-        _ctx: &PhysicalExprDecodeCtx<'_>,
+        _ctx: &PhysicalExprDecodeCtx<'_, ExprDecodeSession<'_>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         not_impl_err!("PhysicalExtensionCodec is not provided")
     }
