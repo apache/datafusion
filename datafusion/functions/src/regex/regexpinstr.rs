@@ -390,17 +390,20 @@ fn get_index(
     };
     let search_slice = &value[byte_start_offset..];
 
-    // A subexpression, when requested, takes precedence over the N-th match.
+    // `n` is 1-based, `nth` is 0-based.
+    let nth = (n - 1) as usize;
+
+    // A subexpression, when requested, is located within the N-th match.
     let match_start = if subexpr > 0 {
         pattern
-            .captures(search_slice)
+            .captures_iter(search_slice)
+            .nth(nth)
             .and_then(|captures| captures.get(subexpr as usize))
             .map(|matched| matched.start())
     } else {
-        // `n` is 1-based, `nth` is 0-based.
         pattern
             .find_iter(search_slice)
-            .nth((n - 1) as usize)
+            .nth(nth)
             .map(|matched| matched.start())
     };
 
@@ -685,13 +688,29 @@ mod tests {
     }
 
     fn test_case_sensitive_regexp_instr_scalar_subexp() {
-        let values = ["12 abc def ghi 34"];
-        let regex = ["(abc) (def) (ghi)"];
-        let start = [1];
-        let nth = [1];
-        let flags = ["i"];
-        let subexps = [2];
-        let expected: Vec<i64> = vec![8];
+        // The first row locates a subexpression in the only match. The rest
+        // locate one in the N-th match, including an N that has no match.
+        let values = [
+            "12 abc def ghi 34",
+            "12 abc def ghi 34 abc def ghi 56",
+            "12 abc def ghi 34 abc def ghi 56",
+            "12 abc def ghi 34 abc def ghi 56",
+            "12 abc def ghi 34 abc def ghi 56",
+            "12 abc def ghi 34 abc def ghi 56",
+        ];
+        let regex = [
+            "(abc) (def) (ghi)",
+            "(abc) (def) (ghi)",
+            "(abc) (def) (ghi)",
+            "(abc) (def) (ghi)",
+            "(abc) (def) (ghi)",
+            "(abc) (def) (ghi)",
+        ];
+        let start = [1, 1, 1, 1, 1, 18];
+        let nth = [1, 2, 2, 2, 3, 1];
+        let flags = ["i", "i", "i", "i", "i", "i"];
+        let subexps = [2, 1, 2, 3, 1, 2];
+        let expected: Vec<i64> = vec![8, 19, 23, 27, 0, 23];
 
         izip!(
             values.iter(),
