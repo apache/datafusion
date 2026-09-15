@@ -16,11 +16,11 @@
 // under the License.
 
 //! This example demonstrates extending the DataFusion SQL parser to support
-//! custom DDL statements, specifically `CREATE EXTERNAL CATALOG`.
+//! custom DDL statements, specifically `CREATE FOREIGN CATALOG`.
 //!
 //! ### Custom Syntax
 //! ```sql
-//! CREATE EXTERNAL CATALOG my_catalog
+//! CREATE FOREIGN CATALOG my_catalog
 //! STORED AS ICEBERG
 //! LOCATION 's3://my-bucket/warehouse/'
 //! OPTIONS (
@@ -59,7 +59,7 @@ use object_store::local::LocalFileSystem;
 
 /// Entry point for the example.
 pub async fn custom_sql_parser() -> Result<()> {
-    // Use standard Parquet testing data as our "external" source.
+    // Use standard Parquet testing data as our "foreign" source.
     let base_path = datafusion::common::test_util::parquet_test_data();
     let base_path = std::path::Path::new(&base_path).canonicalize()?;
 
@@ -71,7 +71,7 @@ pub async fn custom_sql_parser() -> Result<()> {
         .unwrap_or_else(|_| base_path.to_string_lossy().to_string());
 
     let create_catalog_sql = format!(
-        "CREATE EXTERNAL CATALOG parquet_testing
+        "CREATE FOREIGN CATALOG parquet_testing
          STORED AS parquet
          LOCATION 'local://workspace/{location}'
          OPTIONS (
@@ -90,10 +90,10 @@ pub async fn custom_sql_parser() -> Result<()> {
     let err = ctx_standard
         .sql(&create_catalog_sql)
         .await
-        .expect_err("Expected the standard parser to reject CREATE EXTERNAL CATALOG (custom DDL syntax)");
+        .expect_err("Expected the standard parser to reject CREATE FOREIGN CATALOG (custom DDL syntax)");
 
     println!("Error: {err}\n");
-    assert_snapshot!(err.to_string(), @r#"SQL error: ParserError("Expected: TABLE, found: CATALOG at Line: 1, Column: 17")"#);
+    assert_snapshot!(err.to_string(), @r#"SQL error: ParserError("Expected: an object type after CREATE, found: FOREIGN at Line: 1, Column: 8")"#);
 
     // =========================================================================
     // Part 2: Custom parser handles the statement
@@ -106,11 +106,11 @@ pub async fn custom_sql_parser() -> Result<()> {
     let mut parser = CustomParser::new(&create_catalog_sql)?;
     let statement = parser.parse_statement()?;
     match statement {
-        CustomStatement::CreateExternalCatalog(stmt) => {
-            handle_create_external_catalog(&ctx, stmt).await?;
+        CustomStatement::CreateForeignCatalog(stmt) => {
+            handle_create_foreign_catalog(&ctx, stmt).await?;
         }
         CustomStatement::DFStatement(_) => {
-            panic!("Expected CreateExternalCatalog statement");
+            panic!("Expected CreateForeignCatalog statement");
         }
     }
 
@@ -141,10 +141,10 @@ async fn execute_sql(ctx: &SessionContext, sql: &str) -> Result<String> {
     Ok(arrow::util::pretty::pretty_format_batches(&batches)?.to_string())
 }
 
-/// Custom handler for the `CREATE EXTERNAL CATALOG` statement.
-async fn handle_create_external_catalog(
+/// Custom handler for the `CREATE FOREIGN CATALOG` statement.
+async fn handle_create_foreign_catalog(
     ctx: &SessionContext,
-    stmt: CreateExternalCatalog,
+    stmt: CreateForeignCatalog,
 ) -> Result<()> {
     let factory = ListingTableFactory::new();
     let catalog = Arc::new(MemoryCatalogProvider::new());
@@ -240,13 +240,13 @@ async fn handle_create_external_catalog(
 pub enum CustomStatement {
     /// Standard DataFusion statement
     DFStatement(Box<Statement>),
-    /// Custom `CREATE EXTERNAL CATALOG` statement
-    CreateExternalCatalog(CreateExternalCatalog),
+    /// Custom `CREATE FOREIGN CATALOG` statement
+    CreateForeignCatalog(CreateForeignCatalog),
 }
 
-/// Data structure for `CREATE EXTERNAL CATALOG`.
+/// Data structure for `CREATE FOREIGN CATALOG`.
 #[derive(Debug, Clone)]
-pub struct CreateExternalCatalog {
+pub struct CreateForeignCatalog {
     pub name: ObjectName,
     pub catalog_type: String,
     pub location: String,
@@ -257,16 +257,16 @@ impl Display for CustomStatement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::DFStatement(s) => write!(f, "{s}"),
-            Self::CreateExternalCatalog(s) => write!(f, "{s}"),
+            Self::CreateForeignCatalog(s) => write!(f, "{s}"),
         }
     }
 }
 
-impl Display for CreateExternalCatalog {
+impl Display for CreateForeignCatalog {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "CREATE EXTERNAL CATALOG {} STORED AS {} LOCATION '{}'",
+            "CREATE FOREIGN CATALOG {} STORED AS {} LOCATION '{}'",
             self.name, self.catalog_type, self.location
         )?;
         if !self.options.is_empty() {
@@ -296,26 +296,26 @@ impl<'a> CustomParser<'a> {
     }
 
     pub fn parse_statement(&mut self) -> Result<CustomStatement> {
-        if self.is_create_external_catalog() {
-            return self.parse_create_external_catalog();
+        if self.is_create_foreign_catalog() {
+            return self.parse_create_foreign_catalog();
         }
         Ok(CustomStatement::DFStatement(Box::new(
             self.df_parser.parse_statement()?,
         )))
     }
 
-    fn is_create_external_catalog(&self) -> bool {
+    fn is_create_foreign_catalog(&self) -> bool {
         let t1 = &self.df_parser.parser.peek_nth_token(0).token;
         let t2 = &self.df_parser.parser.peek_nth_token(1).token;
         let t3 = &self.df_parser.parser.peek_nth_token(2).token;
 
         matches!(t1, Token::Word(w) if w.keyword == Keyword::CREATE)
-            && matches!(t2, Token::Word(w) if w.keyword == Keyword::EXTERNAL)
+            && matches!(t2, Token::Word(w) if w.keyword == Keyword::FOREIGN)
             && matches!(t3, Token::Word(w) if w.value.to_uppercase() == "CATALOG")
     }
 
-    fn parse_create_external_catalog(&mut self) -> Result<CustomStatement> {
-        // Consume prefix tokens: CREATE EXTERNAL CATALOG
+    fn parse_create_foreign_catalog(&mut self) -> Result<CustomStatement> {
+        // Consume prefix tokens: CREATE FOREIGN CATALOG
         for _ in 0..3 {
             self.df_parser.parser.next_token();
         }
@@ -373,8 +373,8 @@ impl<'a> CustomParser<'a> {
             }
         }
 
-        Ok(CustomStatement::CreateExternalCatalog(
-            CreateExternalCatalog {
+        Ok(CustomStatement::CreateForeignCatalog(
+            CreateForeignCatalog {
                 name,
                 catalog_type: catalog_type
                     .ok_or_else(|| plan_datafusion_err!("Missing STORED AS"))?,
