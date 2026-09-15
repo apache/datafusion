@@ -33,7 +33,8 @@ use datafusion_expr::expr::{Alias, GroupingSet};
 use datafusion_expr::logical_plan::{Join, JoinType};
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{
-    collect_subquery_cols, conjunction, find_join_exprs, split_conjunction,
+    collect_subquery_cols, collect_subquery_join_exprs, conjunction, find_join_exprs,
+    split_conjunction,
 };
 use datafusion_expr::{
     BinaryExpr, Cast, Distinct, EmptyRelation, Expr, ExprSchemable, FetchType,
@@ -91,6 +92,14 @@ pub struct PullUpCorrelatedExpr {
     /// The list is cleared when the pull up passes a node that can put a NULL
     /// back into such a column: an outer join, a union or a grouping set.
     pub correlated_filters: Vec<Expr>,
+    /// A correlated column wrapped in an expression (e.g. `CAST(t2.b AS INT)`)
+    /// gets grouped by that entire expression instead of the bare column,
+    /// aliased to a generated name, once, in the `Aggregate` this column belongs to. Every
+    /// later reference to that column, in a `Projection` above it for
+    /// instance, needs to use the same alias instead of the now
+    /// unresolvable bare column. This records the mapping the first
+    /// time it's made.
+    correlated_col_aliases: HashMap<Column, Expr>,
 }
 
 impl Default for PullUpCorrelatedExpr {
@@ -113,6 +122,7 @@ impl PullUpCorrelatedExpr {
             pull_up_having_expr: None,
             pulled_up_scalar_agg: false,
             correlated_filters: Vec::new(),
+            correlated_col_aliases: HashMap::new(),
         }
     }
 
@@ -372,8 +382,6 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     self.pull_up_having_expr = Some(combined);
                     let new_plan =
                         LogicalPlanBuilder::from((*plan_filter.input).clone()).build()?;
-                    // This filter has no correlated column of its own, but
-                    // the aggregate underneath it does.
                     let mut carried_correlated_cols = correlated_subquery_cols;
                     if let Some(existing) =
                         self.correlated_subquery_cols_map.get(&*plan_filter.input)
@@ -434,8 +442,11 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     &mut local_correlated_cols,
                 );
                 // add missing columns to Projection
-                let mut missing_exprs =
-                    self.collect_missing_exprs(&projection.expr, &local_correlated_cols)?;
+                let mut missing_exprs = self.collect_missing_exprs(
+                    &projection.expr,
+                    &local_correlated_cols,
+                    projection.input.schema(),
+                )?;
 
                 let mut expr_result_map_for_count_bug = HashMap::new();
                 if let Some(expr_result_map) =
@@ -481,7 +492,6 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     &self.correlated_subquery_cols_map,
                     &mut local_correlated_cols,
                 );
-
                 // A grouping set cannot take the columns the pull up adds.
                 // `LogicalPlanBuilder::aggregate` cross joins a plain group
                 // expression with the sets that are already there, so `ROLLUP(i.k)`,
@@ -517,6 +527,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         self.collect_missing_exprs(
                             &aggregate.group_expr,
                             &local_correlated_cols,
+                            aggregate.input.schema(),
                         )?
                     }
                 } else {
@@ -524,6 +535,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     self.collect_missing_exprs(
                         &aggregate.group_expr,
                         &local_correlated_cols,
+                        aggregate.input.schema(),
                     )?
                 };
 
@@ -568,8 +580,16 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 );
                 let mut new_correlated_cols = BTreeSet::new();
                 for col in local_correlated_cols.iter() {
-                    new_correlated_cols
-                        .insert(Column::new(Some(alias.alias.clone()), col.name.clone()));
+                    let requalified =
+                        Column::new(Some(alias.alias.clone()), col.name.clone());
+                    // A column already folded into a group-by alias (see
+                    // `collect_missing_exprs`) needs that mapping carried
+                    // forward under its requalified name.
+                    if let Some(existing_alias) = self.correlated_col_aliases.get(col) {
+                        self.correlated_col_aliases
+                            .insert(requalified.clone(), existing_alias.clone());
+                    }
+                    new_correlated_cols.insert(requalified);
                 }
 
                 let new_plan = if alias.input.schema().fields().len()
@@ -722,9 +742,10 @@ impl PullUpCorrelatedExpr {
     }
 
     fn collect_missing_exprs(
-        &self,
+        &mut self,
         exprs: &[Expr],
         correlated_subquery_cols: &BTreeSet<Column>,
+        subquery_schema: &DFSchemaRef,
     ) -> Result<Vec<Expr>> {
         let mut missing_exprs = vec![];
         for expr in exprs {
@@ -732,8 +753,53 @@ impl PullUpCorrelatedExpr {
                 missing_exprs.push(expr.clone())
             }
         }
+        // A correlated column compared bare (`t1.a = t2.b`) only ever
+        // matches one row per value, so grouping the subquery's own
+        // aggregate by that column is enough. But if the join filter
+        // wraps it in an expression (`t1.a = CAST(t2.b AS INT)`), two
+        // different column values can compare equal after the cast, and
+        // grouping by the bare column would compute the aggregate once
+        // per underlying value instead of once per outer row it actually
+        // joins against. Grouping by the wrapping expression instead
+        // keeps those together, matching what the join predicate itself
+        // treats as equal.
+        let join_filter_exprs =
+            collect_subquery_join_exprs(&self.join_filters, subquery_schema)?;
         for col in correlated_subquery_cols.iter() {
-            let col_expr = Expr::Column(col.clone());
+            if let Some(existing_alias) = self.correlated_col_aliases.get(col) {
+                if !collides_with_existing(&missing_exprs, existing_alias) {
+                    missing_exprs.push(existing_alias.clone())
+                }
+                continue;
+            }
+            let wrapped = join_filter_exprs
+                .iter()
+                .find(|e| e.column_refs().len() == 1 && e.column_refs().contains(col));
+            let col_expr = match wrapped {
+                Some(e) if !matches!(e, Expr::Column(_)) => {
+                    let alias_name = format!("__correlated_group_expr_{}", col.name);
+                    let aliased = e.clone().alias(alias_name.clone());
+                    let reference = Expr::Column(Column::new_unqualified(&alias_name));
+                    self.join_filters = self
+                        .join_filters
+                        .iter()
+                        .map(|f| {
+                            f.clone()
+                                .transform_up(|node| {
+                                    if &node == e {
+                                        Ok(Transformed::yes(reference.clone()))
+                                    } else {
+                                        Ok(Transformed::no(node))
+                                    }
+                                })
+                                .data()
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    self.correlated_col_aliases.insert(col.clone(), reference);
+                    aliased
+                }
+                _ => Expr::Column(col.clone()),
+            };
             if !collides_with_existing(&missing_exprs, &col_expr) {
                 missing_exprs.push(col_expr)
             }
