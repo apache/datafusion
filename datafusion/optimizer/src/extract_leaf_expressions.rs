@@ -30,6 +30,7 @@ use datafusion_common::{Column, DFSchema, Result, qualified_name};
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{Expr, ExpressionPlacement, Projection};
 
+use crate::common_subexpr_eliminate::references_cse_common_expr;
 use crate::optimizer::ApplyOrder;
 use crate::push_down_filter::replace_cols_by_name;
 use crate::utils::{ColumnReference, has_all_column_refs, schema_columns};
@@ -377,6 +378,23 @@ fn routing_extract(
         }
 
         match e.placement() {
+            // `CommonSubexprEliminate` can turn a `KeepInPlace` argument (e.g. a
+            // UDF call reused elsewhere) into a plain `Column` reference to a
+            // `__common_expr_N` it defines in a projection of its own. That
+            // column reference is indistinguishable, at the `ExpressionPlacement`
+            // level, from a genuine cheap base-table column — so a wrapping
+            // expression like `get_field(__common_expr_N, key)` can legitimately
+            // evaluate to `MoveTowardsLeafNodes`. Extracting and pushing it down
+            // would require re-deriving `__common_expr_N`'s (potentially
+            // expensive) defining expression once it's pushed below the point
+            // that column is computed — silently duplicating work CSE already
+            // deduplicated. Skip such expressions so they stay exactly where
+            // CSE put them.
+            ExpressionPlacement::MoveTowardsLeafNodes
+                if references_cse_common_expr(&e) =>
+            {
+                Ok(Transformed::no(e))
+            }
             ExpressionPlacement::MoveTowardsLeafNodes => {
                 if let Some(idx) = find_owning_input(&e, input_column_sets) {
                     let col_ref = extractors[idx].add_extracted(e)?;

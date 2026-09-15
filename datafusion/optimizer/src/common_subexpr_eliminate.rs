@@ -40,6 +40,14 @@ use datafusion_expr::{
 
 const CSE_PREFIX: &str = "__common_expr";
 
+/// Returns `true` if `expr` references a column that is itself a
+/// CSE-synthesized `__common_expr_N` alias.
+pub(crate) fn references_cse_common_expr(expr: &Expr) -> bool {
+    expr.column_refs()
+        .iter()
+        .any(|c| c.relation.is_none() && c.name.starts_with(CSE_PREFIX))
+}
+
 /// Performs Common Sub-expression Elimination optimization.
 ///
 /// This optimization improves query performance by computing expressions that
