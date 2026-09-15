@@ -220,6 +220,24 @@ Rust doc comments are validated by rustdoc in CI and can be checked locally with
 bash ci/scripts/rust_docs.sh
 ```
 
+## ASF Status Check Validation
+
+`ci/scripts/check_asf_yaml_status_checks.py` checks that every required status
+check in `.asf.yaml` matches a job in `.github/workflows`. `./dev/rust_lint.sh`
+runs it and needs `python3` with [PyYAML]:
+
+```shell
+python3 -m pip install pyyaml
+```
+
+To run the check on its own:
+
+```shell
+python3 ci/scripts/check_asf_yaml_status_checks.py
+```
+
+[pyyaml]: https://pypi.org/project/PyYAML/
+
 ## Benchmarks
 
 ### Criterion Benchmarks
