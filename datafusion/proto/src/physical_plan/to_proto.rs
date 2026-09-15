@@ -284,7 +284,11 @@ pub fn serialize_physical_expr_with_converter(
         proto_converter,
     };
     let ctx = datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx::new(&encoder);
-    if let Some(node) = expr.try_to_proto(&ctx)? {
+    if let Some(mut node) = expr.try_to_proto(&ctx)? {
+        // The identity used for deduplication is the driver's to stamp, not
+        // each expression's: a hook that returns its own node otherwise loses
+        // it, and every built-in writes `expr_id: None`.
+        node.expr_id = expr_id;
         return Ok(node);
     }
 
