@@ -23,7 +23,8 @@ use crate::protobuf_common::{
     EmptyMessage, arrow_type::ArrowTypeEnum, scalar_value::Value,
 };
 use arrow::array::{ArrayRef, RecordBatch};
-use arrow::csv::{QuoteStyle, WriterBuilder};
+use arrow::csv::QuoteStyle;
+use arrow::csv::writer::Terminator;
 use arrow::datatypes::{
     DataType, Field, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, Schema,
     SchemaRef, TimeUnit, UnionMode,
@@ -872,10 +873,46 @@ impl TryFrom<&CsvWriterOptions> for protobuf::CsvWriterOptions {
     type Error = DataFusionError;
 
     fn try_from(opts: &CsvWriterOptions) -> datafusion_common::Result<Self, Self::Error> {
-        Ok(csv_writer_options_to_proto(
-            &opts.writer_options,
-            &opts.compression,
-        ))
+        let CsvWriterOptions {
+            writer_options,
+            compression,
+            compression_level,
+        } = opts;
+        let compression: protobuf::CompressionTypeVariant = compression.into();
+        let quote_style: protobuf::CsvQuoteStyle = writer_options.quote_style().into();
+        let terminator = match writer_options.line_terminator() {
+            Terminator::CRLF => b"\r\n".to_vec(),
+            Terminator::Any(byte) => vec![*byte],
+        };
+
+        Ok(protobuf::CsvWriterOptions {
+            compression: compression.into(),
+            delimiter: (writer_options.delimiter() as char).to_string(),
+            has_header: writer_options.header(),
+            date_format: writer_options.date_format().unwrap_or_default().to_owned(),
+            datetime_format: writer_options
+                .datetime_format()
+                .unwrap_or_default()
+                .to_owned(),
+            timestamp_format: writer_options
+                .timestamp_format()
+                .unwrap_or_default()
+                .to_owned(),
+            time_format: writer_options.time_format().unwrap_or_default().to_owned(),
+            null_value: writer_options.null().to_owned(),
+            quote: (writer_options.quote() as char).to_string(),
+            escape: (writer_options.escape() as char).to_string(),
+            double_quote: writer_options.double_quote(),
+            quote_style: quote_style.into(),
+            ignore_leading_whitespace: writer_options.ignore_leading_whitespace(),
+            ignore_trailing_whitespace: writer_options.ignore_trailing_whitespace(),
+            compression_level: *compression_level,
+            timestamp_tz_format: writer_options
+                .timestamp_tz_format()
+                .unwrap_or_default()
+                .to_owned(),
+            terminator,
+        })
     }
 }
 
@@ -1174,28 +1211,4 @@ where
         .into_iter()
         .map(|field| field.as_ref().try_into())
         .collect::<Result<Vec<_>, Error>>()
-}
-
-pub(crate) fn csv_writer_options_to_proto(
-    csv_options: &WriterBuilder,
-    compression: &CompressionTypeVariant,
-) -> protobuf::CsvWriterOptions {
-    let compression: protobuf::CompressionTypeVariant = compression.into();
-    let quote_style: protobuf::CsvQuoteStyle = csv_options.quote_style().into();
-    protobuf::CsvWriterOptions {
-        compression: compression.into(),
-        delimiter: (csv_options.delimiter() as char).to_string(),
-        has_header: csv_options.header(),
-        date_format: csv_options.date_format().unwrap_or("").to_owned(),
-        datetime_format: csv_options.datetime_format().unwrap_or("").to_owned(),
-        timestamp_format: csv_options.timestamp_format().unwrap_or("").to_owned(),
-        time_format: csv_options.time_format().unwrap_or("").to_owned(),
-        null_value: csv_options.null().to_owned(),
-        quote: (csv_options.quote() as char).to_string(),
-        escape: (csv_options.escape() as char).to_string(),
-        double_quote: csv_options.double_quote(),
-        quote_style: quote_style.into(),
-        ignore_leading_whitespace: csv_options.ignore_leading_whitespace(),
-        ignore_trailing_whitespace: csv_options.ignore_trailing_whitespace(),
-    }
 }

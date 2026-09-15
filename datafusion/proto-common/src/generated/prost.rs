@@ -630,6 +630,15 @@ pub struct CsvWriterOptions {
     /// Whether to ignore trailing whitespace in string values
     #[prost(bool, tag = "14")]
     pub ignore_trailing_whitespace: bool,
+    /// Optional compression level
+    #[prost(uint32, optional, tag = "15")]
+    pub compression_level: ::core::option::Option<u32>,
+    /// Optional timestamp format for timestamp with timezone arrays
+    #[prost(string, tag = "16")]
+    pub timestamp_tz_format: ::prost::alloc::string::String,
+    /// Optional line terminator. Empty defaults to LF; valid values are one byte or CRLF
+    #[prost(bytes = "vec", tag = "17")]
+    pub terminator: ::prost::alloc::vec::Vec<u8>,
 }
 /// Options controlling CSV format
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]

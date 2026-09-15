@@ -22,6 +22,7 @@ use crate::common::proto_error;
 use crate::protobuf_common as protobuf;
 use arrow::array::{ArrayRef, AsArray};
 use arrow::buffer::Buffer;
+use arrow::csv::writer::Terminator;
 use arrow::csv::{QuoteStyle, WriterBuilder};
 use arrow::datatypes::{
     DataType, Field, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, Schema,
@@ -985,9 +986,112 @@ impl TryFrom<&protobuf::CsvWriterOptions> for CsvWriterOptions {
     fn try_from(
         opts: &protobuf::CsvWriterOptions,
     ) -> datafusion_common::Result<Self, Self::Error> {
-        let write_options = csv_writer_options_from_proto(opts)?;
-        let compression: CompressionTypeVariant = opts.compression().into();
-        Ok(CsvWriterOptions::new(write_options, compression))
+        let protobuf::CsvWriterOptions {
+            compression,
+            delimiter,
+            has_header,
+            date_format,
+            datetime_format,
+            timestamp_format,
+            time_format,
+            null_value,
+            quote,
+            escape,
+            double_quote,
+            quote_style,
+            ignore_leading_whitespace,
+            ignore_trailing_whitespace,
+            compression_level,
+            timestamp_tz_format,
+            terminator,
+        } = opts;
+
+        let mut writer_options = WriterBuilder::new();
+        if !delimiter.is_empty() {
+            if let Some(delimiter) = delimiter.chars().next() {
+                if delimiter.is_ascii() {
+                    writer_options = writer_options.with_delimiter(delimiter as u8);
+                } else {
+                    return Err(proto_error("CSV Delimiter is not ASCII"));
+                }
+            } else {
+                return Err(proto_error("Error parsing CSV Delimiter"));
+            }
+        }
+        if !quote.is_empty() {
+            if let Some(quote) = quote.chars().next() {
+                if quote.is_ascii() {
+                    writer_options = writer_options.with_quote(quote as u8);
+                } else {
+                    return Err(proto_error("CSV Quote is not ASCII"));
+                }
+            } else {
+                return Err(proto_error("Error parsing CSV Quote"));
+            }
+        }
+        if !escape.is_empty() {
+            if let Some(escape) = escape.chars().next() {
+                if escape.is_ascii() {
+                    writer_options = writer_options.with_escape(escape as u8);
+                } else {
+                    return Err(proto_error("CSV Escape is not ASCII"));
+                }
+            } else {
+                return Err(proto_error("Error parsing CSV Escape"));
+            }
+        }
+        let quote_style = match protobuf::CsvQuoteStyle::try_from(*quote_style) {
+            Ok(protobuf::CsvQuoteStyle::Always) => QuoteStyle::Always,
+            Ok(protobuf::CsvQuoteStyle::NonNumeric) => QuoteStyle::NonNumeric,
+            Ok(protobuf::CsvQuoteStyle::Never) => QuoteStyle::Never,
+            Ok(protobuf::CsvQuoteStyle::Necessary) => QuoteStyle::Necessary,
+            _ => {
+                return Err(proto_error(
+                    "Unknown quote style, must be one of: 'Always', 'NonNumeric', 'Never', 'Necessary'",
+                ));
+            }
+        };
+        writer_options = writer_options
+            .with_header(*has_header)
+            .with_null(null_value.clone())
+            .with_double_quote(*double_quote)
+            .with_quote_style(quote_style)
+            .with_ignore_leading_whitespace(*ignore_leading_whitespace)
+            .with_ignore_trailing_whitespace(*ignore_trailing_whitespace);
+        if !date_format.is_empty() {
+            writer_options = writer_options.with_date_format(date_format.clone());
+        }
+        if !datetime_format.is_empty() {
+            writer_options = writer_options.with_datetime_format(datetime_format.clone());
+        }
+        if !timestamp_format.is_empty() {
+            writer_options =
+                writer_options.with_timestamp_format(timestamp_format.clone());
+        }
+        if !timestamp_tz_format.is_empty() {
+            writer_options =
+                writer_options.with_timestamp_tz_format(timestamp_tz_format.clone());
+        }
+        if !time_format.is_empty() {
+            writer_options = writer_options.with_time_format(time_format.clone());
+        }
+        writer_options = match terminator.as_slice() {
+            [] => writer_options,
+            [byte] => writer_options.with_line_terminator(Terminator::Any(*byte)),
+            [b'\r', b'\n'] => writer_options.with_line_terminator(Terminator::CRLF),
+            _ => {
+                return Err(proto_error("CSV line terminator must be one byte or CRLF"));
+            }
+        };
+
+        let compression = protobuf::CompressionTypeVariant::try_from(*compression)
+            .unwrap_or_default()
+            .into();
+        Ok(CsvWriterOptions {
+            writer_options,
+            compression,
+            compression_level: *compression_level,
+        })
     }
 }
 
@@ -1322,66 +1426,6 @@ where
         .into_iter()
         .map(Field::try_from)
         .collect::<datafusion_common::Result<_, _>>()
-}
-
-pub(crate) fn csv_writer_options_from_proto(
-    writer_options: &protobuf::CsvWriterOptions,
-) -> datafusion_common::Result<WriterBuilder> {
-    let mut builder = WriterBuilder::new();
-    if !writer_options.delimiter.is_empty() {
-        if let Some(delimiter) = writer_options.delimiter.chars().next() {
-            if delimiter.is_ascii() {
-                builder = builder.with_delimiter(delimiter as u8);
-            } else {
-                return Err(proto_error("CSV Delimiter is not ASCII"));
-            }
-        } else {
-            return Err(proto_error("Error parsing CSV Delimiter"));
-        }
-    }
-    if !writer_options.quote.is_empty() {
-        if let Some(quote) = writer_options.quote.chars().next() {
-            if quote.is_ascii() {
-                builder = builder.with_quote(quote as u8);
-            } else {
-                return Err(proto_error("CSV Quote is not ASCII"));
-            }
-        } else {
-            return Err(proto_error("Error parsing CSV Quote"));
-        }
-    }
-    if !writer_options.escape.is_empty() {
-        if let Some(escape) = writer_options.escape.chars().next() {
-            if escape.is_ascii() {
-                builder = builder.with_escape(escape as u8);
-            } else {
-                return Err(proto_error("CSV Escape is not ASCII"));
-            }
-        } else {
-            return Err(proto_error("Error parsing CSV Escape"));
-        }
-    }
-    let quote_style = match protobuf::CsvQuoteStyle::try_from(writer_options.quote_style)
-    {
-        Ok(protobuf::CsvQuoteStyle::Always) => QuoteStyle::Always,
-        Ok(protobuf::CsvQuoteStyle::NonNumeric) => QuoteStyle::NonNumeric,
-        Ok(protobuf::CsvQuoteStyle::Never) => QuoteStyle::Never,
-        Ok(protobuf::CsvQuoteStyle::Necessary) => QuoteStyle::Necessary,
-        _ => Err(proto_error(
-            "Unknown quote style, must be one of: 'Always', 'NonNumeric', 'Never', 'Necessary'",
-        ))?,
-    };
-    Ok(builder
-        .with_header(writer_options.has_header)
-        .with_date_format(writer_options.date_format.clone())
-        .with_datetime_format(writer_options.datetime_format.clone())
-        .with_timestamp_format(writer_options.timestamp_format.clone())
-        .with_time_format(writer_options.time_format.clone())
-        .with_null(writer_options.null_value.clone())
-        .with_double_quote(writer_options.double_quote)
-        .with_quote_style(quote_style)
-        .with_ignore_leading_whitespace(writer_options.ignore_leading_whitespace)
-        .with_ignore_trailing_whitespace(writer_options.ignore_trailing_whitespace))
 }
 
 #[cfg(test)]
