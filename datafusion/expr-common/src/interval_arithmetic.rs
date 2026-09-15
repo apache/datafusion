@@ -2446,6 +2446,40 @@ mod tests {
     }
 
     #[test]
+    fn test_widening_integer_coercion_arithmetic() -> Result<()> {
+        let unsigned = Interval::make_unbounded(&DataType::UInt8)?;
+        let two = Interval::make(Some(2_i16), Some(2_i16))?;
+
+        // Mixed arithmetic must widen UInt8 to [0, 255] in Int16 before
+        // computing the result, including when it is the right operand.
+        let product = Interval::make(Some(0_i16), Some(510_i16))?;
+        assert_eq!(unsigned.mul(&two)?, product);
+        assert_eq!(two.mul(&unsigned)?, product);
+        assert_eq!(
+            unsigned.div(&two)?,
+            Interval::make(Some(0_i16), Some(127_i16))?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_widening_integer_coercion_comparison() -> Result<()> {
+        let unsigned = Interval::make_unbounded(&DataType::UInt8)?;
+        let signed = Interval::make(Some(-1_i16), Some(256_i16))?;
+        let widened = Interval::make(Some(0_i16), Some(255_i16))?;
+
+        // Comparison coercion must preserve both limits of the UInt8 domain.
+        assert_eq!(unsigned.intersect(&signed)?, Some(widened.clone()));
+        assert_eq!(signed.intersect(&unsigned)?, Some(widened.clone()));
+        assert_eq!(widened.contains(&unsigned)?, Interval::TRUE);
+        for value in [-1_i16, 256_i16] {
+            let outside = Interval::make(Some(value), Some(value))?;
+            assert_eq!(unsigned.contains(&outside)?, Interval::FALSE);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_integer_interval_cast_overflow() {
         use arrow::compute::CastOptions;
 
