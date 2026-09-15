@@ -1219,9 +1219,26 @@ impl AggregateExec {
             )?));
         }
 
-        // grouping by an expression that has a sort/limit upstream
+        // Grouping by an expression that has a sort/limit upstream.
+        //
+        // `GroupedTopKAggregateStream` keeps a priority queue, so it only works
+        // when an ordering direction is available: either this is a MIN/MAX
+        // aggregate, whose direction is implied by the accumulator, or the
+        // optimizer pushed a direction down next to the limit.
+        //
+        // A direction-less limit is a soft hint pushed by
+        // `LimitedDistinctAggregation`, which only pushes it while
+        // `is_unordered_unfiltered_group_by_distinct()` holds. That predicate is
+        // not stable: a later rule such as `EnforceSorting` can insert the sort
+        // a window function requires below this aggregate, which gives the
+        // rebuilt aggregate an output ordering and makes the predicate false
+        // without ever supplying a direction. Falling back to the regular
+        // grouped streams is correct in that case, because they treat the limit
+        // as a soft limit and the `LIMIT` above this aggregate still truncates
+        // the result.
         if let Some(config) = self.limit_options
             && !self.is_unordered_unfiltered_group_by_distinct()
+            && (config.descending.is_some() || self.get_minmax_desc().is_some())
         {
             return Ok(StreamType::GroupedPriorityQueue(
                 GroupedTopKAggregateStream::new(self, context, partition, config.limit)?,
