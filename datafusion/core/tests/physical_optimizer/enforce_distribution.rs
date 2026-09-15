@@ -62,7 +62,6 @@ use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::enforce_distribution::*;
 use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion_physical_optimizer::join_selection::JoinSelection;
-use datafusion_physical_optimizer::optimizer::ConfigOnlyContext;
 use datafusion_physical_optimizer::output_requirements::OutputRequirements;
 use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion_physical_plan::aggregates::{
@@ -649,9 +648,9 @@ fn ensure_distribution_helper(
     config.optimizer.repartition_file_scans = false;
     config.optimizer.repartition_file_min_size = 1024;
     config.optimizer.prefer_existing_sort = prefer_existing_sort;
-    ensure_distribution(
+    ensure_distribution_with_stats(
         distribution_context,
-        &ConfigOnlyContext::new(&config),
+        &config,
         &datafusion_physical_plan::statistics::StatisticsContext::new(),
     )
     .map(|item| item.data.plan)
@@ -777,9 +776,9 @@ impl TestConfig {
             // Then run ensure_distribution rule
             DistributionContext::new_default(adjusted)
                 .transform_up(|distribution_context| {
-                    ensure_distribution(
+                    ensure_distribution_with_stats(
                         distribution_context,
-                        &ConfigOnlyContext::new(&self.config),
+                        &self.config,
                         &datafusion_physical_plan::statistics::StatisticsContext::new(),
                     )
                 })
@@ -5081,9 +5080,9 @@ async fn assert_reoptimized_fetch_values(
                 let distribution =
                     DistributionContext::new_default(Arc::clone(&optimized))
                         .transform_up(|context| {
-                            ensure_distribution(
+                            ensure_distribution_with_stats(
                         context,
-                        &ConfigOnlyContext::new(&config),
+                        &config,
                         &datafusion_physical_plan::statistics::StatisticsContext::new(),
                     )
                         })?
@@ -5162,9 +5161,9 @@ async fn check_fetch_below_filter(
         if iteration > 0 {
             let distribution = DistributionContext::new_default(Arc::clone(&plan))
                 .transform_up(|context| {
-                    ensure_distribution(
+                    ensure_distribution_with_stats(
                         context,
-                        &ConfigOnlyContext::new(&config),
+                        &config,
                         &datafusion_physical_plan::statistics::StatisticsContext::new(),
                     )
                 })?
@@ -5449,84 +5448,77 @@ impl ExecutionPlan for CountingStatsExec {
 /// can catch because the optimized plan is identical either way.
 #[test]
 fn ensure_distribution_shares_statistics_cache() -> Result<()> {
-    // Count how many times a leaf's statistics are computed while
-    // `ensure_distribution` runs over a stack of `depth` pass-through operators
-    // sitting on top of it. Each ancestor's distribution enforcement inspects
-    // its child's statistics, which recurse to the leaf.
+    // Count how many times a leaf's statistics are computed over a stack of
+    // `depth` pass-through operators sitting on top of it. Each ancestor's
+    // distribution enforcement inspects its child's statistics, which recurse to
+    // the leaf.
     //
-    // `shared` uses one `StatisticsContext` for the whole pass (what
-    // `EnsureRequirements` does); `fresh` allocates a new context per node (the
-    // behavior before this change). Returns (shared_computes, fresh_computes).
-    fn run(depth: usize) -> Result<(usize, usize)> {
-        fn deep_plan(depth: usize, calls: &Arc<AtomicUsize>) -> Arc<dyn ExecutionPlan> {
-            let mut plan: Arc<dyn ExecutionPlan> =
-                Arc::new(CountingStatsExec::new(parquet_exec(), Arc::clone(calls)));
-            for _ in 0..depth {
-                plan = filter_exec(plan);
-            }
-            plan
+    // The measured arm drives the real `EnsureRequirements` rule, so the sharing
+    // and the cache-reset condition under test are the ones the rule actually
+    // uses — reimplementing them here would keep passing even if the rule
+    // stopped sharing. The baseline arm allocates a fresh `StatisticsContext`
+    // per node, reproducing the behavior before this change.
+    fn deep_plan(depth: usize, calls: &Arc<AtomicUsize>) -> Arc<dyn ExecutionPlan> {
+        let mut plan: Arc<dyn ExecutionPlan> =
+            Arc::new(CountingStatsExec::new(parquet_exec(), Arc::clone(calls)));
+        for _ in 0..depth {
+            plan = filter_exec(plan);
         }
+        plan
+    }
 
+    fn config() -> ConfigOptions {
         let mut config = ConfigOptions::new();
         config.execution.target_partitions = 10;
         // Keep the plan a fixpoint so no node is rebuilt and the shared cache is
         // never reset; statistics are still computed for the round-robin decision.
         config.optimizer.enable_round_robin_repartition = false;
+        config
+    }
 
-        let shared_calls = Arc::new(AtomicUsize::new(0));
-        let stats_ctx = datafusion_physical_plan::statistics::StatisticsContext::new();
-        DistributionContext::new_default(deep_plan(depth, &shared_calls)).transform_up(
-            |ctx| {
-                // Reset only when the node's plan pointer actually changed, exactly
-                // as `EnsureRequirements` does (a rewrite can free a cached node).
-                let before = Arc::clone(&ctx.plan);
-                let result = ensure_distribution(
-                    ctx,
-                    &ConfigOnlyContext::new(&config),
-                    &stats_ctx,
-                )?;
-                if !Arc::ptr_eq(&before, &result.data.plan) {
-                    stats_ctx.reset_cache();
-                }
-                Ok(result)
-            },
-        )?;
-        let shared = shared_calls.load(Ordering::Relaxed);
+    /// Leaf statistics computations performed by the real rule.
+    fn via_rule(depth: usize) -> Result<usize> {
+        let calls = Arc::new(AtomicUsize::new(0));
+        EnsureRequirements::new().optimize(deep_plan(depth, &calls), &config())?;
+        Ok(calls.load(Ordering::Relaxed))
+    }
 
-        let fresh_calls = Arc::new(AtomicUsize::new(0));
-        DistributionContext::new_default(deep_plan(depth, &fresh_calls)).transform_up(
+    /// Leaf statistics computations with a fresh context per node.
+    fn per_node_context(depth: usize) -> Result<usize> {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let config = config();
+        DistributionContext::new_default(deep_plan(depth, &calls)).transform_up(
             |ctx| {
-                ensure_distribution(
+                ensure_distribution_with_stats(
                     ctx,
-                    &ConfigOnlyContext::new(&config),
+                    &config,
                     &datafusion_physical_plan::statistics::StatisticsContext::new(),
                 )
             },
         )?;
-        let fresh = fresh_calls.load(Ordering::Relaxed);
-
-        Ok((shared, fresh))
+        Ok(calls.load(Ordering::Relaxed))
     }
 
-    let (shared_shallow, fresh_shallow) = run(4)?;
-    let (shared_deep, fresh_deep) = run(12)?;
+    let (shared_shallow, fresh_shallow) = (via_rule(4)?, per_node_context(4)?);
+    let (shared_deep, fresh_deep) = (via_rule(12)?, per_node_context(12)?);
 
-    // Sharing strictly reduces statistics recomputation at any depth. A broken
-    // cache (e.g. reset on every node) would make these equal.
+    // Sharing strictly reduces statistics recomputation at any depth. A rule that
+    // stopped sharing (or reset the cache on every node) would make these equal.
     assert!(
         shared_shallow < fresh_shallow && shared_deep < fresh_deep,
-        "shared cache must recompute less: shallow {shared_shallow} vs {fresh_shallow}, deep {shared_deep} vs {fresh_deep}"
+        "shared cache must recompute less: shallow {shared_shallow} vs {fresh_shallow}, \
+         deep {shared_deep} vs {fresh_deep}"
     );
 
     // Without sharing, each extra ancestor recomputes the leaf's subtree, so the
-    // gap between `fresh` and `shared` widens as the plan gets deeper. That is the
-    // depth-scaling recomputation the shared cache removes; a cache that is not
-    // actually shared would save nothing and the gap would not grow.
+    // gap widens as the plan gets deeper. That is the depth-scaling recomputation
+    // the shared cache removes.
     let saved_shallow = fresh_shallow - shared_shallow;
     let saved_deep = fresh_deep - shared_deep;
     assert!(
         saved_deep > saved_shallow,
-        "the shared cache should save more on deeper plans: saved {saved_shallow} at depth 4, {saved_deep} at depth 12"
+        "the shared cache should save more on deeper plans: \
+         saved {saved_shallow} at depth 4, {saved_deep} at depth 12"
     );
 
     Ok(())
