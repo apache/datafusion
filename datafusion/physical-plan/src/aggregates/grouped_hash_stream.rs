@@ -30,7 +30,7 @@
 //!
 //! See issue for details: <https://github.com/apache/datafusion/issues/22710>
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
 
@@ -667,25 +667,11 @@ pub(crate) fn create_group_accumulator(
             "Creating GroupsAccumulatorAdapter for {}: {agg_expr:?}",
             agg_expr.name()
         );
-        let grouped_update_metric = Arc::new(OnceLock::new());
-        let factory_metric = Arc::clone(&grouped_update_metric);
-        let agg_expr_captured = Arc::clone(agg_expr);
-        let factory = move || {
-            let mut accumulator = agg_expr_captured.create_accumulator()?;
-            if factory_metric.get().is_none() {
-                accumulator.set_metrics(Arc::clone(&metrics));
-                // This factory is called serially by one adapter, so the first
-                // accumulator is the only one that resolves the metric handle.
-                let _ = factory_metric.set(accumulator.grouped_update_batch_metric());
-            }
-            Ok(accumulator)
-        };
-        Ok(Box::new(
-            GroupsAccumulatorAdapter::new_with_grouped_update_metric_cache(
-                factory,
-                grouped_update_metric,
-            ),
-        ))
+        let agg_expr = Arc::clone(agg_expr);
+        let mut adapter =
+            GroupsAccumulatorAdapter::new(move || agg_expr.create_accumulator());
+        adapter.set_metrics(metrics);
+        Ok(Box::new(adapter))
     }
 }
 
@@ -1552,8 +1538,8 @@ mod tests {
     }
 
     #[test]
-    fn legacy_grouped_distinct_resolves_metric_once_for_conversion_and_update()
-    -> Result<()> {
+    fn legacy_grouped_distinct_installs_metrics_for_conversion_and_update() -> Result<()>
+    {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "value",
             DataType::UInt32,
@@ -1580,7 +1566,9 @@ mod tests {
         accumulator.convert_to_state(&[Arc::clone(&values)], None)?;
         accumulator.update_batch(&[values], &[0, 1, 2], None, 3)?;
 
-        assert_eq!(metric_resolutions.load(Ordering::Relaxed), 1);
+        // Three temporary conversion accumulators and three grouped accumulators
+        // each receive the aggregate expression's metrics.
+        assert_eq!(metric_resolutions.load(Ordering::Relaxed), 6);
         assert_eq!(metric_durations.load(Ordering::Relaxed), 2);
         Ok(())
     }
@@ -1615,7 +1603,8 @@ mod tests {
         }
         accumulator.merge_batch(&[Arc::new(state.finish())], &[1, 2, 3], 4)?;
 
-        assert_eq!(metric_resolutions.load(Ordering::Relaxed), 1);
+        // Four group accumulators each receive the aggregate expression's metrics.
+        assert_eq!(metric_resolutions.load(Ordering::Relaxed), 4);
         assert_eq!(metric_durations.load(Ordering::Relaxed), 1);
         Ok(())
     }
