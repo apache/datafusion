@@ -3513,6 +3513,142 @@ mod tests {
         }
     }
 
+    #[rstest::rstest]
+    #[case::single(AggregateMode::Single)]
+    #[case::final_stage(AggregateMode::Final)]
+    #[tokio::test]
+    async fn legacy_aggregate_spill_merge_leaves_memory_for_replay(
+        #[case] mode: AggregateMode,
+        #[values(false, true)] wrapped: bool,
+    ) -> Result<()> {
+        use arrow::array::ListArray;
+        use arrow::buffer::OffsetBuffer;
+
+        const KEYS: usize = 64;
+        const VALUES_PER_KEY: i64 = 64;
+        const MEMORY_LIMIT: usize = 8192;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int64, false),
+            Field::new("value", DataType::Int64, false),
+        ]));
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".into())]);
+        let aggregates = vec![Arc::new(
+            AggregateExprBuilder::new(array_agg_udaf(), vec![col("value", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("values")
+                .build()?,
+        )];
+        let input_schema = if mode == AggregateMode::Single {
+            Arc::clone(&schema)
+        } else {
+            Arc::new(create_schema(
+                &schema,
+                &group_by,
+                &aggregates,
+                AggregateMode::Partial,
+            )?)
+        };
+        let mut batches = vec![];
+        // Each group grows across many one-row replay batches before it can be
+        // emitted. A merge that fills the allowance starves this state growth.
+        for value in 1..=VALUES_PER_KEY {
+            for key in (0..KEYS as i64).rev() {
+                let values: ArrayRef = Arc::new(Int64Array::from(vec![value]));
+                let values = if mode == AggregateMode::Single {
+                    values
+                } else {
+                    let DataType::List(field) = input_schema.field(1).data_type() else {
+                        unreachable!("ARRAY_AGG state must be a list")
+                    };
+                    Arc::new(ListArray::new(
+                        Arc::clone(field),
+                        OffsetBuffer::from_lengths([1]),
+                        values,
+                        None,
+                    )) as ArrayRef
+                };
+                batches.push(RecordBatch::try_new(
+                    Arc::clone(&input_schema),
+                    vec![Arc::new(Int64Array::from(vec![key])), values],
+                )?);
+            }
+        }
+        let input = TestMemoryExec::try_new_exec(&[batches], input_schema, None)?;
+        let aggregate = AggregateExec::try_new(
+            mode,
+            group_by,
+            aggregates,
+            vec![None],
+            input,
+            schema,
+        )?;
+        let mut inner: Arc<dyn MemoryPool> = Arc::new(FairSpillPool::new(MEMORY_LIMIT));
+        if wrapped {
+            inner = Arc::new(LegacyMemoryPool(inner));
+        }
+        let pool = Arc::new(PeakRecordingPool::new(inner));
+        let context = Arc::new(
+            TaskContext::default()
+                .with_session_config(
+                    SessionConfig::new().with_batch_size(1).set_bool(
+                        "datafusion.execution.enable_migration_aggregate",
+                        false,
+                    ),
+                )
+                .with_runtime(
+                    RuntimeEnvBuilder::new()
+                        .with_memory_pool(Arc::clone(&pool) as Arc<dyn MemoryPool>)
+                        .build_arc()?,
+                ),
+        );
+        let stream = aggregate.execute_typed(0, &context)?;
+        assert!(matches!(stream, StreamType::GroupedHash(_)));
+        let output = collect(stream.into()).await?;
+        let mut seen = HashSet::new();
+        for batch in output {
+            assert!(
+                batch
+                    .columns()
+                    .iter()
+                    .all(|column| column.null_count() == 0)
+            );
+            let keys = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap();
+            let values = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .unwrap();
+            for row in 0..batch.num_rows() {
+                let key = keys.value(row);
+                assert!((0..KEYS as i64).contains(&key));
+                assert!(seen.insert(key), "duplicate group");
+                let values = values.value(row);
+                assert_eq!(values.null_count(), 0);
+                let mut values = values
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap()
+                    .values()
+                    .to_vec();
+                values.sort_unstable();
+                assert_eq!(values, (1..=VALUES_PER_KEY).collect::<Vec<_>>());
+            }
+        }
+        assert_eq!(seen.len(), KEYS);
+        assert!(aggregate.metrics().unwrap().spill_count().unwrap() > 1);
+        assert!(pool.peak_reserved() <= MEMORY_LIMIT);
+        assert_eq!(pool.reserved(), 0);
+        let progress = context.runtime_env().disk_manager.spilling_progress();
+        assert_eq!(progress.current_bytes, 0);
+        assert_eq!(progress.active_files_count, 0);
+        Ok(())
+    }
+
     // This high-cardinality memory test would create quadratic collision scratch
     // space; small group-value tests cover forced hash-collision correctness.
     #[cfg(not(feature = "force_hash_collisions"))]
