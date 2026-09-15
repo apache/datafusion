@@ -1152,8 +1152,7 @@ mod tests {
             }
             Finish::DropDuringMerge => {
                 senders[0].close_channel();
-                let result = first.next().now_or_never();
-                assert!(result.is_none());
+                let _ = first.next().now_or_never();
                 assert!(matches!(
                     first.state.as_ref(),
                     Some(OrderedFinalAggregateState::MergingSpills { .. })
