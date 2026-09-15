@@ -1165,6 +1165,21 @@ fn collect_equality_columns(predicate: &Arc<dyn PhysicalExpr>) -> (HashSet<usize
     (eq_values.into_keys().collect(), infeasible)
 }
 
+/// If `predicate` is exactly `Column IS NOT NULL` (a single bare conjunct,
+/// the shape `filter_null_join_keys` injects on join inputs), return the
+/// column. Used by `FilterExecStream` to skip mask evaluation and
+/// `filter_record_batch` for batches where the column is provably null-free
+/// (`Array::null_count() == 0`, an O(1) cached value in arrow).
+///
+/// Kept deliberately narrow: only a whole-predicate match. Dropping individual
+/// conjuncts of a larger predicate here would duplicate what the logical
+/// `SimplifyExpressions` rule already does with schema nullability.
+fn as_bare_is_not_null(predicate: &Arc<dyn PhysicalExpr>) -> Option<&Column> {
+    predicate
+        .downcast_ref::<IsNotNullExpr>()
+        .and_then(|n| n.arg().downcast_ref::<Column>())
+}
+
 /// Collects columns that cannot be NULL in any surviving row.
 ///
 /// A filter keeps only rows where the predicate is TRUE, so a column is
@@ -1451,6 +1466,24 @@ impl Stream for FilterExecStream {
                 }
                 Some(Ok(batch)) => {
                     let timer = elapsed_compute.timer();
+                    // Fast path for `col IS NOT NULL` predicates over a batch
+                    // where the column holds no NULLs (`null_count()` is an
+                    // O(1) cached value): the mask would be all-true, so skip
+                    // predicate evaluation and `filter_record_batch`'s row
+                    // selection entirely and feed the batch to the coalescer
+                    // as-is. This is the common case for join-key filters
+                    // injected by `filter_null_join_keys` over NOT NULL keys.
+                    if self.projection.is_none() {
+                        if let Some(col) = as_bare_is_not_null(&self.predicate) {
+                            if col.index() < batch.num_columns()
+                                && batch.column(col.index()).null_count() == 0
+                            {
+                                drop(timer);
+                                let state = self.batch_coalescer.push_batch(batch)?;
+                                continue;
+                            }
+                        }
+                    }
                     let status = self.predicate.as_ref()
                         .evaluate(&batch)
                         .and_then(|v| v.into_array(batch.num_rows()))
@@ -1577,6 +1610,78 @@ mod tests {
     use crate::test;
     use crate::test::exec::StatisticsExec;
     use arrow::datatypes::{Field, Schema, UnionFields, UnionMode};
+
+    #[tokio::test]
+    async fn is_not_null_fast_path_null_free_batch() -> Result<()> {
+        // A bare  predicate over a batch whose column holds
+        // no NULLs takes the per-batch fast path in FilterExecStream: rows
+        // pass through unfiltered (identical to evaluating an all-true mask).
+        use crate::test::exec::MockExec;
+        use arrow::array::{ArrayRef, Int64Array};
+        use futures::TryStreamExt;
+
+        let batch = RecordBatch::try_from_iter(vec![(
+            "a",
+            Arc::new(Int64Array::from(vec![Some(1i64), Some(2), Some(3)])) as ArrayRef,
+        )])?;
+        let schema = batch.schema();
+        let input = Arc::new(
+            MockExec::new(vec![Ok(batch.clone())], Arc::clone(&schema))
+                .with_use_task(false),
+        );
+        let predicate: Arc<dyn PhysicalExpr> =
+            Arc::new(IsNotNullExpr::new(col("a", &schema)?));
+        let filter = FilterExecBuilder::new(predicate, input).build()?;
+
+        let ctx = Arc::new(TaskContext::default());
+        let mut stream = filter.execute(0, ctx)?;
+        let mut collected = Vec::new();
+        while let Some(b) = stream.try_next().await? {
+            collected.push(b);
+        }
+        assert_eq!(collected.len(), 1, "should return single batch");
+        assert_eq!(
+            collected[0], batch,
+            "null-free batch must pass through unchanged"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn is_not_null_slow_path_batch_with_nulls() -> Result<()> {
+        // The same predicate over a batch that actually contains NULLs must
+        // take the normal evaluation path and filter them out.
+        use crate::test::exec::MockExec;
+        use arrow::array::{ArrayRef, Int64Array};
+        use futures::TryStreamExt;
+
+        let batch = RecordBatch::try_from_iter(vec![(
+            "a",
+            Arc::new(Int64Array::from(vec![Some(1i64), None, Some(3)])) as ArrayRef,
+        )])?;
+        let schema = batch.schema();
+        let input = Arc::new(
+            MockExec::new(vec![Ok(batch)], Arc::clone(&schema))
+                .with_use_task(false),
+        );
+        let predicate: Arc<dyn PhysicalExpr> =
+            Arc::new(IsNotNullExpr::new(col("a", &schema)?));
+        let filter = FilterExecBuilder::new(predicate, input).build()?;
+
+        let ctx = Arc::new(TaskContext::default());
+        let mut stream = filter.execute(0, ctx)?;
+        let mut collected = Vec::new();
+        while let Some(b) = stream.try_next().await? {
+            collected.push(b);
+        }
+        assert_eq!(collected.len(), 1, "should return single batch");
+        assert_eq!(
+            collected[0].num_rows(),
+            2,
+            "row with NULL must be filtered out"
+        );
+        Ok(())
+    }
 
     #[test]
     fn filter_rejects_zero_batch_size() -> Result<()> {
