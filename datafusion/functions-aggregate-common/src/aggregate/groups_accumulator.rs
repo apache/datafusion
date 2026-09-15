@@ -102,10 +102,6 @@ pub struct GroupsAccumulatorAdapter {
     /// bottleneck in earlier implementations when there were many
     /// distinct groups.
     allocation_bytes: usize,
-
-    /// The portion of [`Self::allocation_bytes`] that is the scratch
-    /// [`AccumulatorState::indices`] capacity held by [`Self::states`].
-    indices_allocation_bytes: usize,
 }
 
 struct AccumulatorState {
@@ -143,7 +139,6 @@ impl GroupsAccumulatorAdapter {
             factory: Box::new(factory),
             states: vec![],
             allocation_bytes: 0,
-            indices_allocation_bytes: 0,
         }
     }
 
@@ -205,50 +200,55 @@ impl GroupsAccumulatorAdapter {
 
         assert_eq!(values[0].len(), group_indices.len());
 
-        // figure out which input rows correspond to which groups.
-        // Note that self.state.indices starts empty for all groups
-        // (it is cleared out below)
-        for (idx, group_index) in group_indices.iter().enumerate() {
-            self.states[*group_index].indices.push(idx as u32);
-        }
-
-        // groups_with_rows holds a list of group indexes that have
-        // any rows that need to be accumulated, stored in order of
-        // group_index
-
+        // groups_with_rows holds a list of group indexes that have any rows
+        // that need to be accumulated, stored in order of first appearance in
+        // this batch
         let mut groups_with_rows = vec![];
 
+        // the scratch capacity the groups below held before this batch. Only
+        // a group that this batch pushes to can grow, and it is empty until
+        // the first push reaches it, so reading it there reads it before any
+        // growth
+        let mut indices_capacity_pre = 0;
+
+        // figure out which input rows correspond to which groups.
+        // Note that self.state.indices starts empty for all groups (it is
+        // cleared out below), so an empty one is exactly a group that this
+        // batch has not reached yet
+        for (idx, group_index) in group_indices.iter().enumerate() {
+            let state = &mut self.states[*group_index];
+            if state.indices.is_empty() {
+                groups_with_rows.push(*group_index);
+                indices_capacity_pre += state.indices.allocated_size();
+            }
+            state.indices.push(idx as u32);
+        }
+
         // batch_indices holds indices into values, each group is contiguous
-        let mut batch_indices = vec![];
+        let mut batch_indices = Vec::with_capacity(group_indices.len());
 
         // offsets[i] is index into batch_indices where the rows for
-        // group_index i starts
-        let mut offsets = vec![0];
+        // groups_with_rows[i] start
+        let mut offsets = Vec::with_capacity(groups_with_rows.len() + 1);
+        offsets.push(0);
 
         let mut offset_so_far = 0;
-        let mut indices_allocation_bytes = 0;
-        for (group_index, state) in self.states.iter_mut().enumerate() {
-            let indices = &state.indices;
-            // this pass already visits every group, so totalling the scratch
-            // capacity here costs a field read rather than a `size()` call
-            indices_allocation_bytes += indices.allocated_size();
-            if indices.is_empty() {
-                continue;
-            }
-
-            groups_with_rows.push(group_index);
+        let mut indices_capacity_post = 0;
+        for &group_index in groups_with_rows.iter() {
+            let indices = &self.states[group_index].indices;
+            indices_capacity_post += indices.allocated_size();
             batch_indices.extend_from_slice(indices);
             offset_so_far += indices.len();
             offsets.push(offset_so_far);
         }
         let batch_indices = batch_indices.into();
 
-        // The push loop above is the only place `indices` grows. Charge the
-        // growth since the previous batch here: the pre/post deltas below
-        // observe the identical capacity on both sides, because `f` does not
-        // touch `indices` and the `clear()` after it retains the capacity.
-        self.adjust_allocation(self.indices_allocation_bytes, indices_allocation_bytes);
-        self.indices_allocation_bytes = indices_allocation_bytes;
+        // The push loop above is the only place `indices` grows, and it grows
+        // only the groups listed above. Charge that growth here: the pre/post
+        // deltas below observe the identical capacity on both sides, because
+        // `f` does not touch `indices` and the `clear()` after it keeps the
+        // capacity.
+        self.adjust_allocation(indices_capacity_pre, indices_capacity_post);
 
         // reorder the values and opt_filter by batch_indices so that
         // all values for each group are contiguous, then invoke the
@@ -300,18 +300,6 @@ impl GroupsAccumulatorAdapter {
         self.allocation_bytes = self.allocation_bytes.saturating_sub(size)
     }
 
-    /// Release the allocation held by a state that is being emitted.
-    ///
-    /// [`AccumulatorState::size`] covers the scratch `indices` capacity, so
-    /// this also drops it from [`Self::indices_allocation_bytes`] to keep that
-    /// running total equal to the capacity still held by [`Self::states`].
-    fn free_state_allocation(&mut self, state: &AccumulatorState) {
-        self.free_allocation(state.size());
-        self.indices_allocation_bytes = self
-            .indices_allocation_bytes
-            .saturating_sub(state.indices.allocated_size());
-    }
-
     /// Adjusts the allocation for something that started with
     /// start_size and now has new_size avoiding overflow
     ///
@@ -353,7 +341,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         let results: Vec<ScalarValue> = states
             .into_iter()
             .map(|mut state| {
-                self.free_state_allocation(&state);
+                self.free_allocation(state.size());
                 state.accumulator.evaluate()
             })
             .collect::<Result<_>>()?;
@@ -403,7 +391,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         let mut results: Vec<Vec<ScalarValue>> = vec![];
 
         for mut state in states {
-            self.free_state_allocation(&state);
+            self.free_allocation(state.size());
             let accumulator_state = state.accumulator.state()?;
             results.resize_with(accumulator_state.len(), Vec::new);
             for (idx, state_val) in accumulator_state.into_iter().enumerate() {
@@ -566,6 +554,146 @@ mod tests {
     use crate::min_max::MaxAccumulator;
     use arrow::array::{AsArray, Int64Array};
     use arrow::datatypes::{DataType, Int64Type};
+
+    /// Counts the rows it is handed. `MaxAccumulator` cannot see a row that
+    /// reaches it twice, so the tests need an accumulator that can.
+    #[derive(Debug, Default)]
+    struct RowCountAccumulator {
+        rows: i64,
+    }
+
+    impl Accumulator for RowCountAccumulator {
+        fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+            self.rows += values[0].len() as i64;
+            Ok(())
+        }
+        fn merge_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+            self.update_batch(values)
+        }
+        fn evaluate(&mut self) -> Result<ScalarValue> {
+            Ok(ScalarValue::Int64(Some(self.rows)))
+        }
+        fn state(&mut self) -> Result<Vec<ScalarValue>> {
+            Ok(vec![ScalarValue::Int64(Some(self.rows))])
+        }
+        fn size(&self) -> usize {
+            size_of::<Self>()
+        }
+    }
+
+    fn row_count_adapter() -> GroupsAccumulatorAdapter {
+        GroupsAccumulatorAdapter::new(|| {
+            Ok(Box::new(RowCountAccumulator::default()) as Box<dyn Accumulator>)
+        })
+    }
+
+    fn max_adapter() -> GroupsAccumulatorAdapter {
+        GroupsAccumulatorAdapter::new(|| {
+            Ok(Box::new(MaxAccumulator::try_new(&DataType::Int64)?)
+                as Box<dyn Accumulator>)
+        })
+    }
+
+    /// Every row must reach its own group's accumulator, whatever order the
+    /// groups appear in within a batch and however many of them have no rows.
+    #[test]
+    fn adapter_routes_rows_to_their_own_group() -> Result<()> {
+        // only the first `GROUPS_WITH_ROWS` of them ever get a row, so the
+        // batches leave a tail of groups untouched
+        const TOTAL_NUM_GROUPS: usize = 32;
+        const GROUPS_WITH_ROWS: usize = 23;
+
+        let mut accumulator = max_adapter();
+        let mut expected = vec![None; TOTAL_NUM_GROUPS];
+
+        // an empty batch, then batches that interleave and revisit groups
+        for batch in 0..5 {
+            let mut group_indices = vec![];
+            let mut values = vec![];
+            for row in 0..(batch * 31) {
+                let group_index = (row * 5 + batch) % GROUPS_WITH_ROWS;
+                let value = ((row * 7 + batch * 13) % 97) as i64;
+                group_indices.push(group_index);
+                values.push(value);
+                expected[group_index] = expected[group_index].max(Some(value));
+            }
+
+            let values: ArrayRef = Arc::new(Int64Array::from(values));
+            accumulator.update_batch(
+                &[values],
+                &group_indices,
+                None,
+                TOTAL_NUM_GROUPS,
+            )?;
+        }
+
+        assert_eq!(
+            accumulator
+                .evaluate(EmitTo::All)?
+                .as_primitive::<Int64Type>(),
+            &Int64Array::from(expected)
+        );
+        Ok(())
+    }
+
+    /// Rows the filter drops must not reach any accumulator, including when it
+    /// drops every row a group has.
+    #[test]
+    fn adapter_routes_filtered_rows() -> Result<()> {
+        let mut accumulator = max_adapter();
+
+        let values: ArrayRef = Arc::new(Int64Array::from(vec![5, 9, 1, 7, 3, 8]));
+        let group_indices = [2, 0, 2, 1, 0, 2];
+        let filter = BooleanArray::from(vec![true, false, true, false, true, false]);
+        accumulator.update_batch(&[values], &group_indices, Some(&filter), 4)?;
+
+        // group 0 keeps 3, group 1 loses its only row, group 2 keeps 5 and 1,
+        // and group 3 never had a row
+        assert_eq!(
+            accumulator
+                .evaluate(EmitTo::All)?
+                .as_primitive::<Int64Type>(),
+            &Int64Array::from(vec![Some(3), None, Some(5), None])
+        );
+        Ok(())
+    }
+
+    /// Each row must reach its own group's accumulator exactly once. A group
+    /// recorded twice for one batch would hand that group its rows twice.
+    #[test]
+    fn adapter_routes_each_row_exactly_once() -> Result<()> {
+        const TOTAL_NUM_GROUPS: usize = 16;
+
+        let mut accumulator = row_count_adapter();
+        let mut expected = vec![0i64; TOTAL_NUM_GROUPS];
+
+        for batch in 0..4 {
+            let mut group_indices = vec![];
+            for row in 0..(batch * 29) {
+                // revisit groups within a batch, and leave a tail untouched
+                let group_index = (row * 3 + batch) % 11;
+                group_indices.push(group_index);
+                expected[group_index] += 1;
+            }
+
+            let values: ArrayRef =
+                Arc::new(Int64Array::from(vec![1i64; group_indices.len()]));
+            accumulator.update_batch(
+                &[values],
+                &group_indices,
+                None,
+                TOTAL_NUM_GROUPS,
+            )?;
+        }
+
+        assert_eq!(
+            accumulator
+                .evaluate(EmitTo::All)?
+                .as_primitive::<Int64Type>(),
+            &Int64Array::from(expected)
+        );
+        Ok(())
+    }
 
     #[test]
     fn adapter_preserving_evaluation_uses_accumulator_contract() -> Result<()> {
