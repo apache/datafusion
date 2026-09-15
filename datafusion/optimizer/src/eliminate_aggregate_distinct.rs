@@ -108,21 +108,26 @@ impl OptimizerRule for EliminateAggregateDistinct {
 /// whether they share one argument. This is conservative: `min(DISTINCT x),
 /// count(DISTINCT y)` keeps the `min` flag though no rewrite is possible.
 fn can_strip_every_distinct(aggr_expr: &[Expr]) -> Result<bool> {
-    let mut handlings = vec![];
+    let mut found_distinct = false;
+    let mut all_ignored = true;
     for expr in aggr_expr {
         expr.apply(|e| {
             if let Expr::AggregateFunction(AggregateFunction { func, params }) = e
                 && params.distinct
             {
-                handlings.push(func.distinct_handling());
+                found_distinct = true;
+                if func.distinct_handling() != DistinctHandling::Ignored {
+                    all_ignored = false;
+                    return Ok(TreeNodeRecursion::Stop);
+                }
             }
             Ok(TreeNodeRecursion::Continue)
         })?;
+        if !all_ignored {
+            break;
+        }
     }
-    Ok(
-        !handlings.is_empty()
-            && handlings.iter().all(|h| *h == DistinctHandling::Ignored),
-    )
+    Ok(found_distinct && all_ignored)
 }
 
 /// Drops `DISTINCT` from `expr` if it is an aggregate that ignores duplicates.
