@@ -253,11 +253,6 @@ impl RowGroupPruner {
                 .map(Vec::as_slice),
             row_group_metadatas,
             arrow_schema: self.arrow_schema.as_ref(),
-            // Match the existing static row-group pruning behavior: when a
-            // statistic's null count is missing, treat it as zero. This is
-            // sound for runtime pruning because the predicate only needs to
-            // prove a row group *cannot* contain matching rows.
-            missing_null_counts_as_zero: true,
         };
 
         match pp.prune(&stats) {
