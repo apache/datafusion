@@ -81,6 +81,3 @@ For implementation details, see the
    This helps reduce the relative impact of timing noise while keeping the
    suite practical to run.
 
-## Rust microbenchmarks
-
-TODO
