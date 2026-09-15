@@ -684,7 +684,7 @@ impl MultiLevelMergeBuilder {
         // that reads this run so the merged output can't rebuild a full-size batch.
         let last = self.sorted_spill_files.len() - 1;
         self.sorted_spill_files.swap(index, last);
-        let (target, old_batch_size) = self
+        let (mut target, old_batch_size) = self
             .sorted_spill_files
             .pop()
             .expect("index is in bounds, so the vec is non-empty");
@@ -703,21 +703,42 @@ impl MultiLevelMergeBuilder {
                 Arc::clone(&target.file),
                 Some(old_max),
             )?;
+            let mut all_singletons = true;
+            let mut max_is_singleton = false;
+            let mut decoded_max = 0;
             while let Some(batch) = source.next().await {
                 let batch = batch?;
+                all_singletons &= batch.num_rows() == 1;
+                decoded_max = decoded_max.max(batch.get_sliced_size()?);
                 if batch.num_rows() == 1
                     && gc_view_arrays(&batch)?.get_sliced_size()? >= old_max
                 {
-                    if !retry_unsplittable {
-                        return resources_err!(
-                            "Cannot merge sorted runs: a single record batch of {old_max} bytes \
-                             exceeds the available merge memory and cannot be split further"
-                        );
-                    }
-                    self.sorted_spill_files.push((target, 1));
-                    self.sorted_spill_files.swap(index, last);
-                    return Ok(false);
+                    max_is_singleton = true;
+                    break;
                 }
+            }
+            // IPC can discard spare view-buffer capacity included in `old_max`.
+            // A complete scan can correct that estimate without rewriting the
+            // file. Use decoded buffers without GC, as the merge retains them.
+            let shrank = !max_is_singleton && decoded_max < old_max;
+            if shrank || all_singletons || max_is_singleton {
+                if !shrank && !retry_unsplittable {
+                    return resources_err!(
+                        "Cannot merge sorted runs: a single record batch of {old_max} bytes \
+                         exceeds the available merge memory and cannot be split further"
+                    );
+                }
+                if shrank {
+                    target.max_record_batch_memory = decoded_max;
+                }
+                let batch_size_limit = if all_singletons || max_is_singleton {
+                    1
+                } else {
+                    old_batch_size
+                };
+                self.sorted_spill_files.push((target, batch_size_limit));
+                self.sorted_spill_files.swap(index, last);
+                return Ok(shrank);
             }
         }
 
@@ -1379,6 +1400,115 @@ mod tests {
             let key = values.as_string::<i32>().value(0);
             assert_eq!(key[..4].parse::<usize>().unwrap(), expected);
             expected += 1;
+        }
+        assert_eq!(expected, if mixed_batches { 18 } else { 16 });
+        drop(stream);
+        assert_eq!(pool.reserved(), 0);
+        let progress = env.disk_manager.spilling_progress();
+        assert_eq!(progress.current_bytes, 0);
+        assert_eq!(progress.active_files_count, 0);
+        Ok(())
+    }
+
+    #[rstest::rstest]
+    #[case::finite(false)]
+    #[case::unknown(true)]
+    #[tokio::test]
+    async fn small_view_spill_merge_needs_no_extra_disk_space(
+        #[case] unknown_limit: bool,
+        #[values(3, 6)] pool_batches: usize,
+        #[values(false, true)] mixed_batches: bool,
+    ) -> Result<()> {
+        use arrow::array::StringViewBuilder;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::Utf8View,
+            false,
+        )]));
+        let make_runs = |manager: &SpillManager| -> Result<Vec<SortedSpillFile>> {
+            (0..2)
+                .map(|run| {
+                    let batches = (0..8).map(|batch| {
+                        // A non-inline value retains the builder's 8 KiB block,
+                        // but IPC stores only its used bytes. Small view buffers
+                        // are below the spill writer's compaction threshold.
+                        let key = format!("{:04}xxxxxxxxx", run + 2 * batch);
+                        let mut values = StringViewBuilder::with_capacity(1)
+                            .with_fixed_block_size(8192);
+                        values.append_value(key);
+                        // A larger final batch requires scanning the entire run
+                        // before replacing its maximum decoded size.
+                        if mixed_batches && batch == 7 {
+                            values.append_value(format!(
+                                "{:04}xxxxxxxxx",
+                                run + 2 * (batch + 1)
+                            ));
+                        }
+                        RecordBatch::try_new(
+                            Arc::clone(&schema),
+                            vec![Arc::new(values.finish())],
+                        )
+                        .map_err(Into::into)
+                    });
+                    let (file, max_record_batch_memory) = manager
+                        .spill_record_batch_iter_and_return_max_batch_memory(
+                            batches,
+                            "small view singleton run",
+                        )?
+                        .unwrap();
+                    Ok(SortedSpillFile {
+                        file,
+                        max_record_batch_memory,
+                    })
+                })
+                .collect()
+        };
+
+        // Fill the quota with the original runs. Multiple batches prevent
+        // read-ahead from retiring a run before an unnecessary replacement write.
+        let calibration = Arc::new(RuntimeEnv::default());
+        let runs = make_runs(&build_spill_manager(&calibration, &schema))?;
+        let quota = runs.iter().map(|run| run.file.size().unwrap()).sum();
+        drop(runs);
+        let env = RuntimeEnvBuilder::new()
+            .with_max_temp_directory_size(quota)
+            .build_arc()?;
+        let manager = build_spill_manager(&env, &schema);
+        let runs = make_runs(&manager)?;
+        assert_eq!(env.disk_manager.spilling_progress().current_bytes, quota);
+        let stored_max = runs[0].max_record_batch_memory;
+        let mut source = manager.read_spill_as_stream_unbuffered(
+            Arc::clone(&runs[0].file),
+            Some(stored_max),
+        )?;
+        let batch = source.next().await.unwrap()?;
+        assert_eq!(batch.num_rows(), 1);
+        assert!(gc_view_arrays(&batch)?.get_sliced_size()? < stored_max);
+        drop((source, batch));
+
+        // The stale estimate needs four batches for the minimum merge. Test
+        // limits below and above that estimate: both can fit the decoded rows.
+        let pool_bytes = pool_batches * stored_max;
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(pool_bytes));
+        let merge_limit = if unknown_limit {
+            MemoryLimit::Unknown
+        } else {
+            MemoryLimit::Finite(pool_bytes / 2)
+        };
+        let builder = build_merge_builder(manager, schema, runs, &pool, 8192)
+            .with_spill_merge_memory_limit(merge_limit);
+        let mut stream = builder.create_spillable_merge_stream();
+        let mut expected = 0;
+        while let Some(batch) = stream.next().await {
+            let batch = batch?;
+            if !mixed_batches {
+                assert_eq!(batch.num_rows(), 1);
+            }
+            for key in batch.column(0).as_string_view().iter() {
+                assert_eq!(key.unwrap(), format!("{expected:04}xxxxxxxxx"));
+                expected += 1;
+            }
         }
         assert_eq!(expected, if mixed_batches { 18 } else { 16 });
         drop(stream);
