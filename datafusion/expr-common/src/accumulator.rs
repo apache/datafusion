@@ -34,8 +34,10 @@ pub trait AggregateMetric: Debug + Send + Sync + std::panic::RefUnwindSafe {
 
 /// Factory for optional metrics owned by one aggregate expression.
 ///
-/// `subphase` must be a stable static identifier. An implementation may request
-/// no metrics. The execution engine assigns the aggregate expression identity.
+/// `subphase` must be a stable static identifier. Repeated requests for the
+/// same subphase must return handles that update the same metric identity. An
+/// implementation may request no metrics. The execution engine assigns the
+/// aggregate expression identity.
 pub trait AggregateMetrics: Debug + Send + Sync {
     /// Returns the metric for an aggregate-owned internal subphase.
     fn metric(&self, subphase: &'static str) -> Arc<dyn AggregateMetric>;
@@ -72,8 +74,10 @@ pub trait Accumulator: Send + Sync + Debug + std::any::Any {
     /// Supplies optional metrics owned by this aggregate expression.
     ///
     /// The grouped accumulator adapter supplies these metrics to every
-    /// accumulator it creates. The default preserves compatibility for
-    /// accumulators without internal submetrics.
+    /// accumulator it creates. Call this immediately after construction and
+    /// before the accumulator is used; replacing metrics after use is
+    /// unsupported. The default preserves compatibility for accumulators
+    /// without internal submetrics.
     fn set_metrics(&mut self, _metrics: Arc<dyn AggregateMetrics>) {}
 
     /// Updates the accumulator's state from its input.
