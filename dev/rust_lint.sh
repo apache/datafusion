@@ -22,7 +22,9 @@
 #
 # Note: The installed checking tools (e.g., taplo) are not guaranteed to match
 # the CI versions for simplicity, there might be some minor differences. Check
-# `.github/workflows` for the CI versions.
+# `.github/workflows` for the CI versions. When this script installs a missing
+# tool that has a pinned version in `ci/scripts/utils/tool_versions.sh`, it
+# installs that pinned version. An already installed tool is used as is.
 #
 #
 #
@@ -84,10 +86,15 @@ while [[ $# -gt 0 ]]; do
 done
 
 SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Load the tool versions shared with CI (for example, LYCHEE_VERSION).
+source "${SCRIPT_DIR}/../ci/scripts/utils/tool_versions.sh"
 
 ensure_tool "taplo" "cargo install taplo-cli --locked"
 ensure_tool "hawkeye" "cargo install hawkeye --locked"
 ensure_tool "typos" "cargo install typos-cli --locked"
+ensure_tool "lychee" "cargo install lychee --locked --version ${LYCHEE_VERSION}"
 
 run_step() {
   local name="$1"
@@ -107,6 +114,7 @@ declare -a WRITE_STEPS=(
 
 declare -a READONLY_STEPS=(
   "ci/scripts/check_no_cargo_install_in_workflows.sh|false"
+  "ci/scripts/markdown_link_check.sh|false"
   "ci/scripts/rust_docs.sh|false"
 )
 

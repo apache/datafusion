@@ -30,15 +30,189 @@
 //! because batch-arrival timing affects how soon the TopK heap fills,
 //! and we don't want this test to become flaky.
 
+use std::io::Write;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 
-use datafusion::prelude::SessionConfig;
+use datafusion::physical_plan::collect;
+use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
+use datafusion_common::ScalarValue;
+use parquet::arrow::ArrowWriter;
+use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataWriter};
+use parquet::file::properties::{EnabledStatistics, WriterProperties};
+use parquet::file::statistics::Statistics;
+use parquet::file::writer::TrackedWrite;
+use tempfile::NamedTempFile;
 
 use crate::parquet::Unit::RowGroup;
+use crate::parquet::utils::MetricsFinder;
 use crate::parquet::{ContextWithParquet, Scenario};
+
+/// Keep min/max but omit the middle row group's null count. Negate the
+/// values for DESC so the first group always establishes the winning bound.
+fn file_with_missing_null_count(descending: bool, has_null: bool) -> NamedTempFile {
+    let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, true)]));
+    let props = WriterProperties::builder()
+        .set_statistics_enabled(EnabledStatistics::Chunk)
+        .build();
+    let mut bytes = Vec::new();
+    let mut writer =
+        ArrowWriter::try_new(&mut bytes, schema.clone(), Some(props)).unwrap();
+    for values in [
+        vec![Some(0), Some(1), Some(2)],
+        vec![
+            if has_null { None } else { Some(100) },
+            Some(100),
+            Some(101),
+        ],
+        vec![Some(200), Some(201), Some(202)],
+    ] {
+        let values: Int64Array = values
+            .into_iter()
+            .map(|v| v.map(|v| if descending { -v } else { v }))
+            .collect();
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(values)]).unwrap();
+        writer.write(&batch).unwrap();
+        writer.flush().unwrap();
+    }
+    let metadata = writer.close().unwrap();
+    let mut groups = metadata.row_groups().to_vec();
+    if has_null {
+        let column = groups[1].column(0).clone();
+        let Statistics::Int64(stats) = column.statistics().unwrap() else {
+            panic!("expected Int64 statistics");
+        };
+        let stats = Statistics::int64(
+            stats.min_opt().copied(),
+            stats.max_opt().copied(),
+            None,
+            None,
+            false,
+        );
+        let column = column.into_builder().set_statistics(stats).build().unwrap();
+        groups[1] = groups[1]
+            .clone()
+            .into_builder()
+            .set_column_metadata(vec![column])
+            .build()
+            .unwrap();
+    }
+    let metadata = ParquetMetaData::new(metadata.file_metadata().clone(), groups);
+
+    // Replace the footer, leaving the encoded rows and their offsets intact.
+    let footer_len =
+        u32::from_le_bytes(bytes[bytes.len() - 8..bytes.len() - 4].try_into().unwrap());
+    bytes.truncate(bytes.len() - 8 - footer_len as usize);
+    let mut file = tempfile::Builder::new()
+        .suffix(".parquet")
+        .tempfile()
+        .unwrap();
+    let mut output = TrackedWrite::new(file.as_file_mut());
+    output.write_all(&bytes).unwrap();
+    ParquetMetaDataWriter::new_with_tracked(output, &metadata)
+        .finish()
+        .unwrap();
+    file
+}
+
+#[tokio::test]
+async fn missing_null_count_preserves_null_filter_and_count() {
+    let file = file_with_missing_null_count(false, true);
+    let ctx = SessionContext::new();
+    ctx.register_parquet(
+        "t",
+        file.path().to_str().unwrap(),
+        ParquetReadOptions::default(),
+    )
+    .await
+    .unwrap();
+    for (sql, expected) in [
+        ("SELECT COUNT(v) FROM t", 8),
+        ("SELECT COUNT(*) FROM t WHERE v IS NULL", 1),
+    ] {
+        let batches = ctx.sql(sql).await.unwrap().collect().await.unwrap();
+        assert_eq!(
+            ScalarValue::try_from_array(batches[0].column(0), 0).unwrap(),
+            ScalarValue::Int64(Some(expected)),
+            "{sql}",
+        );
+    }
+}
+
+#[tokio::test]
+async fn dynamic_rg_pruning_preserves_missing_null_count() {
+    for descending in [false, true] {
+        for has_null in [false, true] {
+            let file = file_with_missing_null_count(descending, has_null);
+            for nulls_first in [false, true] {
+                for pushdown in [false, true] {
+                    let mut config = SessionConfig::new()
+                        .with_target_partitions(1)
+                        .with_batch_size(1)
+                        .with_parquet_page_index_pruning(false);
+                    // Keep the live filter on the row-group path: file-level
+                    // statistics can otherwise prune the entire remaining file.
+                    config.options_mut().execution.collect_statistics = false;
+                    config.options_mut().optimizer.enable_sort_pushdown = false;
+                    config
+                        .options_mut()
+                        .optimizer
+                        .enable_topk_dynamic_filter_pushdown = pushdown;
+                    config.options_mut().execution.parquet.pushdown_filters = false;
+                    let ctx = SessionContext::new_with_config(config);
+                    ctx.register_parquet(
+                        "t",
+                        file.path().to_str().unwrap(),
+                        ParquetReadOptions::default(),
+                    )
+                    .await
+                    .unwrap();
+                    let order = if descending { "DESC" } else { "ASC" };
+                    let null_order = if nulls_first { "FIRST" } else { "LAST" };
+                    let sql = format!(
+                        "SELECT v FROM t ORDER BY v {order} NULLS {null_order} LIMIT 1"
+                    );
+                    let plan = ctx
+                        .sql(&sql)
+                        .await
+                        .unwrap()
+                        .create_physical_plan()
+                        .await
+                        .unwrap();
+                    let batches = collect(plan.clone(), ctx.task_ctx()).await.unwrap();
+                    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 1);
+                    let expected = if has_null && nulls_first {
+                        None
+                    } else {
+                        Some(0)
+                    };
+                    assert_eq!(
+                        ScalarValue::try_from_array(batches[0].column(0), 0).unwrap(),
+                        ScalarValue::Int64(expected),
+                        "{sql}, has_null={has_null}, pushdown={pushdown}",
+                    );
+                    let metrics = MetricsFinder::find_metrics(plan.as_ref()).unwrap();
+                    let pruned = metrics
+                        .sum_by_name("row_groups_pruned_dynamic_filter")
+                        .unwrap()
+                        .as_usize();
+                    if pushdown {
+                        assert!(
+                            pruned > 0,
+                            "runtime pruning must run: {sql}, has_null={has_null}\n{metrics}\n{}",
+                            datafusion::physical_plan::displayable(plan.as_ref())
+                                .indent(true),
+                        );
+                    } else {
+                        assert_eq!(pruned, 0);
+                    }
+                }
+            }
+        }
+    }
+}
 
 /// Build five `RecordBatch`es whose `v` column ranges are disjoint:
 /// batch `i` carries `v` values `[i*100, (i+1)*100)`. When written with
