@@ -71,7 +71,8 @@ use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::proto::{
     ExecutionPlanDecode, ExecutionPlanDecodeCtx, ExecutionPlanEncode,
-    ExecutionPlanEncodeCtx,
+    ExecutionPlanEncodeCtx, ProtoDecoderRegistry, decode_execution_plan,
+    execution_plan_names,
 };
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::scalar_subquery::ScalarSubqueryExec;
@@ -1399,20 +1400,57 @@ pub trait PhysicalPlanNodeExt: Sized {
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Lookup-order policy, mirroring the one function decode already uses a
+        // layer down (payload -> codec; else registry -> codec fallback): a
+        // plan that named itself on the wire and is registered on this session
+        // decodes itself, no codec involved. Anything else — an unnamed node
+        // from a codec-encoded writer, or a name this session does not know —
+        // takes the codec chain exactly as before.
+        let registry = ctx
+            .task_ctx()
+            .session_config()
+            .get_extension::<ProtoDecoderRegistry>();
+        if let Some(registry) = registry.as_ref() {
+            let plan_decoder = ConverterPlanDecoder {
+                ctx,
+                proto_converter,
+            };
+            // The decoder receives the whole node, like every built-in
+            // `try_from_proto`, reads its own name off it and decodes its own
+            // children through the ctx. `None` here means no decoder claims
+            // the node; a decode *failure* is returned as-is rather than
+            // falling through to the codec.
+            if let Some(decoded) = decode_execution_plan(
+                registry,
+                self.node(),
+                &ExecutionPlanDecodeCtx::new(&plan_decoder),
+            ) {
+                return decoded;
+            }
+        }
+
         let inputs: Vec<Arc<dyn ExecutionPlan>> = extension
             .inputs
             .iter()
             .map(|i| proto_converter.proto_to_execution_plan(i, ctx))
             .collect::<Result<_>>()?;
 
-        let extension_node = ctx.codec().try_decode(
-            extension.node.as_slice(),
-            &inputs,
-            ctx.task_ctx(),
-            proto_converter,
-        )?;
-
-        Ok(extension_node)
+        ctx.codec()
+            .try_decode(
+                extension.node.as_slice(),
+                &inputs,
+                ctx.task_ctx(),
+                proto_converter,
+            )
+            .map_err(|e| match extension.plan_name.as_deref() {
+                // The writer named the plan but this session has no decoder for
+                // it. Add that as context, rather than leaving only the codec's
+                // "unsupported plan" error to explain a missing registration.
+                Some(plan_name) => {
+                    unregistered_extension_plan_context(plan_name, registry.as_deref(), e)
+                }
+                None => e,
+            })
     }
 
     fn generate_series_name_to_str(name: protobuf::GenerateSeriesName) -> &'static str {
@@ -2140,6 +2178,36 @@ impl PhysicalExtensionCodec for ComposedPhysicalExtensionCodec {
     fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
         self.encode_protobuf(buf, |codec, data| codec.try_encode_udaf(node, data))
     }
+}
+
+/// Add "nothing is registered under this name" context to the error a
+/// `PhysicalExtensionCodec` returned for a node that *does* name its plan type.
+///
+/// Lists what *is* registered, because the usual cause is a session configured
+/// on the writing side but not on the reading one. The codec's own error is
+/// kept as the cause rather than reworded: the codec may have failed for a
+/// reason that has nothing to do with the missing registration, and a caller
+/// matching on the error kind must still see the kind the codec chose.
+fn unregistered_extension_plan_context(
+    plan_name: &str,
+    registry: Option<&ProtoDecoderRegistry>,
+    codec_error: DataFusionError,
+) -> DataFusionError {
+    let mut registered: Vec<&str> = registry
+        .map(|registry| execution_plan_names(registry).collect())
+        .unwrap_or_default();
+    registered.sort_unstable();
+    let registered = if registered.is_empty() {
+        "none".to_string()
+    } else {
+        registered.join(", ")
+    };
+    codec_error.context(format!(
+        "No decoder is registered for the extension ExecutionPlan '{plan_name}'. Register \
+         the plan in the ProtoDecoderRegistry attached to the decoding session's \
+         SessionConfig, or supply a PhysicalExtensionCodec that handles it. Registered \
+         extension plans: {registered}"
+    ))
 }
 
 /// Adapter backing [`ExecutionPlanEncodeCtx`] for plans migrated to the
