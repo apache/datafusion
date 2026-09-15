@@ -23,7 +23,7 @@ use crate::{
 };
 use arrow::datatypes::Schema;
 pub use datafusion_common::SplitPoint;
-use datafusion_common::{Result, validate_range_split_points};
+use datafusion_common::{DataFusionError, Result, validate_range_split_points};
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 #[cfg(feature = "proto")]
@@ -204,9 +204,8 @@ impl Display for Partitioning {
 /// partition 2: keys at/after (2023, Allston)
 /// ```
 ///
-/// NOTE: Optimizer and execution behavior for this partitioning is intentionally
-/// not implemented and will be introduced incrementally. See
-/// <https://github.com/apache/datafusion/issues/22395>.
+/// Equality includes retained samples, since they determine which future scales
+/// are possible. Use [`Self::has_same_layout`] to compare only the current layout.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RangePartitioning {
     /// Ordered partitioning key.
@@ -215,37 +214,76 @@ pub struct RangePartitioning {
     samples: Arc<[SplitPoint]>,
     /// Effective boundaries for the current partition count.
     split_points: Arc<[SplitPoint]>,
-    /// Number of effective partitions.
-    partition_count: usize,
+}
+
+/// Why a [`RangePartitioning`] cannot be scaled to a requested partition count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RangePartitioningScaleError {
+    /// A partitioning must contain at least one partition.
+    ZeroPartitions,
+    /// The retained samples cannot support the requested number of partitions.
+    /// Callers may retain the current layout or choose another partitioning.
+    InsufficientSamples {
+        /// Requested number of partitions.
+        target_partitions: usize,
+        /// Largest partition count supported by the retained samples.
+        max_partitions: usize,
+    },
+}
+
+impl Display for RangePartitioningScaleError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ZeroPartitions => {
+                write!(f, "Range partitioning partition count must be at least 1")
+            }
+            Self::InsufficientSamples {
+                target_partitions,
+                max_partitions,
+            } => write!(
+                f,
+                "Range partitioning partition count {target_partitions} exceeds maximum {max_partitions}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RangePartitioningScaleError {}
+
+impl From<RangePartitioningScaleError> for DataFusionError {
+    fn from(error: RangePartitioningScaleError) -> Self {
+        Self::Plan(error.to_string())
+    }
 }
 
 impl RangePartitioning {
     /// Creates range partitioning metadata without validating split points.
     ///
-    /// Use [`Self::try_new`] to validate the contract documented on
-    /// [`RangePartitioning`].
+    /// Prefer [`Self::try_new_with_samples`] to validate the boundaries and retain
+    /// additional samples for scaling up. [`Self::try_new`] remains available for
+    /// validated exact boundaries.
+    #[deprecated(
+        since = "56.0.0",
+        note = "Use RangePartitioning::try_new_with_samples instead"
+    )]
     pub fn new(ordering: LexOrdering, split_points: Vec<SplitPoint>) -> Self {
-        let partition_count = split_points.len() + 1;
         let split_points: Arc<[SplitPoint]> = Arc::from(split_points);
         Self {
             ordering,
             samples: Arc::clone(&split_points),
             split_points,
-            partition_count,
         }
     }
 
     /// Creates range partitioning metadata and validates split point shape and
     /// ordering.
+    ///
+    /// The exact boundaries are also the retained samples. This allows scaling
+    /// down and back up to the original count, but not beyond it. Prefer
+    /// [`Self::try_new_with_samples`] when additional sample points are available.
     pub fn try_new(ordering: LexOrdering, split_points: Vec<SplitPoint>) -> Result<Self> {
-        validate_range_split_points(
-            &split_points,
-            &ordering
-                .iter()
-                .map(|sort_expr| sort_expr.options)
-                .collect::<Vec<_>>(),
-        )?;
-        Ok(Self::new(ordering, split_points))
+        let partition_count = split_points.len() + 1;
+        Self::try_new_with_samples(ordering, split_points, partition_count)
     }
 
     /// Creates sample-backed range partitioning and validates the sample shape,
@@ -254,6 +292,12 @@ impl RangePartitioning {
     /// `partition_count` must be at least one and no larger than
     /// `samples.len() + 1`. When it is smaller than that maximum, the samples
     /// are evenly down-sampled to derive the effective split points.
+    ///
+    /// Retain at least `maximum_expected_partitions - 1` samples to support that
+    /// many partitions later. For example, supplying `4 * partition_count`
+    /// samples provides capacity for up to `4 * partition_count + 1` partitions.
+    /// Choose the sampling factor for the workload; small inputs may not have
+    /// enough distinct values, and callers must handle insufficient capacity.
     pub fn try_new_with_samples(
         ordering: LexOrdering,
         samples: Vec<SplitPoint>,
@@ -273,7 +317,6 @@ impl RangePartitioning {
             ordering,
             samples,
             split_points,
-            partition_count,
         })
     }
 
@@ -294,7 +337,7 @@ impl RangePartitioning {
 
     /// Returns the number of partitions.
     pub fn partition_count(&self) -> usize {
-        self.partition_count
+        self.split_points.len() + 1
     }
 
     /// Returns the largest partition count supported by the stored samples.
@@ -302,20 +345,37 @@ impl RangePartitioning {
         self.samples.len() + 1
     }
 
+    /// Whether two range partitionings have the same current key ordering and
+    /// effective boundaries, irrespective of their retained samples.
+    ///
+    /// This does not imply equal scaling capacity. In particular, a plan that
+    /// combines inputs must not use this comparison to inherit one input's samples
+    /// for all inputs. Structural equality is required for that use case.
+    pub fn has_same_layout(&self, other: &Self) -> bool {
+        self.ordering == other.ordering && self.split_points == other.split_points
+    }
+
     /// Returns this range partitioning scaled to `target_partitions`.
     ///
     /// Scaling retains the original samples, so a range partitioning that was
     /// scaled down can later be scaled back up to [`Self::max_partition_count`].
-    pub fn scale(&self, target_partitions: usize) -> Result<Self> {
+    /// Insufficient samples are an expected limitation, reported separately from
+    /// an invalid zero count by [`RangePartitioningScaleError`]. The caller chooses
+    /// whether to retain the existing layout or fall back to another partitioning.
+    /// This method changes metadata only; the caller must ensure that the actual
+    /// row distribution matches the resulting boundaries.
+    pub fn scale(
+        &self,
+        target_partitions: usize,
+    ) -> Result<Self, RangePartitioningScaleError> {
         validate_range_partition_count(target_partitions, self.max_partition_count())?;
-        if target_partitions == self.partition_count {
+        if target_partitions == self.partition_count() {
             return Ok(self.clone());
         }
         Ok(Self {
             ordering: self.ordering.clone(),
             samples: Arc::clone(&self.samples),
             split_points: downsample_split_points(&self.samples, target_partitions),
-            partition_count: target_partitions,
         })
     }
 
@@ -351,7 +411,6 @@ impl RangePartitioning {
             ordering,
             samples: Arc::clone(&self.samples),
             split_points: Arc::clone(&self.split_points),
-            partition_count: self.partition_count,
         })
     }
 
@@ -402,7 +461,6 @@ impl RangePartitioning {
             ordering: new_ordering,
             samples: Arc::clone(&self.samples),
             split_points: Arc::clone(&self.split_points),
-            partition_count: self.partition_count,
         })
     }
 }
@@ -448,16 +506,15 @@ fn downsample_split_points(
 fn validate_range_partition_count(
     partition_count: usize,
     max_partition_count: usize,
-) -> Result<()> {
+) -> Result<(), RangePartitioningScaleError> {
     if partition_count == 0 {
-        return datafusion_common::plan_err!(
-            "Range partitioning partition count must be at least 1"
-        );
+        return Err(RangePartitioningScaleError::ZeroPartitions);
     }
     if partition_count > max_partition_count {
-        return datafusion_common::plan_err!(
-            "Range partitioning partition count {partition_count} exceeds maximum {max_partition_count}"
-        );
+        return Err(RangePartitioningScaleError::InsufficientSamples {
+            target_partitions: partition_count,
+            max_partitions: max_partition_count,
+        });
     }
     Ok(())
 }
@@ -1412,11 +1469,81 @@ mod tests {
         )?;
 
         assert_eq!(sampled.split_points(), exact.split_points());
+        assert!(sampled.has_same_layout(&exact));
+        assert!(exact.has_same_layout(&sampled));
         assert!(sampled.scale(10).is_ok());
         assert!(exact.scale(10).is_err());
         assert_ne!(sampled, exact);
         assert_ne!(Partitioning::Range(sampled), Partitioning::Range(exact));
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_range_partitioning_layout_requires_keys_options_and_boundaries() -> Result<()>
+    {
+        let fixture = PartitioningTestFixture::int64(&["a", "b"])?;
+        let range = RangePartitioning::try_new_with_samples(
+            fixture.range_ordering([0]),
+            vec![int_split_point([10])],
+            2,
+        )?;
+        assert!(range.has_same_layout(&range.clone()));
+        let different_boundary = RangePartitioning::try_new_with_samples(
+            fixture.range_ordering([0]),
+            vec![int_split_point([20])],
+            2,
+        )?;
+        assert!(!range.has_same_layout(&different_boundary));
+        assert!(!range.has_same_layout(&range.scale(1)?));
+        let singleton = range.scale(1)?;
+        for ordering in [
+            fixture.range_ordering([1]),
+            [fixture.range_sort_expr(0, SortOptions::new(true, false))].into(),
+            [fixture.range_sort_expr(0, SortOptions::new(false, false))].into(),
+        ] {
+            let other = RangePartitioning::try_new_with_samples(ordering, vec![], 1)?;
+            assert!(!singleton.has_same_layout(&other));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_range_partitioning_scaling_errors_are_distinguishable() -> Result<()> {
+        let fixture = PartitioningTestFixture::int64(&["a"])?;
+        let range = RangePartitioning::try_new_with_samples(
+            fixture.range_ordering([0]),
+            vec![int_split_point([10])],
+            1,
+        )?;
+        assert_eq!(
+            range.scale(0),
+            Err(RangePartitioningScaleError::ZeroPartitions)
+        );
+        for target_partitions in [3, usize::MAX] {
+            let error = RangePartitioningScaleError::InsufficientSamples {
+                target_partitions,
+                max_partitions: 2,
+            };
+            assert_eq!(range.scale(target_partitions), Err(error));
+            assert!(matches!(
+                DataFusionError::from(error),
+                DataFusionError::Plan(_)
+            ));
+        }
+        assert_eq!(range.scale(1)?, range);
+        assert_eq!(range.scale(2)?.scale(1)?, range);
+        assert_eq!(range.scale(2)?.partition_count(), 2);
+        let empty = RangePartitioning::try_new_with_samples(
+            fixture.range_ordering([0]),
+            vec![],
+            1,
+        )?;
+        assert_eq!(empty.scale(1)?, empty);
+        assert!(matches!(
+            empty.scale(2),
+            Err(RangePartitioningScaleError::InsufficientSamples { .. })
+        ));
         Ok(())
     }
 
