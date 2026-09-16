@@ -324,6 +324,18 @@ struct TrackedConsumer {
     can_spill: bool,
     reserved: AtomicUsize,
     peak: AtomicUsize,
+    #[cfg(test)]
+    grow_pause: Mutex<Option<GrowPause>>,
+}
+
+#[cfg(test)]
+const TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+#[cfg(test)]
+#[derive(Debug)]
+struct GrowPause {
+    entered: std::sync::mpsc::Sender<()>,
+    resume: std::sync::mpsc::Receiver<()>,
 }
 
 impl TrackedConsumer {
@@ -342,6 +354,11 @@ impl TrackedConsumer {
     fn grow(&self, additional: usize) {
         let reserved =
             self.reserved.fetch_add(additional, Ordering::Relaxed) + additional;
+        #[cfg(test)]
+        if let Some(pause) = self.grow_pause.lock().take() {
+            pause.entered.send(()).unwrap();
+            pause.resume.recv_timeout(TEST_TIMEOUT).unwrap();
+        }
         self.peak.fetch_max(reserved, Ordering::Relaxed);
     }
 
@@ -538,6 +555,8 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
                 can_spill: consumer.can_spill(),
                 reserved: Default::default(),
                 peak: Default::default(),
+                #[cfg(test)]
+                grow_pause: Default::default(),
             },
         );
 
@@ -945,6 +964,48 @@ mod tests {
         let metrics = track_consumers_pool.metrics();
         assert_eq!(metrics.len(), 1);
         assert_eq!(metrics[0].name, "spilling");
+    }
+
+    #[test]
+    fn test_track_consumers_pool_concurrent_peak() {
+        let track_consumers_pool = Arc::new(TrackConsumersPool::new(
+            GreedyMemoryPool::new(100),
+            NonZeroUsize::new(1).unwrap(),
+        ));
+        let memory_pool: Arc<dyn MemoryPool> = Arc::clone(&track_consumers_pool) as _;
+        let reservation_a = MemoryConsumer::new("shared").register(&memory_pool);
+        let reservation_b = reservation_a.new_empty();
+
+        reservation_b.grow(10);
+
+        // Pause A after the shared counter grows, then release B before A records the peak.
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+        track_consumers_pool
+            .tracked_consumers
+            .write()
+            .get_mut(&reservation_a.consumer().id())
+            .unwrap()
+            .grow_pause
+            .get_mut()
+            .replace(GrowPause {
+                entered: entered_tx,
+                resume: resume_rx,
+            });
+
+        std::thread::scope(|scope| {
+            let grow = scope.spawn(|| reservation_a.grow(10));
+            entered_rx.recv_timeout(TEST_TIMEOUT).unwrap();
+            reservation_b.shrink(10);
+            resume_tx.send(()).unwrap();
+            grow.join().unwrap();
+        });
+        reservation_a.shrink(10);
+
+        let metrics = track_consumers_pool.metrics();
+        assert_eq!(metrics.len(), 1);
+        assert_eq!(metrics[0].reserved, 0);
+        assert_eq!(metrics[0].peak, 20);
     }
 
     #[test]
