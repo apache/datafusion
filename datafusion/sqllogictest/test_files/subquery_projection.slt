@@ -328,6 +328,77 @@ SELECT id FROM nn WHERE NULLIF(id, 1) NOT IN (SELECT id FROM r3);
 ----
 4
 
+# An empty subquery gives `false` also for a NULL key, and the plan stays one
+# null-aware mark join.
+statement ok
+CREATE TABLE r_empty(id INT NOT NULL) AS SELECT * FROM r3 WHERE false;
+
+query TT
+EXPLAIN SELECT id, NULLIF(id, 1) IN (SELECT id FROM r_empty) AS m FROM nn;
+----
+logical_plan
+01)Projection: nn.id, __correlated_sq_1.mark AS m
+02)--LeftMark Join: nullif(CAST(nn.id AS Int64), Int64(1)) = __correlated_sq_1.r_empty.id null_aware
+03)----TableScan: nn projection=[id]
+04)----SubqueryAlias: __correlated_sq_1
+05)------Projection: CAST(r_empty.id AS Int64)
+06)--------TableScan: r_empty projection=[id]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, mark@1 as m]
+02)--HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(nullif(nn.id,Int64(1))@1, r_empty.id@0)], projection=[id@0, mark@2], null_aware
+03)----ProjectionExec: expr=[id@0 as id, nullif(CAST(id@0 AS Int64), 1) as nullif(nn.id,Int64(1))]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)----ProjectionExec: expr=[CAST(id@0 AS Int64) as r_empty.id]
+06)------DataSourceExec: partitions=1, partition_sizes=[0]
+
+query IB rowsort
+SELECT id, NULLIF(id, 1) IN (SELECT id FROM r_empty) AS m FROM nn;
+----
+1 false
+2 false
+4 false
+
+query IB rowsort
+SELECT id, NULLIF(id, 1) NOT IN (SELECT id FROM r_empty) AS m FROM nn;
+----
+1 true
+2 true
+4 true
+
+statement ok
+DROP TABLE r_empty;
+
+# A correlated `NOT IN` filter builds a `LeftAnti` join with two keys: the
+# value and the correlation. A null-aware `LeftAnti` hash join supports one key
+# only, so a function key over non-nullable columns must not make this join
+# null-aware.
+statement ok
+CREATE TABLE t1(k INT NOT NULL, s VARCHAR NOT NULL) AS VALUES (1, 'a'), (2, 'b');
+
+statement ok
+CREATE TABLE t2(k INT NOT NULL, s VARCHAR NOT NULL) AS VALUES (1, 'B'), (2, 'B');
+
+query IT rowsort
+SELECT * FROM t1 WHERE upper(t1.s) NOT IN (SELECT t2.s FROM t2 WHERE t2.k = t1.k);
+----
+1 a
+
+# `NULLIF(k, 1)` is NULL for `k = 1`, and that group of `t2` is not empty, so
+# the correct result has no row for `k = 1`. The two key join is not
+# null-aware, so this row is wrong. See
+# https://github.com/apache/datafusion/issues/25347.
+query I rowsort
+SELECT k FROM t1 WHERE NULLIF(t1.k, 1) NOT IN (SELECT t2.k + 10 FROM t2 WHERE t2.k = t1.k);
+----
+1
+2
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;
+
 statement ok
 DROP TABLE nn;
 

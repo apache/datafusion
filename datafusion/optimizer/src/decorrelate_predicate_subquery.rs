@@ -755,12 +755,29 @@ fn build_join(
             left.schema(),
             sub_query_alias.schema(),
         )?;
-        join_keys_may_be_null(
-            &equijoin_keys,
-            residual_filter.as_ref(),
-            left.schema(),
-            sub_query_alias.schema(),
-        )?
+        if equijoin_keys.len() > 1 {
+            // A null-aware `LeftAnti` hash join supports one key only. A
+            // correlated `NOT IN` has two or more keys (the value and the
+            // correlation), so keep the column test on the whole filter here.
+            // A function key such as `upper(s)` over a non-nullable column
+            // then does not make the join null-aware and fail to plan. The
+            // column test misses a NULL that only the key expression makes,
+            // as in `NULLIF(id, 1)`: see
+            // https://github.com/apache/datafusion/issues/25347.
+            join_keys_may_be_null(
+                &[],
+                Some(&join_filter),
+                left.schema(),
+                sub_query_alias.schema(),
+            )?
+        } else {
+            join_keys_may_be_null(
+                &equijoin_keys,
+                residual_filter.as_ref(),
+                left.schema(),
+                sub_query_alias.schema(),
+            )?
+        }
     } else {
         false
     };
