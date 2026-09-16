@@ -1164,6 +1164,10 @@ enum ShortCircuitStrategy {
 /// the side that cannot short-circuit the operator is rare:
 /// - for `AND`, when the proportion of `true` is less than or equal to 0.2
 /// - for `OR`, when the proportion of `false` is less than or equal to 0.2
+///
+/// Public only so that crates modelling this behaviour can share the
+/// definition; not part of the API surface DataFusion advertises.
+#[doc(hidden)]
 pub const PRE_SELECTION_THRESHOLD: f32 = 0.2;
 
 /// How much of the batch an `AND`'s right-hand side is evaluated on, given the
@@ -1172,6 +1176,10 @@ pub const PRE_SELECTION_THRESHOLD: f32 = 0.2;
 /// This is the observable consequence of `check_short_circuit` for `AND`,
 /// exposed so that consumers modelling the cost of a conjunction share one
 /// definition with the code that implements it. See [`and_rhs_evaluation`].
+///
+/// Public only so that crates modelling this behaviour can share the
+/// definition; not part of the API surface DataFusion advertises.
+#[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AndRhsEvaluation {
     /// The left-hand side is `false` on every row, so the right-hand side is
@@ -1194,6 +1202,10 @@ pub enum AndRhsEvaluation {
 ///
 /// `check_short_circuit` decides by this function, so a caller that models
 /// conjunction cost cannot drift away from what evaluation actually does.
+///
+/// Public only so that crates modelling this behaviour can share the
+/// definition; not part of the API surface DataFusion advertises.
+#[doc(hidden)]
 pub fn and_rhs_evaluation(
     true_count: usize,
     null_count: usize,

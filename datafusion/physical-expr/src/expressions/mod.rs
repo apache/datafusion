@@ -41,10 +41,10 @@ pub use crate::PhysicalSortExpr;
 /// Module with some convenient methods used in expression building
 pub use crate::aggregate::stats::StatsType;
 
-pub use binary::{
-    AndRhsEvaluation, BinaryExpr, PRE_SELECTION_THRESHOLD, and_rhs_evaluation, binary,
-    similar_to,
-};
+/// Shared with crates that model `AND` pre-selection; not advertised API.
+#[doc(hidden)]
+pub use binary::{AndRhsEvaluation, PRE_SELECTION_THRESHOLD, and_rhs_evaluation};
+pub use binary::{BinaryExpr, binary, similar_to};
 pub use case::{CaseExpr, case};
 pub use cast::{CastExpr, cast};
 pub use column::{Column, col, with_new_schema};
