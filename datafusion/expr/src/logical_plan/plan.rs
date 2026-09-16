@@ -131,7 +131,7 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// # fn main() -> Result<()> {
 /// let plan = table_scan(Some("employee"), &employee_schema(), None)?
 ///  .filter(col("salary").gt(lit(1000)))?
-///  .project(vec![col("name")])?
+///  .project(vec![col("name"), col("salary")])?
 ///  .build()?;
 ///
 /// // use apply to walk the plan and collect all expressions
@@ -180,7 +180,7 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// use datafusion_common::tree_node::Transformed;
 /// let plan = table_scan(Some("employee"), &employee_schema(), None)?
 ///  .filter(col("salary").gt(lit(1000)))?
-///  .project(vec![col("name")])?
+///  .project(vec![col("name"), col("salary")])?
 ///  .build()?;
 ///
 /// // use transform to rewrite the plan
