@@ -3824,6 +3824,81 @@ mod tests {
         Ok(())
     }
 
+    /// Replaces the plan with an equivalent new object, standing in for a
+    /// rewrite that fires only for some queries.
+    #[derive(Debug)]
+    struct RewritingRule {
+        name: &'static str,
+        rewrite: bool,
+    }
+
+    impl PhysicalOptimizerRule for RewritingRule {
+        fn optimize(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+            _config: &ConfigOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            if self.rewrite {
+                Ok(Arc::new(EmptyExec::new(plan.schema())))
+            } else {
+                Ok(plan)
+            }
+        }
+
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn schema_check(&self) -> bool {
+            true
+        }
+    }
+
+    /// The shape this feature exists for: a chain that enforces requirements,
+    /// applies its own rewrites, and enforces again after each one. Only the
+    /// enforcement passes that follow a rewrite which actually fired have work
+    /// to do; the others receive the plan the previous enforcement produced.
+    ///
+    /// Here the first rewrite fires and the second does not, so of three
+    /// enforcement passes exactly two must run.
+    #[tokio::test]
+    async fn skip_unchanged_handles_an_interleaved_chain() -> Result<()> {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let enforce = || {
+            Arc::new(CountingNoopRule {
+                calls: Arc::clone(&calls),
+                skip_if_unchanged: true,
+            }) as Arc<dyn PhysicalOptimizerRule + Send + Sync>
+        };
+        let rewrite = |name, rewrite| {
+            Arc::new(RewritingRule { name, rewrite })
+                as Arc<dyn PhysicalOptimizerRule + Send + Sync>
+        };
+
+        let mut config = SessionConfig::new();
+        config.options_mut().optimizer.skip_unchanged_physical_rules = true;
+        let state = SessionStateBuilder::new()
+            .with_config(config)
+            .with_default_features()
+            .with_physical_optimizer_rules(vec![
+                enforce(), // runs: nothing memoized yet
+                rewrite("rewrite_that_fires", true),
+                enforce(), // runs: the plan changed
+                rewrite("rewrite_that_does_not", false),
+                enforce(), // skipped: plan is unchanged
+            ])
+            .build();
+        let ctx = SessionContext::new_with_state(state);
+        let logical_plan = LogicalPlanBuilder::empty(false).build()?;
+        ctx.state().create_physical_plan(&logical_plan).await?;
+
+        // Two enforcement passes have real work; the third is skipped (and in
+        // debug builds re-run by the self-check, which is why this counts
+        // against SKIPPED_CALLS rather than a literal).
+        assert_eq!(calls.load(AtomicOrdering::Relaxed), 2 + (SKIPPED_CALLS - 1));
+        Ok(())
+    }
+
     /// The memo is per optimization run, not per rule instance: planning a
     /// second query must not let the first query's plan suppress a call.
     #[tokio::test]
