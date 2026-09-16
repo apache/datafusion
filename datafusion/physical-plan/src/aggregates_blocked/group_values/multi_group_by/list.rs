@@ -186,7 +186,8 @@ impl<const IS_FIXED_BLOCK_SIZE: bool, O: OffsetSizeTrait> BlockedGroupColumn<IS_
     }
 
     fn len(&self) -> usize {
-        self.offsets.len() - 1
+        // the offsets builder counts items, not slots, so there is no leading offset to subtract
+        self.offsets.num_items()
     }
 
     fn size(&self) -> usize {

@@ -44,7 +44,8 @@ impl<const FIXED_BLOCK_SIZING: bool, O: OffsetSizeTrait>
         }
     }
 
-    pub fn len(&self) -> usize {
+    /// Number of items, one less than the offsets held for them
+    pub fn num_items(&self) -> usize {
         self.len
     }
 
@@ -597,13 +598,13 @@ mod tests {
     fn check_fixed_layout(builder: &Fixed, block_size: usize) {
         assert_eq!(
             builder.num_blocks(),
-            builder.len().div_ceil(block_size),
+            builder.num_items().div_ceil(block_size),
             "unexpected number of blocks for len {} and block size {block_size}",
-            builder.len()
+            builder.num_items()
         );
-        assert_eq!(builder.current_block_index(), builder.len() / block_size);
-        assert_eq!(builder.current_block_len(), builder.len() % block_size);
-        let full_blocks = builder.len() / block_size;
+        assert_eq!(builder.current_block_index(), builder.num_items() / block_size);
+        assert_eq!(builder.current_block_len(), builder.num_items() % block_size);
+        let full_blocks = builder.num_items() / block_size;
         for (i, block) in builder.blocks_iter().enumerate() {
             assert_eq!(block[0], 0, "block {i} must start at offset 0");
             if i < full_blocks {
@@ -642,7 +643,7 @@ mod tests {
     }
 
     fn all_lengths(builder: &Fixed, block_size: usize) -> Vec<usize> {
-        (0..builder.len())
+        (0..builder.num_items())
             .map(|i| {
                 let index = BlocksIndex::from_index_in_fixed_block_size(i, block_size);
                 (builder[index.next_index_in_block()] - builder[index]) as usize
@@ -653,7 +654,7 @@ mod tests {
     #[test]
     fn new_is_empty() {
         let mut builder = Fixed::new(4);
-        assert_eq!(builder.len(), 0);
+        assert_eq!(builder.num_items(), 0);
         assert_eq!(
             builder.block_size(),
             4,
@@ -678,7 +679,7 @@ mod tests {
         let mut builder = Fixed::new(3);
         let finished: Vec<bool> = (1..=7).map(|len| builder.push_length(len)).collect();
         assert_eq!(finished, [false, false, true, false, false, true, false]);
-        assert_eq!(builder.len(), 7);
+        assert_eq!(builder.num_items(), 7);
         assert_eq!(builder.last_offset(), 7);
         check_fixed_layout(&builder, 3);
         assert_eq!(all_lengths(&builder, 3), (1..=7).collect::<Vec<_>>());
@@ -687,7 +688,7 @@ mod tests {
             drain(&mut builder),
             vec![vec![1, 2, 3], vec![4, 5, 6], vec![7]]
         );
-        assert_eq!(builder.len(), 0);
+        assert_eq!(builder.num_items(), 0);
         check_fixed_layout(&builder, 3);
     }
 
@@ -712,10 +713,10 @@ mod tests {
         let mut builder = Fixed::new(3);
         builder.extend(std::iter::empty());
         check_fixed_layout(&builder, 3);
-        assert_eq!(builder.len(), 0);
+        assert_eq!(builder.num_items(), 0);
 
         builder.extend([1usize, 2, 3, 4, 5, 6]);
-        assert_eq!(builder.len(), 6);
+        assert_eq!(builder.num_items(), 6);
         assert_eq!(builder.num_blocks(), 2);
         assert_eq!(builder.current_block_len(), 0);
         assert_eq!(builder.last_offset(), 0);
@@ -773,7 +774,7 @@ mod tests {
         let mut builder = Fixed::new(3);
         builder.push_length_n(2, 0);
         builder.push_empty_n(0);
-        assert_eq!(builder.len(), 0);
+        assert_eq!(builder.num_items(), 0);
 
         builder.push_length_n(2, 7);
         assert_eq!(all_lengths(&builder, 3), vec![2; 7]);
@@ -809,7 +810,7 @@ mod tests {
             builder.take_block().map(|b| b.to_vec()),
             Some(vec![0, 1, 3, 6])
         );
-        assert_eq!(builder.len(), 1);
+        assert_eq!(builder.num_items(), 1);
         assert_eq!(builder.last_offset(), 4);
         check_fixed_layout(&builder, 3);
 
@@ -831,7 +832,7 @@ mod tests {
             builder.take_n(3, None::<std::iter::Empty<usize>>),
             vec![0, 1, 3, 6]
         );
-        assert_eq!(builder.len(), 0);
+        assert_eq!(builder.num_items(), 0);
         check_fixed_layout(&builder, 4);
         assert_eq!(builder.take_n(0, None::<std::iter::Empty<usize>>), vec![0]);
         assert_eq!(builder.take_block(), None);
@@ -927,7 +928,7 @@ mod tests {
             assert!(!builder.push_length(len));
         }
         assert_eq!(builder.num_blocks(), 1);
-        assert_eq!(builder.len(), 10);
+        assert_eq!(builder.num_items(), 10);
         assert_eq!(builder.current_block_len(), 10);
         assert_eq!(builder.last_offset(), 45);
         assert_eq!(builder[BlocksIndex::new(0, 10)], 45);
@@ -939,7 +940,7 @@ mod tests {
         builder.push_next_offset_in_block(3);
         builder.push_next_offset_in_block(3);
         builder.push_next_offset_in_block(10);
-        assert_eq!(builder.len(), 3);
+        assert_eq!(builder.num_items(), 3);
         assert_eq!(builder.last_offset(), 10);
         assert_eq!(drain(&mut builder), vec![vec![3, 0, 7]]);
     }
@@ -956,7 +957,7 @@ mod tests {
     fn manual_start_new_block_and_take_block() {
         let mut builder = manual_with_blocks(&[vec![1, 2], vec![3], vec![4, 5, 6]]);
         assert_eq!(builder.num_blocks(), 3);
-        assert_eq!(builder.len(), 6);
+        assert_eq!(builder.num_items(), 6);
         assert_eq!(builder.last_offset(), 15);
         assert_eq!(builder[BlocksIndex::new(2, 3)], 15);
 
@@ -964,7 +965,7 @@ mod tests {
             builder.take_block().map(|b| b.to_vec()),
             Some(vec![0, 1, 3])
         );
-        assert_eq!(builder.len(), 4);
+        assert_eq!(builder.num_items(), 4);
         assert_eq!(builder.current_block_index(), 1);
         // last offset is still the one of the block being written to
         assert_eq!(builder.last_offset(), 15);
@@ -982,7 +983,7 @@ mod tests {
         let mut builder = manual_with_blocks(&blocks());
         let taken = builder.take_n(2, Some([3usize, 3, 4].into_iter()));
         assert_eq!(taken, vec![0, 1, 3]);
-        assert_eq!(builder.len(), 10);
+        assert_eq!(builder.num_items(), 10);
         assert_eq!(
             drain(&mut builder),
             vec![vec![3, 4, 5], vec![6, 7, 8], vec![9, 10, 11, 12]]
@@ -1022,7 +1023,7 @@ mod tests {
         let mut builder = manual_with_blocks(&blocks()[..1]);
         let taken = builder.take_n(5, Some(std::iter::empty::<usize>()));
         assert_eq!(lengths(&taken), [1, 2, 3, 4, 5]);
-        assert_eq!(builder.len(), 0);
+        assert_eq!(builder.num_items(), 0);
         assert_eq!(builder.last_offset(), 0);
         assert_eq!(builder.take_block(), None);
         builder.push_length(1);
@@ -1075,7 +1076,7 @@ mod tests {
             let mut builder = manual_with_blocks(&blocks);
             let taken = builder.take_n(n, Some(adjusted.clone().into_iter()));
             assert_eq!(lengths(&taken), &lens[..n], "seed {seed}");
-            assert_eq!(builder.len(), remaining, "seed {seed}");
+            assert_eq!(builder.num_items(), remaining, "seed {seed}");
 
             let drained = drain(&mut builder);
             let drained_sizes: Vec<usize> = drained.iter().map(Vec::len).collect();
@@ -1258,8 +1259,8 @@ mod tests {
                 manual.end_current_block();
             }
         }
-        assert_eq!(fixed.len(), 9);
-        assert_eq!(manual.len(), 9);
+        assert_eq!(fixed.num_items(), 9);
+        assert_eq!(manual.num_items(), 9);
         assert_eq!(fixed.num_blocks(), 3);
         assert_eq!(manual.num_blocks(), 3);
         let fixed_blocks = fixed.take_all();

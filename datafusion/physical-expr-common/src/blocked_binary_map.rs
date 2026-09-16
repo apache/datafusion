@@ -383,7 +383,7 @@ where
                 } else {
                     let payload = make_payload_fn(None);
 
-                    let null_index = BlocksIndex::from_index_in_fixed_block_size(self.offsets.len(), self.block_size);
+                    let null_index = BlocksIndex::from_index_in_fixed_block_size(self.offsets.num_items(), self.block_size);
                     // nulls need a zero length in the offset buffer
                     let should_end_current_block = self.offsets.push_length(0);
 
@@ -425,7 +425,7 @@ where
                     // the output array, but store the actual bytes inline for
                     // comparison
                     self.buffer.extend_from_slice(value);
-                    let index = BlocksIndex::from_index_in_fixed_block_size(self.offsets.len(), self.block_size);
+                    let index = BlocksIndex::from_index_in_fixed_block_size(self.offsets.num_items(), self.block_size);
                     let should_end_current_block = self.offsets.push_length(value.len());
 
                     if should_end_current_block {
@@ -472,7 +472,7 @@ where
                     // so the bytes can be compared if needed
                     let offset = self.buffer.current_block_len(); // offset of start for data
                     self.buffer.extend_from_slice(value);
-                    let index = BlocksIndex::from_index_in_fixed_block_size(self.offsets.len(), self.block_size);
+                    let index = BlocksIndex::from_index_in_fixed_block_size(self.offsets.num_items(), self.block_size);
                     let should_end_current_block = self.offsets.push_length(value.len());
 
                     if should_end_current_block {

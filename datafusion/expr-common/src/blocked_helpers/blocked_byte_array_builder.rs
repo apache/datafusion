@@ -32,7 +32,7 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteArrayType>
     }
 
     pub fn len(&self) -> usize {
-        self.blocked_offsets.len()
+        self.blocked_offsets.num_items()
     }
 
     pub fn is_empty(&self) -> bool {
