@@ -27,7 +27,7 @@ use log::{Level, debug, log_enabled};
 
 use datafusion_common::instant::Instant;
 use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+    Transformed, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
     Column, DFSchema, Result, assert_eq_or_internal_err, internal_err, plan_err,
@@ -1377,6 +1377,13 @@ pub fn replace_cols_by_name(
     e: Expr,
     replace_map: &HashMap<String, impl AsRef<Expr>>,
 ) -> Result<Expr> {
+    Ok(replace_cols_by_name_impl(e, replace_map)?.data)
+}
+
+pub(super) fn replace_cols_by_name_impl(
+    e: Expr,
+    replace_map: &HashMap<String, impl AsRef<Expr>>,
+) -> Result<Transformed<Expr>> {
     e.transform_up(|expr| {
         if let Expr::Column(c) = &expr
             && let Some(new_expr) = replace_map.get(&c.flat_name())
@@ -1386,7 +1393,6 @@ pub fn replace_cols_by_name(
             Ok(Transformed::no(expr))
         }
     })
-    .data()
 }
 
 /// Unalias expression reference.

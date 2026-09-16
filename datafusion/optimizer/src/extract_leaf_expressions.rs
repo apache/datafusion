@@ -31,7 +31,7 @@ use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{Expr, ExpressionPlacement, Projection};
 
 use crate::optimizer::ApplyOrder;
-use crate::push_down_filter::replace_cols_by_name;
+use crate::push_down_filter::{replace_cols_by_name, replace_cols_by_name_impl};
 use crate::utils::{ColumnReference, has_all_column_refs, schema_columns};
 use crate::{OptimizerConfig, OptimizerRule};
 
@@ -672,17 +672,28 @@ fn build_extraction_projection_impl(
             })
             .collect();
 
+        let mut deferred_extractions = vec![];
+
         // Resolve column references through the projection's rename mapping
         let replace_map = build_projection_replace_map(existing);
 
         // Add new extracted expressions, resolving column refs through the projection
         for (expr, alias) in extracted_exprs {
-            let resolved = replace_cols_by_name(expr.clone().alias(alias), &replace_map)?;
+            let Transformed { data: resolved, transformed, .. } = replace_cols_by_name_impl(expr.clone().alias(alias), &replace_map)?;
             let resolved_inner = if let Expr::Alias(a) = &resolved {
                 a.expr.as_ref()
             } else {
                 &resolved
             };
+
+            // If any columns were inline and the end result is keep-in-place we're likely to be
+            // duplicating an expensive expression. Defer the extraction to a second projection to
+            // avoid this.
+            if transformed && resolved_inner.placement() == ExpressionPlacement::KeepInPlace {
+                deferred_extractions.push(expr.clone().alias(alias));
+                continue;
+            }
+
             if let Some(existing_alias) = existing_extractions.get(resolved_inner) {
                 // Same expression already extracted under a different alias —
                 // add the expression with the new alias so both names are
@@ -727,15 +738,25 @@ fn build_extraction_projection_impl(
             // If resolved to non-column expr, it's already computed by existing projection
         }
 
-        Projection::try_new(proj_exprs, Arc::clone(&existing.input))
-    } else {
-        // Build new projection with extracted expressions + all input columns
-        let mut proj_exprs = Vec::new();
-        for (expr, alias) in extracted_exprs {
-            proj_exprs.push(expr.clone().alias(alias));
+        let extended_projection = Projection::try_new(proj_exprs, Arc::clone(&existing.input))?;
+
+        if deferred_extractions.is_empty() {
+            Ok(extended_projection)
+        } else {
+            let mut proj_exprs = Vec::new();
+            for (qualifier, field) in extended_projection.schema.as_ref().iter() {
+                proj_exprs.push(Expr::from((qualifier, field)));
+            }
+            proj_exprs.extend(deferred_extractions);
+            Projection::try_new(proj_exprs, Arc::new(LogicalPlan::Projection(extended_projection)))
         }
+    } else {
+        let mut proj_exprs = Vec::new();
         for (qualifier, field) in target_schema.iter() {
             proj_exprs.push(Expr::from((qualifier, field)));
+        }
+        for (expr, alias) in extracted_exprs {
+            proj_exprs.push(expr.clone().alias(alias));
         }
         Projection::try_new(proj_exprs, Arc::clone(target))
     }
