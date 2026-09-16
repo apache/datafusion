@@ -23,6 +23,7 @@ use crate::metadata::DFParquetMetadata;
 use bytes::Bytes;
 use datafusion_common::HashMap;
 use datafusion_datasource::PartitionedFile;
+use datafusion_execution::cache::cache_manager::CachedFileMetadataEntry;
 use datafusion_execution::cache::cache_manager::FileMetadata;
 use datafusion_execution::cache::cache_manager::FileMetadataCache;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
@@ -68,6 +69,20 @@ pub trait ParquetFileReaderFactory: Debug + Send + Sync + 'static {
         metadata_size_hint: Option<usize>,
         metrics: &ExecutionPlanMetricsSet,
     ) -> datafusion_common::Result<Box<dyn AsyncFileReader + Send>>;
+
+    /// Stores metadata loaded after the initial metadata request, if this
+    /// factory has a metadata cache.
+    ///
+    /// The default implementation does nothing because most factories do not
+    /// cache metadata. Implementations that do cache metadata can override
+    /// this hook so deferred page-index loads are available to later readers.
+    fn cache_metadata(
+        &self,
+        _partitioned_file: &PartitionedFile,
+        _metadata: Arc<ParquetMetaData>,
+        _options: &ArrowReaderOptions,
+    ) {
+    }
 }
 
 /// Default implementation of [`ParquetFileReaderFactory`]
@@ -159,6 +174,28 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
         .with_metadata_cache(Some(Arc::clone(&self.metadata_cache)));
 
         Ok(Box::new(reader))
+    }
+
+    fn cache_metadata(
+        &self,
+        partitioned_file: &PartitionedFile,
+        metadata: Arc<ParquetMetaData>,
+        options: &ArrowReaderOptions,
+    ) {
+        #[cfg(feature = "parquet_encryption")]
+        if options.file_decryption_properties().is_some() {
+            return;
+        }
+        #[cfg(not(feature = "parquet_encryption"))]
+        let _ = options;
+
+        self.metadata_cache.put(
+            &partitioned_file.object_meta.location,
+            CachedFileMetadataEntry::new(
+                partitioned_file.object_meta.clone(),
+                Arc::new(crate::metadata::CachedParquetMetaData::new(metadata)),
+            ),
+        );
     }
 }
 
