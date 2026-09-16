@@ -399,6 +399,9 @@ fn regexp_like_array_scalar(
         super::explain_regexp_kernel_error(
             "regexp_like",
             error,
+            // The kernel compiles the one pattern up front, whatever the
+            // values are.
+            None,
             &patterns,
             flags.as_ref().map(|flags| flags as &dyn Array),
         )
@@ -508,6 +511,9 @@ fn handle_regexp_like(
         super::explain_regexp_kernel_error(
             "regexp_like",
             error,
+            // The kernel compiles the pattern of a row only if that row has a
+            // value.
+            Some(values.as_ref()),
             patterns.as_ref(),
             flags.map(|flags| flags as &dyn Array),
         )

@@ -200,6 +200,9 @@ macro_rules! regexp_is_match_flag {
             explain_regexp_kernel_error(
                 operator_name($NOT, $FLAG),
                 error,
+                // The kernel compiles the pattern of a row only if that row
+                // has a value.
+                Some(ll as &dyn Array),
                 rr,
                 flag.as_ref().map(|flag| flag as &dyn Array),
             )
@@ -262,6 +265,9 @@ macro_rules! regexp_is_match_flag_scalar {
                     Err(explain_regexp_kernel_error(
                         operator_name($NOT, $FLAG),
                         error,
+                        // The kernel compiles the one pattern up front,
+                        // whatever the values are.
+                        None,
                         &patterns,
                         flags.as_ref().map(|flags| flags as &dyn Array),
                     ))

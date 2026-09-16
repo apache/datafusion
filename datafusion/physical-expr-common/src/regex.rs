@@ -98,12 +98,21 @@ pub fn compile_regex(
 /// row. If every pattern compiles, the failure has a different cause and the
 /// original error is kept.
 ///
+/// `values` is the array of strings that the kernel matched against, given
+/// only by the callers of a kernel that compiles the pattern of a row as it
+/// reaches that row. Such a kernel produces NULL for a row whose value is
+/// NULL without compiling that row's pattern, so a pattern that the kernel
+/// never reached must not be reported as the one that failed. A kernel that
+/// compiles a single pattern up front, before it reads any value, takes
+/// `None`: it compiles that pattern whatever the values are.
+///
 /// This is `pub` only so that the crates that call the kernels can reach it.
 // Not public API.
 #[doc(hidden)]
 pub fn explain_regexp_kernel_error(
     function_name: &str,
     error: ArrowError,
+    values: Option<&dyn Array>,
     patterns: &dyn Array,
     flags: Option<&dyn Array>,
 ) -> DataFusionError {
@@ -119,8 +128,14 @@ pub fn explain_regexp_kernel_error(
 
     let rows = patterns
         .len()
-        .max(flags.as_ref().map_or(0, StringValues::len));
+        .max(flags.as_ref().map_or(0, StringValues::len))
+        .max(values.map_or(0, Array::len));
     for row in 0..rows {
+        // The kernel skips a row whose value is NULL, so it never compiled
+        // the pattern of that row.
+        if values.is_some_and(|values| row < values.len() && values.is_null(row)) {
+            continue;
+        }
         // A NULL pattern or NULL flags produce a NULL result, not an error.
         let Some(pattern) = patterns.broadcast_value(row) else {
             continue;

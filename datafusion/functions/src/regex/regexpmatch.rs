@@ -213,6 +213,9 @@ fn regexp_match_scalar_pattern(args: &[ColumnarValue]) -> Result<Option<ArrayRef
         super::explain_regexp_kernel_error(
             "regexp_match",
             error,
+            // The kernel compiles the one pattern up front, whatever the
+            // values are.
+            None,
             pattern.get().0,
             flags.as_ref().map(|flags| flags.get().0),
         )
@@ -225,6 +228,7 @@ pub fn regexp_match(args: &[ArrayRef]) -> Result<ArrayRef> {
             super::explain_regexp_kernel_error(
                 "regexp_match",
                 error,
+                Some(args[0].as_ref()),
                 args[1].as_ref(),
                 None,
             )
@@ -276,6 +280,7 @@ pub fn regexp_match(args: &[ArrayRef]) -> Result<ArrayRef> {
                 super::explain_regexp_kernel_error(
                     "regexp_match",
                     error,
+                    Some(args[0].as_ref()),
                     args[1].as_ref(),
                     Some(flags.as_ref()),
                 )
