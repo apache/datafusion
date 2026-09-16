@@ -26,9 +26,7 @@ use itertools::Itertools;
 use log::{Level, debug, log_enabled};
 
 use datafusion_common::instant::Instant;
-use datafusion_common::tree_node::{
-    Transformed, TreeNode, TreeNodeRecursion,
-};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
     Column, DFSchema, Result, assert_eq_or_internal_err, internal_err, plan_err,
     qualified_name,

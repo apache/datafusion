@@ -679,7 +679,11 @@ fn build_extraction_projection_impl(
 
         // Add new extracted expressions, resolving column refs through the projection
         for (expr, alias) in extracted_exprs {
-            let Transformed { data: resolved, transformed, .. } = replace_cols_by_name_impl(expr.clone().alias(alias), &replace_map)?;
+            let Transformed {
+                data: resolved,
+                transformed,
+                ..
+            } = replace_cols_by_name_impl(expr.clone().alias(alias), &replace_map)?;
             let resolved_inner = if let Expr::Alias(a) = &resolved {
                 a.expr.as_ref()
             } else {
@@ -689,7 +693,9 @@ fn build_extraction_projection_impl(
             // If any columns were inline and the end result is keep-in-place we're likely to be
             // duplicating an expensive expression. Defer the extraction to a second projection to
             // avoid this.
-            if transformed && resolved_inner.placement() == ExpressionPlacement::KeepInPlace {
+            if transformed
+                && resolved_inner.placement() == ExpressionPlacement::KeepInPlace
+            {
                 deferred_extractions.push(expr.clone().alias(alias));
                 continue;
             }
@@ -738,7 +744,8 @@ fn build_extraction_projection_impl(
             // If resolved to non-column expr, it's already computed by existing projection
         }
 
-        let extended_projection = Projection::try_new(proj_exprs, Arc::clone(&existing.input))?;
+        let extended_projection =
+            Projection::try_new(proj_exprs, Arc::clone(&existing.input))?;
 
         if deferred_extractions.is_empty() {
             Ok(extended_projection)
@@ -748,7 +755,10 @@ fn build_extraction_projection_impl(
                 proj_exprs.push(Expr::from((qualifier, field)));
             }
             proj_exprs.extend(deferred_extractions);
-            Projection::try_new(proj_exprs, Arc::new(LogicalPlan::Projection(extended_projection)))
+            Projection::try_new(
+                proj_exprs,
+                Arc::new(LogicalPlan::Projection(extended_projection)),
+            )
         }
     } else {
         let mut proj_exprs = Vec::new();
