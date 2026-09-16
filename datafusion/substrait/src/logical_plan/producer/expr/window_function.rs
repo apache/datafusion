@@ -16,9 +16,11 @@
 // under the License.
 
 use crate::logical_plan::producer::SubstraitProducer;
+use crate::logical_plan::producer::to_substrait_type_from_field;
 use crate::logical_plan::producer::utils::substrait_sort_field;
 use datafusion::common::{DFSchemaRef, ScalarValue, not_impl_err};
 use datafusion::logical_expr::expr::{WindowFunction, WindowFunctionParams};
+use datafusion::logical_expr::{Expr, ExprSchemable};
 use datafusion::logical_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 use substrait::proto::aggregate_function::AggregationInvocation;
 use substrait::proto::expression::RexType;
@@ -27,7 +29,7 @@ use substrait::proto::expression::window_function::bound as SubstraitBound;
 use substrait::proto::expression::window_function::bound::Kind as BoundKind;
 use substrait::proto::expression::window_function::{Bound, BoundsType};
 use substrait::proto::function_argument::ArgType;
-use substrait::proto::{Expression, FunctionArgument, SortField};
+use substrait::proto::{Expression, FunctionArgument};
 
 pub fn from_window_function(
     producer: &mut impl SubstraitProducer,
@@ -79,37 +81,26 @@ pub fn from_window_function(
     // window frame
     let bounds = to_substrait_bounds(window_frame)?;
     let bound_type = to_substrait_bound_type(window_frame)?;
-    Ok(make_substrait_window_function(
-        function_anchor,
-        arguments,
-        partition_by,
-        order_by,
-        bounds,
-        bound_type,
-        *distinct,
-    ))
-}
+    // Substrait documents `output_type` as "Must be set to the return type of
+    // the function, exactly as derived using the declaration in the extension",
+    // and a consumer that reads it rejects the call when it is unset. The type
+    // comes from the expression itself so that it matches what DataFusion
+    // derives, rather than being restated here.
+    let (_, output_field) =
+        Expr::WindowFunction(Box::new(window_fn.clone())).to_field(schema)?;
+    let output_type = to_substrait_type_from_field(producer, &output_field)?;
 
-fn make_substrait_window_function(
-    function_reference: u32,
-    arguments: Vec<FunctionArgument>,
-    partitions: Vec<Expression>,
-    sorts: Vec<SortField>,
-    bounds: (Bound, Bound),
-    bounds_type: BoundsType,
-    distinct: bool,
-) -> Expression {
     #[expect(deprecated)]
-    Expression {
+    Ok(Expression {
         rex_type: Some(RexType::WindowFunction(SubstraitWindowFunction {
-            function_reference,
+            function_reference: function_anchor,
             arguments,
-            partitions,
-            sorts,
+            partitions: partition_by,
+            sorts: order_by,
             options: vec![],
-            output_type: None,
+            output_type: Some(output_type),
             phase: 0, // default to AGGREGATION_PHASE_UNSPECIFIED
-            invocation: if distinct {
+            invocation: if *distinct {
                 AggregationInvocation::Distinct as i32
             } else {
                 AggregationInvocation::All as i32
@@ -117,9 +108,9 @@ fn make_substrait_window_function(
             lower_bound: Some(bounds.0),
             upper_bound: Some(bounds.1),
             args: vec![],
-            bounds_type: bounds_type as i32,
+            bounds_type: bound_type as i32,
         })),
-    }
+    })
 }
 
 fn to_substrait_bound_type(
@@ -185,7 +176,40 @@ fn to_substrait_bound_offset(value: &ScalarValue) -> datafusion::common::Result<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion::common::assert_contains;
+    use crate::logical_plan::producer::{DefaultSubstraitProducer, to_substrait_type};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::common::{DFSchema, assert_contains};
+    use datafusion::execution::SessionStateBuilder;
+    use datafusion::functions_aggregate::sum::sum_udaf;
+    use datafusion::logical_expr::expr::WindowFunction;
+    use datafusion::prelude::col;
+    use substrait::proto::expression::RexType;
+
+    /// Substrait requires the return type on a window function call, and a
+    /// consumer that reads it rejects the call when it is unset.
+    #[test]
+    fn window_function_output_type() -> datafusion::common::Result<()> {
+        let state = SessionStateBuilder::default().build();
+        let schema =
+            DFSchemaRef::new(DFSchema::try_from(Schema::new(vec![Field::new(
+                "i",
+                DataType::Int64,
+                true,
+            )]))?);
+        let mut producer = DefaultSubstraitProducer::new(&state);
+
+        let window_fn = WindowFunction::new(sum_udaf(), vec![col("i")]);
+        let expr = Expr::WindowFunction(Box::new(window_fn));
+        let substrait_expr = producer.handle_expr(&expr, &schema)?;
+
+        let Some(RexType::WindowFunction(window)) = substrait_expr.rex_type else {
+            panic!("Substrait WindowFunction expected")
+        };
+        // `sum` over a nullable i64 yields a nullable i64.
+        let expected = to_substrait_type(&mut producer, &DataType::Int64, true)?;
+        assert_eq!(window.output_type, Some(expected));
+        Ok(())
+    }
 
     #[test]
     fn window_frame_offsets() {

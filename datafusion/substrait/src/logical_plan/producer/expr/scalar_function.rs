@@ -17,6 +17,7 @@
 
 use crate::logical_plan::producer::{
     SubstraitProducer, to_substrait_literal_expr, to_substrait_type,
+    to_substrait_type_from_field,
 };
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::datatype::FieldExt;
@@ -238,6 +239,14 @@ pub fn from_like(
     like: &Like,
     schema: &DFSchemaRef,
 ) -> datafusion::common::Result<Expression> {
+    make_substrait_like_expr(producer, like, schema)
+}
+
+fn make_substrait_like_expr(
+    producer: &mut impl SubstraitProducer,
+    like: &Like,
+    schema: &DFSchemaRef,
+) -> datafusion::common::Result<Expression> {
     let Like {
         negated,
         expr,
@@ -245,31 +254,18 @@ pub fn from_like(
         escape_char,
         case_insensitive,
     } = like;
-    make_substrait_like_expr(
-        producer,
-        *case_insensitive,
-        *negated,
-        expr,
-        pattern,
-        *escape_char,
-        schema,
-    )
-}
-
-fn make_substrait_like_expr(
-    producer: &mut impl SubstraitProducer,
-    ignore_case: bool,
-    negated: bool,
-    expr: &Expr,
-    pattern: &Expr,
-    escape_char: Option<char>,
-    schema: &DFSchemaRef,
-) -> datafusion::common::Result<Expression> {
-    let function_anchor = if ignore_case {
+    let function_anchor = if *case_insensitive {
         producer.register_function("ilike".to_string())
     } else {
         producer.register_function("like".to_string())
     };
+    // Substrait documents `output_type` as "Must be set to the return type of
+    // the function, exactly as derived using the declaration in the extension",
+    // and a consumer that reads it rejects the call when it is unset. The type
+    // comes from the expression itself so that it matches what DataFusion
+    // derives, rather than being restated here.
+    let (_, output_field) = Expr::Like(like.clone()).to_field(schema)?;
+    let output_type = to_substrait_type_from_field(producer, &output_field)?;
     let expr = producer.handle_expr(expr, schema)?;
     let pattern = producer.handle_expr(pattern, schema)?;
     let escape_char = to_substrait_literal_expr(
@@ -293,13 +289,13 @@ fn make_substrait_like_expr(
         rex_type: Some(RexType::ScalarFunction(ScalarFunction {
             function_reference: function_anchor,
             arguments,
-            output_type: None,
+            output_type: Some(output_type.clone()),
             args: vec![],
             options: vec![],
         })),
     };
 
-    if negated {
+    if *negated {
         let function_anchor = producer.register_function("not".to_string());
 
         #[expect(deprecated)]
@@ -309,7 +305,8 @@ fn make_substrait_like_expr(
                 arguments: vec![FunctionArgument {
                     arg_type: Some(ArgType::Value(substrait_like)),
                 }],
-                output_type: None,
+                // `not` yields the type its argument does.
+                output_type: Some(output_type),
                 args: vec![],
                 options: vec![],
             })),
@@ -318,8 +315,6 @@ fn make_substrait_like_expr(
         Ok(substrait_like)
     }
 }
-
-/// Util to generate substrait [RexType::ScalarFunction] with one argument
 fn to_substrait_unary_scalar_fn(
     producer: &mut impl SubstraitProducer,
     fn_name: &str,
@@ -452,12 +447,14 @@ mod tests {
     use crate::logical_plan::producer::{
         DefaultSubstraitProducer, SubstraitProducer, to_substrait_type,
     };
-    use datafusion::arrow::datatypes::DataType;
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::common::{DFSchema, DFSchemaRef};
     use datafusion::execution::SessionStateBuilder;
-    use datafusion::prelude::lit;
+    use datafusion::logical_expr::{Expr, Like};
+    use datafusion::prelude::{col, lit};
     use substrait::proto::Expression;
     use substrait::proto::expression::{RexType, ScalarFunction};
+    use substrait::proto::function_argument::ArgType;
 
     #[tokio::test]
     async fn binary_expr_output_type() -> datafusion::common::Result<()> {
@@ -478,5 +475,46 @@ mod tests {
         } else {
             panic!("Substrait ScalarFunction expected")
         }
+    }
+
+    /// The `like` call carries the type the expression yields, and so does the
+    /// `not` that wraps a negated one.
+    #[tokio::test]
+    async fn like_output_type() -> datafusion::common::Result<()> {
+        let state = SessionStateBuilder::default().build();
+        let schema =
+            DFSchemaRef::new(DFSchema::try_from(Schema::new(vec![Field::new(
+                "s",
+                DataType::Utf8,
+                true,
+            )]))?);
+        let mut producer = DefaultSubstraitProducer::new(&state);
+        // A `LIKE` over a nullable input yields a nullable boolean.
+        let expected = to_substrait_type(&mut producer, &DataType::Boolean, true)?;
+
+        let like = Like::new(false, Box::new(col("s")), Box::new(lit("a%")), None, false);
+        let substrait_expr = producer.handle_expr(&Expr::Like(like), &schema)?;
+        let Some(RexType::ScalarFunction(like_fn)) = substrait_expr.rex_type else {
+            panic!("Substrait ScalarFunction expected")
+        };
+        assert_eq!(like_fn.output_type, Some(expected.clone()));
+
+        let negated =
+            Like::new(true, Box::new(col("s")), Box::new(lit("a%")), None, false);
+        let substrait_expr = producer.handle_expr(&Expr::Like(negated), &schema)?;
+        let Some(RexType::ScalarFunction(not_fn)) = substrait_expr.rex_type else {
+            panic!("Substrait ScalarFunction expected")
+        };
+        assert_eq!(not_fn.output_type, Some(expected.clone()));
+
+        // The `not` wraps the `like`, which carries the type as well.
+        let Some(ArgType::Value(Expression {
+            rex_type: Some(RexType::ScalarFunction(inner)),
+        })) = not_fn.arguments[0].arg_type.clone()
+        else {
+            panic!("Substrait ScalarFunction expected inside `not`")
+        };
+        assert_eq!(inner.output_type, Some(expected));
+        Ok(())
     }
 }
