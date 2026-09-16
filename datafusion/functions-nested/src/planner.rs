@@ -279,4 +279,36 @@ mod tests {
             PlannerResult::Original(_)
         ));
     }
+
+    #[test]
+    fn leaves_unsupported_struct_access_for_other_planners() {
+        let schema = nested_struct_schema();
+        let payload = Expr::Column(Column::new_unqualified("payload"));
+        let unsupported = [
+            RawBinaryExpr {
+                op: BinaryOperator::Custom("other".to_owned()),
+                left: payload.clone(),
+                right: Expr::Literal(ScalarValue::from("country"), None),
+            },
+            RawBinaryExpr {
+                op: BinaryOperator::Custom(":".to_owned()),
+                left: payload.clone(),
+                right: Expr::Column(Column::new_unqualified("field_name")),
+            },
+            RawBinaryExpr {
+                op: BinaryOperator::Custom(":".to_owned()),
+                left: payload,
+                right: Expr::Literal(ScalarValue::Int64(Some(1)), None),
+            },
+        ];
+
+        for expression in unsupported {
+            assert!(matches!(
+                NestedFunctionPlanner
+                    .plan_binary_op(expression, &schema)
+                    .unwrap(),
+                PlannerResult::Original(_)
+            ));
+        }
+    }
 }
