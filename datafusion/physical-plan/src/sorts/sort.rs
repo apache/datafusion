@@ -19,8 +19,10 @@
 //! It will do in-memory sorting if it has enough memory budget
 //! but spills to disk if needed.
 
+use std::cmp::Ordering as CmpOrdering;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
+use std::ops::Range;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
@@ -57,9 +59,10 @@ use crate::{
     PlanProperties, ReplaceChildrenOptions, SendableRecordBatchStream, Statistics,
 };
 
-use arrow::array::{RecordBatch, RecordBatchOptions};
-use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
+use arrow::array::{Array, RecordBatch, RecordBatchOptions, UInt32Array};
+use arrow::compute::{SortColumn, concat_batches, lexsort_to_indices, take_arrays};
 use arrow::datatypes::SchemaRef;
+use arrow_ord::sort::LexicographicalComparator;
 use datafusion_common::config::SpillCompression;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
@@ -73,7 +76,9 @@ use datafusion_execution::memory_pool::{
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
+use datafusion_physical_expr::expressions::{
+    Column, DynamicFilterPhysicalExpr, Literal, lit,
+};
 
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
@@ -229,6 +234,9 @@ struct ExternalSorter {
     /// the data will be concatenated and sorted in place rather than
     /// sort/merged.
     sort_in_place_threshold_bytes: usize,
+    /// Staged evaluation is restricted to final, single-run in-memory sorts.
+    enable_staged_sort: bool,
+    sort_key_group_size: usize,
 
     // ========================================================================
     // STATE BUFFERS:
@@ -325,7 +333,20 @@ impl ExternalSorter {
             batch_size,
             sort_spill_reservation_bytes,
             sort_in_place_threshold_bytes,
+            enable_staged_sort: false,
+            sort_key_group_size: 3,
         })
+    }
+
+    fn with_staged_sort(mut self, enabled: bool, group_size: usize) -> Result<Self> {
+        if enabled && group_size == 0 {
+            return Err(DataFusionError::Configuration(
+                "datafusion.execution.sort_key_group_size must be greater than zero when datafusion.execution.enable_staged_sort is true".to_string(),
+            ));
+        }
+        self.enable_staged_sort = enabled;
+        self.sort_key_group_size = group_size;
+        Ok(self)
     }
 
     /// Appends an unsorted [`RecordBatch`] to `in_mem_batches`
@@ -657,7 +678,11 @@ impl ExternalSorter {
         if self.in_mem_batches.len() == 1 {
             let batch = self.in_mem_batches.swap_remove(0);
             let reservation = self.reservation.take();
-            let sorted_stream = self.sort_batch_stream(batch, reservation)?;
+            let sorted_stream = self.sort_batch_stream(
+                batch,
+                reservation,
+                is_output_stream && self.use_staged_sort(),
+            )?;
             return Ok(self.observe_if_output(sorted_stream, is_output_stream));
         }
 
@@ -674,7 +699,11 @@ impl ExternalSorter {
                 .try_resize(get_reserved_bytes_for_record_batch(&batch)?)
                 .map_err(Self::err_with_oom_context)?;
             let reservation = self.reservation.take();
-            let sorted_stream = self.sort_batch_stream(batch, reservation)?;
+            let sorted_stream = self.sort_batch_stream(
+                batch,
+                reservation,
+                is_output_stream && self.use_staged_sort(),
+            )?;
             return Ok(self.observe_if_output(sorted_stream, is_output_stream));
         }
 
@@ -696,7 +725,7 @@ impl ExternalSorter {
                 let reservation = self
                     .reservation
                     .split(get_reserved_bytes_for_record_batch(&batch)?);
-                let input = self.sort_batch_stream(batch, reservation)?;
+                let input = self.sort_batch_stream(batch, reservation, false)?;
                 Ok(spawn_buffered(input, 1))
             })
             .collect::<Result<_>>()?;
@@ -781,6 +810,7 @@ impl ExternalSorter {
         &self,
         batch: RecordBatch,
         reservation: MemoryReservation,
+        staged: bool,
     ) -> Result<SendableRecordBatchStream> {
         assert_eq!(
             get_reserved_bytes_for_record_batch(&batch)?,
@@ -790,13 +820,23 @@ impl ExternalSorter {
         let schema = batch.schema();
         let expressions = self.expr.clone();
         let batch_size = self.batch_size;
+        let sort_key_group_size = self.sort_key_group_size;
         let merge_pool = Arc::clone(&self.merge_pool);
 
         let stream = futures::stream::once(async move {
             let schema = batch.schema();
 
             // Sort the batch immediately and get all output batches
-            let sorted_batches = sort_batch_chunked(&batch, &expressions, batch_size)?;
+            let sorted_batches = if staged {
+                staged_sort_batch_chunked(
+                    &batch,
+                    &expressions,
+                    batch_size,
+                    sort_key_group_size,
+                )?
+            } else {
+                sort_batch_chunked(&batch, &expressions, batch_size)?
+            };
 
             // Chunked output can retain shared buffers in every batch and
             // exceed the input estimate. Borrow only already-reserved spill
@@ -839,6 +879,17 @@ impl ExternalSorter {
         .try_flatten();
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+    }
+
+    fn use_staged_sort(&self) -> bool {
+        // The first group is always evaluated for every row. Only computation
+        // in later groups can be avoided.
+        self.enable_staged_sort
+            && self
+                .expr
+                .iter()
+                .skip(self.sort_key_group_size)
+                .any(|key| !key.expr.is::<Column>() && !key.expr.is::<Literal>())
     }
 
     /// If this sort may spill, pre-allocates
@@ -954,6 +1005,143 @@ impl Debug for ExternalSorter {
             .field("spilled_rows", &self.spilled_rows())
             .field("spill_count", &self.spill_count())
             .finish()
+    }
+}
+
+fn staged_sort_batch_chunked(
+    batch: &RecordBatch,
+    expressions: &LexOrdering,
+    batch_size: usize,
+    group_size: usize,
+) -> Result<Vec<RecordBatch>> {
+    let indices = staged_sort_indices(batch, expressions, group_size)?;
+    IncrementalSortIterator::new(batch.clone(), expressions.clone(), batch_size)
+        .with_sorted_indices(indices)
+        .collect()
+}
+
+/// Compute a complete permutation by evaluating successive key groups only for ties.
+fn staged_sort_indices(
+    batch: &RecordBatch,
+    expressions: &LexOrdering,
+    group_size: usize,
+) -> Result<UInt32Array> {
+    let mut indices = Vec::new();
+    // Ranges address positions in `indices`, whose values address the input batch.
+    let mut unresolved: Vec<_> = std::iter::once(0..batch.num_rows()).collect();
+    let stage_count = expressions.len().div_ceil(group_size);
+    for (stage, keys) in expressions.chunks(group_size).enumerate() {
+        if unresolved.is_empty() {
+            break;
+        }
+        unresolved = refine_tied_groups(
+            batch,
+            keys,
+            &mut indices,
+            &unresolved,
+            stage == 0,
+            stage + 1 < stage_count,
+        )?;
+    }
+
+    Ok(UInt32Array::from(indices))
+}
+
+/// Evaluate keys once for all unresolved rows, then sort each tied group independently.
+fn refine_tied_groups(
+    batch: &RecordBatch,
+    keys: &[PhysicalSortExpr],
+    indices: &mut Vec<u32>,
+    unresolved: &[Range<usize>],
+    first_stage: bool,
+    find_ties: bool,
+) -> Result<Vec<Range<usize>>> {
+    let selected = if first_stage {
+        batch.clone()
+    } else {
+        // Gather the original row indices for all tied groups into one buffer.
+        let mut selection = Vec::with_capacity(unresolved.iter().map(Range::len).sum());
+        for range in unresolved {
+            selection.extend_from_slice(&indices[range.clone()]);
+        }
+        arrow::compute::take_record_batch(batch, &UInt32Array::from(selection))?
+    };
+    let sort_columns = keys
+        .iter()
+        .map(|expr| expr.evaluate_to_sort_column(&selected))
+        .collect::<Result<Vec<_>>>()?;
+
+    // Key arrays are already evaluated above. This comparator finds ties that
+    // need the next stage; the final stage does not need it.
+    let comparator = find_ties
+        .then(|| LexicographicalComparator::try_new(&sort_columns))
+        .transpose()?;
+
+    let mut next_unresolved = Vec::new();
+    if first_stage {
+        let order = lexsort_to_indices(&sort_columns, None)?;
+        if let Some(comparator) = &comparator {
+            append_tied_ranges(comparator, &order, 0, 0, &mut next_unresolved);
+        }
+        let (_, values, _) = order.into_parts();
+        *indices = values.into();
+        return Ok(next_unresolved);
+    }
+
+    let mut selected_offset = 0;
+    for range in unresolved {
+        let columns = sort_columns
+            .iter()
+            .map(|column| SortColumn {
+                values: column.values.slice(selected_offset, range.len()),
+                options: column.options,
+            })
+            .collect::<Vec<_>>();
+        let local_order = lexsort_to_indices(&columns, None)?;
+        let previous = indices[range.clone()].to_vec();
+        for (output, local) in indices[range.clone()].iter_mut().zip(local_order.values())
+        {
+            *output = previous[*local as usize];
+        }
+        if let Some(comparator) = &comparator {
+            append_tied_ranges(
+                comparator,
+                &local_order,
+                selected_offset,
+                range.start,
+                &mut next_unresolved,
+            );
+        }
+        selected_offset += range.len();
+    }
+    Ok(next_unresolved)
+}
+
+/// Find consecutive equal keys in a sorted group; only these rows need later keys.
+/// For sorted keys `[a, a, b]` at output offset 5, append the range `5..7`.
+/// `selected_offset` locates this group's key values in the gathered batch;
+/// `output_offset` locates its positions in the complete output permutation.
+fn append_tied_ranges(
+    comparator: &LexicographicalComparator,
+    order: &UInt32Array,
+    selected_offset: usize,
+    output_offset: usize,
+    ties: &mut Vec<Range<usize>>,
+) {
+    let mut start = 0;
+    while start < order.len() {
+        let first = selected_offset + order.value(start) as usize;
+        let mut end = start + 1;
+        while end < order.len()
+            && comparator.compare(first, selected_offset + order.value(end) as usize)
+                == CmpOrdering::Equal
+        {
+            end += 1;
+        }
+        if end - start > 1 {
+            ties.push((output_offset + start)..(output_offset + end));
+        }
+        start = end;
     }
 }
 
@@ -1517,6 +1705,10 @@ impl ExecutionPlan for SortExec {
                     context.session_config().spill_compression(),
                     &self.metrics_set,
                     context.runtime_env(),
+                )?
+                .with_staged_sort(
+                    execution_options.enable_staged_sort,
+                    execution_options.sort_key_group_size,
                 )?;
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),

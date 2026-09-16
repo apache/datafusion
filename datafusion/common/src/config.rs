@@ -1001,6 +1001,18 @@ config_namespace! {
         /// batches and merged.
         pub sort_in_place_threshold_bytes: usize, default = 1024 * 1024
 
+        /// Enables staged evaluation for eligible final, single-run, in-memory sorts.
+        /// Later sort keys are evaluated only for rows still tied on earlier keys.
+        /// Requires a key after the first group that is neither a column nor a literal.
+        /// Spill preparation, multi-run merges, and TopK sorting continue to use eager
+        /// key evaluation. This experimental option can suppress expression errors
+        /// or change volatile expression results by skipping evaluations.
+        pub enable_staged_sort: bool, default = false
+
+        /// Number of sort keys evaluated together by staged in-memory sorting.
+        /// Must be greater than zero when `enable_staged_sort` is true.
+        pub sort_key_group_size: usize, default = 3
+
         /// Maximum buffer capacity (in bytes) per partition for BufferExec
         /// inserted during sort pushdown optimization.
         ///
