@@ -487,6 +487,7 @@ fn build_join(
             &alias,
             &expr_map,
             pull_up.pull_up_having_expr.as_ref(),
+            pull_up.forces_empty_result,
         )
         .map(Some);
     }
@@ -703,6 +704,7 @@ fn build_join_with_count_bug(
     alias: &str,
     expr_map: &crate::decorrelate::ExprResultMap,
     pull_up_having_expr: Option<&Expr>,
+    forces_empty_result: bool,
 ) -> Result<LogicalPlan> {
     if in_predicate_opt.is_some() {
         return not_impl_err!(
@@ -750,18 +752,25 @@ fn build_join_with_count_bug(
     };
 
     // EXISTS is true by default (the groupless aggregate always
-    // produces a row), unless either the row joined against a group
-    // whose HAVING predicate failed, or an unmatched row's own
-    // default aggregate values fail that same HAVING clause.
-    let exists_expr = match having_arm {
-        Some(when_expr) => {
-            when(indicator_col.clone().is_null(), unmatched_having_default)
-                .when(when_expr, lit(false))
-                .otherwise(lit(true))?
-                .rewrite(&mut expr_rewrite)
-                .data()?
+    // produces a row), unless one of three cases holds: (1) the outer
+    // row joined against an inner group whose HAVING predicate failed,
+    // (2) an unmatched outer row's own default aggregate values fail
+    // that same HAVING clause, or (3) the subquery was truncated to
+    // zero rows unconditionally (LIMIT 0), which is false for every
+    // outer row regardless of whether it matched.
+    let exists_expr = if forces_empty_result {
+        lit(false)
+    } else {
+        match having_arm {
+            Some(when_expr) => {
+                when(indicator_col.clone().is_null(), unmatched_having_default)
+                    .when(when_expr, lit(false))
+                    .otherwise(lit(true))?
+                    .rewrite(&mut expr_rewrite)
+                    .data()?
+            }
+            None => lit(true),
         }
-        None => lit(true),
     };
 
     let new_plan = match join_type {

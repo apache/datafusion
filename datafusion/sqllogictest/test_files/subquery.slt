@@ -1887,6 +1887,33 @@ DROP TABLE cte_dedup_outer;
 statement ok
 DROP TABLE cte_dedup_inner;
 
+statement ok
+CREATE TABLE limit_zero_outer(k INT) AS VALUES (1);
+
+statement ok
+CREATE TABLE limit_zero_inner(k INT, v INT) AS VALUES (1, NULL);
+
+# correlated_exists_groupless_count_agg_limit_zero
+query I
+SELECT o.k FROM limit_zero_outer o WHERE EXISTS (
+  SELECT count(*) FROM limit_zero_inner i WHERE i.k = o.k LIMIT 0
+)
+----
+
+# correlated_not_exists_groupless_count_agg_limit_zero
+query I
+SELECT o.k FROM limit_zero_outer o WHERE NOT EXISTS (
+  SELECT count(*) FROM limit_zero_inner i WHERE i.k = o.k LIMIT 0
+)
+----
+1
+
+statement ok
+DROP TABLE limit_zero_outer;
+
+statement ok
+DROP TABLE limit_zero_inner;
+
 statement count 0
 drop table t1;
 

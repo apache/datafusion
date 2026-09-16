@@ -83,6 +83,11 @@ pub struct PullUpCorrelatedExpr {
     /// unresolvable bare column. This records the mapping the first
     /// time it's made.
     correlated_col_aliases: HashMap<Column, Expr>,
+    /// `LIMIT 0` forces the subquery to zero rows unconditionally, regardless
+    /// of whether the correlation matched, collapsing it to an `EmptyRelation`.
+    /// Join-compensation needs this flag to
+    /// distinguish "empty" from its usual "matched" default.
+    pub forces_empty_result: bool,
 }
 
 impl Default for PullUpCorrelatedExpr {
@@ -105,6 +110,7 @@ impl PullUpCorrelatedExpr {
             pull_up_having_expr: None,
             pulled_up_scalar_agg: false,
             correlated_col_aliases: HashMap::new(),
+            forces_empty_result: false,
         }
     }
 
@@ -448,6 +454,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     // Correlated exist subquery, remove the limit(so that correlated expressions can pull up)
                     (true, false) => Transformed::yes(match limit.get_fetch_type()? {
                         FetchType::Literal(Some(0)) => {
+                            self.forces_empty_result = true;
                             LogicalPlan::EmptyRelation(EmptyRelation {
                                 produce_one_row: false,
                                 schema: Arc::clone(limit.input.schema()),
