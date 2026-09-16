@@ -122,3 +122,22 @@ ORDER BY g;
 1 [5]
 2 [10, 20]
 3 []
+
+# collect_set always deduplicates, so DISTINCT is redundant and removed by the optimizer
+query ?
+SELECT array_sort(collect_set(DISTINCT a)) FROM (VALUES (1), (2), (2), (3), (1)) AS t(a);
+----
+[1, 2, 3]
+
+query TT
+EXPLAIN SELECT collect_set(DISTINCT a) FROM (VALUES (1), (2), (2), (3), (1)) AS t(a);
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[collect_set(t.a) AS collect_set(DISTINCT t.a)]]
+02)--SubqueryAlias: t
+03)----Projection: column1 AS a
+04)------Values: (Int64(1)), (Int64(2)), (Int64(2)), (Int64(3)), (Int64(1))
+physical_plan
+01)AggregateExec: mode=Single, gby=[], aggr=[collect_set(t.a) as collect_set(DISTINCT t.a)]
+02)--ProjectionExec: expr=[column1@0 as a]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
