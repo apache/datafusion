@@ -2857,6 +2857,13 @@ mod tests {
         let result = simplify(expr.clone());
         // The expression should not have been simplified
         assert_eq!(result, expr);
+
+        // Signed zeros compare equal at runtime and must not be treated as
+        // different literals
+        let expr = col("f")
+            .eq(lit(0.0_f64))
+            .and(col("f").not_eq(lit(-0.0_f64)));
+        assert_eq!(simplify(expr.clone()), expr);
     }
 
     #[test]

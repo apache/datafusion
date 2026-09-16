@@ -28,6 +28,7 @@
 //! `false` so that later rules can prune the plan they filter.
 
 use super::utils::{is_false, is_null};
+use datafusion_common::utils::normalize_float_zero_scalar;
 use datafusion_common::{Column, Result, ScalarValue, internal_err};
 use datafusion_expr::{BinaryExpr, Expr, Operator, lit};
 use std::cmp::Ordering;
@@ -77,6 +78,8 @@ pub fn simplify_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
                 if let (Some(col), Some(_)) =
                     (extract_column_from_expr(&left), right.as_literal())
                 {
+                    let mut right = right;
+                    normalize_literal(right.as_mut());
                     column_predicates
                         .entry(col)
                         .or_default()
@@ -88,6 +91,8 @@ pub fn simplify_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
                 ) {
                     // Put the literal on the right so that predicates differing only in
                     // operand order compare equal below
+                    let mut left = left;
+                    normalize_literal(left.as_mut());
                     column_predicates
                         .entry(col)
                         .or_default()
@@ -286,6 +291,17 @@ fn op_and_literal(predicate: &Expr) -> Result<(Operator, &ScalarValue)> {
         Ok((*op, literal))
     } else {
         internal_err!("Unexpected predicate {predicate}")
+    }
+}
+
+/// The executor folds `-0.0` into `0.0` before comparing floats (see
+/// `datafusion_physical_expr_common::datum::apply_cmp`), while
+/// [`ScalarValue::try_cmp`] orders `-0.0` below `0.0`. Fold it here too so the
+/// decisions in this module match what the filter will evaluate.
+fn normalize_literal(expr: &mut Expr) {
+    if let Expr::Literal(value, _) = expr {
+        let original = std::mem::replace(value, ScalarValue::Null);
+        *value = normalize_float_zero_scalar(original);
     }
 }
 
@@ -580,6 +596,15 @@ mod tests {
             result,
             vec![col("a").not_eq(lit(5i32)), col("a").gt(lit(1i32))]
         );
+    }
+
+    #[test]
+    fn test_signed_zero_literals_are_normalized() {
+        let predicates = vec![col("f").eq(lit(-0.0_f64)), col("f").gt_eq(lit(0.0_f64))];
+
+        let result = simplify_predicates(predicates).unwrap();
+
+        assert_eq!(result, vec![col("f").eq(lit(0.0_f64))]);
     }
 
     #[test]

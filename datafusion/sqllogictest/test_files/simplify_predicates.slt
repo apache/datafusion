@@ -350,3 +350,26 @@ SELECT c FROM struct_with_null
 WHERE c = named_struct('a', arrow_cast(NULL, 'Int32'), 'b', 1)
   AND c = named_struct('a', arrow_cast(2, 'Int32'), 'b', 1);
 ----
+
+# Signed zero literals must be compared with the same normalization as the executor
+
+statement ok
+CREATE TABLE signed_zero(label VARCHAR, f DOUBLE) AS VALUES
+  ('positive zero', 0.0),
+  ('negative zero', -0.0),
+  ('NaN', arrow_cast('NaN', 'Float64'));
+
+query T rowsort
+SELECT label FROM signed_zero WHERE f = -0.0 AND f >= 0.0;
+----
+negative zero
+positive zero
+
+query T
+SELECT label FROM signed_zero WHERE f = 0.0 AND f != -0.0;
+----
+
+query T
+SELECT label FROM signed_zero WHERE f > -0.0 AND f >= 0.0;
+----
+NaN
