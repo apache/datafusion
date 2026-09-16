@@ -192,7 +192,7 @@ select array_append(column1, column2) from fixed_arrays_values;
 [11, 12, 13, 14, 15, 16, 17, 18, NULL, 20, 12]
 [21, 22, 23, NULL, 25, 26, 27, 28, 29, 30, 23]
 [31, 32, 33, 34, 35, NULL, 37, 38, 39, 40, 34]
-[NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 44]
+[44]
 [41, 42, 43, 44, 45, 46, 47, 48, 49, 50, NULL]
 [51, 52, NULL, 54, 55, 56, 57, 58, 59, 60, 55]
 [61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 66]
@@ -247,8 +247,8 @@ select array_append(column2, 100.1), array_append(column3, '.') from fixed_size_
 [7.7, 8.8, 9.9, 100.1] [d, NULL, l, o, r, .]
 [10.1, NULL, 12.2, 100.1] [s, i, t, a, b, .]
 [13.3, 14.4, 15.5, 100.1] [a, m, e, t, x, .]
-[NULL, NULL, NULL, 100.1] [,, a, b, c, d, .]
-[16.6, 17.7, 18.8, 100.1] [NULL, NULL, NULL, NULL, NULL, .]
+[100.1] [,, a, b, c, d, .]
+[16.6, 17.7, 18.8, 100.1] [.]
 
 # array_append with columns and scalars #2
 query ??
@@ -330,6 +330,36 @@ from values (3), (NULL);
 ----
 [1, 2, 3] List(Int64)
 [1, 2, NULL] List(Int64)
+
+# https://github.com/apache/datafusion/issues/25222
+query I??
+select
+  column3,
+  nullif(column1, column2),
+  array_append(nullif(column1, column2), 9)
+from values ([1, 2, 3], [1, 2, 3], 1), ([4, 5, 6], [7], 2)
+order by column3;
+----
+1 NULL [9]
+2 [4, 5, 6] [4, 5, 6, 9]
+
+query I?
+select
+  column3,
+  array_append(arrow_cast(nullif(column1, column2), 'LargeList(Int64)'), 9)
+from values ([1, 2, 3], [1, 2, 3], 1), ([4, 5, 6], [7], 2)
+order by column3;
+----
+1 [9]
+2 [4, 5, 6, 9]
+
+query I?
+select column2, array_append(column1, 9)
+from values (arrow_cast([1, 2, 3], 'FixedSizeList(3, Int64)'), 1), (NULL, 2)
+order by column2;
+----
+1 [1, 2, 3, 9]
+2 [9]
 
 
 include ./cleanup.slt.part
