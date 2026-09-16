@@ -401,7 +401,7 @@ mod test {
 
         let s = async_stream(|mut emitter| async move {
             select! {
-                _ = do_stuff_async() => emitter.emit(()).await,
+                () = do_stuff_async() => emitter.emit(()).await,
                 else => emitter.emit(()).await,
             }
         });
@@ -421,8 +421,8 @@ mod test {
 
         let s = async_stream(|mut emitter| async move {
             select! {
-                _ = do_stuff_async() => emitter.emit("hey").await,
-                _ = more_async_work() => emitter.emit("hey").await,
+                () = do_stuff_async() => emitter.emit("hey").await,
+                () = more_async_work() => emitter.emit("hey").await,
                 else => emitter.emit("hey").await,
             }
         });
@@ -572,7 +572,7 @@ mod test {
 
         let _ = async_stream(|mut emitter| async move {
             select! {
-                _ = do_stuff_async() => {
+                () = do_stuff_async() => {
                     let another_s = async_try_stream(|mut inner_emitter| async move {
                         inner_emitter.emit(()).await;
                         Ok(())
