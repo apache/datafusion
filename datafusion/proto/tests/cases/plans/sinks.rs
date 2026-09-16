@@ -17,7 +17,7 @@
 
 //! Data sinks and their file sink configurations.
 
-use super::{roundtrip_test, roundtrip_test_and_return};
+use super::roundtrip_test_and_return;
 use arrow::csv::writer::Terminator;
 use arrow::csv::{QuoteStyle, WriterBuilder};
 use async_trait::async_trait;
