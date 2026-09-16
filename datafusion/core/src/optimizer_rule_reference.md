@@ -36,7 +36,7 @@ Rule order matters. The default pipeline may change between releases.
 ### Logical Optimizer Rules
 
 | order | rule                                      | summary                                                                                                                     |
-|-------| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| ----- | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | 1     | `rewrite_set_comparison`                  | Rewrites `ANY` and `ALL` set-comparison subqueries into `EXISTS`-based boolean expressions with correct SQL NULL semantics. |
 | 2     | `optimize_unions`                         | Flattens nested unions and removes unions with a single input.                                                              |
 | 3     | `unions_to_filter`                        | Merges `UNION DISTINCT` branches that share the same source into a single filtered branch with a disjunctive predicate.     |
