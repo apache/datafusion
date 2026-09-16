@@ -42,6 +42,28 @@ select * from validate_partitioned_parquet order by col1, col2;
 1 Foo
 2 Bar
 
+# Reject NULL partition values instead of writing them into the zero partition.
+statement ok
+CREATE TABLE nullable_partition_source (id INT, p INT) AS VALUES (1, NULL), (2, 0);
+
+statement error DataFusion error: Execution error: NULL values are not supported for partition column 'p'
+COPY nullable_partition_source TO 'test_files/scratch/copy/null_partition/' STORED AS PARQUET PARTITIONED BY (p);
+
+# Nullable partition columns still work when the copied rows contain no NULLs.
+query I
+COPY (SELECT * FROM nullable_partition_source WHERE p IS NOT NULL) TO 'test_files/scratch/copy/non_null_partition/' STORED AS PARQUET PARTITIONED BY (p);
+----
+1
+
+statement ok
+CREATE EXTERNAL TABLE validate_non_null_partition (id INT, p INT)
+STORED AS PARQUET LOCATION 'test_files/scratch/copy/non_null_partition/' PARTITIONED BY (p);
+
+query II
+SELECT id, p FROM validate_non_null_partition;
+----
+2 0
+
 # validate partition paths were actually generated
 statement ok
 CREATE EXTERNAL TABLE validate_partitioned_parquet_bar STORED AS PARQUET

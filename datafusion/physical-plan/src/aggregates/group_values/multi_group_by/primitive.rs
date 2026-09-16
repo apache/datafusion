@@ -188,7 +188,7 @@ where
     }
 
     fn vectorized_equal_to(
-        &self,
+        &mut self,
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
@@ -354,7 +354,7 @@ mod tests {
         };
 
         let equal_to =
-            |builder: &PrimitiveGroupValueBuilder<Float32Type, true>,
+            |builder: &mut PrimitiveGroupValueBuilder<Float32Type, true>,
              lhs_rows: &[usize],
              input_array: &ArrayRef,
              rhs_rows: &[usize],
@@ -380,7 +380,7 @@ mod tests {
         };
 
         let equal_to =
-            |builder: &PrimitiveGroupValueBuilder<Float32Type, true>,
+            |builder: &mut PrimitiveGroupValueBuilder<Float32Type, true>,
              lhs_rows: &[usize],
              input_array: &ArrayRef,
              rhs_rows: &[usize],
@@ -400,7 +400,7 @@ mod tests {
     where
         A: FnMut(&mut PrimitiveGroupValueBuilder<Float32Type, true>, &ArrayRef, &[usize]),
         E: FnMut(
-            &PrimitiveGroupValueBuilder<Float32Type, true>,
+            &mut PrimitiveGroupValueBuilder<Float32Type, true>,
             &[usize],
             &ArrayRef,
             &[usize],
@@ -455,7 +455,7 @@ mod tests {
         // Check
         let mut equal_to_results = make_true_buffer(builder.len());
         equal_to(
-            &builder,
+            &mut builder,
             &[0, 1, 2, 3, 4, 5, 6],
             &input_array,
             &[0, 1, 2, 3, 4, 5, 6],
@@ -483,7 +483,7 @@ mod tests {
         };
 
         let equal_to =
-            |builder: &PrimitiveGroupValueBuilder<Int64Type, false>,
+            |builder: &mut PrimitiveGroupValueBuilder<Int64Type, false>,
              lhs_rows: &[usize],
              input_array: &ArrayRef,
              rhs_rows: &[usize],
@@ -509,7 +509,7 @@ mod tests {
         };
 
         let equal_to =
-            |builder: &PrimitiveGroupValueBuilder<Int64Type, false>,
+            |builder: &mut PrimitiveGroupValueBuilder<Int64Type, false>,
              lhs_rows: &[usize],
              input_array: &ArrayRef,
              rhs_rows: &[usize],
@@ -529,7 +529,7 @@ mod tests {
     where
         A: FnMut(&mut PrimitiveGroupValueBuilder<Int64Type, false>, &ArrayRef, &[usize]),
         E: FnMut(
-            &PrimitiveGroupValueBuilder<Int64Type, false>,
+            &mut PrimitiveGroupValueBuilder<Int64Type, false>,
             &[usize],
             &ArrayRef,
             &[usize],
@@ -553,7 +553,7 @@ mod tests {
         // Check
         let mut equal_to_results = make_true_buffer(builder.len());
         equal_to(
-            &builder,
+            &mut builder,
             &[0, 1],
             &input_array,
             &[0, 1],
