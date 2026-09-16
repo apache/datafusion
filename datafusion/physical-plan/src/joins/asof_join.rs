@@ -553,6 +553,180 @@ impl ExecutionPlan for AsOfJoinExec {
             column_statistics,
         }))
     }
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        // Destructure exhaustively (no `..`) so that a newly added field is a
+        // compile error here instead of being silently left out of the proto.
+        let Self {
+            left,
+            right,
+            on,
+            match_condition,
+            projection,
+            // derived from the children's schemas by `try_new` on decode
+            join_schema: _,
+            // derived from the children's schemas by `try_new` on decode
+            column_indices: _,
+            // runtime metrics, not part of the plan
+            metrics: _,
+            // recomputed from `on` and `match_condition.op` by `try_new`
+            left_ordering: _,
+            // recomputed from `on` and `match_condition.op` by `try_new`
+            right_ordering: _,
+            // right input collected at execution time, not part of the plan
+            right_fut: _,
+            // recomputed by `try_new` on decode
+            cache: _,
+        } = self;
+
+        let left = ctx.encode_child(left)?;
+        let right = ctx.encode_child(right)?;
+        let on = on
+            .iter()
+            .map(|(left, right)| {
+                Ok(protobuf::JoinOn {
+                    left: Some(ctx.encode_expr(left)?),
+                    right: Some(ctx.encode_expr(right)?),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let match_operator = match match_condition.op {
+            Operator::Lt => protobuf::AsOfMatchOperator::Lt,
+            Operator::LtEq => protobuf::AsOfMatchOperator::LtEq,
+            Operator::Gt => protobuf::AsOfMatchOperator::Gt,
+            Operator::GtEq => protobuf::AsOfMatchOperator::GtEq,
+            op => {
+                return internal_err!(
+                    "AsOfJoinExec cannot serialize unsupported match operator {op}"
+                );
+            }
+        };
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::AsOfJoin(Box::new(
+                    protobuf::AsOfJoinExecNode {
+                        left: Some(Box::new(left)),
+                        right: Some(Box::new(right)),
+                        on,
+                        left_match_expr: Some(ctx.encode_expr(&match_condition.left)?),
+                        right_match_expr: Some(ctx.encode_expr(&match_condition.right)?),
+                        match_operator: match_operator.into(),
+                        // Proto3 `repeated` cannot distinguish `None` from
+                        // `Some(vec![])`; preserve the empty projection with
+                        // the invalid column-index sentinel used by hash join.
+                        projection: match projection.as_ref() {
+                            None => Vec::new(),
+                            Some(projection) if projection.is_empty() => vec![u32::MAX],
+                            Some(projection) => {
+                                projection.iter().map(|index| *index as u32).collect()
+                            }
+                        },
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl AsOfJoinExec {
+    /// Reconstruct an [`AsOfJoinExec`] from its protobuf representation.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+
+        let asof_join = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::AsOfJoin,
+            "AsOfJoinExec",
+        );
+        // Destructure exhaustively (no `..`) so that a newly added proto field
+        // is a compile error here instead of being silently ignored.
+        let protobuf::AsOfJoinExecNode {
+            left,
+            right,
+            on,
+            left_match_expr,
+            right_match_expr,
+            match_operator,
+            projection,
+        } = &**asof_join;
+
+        let left = ctx.decode_required_child(left.as_deref(), "AsOfJoinExec", "left")?;
+        let right =
+            ctx.decode_required_child(right.as_deref(), "AsOfJoinExec", "right")?;
+        let left_schema = left.schema();
+        let right_schema = right.schema();
+        let on = on
+            .iter()
+            .map(|pair| {
+                let left = ctx.decode_required_expr(
+                    pair.left.as_ref(),
+                    left_schema.as_ref(),
+                    "AsOfJoinExec",
+                    "on.left",
+                )?;
+                let right = ctx.decode_required_expr(
+                    pair.right.as_ref(),
+                    right_schema.as_ref(),
+                    "AsOfJoinExec",
+                    "on.right",
+                )?;
+                Ok((left, right))
+            })
+            .collect::<Result<_>>()?;
+        let left_match = ctx.decode_required_expr(
+            left_match_expr.as_ref(),
+            left_schema.as_ref(),
+            "AsOfJoinExec",
+            "left_match_expr",
+        )?;
+        let right_match = ctx.decode_required_expr(
+            right_match_expr.as_ref(),
+            right_schema.as_ref(),
+            "AsOfJoinExec",
+            "right_match_expr",
+        )?;
+        let match_operator = protobuf::AsOfMatchOperator::try_from(*match_operator)
+            .map_err(|_| {
+                datafusion_common::internal_datafusion_err!(
+                    "AsOfJoinExec: unknown AsOfMatchOperator {}",
+                    match_operator
+                )
+            })?;
+        let op = match match_operator {
+            protobuf::AsOfMatchOperator::Lt => Operator::Lt,
+            protobuf::AsOfMatchOperator::LtEq => Operator::LtEq,
+            protobuf::AsOfMatchOperator::Gt => Operator::Gt,
+            protobuf::AsOfMatchOperator::GtEq => Operator::GtEq,
+            protobuf::AsOfMatchOperator::Unspecified => {
+                return internal_err!("AsOfJoinExec match operator must be specified");
+            }
+        };
+
+        // Preserve the empty-projection sentinel written by `try_to_proto`.
+        let projection = match projection.as_slice() {
+            [] => None,
+            [u32::MAX] => Some(Vec::new()),
+            indices => Some(indices.iter().map(|index| *index as usize).collect()),
+        };
+
+        Ok(Arc::new(Self::try_new(
+            left,
+            right,
+            on,
+            AsOfMatchExpr::new(left_match, op, right_match),
+            projection,
+        )?))
+    }
 }
 
 /// Materialized right input shared by every left output partition.
