@@ -27,7 +27,8 @@
 # installs that pinned version. An already installed tool is used as is.
 #
 # The ASF status-check validator runs with `python3` from PATH and needs the
-# PyYAML package. This script checks both but does not install Python packages.
+# PyYAML package. This script checks both but does not install Python packages;
+# `uv run ./dev/rust_lint.sh` provides them from the uv workspace.
 #
 #
 #
@@ -93,14 +94,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # `ci/scripts/check_asf_yaml_status_checks.py` runs with `python3` from PATH
 # and imports PyYAML. Report a missing prerequisite before any tool is
-# installed or any formatter runs.
+# installed or any formatter runs, and point at `uv run`, which sets up the
+# Python dependencies from the uv workspace.
 ensure_python_with_yaml() {
   if ! command -v python3 &> /dev/null; then
-    echo "[${SCRIPT_NAME}] python3 was not found on PATH. Install Python 3 to run ci/scripts/check_asf_yaml_status_checks.py." >&2
+    echo "[${SCRIPT_NAME}] python3 was not found on PATH. Please run the suite through uv, which provides Python and its packages: uv run ./dev/rust_lint.sh" >&2
     exit 1
   fi
   if ! python3 -c 'import yaml' &> /dev/null; then
-    echo "[${SCRIPT_NAME}] PyYAML is not installed for $(command -v python3). Install it in your active Python environment with: python3 -m pip install pyyaml" >&2
+    echo "[${SCRIPT_NAME}] PyYAML is not installed for $(command -v python3). Please run the suite through uv, which installs it: uv run ./dev/rust_lint.sh" >&2
     exit 1
   fi
 }

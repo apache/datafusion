@@ -224,19 +224,20 @@ bash ci/scripts/rust_docs.sh
 
 `ci/scripts/check_asf_yaml_status_checks.py` checks that every required status
 check in `.asf.yaml` matches a job in `.github/workflows`. `./dev/rust_lint.sh`
-runs it and needs `python3` with [PyYAML]:
+runs it and needs `python3` with [PyYAML]. The [uv] workspace provides both:
 
 ```shell
-python3 -m pip install pyyaml
+uv run ./dev/rust_lint.sh
 ```
 
 To run the check on its own:
 
 ```shell
-python3 ci/scripts/check_asf_yaml_status_checks.py
+uv run python3 ci/scripts/check_asf_yaml_status_checks.py
 ```
 
 [pyyaml]: https://pypi.org/project/PyYAML/
+[uv]: https://docs.astral.sh/uv/
 
 ## Benchmarks
 
