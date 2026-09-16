@@ -314,7 +314,7 @@ impl BlockedGroupValues for BlockedGroupValuesRows {
         self.group_values.reset();
         self.map.clear();
         self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
-        self.map_size = self.map.capacity() * size_of::<(u64, usize)>();
+        self.map_size = self.map.capacity() * size_of::<(u64, BlocksIndex)>();
         self.hashes_buffer.clear();
         self.hashes_buffer.shrink_to(num_rows);
     }
