@@ -77,11 +77,11 @@ pub struct PullUpCorrelatedExpr {
     pub pulled_up_scalar_agg: bool,
     /// A correlated column wrapped in an expression (e.g. `CAST(t2.b AS INT)`)
     /// gets grouped by that entire expression instead of the bare column,
-    /// aliased to a generated name, once, in the `Aggregate` this column belongs to. Every
-    /// later reference to that column, in a `Projection` above it for
-    /// instance, needs to use the same alias instead of the now
-    /// unresolvable bare column. This records the mapping the first
-    /// time it's made.
+    /// aliased to a generated name, once, in the `Aggregate` this column
+    /// belongs to. Every later reference to that column, in a
+    /// `Projection` above it for instance, needs to use the same alias
+    /// instead of the now unresolvable bare column. This records the
+    /// mapping the first time it's made.
     correlated_col_aliases: HashMap<Column, Expr>,
     /// `LIMIT 0` forces the subquery to zero rows unconditionally, regardless
     /// of whether the correlation matched, collapsing it to an `EmptyRelation`.

@@ -708,7 +708,7 @@ fn build_join_with_count_bug(
 ) -> Result<LogicalPlan> {
     if in_predicate_opt.is_some() {
         return not_impl_err!(
-            "build_join_with_count_bug: `IN`/`NOT IN` count-bug compensation is not implemented"
+            "IN/NOT IN count-bug compensation for groupless aggregates is not implemented"
         );
     }
 
@@ -752,12 +752,14 @@ fn build_join_with_count_bug(
     };
 
     // EXISTS is true by default (the groupless aggregate always
-    // produces a row), unless one of three cases holds: (1) the outer
-    // row joined against an inner group whose HAVING predicate failed,
+    // produces a row), unless one of three cases holds:
+    // (1) the outer row joined against an inner group whose HAVING
+    //     predicate failed,
     // (2) an unmatched outer row's own default aggregate values fail
-    // that same HAVING clause, or (3) the subquery was truncated to
-    // zero rows unconditionally (LIMIT 0), which is false for every
-    // outer row regardless of whether it matched.
+    //     that same HAVING clause,
+    // (3) the subquery was truncated to zero rows unconditionally
+    //     (LIMIT 0), which is false for every outer row regardless of
+    //     whether it matched.
     let exists_expr = if forces_empty_result {
         lit(false)
     } else {
