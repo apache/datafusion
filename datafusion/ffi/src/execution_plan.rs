@@ -558,7 +558,9 @@ impl ExecutionPlan for ForeignExecutionPlan {
 #[cfg(any(test, feature = "integration-tests"))]
 pub mod tests {
     use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
-    use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+    use datafusion_physical_plan::execution_plan::{
+        Boundedness, EmissionType, EvaluationType, SchedulingType,
+    };
     use datafusion_physical_plan::{Partitioning, PhysicalExpr};
 
     use super::*;
@@ -576,12 +578,17 @@ pub mod tests {
     impl EmptyExec {
         pub fn new(schema: arrow::datatypes::SchemaRef) -> Self {
             Self {
-                props: Arc::new(PlanProperties::new(
-                    datafusion_physical_expr::EquivalenceProperties::new(schema),
-                    Partitioning::UnknownPartitioning(3),
-                    EmissionType::Incremental,
-                    Boundedness::Bounded,
-                )),
+                // Nondefault properties expose information lost across the FFI boundary.
+                props: Arc::new(
+                    PlanProperties::new(
+                        datafusion_physical_expr::EquivalenceProperties::new(schema),
+                        Partitioning::UnknownPartitioning(3),
+                        EmissionType::Incremental,
+                        Boundedness::Bounded,
+                    )
+                    .with_scheduling_type(SchedulingType::Cooperative)
+                    .with_evaluation_type(EvaluationType::Eager),
+                ),
                 children: Vec::default(),
                 expressions: Vec::default(),
                 dynamic_expressions: Vec::default(),
