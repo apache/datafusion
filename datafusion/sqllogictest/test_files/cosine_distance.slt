@@ -183,3 +183,12 @@ select
   cosine_distance([CAST('Infinity' AS DOUBLE), 1.0], [1.0, 1.0]);
 ----
 NaN NaN
+
+# only one vector's sum of squares is out of range, so only that vector is
+# scaled and the dot product mixes a scaled value with an unscaled one
+query RR
+select
+  cosine_distance([CAST(1e200 AS DOUBLE), CAST(0 AS DOUBLE)], [CAST(1 AS DOUBLE), CAST(0 AS DOUBLE)]),
+  cosine_distance([CAST(1e200 AS DOUBLE), CAST(1 AS DOUBLE)], [CAST(1e-200 AS DOUBLE), CAST(1 AS DOUBLE)]);
+----
+0 1
