@@ -1603,26 +1603,19 @@ config_namespace! {
         ///
         /// Physical rules run as a fixed sequence with no fixpoint loop, so a
         /// list holding the same rule several times runs it again on plans it
-        /// has already settled. Naming that rule lets those repeats be
-        /// answered from what was observed rather than re-derived.
-        ///
-        /// A plan is remembered only after the rule has run on it and returned
-        /// the same plan, so a skip replays an outcome already seen rather
-        /// than predicting one. A rule that has not yet reached its fixpoint
-        /// records nothing and keeps running, which matters because rules are
-        /// not required to settle in a single pass.
-        ///
-        /// What is remembered is scoped to one planning run, and plans are
-        /// compared by their rendered form, since a rule that changes nothing
-        /// still commonly rebuilds the tree. Debug builds re-run a skipped
-        /// rule and check it still leaves the plan alone.
+        /// has already settled. A plan is remembered only after the rule ran
+        /// on it and returned that same plan, so a skip replays an observed
+        /// outcome rather than predicting one; a rule that has not yet
+        /// converged records nothing and keeps running. What is remembered is
+        /// scoped to one planning run, and plans are compared by rendered
+        /// form, since a rule that changes nothing still commonly rebuilds the
+        /// tree. Debug builds re-run a skipped rule and check it.
         ///
         /// Names are matched against what a rule reports as its name, which is
-        /// what `EXPLAIN VERBOSE` shows; a name matching no rule is ignored. A
-        /// name has to identify a behaviour, because every rule answering to it
-        /// shares one record. The built-in `OutputRequirements` reports one
-        /// name for two instances that do opposite things, so it must not be
-        /// named here.
+        /// what `EXPLAIN VERBOSE` shows; an unmatched name is ignored. A name
+        /// stands for a behaviour, since every rule answering to it shares one
+        /// record: the built-in `OutputRequirements` names two instances that
+        /// do opposite things, so it must not be listed.
         pub skip_unchanged_physical_rules: String, default = "".to_string()
 
         /// When set to true, the optimizer will attempt to perform limit operations
