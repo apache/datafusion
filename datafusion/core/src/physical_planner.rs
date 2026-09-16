@@ -2972,15 +2972,17 @@ impl DefaultPhysicalPlanner {
         // that makes re-running it pointless. Scoped to this call: rule
         // instances are shared between queries, so this must not live on the
         // rule itself.
-        let skip_unchanged = session_state
+        let mut last_outputs = session_state
             .config_options()
             .optimizer
-            .skip_unchanged_physical_rules;
-        let mut last_outputs: HashMap<&str, Arc<dyn ExecutionPlan>> = HashMap::new();
+            .skip_unchanged_physical_rules
+            .then(HashMap::<&str, Arc<dyn ExecutionPlan>>::new);
 
         for optimizer in optimizers {
-            if skip_unchanged && optimizer.skip_if_unchanged() {
-                if let Some(last) = last_outputs.get(optimizer.name())
+            if last_outputs.is_some() && optimizer.skip_if_unchanged() {
+                if let Some(last) = last_outputs
+                    .as_ref()
+                    .and_then(|memo| memo.get(optimizer.name()))
                     && Arc::ptr_eq(last, &new_plan)
                 {
                     // The rule produced this exact plan and nothing since has
@@ -3018,8 +3020,10 @@ impl DefaultPhysicalPlanner {
                 .map_err(|e| {
                     DataFusionError::Context(optimizer.name().to_string(), Box::new(e))
                 })?;
-            if skip_unchanged && optimizer.skip_if_unchanged() {
-                last_outputs.insert(optimizer.name(), Arc::clone(&new_plan));
+            if let Some(memo) = last_outputs.as_mut()
+                && optimizer.skip_if_unchanged()
+            {
+                memo.insert(optimizer.name(), Arc::clone(&new_plan));
             }
 
             // This only checks the schema in release build, and performs additional checks in debug mode.
