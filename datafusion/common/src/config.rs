@@ -1612,6 +1612,11 @@ config_namespace! {
         /// rather than trusting it. Names are matched against what a rule
         /// reports as its name, which is what `EXPLAIN VERBOSE` shows; a name
         /// matching no rule is ignored.
+        ///
+        /// A name has to identify a behaviour, because every rule answering to
+        /// it is treated as the same rule. The built-in `OutputRequirements`
+        /// reports one name for two instances that do opposite things, so it
+        /// must not be named here.
         pub skip_unchanged_physical_rules: String, default = "".to_string()
 
         /// When set to true, the optimizer will attempt to perform limit operations

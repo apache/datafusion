@@ -4111,6 +4111,32 @@ mod tests {
         Ok(())
     }
 
+    /// A name stands for a behaviour, since every rule answering to it shares
+    /// one memo entry. The built-in chain breaks that for `OutputRequirements`,
+    /// whose two instances add and then remove the same requirements under one
+    /// name, so naming it in the config would let the first instance's output
+    /// suppress the second. Pinned here because the config documents it, and
+    /// because giving the two modes distinct names would make it safe.
+    ///
+    /// `ProjectionPushdown` repeats too, but both instances are the same rule
+    /// doing the same thing, which is the case the feature is built for.
+    #[tokio::test]
+    async fn builtin_chain_repeats_two_rule_names() -> Result<()> {
+        let stock = PhysicalOptimizer::default().rules;
+        let mut counts = HashMap::<&str, usize>::new();
+        for rule in &stock {
+            *counts.entry(rule.name()).or_default() += 1;
+        }
+        let mut repeated: Vec<&str> = counts
+            .into_iter()
+            .filter(|(_, count)| *count > 1)
+            .map(|(name, _)| name)
+            .collect();
+        repeated.sort_unstable();
+        assert_eq!(repeated, ["OutputRequirements", "ProjectionPushdown"]);
+        Ok(())
+    }
+
     /// `EXPLAIN VERBOSE` renders one plan snapshot per rule from the observer
     /// callback, so a skipped rule still has to report the plan it would have
     /// returned. Otherwise enabling the optimization would silently shorten
