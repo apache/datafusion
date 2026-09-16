@@ -322,8 +322,6 @@ impl IncrementalSortIterator {
         }
     }
 
-    /// Use a precomputed sort permutation instead of evaluating the expressions.
-    /// Must be called before iteration; indices must contain every input row once.
     pub(crate) fn with_sorted_indices(mut self, indices: UInt32Array) -> Self {
         self.indices = Some(indices);
         self
