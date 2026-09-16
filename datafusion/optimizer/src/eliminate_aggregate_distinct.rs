@@ -167,9 +167,15 @@ mod tests {
     use crate::test::*;
 
     use crate::single_distinct_to_groupby::SingleDistinctToGroupBy;
-    use datafusion_expr::{ExprFunctionExt, LogicalPlanBuilder, col, lit};
+    use arrow::datatypes::DataType;
+    use datafusion_expr::function::AccumulatorArgs;
+    use datafusion_expr::{
+        Accumulator, AggregateUDF, AggregateUDFImpl, ExprFunctionExt, LogicalPlanBuilder,
+        Signature, Volatility, col, lit,
+    };
     use datafusion_functions_aggregate::expr_fn::{bit_xor, max, min, sum};
 
+    use std::hash::{Hash, Hasher};
     use std::sync::Arc;
 
     macro_rules! assert_optimized_plan_equal {
@@ -187,6 +193,68 @@ mod tests {
                 @ $expected,
             )
         }};
+    }
+
+    /// A user defined aggregate that reports the [`DistinctHandling`] it was
+    /// built with.
+    ///
+    /// The tests above read the tag off built-in functions, which only covers
+    /// the variants those functions happen to carry. This one exercises the
+    /// public API a third-party function uses: an
+    /// [`AggregateUDFImpl::distinct_handling`] override.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct TaggedUdaf {
+        name: &'static str,
+        handling: DistinctHandling,
+        signature: Signature,
+    }
+
+    impl TaggedUdaf {
+        fn new(name: &'static str, handling: DistinctHandling) -> Self {
+            Self {
+                name,
+                handling,
+                signature: Signature::any(1, Volatility::Immutable),
+            }
+        }
+    }
+
+    /// Hashed by name, which identifies the function here. `DistinctHandling`
+    /// is not `Hash`, and `AggregateUDFImpl` requires one through `DynHash`.
+    impl Hash for TaggedUdaf {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.name.hash(state);
+            self.signature.hash(state);
+        }
+    }
+
+    impl AggregateUDFImpl for TaggedUdaf {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::UInt32)
+        }
+
+        fn accumulator(
+            &self,
+            _acc_args: AccumulatorArgs,
+        ) -> Result<Box<dyn Accumulator>> {
+            unimplemented!("the rule only rewrites the logical plan")
+        }
+
+        fn distinct_handling(&self) -> DistinctHandling {
+            self.handling
+        }
+    }
+
+    fn tagged(name: &'static str, handling: DistinctHandling) -> AggregateUDF {
+        AggregateUDF::from(TaggedUdaf::new(name, handling))
     }
 
     /// `min(DISTINCT b)` loses the flag but keeps its column name.
@@ -360,6 +428,149 @@ mod tests {
               TableScan: test
         ",
         )
+    }
+
+    /// A user defined `Ignored` aggregate loses the flag, keeps its output
+    /// name, and carries `FILTER` and `ORDER BY` over untouched.
+    #[test]
+    fn eliminate_distinct_from_ignored_udaf() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![
+                    tagged("first_seen", DistinctHandling::Ignored)
+                        .call(vec![col("b")])
+                        .distinct()
+                        .filter(col("c").gt(lit(0u32)))
+                        .order_by(vec![col("b").sort(true, false)])
+                        .build()?,
+                ],
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Aggregate: groupBy=[[test.a]], aggr=[[first_seen(test.b) FILTER (WHERE test.c > UInt32(0)) ORDER BY [test.b ASC NULLS LAST] AS first_seen(DISTINCT test.b) FILTER (WHERE test.c > UInt32(0)) ORDER BY [test.b ASC NULLS LAST]]]
+          TableScan: test
+        ")
+    }
+
+    /// A user defined aggregate that deduplicates for real keeps the flag.
+    #[test]
+    fn keep_distinct_on_honored_udaf() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![
+                    tagged("counts_uniques", DistinctHandling::Honored)
+                        .call(vec![col("b")])
+                        .distinct()
+                        .build()?,
+                ],
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Aggregate: groupBy=[[test.a]], aggr=[[counts_uniques(DISTINCT test.b)]]
+          TableScan: test
+        ")
+    }
+
+    /// An aggregate that does not implement `DISTINCT` keeps the flag too: the
+    /// planner still has to deduplicate the input for it.
+    #[test]
+    fn keep_distinct_on_unsupported_udaf() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![
+                    tagged("needs_dedup", DistinctHandling::Unsupported)
+                        .call(vec![col("b")])
+                        .distinct()
+                        .build()?,
+                ],
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Aggregate: groupBy=[[test.a]], aggr=[[needs_dedup(DISTINCT test.b)]]
+          TableScan: test
+        ")
+    }
+
+    /// The conservative gate covers user defined functions as well: an
+    /// `Ignored` one beside an `Honored` one keeps both flags.
+    #[test]
+    fn mixed_udaf_node_is_left_alone() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![
+                    tagged("first_seen", DistinctHandling::Ignored)
+                        .call(vec![col("b")])
+                        .distinct()
+                        .build()?,
+                    tagged("counts_uniques", DistinctHandling::Honored)
+                        .call(vec![col("c")])
+                        .distinct()
+                        .build()?,
+                ],
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Aggregate: groupBy=[[test.a]], aggr=[[first_seen(DISTINCT test.b), counts_uniques(DISTINCT test.c)]]
+          TableScan: test
+        ")
+    }
+
+    /// An aggregate that already carries an alias keeps that one name: the
+    /// rule restores the name it found, so no second alias is stacked on top.
+    #[test]
+    fn already_aliased_aggregate_gets_no_second_alias() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![
+                    tagged("first_seen", DistinctHandling::Ignored)
+                        .call(vec![col("b")])
+                        .distinct()
+                        .build()?
+                        .alias("m"),
+                ],
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Aggregate: groupBy=[[test.a]], aggr=[[first_seen(test.b) AS m]]
+          TableScan: test
+        ")
+    }
+
+    /// `AggregateUDF::with_aliases` wraps the function in another
+    /// `AggregateUDFImpl`, which has to pass the tag through.
+    #[test]
+    fn with_aliases_delegates_distinct_handling() -> Result<()> {
+        let aliased =
+            tagged("first_seen", DistinctHandling::Ignored).with_aliases(["first_hit"]);
+        assert_eq!(aliased.distinct_handling(), DistinctHandling::Ignored);
+
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![aliased.call(vec![col("b")]).distinct().build()?],
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Aggregate: groupBy=[[test.a]], aggr=[[first_seen(test.b) AS first_seen(DISTINCT test.b)]]
+          TableScan: test
+        ")
     }
 
     /// A plan with no Aggregate takes the no-op path.

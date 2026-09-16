@@ -485,6 +485,27 @@ physical_plan
 03)----AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[bit_or(distinct_simplify_t.v) as bit_or(DISTINCT distinct_simplify_t.v)]
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
+# approx_distinct: setting an HLL register a value already reached is a no-op,
+# so the deduplicating inner group by that SingleDistinctToGroupBy used to plan
+# here was pure cost. This is the largest plan change the rule makes.
+query II
+SELECT g, approx_distinct(DISTINCT v) FROM distinct_simplify_t GROUP BY g ORDER BY g;
+----
+1 2
+2 1
+
+query TT
+EXPLAIN SELECT g, approx_distinct(DISTINCT v) FROM distinct_simplify_t GROUP BY g;
+----
+logical_plan
+01)Aggregate: groupBy=[[distinct_simplify_t.g]], aggr=[[approx_distinct(distinct_simplify_t.v) AS approx_distinct(DISTINCT distinct_simplify_t.v)]]
+02)--TableScan: distinct_simplify_t projection=[g, v]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[approx_distinct(distinct_simplify_t.v) as approx_distinct(DISTINCT distinct_simplify_t.v)]
+02)--RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=1
+03)----AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[approx_distinct(distinct_simplify_t.v) as approx_distinct(DISTINCT distinct_simplify_t.v)]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
 # Negative case: bit_xor cancels duplicate pairs, so DISTINCT is kept and
 # SingleDistinctToGroupBy still rewrites the plan.
 query II
