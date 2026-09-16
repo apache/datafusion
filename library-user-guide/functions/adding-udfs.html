@@ -1136,6 +1136,24 @@ green,10.3,1996-04-12T12:05:04.000000000
 <span class="p">}</span>
 </pre></div>
 </div>
+<section id="declaring-how-an-aggregate-udf-treats-distinct">
+<h3>Declaring how an Aggregate UDF treats <code class="docutils literal notranslate"><span class="pre">DISTINCT</span></code><a class="headerlink" href="#declaring-how-an-aggregate-udf-treats-distinct" title="Link to this heading">#</a></h3>
+<p>By default DataFusion assumes an aggregate is sensitive to the <code class="docutils literal notranslate"><span class="pre">DISTINCT</span></code> modifier, which means the accumulator is expected to
+read <code class="docutils literal notranslate"><span class="pre">AccumulatorArgs::is_distinct</span></code> and deduplicate its input. Override
+<a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.AggregateUDFImpl.html#method.distinct_handling"><code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::distinct_handling</span></code></a> when that is not what your function does:</p>
+<ul class="simple">
+<li><p>Return <code class="docutils literal notranslate"><span class="pre">DistinctHandling::Insensitive</span></code> when duplicates cannot change the result, that is, when merging a value the
+accumulator has already seen is a no-op. <code class="docutils literal notranslate"><span class="pre">min</span></code>, <code class="docutils literal notranslate"><span class="pre">max</span></code>, <code class="docutils literal notranslate"><span class="pre">bool_and</span></code> and <code class="docutils literal notranslate"><span class="pre">bit_or</span></code> are all in this group. The optimizer
+then plans <code class="docutils literal notranslate"><span class="pre">f(DISTINCT</span> <span class="pre">x)</span></code> as <code class="docutils literal notranslate"><span class="pre">f(x)</span></code>, which skips both the per-group hash set and the extra grouping stage that
+<code class="docutils literal notranslate"><span class="pre">SingleDistinctToGroupBy</span></code> would otherwise introduce.</p></li>
+<li><p>Return <code class="docutils literal notranslate"><span class="pre">DistinctHandling::Unsupported</span></code> when the accumulator does not implement <code class="docutils literal notranslate"><span class="pre">DISTINCT</span></code>: it does not read
+<code class="docutils literal notranslate"><span class="pre">is_distinct</span></code>, or it rejects <code class="docutils literal notranslate"><span class="pre">DISTINCT</span></code> with an error. The planner must then deduplicate the input first or reject
+the query. Today this is a declaration only; rejecting such queries at planning time is a follow-up change.</p></li>
+<li><p>Leave the default <code class="docutils literal notranslate"><span class="pre">DistinctHandling::Sensitive</span></code> when the accumulator reads <code class="docutils literal notranslate"><span class="pre">AccumulatorArgs::is_distinct</span></code> and
+deduplicates its input itself.</p></li>
+</ul>
+<p>Getting this wrong changes query results, so only claim <code class="docutils literal notranslate"><span class="pre">Insensitive</span></code> if your merge is genuinely idempotent.</p>
+</section>
 <section id="registering-an-aggregate-udf">
 <h3>Registering an Aggregate UDF<a class="headerlink" href="#registering-an-aggregate-udf" title="Link to this heading">#</a></h3>
 <p>To register a Aggregate UDF, you need to wrap the function implementation in a <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.AggregateUDF.html"><code class="docutils literal notranslate"><span class="pre">AggregateUDF</span></code></a> struct and then register
@@ -1475,6 +1493,7 @@ validation of the input <code class="docutils literal notranslate"><span class="
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#adding-an-aggregate-udf">Adding an Aggregate UDF</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#declaring-how-an-aggregate-udf-treats-distinct">Declaring how an Aggregate UDF treats <code class="docutils literal notranslate"><span class="pre">DISTINCT</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#registering-an-aggregate-udf">Registering an Aggregate UDF</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#returning-multiple-values-from-an-aggregate-udf">Returning multiple values from an Aggregate UDF</a></li>
 </ul>
