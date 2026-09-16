@@ -385,10 +385,10 @@ where
 
                     let null_index = BlocksIndex::from_index_in_fixed_block_size(self.offsets.len(), self.block_size);
                     // nulls need a zero length in the offset buffer
-                    let should_start_new_block = self.offsets.push_length(0);
+                    let should_end_current_block = self.offsets.push_length(0);
 
-                    if should_start_new_block {
-                        self.buffer.start_new_block();
+                    if should_end_current_block {
+                        self.buffer.end_current_block();
                     }
                     self.null = Some((payload, null_index));
                     (payload, null_index)
@@ -426,10 +426,10 @@ where
                     // comparison
                     self.buffer.extend_from_slice(value);
                     let index = BlocksIndex::from_index_in_fixed_block_size(self.offsets.len(), self.block_size);
-                    let should_start_new_block = self.offsets.push_length(value.len());
+                    let should_end_current_block = self.offsets.push_length(value.len());
 
-                    if should_start_new_block {
-                        self.buffer.start_new_block();
+                    if should_end_current_block {
+                        self.buffer.end_current_block();
                     }
                     let payload = make_payload_fn(Some(value));
                     let new_header = Entry {
@@ -473,10 +473,10 @@ where
                     let offset = self.buffer.current_block_len(); // offset of start for data
                     self.buffer.extend_from_slice(value);
                     let index = BlocksIndex::from_index_in_fixed_block_size(self.offsets.len(), self.block_size);
-                    let should_start_new_block = self.offsets.push_length(value.len());
+                    let should_end_current_block = self.offsets.push_length(value.len());
 
-                    if should_start_new_block {
-                        self.buffer.start_new_block();
+                    if should_end_current_block {
+                        self.buffer.end_current_block();
                     }
 
                     let payload = make_payload_fn(Some(value));

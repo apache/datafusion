@@ -126,7 +126,7 @@ pub trait BlockedGroupColumn<const IS_FIXED_BLOCK_SIZE: bool>: Send + Sync {
     fn take_all(self: Box<Self>) -> Vec<ArrayRef>;
 
     /// When the block sizing is externally managed (when `IS_FIXED_BLOCK_SIZE` is `false`) this call signals that a new block has started.
-    fn start_new_block(&mut self);
+    fn end_current_block(&mut self);
 }
 
 /// Determines if the nullability of the existing and new input array can be used

@@ -329,10 +329,10 @@ where
         )
     }
 
-    fn start_new_block(&mut self) {
-        self.group_values.start_new_block();
+    fn end_current_block(&mut self) {
+        self.group_values.end_current_block();
         if NULLABLE {
-            self.nulls.start_new_block();
+            self.nulls.end_current_block();
         }
     }
 }

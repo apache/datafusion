@@ -58,6 +58,10 @@ impl BlockedBytesBufferBuilder {
         self.bytes.start_new_block();
     }
 
+    pub fn end_current_block(&mut self) {
+        self.bytes.end_current_block();
+    }
+
     pub fn extend_from_slice(&mut self, slice: &[u8]) {
         self.bytes.extend_from_slice(slice);
     }
@@ -81,11 +85,7 @@ impl BlockedBytesBufferBuilder {
     /// A block may legitimately be empty (all its items are empty or null) so unlike the
     /// other builders the block count, not the byte count, decides when we are done
     pub fn take_block(&mut self) -> Option<Buffer> {
-        if self.num_blocks() == 1 && self.is_empty() {
-            return None;
-        }
-
-        Some(self.take_first_block())
+        self.bytes.take_block().map(|b| b.into_buffer())
     }
 
     /// Take the first block even when it is empty, for callers that know from
@@ -96,13 +96,10 @@ impl BlockedBytesBufferBuilder {
 
     /// Take every block, a trailing empty block is dropped
     pub fn take_all(&mut self) -> Vec<Buffer> {
-        let mut blocks: Vec<Buffer> = (0..self.num_blocks())
-            .map(|_| self.take_first_block())
-            .collect();
-        if blocks.last().is_some_and(Buffer::is_empty) {
-            blocks.pop();
-        }
-        blocks
+        let blocks = self.bytes.take_all();
+        blocks.into_iter()
+            .map(|b| b.into_buffer())
+            .collect::<Vec<_>>()
     }
 
     pub fn take_block_finished(&mut self) -> Option<Buffer> {

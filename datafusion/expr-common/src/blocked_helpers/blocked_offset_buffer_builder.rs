@@ -63,7 +63,7 @@ impl<const FIXED_BLOCK_SIZING: bool, O: OffsetSizeTrait>
     }
 
     pub fn current_block_index(&self) -> usize {
-        self.slots.num_blocks() - 1
+        self.slots.num_blocks().saturating_sub(1)
     }
 
     pub fn num_blocks(&self) -> usize {
@@ -85,6 +85,11 @@ impl<const FIXED_BLOCK_SIZING: bool, O: OffsetSizeTrait>
 
     pub fn start_new_block(&mut self) {
         self.slots.start_new_block();
+        self.open_block();
+    }
+
+    pub fn end_current_block(&mut self) {
+        self.slots.end_current_block();
         self.open_block();
     }
 
@@ -281,7 +286,6 @@ impl<const FIXED_BLOCK_SIZING: bool, O: OffsetSizeTrait>
             .slots
             .take_all()
             .into_iter()
-            .filter(|b| b.len() > 1)
             .map(MmapVec::into_scalar_buffer)
             .collect();
         self.len = 0;
@@ -908,7 +912,7 @@ mod tests {
         let mut builder = Manual::new(0);
         for (i, block) in blocks.iter().enumerate() {
             if i > 0 {
-                builder.start_new_block();
+                builder.end_current_block();
             }
             for &len in block {
                 builder.push_length(len);

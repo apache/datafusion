@@ -79,6 +79,7 @@ pub struct BlockedCustomHeapAllocatedInputBuilder<
 
     /// The index of the current block
     current_block_index: usize,
+    should_count_current_block: bool,
 
     _phantom: PhantomData<HeapAllocatedSize>,
 }
@@ -112,6 +113,7 @@ impl<
             blocks,
             blocks_heap_allocated_sizes,
             finished_blocks_allocated_memory: 0,
+            should_count_current_block: false,
             block_size,
             len: 0,
             current_block_index: 0,
@@ -138,7 +140,11 @@ impl<
     }
 
     pub fn num_blocks(&self) -> usize {
-        self.blocks.len()
+        self.current_block_index + (self.should_count_current_block() as usize)
+    }
+
+    fn should_count_current_block(&self) -> bool {
+        self.should_count_current_block || !self.blocks[self.current_block_index].is_empty()
     }
 
     pub fn block_size(&self) -> usize {
@@ -161,15 +167,22 @@ impl<
     }
 
     pub fn start_new_block(&mut self) {
+        self.end_current_block();
+        self.should_count_current_block = true;
+    }
+
+    pub fn end_current_block(&mut self) {
+        assert!(!FIXED_BLOCK_SIZING, "end_current_block is only relevant for manual block size");
         // Don't add to number of blocks since we might not insert into it
         self.current_block_index += 1;
         self.finished_blocks_allocated_memory +=
-            self.blocks.back().map_or(0, |b| b.allocated_size())
-                + self.blocks_heap_allocated_sizes.back().map_or(0, |b| *b);
+          self.blocks.back().map_or(0, |b| b.allocated_size())
+            + self.blocks_heap_allocated_sizes.back().map_or(0, |b| *b);
 
         if Self::should_track_blocks_heap_allocation() {
             self.blocks_heap_allocated_sizes.push_back(0);
         }
+        self.should_count_current_block = false;
         let new_block = self.blocks_provider.new_block();
         self.blocks.push_back(new_block);
     }
@@ -249,7 +262,7 @@ impl<
         let finished_block = FIXED_BLOCK_SIZING && block.len() == self.block_size;
 
         if finished_block {
-            self.start_new_block();
+            self.end_current_block();
             true
         } else {
             false
@@ -294,7 +307,7 @@ impl<
         let finished_block = FIXED_BLOCK_SIZING && block.len() == self.block_size;
 
         if finished_block {
-            self.start_new_block();
+            self.end_current_block();
             true
         } else {
             false
@@ -340,7 +353,7 @@ impl<
         let finished_block = FIXED_BLOCK_SIZING && block.len() == self.block_size;
 
         if finished_block {
-            self.start_new_block();
+            self.end_current_block();
             true
         } else {
             false
@@ -415,7 +428,7 @@ impl<
         let finished_block = FIXED_BLOCK_SIZING && block.len() == self.block_size;
 
         if finished_block {
-            self.start_new_block();
+            self.end_current_block();
             true
         } else {
             false
@@ -465,7 +478,7 @@ impl<
 
     /// Take the first block, `None` once there are no more items
     pub fn take_block(&mut self) -> Option<CustomBlockProvider::Block> {
-        if self.len == 0 {
+        if self.len == 0 && !self.should_count_current_block {
             return None;
         }
 
@@ -491,6 +504,7 @@ impl<
 
             self.current_block_index = 0;
             self.blocks.push_back(self.blocks_provider.new_block());
+            self.should_count_current_block = false;
             if Self::should_track_blocks_heap_allocation() {
                 self.blocks_heap_allocated_sizes.push_back(0);
             }
@@ -523,18 +537,19 @@ impl<
 
     /// Take every non empty block
     pub fn take_all(&mut self) -> Vec<CustomBlockProvider::Block> {
-        let blocks = std::mem::take(&mut self.blocks);
+        let num_blocks = self.num_blocks();
+        let mut blocks = std::mem::take(&mut self.blocks);
+        blocks.truncate(num_blocks);
         self.reset();
 
-        blocks
-            .into_iter()
-            .filter(|block| !block.is_empty())
-            .collect()
+        blocks.into()
     }
 
     /// Take every non empty block
     pub fn take_all_with_mem(&mut self) -> Vec<(CustomBlockProvider::Block, usize)> {
-        let blocks = std::mem::take(&mut self.blocks);
+        let num_blocks = self.num_blocks();
+        let mut blocks = std::mem::take(&mut self.blocks);
+        blocks.truncate(num_blocks);
         let blocks_mem = if Self::should_track_blocks_heap_allocation() {
             std::mem::take(&mut self.blocks_heap_allocated_sizes)
         } else {
@@ -545,7 +560,6 @@ impl<
         blocks
             .into_iter()
             .zip(blocks_mem)
-            .filter(|(block, _mem)| !block.is_empty())
             .collect()
     }
 
@@ -617,6 +631,7 @@ impl<
         self.len = layout.len;
         self.current_block_index = layout.current_block_index;
         self.finished_blocks_allocated_memory = layout.finished_blocks_allocated_size;
+        self.should_count_current_block = !layout.last_block_added_for_future_additions;
         if Self::should_track_blocks_heap_allocation() {
             assert_ne!(layout.block_heap_allocated_size.len(), 0);
             self.blocks_heap_allocated_sizes = layout.block_heap_allocated_size;
@@ -635,6 +650,7 @@ impl<
         self.len = 0;
         self.current_block_index = 0;
         self.finished_blocks_allocated_memory = 0;
+        self.should_count_current_block = false;
     }
 }
 

@@ -940,9 +940,9 @@ mod tests {
     fn manual_start_new_block_and_take_block() {
         let mut builder = Manual::new(0);
         builder.extend(values(0..5));
-        builder.start_new_block();
+        builder.end_current_block();
         builder.extend(values(5..7));
-        builder.start_new_block();
+        builder.end_current_block();
         builder.extend(values(7..11));
         assert_eq!(builder.num_blocks(), 3);
         assert_eq!(builder.len(), 11);

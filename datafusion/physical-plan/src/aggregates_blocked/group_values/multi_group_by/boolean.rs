@@ -234,10 +234,10 @@ impl<const IS_FIXED_BLOCK: bool, const NULLABLE: bool> BlockedGroupColumn<IS_FIX
         Arc::new(BooleanArray::new(first_n_values, first_n_nulls))
     }
 
-    fn start_new_block(&mut self) {
-        self.buffer.start_new_block();
+    fn end_current_block(&mut self) {
+        self.buffer.end_current_block();
         if NULLABLE {
-            self.nulls.start_new_block();
+            self.nulls.end_current_block();
         }
 
     }

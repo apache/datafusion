@@ -18,6 +18,7 @@ pub struct BlockedBooleanBuilder<const FIXED_BLOCK_SIZING: bool> {
 
     /// The index of the current block
     current_block_index: usize,
+    should_count_current_block: bool,
 
     len: usize,
 
@@ -37,12 +38,21 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedBooleanBuilder<FIXED_BLOCK_SIZING> {
             block_size,
             current_block_index: 0,
             len: 0,
+            should_count_current_block: false,
             finished_blocks_allocated_size: 0,
         }
     }
 
     pub fn len(&self) -> usize {
         self.len
+    }
+
+    pub fn num_blocks(&self) -> usize {
+        self.current_block_index + (self.should_count_current_block() as usize)
+    }
+
+    fn should_count_current_block(&self) -> bool {
+        self.should_count_current_block || !self.blocks[self.current_block_index].is_empty()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -64,11 +74,18 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedBooleanBuilder<FIXED_BLOCK_SIZING> {
     }
 
     pub fn start_new_block(&mut self) {
+        self.end_current_block();
+        self.should_count_current_block = true;
+    }
+
+    pub fn end_current_block(&mut self) {
+        assert!(!FIXED_BLOCK_SIZING, "end_current_block is only relevant for manual block size");
         self.current_block_index += 1;
         self.finished_blocks_allocated_size +=
-            self.blocks.back().map_or(0, allocated_size_for_builder);
+          self.blocks.back().map_or(0, allocated_size_for_builder);
         let new_block = BooleanBufferBuilder::new(self.block_size);
         self.blocks.push_back(new_block);
+        self.should_count_current_block = false;
     }
 
     pub(crate) fn reserve_blocks(&mut self, n: usize) {
@@ -97,7 +114,7 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedBooleanBuilder<FIXED_BLOCK_SIZING> {
         );
 
         if FIXED_BLOCK_SIZING && block.len() == self.block_size {
-            self.start_new_block();
+            self.end_current_block();
         }
     }
 
@@ -130,7 +147,7 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedBooleanBuilder<FIXED_BLOCK_SIZING> {
         self.len += 1;
 
         if FIXED_BLOCK_SIZING && block.len() == self.block_size {
-            self.start_new_block();
+            self.end_current_block();
         }
     }
 
@@ -174,7 +191,7 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedBooleanBuilder<FIXED_BLOCK_SIZING> {
         self.len += added_items;
 
         if FIXED_BLOCK_SIZING && block.len() == self.block_size {
-            self.start_new_block();
+            self.end_current_block();
         }
 
         added_items
@@ -182,7 +199,7 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedBooleanBuilder<FIXED_BLOCK_SIZING> {
 
     /// Take the first block, `None` once there are no more items
     pub fn take_block(&mut self) -> Option<BooleanBuffer> {
-        if self.len == 0 {
+        if self.len == 0 && !self.should_count_current_block {
             return None;
         }
 
@@ -194,6 +211,7 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedBooleanBuilder<FIXED_BLOCK_SIZING> {
 
         if self.blocks.is_empty() {
             self.current_block_index = 0;
+            self.should_count_current_block = false;
             self.blocks
                 .push_back(BooleanBufferBuilder::new(self.block_size));
         } else {
@@ -208,8 +226,9 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedBooleanBuilder<FIXED_BLOCK_SIZING> {
 
     /// Take every non empty block
     pub fn take_all(&mut self) -> Vec<BooleanBuffer> {
-        let blocks = std::mem::take(&mut self.blocks);
-        assert_eq!(self.current_block_index, blocks.len() - 1);
+        let num_blocks = self.num_blocks();
+        let mut blocks = std::mem::take(&mut self.blocks);
+        blocks.truncate(num_blocks);
 
         // TODO - should preallocate? can be expensive for large schema
         self.blocks
@@ -217,10 +236,10 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedBooleanBuilder<FIXED_BLOCK_SIZING> {
         self.len = 0;
         self.current_block_index = 0;
         self.finished_blocks_allocated_size = 0;
+        self.should_count_current_block = false;
 
         blocks
             .into_iter()
-            .filter(|b| !b.is_empty())
             .map(|b| b.build())
             .collect()
     }
@@ -258,6 +277,7 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedBooleanBuilder<FIXED_BLOCK_SIZING> {
             self.len = layout.len;
             self.current_block_index = layout.current_block_index;
             self.finished_blocks_allocated_size = layout.finished_blocks_allocated_size;
+            self.should_count_current_block = !layout.last_block_added_for_future_additions;
 
             taken
         } else {
@@ -330,6 +350,9 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedBooleanBuilder<FIXED_BLOCK_SIZING> {
             }
 
             self.current_block_index = self.blocks.len() - 1;
+
+            // Since we are in fixed mode, count this if it is not empty
+            self.should_count_current_block = !self.blocks[self.current_block_index].is_empty();
 
             taken.build()
         }

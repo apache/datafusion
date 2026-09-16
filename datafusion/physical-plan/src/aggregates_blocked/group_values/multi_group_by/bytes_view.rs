@@ -117,16 +117,18 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType>
     }
 
     /// A views block was completed, the next one starts with a fresh bytes block
-    fn open_views_block(&mut self) {
-        self.bytes.start_new_block();
+    fn end_views_block(&mut self) {
+        self.bytes.end_current_block();
         self.block_starts.push(self.bytes.num_blocks() - 1);
+
+        // TODO - should it be 1 or 0
         self.num_bytes_blocks_per_block.push(1);
     }
 
     #[inline]
     fn push_view(&mut self, view: u128) {
         if self.views.push(view) {
-            self.open_views_block();
+            self.end_views_block();
         }
     }
 
@@ -134,7 +136,7 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType>
     /// bytes blocks they need
     fn sync_bytes_blocks(&mut self) {
         while self.num_bytes_blocks_per_block.len() < self.views.num_blocks() {
-            self.open_views_block();
+            self.end_views_block();
         }
     }
 
@@ -635,10 +637,10 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType> BlockedGroupColumn<FIXED_B
         Some(Self::build(views.into(), buffers, nulls))
     }
 
-    fn start_new_block(&mut self) {
-        self.views.start_new_block();
-        self.nulls.start_new_block();
-        self.open_views_block();
+    fn end_current_block(&mut self) {
+        self.views.end_current_block();
+        self.nulls.end_current_block();
+        self.end_views_block();
     }
 }
 
@@ -928,7 +930,7 @@ mod tests {
         for row in 0..4 {
             builder.append_val(&input, row).unwrap();
         }
-        builder.start_new_block();
+        builder.end_current_block();
         builder.vectorized_append(&input, &[4, 5, 6, 7, 8]).unwrap();
         assert_eq!(builder.views.num_blocks(), 2);
 

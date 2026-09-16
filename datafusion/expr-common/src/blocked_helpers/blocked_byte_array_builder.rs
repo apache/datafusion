@@ -47,9 +47,9 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteArrayType>
 
     pub fn push_null(&mut self) {
         self.blocked_nulls.push_null();
-        let should_open_new_block = self.blocked_offsets.push_length(0);
-        if should_open_new_block {
-            self.blocked_bytes.start_new_block();
+        let finished_current_block = self.blocked_offsets.push_length(0);
+        if finished_current_block {
+            self.blocked_bytes.end_current_block();
         }
     }
 
@@ -72,10 +72,10 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteArrayType>
             let to_add = remaining_in_current_block.min(n);
             n -= to_add;
 
-            let should_create_new_block =
+            let finished_current_block =
                 self.blocked_offsets.push_empty_within_block(to_add);
-            if should_create_new_block {
-                self.blocked_bytes.start_new_block();
+            if finished_current_block {
+                self.blocked_bytes.end_current_block();
             }
         }
     }
@@ -98,9 +98,9 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteArrayType>
     pub fn append_valid_slice(&mut self, bytes: &[u8]) {
         self.blocked_bytes.extend_from_slice(bytes);
 
-        let should_open_new_block = self.blocked_offsets.push_length(bytes.len());
-        if should_open_new_block {
-            self.blocked_bytes.start_new_block();
+        let finished_current_block = self.blocked_offsets.push_length(bytes.len());
+        if finished_current_block {
+            self.blocked_bytes.end_current_block();
         }
     }
 
@@ -112,6 +112,16 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteArrayType>
         self.blocked_bytes.start_new_block();
         self.blocked_offsets.start_new_block();
         self.blocked_nulls.start_new_block();
+    }
+
+    pub fn end_current_block(&mut self) {
+        assert!(
+            !FIXED_BLOCK_SIZING,
+            "only valid when FIXED_BLOCK_SIZING is false"
+        );
+        self.blocked_bytes.end_current_block();
+        self.blocked_offsets.end_current_block();
+        self.blocked_nulls.end_current_block();
     }
 
     pub fn current_block_bytes_len(&self) -> usize {

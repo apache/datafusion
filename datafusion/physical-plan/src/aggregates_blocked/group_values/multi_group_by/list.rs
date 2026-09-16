@@ -121,9 +121,9 @@ impl<const IS_FIXED_BLOCK_SIZE: bool, O: OffsetSizeTrait> ListGroupValueBuilder<
             self.outer_nulls.push_null();
             // Zero-length range for null outer rows: do not push any child
             // elements, and the offset for the next row stays the same.
-            let should_start_new_block = self.offsets.push_length(0);
-            if should_start_new_block {
-                self.child.start_new_block();
+            let should_end_current_block = self.offsets.push_length(0);
+            if should_end_current_block {
+                self.child.end_current_block();
             }
         } else {
             self.outer_nulls.push_non_null();
@@ -133,9 +133,9 @@ impl<const IS_FIXED_BLOCK_SIZE: bool, O: OffsetSizeTrait> ListGroupValueBuilder<
             for j in rhs_range {
                 self.child.append_val(values, j)?;
             }
-            let should_start_new_block = self.push_offset(rhs_len)?;
-            if should_start_new_block {
-                self.child.start_new_block();
+            let should_end_current_block = self.push_offset(rhs_len)?;
+            if should_end_current_block {
+                self.child.end_current_block();
             }
         }
         Ok(())
@@ -306,10 +306,10 @@ impl<const IS_FIXED_BLOCK_SIZE: bool, O: OffsetSizeTrait> BlockedGroupColumn<IS_
         ))
     }
 
-    fn start_new_block(&mut self) {
-        self.outer_nulls.start_new_block();
-        self.offsets.start_new_block();
-        self.child.start_new_block();
+    fn end_current_block(&mut self) {
+        self.outer_nulls.end_current_block();
+        self.offsets.end_current_block();
+        self.child.end_current_block();
     }
 }
 //

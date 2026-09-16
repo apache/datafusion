@@ -48,6 +48,7 @@ pub(crate) struct BlocksLayout {
     pub len: usize,
     pub current_block_index: usize,
     pub finished_blocks_allocated_size: usize,
+    pub last_block_added_for_future_additions: bool,
 
     // will only exists when item heap allocation tracking is enabled
     pub block_heap_allocated_size: VecDeque<usize>,
@@ -119,9 +120,9 @@ pub(crate) fn take_n_from_heap_blocks<
             blocks.iter().map(|b| provider.len(b)),
         )
     {
-        ensure_writable_tail::<_, HeapAllocatedSize>(provider, blocks, blocks_sizes, block_size);
+        let last_block_added_for_future_additions = ensure_writable_tail::<_, HeapAllocatedSize>(provider, blocks, blocks_sizes, block_size);
 
-        let layout = layout_for::<_, HeapAllocatedSize>(provider, blocks, blocks_sizes, prev_len);
+        let layout = layout_for::<_, HeapAllocatedSize>(provider, blocks, blocks_sizes, prev_len, last_block_added_for_future_additions);
 
         return (provider.finish(provider.with_capacity(0)), layout);
     }
@@ -140,10 +141,10 @@ pub(crate) fn take_n_from_heap_blocks<
             blocks_sizes.pop_front().expect("must have block");
         }
 
-        ensure_writable_tail::<_, HeapAllocatedSize>(provider, blocks, blocks_sizes, block_size);
+        let last_block_added_for_future_additions = ensure_writable_tail::<_, HeapAllocatedSize>(provider, blocks, blocks_sizes, block_size);
 
         let layout =
-            layout_for::<_, HeapAllocatedSize>(provider, blocks, blocks_sizes, prev_len - n);
+            layout_for::<_, HeapAllocatedSize>(provider, blocks, blocks_sizes, prev_len - n, last_block_added_for_future_additions);
 
         return (provider.finish(taken), layout);
     }
@@ -333,9 +334,9 @@ pub(crate) fn take_n_from_heap_blocks<
         blocks_sizes.truncate(dst_index);
     }
 
-    ensure_writable_tail::<_, HeapAllocatedSize>(provider, blocks, blocks_sizes, block_size);
+    let last_block_added_for_future_additions = ensure_writable_tail::<_, HeapAllocatedSize>(provider, blocks, blocks_sizes, block_size);
 
-    let layout = layout_for::<_, HeapAllocatedSize>(provider, blocks, blocks_sizes, sum);
+    let layout = layout_for::<_, HeapAllocatedSize>(provider, blocks, blocks_sizes, sum, last_block_added_for_future_additions);
 
     (provider.finish(taken), layout)
 }
@@ -350,7 +351,7 @@ fn ensure_writable_tail<
     blocks: &mut VecDeque<B::Block>,
     blocks_sizes: &mut VecDeque<usize>,
     block_size: Option<usize>,
-) {
+) -> bool {
     let tail_is_full = block_size.is_some_and(|block_size| {
         blocks.back().is_some_and(|block| provider.len(block) == block_size)
     });
@@ -361,6 +362,9 @@ fn ensure_writable_tail<
             // 0 since block capacity is not the actual heap items
             blocks_sizes.push_back(0);
         }
+        true
+    } else {
+        false
     }
 }
 
@@ -375,6 +379,7 @@ fn layout_for<
     blocks: &VecDeque<B::Block>,
     blocks_sizes: &VecDeque<usize>,
     len: usize,
+    last_block_added_for_future_additions: bool,
 ) -> BlocksLayout {
     let finished_blocks_count = blocks.len() - 1;
 
@@ -395,6 +400,7 @@ fn layout_for<
                 .map(|block| provider.block_allocated_size(block))
                 .sum()
         },
+        last_block_added_for_future_additions,
         block_heap_allocated_size: blocks_sizes.clone(),
     }
 }

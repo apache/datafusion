@@ -39,6 +39,8 @@ pub(crate) struct BlocksLayout {
     pub len: usize,
     pub current_block_index: usize,
     pub finished_blocks_allocated_size: usize,
+    /// Whether the last block is just for future additions and there is no data in it and it was not requested by the blocks size hint
+    pub last_block_added_for_future_additions: bool,
 }
 
 pub fn create_adjusted_block_size_iter_for_fixed_blocks(
@@ -89,9 +91,9 @@ pub(crate) fn take_n_from_blocks<B: BlockBuilderProvider>(
             blocks.iter().map(|b| provider.len(b)),
         )
     {
-        ensure_writable_tail(provider, blocks, block_size);
+        let last_block_added_for_future_additions = ensure_writable_tail(provider, blocks, block_size);
 
-        let layout = layout_for(provider, blocks, prev_len);
+        let layout = layout_for(provider, blocks, prev_len, last_block_added_for_future_additions);
 
         return (provider.finish(provider.with_capacity(0)), layout);
     }
@@ -105,9 +107,9 @@ pub(crate) fn take_n_from_blocks<B: BlockBuilderProvider>(
     {
         let taken = blocks.pop_front().expect("must have block");
 
-        ensure_writable_tail(provider, blocks, block_size);
+        let last_block_added_for_future_additions = ensure_writable_tail(provider, blocks, block_size);
 
-        let layout = layout_for(provider, blocks, prev_len - n);
+        let layout = layout_for(provider, blocks, prev_len - n, last_block_added_for_future_additions);
 
         return (provider.finish(taken), layout);
     }
@@ -239,9 +241,9 @@ pub(crate) fn take_n_from_blocks<B: BlockBuilderProvider>(
     // Drop the old blocks that the new layout did not need
     blocks.truncate(dst_index);
 
-    ensure_writable_tail(provider, blocks, block_size);
+    let last_block_added_for_future_additions = ensure_writable_tail(provider, blocks, block_size);
 
-    let layout = layout_for(provider, blocks, sum);
+    let layout = layout_for(provider, blocks, sum, last_block_added_for_future_additions);
 
     (provider.finish(taken), layout)
 }
@@ -263,23 +265,27 @@ fn ensure_writable_tail<B: BlockBuilderProvider>(
     provider: &B,
     blocks: &mut VecDeque<B::Block>,
     block_size: Option<usize>,
-) {
+) -> bool {
     let tail_is_full = block_size.is_some_and(|block_size| {
         blocks.back().is_some_and(|block| provider.len(block) == block_size)
     });
 
     if blocks.is_empty() || tail_is_full {
         blocks.push_back(provider.with_capacity(block_size.unwrap_or(0)));
+        true
+    } else {
+        false
     }
 }
 
 /// The back block is the one still being written to and is measured separately
-fn layout_for<B: BlockBuilderProvider>(provider: &B, blocks: &VecDeque<B::Block>, len: usize) -> BlocksLayout {
+fn layout_for<B: BlockBuilderProvider>(provider: &B, blocks: &VecDeque<B::Block>, len: usize, last_block_added_for_future_additions: bool) -> BlocksLayout {
     let finished_blocks_count = blocks.len() - 1;
 
     BlocksLayout {
         len,
         current_block_index: finished_blocks_count,
+        last_block_added_for_future_additions,
         finished_blocks_allocated_size: blocks
             .iter()
             .take(finished_blocks_count)

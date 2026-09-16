@@ -306,10 +306,10 @@ where
                 } else {
                     let payload = make_payload_fn(None);
                     let null_index = self.next_index();
-                    let should_start_new_block = self.views.push(0);
+                    let should_end_current_block = self.views.push(0);
 
-                    if should_start_new_block {
-                        self.start_new_block();
+                    if should_end_current_block {
+                        self.end_current_block();
                     }
                     self.null = Some((payload, null_index));
                     (payload, null_index)
@@ -667,10 +667,10 @@ where
     }
 
     unsafe fn append_inline_view(&mut self, view: u128) -> u128 {
-        let should_start_new_buffer = self.views.push(view);
+        let should_end_current_block = self.views.push(view);
 
-        if should_start_new_buffer {
-            self.start_new_block();
+        if should_end_current_block {
+            self.end_current_block();
         }
         view
     }
@@ -683,7 +683,7 @@ where
         } else {
             // Ensure buffer is big enough
             if self.buffer.current_block_len() + len > BYTE_VIEW_MAX_BLOCK_SIZE {
-                self.buffer.start_new_block();
+                self.buffer.end_current_block();
                 let count = self.num_buffer_blocks_per_block.last_mut().unwrap();
                 *count += 1;
                 self.buffer
@@ -698,10 +698,10 @@ where
             make_view(value, buffer_index, offset)
         };
 
-        let should_start_new_block = self.views.push(view);
+        let should_end_current_block = self.views.push(view);
 
-        if should_start_new_block {
-            self.start_new_block();
+        if should_end_current_block {
+            self.end_current_block();
         }
         view
     }
@@ -709,6 +709,13 @@ where
     fn start_new_block(&mut self) {
         self.num_buffer_blocks_per_block.push(1);
         self.buffer.start_new_block();
+        self.current_start_block_index = self.buffer.num_blocks() - 1;
+        self.block_starts.push(self.current_start_block_index);
+    }
+
+    fn end_current_block(&mut self) {
+        self.num_buffer_blocks_per_block.push(1);
+        self.buffer.end_current_block();
         self.current_start_block_index = self.buffer.num_blocks() - 1;
         self.block_starts.push(self.current_start_block_index);
     }

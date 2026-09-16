@@ -395,8 +395,8 @@ where
         Self::build_array(self.output_type, data)
     }
 
-    fn start_new_block(&mut self) {
-        self.data.start_new_block();
+    fn end_current_block(&mut self) {
+        self.data.end_current_block();
     }
 }
 

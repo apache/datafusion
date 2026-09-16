@@ -24,6 +24,7 @@ pub struct BlockedNullsBuilder<const FIXED_BLOCK_SIZING: bool> {
     len: usize,
 
     finished_blocks_allocated_size: usize,
+    should_count_current_block: bool,
 
     might_have_nulls: bool,
 }
@@ -40,6 +41,7 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedNullsBuilder<FIXED_BLOCK_SIZING> {
             blocks,
             block_size,
             current_block_index: 0,
+            should_count_current_block: false,
             len: 0,
             finished_blocks_allocated_size: 0,
             might_have_nulls: false,
@@ -69,16 +71,31 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedNullsBuilder<FIXED_BLOCK_SIZING> {
         self.block_size
     }
 
+    pub fn num_blocks(&self) -> usize {
+        self.current_block_index + (self.should_count_current_block() as usize)
+    }
+
+    fn should_count_current_block(&self) -> bool {
+        self.should_count_current_block || !self.blocks[self.current_block_index].is_empty()
+    }
+
     pub fn might_have_nulls(&self) -> bool {
         self.might_have_nulls
     }
 
     pub fn start_new_block(&mut self) {
+        self.end_current_block();
+        self.should_count_current_block = true;
+    }
+
+    pub fn end_current_block(&mut self) {
+        assert!(!FIXED_BLOCK_SIZING, "end_current_block is only available for manual block");
         self.current_block_index += 1;
         self.finished_blocks_allocated_size +=
-            self.blocks.back().map_or(0, |b| b.allocated_size());
+          self.blocks.back().map_or(0, |b| b.allocated_size());
         let new_block = NullBufferBuilder::new(self.block_size);
         self.blocks.push_back(new_block);
+        self.should_count_current_block = false;
     }
 
     pub(crate) fn reserve_blocks(&mut self, n: usize) {
@@ -116,7 +133,7 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedNullsBuilder<FIXED_BLOCK_SIZING> {
         self.len += added_items;
 
         if FIXED_BLOCK_SIZING && block.len() == self.block_size {
-            self.start_new_block();
+            self.end_current_block();
         }
     }
 
@@ -198,7 +215,7 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedNullsBuilder<FIXED_BLOCK_SIZING> {
         self.might_have_nulls |= block.as_slice().is_some();
 
         if FIXED_BLOCK_SIZING && block.len() == self.block_size {
-            self.start_new_block();
+            self.end_current_block();
         }
 
         added_items
@@ -265,7 +282,7 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedNullsBuilder<FIXED_BLOCK_SIZING> {
         );
 
         if FIXED_BLOCK_SIZING && block.len() == self.block_size {
-            self.start_new_block();
+            self.end_current_block();
         }
     }
 
@@ -308,7 +325,7 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedNullsBuilder<FIXED_BLOCK_SIZING> {
         self.might_have_nulls |= block.as_slice().is_some();
 
         if FIXED_BLOCK_SIZING && block.len() == self.block_size {
-            self.start_new_block();
+            self.end_current_block();
         }
     }
 
@@ -322,7 +339,7 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedNullsBuilder<FIXED_BLOCK_SIZING> {
         self.might_have_nulls = true;
 
         if FIXED_BLOCK_SIZING && block.len() == self.block_size {
-            self.start_new_block();
+            self.end_current_block();
         }
     }
 
@@ -381,7 +398,7 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedNullsBuilder<FIXED_BLOCK_SIZING> {
 
         self.might_have_nulls |= block.as_slice().is_some();
         if FIXED_BLOCK_SIZING && block.len() == self.block_size {
-            self.start_new_block();
+            self.end_current_block();
         }
 
         added_items
@@ -407,7 +424,7 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedNullsBuilder<FIXED_BLOCK_SIZING> {
     ///
     /// `Some(None)` means the block has no nulls
     pub fn take_block(&mut self) -> Option<Option<NullBuffer>> {
-        if self.len == 0 {
+        if self.len == 0 && !self.should_count_current_block {
             return None;
         }
 
@@ -420,6 +437,7 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedNullsBuilder<FIXED_BLOCK_SIZING> {
         // Never have empty blocks since we won't be able to add more items
         if self.blocks.is_empty() {
             self.might_have_nulls = false;
+            self.should_count_current_block = false;
             self.current_block_index = 0;
             let empty_block = NullBufferBuilder::new(self.block_size);
             self.blocks.push_back(empty_block);
@@ -435,11 +453,14 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedNullsBuilder<FIXED_BLOCK_SIZING> {
 
     /// Take every non empty block, `None` entries have no nulls
     pub fn take_all(&mut self) -> Vec<Option<NullBuffer>> {
-        let blocks = std::mem::take(&mut self.blocks);
+        let num_blocks = self.num_blocks();
+        let mut blocks = std::mem::take(&mut self.blocks);
+        blocks.truncate(num_blocks);
         self.len = 0;
         self.might_have_nulls = false;
         self.finished_blocks_allocated_size = 0;
         self.current_block_index = 0;
+        self.should_count_current_block = false;
 
         // Never have empty blocks since we won't be able to add more items
         let empty_block = NullBufferBuilder::new(self.block_size);
@@ -447,7 +468,6 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedNullsBuilder<FIXED_BLOCK_SIZING> {
 
         blocks
             .into_iter()
-            .filter(|b| !b.is_empty())
             .map(|item| item.build().filter(|b| b.null_count() > 0))
             .collect()
     }
@@ -479,6 +499,7 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedNullsBuilder<FIXED_BLOCK_SIZING> {
         self.len = layout.len;
         self.current_block_index = layout.current_block_index;
         self.finished_blocks_allocated_size = layout.finished_blocks_allocated_size;
+        self.should_count_current_block = !layout.last_block_added_for_future_additions;
 
         // Copying bits materializes the bitmap even when every bit is valid
         taken.filter(|b| b.null_count() > 0)
@@ -957,7 +978,7 @@ mod tests {
         let mut builder = Manual::new(0);
         for (i, block) in blocks.iter().enumerate() {
             if i > 0 {
-                builder.start_new_block();
+                builder.end_current_block();
             }
             builder.extend(block.iter().copied());
         }

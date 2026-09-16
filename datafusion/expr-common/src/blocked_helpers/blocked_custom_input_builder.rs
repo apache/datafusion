@@ -62,6 +62,7 @@ pub struct BlockedCustomInputBuilder<
 
     /// The index of the current block
     current_block_index: usize,
+    should_count_current_block: bool,
 
     finished_blocks_allocated_memory: usize,
 }
@@ -81,6 +82,7 @@ impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider: BlockProvider>
             blocks_provider,
             blocks,
             block_size,
+            should_count_current_block: false,
             len: 0,
             current_block_index: 0,
             finished_blocks_allocated_memory: 0,
@@ -100,7 +102,11 @@ impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider: BlockProvider>
     }
 
     pub fn num_blocks(&self) -> usize {
-        self.blocks.len()
+        self.current_block_index + (self.should_count_current_block() as usize)
+    }
+
+    fn should_count_current_block(&self) -> bool {
+        self.should_count_current_block || !self.blocks[self.current_block_index].is_empty()
     }
 
     pub fn block(&self, block_index: usize) -> &CustomBlockProvider::Block {
@@ -124,11 +130,20 @@ impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider: BlockProvider>
     }
 
     pub fn start_new_block(&mut self) {
+        self.end_current_block();
+        self.should_count_current_block = true;
+    }
+
+    pub fn end_current_block(&mut self) {
+        assert!(!FIXED_BLOCK_SIZING, "end_current_block is only relevant for manual block size");
         // Don't add to number of blocks since we might not insert into it
         self.current_block_index += 1;
         self.finished_blocks_allocated_memory +=
-            self.blocks.back().map_or(0, |b| b.allocated_size());
+          self.blocks.back().map_or(0, |b| b.allocated_size());
         let new_block = self.blocks_provider.new_block();
+
+        // Don't count current block since we might not insert into it
+        self.should_count_current_block = false;
         self.blocks.push_back(new_block);
     }
 
@@ -146,7 +161,7 @@ impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider: BlockProvider>
         let finished_block = FIXED_BLOCK_SIZING && block.len() == self.block_size;
 
         if finished_block {
-            self.start_new_block();
+            self.end_current_block();
             true
         } else {
             false
@@ -182,7 +197,7 @@ impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider: BlockProvider>
         let finished_block = FIXED_BLOCK_SIZING && block.len() == self.block_size;
 
         if finished_block {
-            self.start_new_block();
+            self.end_current_block();
             true
         } else {
             false
@@ -221,7 +236,7 @@ impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider: BlockProvider>
         let finished_block = FIXED_BLOCK_SIZING && block.len() == self.block_size;
 
         if finished_block {
-            self.start_new_block();
+            self.end_current_block();
             true
         } else {
             false
@@ -291,7 +306,7 @@ impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider: BlockProvider>
         let finished_block = FIXED_BLOCK_SIZING && block.len() == self.block_size;
 
         if finished_block {
-            self.start_new_block();
+            self.end_current_block();
             true
         } else {
             false
@@ -338,7 +353,7 @@ impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider: BlockProvider>
 
     /// Take the first block, `None` once there are no more items
     pub fn take_block(&mut self) -> Option<CustomBlockProvider::Block> {
-        if self.len == 0 {
+        if self.len == 0 && !self.should_count_current_block {
             return None;
         }
         Some(self.take_first_block())
@@ -351,6 +366,7 @@ impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider: BlockProvider>
 
         if self.blocks.is_empty() {
             self.current_block_index = 0;
+            self.should_count_current_block = false;
             self.blocks.push_back(self.blocks_provider.new_block());
         } else {
             self.current_block_index -= 1;
@@ -388,7 +404,8 @@ impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider: BlockProvider>
     }
 
     pub fn blocks_mut(&mut self) -> impl Iterator<Item = &mut CustomBlockProvider::Block> {
-        self.blocks.iter_mut()
+        let num_blocks = self.num_blocks();
+        self.blocks.iter_mut().take(num_blocks)
     }
 
     pub fn current_block_mut(&mut self) -> &mut CustomBlockProvider::Block {
@@ -412,12 +429,13 @@ impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider: BlockProvider>
 
     /// Take every non empty block
     pub fn take_all(&mut self) -> Vec<CustomBlockProvider::Block> {
-        let blocks = std::mem::take(&mut self.blocks);
+        let num_blocks = self.num_blocks();
+        let mut blocks = std::mem::take(&mut self.blocks);
+        blocks.truncate(num_blocks);
         self.reset();
 
         blocks
             .into_iter()
-            .filter(|block| !block.is_empty())
             .collect()
     }
 
@@ -451,6 +469,7 @@ impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider: BlockProvider>
         self.len = layout.len;
         self.current_block_index = layout.current_block_index;
         self.finished_blocks_allocated_memory = layout.finished_blocks_allocated_size;
+        self.should_count_current_block = !layout.last_block_added_for_future_additions;
 
         taken
     }
@@ -460,6 +479,7 @@ impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider: BlockProvider>
         self.len = 0;
         self.current_block_index = 0;
         self.finished_blocks_allocated_memory = 0;
+        self.should_count_current_block = false;
     }
 }
 

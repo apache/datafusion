@@ -344,9 +344,9 @@ impl<const IS_FIXED_BLOCK_SIZE: bool> BlockedGroupColumn<IS_FIXED_BLOCK_SIZE>
               .expect("dictionary re-encode during emit")
     }
 
-    fn start_new_block(&mut self) {
+    fn end_current_block(&mut self) {
         assert!(!IS_FIXED_BLOCK_SIZE);
-        self.group_values.start_new_block();
+        self.group_values.end_current_block();
     }
 }
 //
