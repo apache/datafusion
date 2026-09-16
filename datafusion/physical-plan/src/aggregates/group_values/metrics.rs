@@ -82,12 +82,8 @@ impl AggregateMetric for AggregateSubMetric {
 
 impl AggregateMetrics for AggregateSubMetrics {
     fn metric(&self, subphase: &'static str) -> Arc<dyn AggregateMetric> {
-        if let Some((registered_subphase, metric)) = self.first_subphase_metric.get()
-            && *registered_subphase == subphase
-        {
-            return Arc::clone(metric);
-        }
-
+        // `get_or_init` already takes a lock-free fast path when the cell is
+        // initialized, so the common repeat lookup never allocates or locks.
         let (registered_subphase, metric) = self
             .first_subphase_metric
             .get_or_init(|| (subphase, self.new_metric(subphase)));

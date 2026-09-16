@@ -913,9 +913,7 @@ impl DistinctArrayAggAccumulator {
         }
         Ok(())
     }
-}
 
-impl DistinctArrayAggAccumulator {
     fn update_batch_impl(
         &mut self,
         values: &[ArrayRef],
@@ -954,7 +952,7 @@ impl DistinctArrayAggAccumulator {
             .then(|| self.distinct_metric.clone())
             .flatten();
         let mut metric_recorder = AggregateMetricRecorder::new(distinct_metric);
-        (|| {
+        {
             let _timer = metric_recorder.timer();
             self.ensure_state(col.data_type())?;
 
@@ -1003,11 +1001,9 @@ impl DistinctArrayAggAccumulator {
                 }
             }
             Ok(())
-        })()
+        }
     }
-}
 
-impl DistinctArrayAggAccumulator {
     fn merge_batch_impl(
         &mut self,
         states: &[ArrayRef],

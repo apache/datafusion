@@ -168,6 +168,15 @@ impl GroupsAccumulatorAdapter {
         Ok(accumulator)
     }
 
+    /// Returns the aggregate-owned grouped-update metric, if the first
+    /// accumulator this adapter created exposed one.
+    ///
+    /// The cell is seeded by [`Self::create_accumulator`], so this returns
+    /// `None` until at least one accumulator has been built.
+    fn grouped_metric(&self) -> Option<Arc<dyn AggregateMetric>> {
+        self.grouped_update_metric.get().and_then(Clone::clone)
+    }
+
     /// Ensure that self.accumulators has total_num_groups
     fn make_accumulators_if_needed(&mut self, total_num_groups: usize) -> Result<()> {
         // can't shrink
@@ -277,8 +286,7 @@ impl GroupsAccumulatorAdapter {
         let values = take_arrays(values, &batch_indices, None)?;
         let opt_filter = get_filter_at_indices(opt_filter, &batch_indices)?;
 
-        let grouped_update_metric =
-            self.grouped_update_metric.get().and_then(Clone::clone);
+        let grouped_update_metric = self.grouped_metric();
 
         let mut sizes_pre = 0;
         let mut sizes_post = 0;
@@ -570,11 +578,11 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
                 // Create the empty accumulator and prepare adapter-owned input
                 // outside the aggregate submetric.
                 let accumulator = self.create_accumulator()?;
-                if row_idx == 0 {
-                    metric_recorder = Some(AggregateMetricRecorder::new(
-                        self.grouped_update_metric.get().and_then(Clone::clone),
-                    ));
-                }
+                // `create_accumulator` resolves the metric, so the recorder can
+                // only be built once the first accumulator exists.
+                metric_recorder.get_or_insert_with(|| {
+                    AggregateMetricRecorder::new(self.grouped_metric())
+                });
                 let values_to_accumulate =
                     slice_and_maybe_filter(values, opt_filter, &[row_idx, row_idx + 1])?;
                 prepared.push((accumulator, values_to_accumulate));
