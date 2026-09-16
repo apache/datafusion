@@ -53,6 +53,7 @@ pub fn apply_file_schema_type_coercions(
 ) -> Option<Schema> {
     let mut needs_view_transform = false;
     let mut needs_string_transform = false;
+    let mut needs_nested_transform = false;
 
     // Create a mapping of table field names to their data types for fast lookup
     // and simultaneously check if we need any transformations
@@ -72,13 +73,26 @@ pub fn apply_file_schema_type_coercions(
             ) {
                 needs_string_transform = true;
             }
+            // Nested fields can need transformations even when their parent does not.
+            if matches!(
+                dt,
+                DataType::Struct(_)
+                    | DataType::List(_)
+                    | DataType::LargeList(_)
+                    | DataType::ListView(_)
+                    | DataType::LargeListView(_)
+                    | DataType::FixedSizeList(_, _)
+                    | DataType::Map(_, _)
+            ) {
+                needs_nested_transform = true;
+            }
 
             (f.name(), dt)
         })
         .collect();
 
     // Early return if no transformation needed
-    if !needs_view_transform && !needs_string_transform {
+    if !needs_view_transform && !needs_string_transform && !needs_nested_transform {
         return None;
     }
 
@@ -120,6 +134,58 @@ pub fn apply_file_schema_type_coercions(
                     (&DataType::BinaryView, DataType::Binary | DataType::LargeBinary) => {
                         return field_with_new_type(field, DataType::BinaryView);
                     }
+                    // Apply the same coercions to matching fields inside structs.
+                    (DataType::Struct(table_fields), DataType::Struct(file_fields)) => {
+                        if let Some(schema) = apply_file_schema_type_coercions(
+                            &Schema::new(table_fields.clone()),
+                            &Schema::new(file_fields.clone()),
+                        ) {
+                            return field_with_new_type(
+                                field,
+                                DataType::Struct(schema.fields),
+                            );
+                        }
+                    }
+                    // Container children match by position, regardless of their names.
+                    (DataType::List(table_child), DataType::List(file_child))
+                    | (
+                        DataType::LargeList(table_child),
+                        DataType::LargeList(file_child),
+                    )
+                    | (DataType::ListView(table_child), DataType::ListView(file_child))
+                    | (
+                        DataType::LargeListView(table_child),
+                        DataType::LargeListView(file_child),
+                    )
+                    | (
+                        DataType::FixedSizeList(table_child, _),
+                        DataType::FixedSizeList(file_child, _),
+                    )
+                    | (DataType::Map(table_child, _), DataType::Map(file_child, _)) => {
+                        if let Some(schema) = apply_file_schema_type_coercions(
+                            &Schema::new(vec![field_with_new_type(
+                                file_child,
+                                table_child.data_type().clone(),
+                            )]),
+                            &Schema::new(vec![Arc::clone(file_child)]),
+                        ) {
+                            let child = Arc::clone(&schema.fields()[0]);
+                            let new_type = match field_type {
+                                DataType::List(_) => DataType::List(child),
+                                DataType::LargeList(_) => DataType::LargeList(child),
+                                DataType::ListView(_) => DataType::ListView(child),
+                                DataType::LargeListView(_) => {
+                                    DataType::LargeListView(child)
+                                }
+                                DataType::FixedSizeList(_, size) => {
+                                    DataType::FixedSizeList(child, *size)
+                                }
+                                DataType::Map(_, sorted) => DataType::Map(child, *sorted),
+                                _ => return Arc::clone(field),
+                            };
+                            return field_with_new_type(field, new_type);
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -128,6 +194,10 @@ pub fn apply_file_schema_type_coercions(
             Arc::clone(field)
         })
         .collect();
+
+    if transformed_fields.iter().eq(file_schema.fields().iter()) {
+        return None;
+    }
 
     Some(Schema::new_with_metadata(
         transformed_fields,
@@ -328,7 +398,8 @@ fn coerce_int96_to_resolution_impl(
                         current_field.name(),
                         processed_children.as_slice(),
                         current_field.is_nullable(),
-                    );
+                    )
+                    .with_metadata(current_field.metadata().clone());
                     parent_fields.borrow_mut().push(Arc::new(processed_struct));
                 }
                 (DataType::List(unprocessed_child), None) => {
@@ -361,7 +432,8 @@ fn coerce_int96_to_resolution_impl(
                         current_field.name(),
                         Arc::clone(&processed_children[0]),
                         current_field.is_nullable(),
-                    );
+                    )
+                    .with_metadata(current_field.metadata().clone());
                     parent_fields.borrow_mut().push(Arc::new(processed_list));
                 }
                 (DataType::Map(unprocessed_child, _), None) => {
@@ -391,7 +463,8 @@ fn coerce_int96_to_resolution_impl(
                         current_field.name(),
                         DataType::Map(Arc::clone(&processed_children[0]), *sorted),
                         current_field.is_nullable(),
-                    );
+                    )
+                    .with_metadata(current_field.metadata().clone());
                     parent_fields.borrow_mut().push(Arc::new(processed_map));
                 }
                 (DataType::Timestamp(TimeUnit::Nanosecond, None), None)
@@ -460,11 +533,256 @@ pub fn transform_binary_to_string(schema: &Schema) -> Schema {
 }
 #[cfg(test)]
 mod tests {
+    use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use parquet::arrow::parquet_to_arrow_schema;
 
     use super::*;
 
     use parquet::schema::parser::parse_message_type;
+
+    #[test]
+    fn nested_coercion_preserves_file_schema() {
+        let field_metadata = HashMap::from([("source".into(), "file".into())]);
+        let identifiers = Field::new_struct(
+            "identifiers",
+            vec![Field::new("cid", DataType::Utf8, true)],
+            true,
+        )
+        .with_metadata(field_metadata.clone());
+        let struct_field = Field::new_struct(
+            "_struct",
+            vec![
+                Field::new("file_only", DataType::Binary, true),
+                identifiers.clone(),
+            ],
+            true,
+        )
+        .with_metadata(field_metadata.clone());
+        let file_schema = Schema::new_with_metadata(
+            vec![
+                Field::new("id", DataType::Int64, false),
+                struct_field.clone(),
+            ],
+            field_metadata.clone(),
+        );
+        let table_schema = Schema::new(vec![
+            Field::new_struct(
+                "_struct",
+                vec![
+                    Field::new_struct(
+                        "identifiers",
+                        vec![Field::new("cid", DataType::Utf8View, false)],
+                        false,
+                    ),
+                    Field::new("schemaEvolutionOnly", DataType::Utf8View, true),
+                ],
+                false,
+            ),
+            Field::new("missing", DataType::Utf8View, true),
+            Field::new("id", DataType::Int64, true),
+        ]);
+        let expected = Schema::new_with_metadata(
+            vec![
+                Field::new("id", DataType::Int64, false),
+                struct_field.with_data_type(DataType::Struct(
+                    vec![
+                        Field::new("file_only", DataType::Binary, true),
+                        identifiers.with_data_type(DataType::Struct(
+                            vec![Field::new("cid", DataType::Utf8View, true)].into(),
+                        )),
+                    ]
+                    .into(),
+                )),
+            ],
+            field_metadata,
+        );
+
+        let result = apply_file_schema_type_coercions(&table_schema, &file_schema);
+        assert_eq!(result, Some(expected.clone()));
+        assert_eq!(
+            apply_file_schema_type_coercions(&table_schema, &expected),
+            None
+        );
+    }
+
+    #[test]
+    fn nested_coercion_preserves_list_containers() {
+        let wrap: [fn(FieldRef) -> DataType; 6] = [
+            DataType::List,
+            DataType::LargeList,
+            DataType::ListView,
+            DataType::LargeListView,
+            |field| DataType::FixedSizeList(field, 3),
+            |field| DataType::Map(field, false),
+        ];
+        for wrap in wrap {
+            let file_element = Arc::new(Field::new_struct(
+                "entries",
+                vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", DataType::Binary, true),
+                ],
+                false,
+            ));
+            let table_element = Arc::new(Field::new_struct(
+                "entries",
+                vec![
+                    Field::new("value", DataType::Utf8View, true),
+                    Field::new("key", DataType::Utf8View, false),
+                ],
+                false,
+            ));
+            let expected_element = Arc::new(Field::new_struct(
+                "entries",
+                vec![
+                    Field::new("key", DataType::Utf8View, false),
+                    Field::new("value", DataType::Utf8View, true),
+                ],
+                false,
+            ));
+            let file_schema =
+                Schema::new(vec![Field::new("data", wrap(file_element), true)]);
+            let table_schema =
+                Schema::new(vec![Field::new("data", wrap(table_element), true)]);
+            let expected =
+                Schema::new(vec![Field::new("data", wrap(expected_element), true)]);
+            assert_eq!(
+                apply_file_schema_type_coercions(&table_schema, &file_schema),
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn nested_coercion_preserves_leaf_conversion_rules() {
+        let nested_schema = |data_type| {
+            Schema::new(vec![Field::new_struct(
+                "nested",
+                vec![Field::new("value", data_type, true)],
+                true,
+            )])
+        };
+        for (table_type, file_types) in [
+            (
+                DataType::Utf8,
+                vec![
+                    DataType::Binary,
+                    DataType::LargeBinary,
+                    DataType::BinaryView,
+                ],
+            ),
+            (
+                DataType::LargeUtf8,
+                vec![
+                    DataType::Binary,
+                    DataType::LargeBinary,
+                    DataType::BinaryView,
+                ],
+            ),
+            (
+                DataType::Utf8View,
+                vec![
+                    DataType::Binary,
+                    DataType::LargeBinary,
+                    DataType::BinaryView,
+                    DataType::Utf8,
+                    DataType::LargeUtf8,
+                ],
+            ),
+            (
+                DataType::BinaryView,
+                vec![DataType::Binary, DataType::LargeBinary],
+            ),
+        ] {
+            for file_type in file_types {
+                let file_schema = nested_schema(file_type);
+                let table_schema = nested_schema(table_type.clone());
+                assert_eq!(
+                    apply_file_schema_type_coercions(&table_schema, &file_schema),
+                    Some(table_schema)
+                );
+            }
+        }
+        let file_schema = nested_schema(DataType::Int32);
+        let table_schema = nested_schema(DataType::Int64);
+        assert_eq!(
+            apply_file_schema_type_coercions(&table_schema, &file_schema),
+            None
+        );
+    }
+
+    #[test]
+    fn nested_coercion_reader_produces_string_views() {
+        use arrow::array::{Array, ArrayRef, StringArray, StringViewArray, StructArray};
+        use arrow::record_batch::RecordBatch;
+        use bytes::Bytes;
+        use parquet::arrow::ArrowWriter;
+        use parquet::arrow::arrow_reader::{
+            ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
+        };
+
+        let identifiers = StructArray::from(vec![(
+            Arc::new(Field::new("cid", DataType::Utf8, true)),
+            Arc::new(StringArray::from(vec![Some("customer-03"), None])) as ArrayRef,
+        )]);
+        let struct_field = StructArray::from(vec![(
+            Arc::new(Field::new(
+                "identifiers",
+                identifiers.data_type().clone(),
+                true,
+            )),
+            Arc::new(identifiers) as ArrayRef,
+        )]);
+        let batch =
+            RecordBatch::try_from_iter([("_struct", Arc::new(struct_field) as ArrayRef)])
+                .unwrap();
+        let table_schema = Schema::new(vec![Field::new_struct(
+            "_struct",
+            vec![
+                Field::new_struct(
+                    "identifiers",
+                    vec![Field::new("cid", DataType::Utf8View, true)],
+                    true,
+                ),
+                Field::new("schemaEvolutionOnly", DataType::Utf8View, true),
+            ],
+            true,
+        )]);
+        let reader_schema = Arc::new(
+            apply_file_schema_type_coercions(&table_schema, &batch.schema()).unwrap(),
+        );
+        let mut bytes = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut bytes, batch.schema(), None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let mut reader = ParquetRecordBatchReaderBuilder::try_new_with_options(
+            Bytes::from(bytes),
+            ArrowReaderOptions::new().with_schema(reader_schema),
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+        let decoded = reader.next().unwrap().unwrap();
+        let struct_field = decoded
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let identifiers = struct_field
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let cust_id = identifiers
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .unwrap();
+        assert_eq!(cust_id.value(0), "customer-03");
+        assert!(cust_id.is_null(1));
+        assert_eq!(struct_field.num_columns(), 1);
+        assert!(reader.next().is_none());
+    }
 
     #[test]
     fn coerce_int96_to_resolution_with_mixed_timestamps() {
@@ -727,5 +1045,145 @@ mod tests {
         ]);
 
         assert_eq!(result, expected_schema);
+    }
+
+    #[test]
+    fn coerce_int96_to_resolution_preserves_field_metadata() {
+        // Spark and Delta Lake stamp a field id on every field. Coercion must
+        // carry that metadata across on nested fields as well as leaves:
+        // formats that identify a column by id rather than by name, such as
+        // Delta Lake column mapping, cannot resolve a column that loses it.
+        let spark_schema = "
+            message spark_schema {
+                REQUIRED INT64 c0 = 1;
+                OPTIONAL group c1 = 2 {
+                    OPTIONAL INT96 c2 = 3;
+                }
+                OPTIONAL group c3 (LIST) = 4 {
+                    REPEATED group list {
+                        OPTIONAL INT96 element = 5;
+                    }
+                }
+                OPTIONAL group c4 (MAP) = 6 {
+                    REPEATED group key_value {
+                        REQUIRED BYTE_ARRAY key (STRING) = 7;
+                        OPTIONAL INT96 value = 8;
+                    }
+                }
+            }
+        ";
+
+        let schema = parse_message_type(spark_schema).expect("should parse schema");
+        let descr = SchemaDescriptor::new(Arc::new(schema));
+        // Arrow derives a field id for every field but a map's entry struct, and
+        // metadata holds more than ids, so stamp each field with a key of its
+        // own: coercion has to preserve arbitrary metadata at every level.
+        let arrow_schema =
+            stamp_every_field(&parquet_to_arrow_schema(&descr, None).unwrap());
+
+        let result = Int96Coercer::new(&descr, &arrow_schema, &TimeUnit::Microsecond)
+            .coerce()
+            .unwrap();
+
+        assert_eq!(result.fields().len(), arrow_schema.fields().len());
+        for (original, coerced) in arrow_schema.fields().iter().zip(result.fields()) {
+            assert_field_metadata_preserved(original, coerced, original.name());
+        }
+
+        // The containers are the fields the coercion rebuilds, so spell out that
+        // they kept their ids: the recursion above compares the two schemas
+        // against each other and would also pass on a schema carrying no ids.
+        for (name, field_id) in [("c1", "2"), ("c3", "4"), ("c4", "6")] {
+            assert_eq!(
+                result.field_with_name(name).unwrap().metadata()
+                    [PARQUET_FIELD_ID_META_KEY],
+                field_id,
+            );
+        }
+    }
+
+    /// Metadata key stamped by [`stamp_every_field`], holding the field's path.
+    const TEST_METADATA_KEY: &str = "test.field_path";
+
+    /// Add [`TEST_METADATA_KEY`] to every field of `schema`, nested fields
+    /// included, keeping the metadata each field already has.
+    fn stamp_every_field(schema: &Schema) -> Schema {
+        fn stamp(field: &FieldRef, path: &str) -> FieldRef {
+            let child_path = |child: &FieldRef| format!("{path}.{}", child.name());
+            let data_type = match field.data_type() {
+                DataType::Struct(children) => DataType::Struct(
+                    children
+                        .iter()
+                        .map(|child| stamp(child, &child_path(child)))
+                        .collect(),
+                ),
+                DataType::List(child) => DataType::List(stamp(child, &child_path(child))),
+                DataType::Map(child, sorted) => {
+                    DataType::Map(stamp(child, &child_path(child)), *sorted)
+                }
+                other => other.clone(),
+            };
+            let mut metadata = field.metadata().clone();
+            metadata.insert(TEST_METADATA_KEY.to_string(), path.to_string());
+            Arc::new(
+                field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(data_type)
+                    .with_metadata(metadata),
+            )
+        }
+
+        Schema::new_with_metadata(
+            schema
+                .fields()
+                .iter()
+                .map(|field| stamp(field, field.name()))
+                .collect::<Vec<_>>(),
+            schema.metadata.clone(),
+        )
+    }
+
+    /// Assert `coerced` carries the metadata of `original`, and so does every
+    /// one of its children: struct fields, list elements, map entry structs.
+    fn assert_field_metadata_preserved(
+        original: &FieldRef,
+        coerced: &FieldRef,
+        path: &str,
+    ) {
+        assert_eq!(
+            original.metadata(),
+            coerced.metadata(),
+            "field {path} lost its metadata",
+        );
+
+        match (original.data_type(), coerced.data_type()) {
+            (DataType::Struct(original_children), DataType::Struct(coerced_children)) => {
+                assert_eq!(original_children.len(), coerced_children.len());
+                for (original_child, coerced_child) in
+                    original_children.iter().zip(coerced_children)
+                {
+                    assert_field_metadata_preserved(
+                        original_child,
+                        coerced_child,
+                        &format!("{path}.{}", original_child.name()),
+                    );
+                }
+            }
+            (DataType::List(original_child), DataType::List(coerced_child))
+            | (DataType::Map(original_child, _), DataType::Map(coerced_child, _)) => {
+                assert_field_metadata_preserved(
+                    original_child,
+                    coerced_child,
+                    &format!("{path}.{}", original_child.name()),
+                );
+            }
+            // Only the arms above recurse, so a nested type here means the
+            // coercion changed the field's shape and children went unchecked.
+            (original_type, coerced_type) => assert!(
+                !original_type.is_nested(),
+                "field {path} changed shape: {original_type} -> {coerced_type}",
+            ),
+        }
     }
 }

@@ -1093,3 +1093,34 @@ fn test_string_concat_coercion() -> Result<()> {
 
     Ok(())
 }
+
+/// `Decimal256` allows a precision and a scale of up to 76, so the required
+/// precision `max(s1, s2) + max(p1 - s1, p2 - s2)` can reach 228 and the
+/// intermediate `p - s` can reach 152. Neither fits in the `i8` used for
+/// decimal scales, which used to panic with "attempt to add with overflow"
+/// (or "attempt to subtract with overflow") in debug builds.
+#[test]
+fn test_decimal256_comparison_coercion_precision_overflow() -> Result<()> {
+    // required precision = max(0, 52) + max(76 - 0, 76 - 52) = 128
+    assert_eq!(
+        comparison_coercion(&DataType::Decimal256(76, 0), &DataType::Decimal256(76, 52)),
+        Some(DataType::Decimal256(76, 52))
+    );
+
+    // required precision = max(0, 76) + max(76 - 0, 76 - 76) = 152
+    assert_eq!(
+        comparison_coercion(&DataType::Decimal256(76, 0), &DataType::Decimal256(76, 76)),
+        Some(DataType::Decimal256(76, 76))
+    );
+
+    // `p1 - s1` alone is 76 - (-76) = 152 before the sum is even computed
+    assert_eq!(
+        comparison_coercion(
+            &DataType::Decimal256(76, -76),
+            &DataType::Decimal256(76, 76)
+        ),
+        Some(DataType::Decimal256(76, 76))
+    );
+
+    Ok(())
+}

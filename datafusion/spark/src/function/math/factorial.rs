@@ -21,11 +21,15 @@ use arrow::array::{Array, Int64Array};
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Int32, Int64};
 use datafusion_common::cast::as_int32_array;
+use datafusion_common::types::logical_int32;
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, exec_err, utils::take_function_args,
 };
 use datafusion_expr::Signature;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Volatility};
+use datafusion_expr::{
+    Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, TypeSignatureClass,
+    Volatility,
+};
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#factorial>
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -43,7 +47,13 @@ impl Default for SparkFactorial {
 impl SparkFactorial {
     pub fn new() -> Self {
         Self {
-            signature: Signature::exact(vec![Int32], Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![Coercion::new_implicit_native(
+                    logical_int32(),
+                    vec![TypeSignatureClass::Integer],
+                )],
+                Volatility::Immutable,
+            ),
             aliases: vec![],
         }
     }

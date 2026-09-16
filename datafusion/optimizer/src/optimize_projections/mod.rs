@@ -407,6 +407,26 @@ fn optimize_projections(
                 right_indices.with_projection_beneficial(),
             ]
         }
+        LogicalPlan::AsOfJoin(join) => {
+            let left_len = join.left.schema().fields().len();
+            let mut left_required = Vec::new();
+            let mut right_required = Vec::new();
+            for index in indices.indices() {
+                if *index < left_len {
+                    left_required.push(*index);
+                } else {
+                    right_required.push(*index - left_len);
+                }
+            }
+            let left_indices = RequiredIndices::new_from_indices(left_required)
+                .with_plan_exprs(&plan, join.left.schema())?;
+            let right_indices = RequiredIndices::new_from_indices(right_required)
+                .with_plan_exprs(&plan, join.right.schema())?;
+            vec![
+                left_indices.with_projection_beneficial(),
+                right_indices.with_projection_beneficial(),
+            ]
+        }
         // these nodes are explicitly rewritten in the match statement above
         LogicalPlan::Projection(_)
         | LogicalPlan::Aggregate(_)
