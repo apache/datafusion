@@ -455,11 +455,11 @@ NULL
 statement ok
 DROP TABLE t_invalid_pattern;
 
-# The kernel gives NULL for a row whose value is NULL and never compiles that
-# row's pattern, so the diagnosis names the pattern that made the kernel fail,
-# not the one of a row the kernel skipped.
+# A row whose value or whose pattern is NULL gives NULL, and the kernel never
+# compiles that row's pattern. The diagnosis therefore names the pattern that
+# made the kernel fail, not the one of a row the kernel skipped.
 statement ok
-CREATE TABLE t_null_value(str varchar, pattern varchar) AS VALUES (NULL, 'a(b'), ('abc', 'c[d');
+CREATE TABLE t_null_value(str varchar, pattern varchar) AS VALUES (NULL, 'a(b'), ('abc', NULL), ('abc', 'c[d');
 
 query error DataFusion error: Execution error: Regular expression did not compile: regex parse error[\s\S]*unclosed character class
 SELECT str ~ pattern FROM t_null_value;
@@ -469,6 +469,28 @@ SELECT regexp_like(str, pattern) FROM t_null_value;
 
 query error DataFusion error: Execution error: Regular expression did not compile: regex parse error[\s\S]*unclosed character class
 SELECT regexp_like(str, pattern, 'm') FROM t_null_value;
+
+# The control: on their own, the rows that the kernel skips give NULL, and the
+# pattern that does not compile is never reported.
+query B
+SELECT str ~ pattern FROM t_null_value WHERE str IS NULL;
+----
+NULL
+
+query B
+SELECT str ~ pattern FROM t_null_value WHERE pattern IS NULL;
+----
+NULL
+
+query B
+SELECT regexp_like(str, pattern, 'm') FROM t_null_value WHERE str IS NULL;
+----
+NULL
+
+query B
+SELECT regexp_like(str, pattern, 'm') FROM t_null_value WHERE pattern IS NULL;
+----
+NULL
 
 statement ok
 DROP TABLE t_null_value;
