@@ -85,25 +85,44 @@ fn coerce_fields_by_name(table_fields: &Fields, file_fields: &Fields) -> Option<
         .map(|f| (f.name(), f.data_type()))
         .collect();
 
-    let mut changed = false;
-    let fields: Fields = file_fields
-        .iter()
-        .map(|field| {
-            match table_types
-                .get(field.name())
-                .and_then(|table_type| coerce_data_type(table_type, field.data_type()))
-            {
-                Some(new_type) => {
-                    changed = true;
-                    field_with_new_type(field, new_type)
-                }
-                // If no transformation is needed, keep the original field
-                None => Arc::clone(field),
-            }
-        })
-        .collect();
+    coerce_fields(file_fields, |_, field| {
+        let table_type = table_types.get(field.name())?;
+        coerce_data_type(table_type, field.data_type())
+            .map(|new_type| field_with_new_type(field, new_type))
+    })
+}
 
-    changed.then_some(fields)
+/// Rebuild `file_fields`, replacing every field for which `coerce` returns a
+/// new one. Returns `None` if no field changed.
+///
+/// The output is only allocated once a field actually changes, so schemas
+/// needing no coercion at all (the common case) are walked without allocating
+/// or touching the reference counts of the file fields.
+fn coerce_fields(
+    file_fields: &Fields,
+    mut coerce: impl FnMut(usize, &FieldRef) -> Option<FieldRef>,
+) -> Option<Fields> {
+    let mut coerced: Option<Vec<FieldRef>> = None;
+    for (idx, field) in file_fields.iter().enumerate() {
+        match coerce(idx, field) {
+            Some(new_field) => coerced
+                .get_or_insert_with(|| {
+                    // The fields before the first change are carried over as is
+                    let mut fields = Vec::with_capacity(file_fields.len());
+                    fields.extend_from_slice(&file_fields[..idx]);
+                    fields
+                })
+                .push(new_field),
+            // Unchanged fields are only copied once something else changed
+            None => {
+                if let Some(coerced) = &mut coerced {
+                    coerced.push(Arc::clone(field));
+                }
+            }
+        }
+    }
+
+    coerced.map(Fields::from)
 }
 
 /// Coerce `file_type` towards `table_type`, recursing into nested types.
@@ -175,22 +194,11 @@ fn coerce_map_entries(
         return None;
     }
 
-    let mut changed = false;
-    let fields: Fields = table_fields
-        .iter()
-        .zip(file_fields.iter())
-        .map(
-            |(table_child, file_child)| match coerce_child(table_child, file_child) {
-                Some(child) => {
-                    changed = true;
-                    child
-                }
-                None => Arc::clone(file_child),
-            },
-        )
-        .collect();
+    let fields = coerce_fields(file_fields, |idx, file_child| {
+        coerce_child(&table_fields[idx], file_child)
+    })?;
 
-    changed.then(|| field_with_new_type(file_entries, DataType::Struct(fields)))
+    Some(field_with_new_type(file_entries, DataType::Struct(fields)))
 }
 
 /// Coerces the file schema's Timestamps to the provided TimeUnit if the
