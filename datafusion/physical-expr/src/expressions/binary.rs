@@ -1169,7 +1169,7 @@ pub const PRE_SELECTION_THRESHOLD: f32 = 0.2;
 /// How much of the batch an `AND`'s right-hand side is evaluated on, given the
 /// shape of its left-hand side's result.
 ///
-/// This is the observable consequence of [`check_short_circuit`] for `AND`,
+/// This is the observable consequence of `check_short_circuit` for `AND`,
 /// exposed so that consumers modelling the cost of a conjunction share one
 /// definition with the code that implements it. See [`and_rhs_evaluation`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1192,7 +1192,7 @@ pub enum AndRhsEvaluation {
 /// `true_count` counts non-null `true`s; it is only consulted when
 /// `null_count` is zero, where the two conventions coincide.
 ///
-/// [`check_short_circuit`] decides by this function, so a caller that models
+/// `check_short_circuit` decides by this function, so a caller that models
 /// conjunction cost cannot drift away from what evaluation actually does.
 pub fn and_rhs_evaluation(
     true_count: usize,
