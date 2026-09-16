@@ -892,8 +892,11 @@ mod tests {
         assert!(close(stats(1000, 200, 1000).downstream_weight(), 0.20));
         // Just above it: no pre-selection, so the full batch carries on.
         assert!(close(stats(1000, 210, 1000).downstream_weight(), 1.0));
-        // Well above it, and all rows passing: likewise the full batch.
+        // Well above it: keeping 30% and keeping 90% both leave the conjuncts
+        // after them facing every row, so both weigh the same.
+        assert!(close(stats(1000, 300, 1000).downstream_weight(), 1.0));
         assert!(close(stats(1000, 900, 1000).downstream_weight(), 1.0));
+        // All rows passing: likewise the full batch.
         assert!(close(stats(1000, 1000, 1000).downstream_weight(), 1.0));
         // All rows rejected: nothing after it is evaluated at all.
         assert!(close(stats(1000, 0, 1000).downstream_weight(), 0.0));
