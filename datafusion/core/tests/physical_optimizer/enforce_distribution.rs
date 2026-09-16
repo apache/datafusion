@@ -818,9 +818,9 @@ fn range_satisfaction_config_matrix() -> Result<()> {
     let config_cases = [
         // subset  preserve  target   exact  subset  incompatible
         (NOT_MET, DISABLED, EQUAL, [Reuse, Hash, Hash]),
-        (NOT_MET, DISABLED, GREATER, [Hash, Hash, Hash]),
+        (NOT_MET, DISABLED, GREATER, [Reuse, Hash, Hash]),
         (NOT_MET, NOT_MET, EQUAL, [Reuse, Hash, Hash]),
-        (NOT_MET, NOT_MET, GREATER, [Hash, Hash, Hash]),
+        (NOT_MET, NOT_MET, GREATER, [Reuse, Hash, Hash]),
         (NOT_MET, MET, EQUAL, [Reuse, Hash, Hash]),
         (NOT_MET, MET, GREATER, [Reuse, Reuse, Hash]),
         (MET, DISABLED, EQUAL, [Reuse, Reuse, Hash]),
@@ -1106,6 +1106,368 @@ fn range_hash_join_repartitions_unpartitioned_side_to_match_range() -> Result<()
     "
     );
 
+    Ok(())
+}
+
+#[test]
+fn range_requirement_scales_within_sample_resolution() -> Result<()> {
+    let ordering = [PhysicalSortExpr::new_default(col("a", &schema())?)].into();
+    let samples = (10..=50)
+        .step_by(10)
+        .map(|value| SplitPoint::new(vec![ScalarValue::Int64(Some(value))]))
+        .collect();
+    let range = RangePartitioning::try_new_with_samples(ordering, samples, 3)?;
+    for target in [2, 3, 5, 6, 7] {
+        let input =
+            parquet_exec_with_output_partitioning(Partitioning::Range(range.clone()));
+        let requirement = RequirementsTestExec::new(input)
+            .with_required_input_distribution(Distribution::KeyPartitioned(vec![col(
+                "a",
+                &schema(),
+            )?]))
+            .into_arc();
+        let plan = TestConfig::default()
+            .with_query_execution_partitions(target)
+            .to_plan(requirement, &DISTRIB_DISTRIB_SORT);
+        let rendered = displayable(plan.as_ref()).indent(true).to_string();
+        let child = Arc::clone(plan.children()[0]);
+        let Partitioning::Range(actual) = child.output_partitioning() else {
+            panic!("range partitioning lost for target {target}: {rendered}");
+        };
+        let expected_count = if (4..=6).contains(&target) { target } else { 3 };
+        assert_eq!(actual.partition_count(), expected_count, "{rendered}");
+        assert_eq!(actual.samples(), range.samples());
+        assert_eq!(
+            actual.split_points(),
+            range.scale(expected_count)?.split_points()
+        );
+        assert_eq!(
+            rendered.matches("RepartitionExec:").count(),
+            usize::from(expected_count != 3),
+            "{rendered}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn range_singleton_scaling_respects_required_keys() -> Result<()> {
+    let ordering = [PhysicalSortExpr::new_default(col("a", &schema())?)].into();
+    let samples = (10..=50)
+        .step_by(10)
+        .map(|value| SplitPoint::new(vec![ScalarValue::Int64(Some(value))]))
+        .collect();
+    let range = RangePartitioning::try_new_with_samples(ordering, samples, 1)?;
+    for key in ["a", "b"] {
+        let input =
+            parquet_exec_with_output_partitioning(Partitioning::Range(range.clone()));
+        let required = Distribution::KeyPartitioned(vec![col(key, &schema())?]);
+        let requirement = RequirementsTestExec::new(input)
+            .with_required_input_distribution(required.clone())
+            .into_arc();
+        let plan = TestConfig::default()
+            .with_query_execution_partitions(5)
+            .to_plan(requirement, &DISTRIB_DISTRIB_SORT);
+        let child = Arc::clone(plan.children()[0]);
+        assert_eq!(child.output_partitioning().partition_count(), 5);
+        assert!(
+            child
+                .output_partitioning()
+                .satisfaction(&required, child.equivalence_properties(), false)
+                .is_satisfied()
+        );
+        assert_eq!(
+            matches!(child.output_partitioning(), Partitioning::Range(_)),
+            key == "a"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn range_preservation_keeps_existing_native_reference() -> Result<()> {
+    for (first_count, second_count, target, expected_range_count) in [
+        (4, 3, 4, Some(4)),
+        (5, 3, 4, Some(5)),
+        (4, 4, 4, None),
+        (3, 2, 4, None),
+    ] {
+        for swap in [false, true] {
+            let first = parquet_exec_with_output_partitioning(range_partitioning(
+                "a",
+                (1..first_count).map(|i| i * 10),
+                SortOptions::default(),
+            )?);
+            let second = parquet_exec_with_output_partitioning(range_partitioning(
+                "a",
+                (1..second_count).map(|i| i * 10 + 5),
+                SortOptions::default(),
+            )?);
+            let (left, right) = if swap {
+                (second, first)
+            } else {
+                (first, second)
+            };
+            let join_on = vec![(col("a", &schema())?, col("a", &schema())?)];
+            let join = hash_join_exec(left, right, &join_on, &JoinType::Inner);
+            let plan = TestConfig::default()
+                .with_query_execution_partitions(target)
+                .to_plan(join, &DISTRIB_DISTRIB_SORT);
+            let rendered = displayable(plan.as_ref()).indent(true).to_string();
+            for child in plan.children() {
+                match (expected_range_count, child.output_partitioning()) {
+                    (Some(count), Partitioning::Range(range)) => {
+                        assert_eq!(range.partition_count(), count, "{rendered}")
+                    }
+                    (None, Partitioning::Hash(_, count)) => {
+                        assert_eq!(*count, target, "{rendered}")
+                    }
+                    _ => panic!("unexpected reference choice: {rendered}"),
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn range_preservation_prefers_larger_unscalable_input() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let input =
+        |count: usize, rows_per_partition: usize| -> Result<Arc<dyn ExecutionPlan>> {
+            let partitions = (0..count)
+                .map(|partition| {
+                    Ok(vec![RecordBatch::try_new(
+                        Arc::clone(&schema),
+                        vec![Arc::new(Int64Array::from(vec![
+                            partition as i64 * 10;
+                            rows_per_partition
+                        ]))],
+                    )?])
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let source =
+                MemorySourceConfig::try_new_exec(&partitions, Arc::clone(&schema), None)?;
+            Ok(Arc::new(source.as_ref().clone().with_partitioning(
+                range_partitioning(
+                    "a",
+                    (1..count).map(|i| i as i64 * 10),
+                    SortOptions::default(),
+                )?,
+            )))
+        };
+    for swap in [false, true] {
+        let first = input(4, 1)?;
+        let second = input(3, 100)?;
+        let (left, right) = if swap {
+            (second, first)
+        } else {
+            (first, second)
+        };
+        let join_on = vec![(col("a", &schema)?, col("a", &schema)?)];
+        let join = hash_join_exec(left, right, &join_on, &JoinType::Inner);
+        let plan = TestConfig::default()
+            .with_query_execution_partitions(4)
+            .to_plan(join, &DISTRIB_DISTRIB_SORT);
+        let rendered = displayable(plan.as_ref()).indent(true).to_string();
+        for child in plan.children() {
+            let Partitioning::Range(range) = child.output_partitioning() else {
+                panic!("{rendered}")
+            };
+            assert_eq!(range.partition_count(), 3, "{rendered}");
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn range_hash_join_preserves_satisfying_range_above_max_partitions() -> Result<()> {
+    let left = parquet_exec();
+    let right = parquet_exec_with_output_partitioning(range_partitioning(
+        "a",
+        [10, 20, 30],
+        SortOptions::default(),
+    )?);
+    let join_on = vec![(col("a", &left.schema())?, col("a", &right.schema())?)];
+    let join = hash_join_exec(left, right, &join_on, &JoinType::Inner);
+    let plan = TestConfig::default()
+        .with_query_execution_partitions(8)
+        .to_plan(join, &DISTRIB_DISTRIB_SORT);
+    let rendered = displayable(plan.as_ref()).indent(true).to_string();
+    assert!(!rendered.contains("partitioning=Hash"), "{rendered}");
+    assert_eq!(
+        rendered.matches("RepartitionExec:").count(),
+        1,
+        "{rendered}"
+    );
+    assert!(rendered.contains("partitioning=Range"), "{rendered}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn range_singleton_scaling_preserves_aggregate_groups() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int64, false),
+        Field::new("b", DataType::Int64, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int64Array::from(vec![0, 10, 20, 30, 40, 50])),
+            Arc::new(Int64Array::from(vec![1, 2, 1, 2, 1, 2])),
+        ],
+    )?;
+    let range = RangePartitioning::try_new_with_samples(
+        [PhysicalSortExpr::new_default(col("a", &schema)?)].into(),
+        (10..=50)
+            .step_by(10)
+            .map(|value| SplitPoint::new(vec![ScalarValue::Int64(Some(value))]))
+            .collect(),
+        1,
+    )?;
+    let source =
+        MemorySourceConfig::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+    let source = Arc::new(
+        source
+            .as_ref()
+            .clone()
+            .with_partitioning(Partitioning::Range(range)),
+    );
+    // The input represents partial groups. Repeated b values must be combined,
+    // even though they lie on opposite sides of the retained a boundaries.
+    let aggregate = Arc::new(AggregateExec::try_new(
+        AggregateMode::FinalPartitioned,
+        PhysicalGroupBy::new_single(vec![(col("b", &schema)?, "b".to_string())]),
+        vec![],
+        vec![],
+        source,
+        schema,
+    )?);
+    let plan = TestConfig::default()
+        .with_query_execution_partitions(5)
+        .to_plan(aggregate, &DISTRIB_DISTRIB_SORT);
+    let rendered = displayable(plan.as_ref()).indent(true).to_string();
+    assert!(
+        rendered.contains("partitioning=Hash([b@1], 5)"),
+        "{rendered}"
+    );
+    let batches = collect(plan, SessionContext::new().task_ctx()).await?;
+    let mut groups = batches
+        .iter()
+        .flat_map(|batch| {
+            batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+                .iter()
+                .copied()
+        })
+        .collect::<Vec<_>>();
+    groups.sort_unstable();
+    assert_eq!(groups, vec![1, 2]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn range_hash_join_scaling_preserves_rows() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+    let batch = |values: Vec<Option<i64>>| {
+        RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int64Array::from(values))],
+        )
+    };
+    for descending in [false, true] {
+        // Physical rows must match the declared boundaries in each sort direction.
+        let partitions = if descending {
+            vec![
+                vec![batch(vec![Some(99), Some(50)])?],
+                vec![batch(vec![Some(40), Some(39), Some(30)])?],
+                vec![batch(vec![Some(20), Some(19), Some(10), Some(0), None])?],
+            ]
+        } else {
+            vec![
+                vec![batch(vec![None, Some(0), Some(10), Some(19)])?],
+                vec![batch(vec![Some(20), Some(30), Some(39)])?],
+                vec![batch(vec![Some(40), Some(50), Some(99)])?],
+            ]
+        };
+        let ordering = [PhysicalSortExpr::new(
+            col("a", &schema)?,
+            SortOptions::new(descending, !descending),
+        )]
+        .into();
+        let samples = (1..=5)
+            .map(|index| {
+                if descending {
+                    60 - index * 10
+                } else {
+                    index * 10
+                }
+            })
+            .map(|value| SplitPoint::new(vec![ScalarValue::Int64(Some(value))]))
+            .collect();
+        let range = RangePartitioning::try_new_with_samples(ordering, samples, 3)?;
+        for target in [3, 5, 6, 8] {
+            let source =
+                MemorySourceConfig::try_new_exec(&partitions, Arc::clone(&schema), None)?;
+            let right: Arc<dyn ExecutionPlan> = Arc::new(
+                source
+                    .as_ref()
+                    .clone()
+                    .with_partitioning(Partitioning::Range(range.clone())),
+            );
+            let left = MemorySourceConfig::try_new_exec(
+                &[partitions.iter().flatten().cloned().collect()],
+                Arc::clone(&schema),
+                None,
+            )?;
+            let join_on = vec![(col("a", &schema)?, col("a", &schema)?)];
+            let join = hash_join_exec(left, right, &join_on, &JoinType::Inner);
+            let plan = TestConfig::default()
+                .with_query_execution_partitions(target)
+                .to_plan(join, &DISTRIB_DISTRIB_SORT);
+            let rendered = displayable(plan.as_ref()).indent(true).to_string();
+            assert!(
+                !rendered.contains("partitioning=Hash"),
+                "target {target}: {rendered}"
+            );
+            let expected_count = if target <= 6 { target } else { 3 };
+            for child in plan.children() {
+                let Partitioning::Range(actual) = child.output_partitioning() else {
+                    panic!("target {target}: {rendered}");
+                };
+                assert_eq!(actual.partition_count(), expected_count, "{rendered}");
+                assert_eq!(
+                    actual.split_points(),
+                    range.scale(expected_count)?.split_points()
+                );
+            }
+            let batches = collect(plan, SessionContext::new().task_ctx()).await?;
+            let mut rows = vec![];
+            for batch in &batches {
+                let left = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap();
+                let right = batch
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap();
+                rows.extend(left.iter().zip(right.iter()));
+            }
+            rows.sort();
+            let expected = [0, 10, 19, 20, 30, 39, 40, 50, 99]
+                .into_iter()
+                .map(|value| (Some(value), Some(value)))
+                .collect::<Vec<_>>();
+            assert_eq!(rows, expected, "target {target}: {rendered}");
+        }
+    }
     Ok(())
 }
 

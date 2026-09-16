@@ -449,10 +449,12 @@ fn roundtrip_repartition_preserve_order() -> Result<()> {
 fn roundtrip_range_partitioning() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
     let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
-    let range_partitioning = Partitioning::Range(RangePartitioning::new(
-        [PhysicalSortExpr::new_default(col("a", &schema)?)].into(),
-        vec![SplitPoint::new(vec![ScalarValue::Int64(Some(10))])],
-    ));
+    let range_partitioning =
+        Partitioning::Range(RangePartitioning::try_new_with_samples(
+            [PhysicalSortExpr::new_default(col("a", &schema)?)].into(),
+            vec![SplitPoint::new(vec![ScalarValue::Int64(Some(10))])],
+            2,
+        )?);
     // RepartitionExec is used only to carry the partitioning through proto.
     // Executing range repartitioning is intentionally unsupported.
     let repartition = RepartitionExec::try_new(input, range_partitioning)?;
