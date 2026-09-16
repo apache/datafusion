@@ -487,33 +487,28 @@ statement ok
 DROP TABLE upper_dictionary_test
 
 # upper and lower preserve input nullability in the planned schema
-statement ok
-CREATE TABLE case_nullability (a VARCHAR NOT NULL, b VARCHAR) AS VALUES ('Ab', NULL)
-
-statement ok
-CREATE TABLE case_nullability_out AS
-SELECT upper(a) AS ua, lower(a) AS la, upper(b) AS ub FROM case_nullability
-
 query TTT
-DESCRIBE case_nullability_out
+DESCRIBE SELECT upper(a) AS ua, lower(a) AS la, upper(b) AS ub
+FROM (VALUES ('Ab', CAST(NULL AS VARCHAR))) AS t(a, b)
 ----
-ua Utf8View NO
-la Utf8View NO
+ua Utf8 NO
+la Utf8 NO
 ub Utf8View YES
 
 # An outer join widens a non-nullable input before it reaches upper
+query TTT
+DESCRIBE SELECT upper(t.a) AS ua
+FROM (SELECT 1 AS k) x
+LEFT JOIN (VALUES ('Ab')) AS t(a) ON false
+----
+ua Utf8 YES
+
 query T
 SELECT upper(t.a)
 FROM (SELECT 1 AS k) x
-LEFT JOIN case_nullability t ON false
+LEFT JOIN (VALUES ('Ab')) AS t(a) ON false
 ----
 NULL
-
-statement ok
-DROP TABLE case_nullability_out
-
-statement ok
-DROP TABLE case_nullability
 
 query T
 SELECT btrim('   foo  ')
