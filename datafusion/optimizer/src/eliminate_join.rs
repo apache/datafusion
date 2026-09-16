@@ -28,9 +28,10 @@
 //!
 //!     1. None of R's columns are referenced above the join.
 //!     2. R does not observably multiply L's rows. This holds when either the
-//!        join's ancestors are duplicate-insensitive (e.g., DISTINCT) or we can use
-//!        functional dependencies to prove that each L row matches at most one R
-//!        row (R is provably unique on the join keys).
+//!        join's ancestors are duplicate-insensitive (e.g., DISTINCT) and its
+//!        conditions are repeatable, or we can use functional dependencies to
+//!        prove that each L row matches at most one R row (R is provably unique
+//!        on the join keys).
 //!
 //! * A left outer join `L ⟕ R` can be removed entirely, i.e. replaced by `L`,
 //!   under the same two conditions. Unlike an inner join, a left join
@@ -38,11 +39,11 @@
 //!   columns are unused and R cannot multiply L's rows the join has no
 //!   observable effect at all. Such joins commonly appear in generated SQL
 //!   and in queries over views that join in lookup tables the query does not
-//!   read. A join filter does not prevent this rewrite: for a left join it
-//!   only decides whether a left row is matched or null-padded, and either
-//!   way the row is emitted. Symmetrically, a right outer join `L ⟖ R` can be
-//!   replaced by `R` when L's columns are unused and L cannot multiply R's
-//!   rows.
+//!   read. A repeatable join filter does not prevent this rewrite: for a left
+//!   join it only decides whether a left row is matched or null-padded, and
+//!   either way the row is emitted. Symmetrically, a right outer join `L ⟖ R`
+//!   can be replaced by `R` when L's columns are unused and L cannot multiply
+//!   R's rows.
 //!
 //! # Overview
 //!
@@ -255,9 +256,10 @@ fn rewrite_node(
                 input.schema(),
             )?;
 
-            // This includes grouping-only aggregates and global aggregates.
-            // One sensitive aggregate makes the input multiplicity observable,
-            // regardless of whether an ancestor ignores this node's duplicates.
+            // The input can ignore repeated rows when grouping expressions are
+            // repeatable and every aggregate ignores duplicates. This covers
+            // grouping-only and global aggregates. One sensitive aggregate makes
+            // input multiplicity observable, even beneath an insensitive ancestor.
             let child_duplicate_insensitive = group_expr.iter().all(is_repeatable)
                 && aggr_expr.iter().all(is_duplicate_insensitive_aggregate);
 
@@ -423,9 +425,10 @@ fn rewrite_join(
 
     let (visible_left, visible_right) = split_join_output_columns(&join, live);
 
-    // If the join keys or filter are not repeatable, removing duplicate input
-    // rows could change whether a match exists. Require repeatable conditions
-    // before ignoring duplicates in this join or either of its inputs.
+    // A semi join may stop evaluating conditions after finding a match.
+    // If the conditions are not repeatable, skipping evaluations can change
+    // later matches. Removing duplicate input rows can have the same effect.
+    // Require repeatable conditions for this join and rewrites of its inputs.
     let repeatable = join
         .on
         .iter()
@@ -570,9 +573,10 @@ fn rewritten_join_type(
             ));
 
     // A LEFT JOIN preserves every left row, so with a redundant right side the
-    // join has no observable effect and can be replaced by its left input. A
-    // join filter cannot prevent this: it only decides whether a left row is
-    // matched or null-padded, and either way the row is emitted.
+    // join has no observable effect and can be replaced by its left input.
+    // A filter only decides whether a row is matched or null-padded. When
+    // relying on duplicate-insensitivity, the caller has already required
+    // repeatable join conditions.
     if join.join_type == JoinType::Left && can_remove_right {
         return JoinRewrite::ReplaceWithLeft;
     }

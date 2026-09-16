@@ -45,18 +45,18 @@ pub use datafusion_expr::expr_rewriter::NamePreserver;
 /// Subqueries are conservative barriers because their plans may contain
 /// volatile expressions that [`Expr::is_volatile`] does not visit.
 pub(crate) fn is_repeatable(expr: &Expr) -> bool {
-    !expr.is_volatile()
-        && !expr
-            .exists(|expr| {
-                Ok(matches!(
+    !expr
+        .exists(|expr| {
+            Ok(expr.is_volatile_node()
+                || matches!(
                     expr,
                     Expr::Exists(_)
                         | Expr::InSubquery(_)
                         | Expr::SetComparison(_)
                         | Expr::ScalarSubquery(_)
                 ))
-            })
-            .expect("expression traversal is infallible")
+        })
+        .expect("expression traversal is infallible")
 }
 
 /// Whether an aggregate explicitly declares duplicate insensitivity and can
@@ -69,6 +69,8 @@ pub(crate) fn is_duplicate_insensitive_aggregate(mut expr: &Expr) -> bool {
     let Expr::AggregateFunction(aggregate) = expr else {
         return false;
     };
+    // Expr::is_volatile checks scalar functions only; check the aggregate
+    // function's own volatility separately.
     aggregate.func.distinct_handling() == DistinctHandling::Insensitive
         && aggregate.func.signature().volatility != Volatility::Volatile
         && is_repeatable(expr)
