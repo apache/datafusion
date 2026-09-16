@@ -167,12 +167,20 @@ impl<
     }
 
     pub fn start_new_block(&mut self) {
-        self.end_current_block();
+        // a block that was only pre-opened becomes the started block instead of an empty
+        // block of its own
+        if self.should_count_current_block() {
+            self.end_current_block();
+        }
         self.should_count_current_block = true;
     }
 
     pub fn end_current_block(&mut self) {
         assert!(!FIXED_BLOCK_SIZING, "end_current_block is only relevant for manual block size");
+        self.end_current_block_inner();
+    }
+
+    fn end_current_block_inner(&mut self) {
         // Don't add to number of blocks since we might not insert into it
         self.current_block_index += 1;
         self.finished_blocks_allocated_memory +=
@@ -262,7 +270,7 @@ impl<
         let finished_block = FIXED_BLOCK_SIZING && block.len() == self.block_size;
 
         if finished_block {
-            self.end_current_block();
+            self.end_current_block_inner();
             true
         } else {
             false
@@ -307,7 +315,7 @@ impl<
         let finished_block = FIXED_BLOCK_SIZING && block.len() == self.block_size;
 
         if finished_block {
-            self.end_current_block();
+            self.end_current_block_inner();
             true
         } else {
             false
@@ -353,7 +361,7 @@ impl<
         let finished_block = FIXED_BLOCK_SIZING && block.len() == self.block_size;
 
         if finished_block {
-            self.end_current_block();
+            self.end_current_block_inner();
             true
         } else {
             false
@@ -428,7 +436,7 @@ impl<
         let finished_block = FIXED_BLOCK_SIZING && block.len() == self.block_size;
 
         if finished_block {
-            self.end_current_block();
+            self.end_current_block_inner();
             true
         } else {
             false
@@ -478,7 +486,7 @@ impl<
 
     /// Take the first block, `None` once there are no more items
     pub fn take_block(&mut self) -> Option<CustomBlockProvider::Block> {
-        if self.len == 0 && !self.should_count_current_block {
+        if self.num_blocks() == 0 {
             return None;
         }
 
@@ -535,7 +543,7 @@ impl<
         Some(finished)
     }
 
-    /// Take every non empty block
+    /// Take every block that counts, see [`Self::num_blocks`]
     pub fn take_all(&mut self) -> Vec<CustomBlockProvider::Block> {
         let num_blocks = self.num_blocks();
         let mut blocks = std::mem::take(&mut self.blocks);
@@ -545,7 +553,7 @@ impl<
         blocks.into()
     }
 
-    /// Take every non empty block
+    /// Take every block that counts, see [`Self::num_blocks`]
     pub fn take_all_with_mem(&mut self) -> Vec<(CustomBlockProvider::Block, usize)> {
         let num_blocks = self.num_blocks();
         let mut blocks = std::mem::take(&mut self.blocks);

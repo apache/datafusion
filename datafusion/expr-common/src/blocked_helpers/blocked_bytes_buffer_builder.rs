@@ -62,6 +62,12 @@ impl BlockedBytesBufferBuilder {
         self.bytes.end_current_block();
     }
 
+    /// The current block counts even without bytes: the owner's items block has items
+    /// (empty values or nulls) so this block belongs to it
+    pub fn mark_current_block_counted(&mut self) {
+        self.bytes.mark_current_block_counted();
+    }
+
     pub fn extend_from_slice(&mut self, slice: &[u8]) {
         self.bytes.extend_from_slice(slice);
     }
@@ -94,7 +100,7 @@ impl BlockedBytesBufferBuilder {
         self.bytes.take_first_block().into_buffer()
     }
 
-    /// Take every block, a trailing empty block is dropped
+    /// Take every block that counts, see [`Self::num_blocks`]
     pub fn take_all(&mut self) -> Vec<Buffer> {
         let blocks = self.bytes.take_all();
         blocks.into_iter()
@@ -146,7 +152,7 @@ mod tests {
             out.push(block.to_vec());
         }
         assert_eq!(builder.len(), 0);
-        assert_eq!(builder.num_blocks(), 1);
+        assert_eq!(builder.num_blocks(), 0);
         out
     }
 
@@ -154,7 +160,7 @@ mod tests {
     fn new_is_empty() {
         let mut builder = BlockedBytesBufferBuilder::new();
         assert_eq!(builder.len(), 0);
-        assert_eq!(builder.num_blocks(), 1);
+        assert_eq!(builder.num_blocks(), 0);
         assert_eq!(builder.current_block_len(), 0);
         assert_eq!(builder.take_block(), None);
         assert_eq!(builder.take_block_finished(), None);
@@ -190,12 +196,15 @@ mod tests {
             vec![b"de".to_vec(), vec![], b"f".to_vec()]
         );
 
-        // a trailing empty block waiting for the next write is not a block to take
+        // a started block counts even while empty, an ended one leaves nothing to take
         let mut builder = with_blocks(&[b"abc"]);
         builder.start_new_block();
+        assert_eq!(drain(&mut builder), vec![b"abc".to_vec(), vec![]]);
+        let mut builder = with_blocks(&[b"abc"]);
+        builder.end_current_block();
         assert_eq!(drain(&mut builder), vec![b"abc".to_vec()]);
 
-        // but it is still there to write into
+        // and there is still a block to write into
         builder.extend_from_slice(b"x");
         assert_eq!(drain(&mut builder), vec![b"x".to_vec()]);
     }
@@ -206,32 +215,6 @@ mod tests {
         assert_eq!(builder.take_block_finished().unwrap().as_slice(), b"abc");
         assert_eq!(builder.take_block_finished().unwrap().as_slice(), b"de");
         assert_eq!(builder.take_block_finished(), None);
-    }
-
-    #[test]
-    fn take_all_drops_trailing_empty_block() {
-        let mut builder = with_blocks(&[b"abc", b"", b"de"]);
-        builder.start_new_block();
-        assert_eq!(
-            builder
-                .take_all()
-                .iter()
-                .map(|b| b.to_vec())
-                .collect::<Vec<_>>(),
-            vec![b"abc".to_vec(), vec![], b"de".to_vec()]
-        );
-        assert_eq!(builder.len(), 0);
-        assert_eq!(builder.num_blocks(), 1);
-
-        builder.extend_from_slice(b"z");
-        assert_eq!(
-            builder
-                .take_all()
-                .iter()
-                .map(|b| b.to_vec())
-                .collect::<Vec<_>>(),
-            vec![b"z".to_vec()]
-        );
     }
 
     #[test]
@@ -345,16 +328,17 @@ mod tests {
             b"a"
         );
         assert_eq!(builder.num_blocks(), 4);
+        // the trailing empty block was requested, so it counts
         assert_eq!(
             drain(&mut builder),
-            vec![b"bc".to_vec(), vec![], b"def".to_vec()]
+            vec![b"bc".to_vec(), vec![], b"def".to_vec(), vec![]]
         );
 
-        // everything is taken and the new layout is only empty blocks
+        // everything is taken and the new layout is only empty blocks, both requested
         let mut builder = with_blocks(&[b"ab"]);
         assert_eq!(builder.take_n(2, [0usize, 0].into_iter()).as_slice(), b"ab");
         assert_eq!(builder.num_blocks(), 2);
-        assert_eq!(drain(&mut builder), vec![Vec::<u8>::new()]);
+        assert_eq!(drain(&mut builder), vec![Vec::<u8>::new(), Vec::<u8>::new()]);
     }
 
     #[test]

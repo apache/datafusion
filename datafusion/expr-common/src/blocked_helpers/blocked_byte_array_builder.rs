@@ -47,6 +47,7 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteArrayType>
 
     pub fn push_null(&mut self) {
         self.blocked_nulls.push_null();
+        self.blocked_bytes.mark_current_block_counted();
         let finished_current_block = self.blocked_offsets.push_length(0);
         if finished_current_block {
             self.blocked_bytes.end_current_block();
@@ -63,6 +64,7 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteArrayType>
         self.blocked_nulls.push_n(n, false);
 
         if !FIXED_BLOCK_SIZING {
+            self.blocked_bytes.mark_current_block_counted();
             self.blocked_offsets.push_empty_within_block(n);
             return;
         }
@@ -72,6 +74,7 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteArrayType>
             let to_add = remaining_in_current_block.min(n);
             n -= to_add;
 
+            self.blocked_bytes.mark_current_block_counted();
             let finished_current_block =
                 self.blocked_offsets.push_empty_within_block(to_add);
             if finished_current_block {
@@ -97,6 +100,7 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteArrayType>
 
     pub fn append_valid_slice(&mut self, bytes: &[u8]) {
         self.blocked_bytes.extend_from_slice(bytes);
+        self.blocked_bytes.mark_current_block_counted();
 
         let finished_current_block = self.blocked_offsets.push_length(bytes.len());
         if finished_current_block {
@@ -122,6 +126,11 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteArrayType>
         self.blocked_bytes.end_current_block();
         self.blocked_offsets.end_current_block();
         self.blocked_nulls.end_current_block();
+    }
+
+    /// Number of blocks, see `BlockedOffsetBufferBuilder::num_blocks`
+    pub fn num_blocks(&self) -> usize {
+        self.blocked_offsets.num_blocks()
     }
 
     pub fn current_block_bytes_len(&self) -> usize {
@@ -208,7 +217,7 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteArrayType>
         Some((offsets, bytes, nulls))
     }
 
-    /// Take every non empty block
+    /// Take every block that counts, see [`Self::num_blocks`]
     pub fn take_all(&mut self) -> Vec<GenericByteArray<B>> {
         self.take_all_parts()
             .map(|(offsets, bytes, nulls)| GenericByteArray::new(offsets, bytes, nulls))
@@ -230,12 +239,9 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteArrayType>
     fn take_all_parts(
         &mut self,
     ) -> impl Iterator<Item = (OffsetBuffer<B::Offset>, Buffer, Option<NullBuffer>)> {
-        // The bytes builder does not know how many items are in a block so it can not tell
-        // a block of empty values from an unused trailing block, take as many as the offsets have
         let offsets = self.blocked_offsets.take_all();
         let nulls = self.blocked_nulls.take_all();
-        let mut bytes = self.blocked_bytes.take_all();
-        bytes.resize_with(offsets.len(), || Buffer::from(&[]));
+        let bytes = self.blocked_bytes.take_all();
 
         offsets.into_iter().zip_eq(bytes).zip_eq(nulls).map(
             |((offsets, bytes), nulls)| (Self::offsets_from_vec(offsets), bytes, nulls),
@@ -278,7 +284,8 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteArrayType>
         );
         let nulls = self.blocked_nulls.take_n(n, adjusted_block_size);
 
-        // The offsets are already re-laid out, the last offset of each block is its byte count
+        // The offsets are already re-laid out, the last offset of each block that counts is
+        // its byte count
         let bytes_per_block: Vec<usize> = self
             .blocked_offsets
             .blocks_iter()
@@ -288,6 +295,13 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteArrayType>
             offsets[offsets.len() - 1].as_usize(),
             bytes_per_block.into_iter(),
         );
+        // The offsets may also hold a block that does not count yet (opened by a fill or an
+        // end) after their blocks that count; the bytes need the same one so the next value
+        // lands in the right block. Without blocks that count the bytes already have it.
+        let counted = self.blocked_offsets.num_blocks();
+        if counted > 0 && counted <= self.blocked_offsets.current_block_index() {
+            self.blocked_bytes.end_current_block();
+        }
 
         (offsets, bytes, nulls)
     }
@@ -440,23 +454,6 @@ mod tests {
         expected.extend(model);
         assert_eq!(values(&builder, 4), expected);
         assert_eq!(drain(&mut builder), chunks(&expected, 4));
-    }
-
-    #[test]
-    fn take_all_returns_only_non_empty_blocks() {
-        let model = model(2, 6);
-        let mut builder = fixed_with(3, &model);
-        let blocks: Vec<_> = builder.take_all().iter().map(values_of).collect();
-        assert_eq!(blocks, chunks(&model, 3));
-        assert_eq!(builder.len(), 0);
-        assert!(builder.take_all().is_empty());
-
-        // a block whose items hold no bytes at all is still a block
-        let empties = vec![Some(String::new()), None, Some(String::new())];
-        let mut builder = fixed_with(3, &empties);
-        builder.push(Some(b"x"));
-        let blocks: Vec<_> = builder.take_all().iter().map(values_of).collect();
-        assert_eq!(blocks, vec![empties, vec![Some("x".to_string())]]);
     }
 
     #[test]
@@ -630,5 +627,185 @@ mod tests {
         let mut rest = owned(&a[2..]);
         rest.extend(owned(&b));
         assert_eq!(drain_manual(&mut builder), vec![rest]);
+    }
+
+    /// Builds a manual builder from `steps`: a digit pushes that many items, `E` ends the
+    /// current block and `S` starts a new one
+    fn manual_from_steps(steps: &str) -> Manual {
+        let mut builder = Manual::new(3);
+        for step in steps.chars() {
+            match step {
+                'E' => builder.end_current_block(),
+                'S' => builder.start_new_block(),
+                digit => {
+                    for _ in 0..digit.to_digit(10).expect("digit") {
+                        builder.push(Some(b"ab"));
+                    }
+                }
+            }
+        }
+        builder
+    }
+
+    /// Builds a fixed builder with block size 3 holding `len` items
+    fn fixed_of_len(len: usize) -> Fixed {
+        let mut builder = Fixed::new(3);
+        for i in 0..len {
+            builder.push(Some(if i % 2 == 0 { b"ab".as_slice() } else { b"" }));
+        }
+        builder
+    }
+
+    /// (steps, blocks that count): an ended block counts even while empty and leaves a
+    /// pre-opened one that does not count until it is used, started or ended; a started block
+    /// counts right away, and a block that was only pre-opened becomes the started one
+    const MANUAL_CASES: &[(&str, usize)] = &[
+        ("", 0),
+        ("S", 1),
+        ("SS", 2),
+        ("E", 1),
+        ("EE", 2),
+        ("2", 1),
+        ("2E", 1),
+        ("2EE", 2),
+        ("2E3", 2),
+        ("2E3E", 2),
+        ("2S", 2),
+        ("2S3", 2),
+        ("2SS", 3),
+        ("S2E", 1),
+        ("2EE3", 3),
+        ("E2", 2),
+    ];
+
+    #[test]
+    fn fixed_num_blocks_matches_take_all_and_take_block() {
+        for len in 0..=10 {
+            let blocks = assert_blocks_consistent!(|| fixed_of_len(len));
+            assert_eq!(blocks.len(), len.div_ceil(3), "len {len}");
+            assert_eq!(blocks.iter().map(arrow::array::Array::len).sum::<usize>(), len);
+        }
+    }
+
+    #[test]
+    fn fixed_take_n_leaving_no_open_block_or_a_partial_one() {
+        // 7 items in blocks of 3: taking 1 leaves 6, an exact multiple with nothing open,
+        // taking 2 leaves 5 with a partial last block, taking 3 a whole block
+        for (take, expected_blocks) in [(0, 3), (1, 2), (2, 2), (3, 2)] {
+            let blocks = assert_blocks_consistent!(|| {
+                let mut builder = fixed_of_len(7);
+                builder.take_n(take, None::<std::iter::Empty<usize>>);
+                builder
+            });
+            assert_eq!(blocks.len(), expected_blocks, "take {take}");
+        }
+        // everything, block by block
+        let blocks = assert_blocks_consistent!(|| {
+            let mut builder = fixed_of_len(6);
+            builder.take_n(3, None::<std::iter::Empty<usize>>);
+            builder.take_n(3, None::<std::iter::Empty<usize>>);
+            builder
+        });
+        assert!(blocks.is_empty());
+        // usable again after everything was taken
+        let blocks = assert_blocks_consistent!(|| {
+            let mut builder = fixed_of_len(6);
+            builder.take_all();
+            for _ in 0..4 {
+                builder.push(Some(b"ab"));
+            }
+            builder
+        });
+        assert_eq!(blocks.len(), 2);
+    }
+
+    #[test]
+    fn fixed_take_block_then_the_rest() {
+        let blocks = assert_blocks_consistent!(|| {
+            let mut builder = fixed_of_len(7);
+            builder.take_block();
+            builder
+        });
+        assert_eq!(blocks.len(), 2);
+        let blocks = assert_blocks_consistent!(|| {
+            let mut builder = fixed_of_len(6);
+            builder.take_block();
+            builder
+        });
+        assert_eq!(blocks.len(), 1);
+    }
+
+    #[test]
+    fn manual_num_blocks_matches_take_all_and_take_block() {
+        for (steps, expected) in MANUAL_CASES {
+            let blocks = assert_blocks_consistent!(|| manual_from_steps(steps));
+            assert_eq!(blocks.len(), *expected, "steps {steps:?}");
+        }
+    }
+
+    #[test]
+    fn manual_take_n_with_and_without_empty_blocks() {
+        // blocks of 2 and 3 items, take 1 and re-block the remaining 4
+        for (sizes, expected) in [
+            (vec![1, 3], 2),
+            (vec![1, 3, 0], 3),
+            (vec![0, 4], 2),
+            (vec![4], 1),
+            (vec![0, 0, 4], 3),
+            (vec![2, 2, 0, 0], 4),
+        ] {
+            let blocks = assert_blocks_consistent!(|| {
+                let mut builder = manual_from_steps("2E3");
+                builder.take_n(1, Some(sizes.clone().into_iter()));
+                builder
+            });
+            assert_eq!(blocks.len(), expected, "sizes {sizes:?}");
+        }
+        // everything, without and with a requested empty block
+        let blocks = assert_blocks_consistent!(|| {
+            let mut builder = manual_from_steps("2");
+            builder.take_n(2, Some(std::iter::empty()));
+            builder
+        });
+        assert!(blocks.is_empty());
+        let blocks = assert_blocks_consistent!(|| {
+            let mut builder = manual_from_steps("2");
+            builder.take_n(2, Some(std::iter::once(0)));
+            builder
+        });
+        assert_eq!(blocks.len(), 1);
+        // an empty block in the middle survives a take that does not touch it
+        let blocks = assert_blocks_consistent!(|| {
+            let mut builder = manual_from_steps("2EE3");
+            builder.take_n(2, Some([0usize, 3].into_iter()));
+            builder
+        });
+        assert_eq!(blocks.len(), 2);
+    }
+
+    /// Nine items with block size 3: fixed sizing ends a block by itself when it fills up,
+    /// manual sizing ends it with `end_current_block`, both look the same from outside
+    #[test]
+    fn fixed_and_manual_block_ends_match() {
+        let mut fixed = Fixed::new(3);
+        let mut manual = Manual::new(3);
+        for i in 0..9 {
+            fixed.push(Some(if i % 2 == 0 { b"ab".as_slice() } else { b"" }));
+            manual.push(Some(if i % 2 == 0 { b"ab".as_slice() } else { b"" }));
+            if (i + 1) % 3 == 0 {
+                manual.end_current_block();
+            }
+        }
+        assert_eq!(fixed.len(), 9);
+        assert_eq!(manual.len(), 9);
+        assert_eq!(fixed.num_blocks(), 3);
+        assert_eq!(manual.num_blocks(), 3);
+        let fixed_blocks = fixed.take_all();
+        let manual_blocks = manual.take_all();
+        assert_eq!(fixed_blocks.len(), 3);
+        assert_eq!(manual_blocks.len(), 3);
+        assert_eq!(fixed_blocks.iter().map(arrow::array::Array::len).collect::<Vec<_>>(), manual_blocks.iter().map(arrow::array::Array::len).collect::<Vec<_>>());
+        assert_eq!(fixed.num_blocks(), 0);
+        assert_eq!(manual.num_blocks(), 0);
     }
 }

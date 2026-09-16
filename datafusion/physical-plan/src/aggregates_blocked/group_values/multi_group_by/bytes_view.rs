@@ -92,9 +92,14 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType>
             assert_ne!(block_size, 0);
         }
 
+        // The column keeps its own bookkeeping of which bytes blocks belong to which views
+        // block, so every bytes block counts, the pre-opened one included
+        let mut bytes = BlockedBytesBufferBuilder::new();
+        bytes.mark_current_block_counted();
+
         Self {
             views: CopyItemBlockedVecBuilder::new(block_size),
-            bytes: BlockedBytesBufferBuilder::new(),
+            bytes,
             num_bytes_blocks_per_block: vec![1],
             block_starts: vec![0],
             max_block_size: BYTE_VIEW_MAX_BLOCK_SIZE,
@@ -119,6 +124,7 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType>
     /// A views block was completed, the next one starts with a fresh bytes block
     fn end_views_block(&mut self) {
         self.bytes.end_current_block();
+        self.bytes.mark_current_block_counted();
         self.block_starts.push(self.bytes.num_blocks() - 1);
 
         // TODO - should it be 1 or 0
@@ -135,7 +141,14 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType>
     /// Bulk appends with fixed sizing cross views block boundaries silently, open the
     /// bytes blocks they need
     fn sync_bytes_blocks(&mut self) {
-        while self.num_bytes_blocks_per_block.len() < self.views.num_blocks() {
+        // The views block being written to has an entry even before its first view, so
+        // count it although it does not count for the outside world yet
+        let views_blocks = if FIXED_BLOCK_SIZING {
+            self.views.len() / self.views.block_size() + 1
+        } else {
+            self.num_bytes_blocks_per_block.len()
+        };
+        while self.num_bytes_blocks_per_block.len() < views_blocks {
             self.end_views_block();
         }
     }
@@ -593,6 +606,7 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType> BlockedGroupColumn<FIXED_B
         let mut buffers: Vec<Buffer> =
             (0..b).map(|_| self.bytes.take_first_block()).collect();
         let last = self.bytes.take_n(end, sizes.into_iter());
+        self.bytes.mark_current_block_counted();
         if !last.is_empty() {
             buffers.push(last);
         }
@@ -622,6 +636,8 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType> BlockedGroupColumn<FIXED_B
             .num_bytes_blocks_per_block
             .remove(0);
         let buffers = (0..count).map(|_| self.bytes.take_first_block()).collect();
+        // taking the last block pre-opens a new one, which counts like every other
+        self.bytes.mark_current_block_counted();
 
         // The taken bytes blocks shift every remaining block index down
         self.block_starts.remove(0);

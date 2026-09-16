@@ -74,12 +74,20 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedBooleanBuilder<FIXED_BLOCK_SIZING> {
     }
 
     pub fn start_new_block(&mut self) {
-        self.end_current_block();
+        // a block that was only pre-opened becomes the started block instead of an empty
+        // block of its own
+        if self.should_count_current_block() {
+            self.end_current_block();
+        }
         self.should_count_current_block = true;
     }
 
     pub fn end_current_block(&mut self) {
         assert!(!FIXED_BLOCK_SIZING, "end_current_block is only relevant for manual block size");
+        self.end_current_block_inner();
+    }
+
+    fn end_current_block_inner(&mut self) {
         self.current_block_index += 1;
         self.finished_blocks_allocated_size +=
           self.blocks.back().map_or(0, allocated_size_for_builder);
@@ -114,7 +122,7 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedBooleanBuilder<FIXED_BLOCK_SIZING> {
         );
 
         if FIXED_BLOCK_SIZING && block.len() == self.block_size {
-            self.end_current_block();
+            self.end_current_block_inner();
         }
     }
 
@@ -147,7 +155,7 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedBooleanBuilder<FIXED_BLOCK_SIZING> {
         self.len += 1;
 
         if FIXED_BLOCK_SIZING && block.len() == self.block_size {
-            self.end_current_block();
+            self.end_current_block_inner();
         }
     }
 
@@ -191,7 +199,7 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedBooleanBuilder<FIXED_BLOCK_SIZING> {
         self.len += added_items;
 
         if FIXED_BLOCK_SIZING && block.len() == self.block_size {
-            self.end_current_block();
+            self.end_current_block_inner();
         }
 
         added_items
@@ -199,7 +207,7 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedBooleanBuilder<FIXED_BLOCK_SIZING> {
 
     /// Take the first block, `None` once there are no more items
     pub fn take_block(&mut self) -> Option<BooleanBuffer> {
-        if self.len == 0 && !self.should_count_current_block {
+        if self.num_blocks() == 0 {
             return None;
         }
 
@@ -224,7 +232,7 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedBooleanBuilder<FIXED_BLOCK_SIZING> {
         Some(block.build())
     }
 
-    /// Take every non empty block
+    /// Take every block that counts, see [`Self::num_blocks`]
     pub fn take_all(&mut self) -> Vec<BooleanBuffer> {
         let num_blocks = self.num_blocks();
         let mut blocks = std::mem::take(&mut self.blocks);
@@ -701,38 +709,6 @@ mod tests {
     }
 
     #[test]
-    fn take_all_returns_only_non_empty_blocks() {
-        let values = pattern(7, 7);
-        let mut builder = fixed_with(3, &values);
-        let blocks: Vec<Vec<bool>> = builder.take_all().iter().map(buffer_bits).collect();
-        assert_eq!(
-            blocks,
-            vec![
-                values[0..3].to_vec(),
-                values[3..6].to_vec(),
-                values[6..7].to_vec()
-            ]
-        );
-        assert_eq!(builder.len(), 0);
-        check_fixed_layout(&builder);
-
-        // exact multiple, the trailing empty block is not returned
-        let mut builder = fixed_with(3, &values[..6]);
-        let blocks: Vec<Vec<bool>> = builder.take_all().iter().map(buffer_bits).collect();
-        assert_eq!(blocks, vec![values[0..3].to_vec(), values[3..6].to_vec()]);
-        check_fixed_layout(&builder);
-
-        let mut builder = Fixed::new(3);
-        assert!(builder.take_all().is_empty());
-        check_fixed_layout(&builder);
-
-        // usable after
-        builder.append_n(4, true);
-        assert_eq!(bits(&builder), vec![true; 4]);
-        check_fixed_layout(&builder);
-    }
-
-    #[test]
     fn take_n_zero_is_noop() {
         let values = pattern(8, 7);
         let mut builder = fixed_with(3, &values);
@@ -998,12 +974,6 @@ mod tests {
         let blocks: Vec<Vec<bool>> = builder.take_all().iter().map(buffer_bits).collect();
         assert_eq!(blocks, vec![a.clone(), b]);
         assert_eq!(builder.len(), 0);
-
-        // trailing empty block from start_new_block is dropped
-        let mut builder = manual_with_blocks(std::slice::from_ref(&a));
-        builder.start_new_block();
-        let blocks: Vec<Vec<bool>> = builder.take_all().iter().map(buffer_bits).collect();
-        assert_eq!(blocks, vec![a]);
     }
 
     #[test]
@@ -1134,5 +1104,185 @@ mod tests {
     fn manual_take_n_wrong_adjusted_sizes_panics() {
         let mut builder = manual_with_blocks(&[pattern(0, 5), pattern(1, 3)]);
         builder.take_n(2, Some([3usize, 2].into_iter()));
+    }
+
+    /// Builds a manual builder from `steps`: a digit pushes that many items, `E` ends the
+    /// current block and `S` starts a new one
+    fn manual_from_steps(steps: &str) -> Manual {
+        let mut builder = Manual::new(0);
+        for step in steps.chars() {
+            match step {
+                'E' => builder.end_current_block(),
+                'S' => builder.start_new_block(),
+                digit => {
+                    for _ in 0..digit.to_digit(10).expect("digit") {
+                        builder.append(true);
+                    }
+                }
+            }
+        }
+        builder
+    }
+
+    /// Builds a fixed builder with block size 3 holding `len` items
+    fn fixed_of_len(len: usize) -> Fixed {
+        let mut builder = Fixed::new(3);
+        for i in 0..len {
+            builder.append(i % 2 == 0);
+        }
+        builder
+    }
+
+    /// (steps, blocks that count): an ended block counts even while empty and leaves a
+    /// pre-opened one that does not count until it is used, started or ended; a started block
+    /// counts right away, and a block that was only pre-opened becomes the started one
+    const MANUAL_CASES: &[(&str, usize)] = &[
+        ("", 0),
+        ("S", 1),
+        ("SS", 2),
+        ("E", 1),
+        ("EE", 2),
+        ("2", 1),
+        ("2E", 1),
+        ("2EE", 2),
+        ("2E3", 2),
+        ("2E3E", 2),
+        ("2S", 2),
+        ("2S3", 2),
+        ("2SS", 3),
+        ("S2E", 1),
+        ("2EE3", 3),
+        ("E2", 2),
+    ];
+
+    #[test]
+    fn fixed_num_blocks_matches_take_all_and_take_block() {
+        for len in 0..=10 {
+            let blocks = assert_blocks_consistent!(|| fixed_of_len(len));
+            assert_eq!(blocks.len(), len.div_ceil(3), "len {len}");
+            assert_eq!(blocks.iter().map(|b| b.len()).sum::<usize>(), len);
+        }
+    }
+
+    #[test]
+    fn fixed_take_n_leaving_no_open_block_or_a_partial_one() {
+        // 7 items in blocks of 3: taking 1 leaves 6, an exact multiple with nothing open,
+        // taking 2 leaves 5 with a partial last block, taking 3 a whole block
+        for (take, expected_blocks) in [(0, 3), (1, 2), (2, 2), (3, 2)] {
+            let blocks = assert_blocks_consistent!(|| {
+                let mut builder = fixed_of_len(7);
+                builder.take_n(take, None::<std::iter::Empty<usize>>);
+                builder
+            });
+            assert_eq!(blocks.len(), expected_blocks, "take {take}");
+        }
+        // everything, block by block
+        let blocks = assert_blocks_consistent!(|| {
+            let mut builder = fixed_of_len(6);
+            builder.take_n(3, None::<std::iter::Empty<usize>>);
+            builder.take_n(3, None::<std::iter::Empty<usize>>);
+            builder
+        });
+        assert!(blocks.is_empty());
+        // usable again after everything was taken
+        let blocks = assert_blocks_consistent!(|| {
+            let mut builder = fixed_of_len(6);
+            builder.take_all();
+            for _ in 0..4 {
+                builder.append(true);
+            }
+            builder
+        });
+        assert_eq!(blocks.len(), 2);
+    }
+
+    #[test]
+    fn fixed_take_block_then_the_rest() {
+        let blocks = assert_blocks_consistent!(|| {
+            let mut builder = fixed_of_len(7);
+            builder.take_block();
+            builder
+        });
+        assert_eq!(blocks.len(), 2);
+        let blocks = assert_blocks_consistent!(|| {
+            let mut builder = fixed_of_len(6);
+            builder.take_block();
+            builder
+        });
+        assert_eq!(blocks.len(), 1);
+    }
+
+    #[test]
+    fn manual_num_blocks_matches_take_all_and_take_block() {
+        for (steps, expected) in MANUAL_CASES {
+            let blocks = assert_blocks_consistent!(|| manual_from_steps(steps));
+            assert_eq!(blocks.len(), *expected, "steps {steps:?}");
+        }
+    }
+
+    #[test]
+    fn manual_take_n_with_and_without_empty_blocks() {
+        // blocks of 2 and 3 items, take 1 and re-block the remaining 4
+        for (sizes, expected) in [
+            (vec![1, 3], 2),
+            (vec![1, 3, 0], 3),
+            (vec![0, 4], 2),
+            (vec![4], 1),
+            (vec![0, 0, 4], 3),
+            (vec![2, 2, 0, 0], 4),
+        ] {
+            let blocks = assert_blocks_consistent!(|| {
+                let mut builder = manual_from_steps("2E3");
+                builder.take_n(1, Some(sizes.clone().into_iter()));
+                builder
+            });
+            assert_eq!(blocks.len(), expected, "sizes {sizes:?}");
+        }
+        // everything, without and with a requested empty block
+        let blocks = assert_blocks_consistent!(|| {
+            let mut builder = manual_from_steps("2");
+            builder.take_n(2, Some(std::iter::empty()));
+            builder
+        });
+        assert!(blocks.is_empty());
+        let blocks = assert_blocks_consistent!(|| {
+            let mut builder = manual_from_steps("2");
+            builder.take_n(2, Some(std::iter::once(0)));
+            builder
+        });
+        assert_eq!(blocks.len(), 1);
+        // an empty block in the middle survives a take that does not touch it
+        let blocks = assert_blocks_consistent!(|| {
+            let mut builder = manual_from_steps("2EE3");
+            builder.take_n(2, Some([0usize, 3].into_iter()));
+            builder
+        });
+        assert_eq!(blocks.len(), 2);
+    }
+
+    /// Nine items with block size 3: fixed sizing ends a block by itself when it fills up,
+    /// manual sizing ends it with `end_current_block`, both look the same from outside
+    #[test]
+    fn fixed_and_manual_block_ends_match() {
+        let mut fixed = Fixed::new(3);
+        let mut manual = Manual::new(0);
+        for i in 0..9 {
+            fixed.append(i % 2 == 0);
+            manual.append(i % 2 == 0);
+            if (i + 1) % 3 == 0 {
+                manual.end_current_block();
+            }
+        }
+        assert_eq!(fixed.len(), 9);
+        assert_eq!(manual.len(), 9);
+        assert_eq!(fixed.num_blocks(), 3);
+        assert_eq!(manual.num_blocks(), 3);
+        let fixed_blocks = fixed.take_all();
+        let manual_blocks = manual.take_all();
+        assert_eq!(fixed_blocks.len(), 3);
+        assert_eq!(manual_blocks.len(), 3);
+        assert_eq!(fixed_blocks, manual_blocks);
+        assert_eq!(fixed.num_blocks(), 0);
+        assert_eq!(manual.num_blocks(), 0);
     }
 }

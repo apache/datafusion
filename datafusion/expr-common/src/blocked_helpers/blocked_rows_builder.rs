@@ -170,7 +170,7 @@ mod tests {
             out.push(values_of(builder.row_converter(), &block));
         }
         assert_eq!(builder.len(), 0);
-        assert_eq!(builder.num_blocks(), 1);
+        assert_eq!(builder.num_blocks(), 0);
         out
     }
 
@@ -178,7 +178,7 @@ mod tests {
     fn new_is_empty() {
         let mut builder = BlockedRowsBuilder::<true>::new(3, converter());
         assert_eq!(builder.len(), 0);
-        assert_eq!(builder.num_blocks(), 1);
+        assert_eq!(builder.num_blocks(), 0);
         assert_eq!(builder.current_block_len(), 0);
         assert!(builder.take_block().is_none());
         assert!(builder.take_all().is_empty());
@@ -215,7 +215,7 @@ mod tests {
         let mut builder = BlockedRowsBuilder::<true>::new(4, converter());
         let source = rows_of(builder.row_converter(), &[5, 6, 7, 8]);
         assert!(builder.extend_in_block(source.iter()));
-        assert_eq!(builder.num_blocks(), 2);
+        assert_eq!(builder.num_blocks(), 1);
 
         let source = rows_of(builder.row_converter(), &[9]);
         assert!(!builder.extend_in_block(source.iter()));
@@ -257,7 +257,7 @@ mod tests {
         }
         builder.reset();
         assert_eq!(builder.len(), 0);
-        assert_eq!(builder.num_blocks(), 1);
+        assert_eq!(builder.num_blocks(), 0);
         assert!(builder.take_block().is_none());
     }
 

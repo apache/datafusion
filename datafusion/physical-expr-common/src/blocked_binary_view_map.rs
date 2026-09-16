@@ -176,12 +176,17 @@ where
         let map = hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY);
         let map_size = map.capacity() * size_of::<Entry<V>>();
 
+        // The map keeps its own bookkeeping of which buffer blocks belong to which views
+        // block, so every buffer block counts, the pre-opened one included
+        let mut buffer = BlockedBytesBufferBuilder::new();
+        buffer.mark_current_block_counted();
+
         Self {
             output_type,
             map,
             map_size,
             views: CopyItemBlockedVecBuilder::new(block_size),
-            buffer: BlockedBytesBufferBuilder::new(),
+            buffer,
             // 1 empty block
             num_buffer_blocks_per_block: vec![1],
             block_starts: vec![0],
@@ -444,6 +449,8 @@ where
         let buffers = (0..num_blocks)
             .map(|_| Buffer::from(self.buffer.take_first_block()))
             .collect::<Vec<_>>();
+        // taking the last block pre-opens a new one, which counts like every other
+        self.buffer.mark_current_block_counted();
         if self.num_buffer_blocks_per_block.is_empty() {
             self.num_buffer_blocks_per_block.push(1);
         }
@@ -514,6 +521,7 @@ where
             let views = views.into_scalar_buffer();
             output_blocks.push(self.build_output(views, block_buffers, null_buffer));
         }
+        self.buffer.mark_current_block_counted();
 
         self.current_start_block_index = 0;
 
@@ -611,6 +619,7 @@ where
         if !last.is_empty() {
             buffers.push(last);
         }
+        self.buffer.mark_current_block_counted();
 
         // First buffer block of every new views block
         let block_firsts: Vec<usize> = std::iter::once(0)
@@ -684,6 +693,7 @@ where
             // Ensure buffer is big enough
             if self.buffer.current_block_len() + len > BYTE_VIEW_MAX_BLOCK_SIZE {
                 self.buffer.end_current_block();
+                self.buffer.mark_current_block_counted();
                 let count = self.num_buffer_blocks_per_block.last_mut().unwrap();
                 *count += 1;
                 self.buffer
@@ -716,6 +726,7 @@ where
     fn end_current_block(&mut self) {
         self.num_buffer_blocks_per_block.push(1);
         self.buffer.end_current_block();
+        self.buffer.mark_current_block_counted();
         self.current_start_block_index = self.buffer.num_blocks() - 1;
         self.block_starts.push(self.current_start_block_index);
     }
