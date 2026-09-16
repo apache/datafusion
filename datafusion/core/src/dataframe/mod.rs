@@ -22,19 +22,19 @@ mod parquet;
 
 use crate::arrow::record_batch::RecordBatch;
 use crate::arrow::util::pretty;
-use crate::datasource::file_format::csv::CsvFormatFactory;
-use crate::datasource::file_format::format_as_file_type;
-use crate::datasource::file_format::json::JsonFormatFactory;
 use crate::datasource::{
-    DefaultTableSource, MemTable, TableProvider, provider_as_source,
+    DefaultTableSource, MemTable, TableProvider,
+    file_format::{csv::CsvFormatFactory, format_as_file_type, json::JsonFormatFactory},
+    provider_as_source,
 };
 use crate::error::Result;
-use crate::execution::FunctionRegistry;
-use crate::execution::context::{SessionState, TaskContext};
-use crate::logical_expr::utils::find_window_exprs;
+use crate::execution::{
+    FunctionRegistry,
+    context::{SessionState, TaskContext},
+};
 use crate::logical_expr::{
     Expr, JoinType, LogicalPlan, LogicalPlanBuilder, LogicalPlanBuilderOptions,
-    Partitioning, TableType, col, ident,
+    Partitioning, TableType, col, ident, utils::find_window_exprs,
 };
 use crate::physical_expr::EquivalenceProperties;
 use crate::physical_plan::{
@@ -45,39 +45,40 @@ use crate::physical_plan::{
     execute_stream, execute_stream_partitioned, stream::RecordBatchStreamAdapter,
 };
 use crate::prelude::SessionContext;
-use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
-use std::fmt::{self, Formatter};
-use std::sync::Arc;
-
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::util::display::{ArrayFormatter, FormatOptions};
 use arrow_schema::FieldRef;
-use datafusion_common::config::{CsvOptions, JsonOptions};
+use datafusion_catalog::Session;
 use datafusion_common::{
     Column, DFSchema, DataFusionError, ParamValues, ScalarValue, SchemaError,
-    TableReference, UnnestOptions, exec_err, internal_datafusion_err, not_impl_err,
-    plan_datafusion_err, plan_err, project_schema, tree_node::TreeNodeRecursion,
+    TableReference, UnnestOptions,
+    config::{CsvOptions, JsonOptions},
+    exec_err, internal_datafusion_err, not_impl_err, plan_datafusion_err, plan_err,
+    project_schema,
+    tree_node::TreeNodeRecursion,
     unqualified_field_not_found,
 };
-use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
-    ExplainOption, ScalarUDF, SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE, case,
-    dml::InsertOp, is_null, lit, utils::COUNT_STAR_EXPANSION,
+    ColumnarValue, ExplainOption, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+    Signature, SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE, Volatility, case,
+    dml::InsertOp, extension_types::DFArrayFormatterFactory, is_null, lit,
+    select_expr::SelectExpr, utils::COUNT_STAR_EXPANSION,
 };
-use datafusion_functions::core::coalesce;
-use datafusion_functions::math::nanvl;
+use datafusion_functions::{core::coalesce, math::nanvl};
 use datafusion_functions_aggregate::expr_fn::{
     avg, count, max, median, min, stddev, sum,
 };
 
 use async_trait::async_trait;
-use datafusion_catalog::Session;
-use datafusion_expr::extension_types::DFArrayFormatterFactory;
 use futures::StreamExt;
 use futures::future::BoxFuture;
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
+use std::fmt::{self, Formatter};
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 /// Contains options that control how data is
 /// written out from a DataFrame
@@ -312,6 +313,7 @@ impl DataFrame {
     /// Filter the DataFrame by column. Returns a new DataFrame only containing the
     /// specified columns.
     ///
+    /// # Example
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -2289,21 +2291,46 @@ impl DataFrame {
 
     /// Add or replace a column in the DataFrame.
     ///
+    /// The column can be created from a DataFusion expression or from a
+    /// pre-materialized in-memory Arrow array.
+    ///
     /// # Example
     /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow::array::{ArrayRef, Int32Array};
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx
     ///     .read_csv("tests/data/example.csv", CsvReadOptions::new())
     ///     .await?;
+    ///
+    /// // Add a column computed from existing DataFrame columns.
     /// let df = df.with_column("ab_sum", col("a") + col("b"))?;
+    ///
+    /// // Add a column from a pre-materialized Arrow array.
+    /// let values: ArrayRef = Arc::new(Int32Array::from(vec![42]));
+    /// let df = df.with_column("extra", array_col(values))?;
+    ///
+    /// let expected = vec![
+    ///     "+---+---+---+--------+-------+",
+    ///     "| a | b | c | ab_sum | extra |",
+    ///     "+---+---+---+--------+-------+",
+    ///     "| 1 | 2 | 3 | 3      | 42    |",
+    ///     "+---+---+---+--------+-------+",
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
     /// # Ok(())
     /// # }
     /// ```
     pub fn with_column(self, name: &str, expr: Expr) -> Result<DataFrame> {
+        if let Some(array) = take_array_col(&expr) {
+            return self.with_array_column(name, array);
+        }
+
         let window_func_exprs = find_window_exprs([&expr]);
 
         let original_names: HashSet<String> = self
@@ -2753,20 +2780,20 @@ impl DataFrame {
         Ok(df)
     }
 
-    /// Append named Arrow arrays as columns to this [`DataFrame`].
+    /// Append an Arrow array as a column to this [`DataFrame`].
     ///
-    /// This does not execute the current plan. The arrays are attached when the
-    /// returned DataFrame is collected. Each array must have the same length as
+    /// This does not execute the current plan. The array is attached when the
+    /// returned DataFrame is collected. The array must have the same length as
     /// the number of rows this DataFrame produces.
     ///
-    /// See [`Self::with_column`] to add a column from an [`Expr`].
+    /// Called from [`Self::with_column`] when the expression is [`array_col`].
     ///
     /// # Example
     ///
     /// ```
     /// use std::sync::Arc;
     /// use arrow::array::{ArrayRef, Int32Array, StringArray};
-    /// use datafusion::prelude::DataFrame;
+    /// use datafusion::prelude::*;
     /// # use datafusion::error::Result;
     /// # use datafusion_common::assert_batches_sorted_eq;
     /// # #[tokio::main]
@@ -2776,7 +2803,7 @@ impl DataFrame {
     /// let df = DataFrame::from_columns([("id", id), ("name", name)])?;
     ///
     /// let extra: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 30]));
-    /// let df = df.with_array_columns([("extra", extra)])?;
+    /// let df = df.with_column("extra", array_col(extra))?;
     ///
     /// let expected = vec![
     ///     "+----+------+-------+",
@@ -2791,50 +2818,141 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn with_array_columns<'a, I>(self, columns: I) -> Result<DataFrame>
-    where
-        I: IntoIterator<Item = (&'a str, ArrayRef)>,
-    {
-        let added: Vec<(String, ArrayRef)> = columns
-            .into_iter()
-            .map(|(name, array)| (name.to_string(), array))
-            .collect();
-
-        if added.is_empty() {
-            return Ok(self);
-        }
-
-        if let Some((_, first)) = added.first() {
-            let expected = first.len();
-            for (name, array) in &added {
-                if array.len() != expected {
-                    return plan_err!(
-                        "Column '{name}' has length {}, expected {expected}",
-                        array.len()
-                    );
-                }
-            }
-        }
-
+    fn with_array_column(self, name: &str, array: ArrayRef) -> Result<DataFrame> {
         let (state, plan) = self.into_parts();
-        let provider = Arc::new(AddColumnProvider::try_new(plan, added)?);
+        let provider = Arc::new(AddColumnProvider::try_new(plan, name, array)?);
         let plan =
             LogicalPlanBuilder::scan(UNNAMED_TABLE, provider_as_source(provider), None)?
                 .build()?;
-
         Ok(DataFrame::new(state, plan))
+    }
+}
+
+/// Create an [`Expr`] that attaches an Arrow [`ArrayRef`] as a DataFrame column.
+///
+/// Pass the result to [`DataFrame::with_column`]. Unlike [`lit`] or nested
+/// constructors such as make_array, values are zipped onto existing rows
+/// positionally.
+///
+/// # Example
+///
+/// ```
+/// use std::sync::Arc;
+/// use arrow::array::{ArrayRef, Int32Array, StringArray};
+/// use datafusion::prelude::*;
+/// # use datafusion::error::Result;
+/// # use datafusion_common::assert_batches_sorted_eq;
+/// # #[tokio::main]
+/// # async fn main() -> Result<()> {
+/// let id: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+/// let name: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar", "baz"]));
+/// let df = DataFrame::from_columns([("id", id), ("name", name)])?;
+///
+/// let extra: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 30]));
+/// let df = df.with_column("extra", array_col(extra))?;
+///
+/// let expected = vec![
+///     "+----+------+-------+",
+///     "| id | name | extra |",
+///     "+----+------+-------+",
+///     "| 1  | foo  | 10    |",
+///     "| 2  | bar  | 20    |",
+///     "| 3  | baz  | 30    |",
+///     "+----+------+-------+",
+/// ];
+/// # assert_batches_sorted_eq!(expected, &df.collect().await?);
+/// # Ok(())
+/// # }
+/// ```
+pub fn array_col(array: ArrayRef) -> Expr {
+    ScalarUDF::new_from_impl(ArrayCol::new(array)).call(vec![])
+}
+
+/// Marker UDF used by [`array_col`]. [`DataFrame::with_column`] intercepts this
+/// expression and zips the array onto existing rows. Evaluating it as a normal
+/// scalar function is not supported.
+#[derive(Debug)]
+struct ArrayCol {
+    array: ArrayRef,
+    signature: Signature,
+}
+
+impl ArrayCol {
+    fn new(array: ArrayRef) -> Self {
+        Self {
+            array,
+            signature: Signature::nullary(Volatility::Volatile),
+        }
+    }
+}
+
+impl PartialEq for ArrayCol {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.array, &other.array)
+    }
+}
+
+impl Eq for ArrayCol {}
+
+impl Hash for ArrayCol {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.array.data_type().hash(state);
+        self.array.len().hash(state);
+        Arc::as_ptr(&self.array).cast::<()>().hash(state);
+    }
+}
+
+impl ScalarUDFImpl for ArrayCol {
+    fn name(&self) -> &str {
+        "array_col"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(self.array.data_type().clone())
+    }
+
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        exec_err!("array_col() can only be used with DataFrame::with_column")
+    }
+
+    fn should_evaluate_const(&self, _args: &[&ScalarValue]) -> bool {
+        false
+    }
+}
+
+/// Extract the array from an [`array_col`] expression, unwrapping aliases.
+fn take_array_col(mut expr: &Expr) -> Option<ArrayRef> {
+    while let Expr::Alias(alias) = expr {
+        expr = alias.expr.as_ref();
+    }
+    match expr {
+        Expr::ScalarFunction(func) if func.args.is_empty() => func
+            .func
+            .inner()
+            .downcast_ref::<ArrayCol>()
+            .map(|array_col| Arc::clone(&array_col.array)),
+        _ => None,
     }
 }
 
 #[derive(Debug)]
 struct AddColumnProvider {
     input: LogicalPlan,
-    added: Vec<(String, ArrayRef)>,
+    name: String,
+    array: ArrayRef,
     schema: SchemaRef,
 }
 
 impl AddColumnProvider {
-    fn try_new(input: LogicalPlan, added: Vec<(String, ArrayRef)>) -> Result<Self> {
+    fn try_new(input: LogicalPlan, name: &str, array: ArrayRef) -> Result<Self> {
+        if input.schema().has_column_with_unqualified_name(name) {
+            return plan_err!("Column '{name}' already exists");
+        }
+
         let mut fields: Vec<Field> = input
             .schema()
             .as_arrow()
@@ -2842,17 +2960,12 @@ impl AddColumnProvider {
             .iter()
             .map(|f| f.as_ref().clone())
             .collect();
-
-        for (name, array) in &added {
-            if input.schema().has_column_with_unqualified_name(name) {
-                return plan_err!("Column '{name}' already exists");
-            }
-            fields.push(Field::new(name, array.data_type().clone(), true));
-        }
+        fields.push(Field::new(name, array.data_type().clone(), true));
 
         Ok(Self {
             input,
-            added,
+            name: name.to_string(),
+            array,
             schema: Arc::new(Schema::new(fields)),
         })
     }
@@ -2878,7 +2991,8 @@ impl TableProvider for AddColumnProvider {
         let input = state.create_physical_plan(&self.input).await?;
         Ok(Arc::new(AddColumnExec::new(
             input,
-            self.added.clone(),
+            self.name.clone(),
+            Arc::clone(&self.array),
             Arc::clone(&self.schema),
             projection,
         )?))
@@ -2888,7 +3002,8 @@ impl TableProvider for AddColumnProvider {
 #[derive(Debug)]
 struct AddColumnExec {
     input: Arc<dyn ExecutionPlan>,
-    added: Vec<(String, ArrayRef)>,
+    name: String,
+    array: ArrayRef,
     full_schema: SchemaRef,
     projection: Option<Vec<usize>>,
     cache: Arc<PlanProperties>,
@@ -2897,7 +3012,8 @@ struct AddColumnExec {
 impl AddColumnExec {
     fn new(
         input: Arc<dyn ExecutionPlan>,
-        added: Vec<(String, ArrayRef)>,
+        name: String,
+        array: ArrayRef,
         full_schema: SchemaRef,
         projection: Option<&[usize]>,
     ) -> Result<Self> {
@@ -2905,7 +3021,8 @@ impl AddColumnExec {
         Ok(Self {
             cache: Arc::new(Self::compute_properties(projected_schema, input.as_ref())),
             input,
-            added,
+            name,
+            array,
             full_schema,
             projection: projection.map(|p| p.to_vec()),
         })
@@ -2926,8 +3043,7 @@ impl AddColumnExec {
 
 impl DisplayAs for AddColumnExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
-        let names: Vec<&str> = self.added.iter().map(|(n, _)| n.as_str()).collect();
-        write!(f, "AddColumnExec: {}", names.join(", "))
+        write!(f, "AddColumnExec: {}", self.name)
     }
 }
 
@@ -2961,14 +3077,16 @@ impl ExecutionPlan for AddColumnExec {
         match options.children_properties {
             ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
                 input,
-                added: self.added.clone(),
+                name: self.name.clone(),
+                array: Arc::clone(&self.array),
                 full_schema: Arc::clone(&self.full_schema),
                 projection: self.projection.clone(),
                 cache: Arc::clone(&self.cache),
             })),
             ChildrenPropertiesMode::Recompute => Ok(Arc::new(Self::new(
                 input,
-                self.added.clone(),
+                self.name.clone(),
+                Arc::clone(&self.array),
                 Arc::clone(&self.full_schema),
                 self.projection.as_deref(),
             )?)),
@@ -3002,16 +3120,16 @@ impl ExecutionPlan for AddColumnExec {
         };
 
         let stream = input.execute(0, context)?;
-        let added = self.added.clone();
+        let array = Arc::clone(&self.array);
         let full_schema = Arc::clone(&self.full_schema);
         let projection = self.projection.clone();
-        let expected_rows = added.first().map(|(_, a)| a.len()).unwrap_or(0);
+        let expected_rows = array.len();
         let out_schema = self.schema();
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             out_schema,
             futures::stream::try_unfold((stream, 0usize), move |(mut stream, offset)| {
-                let added = added.clone();
+                let array = Arc::clone(&array);
                 let full_schema = Arc::clone(&full_schema);
                 let projection = projection.clone();
 
@@ -3026,11 +3144,8 @@ impl ExecutionPlan for AddColumnExec {
                                     offset + n
                                 );
                             }
-
                             let mut columns = batch.columns().to_vec();
-                            for (_, array) in &added {
-                                columns.push(array.slice(offset, n));
-                            }
+                            columns.push(array.slice(offset, n));
                             let full = RecordBatch::try_new(full_schema, columns)?;
                             let batch = match &projection {
                                 Some(indices) => full.project(indices)?,
