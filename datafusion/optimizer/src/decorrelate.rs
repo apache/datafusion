@@ -100,6 +100,11 @@ pub struct PullUpCorrelatedExpr {
     /// unresolvable bare column. This records the mapping the first
     /// time it's made.
     correlated_col_aliases: HashMap<Column, Expr>,
+    /// `LIMIT 0` forces the subquery to zero rows unconditionally, regardless
+    /// of whether the correlation matched, collapsing it to an `EmptyRelation`.
+    /// Join-compensation needs this flag to
+    /// distinguish "empty" from its usual "matched" default.
+    pub forces_empty_result: bool,
 }
 
 impl Default for PullUpCorrelatedExpr {
@@ -123,6 +128,7 @@ impl PullUpCorrelatedExpr {
             pulled_up_scalar_agg: false,
             correlated_filters: Vec::new(),
             correlated_col_aliases: HashMap::new(),
+            forces_empty_result: false,
         }
     }
 
@@ -229,6 +235,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 // with an empty relation.
                 let fetch = limit.get_fetch_type()?;
                 if matches!(fetch, FetchType::Literal(Some(0))) {
+                    self.forces_empty_result = true;
                     return Ok(Transformed::yes(LogicalPlan::EmptyRelation(
                         EmptyRelation {
                             produce_one_row: false,
