@@ -21,7 +21,7 @@
 //! that a pattern that does not compile is reported in one way, wherever the
 //! pattern came from.
 
-use arrow::array::{Array, AsArray};
+use arrow::array::{Array, AsArray, LargeStringArray, StringArray, StringViewArray};
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
 use datafusion_common::{
@@ -103,23 +103,25 @@ pub fn explain_regexp_kernel_error(
     patterns: &dyn Array,
     flags: Option<&dyn Array>,
 ) -> DataFusionError {
-    let Some(patterns) = string_values(patterns) else {
+    let Some(patterns) = StringValues::new(patterns) else {
         return arrow_datafusion_err!(error);
     };
-    let flags = match flags.map(string_values) {
+    let flags = match flags.map(StringValues::new) {
         None => None,
         Some(Some(flags)) => Some(flags),
         // Flags of some other type are not what made the kernel fail.
         Some(None) => return arrow_datafusion_err!(error),
     };
 
-    let rows = patterns.len().max(flags.as_ref().map_or(0, Vec::len));
+    let rows = patterns
+        .len()
+        .max(flags.as_ref().map_or(0, StringValues::len));
     for row in 0..rows {
         // A NULL pattern or NULL flags produce a NULL result, not an error.
-        let Some(pattern) = broadcast_value(&patterns, row) else {
+        let Some(pattern) = patterns.broadcast_value(row) else {
             continue;
         };
-        let flags = flags.as_ref().and_then(|flags| broadcast_value(flags, row));
+        let flags = flags.as_ref().and_then(|flags| flags.broadcast_value(row));
         if let Err(error) = compile_regex(function_name, pattern, flags) {
             return error;
         }
@@ -128,23 +130,47 @@ pub fn explain_regexp_kernel_error(
     arrow_datafusion_err!(error)
 }
 
-/// Borrows the values of a string array of any of the three string types.
-/// Returns `None` for an array of any other type.
-fn string_values(array: &dyn Array) -> Option<Vec<Option<&str>>> {
-    match array.data_type() {
-        DataType::Utf8 => Some(array.as_string::<i32>().iter().collect()),
-        DataType::LargeUtf8 => Some(array.as_string::<i64>().iter().collect()),
-        DataType::Utf8View => Some(array.as_string_view().iter().collect()),
-        _ => None,
-    }
+/// A string array of any of the three string types, read by row.
+///
+/// This borrows the array that the kernel received, so that explaining an
+/// error reads the rows it needs and allocates nothing, however long the
+/// array is.
+enum StringValues<'a> {
+    Utf8(&'a StringArray),
+    LargeUtf8(&'a LargeStringArray),
+    Utf8View(&'a StringViewArray),
 }
 
-/// Reads the value of `row`, treating an array of a single value as a scalar
-/// that applies to every row.
-fn broadcast_value<'a>(values: &[Option<&'a str>], row: usize) -> Option<&'a str> {
-    if values.len() == 1 {
-        values[0]
-    } else {
-        values.get(row).copied().flatten()
+impl<'a> StringValues<'a> {
+    /// Borrows `array`, or returns `None` for an array of any other type.
+    fn new(array: &'a dyn Array) -> Option<Self> {
+        match array.data_type() {
+            DataType::Utf8 => Some(Self::Utf8(array.as_string::<i32>())),
+            DataType::LargeUtf8 => Some(Self::LargeUtf8(array.as_string::<i64>())),
+            DataType::Utf8View => Some(Self::Utf8View(array.as_string_view())),
+            _ => None,
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Utf8(array) => array.len(),
+            Self::LargeUtf8(array) => array.len(),
+            Self::Utf8View(array) => array.len(),
+        }
+    }
+
+    /// Reads the value of `row`, treating an array of a single value as a
+    /// scalar that applies to every row.
+    fn broadcast_value(&self, row: usize) -> Option<&'a str> {
+        let row = if self.len() == 1 { 0 } else { row };
+        if row >= self.len() {
+            return None;
+        }
+        match *self {
+            Self::Utf8(array) => (!array.is_null(row)).then(|| array.value(row)),
+            Self::LargeUtf8(array) => (!array.is_null(row)).then(|| array.value(row)),
+            Self::Utf8View(array) => (!array.is_null(row)).then(|| array.value(row)),
+        }
     }
 }
