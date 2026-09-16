@@ -1894,6 +1894,9 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 right.as_ref(),
                 false,
                 false,
+            ) && inlists_have_set_comparable_literals(
+                left.as_ref(),
+                right.as_ref(),
             ) =>
             {
                 match (*left, *right) {
@@ -1941,6 +1944,9 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 right.as_ref(),
                 false,
                 true,
+            ) && inlists_have_set_comparable_literals(
+                left.as_ref(),
+                right.as_ref(),
             ) =>
             {
                 match (*left, *right) {
@@ -1968,6 +1974,9 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 right.as_ref(),
                 true,
                 false,
+            ) && inlists_have_set_comparable_literals(
+                left.as_ref(),
+                right.as_ref(),
             ) =>
             {
                 match (*left, *right) {
@@ -1995,6 +2004,9 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 right.as_ref(),
                 true,
                 true,
+            ) && inlists_have_set_comparable_literals(
+                left.as_ref(),
+                right.as_ref(),
             ) =>
             {
                 match (*left, *right) {
@@ -2285,8 +2297,26 @@ fn are_inlist_and_eq_and_match_neg(
 ) -> bool {
     match (left, right) {
         (Expr::InList(l), Expr::InList(r)) => {
-            l.expr == r.expr && l.negated == is_left_neg && r.negated == is_right_neg
+            l.expr == r.expr
+                && !l.expr.is_volatile()
+                && !l.list.iter().chain(&r.list).any(Expr::is_volatile)
+                && l.negated == is_left_neg
+                && r.negated == is_right_neg
         }
+        _ => false,
+    }
+}
+
+/// Structural equality can determine set membership only for non-null literals
+/// whose equality agrees with runtime comparisons. Different runtime expressions
+/// can evaluate to the same value, and floating-point equality can differ from
+/// literal equality (for example, positive and negative zero).
+fn inlists_have_set_comparable_literals(left: &Expr, right: &Expr) -> bool {
+    match (left, right) {
+        (Expr::InList(l), Expr::InList(r)) => l.list.iter().chain(&r.list).all(|item| {
+            item.as_literal()
+                .is_some_and(|value| !value.is_null() && !value.data_type().is_floating())
+        }),
         _ => false,
     }
 }
@@ -2299,6 +2329,7 @@ fn are_inlist_and_eq(left: &Expr, right: &Expr) -> bool {
         matches!(lhs.expr.as_ref(), Expr::Column(_))
             && matches!(rhs.expr.as_ref(), Expr::Column(_))
             && lhs.expr == rhs.expr
+            && !lhs.list.iter().chain(&rhs.list).any(Expr::is_volatile)
             && !lhs.negated
             && !rhs.negated
     } else {
@@ -2476,7 +2507,7 @@ mod tests {
     use super::*;
     use crate::test::test_table_scan_with_name;
     use arrow::{
-        array::{Int32Array, StructArray},
+        array::{BooleanArray, Float64Array, Int32Array, StructArray},
         datatypes::{FieldRef, Fields},
     };
     use datafusion_common::{DFSchemaRef, ToDFSchema, assert_contains};
@@ -4888,6 +4919,192 @@ mod tests {
         // https://github.com/apache/datafusion/issues/8970
         // assert_eq!(simplify(expr.clone()), lit(true));
         assert_eq!(simplify(expr.clone()), expr);
+    }
+
+    fn assert_inlist_simplification_result(
+        expr: Expr,
+        batch: &RecordBatch,
+        expected: Vec<bool>,
+    ) -> Result<()> {
+        let schema = batch.schema().to_dfschema_ref()?;
+        let simplifier = ExprSimplifier::new(
+            SimplifyContext::builder()
+                .with_schema(Arc::clone(&schema))
+                .build(),
+        );
+        let original = simplifier.coerce(expr, &schema)?;
+        let simplified = simplifier.simplify(original.clone())?;
+        let props = ExecutionProps::new();
+        let evaluate = |expr: &Expr| {
+            create_physical_expr(
+                expr,
+                &schema,
+                &props,
+                &PhysicalPlanningContext::default(),
+            )?
+            .evaluate(batch)?
+            .into_array(batch.num_rows())
+        };
+        let original_result = evaluate(&original)?;
+        let actual = evaluate(&simplified)?;
+        assert_eq!(original_result.as_ref(), actual.as_ref());
+        assert_eq!(actual.as_boolean(), &BooleanArray::from(expected));
+        Ok(())
+    }
+
+    #[test]
+    fn simplify_inlist_runtime_set_operations() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("x", DataType::Int32, false),
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(Int32Array::from(vec![1, 1, 3])),
+                Arc::new(Int32Array::from(vec![1, 2, 4])),
+            ],
+        )?;
+        let left = |negated| {
+            in_list(col("x"), vec![col("a"), lit(2), lit(10), lit(11)], negated)
+        };
+        let right = |negated| {
+            in_list(col("x"), vec![col("b"), lit(5), lit(12), lit(13)], negated)
+        };
+
+        // Structurally different, non-null columns can hold equal values.
+        for (expr, expected) in [
+            (left(false).and(right(false)), vec![true, true, false]),
+            (left(false).and(right(true)), vec![false, false, true]),
+            (left(true).and(right(false)), vec![false, false, false]),
+            (left(true).or(right(true)), vec![false, false, true]),
+            // Union remains valid for nonvolatile runtime expressions.
+            (left(false).or(right(false)), vec![true, true, true]),
+            (left(true).and(right(true)), vec![false, false, false]),
+        ] {
+            assert_inlist_simplification_result(expr, &batch, expected)?;
+        }
+
+        // Coercion must precede structural comparison of mixed integer literals.
+        let expr = in_list(col("x"), vec![lit(1i32), lit(2), lit(10), lit(11)], false)
+            .and(in_list(
+                col("x"),
+                vec![lit(1i64), lit(3i64), lit(12i64), lit(13i64)],
+                false,
+            ));
+        assert_inlist_simplification_result(expr, &batch, vec![true, false, false])
+    }
+
+    #[test]
+    fn simplify_inlist_signed_zero() -> Result<()> {
+        for data_type in [DataType::Float16, DataType::Float32, DataType::Float64] {
+            let values =
+                arrow::compute::cast(&Float64Array::from(vec![0.0, -0.0]), &data_type)?;
+            let literals = |values: &[f64]| {
+                values
+                    .iter()
+                    .map(|&value| {
+                        ScalarValue::Float64(Some(value))
+                            .cast_to(&data_type)
+                            .map(lit)
+                    })
+                    .collect::<Result<Vec<_>>>()
+            };
+            let left_list = literals(&[0.0, 1.0, 2.0, 3.0])?;
+            let right_list = literals(&[-0.0, 4.0, 5.0, 6.0])?;
+            let schema = Arc::new(Schema::new(vec![Field::new("x", data_type, false)]));
+            let batch = RecordBatch::try_new(schema, vec![values])?;
+            let schema = batch.schema().to_dfschema_ref()?;
+            let simplifier = ExprSimplifier::new(
+                SimplifyContext::builder()
+                    .with_schema(Arc::clone(&schema))
+                    .build(),
+            )
+            .with_canonicalize(false);
+            // Cover both inlined comparisons and lists that reach the set rewrites.
+            assert!(left_list.len() > THRESHOLD_INLINE_INLIST);
+            assert!(right_list.len() > THRESHOLD_INLINE_INLIST);
+            for list_len in [2, left_list.len()] {
+                let left =
+                    |negated| in_list(col("x"), left_list[..list_len].to_vec(), negated);
+                let right =
+                    |negated| in_list(col("x"), right_list[..list_len].to_vec(), negated);
+                for (expr, expected) in [
+                    (left(false).and(right(false)), vec![true, true]),
+                    (left(false).and(right(true)), vec![false, false]),
+                    (left(true).and(right(false)), vec![false, false]),
+                    (left(true).or(right(true)), vec![false, false]),
+                ] {
+                    let simplified = simplifier.simplify(expr.clone())?;
+                    if list_len > THRESHOLD_INLINE_INLIST {
+                        // Floating-point literals must bypass structural set rewrites.
+                        assert_eq!(simplified, expr);
+                    } else {
+                        let actual = create_physical_expr(
+                            &simplified,
+                            &schema,
+                            &ExecutionProps::new(),
+                            &PhysicalPlanningContext::default(),
+                        )?
+                        .evaluate(&batch)?
+                        .into_array(batch.num_rows())?;
+                        assert_eq!(actual.as_boolean(), &BooleanArray::from(expected));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn simplify_inlist_preserves_volatile_evaluations() {
+        let fun = Arc::new(ScalarUDF::new_from_impl(VolatileUdf::new()));
+        let volatile = Expr::ScalarFunction(ScalarFunction::new_udf(fun, vec![]));
+        let left = |negated| {
+            in_list(
+                volatile.clone(),
+                vec![lit(1), lit(2), lit(3), lit(4)],
+                negated,
+            )
+        };
+        let right = |negated| {
+            in_list(
+                volatile.clone(),
+                vec![lit(3), lit(4), lit(5), lit(6)],
+                negated,
+            )
+        };
+        for expr in [
+            left(false).and(right(false)),
+            left(false).and(right(true)),
+            left(true).and(right(false)),
+            left(true).or(right(true)),
+            left(true).and(right(true)),
+        ] {
+            assert_eq!(simplify_no_canonicalize(expr.clone()), expr);
+        }
+
+        // Union deduplication must not remove a repeated volatile list item.
+        for negated in [false, true] {
+            let left = in_list(
+                col("c1"),
+                vec![volatile.clone(), lit(1), lit(2), lit(3)],
+                negated,
+            );
+            let right = in_list(
+                col("c1"),
+                vec![volatile.clone(), lit(4), lit(5), lit(6)],
+                negated,
+            );
+            let expr = if negated {
+                left.and(right)
+            } else {
+                left.or(right)
+            };
+            assert_eq!(simplify_no_canonicalize(expr.clone()), expr);
+        }
     }
 
     #[test]
