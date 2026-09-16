@@ -30,7 +30,9 @@ use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{Exists, InSubquery, SetComparison};
 use datafusion_expr::expr_rewriter::replace_col;
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
-use datafusion_expr::{ColumnarValue, Expr, logical_plan::LogicalPlan};
+use datafusion_expr::{
+    ColumnarValue, DistinctHandling, Expr, Volatility, logical_plan::LogicalPlan,
+};
 use datafusion_physical_expr::create_physical_expr;
 use log::{debug, trace};
 use std::sync::Arc;
@@ -38,6 +40,39 @@ use std::sync::Arc;
 /// Re-export of `NamesPreserver` for backwards compatibility,
 /// as it was initially placed here and then moved elsewhere.
 pub use datafusion_expr::expr_rewriter::NamePreserver;
+
+/// Whether an expression is free of volatile scalar functions and subqueries.
+/// Subqueries are conservative barriers because their plans may contain
+/// volatile expressions that [`Expr::is_volatile`] does not visit.
+pub(crate) fn is_repeatable(expr: &Expr) -> bool {
+    !expr.is_volatile()
+        && !expr
+            .exists(|expr| {
+                Ok(matches!(
+                    expr,
+                    Expr::Exists(_)
+                        | Expr::InSubquery(_)
+                        | Expr::SetComparison(_)
+                        | Expr::ScalarSubquery(_)
+                ))
+            })
+            .expect("expression traversal is infallible")
+}
+
+/// Whether an aggregate explicitly declares duplicate insensitivity and can
+/// safely ignore repeated input rows. Arguments, FILTER, and ORDER BY must
+/// also be repeatable: MIN(random()) still observes repetitions.
+pub(crate) fn is_duplicate_insensitive_aggregate(mut expr: &Expr) -> bool {
+    while let Expr::Alias(alias) = expr {
+        expr = &alias.expr;
+    }
+    let Expr::AggregateFunction(aggregate) = expr else {
+        return false;
+    };
+    aggregate.func.distinct_handling() == DistinctHandling::Insensitive
+        && aggregate.func.signature().volatility != Volatility::Volatile
+        && is_repeatable(expr)
+}
 
 /// Invokes `f` with the index, within `schema`, of every column referenced by
 /// `expr` — including columns reached through a correlated subquery's outer
@@ -251,7 +286,34 @@ fn coerce(expr: Expr, schema: &DFSchema) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_expr::{Operator, binary_expr, case, col, in_list, is_null, lit};
+    use crate::test::test_table_scan_with_name;
+    use datafusion_common::Spans;
+    use datafusion_expr::expr::SetQuantifier;
+    use datafusion_expr::logical_plan::builder::LogicalPlanBuilder;
+    use datafusion_expr::{
+        Operator, Subquery, binary_expr, case, col, in_list, is_null, lit,
+    };
+
+    #[test]
+    fn set_comparison_is_not_repeatable() {
+        let subquery = LogicalPlanBuilder::from(test_table_scan_with_name("t2").unwrap())
+            .project(vec![col("b")])
+            .unwrap()
+            .build()
+            .unwrap();
+        let expr = Expr::SetComparison(SetComparison::new(
+            Box::new(col("a")),
+            Subquery {
+                subquery: Arc::new(subquery),
+                outer_ref_columns: vec![],
+                spans: Spans::new(),
+            },
+            Operator::Gt,
+            SetQuantifier::Any,
+        ));
+
+        assert!(!is_repeatable(&expr));
+    }
 
     #[test]
     fn expr_is_restrict_null_predicate() -> Result<()> {
