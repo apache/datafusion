@@ -260,6 +260,15 @@ impl PhysicalOptimizerRule for EnsureRequirements {
         "EnsureRequirements"
     }
 
+    /// This rule derives everything it does from the plan and the config, and
+    /// the config is fixed for an optimization run, so re-running it on a plan
+    /// it just produced cannot change anything. Rule lists that enforce
+    /// requirements again after their own rewrites can therefore skip the
+    /// passes whose input nothing has touched.
+    fn skip_if_unchanged(&self) -> bool {
+        true
+    }
+
     fn schema_check(&self) -> bool {
         true
     }
