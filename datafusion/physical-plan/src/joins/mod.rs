@@ -37,6 +37,7 @@ mod asof_join;
 pub mod chain;
 mod cross_join;
 mod hash_join;
+mod logical_batch;
 mod nested_loop_join;
 mod piecewise_merge_join;
 #[cfg(feature = "proto")]
