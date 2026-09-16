@@ -220,6 +220,40 @@ Rust doc comments are validated by rustdoc in CI and can be checked locally with
 bash ci/scripts/rust_docs.sh
 ```
 
+## ASF Status Check Validation
+
+`ci/scripts/check_asf_yaml_status_checks.py` checks that every required status
+check in `.asf.yaml` matches a job in `.github/workflows`. `./dev/rust_lint.sh`
+runs it and needs `python3` with [PyYAML]. The [uv] workspace provides both:
+
+```shell
+uv run ./dev/rust_lint.sh
+```
+
+To run the check on its own:
+
+```shell
+uv run python3 ci/scripts/check_asf_yaml_status_checks.py
+```
+
+[pyyaml]: https://pypi.org/project/PyYAML/
+[uv]: https://docs.astral.sh/uv/
+
+## Security Audit
+
+`ci/scripts/security_audit.sh` runs `cargo audit` on the root `Cargo.lock` with
+the advisory exceptions that CI uses. `./dev/rust_lint.sh` runs it and installs
+[cargo-audit] if it is missing. To run the audit on its own:
+
+```shell
+./ci/scripts/security_audit.sh
+```
+
+The audit fetches the RustSec advisory database. A new advisory or a different
+`cargo-audit` version can change the result without any change to the repository.
+
+[cargo-audit]: https://github.com/rustsec/rustsec/blob/main/cargo-audit/README.md
+
 ## Benchmarks
 
 ### Criterion Benchmarks
