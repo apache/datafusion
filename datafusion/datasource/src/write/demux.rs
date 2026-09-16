@@ -18,14 +18,14 @@
 //! Module containing helper methods/traits related to enabling
 //! dividing input stream into multiple output files at execution time
 
-use std::borrow::Cow;
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use crate::url::ListingTableUrl;
 use crate::write::FileSinkConfig;
 use datafusion_common::error::Result;
 use datafusion_physical_plan::SendableRecordBatchStream;
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use arrow::array::{
     ArrayAccessor, RecordBatch, StringArray, StructArray, builder::UInt64Builder,
@@ -50,8 +50,10 @@ use object_store::path::Path;
 use rand::distr::SampleString;
 use tokio::sync::mpsc::{self, Receiver, Sender, UnboundedReceiver, UnboundedSender};
 
+/// Cumulative encoded bytes reported by an output file writer.
+pub type FileSize = Arc<AtomicUsize>;
 type RecordBatchReceiver = Receiver<RecordBatch>;
-pub type DemuxedStreamReceiver = UnboundedReceiver<(Path, RecordBatchReceiver)>;
+pub type DemuxedStreamReceiver = UnboundedReceiver<(FileMetadata, RecordBatchReceiver)>;
 
 /// Splits a single [SendableRecordBatchStream] into a dynamically determined
 /// number of partitions at execution time.
@@ -144,9 +146,10 @@ pub(crate) fn start_demuxer_task(
     (task, rx)
 }
 
-/// Dynamically partitions input stream to achieve desired maximum rows per file
+/// Dynamically partitions the input stream to achieve the desired maximum rows
+/// and encoded bytes per file.
 async fn row_count_demuxer(
-    mut tx: UnboundedSender<(Path, Receiver<RecordBatch>)>,
+    mut tx: UnboundedSender<(FileMetadata, RecordBatchReceiver)>,
     mut input: SendableRecordBatchStream,
     context: Arc<TaskContext>,
     base_output_path: ListingTableUrl,
@@ -163,10 +166,10 @@ async fn row_count_demuxer(
     let write_id = rand::distr::Alphanumeric.sample_string(&mut rand::rng(), 16);
 
     let mut open_file_streams = Vec::with_capacity(minimum_parallel_files);
+    let mut file_sizes = Vec::with_capacity(minimum_parallel_files);
 
     let mut next_send_steam = 0;
     let mut row_counts = Vec::with_capacity(minimum_parallel_files);
-    let mut bytes_counts = Vec::with_capacity(minimum_parallel_files);
 
     // Overrides if single_file_output is set
     let minimum_parallel_files = if single_file_output {
@@ -189,7 +192,7 @@ async fn row_count_demuxer(
 
     if single_file_output {
         // ensure we have one file open, even when the input stream is empty
-        open_file_streams.push(create_new_file_stream(
+        let (file_stream, file_size) = create_new_file_stream(
             &base_output_path,
             &write_id,
             part_idx,
@@ -197,9 +200,10 @@ async fn row_count_demuxer(
             single_file_output,
             max_buffered_batches,
             &mut tx,
-        )?);
+        )?;
+        open_file_streams.push(file_stream);
+        file_sizes.push(file_size);
         row_counts.push(0);
-        bytes_counts.push(0);
         part_idx += 1;
     }
 
@@ -210,24 +214,7 @@ async fn row_count_demuxer(
         is_batch_received = true;
         // ensure we have at least minimum_parallel_files open
         if open_file_streams.len() < minimum_parallel_files {
-            open_file_streams.push(create_new_file_stream(
-                &base_output_path,
-                &write_id,
-                part_idx,
-                &file_extension,
-                single_file_output,
-                max_buffered_batches,
-                &mut tx,
-            )?);
-            row_counts.push(0);
-            bytes_counts.push(0);
-            part_idx += 1;
-        } else if row_counts[next_send_steam] >= max_rows_per_file
-            || bytes_counts[next_send_steam] >= max_bytes_per_file
-        {
-            row_counts[next_send_steam] = 0;
-            bytes_counts[next_send_steam] = 0;
-            open_file_streams[next_send_steam] = create_new_file_stream(
+            let (file_stream, file_size) = create_new_file_stream(
                 &base_output_path,
                 &write_id,
                 part_idx,
@@ -236,10 +223,29 @@ async fn row_count_demuxer(
                 max_buffered_batches,
                 &mut tx,
             )?;
+            open_file_streams.push(file_stream);
+            file_sizes.push(file_size);
+            row_counts.push(0);
+            part_idx += 1;
+        }
+        if row_counts[next_send_steam] >= max_rows_per_file
+            || file_sizes[next_send_steam].load(Ordering::Relaxed) >= max_bytes_per_file
+        {
+            row_counts[next_send_steam] = 0;
+            let (file_stream, file_size) = create_new_file_stream(
+                &base_output_path,
+                &write_id,
+                part_idx,
+                &file_extension,
+                single_file_output,
+                max_buffered_batches,
+                &mut tx,
+            )?;
+            open_file_streams[next_send_steam] = file_stream;
+            file_sizes[next_send_steam] = file_size;
             part_idx += 1;
         }
         row_counts[next_send_steam] += rb.num_rows();
-        bytes_counts[next_send_steam] += rb.get_array_memory_size();
         open_file_streams[next_send_steam]
             .send(rb)
             .await
@@ -291,26 +297,30 @@ fn create_new_file_stream(
     file_extension: &str,
     single_file_output: bool,
     max_buffered_batches: usize,
-    tx: &mut UnboundedSender<(Path, Receiver<RecordBatch>)>,
-) -> Result<Sender<RecordBatch>> {
-    let file_path = generate_file_path(
-        base_output_path,
-        write_id,
-        part_idx,
-        file_extension,
-        single_file_output,
-    );
+    tx: &mut UnboundedSender<(FileMetadata, RecordBatchReceiver)>,
+) -> Result<(Sender<RecordBatch>, FileSize)> {
+    let file_size = Arc::new(AtomicUsize::new(0));
+    let file_metadata = FileMetadata {
+        path: generate_file_path(
+            base_output_path,
+            write_id,
+            part_idx,
+            file_extension,
+            single_file_output,
+        ),
+        size: Arc::clone(&file_size),
+    };
     let (tx_file, rx_file) = mpsc::channel(max_buffered_batches / 2);
-    tx.send((file_path, rx_file))
+    tx.send((file_metadata, rx_file))
         .map_err(|_| exec_datafusion_err!("Error sending RecordBatch to file stream!"))?;
-    Ok(tx_file)
+    Ok((tx_file, file_size))
 }
 
 /// Splits an input stream based on the distinct values of a set of columns
 /// Assumes standard hive style partition paths such as
 /// /col1=val1/col2=val2/outputfile.parquet
 async fn hive_style_partitions_demuxer(
-    tx: UnboundedSender<(Path, Receiver<RecordBatch>)>,
+    tx: UnboundedSender<(FileMetadata, RecordBatchReceiver)>,
     mut input: SendableRecordBatchStream,
     context: Arc<TaskContext>,
     partition_by: Vec<(String, DataType)>,
@@ -351,15 +361,18 @@ async fn hive_style_partitions_demuxer(
                     // Create channel for previously unseen distinct partition key and notify consumer of new file
                     let (part_tx, part_rx) =
                         mpsc::channel::<RecordBatch>(max_buffered_recordbatches);
-                    let file_path = compute_hive_style_file_path(
-                        &part_key,
-                        &partition_by,
-                        &write_id,
-                        &file_extension,
-                        &base_output_path,
-                    );
+                    let file_metadata = FileMetadata {
+                        path: compute_hive_style_file_path(
+                            &part_key,
+                            &partition_by,
+                            &write_id,
+                            &file_extension,
+                            &base_output_path,
+                        ),
+                        size: Arc::new(AtomicUsize::new(0)),
+                    };
 
-                    tx.send((file_path, part_rx)).map_err(|_| {
+                    tx.send((file_metadata, part_rx)).map_err(|_| {
                         exec_datafusion_err!("Error sending new file stream!")
                     })?;
 
@@ -384,6 +397,11 @@ async fn hive_style_partitions_demuxer(
     }
 
     Ok(())
+}
+
+pub struct FileMetadata {
+    pub path: Path,
+    pub size: FileSize,
 }
 
 fn compute_partition_keys_by_row<'a>(

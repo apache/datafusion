@@ -20,19 +20,19 @@
 //! parallelization, and abort handling
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
-use super::demux::DemuxedStreamReceiver;
+use super::demux::{DemuxedStreamReceiver, FileSize};
 use super::{BatchSerializer, ObjectWriterBuilder};
 use crate::file_compression_type::FileCompressionType;
 use datafusion_common::error::Result;
-
-use arrow::array::RecordBatch;
 use datafusion_common::{
     DataFusionError, exec_datafusion_err, internal_datafusion_err, internal_err,
 };
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_execution::TaskContext;
 
+use arrow::array::RecordBatch;
 use bytes::Bytes;
 use futures::join;
 use object_store::ObjectStore;
@@ -86,6 +86,7 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
     mut data_rx: Receiver<RecordBatch>,
     serializer: Arc<dyn BatchSerializer>,
     mut writer: WriterType,
+    file_size: FileSize,
 ) -> SerializedRecordBatchResult {
     let (tx, mut rx) =
         mpsc::channel::<SpawnedTask<Result<(usize, Bytes), DataFusionError>>>(100);
@@ -111,9 +112,11 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
     });
 
     let mut row_count = 0;
+    let mut serialized_bytes = 0;
     while let Some(task) = rx.recv().await {
         match task.join().await {
             Ok(Ok((cnt, bytes))) => {
+                serialized_bytes += bytes.len();
                 match writer.write_all(&bytes).await {
                     Ok(_) => (),
                     Err(e) => {
@@ -124,6 +127,7 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
                     }
                 }
                 row_count += cnt;
+                file_size.store(serialized_bytes, Ordering::Relaxed);
             }
             Ok(Err(e)) => {
                 // Return the writer along with the error
@@ -154,7 +158,7 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
     SerializedRecordBatchResult::success(writer, row_count)
 }
 
-type FileWriteBundle = (Receiver<RecordBatch>, SerializerType, WriterType);
+type FileWriteBundle = (Receiver<RecordBatch>, SerializerType, WriterType, FileSize);
 /// Contains the common logic for serializing RecordBatches and
 /// writing the resulting bytes to an ObjectStore.
 /// Serialization is assumed to be stateless, i.e.
@@ -173,9 +177,10 @@ pub(crate) async fn stateless_serialize_and_write_files(
     // if true, we may not have a guarantee that all written data was cleaned up.
     let mut any_abort_errors = false;
     let mut join_set = JoinSet::new();
-    while let Some((data_rx, serializer, writer)) = rx.recv().await {
+    while let Some((data_rx, serializer, writer, file_size)) = rx.recv().await {
         join_set.spawn(async move {
-            serialize_rb_stream_to_object_store(data_rx, serializer, writer).await
+            serialize_rb_stream_to_object_store(data_rx, serializer, writer, file_size)
+                .await
         });
     }
     let mut finished_writers = Vec::new();
@@ -264,21 +269,29 @@ pub async fn spawn_writer_tasks_and_join(
     let write_coordinator_task = SpawnedTask::spawn(async move {
         stateless_serialize_and_write_files(rx_file_bundle, tx_row_cnt).await
     });
-    while let Some((location, rb_stream)) = file_stream_rx.recv().await {
-        let writer =
-            ObjectWriterBuilder::new(compression, &location, Arc::clone(&object_store))
-                .with_buffer_size(Some(
-                    context
-                        .session_config()
-                        .options()
-                        .execution
-                        .objectstore_writer_buffer_size,
-                ))
-                .with_compression_level(compression_level)
-                .build()?;
+    while let Some((file_metadata, rb_stream)) = file_stream_rx.recv().await {
+        let writer = ObjectWriterBuilder::new(
+            compression,
+            &file_metadata.path,
+            Arc::clone(&object_store),
+        )
+        .with_buffer_size(Some(
+            context
+                .session_config()
+                .options()
+                .execution
+                .objectstore_writer_buffer_size,
+        ))
+        .with_compression_level(compression_level)
+        .build()?;
 
         if tx_file_bundle
-            .send((rb_stream, Arc::clone(&serializer), writer))
+            .send((
+                rb_stream,
+                Arc::clone(&serializer),
+                writer,
+                file_metadata.size,
+            ))
             .await
             .is_err()
         {

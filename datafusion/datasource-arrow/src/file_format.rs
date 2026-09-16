@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use std::fmt::{self, Debug};
 use std::io::{Seek, SeekFrom};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
@@ -274,7 +275,7 @@ impl FileSink for ArrowFileSink {
         let ipc_options =
             IpcWriteOptions::try_new(64, false, arrow_ipc::MetadataVersion::V5)?
                 .try_with_compression(Some(CompressionType::LZ4_FRAME))?;
-        while let Some((path, mut rx)) = file_stream_rx.recv().await {
+        while let Some((file_metadata, mut rx)) = file_stream_rx.recv().await {
             let shared_buffer = SharedBuffer::new(INITIAL_BUFFER_BYTES);
             let mut arrow_writer = arrow_ipc::writer::FileWriter::try_new_with_options(
                 shared_buffer.clone(),
@@ -283,7 +284,7 @@ impl FileSink for ArrowFileSink {
             )?;
             let mut object_store_writer = ObjectWriterBuilder::new(
                 FileCompressionType::UNCOMPRESSED,
-                &path,
+                &file_metadata.path,
                 Arc::clone(&object_store),
             )
             .with_buffer_size(Some(
@@ -296,14 +297,19 @@ impl FileSink for ArrowFileSink {
             .build()?;
             file_write_tasks.spawn(async move {
                 let mut row_count = 0;
+                let mut flushed_bytes = 0;
                 while let Some(batch) = rx.recv().await {
                     row_count += batch.num_rows();
                     arrow_writer.write(&batch)?;
                     let mut buff_to_flush = shared_buffer.buffer.try_lock().unwrap();
+                    file_metadata
+                        .size
+                        .store(flushed_bytes + buff_to_flush.len(), Ordering::Relaxed);
                     if buff_to_flush.len() > BUFFER_FLUSH_BYTES {
                         object_store_writer
                             .write_all(buff_to_flush.as_slice())
                             .await?;
+                        flushed_bytes += buff_to_flush.len();
                         buff_to_flush.clear();
                     }
                 }

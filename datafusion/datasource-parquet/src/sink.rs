@@ -22,6 +22,7 @@
 use std::fmt;
 use std::fmt::Debug;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::{Schema, SchemaRef};
@@ -35,7 +36,7 @@ use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
 use datafusion_datasource::sink::DataSink;
 #[cfg(feature = "proto")]
 use datafusion_datasource::sink::DataSinkExec;
-use datafusion_datasource::write::demux::DemuxedStreamReceiver;
+use datafusion_datasource::write::demux::{DemuxedStreamReceiver, FileSize};
 use datafusion_datasource::write::{
     ObjectWriterBuilder, SharedBuffer, get_writer_schema,
 };
@@ -293,32 +294,38 @@ impl FileSink for ParquetSink {
                 .maximum_buffered_record_batches_per_stream,
         };
 
-        while let Some((path, mut rx)) = file_stream_rx.recv().await {
-            let parquet_props = self.create_writer_props(&runtime, &path).await?;
+        while let Some((file_metadata, mut rx)) = file_stream_rx.recv().await {
+            let parquet_props = self
+                .create_writer_props(&runtime, &file_metadata.path)
+                .await?;
             // CDC requires the sequential writer: the chunker state lives in ArrowWriter
             // and persists across row groups. The parallel path bypasses ArrowWriter entirely.
             if !parquet_opts.global.allow_single_file_parallelism
                 || parquet_opts.global.content_defined_chunking.enabled
             {
                 let mut writer = self.create_async_arrow_writer(
-                    &path,
+                    &file_metadata.path,
                     Arc::clone(&object_store),
                     context,
                     parquet_props.clone(),
                 )?;
-                let reservation = MemoryConsumer::new(format!("ParquetSink[{path}]"))
-                    .register(context.memory_pool());
+                let reservation =
+                    MemoryConsumer::new(format!("ParquetSink[{}]", file_metadata.path))
+                        .register(context.memory_pool());
                 file_write_tasks.spawn(
                     async move {
                         while let Some(batch) = rx.recv().await {
                             writer.write(&batch).await?;
                             reservation.try_resize(writer.memory_size())?;
+                            let encoded_size =
+                                writer.bytes_written() + writer.in_progress_size();
+                            file_metadata.size.store(encoded_size, Ordering::Relaxed);
                         }
                         let parquet_meta_data = writer
                             .close()
                             .await
                             .map_err(|e| DataFusionError::ParquetError(Box::new(e)))?;
-                        Ok((path, parquet_meta_data))
+                        Ok((file_metadata.path, parquet_meta_data))
                     }
                     .with_elapsed_compute(elapsed_compute.clone()),
                 );
@@ -327,7 +334,7 @@ impl FileSink for ParquetSink {
                     // Parquet files as a whole are never compressed, since they
                     // manage compressed blocks themselves.
                     FileCompressionType::UNCOMPRESSED,
-                    &path,
+                    &file_metadata.path,
                     Arc::clone(&object_store),
                 )
                 .with_buffer_size(Some(
@@ -352,9 +359,10 @@ impl FileSink for ParquetSink {
                         rx,
                         ctx,
                         encoding_time,
+                        file_metadata.size,
                     )
                     .await?;
-                    Ok((path, parquet_meta_data))
+                    Ok((file_metadata.path, parquet_meta_data))
                 });
             }
         }
@@ -521,11 +529,19 @@ async fn column_serializer_task(
     mut writer: ArrowColumnWriter,
     reservation: MemoryReservation,
     encoding_time: Time,
+    file_size: FileSize,
 ) -> Result<(ArrowColumnWriter, MemoryReservation)> {
+    let mut encoded_size = 0;
     while let Some(col) = rx.recv().await {
         let _timer = encoding_time.timer();
         writer.write(&col)?;
         reservation.try_resize(writer.memory_size())?;
+        let new_encoded_size = writer.get_estimated_total_bytes();
+        file_size.fetch_add(
+            new_encoded_size.saturating_sub(encoded_size),
+            Ordering::Relaxed,
+        );
+        encoded_size = new_encoded_size;
     }
     Ok((writer, reservation))
 }
@@ -541,6 +557,7 @@ fn spawn_column_parallel_row_group_writer(
     max_buffer_size: usize,
     pool: &Arc<dyn MemoryPool>,
     encoding_time: &Time,
+    file_size: &FileSize,
 ) -> Result<(Vec<ColumnWriterTask>, Vec<ColSender>)> {
     let num_columns = col_writers.len();
 
@@ -559,6 +576,7 @@ fn spawn_column_parallel_row_group_writer(
             writer,
             reservation,
             encoding_time.clone(),
+            Arc::clone(file_size),
         ));
         col_writer_tasks.push(task);
     }
@@ -660,6 +678,7 @@ fn spawn_parquet_parallel_serialization_task(
     serialize_tx: Sender<SpawnedTask<RBStreamSerializeResult>>,
     ctx: ParquetFileWriteContext,
     encoding_time: Time,
+    file_size: FileSize,
 ) -> SpawnedTask<Result<(), DataFusionError>> {
     SpawnedTask::spawn(async move {
         let max_buffer_rb = ctx.parallel_options.max_buffered_record_batches_per_stream;
@@ -676,6 +695,7 @@ fn spawn_parquet_parallel_serialization_task(
                 max_buffer_rb,
                 &ctx.pool,
                 &encoding_time,
+                &file_size,
             )?;
         let mut current_rg_rows = 0;
 
@@ -732,6 +752,7 @@ fn spawn_parquet_parallel_serialization_task(
                             max_buffer_rb,
                             &ctx.pool,
                             &encoding_time,
+                            &file_size,
                         )?;
                 }
             }
@@ -813,6 +834,7 @@ async fn output_single_parquet_file_parallelized(
     data: Receiver<RecordBatch>,
     ctx: ParquetFileWriteContext,
     encoding_time: Time,
+    file_size: FileSize,
 ) -> Result<ParquetMetaData> {
     let max_rowgroups = ctx.parallel_options.max_parallel_row_groups;
     // Buffer size of this channel limits maximum number of RowGroups being worked on in parallel
@@ -837,6 +859,7 @@ async fn output_single_parquet_file_parallelized(
         serialize_tx,
         ctx,
         encoding_time,
+        file_size,
     );
     let parquet_meta_data = concatenate_parallel_row_groups(
         writer,

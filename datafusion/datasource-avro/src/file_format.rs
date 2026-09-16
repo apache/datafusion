@@ -19,6 +19,7 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::{fmt, io};
 
 use crate::read_avro_schema_from_reader;
@@ -219,11 +220,11 @@ impl FileSink for AvroFileSink {
         mut file_stream_rx: DemuxedStreamReceiver,
         object_store: Arc<dyn ObjectStore>,
     ) -> Result<u64> {
-        let mut file_write_tasks: JoinSet<std::result::Result<usize, DataFusionError>> =
+        let mut file_write_tasks: JoinSet<Result<usize, DataFusionError>> =
             JoinSet::new();
 
         let writer_schema = get_writer_schema(&self.config);
-        while let Some((path, mut rx)) = file_stream_rx.recv().await {
+        while let Some((file_metadata, mut rx)) = file_stream_rx.recv().await {
             let shared_buffer = SharedBuffer::new(INITIAL_BUFFER_BYTES);
             let mut avro_writer: AvroWriter<SharedBuffer> =
                 WriterBuilder::new(writer_schema.as_ref().clone())
@@ -233,7 +234,7 @@ impl FileSink for AvroFileSink {
                     })?;
             let mut object_store_writer = ObjectWriterBuilder::new(
                 FileCompressionType::UNCOMPRESSED,
-                &path,
+                &file_metadata.path,
                 Arc::clone(&object_store),
             )
             .with_buffer_size(Some(
@@ -246,16 +247,21 @@ impl FileSink for AvroFileSink {
             .build()?;
             file_write_tasks.spawn(async move {
                 let mut row_count = 0;
+                let mut flushed_bytes = 0;
                 while let Some(batch) = rx.recv().await {
                     row_count += batch.num_rows();
                     avro_writer
                         .write(&batch)
                         .map_err(|e| internal_datafusion_err!("{e}"))?;
                     let mut buff_to_flush = shared_buffer.buffer.try_lock().unwrap();
+                    file_metadata
+                        .size
+                        .store(flushed_bytes + buff_to_flush.len(), Ordering::Relaxed);
                     if buff_to_flush.len() > BUFFER_FLUSH_BYTES {
                         object_store_writer
                             .write_all(buff_to_flush.as_slice())
                             .await?;
+                        flushed_bytes += buff_to_flush.len();
                         buff_to_flush.clear();
                     }
                 }

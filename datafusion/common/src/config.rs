@@ -1065,10 +1065,11 @@ config_namespace! {
         /// number of rows written is not roughly divisible by the soft max
         pub soft_max_rows_per_output_file: ConfigNonZeroUsize, default = non_zero_usize_default(50000000)
 
-        /// Target number of bytes in output files when writing multiple.
-        /// This is a soft max, so it can be exceeded slightly. There also
-        /// will be one file smaller than the limit if the total
-        /// number of rows written is not roughly divisible by the soft max
+        /// Target encoded size in bytes of output files when writing multiple.
+        /// Writers asynchronously report the cumulative encoded size as they
+        /// process RecordBatches. The final file size may exceed this limit due
+        /// to batches buffered before the limit is observed, the size of a batch,
+        /// and file metadata written when the file is finalized.
         pub soft_max_bytes_per_output_file: ConfigNonZeroUsize, default = non_zero_usize_default(4294967295)
 
         /// This is the maximum number of RecordBatches buffered
