@@ -23,9 +23,9 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DFSchema, Result};
 
 use crate::utils::NamePreserver;
-use datafusion_expr::LogicalPlan;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::utils::merge_schema;
+use datafusion_expr::{DmlStatement, LogicalPlan, WriteOp};
 use std::sync::Arc;
 
 /// Analyzer rule that invokes [`FunctionRewrite`]s on expressions
@@ -56,6 +56,23 @@ impl ApplyFunctionRewrites {
                 &ts.source.schema(),
             )?;
             schema.merge(&source_schema);
+        }
+
+        // MERGE expressions reference the target table, which is not one of
+        // `plan.inputs()`. Rebuild the target schema from the DML's
+        // `table_name` and `target` so those columns resolve.
+        if let LogicalPlan::Dml(DmlStatement {
+            op: WriteOp::MergeInto(_),
+            table_name,
+            target,
+            ..
+        }) = &plan
+        {
+            let target_schema = DFSchema::try_from_qualified_schema(
+                table_name.clone(),
+                &target.schema(),
+            )?;
+            schema.merge(&target_schema);
         }
 
         let name_preserver = NamePreserver::new(&plan);

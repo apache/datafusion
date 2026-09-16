@@ -33,7 +33,7 @@ pub fn setup_scratch_dir(name: &Path) -> Result<()> {
     let file_stem = name.file_stem().expect("File should have a stem");
     let path = PathBuf::from("test_files").join("scratch").join(file_stem);
 
-    info!("Creating scratch dir in {path:?}");
+    info!("Creating scratch dir in {}", path.display());
     if path.exists() {
         fs::remove_dir_all(&path)?;
     }

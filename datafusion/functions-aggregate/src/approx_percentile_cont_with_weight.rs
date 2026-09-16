@@ -26,6 +26,7 @@ use arrow::{array::ArrayRef, datatypes::DataType};
 use datafusion_common::ScalarValue;
 use datafusion_common::types::{NativeType, logical_float64};
 use datafusion_common::{Result, not_impl_err, plan_err};
+use datafusion_expr::DistinctHandling;
 use datafusion_expr::expr::{AggregateFunction, Sort};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::{
@@ -90,11 +91,11 @@ An alternative syntax is also supported:
 
 ```sql
 > SELECT approx_percentile_cont_with_weight(column_name, weight_column, 0.90) FROM table_name;
-+--------------------------------------------------+
++----------------------------------------------------------------------+
 | approx_percentile_cont_with_weight(column_name, weight_column, 0.90) |
-+--------------------------------------------------+
-| 78.5                                             |
-+--------------------------------------------------+
++----------------------------------------------------------------------+
+| 78.5                                                                 |
++----------------------------------------------------------------------+
 ```"#,
     standard_argument(name = "expression", prefix = "The"),
     argument(
@@ -280,6 +281,11 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // The accumulator rejects `DISTINCT` with `not_impl_err!`.
+        DistinctHandling::Unsupported
     }
 }
 

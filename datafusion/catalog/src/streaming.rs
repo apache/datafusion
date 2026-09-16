@@ -17,16 +17,22 @@
 
 //! A simplified [`TableProvider`] for streaming partitioned datasets
 
+use std::future::ready;
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use datafusion_common::{DFSchema, Result, plan_err};
+use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{Expr, SortExpr, TableType};
 use datafusion_physical_expr::equivalence::project_ordering;
-use datafusion_physical_expr::{LexOrdering, create_physical_sort_exprs};
+use datafusion_physical_expr::projection::ProjectionMapping;
+use datafusion_physical_expr::{
+    EquivalenceProperties, LexOrdering, Partitioning, create_physical_sort_exprs,
+};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
+use futures::future::BoxFuture;
 use log::debug;
 
 use crate::{Session, TableProvider};
@@ -38,6 +44,7 @@ pub struct StreamingTable {
     partitions: Vec<Arc<dyn PartitionStream>>,
     infinite: bool,
     sort_order: Vec<SortExpr>,
+    output_partitioning: Option<Partitioning>,
 }
 
 impl StreamingTable {
@@ -62,6 +69,7 @@ impl StreamingTable {
             partitions,
             infinite: false,
             sort_order: vec![],
+            output_partitioning: None,
         })
     }
 
@@ -76,6 +84,30 @@ impl StreamingTable {
         self.sort_order = sort_order;
         self
     }
+
+    /// Declares the output partitioning of this streaming table.
+    ///
+    /// The partitioning expressions refer to the table schema before scan
+    /// projection. If a scan projection removes a partitioning expression, the
+    /// physical plan reports unknown partitioning.
+    pub fn with_output_partitioning(mut self, output_partitioning: Partitioning) -> Self {
+        self.output_partitioning = Some(output_partitioning);
+        self
+    }
+
+    fn output_partitioning(&self, projection: Option<&[usize]>) -> Result<Partitioning> {
+        let Some(output_partitioning) = &self.output_partitioning else {
+            return Ok(Partitioning::UnknownPartitioning(self.partitions.len()));
+        };
+        let Some(projection) = projection else {
+            return Ok(output_partitioning.clone());
+        };
+
+        let projection_mapping =
+            ProjectionMapping::from_indices(projection, &self.schema)?;
+        let eq_properties = EquivalenceProperties::new(Arc::clone(&self.schema));
+        Ok(output_partitioning.project(&projection_mapping, &eq_properties))
+    }
 }
 
 #[async_trait]
@@ -88,10 +120,41 @@ impl TableProvider for StreamingTable {
         TableType::View
     }
 
-    async fn scan(
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
+        projection: Option<&'life2 [usize]>,
+        filters: &'life3 [Expr],
+        limit: Option<usize>,
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        'life3: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.scan_boxed(state, projection, filters, limit)
+    }
+}
+
+impl StreamingTable {
+    fn scan_boxed<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        filters: &'a [Expr],
+        limit: Option<usize>,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(ready(self.scan_inner(state, projection, filters, limit)))
+    }
+
+    fn scan_inner(
         &self,
         state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         _filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -99,8 +162,12 @@ impl TableProvider for StreamingTable {
             let df_schema = DFSchema::try_from(Arc::clone(&self.schema))?;
             let eqp = state.execution_props();
 
-            let original_sort_exprs =
-                create_physical_sort_exprs(&self.sort_order, &df_schema, eqp)?;
+            let original_sort_exprs = create_physical_sort_exprs(
+                &self.sort_order,
+                &df_schema,
+                eqp,
+                &PhysicalPlanningContext::default(),
+            )?;
 
             if let Some(p) = projection {
                 // When performing a projection, the output columns will not match
@@ -119,13 +186,16 @@ impl TableProvider for StreamingTable {
             vec![]
         };
 
-        Ok(Arc::new(StreamingTableExec::try_new(
+        let exec = StreamingTableExec::try_new(
             Arc::clone(&self.schema),
             self.partitions.clone(),
             projection,
             LexOrdering::new(physical_sort),
             self.infinite,
             limit,
-        )?))
+        )?
+        .with_output_partitioning(self.output_partitioning(projection)?)?;
+
+        Ok(Arc::new(exec))
     }
 }

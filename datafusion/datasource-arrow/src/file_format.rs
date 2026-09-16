@@ -350,7 +350,7 @@ impl DisplayAs for ArrowFileSink {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "ArrowFileSink(file_groups=",)?;
+                write!(f, "ArrowFileSink(file_groups=")?;
                 FileGroupDisplay(&self.config.file_group).fmt_as(t, f)?;
                 write!(f, ")")
             }
@@ -548,6 +548,7 @@ mod tests {
         AggregateUDF, Expr, HigherOrderUDF, LogicalPlan, ScalarUDF, WindowUDF,
     };
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    use datafusion_session::{CatalogProviderList, EmptyCatalogProviderList};
     use object_store::{chunked::ChunkedStore, memory::InMemory};
 
     struct MockSession {
@@ -572,6 +573,10 @@ mod tests {
 
         fn config(&self) -> &SessionConfig {
             &self.config
+        }
+
+        fn catalog_list(&self) -> Arc<dyn CatalogProviderList> {
+            Arc::new(EmptyCatalogProviderList)
         }
 
         async fn create_physical_plan(

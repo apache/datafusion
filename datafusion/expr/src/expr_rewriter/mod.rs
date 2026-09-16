@@ -87,13 +87,16 @@ pub fn normalize_col_with_schemas_and_ambiguity_check(
     using_columns: &[HashSet<Column>],
 ) -> Result<Expr> {
     // Normalize column inside Unnest
-    if let Expr::Unnest(Unnest { expr }) = expr {
+    if let Expr::Unnest(Unnest { expr, outer }) = expr {
         let e = normalize_col_with_schemas_and_ambiguity_check(
             expr.as_ref().clone(),
             schemas,
             using_columns,
         )?;
-        return Ok(Expr::Unnest(Unnest { expr: Box::new(e) }));
+        return Ok(Expr::Unnest(Unnest {
+            expr: Box::new(e),
+            outer,
+        }));
     }
 
     expr.transform(|expr| {
@@ -200,7 +203,7 @@ pub fn unnormalize_cols(exprs: impl IntoIterator<Item = Expr>) -> Vec<Expr> {
     exprs.into_iter().map(unnormalize_col).collect()
 }
 
-/// Recursively remove all the ['OuterReferenceColumn'] and return the inside Column
+/// Recursively remove all the [`Expr::OuterReferenceColumn`] and return the inside Column
 /// in the expression tree.
 pub fn strip_outer_reference(expr: Expr) -> Expr {
     expr.transform(|expr| {

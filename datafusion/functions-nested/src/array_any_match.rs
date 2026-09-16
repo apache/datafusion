@@ -18,17 +18,11 @@
 //! [`datafusion_expr::HigherOrderUDF`] definitions for array_any_match function.
 
 use arrow::{
-    array::{Array, AsArray, BooleanArray, BooleanBuilder, new_null_array},
+    array::{Array, BooleanArray, BooleanBuilder},
     buffer::NullBuffer,
-    compute::take_arrays,
-    datatypes::{ArrowNativeType, DataType, Field, FieldRef},
+    datatypes::{DataType, Field, FieldRef},
 };
-use datafusion_common::{
-    Result, exec_datafusion_err, exec_err, plan_err,
-    utils::{
-        adjust_offsets_for_slice, list_values, list_values_row_number, take_function_args,
-    },
-};
+use datafusion_common::{Result, plan_err, utils::take_function_args};
 use datafusion_expr::{
     ColumnarValue, Documentation, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs,
     HigherOrderSignature, HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda,
@@ -36,6 +30,10 @@ use datafusion_expr::{
 };
 use datafusion_macros::user_doc;
 use std::{fmt::Debug, sync::Arc};
+
+use crate::lambda_utils::{
+    SingleListLambdaResult, coerce_single_list_arg, evaluate_single_list_predicate,
+};
 
 make_higher_order_function_expr_and_func!(
     ArrayAnyMatch,
@@ -120,30 +118,7 @@ impl HigherOrderUDFImpl for ArrayAnyMatch {
     }
 
     fn coerce_value_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let [list] = arg_types else {
-            return plan_err!(
-                "{} function requires 1 value argument, got {}",
-                self.name(),
-                arg_types.len()
-            );
-        };
-
-        let coerced = match list {
-            DataType::List(_) | DataType::LargeList(_) => list.clone(),
-            DataType::ListView(field) | DataType::FixedSizeList(field, _) => {
-                DataType::List(Arc::clone(field))
-            }
-            DataType::LargeListView(field) => DataType::LargeList(Arc::clone(field)),
-            _ => {
-                return plan_err!(
-                    "{} expected a list as first argument, got {}",
-                    self.name(),
-                    list
-                );
-            }
-        };
-
-        Ok(vec![coerced])
+        coerce_single_list_arg(self.name(), arg_types)
     }
 
     fn lambda_parameters(
@@ -181,75 +156,25 @@ impl HigherOrderUDFImpl for ArrayAnyMatch {
     }
 
     fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
-        let [ValueOrLambda::Value(list), ValueOrLambda::Lambda(lambda)] =
-            take_function_args(self.name(), &args.args)?
-        else {
-            return exec_err!("{} expects a value followed by a lambda", self.name());
+        let evaluated = match evaluate_single_list_predicate(self.name(), &args)? {
+            SingleListLambdaResult::EarlyReturn(v) => return Ok(v),
+            SingleListLambdaResult::Ready(v) => v,
         };
 
-        let list_array = list.to_array(args.number_rows)?;
+        let predicate = evaluated.boolean_predicate(self.name())?;
 
-        // fast path: fully null input — also required for FixedSizeList which can't be
-        // handled by clear_null_values when fully null
-        if list_array.null_count() == list_array.len() {
-            return Ok(ColumnarValue::Array(new_null_array(
-                args.return_type(),
-                list_array.len(),
-            )));
-        }
-
-        let list_values = list_values(&list_array)?;
-
-        let values_param = || Ok(Arc::clone(&list_values));
-
-        let predicate_results = lambda
-            .evaluate(&[&values_param], |arrays| {
-                let indices = list_values_row_number(&list_array)?;
-                Ok(take_arrays(arrays, &indices, None)?)
-            })?
-            .into_array(list_values.len())?;
-
-        let predicate_bool = predicate_results
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .ok_or_else(|| {
-                exec_datafusion_err!(
-                    "{} predicate must return boolean array",
-                    self.name()
-                )
-            })?;
-
-        let mut values = BooleanBuilder::with_capacity(list_array.len());
-
-        // Maps predicate results (flat over all elements) back to one Boolean per row.
-        // Uses adjusted offsets so sliced lists index correctly into the predicate array.
-        macro_rules! process_list {
-            ($list_typed:expr) => {{
-                let offsets = adjust_offsets_for_slice($list_typed);
-                for i in 0..$list_typed.len() {
-                    let start = offsets[i].as_usize();
-                    let end = offsets[i + 1].as_usize();
-                    // any_match_for_range returns None when nulls poison the result;
-                    // null rows produce an empty range and return Some(false), but their
-                    // null bit is preserved by attaching the original null bitmap below.
-                    values.append_option(any_match_for_range(predicate_bool, start, end));
-                }
-            }};
-        }
-
-        match list_array.data_type() {
-            DataType::List(_) => {
-                process_list!(list_array.as_list::<i32>());
-            }
-            DataType::LargeList(_) => {
-                process_list!(list_array.as_list::<i64>());
-            }
-            other => return exec_err!("expected list, got {other}"),
+        let mut values = BooleanBuilder::with_capacity(evaluated.len());
+        for i in 0..evaluated.len() {
+            let (start, end) = evaluated.row_range(i);
+            // any_match_for_range returns None when nulls poison the result;
+            // null rows produce an empty range and return Some(false), but their
+            // null bit is preserved by attaching the original null bitmap below.
+            values.append_option(any_match_for_range(&predicate, start, end));
         }
 
         let (boolean_buffer, predicate_nulls) = values.finish().into_parts();
         // Merge: a row is null if the input list row was null or the predicate returned null.
-        let nulls = NullBuffer::union(list_array.nulls(), predicate_nulls.as_ref());
+        let nulls = NullBuffer::union(evaluated.nulls(), predicate_nulls.as_ref());
         Ok(ColumnarValue::Array(Arc::new(BooleanArray::new(
             boolean_buffer,
             nulls,
@@ -276,10 +201,15 @@ mod tests {
         execution_props::ExecutionProps,
         expr::{HigherOrderFunction, LambdaVariable},
         lambda, lit,
+        physical_planning_context::PhysicalPlanningContext,
     };
     use datafusion_physical_expr::create_physical_expr;
 
     use crate::array_any_match::{ArrayAnyMatch, array_any_match_higher_order_function};
+    use crate::lambda_utils::test_utils::{
+        create_i32_large_list, create_i32_list, eval_hof_on_i32_list,
+        eval_hof_on_i32_list_with_outer, v,
+    };
 
     fn run_any_match(
         list: impl arrow::array::Array + Clone + 'static,
@@ -311,6 +241,7 @@ mod tests {
             )),
             &schema,
             &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
         )?
         .evaluate(&RecordBatch::try_new(
             Arc::clone(schema.inner()),
@@ -344,6 +275,7 @@ mod tests {
             )),
             &schema,
             &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
         )?
         .evaluate(&RecordBatch::try_new(
             Arc::clone(schema.inner()),
@@ -515,6 +447,46 @@ mod tests {
         assert_eq!(
             result.as_any().downcast_ref::<BooleanArray>().unwrap(),
             &BooleanArray::from(vec![Some(true), Some(false)])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_any_match_large_list_parity() -> Result<()> {
+        let list = create_i32_large_list(
+            vec![1, 2, 3],
+            OffsetBuffer::<i64>::from_lengths(vec![3]),
+            None,
+        );
+        let result = eval_hof_on_i32_list(
+            array_any_match_higher_order_function(),
+            list,
+            v().gt(lit(2i32)),
+        )?;
+        assert_eq!(
+            result.as_any().downcast_ref::<BooleanArray>().unwrap(),
+            &BooleanArray::from(vec![Some(true)])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_any_match_captured_outer_column() -> Result<()> {
+        let list = create_i32_list(
+            vec![1, 50, 4, 50, 7, 50],
+            OffsetBuffer::<i32>::from_lengths(vec![2, 2, 2]),
+            None,
+        );
+        let number = Int32Array::from(vec![10, 40, 60]);
+        let result = eval_hof_on_i32_list_with_outer(
+            array_any_match_higher_order_function(),
+            list,
+            number,
+            v().gt(col("number")),
+        )?;
+        assert_eq!(
+            result.as_any().downcast_ref::<BooleanArray>().unwrap(),
+            &BooleanArray::from(vec![Some(true), Some(true), Some(false)])
         );
         Ok(())
     }

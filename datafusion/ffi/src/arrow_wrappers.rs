@@ -49,7 +49,6 @@ impl From<SchemaRef> for WrappedSchema {
 /// Since going through the FFI always has the potential to fail, we need to catch these errors,
 /// give the user a warning, and return some kind of result. In this case we default to an
 /// empty schema.
-#[cfg(not(tarpaulin_include))]
 fn catch_df_schema_error(e: &ArrowError) -> Schema {
     error!(
         "Unable to convert from FFI_ArrowSchema to DataFusion Schema in FFI_PlanProperties. {e}"

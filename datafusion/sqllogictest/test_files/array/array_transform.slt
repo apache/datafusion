@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -392,6 +392,12 @@ physical_plan
 01)SortExec: expr=[number@2 ASC NULLS LAST], preserve_partitioning=[false]
 02)--ProjectionExec: expr=[text@0 as text, list@1 as list, number@2 as number, CASE WHEN number@2 > 30 THEN array_transform(make_array(make_array(list@1)), (list) -> array_transform(list@3, (list) -> array_transform(list@4, (v) -> number@2 + v@5 + array_element(list@4, 1)))) ELSE array_transform(make_array(make_array(list@1)), (list) -> array_transform(list@3, (list) -> array_transform(list@4, (v) -> number@2 + array_element(list@4, 1)))) END as CASE WHEN t.number > Int64(30) THEN array_transform(make_array(make_array(t.list)),(list) -> array_transform(list,(list) -> array_transform(list,(v) -> t.number + v + list[Int64(1)]))) ELSE array_transform(make_array(make_array(t.list)),(list) -> array_transform(list,(list) -> array_transform(list,(v) -> t.number + list[Int64(1)]))) END]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# null arg
+query ?
+SELECT array_transform(NULL, x -> x * 2);
+----
+NULL
 
 query error
 select array_transform();

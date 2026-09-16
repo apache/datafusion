@@ -18,6 +18,8 @@
 //! Physical expressions for window functions
 
 mod bounded_window_agg_exec;
+#[cfg(feature = "proto")]
+mod proto;
 mod utils;
 mod window_agg_exec;
 
@@ -31,7 +33,7 @@ use crate::{
 
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow_schema::{FieldRef, SortOptions};
-use datafusion_common::{Result, exec_err};
+use datafusion_common::{Result, assert_or_internal_err, exec_err};
 use datafusion_expr::{
     LimitEffect, PartitionEvaluator, ReversedUDWF, SetMonotonicity, WindowFrame,
     WindowFunctionDefinition, WindowUDF,
@@ -52,7 +54,7 @@ use datafusion_physical_expr_common::sort_expr::{
 use itertools::Itertools;
 
 // Public interface:
-pub use bounded_window_agg_exec::BoundedWindowAggExec;
+pub use bounded_window_agg_exec::{BoundedWindowAggExec, WindowStateObserver};
 pub use datafusion_physical_expr::window::{
     PlainAggregateWindowExpr, StandardWindowExpr, WindowExpr,
 };
@@ -76,15 +78,13 @@ pub fn schema_add_window_field(
         .map(|f| f.as_ref().clone())
         .collect_vec();
     // Skip extending schema for UDAF
-    if let WindowFunctionDefinition::AggregateUDF(_) = window_fn {
-        Ok(Arc::new(Schema::new(window_fields)))
-    } else {
+    if !matches!(window_fn, WindowFunctionDefinition::AggregateUDF(_)) {
         window_fields.extend_from_slice(&[window_expr_return_field
             .as_ref()
             .clone()
             .with_name(fn_name)]);
-        Ok(Arc::new(Schema::new(window_fields)))
     }
+    Ok(Arc::new(Schema::new(window_fields)))
 }
 
 /// Create a physical expression for window function
@@ -568,7 +568,7 @@ pub(crate) fn window_equivalence_properties(
                                 Arc::new(window_col),
                                 SortOptions::new(true, false),
                             )]);
-                        };
+                        }
                     }
                 }
             }
@@ -594,25 +594,28 @@ pub fn get_best_fitting_window(
     // They are either the same with `window_expr`'s PARTITION BY columns,
     // or it is empty if partitioning is not desirable for this windowing operator.
     physical_partition_keys: &[Arc<dyn PhysicalExpr>],
+    // A [`WindowStateObserver`] installed on the source
+    // [`BoundedWindowAggExec`] (via [`BoundedWindowAggExec::with_state_observer`])
+    // that must survive the rebuild. Ignored when the rebuilt exec is a
+    // [`WindowAggExec`], which does not carry an observer. `None` when the
+    // source is a [`WindowAggExec`] or has no observer installed.
+    state_observer: Option<Arc<dyn WindowStateObserver>>,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     // Contains at least one window expr and all of the partition by and order by sections
     // of the window_exprs are same.
     let partitionby_exprs = window_exprs[0].partition_by();
     let orderby_keys = window_exprs[0].order_by();
-    let (should_reverse, input_order_mode) =
-        if let Some((should_reverse, input_order_mode)) =
-            get_window_mode(partitionby_exprs, orderby_keys, input)?
-        {
-            (should_reverse, input_order_mode)
-        } else {
-            return Ok(None);
-        };
+    let Some((should_reverse, input_order_mode)) =
+        get_window_mode(partitionby_exprs, orderby_keys, input)?
+    else {
+        return Ok(None);
+    };
     let is_unbounded = input.boundedness().is_unbounded();
     if !is_unbounded && input_order_mode != InputOrderMode::Sorted {
         // Executor has bounded input and `input_order_mode` is not `InputOrderMode::Sorted`
         // in this case removing the sort is not helpful, return:
         return Ok(None);
-    };
+    }
 
     let window_expr = if should_reverse {
         if let Some(reversed_window_expr) = window_exprs
@@ -620,6 +623,20 @@ pub fn get_best_fitting_window(
             .map(|e| e.get_reverse_expr())
             .collect::<Option<Vec<_>>>()
         {
+            // The rebuilt exec derives its schema from `WindowExpr::field()`, so a
+            // reversal that renames the output field would silently change this
+            // node's schema while parent nodes still reference the old column
+            // names. Catch that here, where the culprit is identifiable.
+            for (reversed, original) in reversed_window_expr.iter().zip(window_exprs) {
+                let (reversed_field, original_field) =
+                    (reversed.field()?, original.field()?);
+                assert_or_internal_err!(
+                    reversed_field.name() == original_field.name(),
+                    "Reversing window expression changed its output field name from {} to {}",
+                    original_field.name(),
+                    reversed_field.name()
+                );
+            }
             reversed_window_expr
         } else {
             // Cannot take reverse of any of the window expr
@@ -633,12 +650,15 @@ pub fn get_best_fitting_window(
     // If all window expressions can run with bounded memory, choose the
     // bounded window variant:
     if window_expr.iter().all(|e| e.uses_bounded_memory()) {
-        Ok(Some(Arc::new(BoundedWindowAggExec::try_new(
-            window_expr,
-            Arc::clone(input),
-            input_order_mode,
-            !physical_partition_keys.is_empty(),
-        )?) as _))
+        Ok(Some(Arc::new(
+            BoundedWindowAggExec::try_new(
+                window_expr,
+                Arc::clone(input),
+                input_order_mode,
+                !physical_partition_keys.is_empty(),
+            )?
+            .with_state_observer(state_observer)?,
+        ) as _))
     } else if input_order_mode != InputOrderMode::Sorted {
         // For `WindowAggExec` to work correctly PARTITION BY columns should be sorted.
         // Hence, if `input_order_mode` is not `Sorted` we should convert
@@ -934,6 +954,79 @@ mod tests {
         drop(fut);
         assert_strong_count_converges_to_zero(refs).await;
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_best_fitting_window_preserves_state_observer() -> Result<()> {
+        // `EnforceSorting`/`EnforceDistribution` call `get_best_fitting_window`
+        // on a source `BoundedWindowAggExec` and replace it with the returned
+        // exec. Without observer propagation, a `WindowStateObserver`
+        // installed on the source is silently dropped by the rebuild.
+        use datafusion_common::ScalarValue;
+        use datafusion_expr::{WindowFrameBound, WindowFrameUnits};
+
+        struct NoopObserver;
+        impl WindowStateObserver for NoopObserver {
+            fn finalize_window_aggregate(
+                &self,
+                _partition_idx: usize,
+                _window_expr: &Arc<dyn WindowExpr>,
+                _partition_key: &datafusion_physical_expr::window::PartitionKey,
+                _state: Vec<ScalarValue>,
+            ) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let schema = create_test_schema()?;
+        let sort = sort_expr("nullable_col", &schema);
+        let ordering: LexOrdering = [sort.clone()].into();
+        let source = streaming_table_exec(&schema, ordering, false)?;
+
+        let expr = create_window_expr(
+            &WindowFunctionDefinition::AggregateUDF(count_udaf()),
+            "cnt".to_string(),
+            &[col("nullable_col", &schema)?],
+            &[],
+            &[sort],
+            Arc::new(WindowFrame::new_bounds(
+                WindowFrameUnits::Rows,
+                WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+                WindowFrameBound::CurrentRow,
+            )),
+            source.schema(),
+            false,
+            false,
+            None,
+        )?;
+
+        let observer: Arc<dyn WindowStateObserver> = Arc::new(NoopObserver);
+        let bounded = BoundedWindowAggExec::try_new(
+            vec![expr],
+            Arc::clone(&source),
+            Sorted,
+            false,
+        )?
+        .with_state_observer(Some(Arc::clone(&observer)))?;
+
+        let rebuilt = get_best_fitting_window(
+            bounded.window_expr(),
+            bounded.input(),
+            &bounded.partition_keys(),
+            bounded.state_observer().cloned(),
+        )?
+        .expect("rebuild should produce a plan");
+        let bwag = rebuilt
+            .downcast_ref::<BoundedWindowAggExec>()
+            .expect("rebuild yielded BoundedWindowAggExec");
+        let installed = bwag
+            .state_observer()
+            .expect("observer preserved through rebuild");
+        assert!(
+            Arc::ptr_eq(installed, &observer),
+            "observer identity preserved through rebuild",
+        );
         Ok(())
     }
 

@@ -22,6 +22,7 @@ use arrow::error::ArrowError;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::function::Hint;
+use std::cmp::Ordering;
 use std::sync::Arc;
 
 /// Creates a function to identify the optimal return type of a string function given
@@ -32,7 +33,8 @@ use std::sync::Arc;
 ///
 /// If the input type is `Utf8` or `Binary` the return type is `$utf8Type`,
 ///
-/// If the input type is `Utf8View` the return type is $utf8Type,
+/// If the input type is `Utf8View`, `BinaryView` or `FixedSizeBinary` the
+/// return type is `$utf8Type`,
 macro_rules! get_optimal_return_type {
     ($FUNC:ident, $largeUtf8Type:expr, $utf8Type:expr) => {
         pub(crate) fn $FUNC(arg_type: &DataType, name: &str) -> Result<DataType> {
@@ -43,10 +45,13 @@ macro_rules! get_optimal_return_type {
                 DataType::Utf8 | DataType::Binary => $utf8Type,
                 // Utf8View max offset size is u32::MAX, the same as UTF8
                 DataType::Utf8View | DataType::BinaryView => $utf8Type,
+                // FixedSizeBinary sizes are declared as i32
+                DataType::FixedSizeBinary(_) => $utf8Type,
                 DataType::Null => DataType::Null,
                 DataType::Dictionary(_, value_type) => match **value_type {
                     DataType::LargeUtf8 | DataType::LargeBinary => $largeUtf8Type,
                     DataType::Utf8 | DataType::Binary => $utf8Type,
+                    DataType::FixedSizeBinary(_) => $utf8Type,
                     DataType::Null => DataType::Null,
                     _ => {
                         return datafusion_common::exec_err!(
@@ -73,6 +78,28 @@ get_optimal_return_type!(utf8_to_str_type, DataType::LargeUtf8, DataType::Utf8);
 
 // `utf8_to_int_type`: returns either a Int32 or Int64 based on the input type size.
 get_optimal_return_type!(utf8_to_int_type, DataType::Int64, DataType::Int32);
+
+/// Transforms the leaf type while preserving supported encoding containers.
+///
+/// Keep encoded type handling centralized here so additional encodings can be
+/// supported without changing each function's return type implementation.
+pub(crate) fn transform_leaf_type_preserving_encoding<F>(
+    arg_type: &DataType,
+    transform: &F,
+) -> Result<DataType>
+where
+    F: Fn(&DataType) -> Result<DataType>,
+{
+    match arg_type {
+        DataType::Dictionary(key_type, value_type) => Ok(DataType::Dictionary(
+            key_type.clone(),
+            Box::new(transform_leaf_type_preserving_encoding(
+                value_type, transform,
+            )?),
+        )),
+        _ => transform(arg_type),
+    }
+}
 
 /// Creates a scalar function implementation for the given function.
 /// * `inner` - the function to be executed
@@ -276,53 +303,47 @@ where
 
 /// Converts Decimal128 components (value and scale) to an unscaled i128
 pub fn decimal128_to_i128(value: i128, scale: i8) -> Result<i128, ArrowError> {
-    if scale < 0 {
-        Err(ArrowError::ComputeError(
+    match scale.cmp(&0) {
+        Ordering::Less => Err(ArrowError::ComputeError(
             "Negative scale is not supported".into(),
-        ))
-    } else if scale == 0 {
-        Ok(value)
-    } else {
-        match i128::from(10).checked_pow(scale as u32) {
+        )),
+        Ordering::Equal => Ok(value),
+        Ordering::Greater => match i128::from(10).checked_pow(scale as u32) {
             Some(divisor) => Ok(value / divisor),
             None => Err(ArrowError::ComputeError(format!(
                 "Cannot get a power of {scale}"
             ))),
-        }
+        },
     }
 }
 
 pub fn decimal32_to_i32(value: i32, scale: i8) -> Result<i32, ArrowError> {
-    if scale < 0 {
-        Err(ArrowError::ComputeError(
+    match scale.cmp(&0) {
+        Ordering::Less => Err(ArrowError::ComputeError(
             "Negative scale is not supported".into(),
-        ))
-    } else if scale == 0 {
-        Ok(value)
-    } else {
-        match 10_i32.checked_pow(scale as u32) {
+        )),
+        Ordering::Equal => Ok(value),
+        Ordering::Greater => match 10_i32.checked_pow(scale as u32) {
             Some(divisor) => Ok(value / divisor),
             None => Err(ArrowError::ComputeError(format!(
                 "Cannot get a power of {scale}"
             ))),
-        }
+        },
     }
 }
 
 pub fn decimal64_to_i64(value: i64, scale: i8) -> Result<i64, ArrowError> {
-    if scale < 0 {
-        Err(ArrowError::ComputeError(
+    match scale.cmp(&0) {
+        Ordering::Less => Err(ArrowError::ComputeError(
             "Negative scale is not supported".into(),
-        ))
-    } else if scale == 0 {
-        Ok(value)
-    } else {
-        match i64::from(10).checked_pow(scale as u32) {
+        )),
+        Ordering::Equal => Ok(value),
+        Ordering::Greater => match i64::from(10).checked_pow(scale as u32) {
             Some(divisor) => Ok(value / divisor),
             None => Err(ArrowError::ComputeError(format!(
                 "Cannot get a power of {scale}"
             ))),
-        }
+        },
     }
 }
 

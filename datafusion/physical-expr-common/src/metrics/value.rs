@@ -1050,11 +1050,9 @@ impl MetricValue {
             Self::SpilledRows(_) => 12,
             Self::CurrentMemoryUsage(_) => 13,
             Self::Count { name, .. } => match name.as_ref() {
-                // This Parquet page-index metric is a plain Count because it
-                // records pages that skipped page-index evaluation, not a
-                // pruned/matched pair. Keep it grouped with the other
+                // Keep lazy Parquet pruning counters grouped with the other
                 // page-index pruning metrics in EXPLAIN output.
-                "page_index_pages_skipped_by_fully_matched" => 8,
+                "page_index_pages_skipped_by_fully_matched" | "limit_pruned_rows" => 8,
                 _ => 14,
             },
             Self::PeakMemoryUsage { .. } => 13,
@@ -1186,13 +1184,13 @@ mod tests {
         let other_custom_val = new_custom_counter("Hello", 1);
 
         // Not equal since the name differs.
-        assert!(other_custom_val != custom_val);
+        assert_ne!(other_custom_val, custom_val);
 
         // Should work even though the name differs
         custom_val.aggregate(&other_custom_val);
 
         let expected_val = new_custom_counter("Hi", 2);
-        assert!(expected_val == custom_val);
+        assert_eq!(expected_val, custom_val);
     }
 
     #[test]
@@ -1202,7 +1200,7 @@ mod tests {
 
         custom_val.aggregate(&other_custom_val);
 
-        assert!(custom_val != other_custom_val);
+        assert_ne!(custom_val, other_custom_val);
 
         if let MetricValue::Custom { value, .. } = custom_val {
             let counter = value

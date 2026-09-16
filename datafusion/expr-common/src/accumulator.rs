@@ -92,6 +92,8 @@ pub trait Accumulator: Send + Sync + Debug + std::any::Any {
     ///
     /// "Allocated" means that for internal containers such as `Vec`,
     /// the `capacity` should be used not the `len`.
+    ///
+    /// May be expensive; check the implementation before calling on hot paths.
     fn size(&self) -> usize;
 
     /// Returns the intermediate state of the accumulator, consuming the

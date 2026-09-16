@@ -1,0 +1,26 @@
+description = "Join Order Benchmark queries over the IMDb dataset"
+
+query_pattern = "{QUERY_ID_PADDED}.benchmark"
+
+[path_replacements]
+DATA_DIR = "../../data"
+
+[[options]]
+name = "format"
+short = "f"
+env = "IMDB_FILE_TYPE"
+default = "parquet"
+values = ["parquet", "csv"]
+help = "Selects the IMDb data format."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- imdb"
+description = "Run all IMDb queries against Parquet data."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- imdb --query 01a"
+description = "Run IMDb query 01a."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- imdb --query 01a -f csv"
+description = "Run IMDb query 01a against CSV data."

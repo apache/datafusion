@@ -42,7 +42,7 @@
 //! Spark functions taking priority.
 //!
 //! ```
-//! # use datafusion_execution::FunctionRegistry;
+//! # use datafusion_expr::registry::FunctionRegistry;
 //! # use datafusion_expr::{ScalarUDF, AggregateUDF, WindowUDF, HigherOrderUDF};
 //! # use datafusion_expr::planner::ExprPlanner;
 //! # use datafusion_common::Result;
@@ -137,10 +137,10 @@ mod session_state;
 #[cfg(feature = "core")]
 pub use session_state::SessionStateBuilderSpark;
 
-use datafusion_catalog::TableFunction;
 use datafusion_common::Result;
-use datafusion_execution::FunctionRegistry;
+use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
+use datafusion_session::TableFunction;
 use log::debug;
 use std::sync::Arc;
 

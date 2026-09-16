@@ -151,8 +151,10 @@ pub struct FunctionalDependence {
 /// Describes functional dependency mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dependency {
-    Single, // A determinant key may occur only once.
-    Multi,  // A determinant key may occur multiple times (in multiple rows).
+    /// A determinant key may occur only once.
+    Single,
+    /// A determinant key may occur multiple times (in multiple rows).
+    Multi,
 }
 
 impl FunctionalDependence {
@@ -539,7 +541,7 @@ pub fn get_target_functional_dependencies(
     }
     (!combined_target_indices.is_empty()).then_some({
         let mut result = combined_target_indices.into_iter().collect::<Vec<_>>();
-        result.sort();
+        result.sort_unstable();
         result
     })
 }
@@ -561,7 +563,7 @@ pub fn get_required_group_by_exprs_indices(
         })
         .collect::<Option<Vec<_>>>()?;
 
-    groupby_expr_indices.sort();
+    groupby_expr_indices.sort_unstable();
     for FunctionalDependence {
         source_indices,
         target_indices,

@@ -50,6 +50,16 @@ pub(crate) fn try_as_scalar_i64(cv: &ColumnarValue) -> Option<i64> {
     }
 }
 
+/// Estimates data capacity for `pad` based on `length_array` with row length.
+/// For ASCII, one row is at most `target_len` bytes.
+/// For UTF8, it could be larger
+pub(crate) fn pad_data_capacity(length_array: &Int64Array) -> usize {
+    length_array
+        .iter()
+        .flatten()
+        .fold(0, |acc, len| acc.saturating_add(len as usize))
+}
+
 /// A trait for `left` and `right` byte slicing operations
 pub(crate) trait LeftRightSlicer {
     fn slice(string: &str, n: i64) -> Range<usize>;
@@ -115,16 +125,22 @@ pub(crate) enum StringCharLen {
 /// Calculate the byte length of the substring of `n` chars from string `string`
 #[inline]
 fn left_right_byte_length(string: &str, n: i64) -> usize {
+    let abs = n.unsigned_abs().min(usize::MAX as u64) as usize;
+    // For ASCII input every character is exactly one byte, so the byte offset of
+    // the n-th codepoint is just the (clamped) character count. This avoids the
+    // per-character `char_indices()` scan of the general path.
     match n.cmp(&0) {
+        Ordering::Equal => 0,
+        // `abs` chars trimmed from the end: keep the leading `len - abs`.
+        Ordering::Less if string.is_ascii() => string.len().saturating_sub(abs),
         Ordering::Less => string
             .char_indices()
-            .nth_back((n.unsigned_abs().min(usize::MAX as u64) - 1) as usize)
+            .nth_back(abs - 1)
             .map(|(index, _)| index)
             .unwrap_or(0),
-        Ordering::Equal => 0,
-        Ordering::Greater => {
-            byte_offset_of_char(string, n.unsigned_abs().min(usize::MAX as u64) as usize)
-        }
+        // First `abs` chars, but never past the end of the string.
+        Ordering::Greater if string.is_ascii() => abs.min(string.len()),
+        Ordering::Greater => byte_offset_of_char(string, abs),
     }
 }
 
@@ -151,79 +167,20 @@ pub(crate) fn general_left_right<F: LeftRightSlicer>(
     }
 }
 
-/// Returns true if all offsets in the array fit in i32, meaning the values
-/// buffer can be referenced by StringView's offset field.
-fn values_fit_in_i32<T: OffsetSizeTrait>(string_array: &GenericStringArray<T>) -> bool {
-    string_array
-        .offsets()
-        .last()
-        .map(|offset| offset.as_usize() <= i32::MAX as usize)
-        .unwrap_or(true)
-}
-
 /// `left`/`right` for Utf8/LargeUtf8 input.
-///
-/// When offsets fit in i32, produces a zero-copy `StringViewArray` with views
-/// pointing into the input values buffer. Otherwise falls back to building a
-/// `StringViewArray` by copying.
 fn general_left_right_array<T: OffsetSizeTrait, F: LeftRightSlicer>(
     string_array: &GenericStringArray<T>,
     n_array: &Int64Array,
 ) -> Result<ArrayRef> {
-    if !values_fit_in_i32(string_array) {
-        let result = string_array
-            .iter()
-            .zip(n_array.iter())
-            .map(|(string, n)| match (string, n) {
-                (Some(string), Some(n)) => Some(&string[F::slice(string, n)]),
-                _ => None,
-            })
-            .collect::<StringViewArray>();
-        return Ok(Arc::new(result) as ArrayRef);
-    }
-
-    let len = string_array.len();
-    let offsets = string_array.value_offsets();
-    let nulls = NullBuffer::union(string_array.nulls(), n_array.nulls());
-
-    let mut views_buf = Vec::with_capacity(len);
-    let mut has_out_of_line = false;
-
-    for (i, offset) in offsets.iter().enumerate().take(len) {
-        if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
-            views_buf.push(0);
-            continue;
-        }
-
-        // SAFETY: we just checked validity above
-        let string = unsafe { string_array.value_unchecked(i) };
-        let n = n_array.value(i);
-        let range = F::slice(string, n);
-        let result_bytes = &string.as_bytes()[range.clone()];
-        if result_bytes.len() > 12 {
-            has_out_of_line = true;
-        }
-
-        let buf_offset = offset.as_usize() as u32 + range.start as u32;
-        views_buf.push(make_view(result_bytes, 0, buf_offset));
-    }
-
-    let views = ScalarBuffer::from(views_buf);
-    let data_buffers = if has_out_of_line {
-        vec![string_array.values().clone()]
-    } else {
-        vec![]
-    };
-
-    // SAFETY:
-    // - Each view is produced by `make_view` with correct bytes and offset
-    // - Out-of-line views reference buffer index 0, which is the original
-    //   values buffer included in data_buffers when has_out_of_line is true
-    // - values_fit_in_i32 guarantees all offsets fit in i32
-    unsafe {
-        let array = StringViewArray::new_unchecked(views, data_buffers, nulls);
-        Ok(Arc::new(array) as ArrayRef)
-    }
+    let result = string_array
+        .iter()
+        .zip(n_array.iter())
+        .map(|(string, n)| match (string, n) {
+            (Some(string), Some(n)) => Some(&string[F::slice(string, n)]),
+            _ => None,
+        })
+        .collect::<GenericStringArray<T>>();
+    Ok(Arc::new(result) as ArrayRef)
 }
 
 /// `general_left_right` for StringViewArray input.

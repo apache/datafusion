@@ -38,7 +38,7 @@ const ANY_CHAR_REGEX_PATTERN: &str = ".*";
 /// - full anchored regex patterns (e.g. `^foo$`) to `= 'foo'`
 /// - partial anchored regex patterns (e.g. `^foo`) to `LIKE 'foo%'`
 /// - combinations (alternatives) of the above, will be concatenated with `OR` or `AND`
-/// - `EQ .*` to NotNull
+/// - `EQ .*` to `col IS NOT NULL OR NULL` (true for any string, NULL if col is NULL)
 /// - `NE .*` to col IS NULL AND Boolean(NULL) (false for any string, or NULL if col is NULL)
 ///
 /// Dev note: unit tests of this function are in `expr_simplifier.rs`, case `test_simplify_regex`.
@@ -75,8 +75,11 @@ pub fn simplify_regex_expr(
                 right: Box::new(null_bool),
             })
         } else {
-            // not null
-            left.is_not_null()
+            // `col ~ '.*'` matches every non-NULL string and yields NULL for a
+            // NULL input (three-valued logic). Mirror the `not` branch so the
+            // NULL row is preserved (`NULL`) instead of collapsing to `false`.
+            let null_bool = lit(ScalarValue::Boolean(None));
+            left.is_not_null().or(null_bool)
         };
         return Ok(Transformed::yes(new_expr));
     }
@@ -208,7 +211,7 @@ fn is_anchored_literal(v: &[Hir]) -> bool {
     match v.len() {
         2..=3 => (),
         _ => return false,
-    };
+    }
 
     let first_last = (
         v.first().expect("length checked"),

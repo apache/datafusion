@@ -25,12 +25,13 @@ use self::early_stop::EarlyStoppingStream;
 use self::encryption::EncryptionContext;
 use crate::access_plan::PreparedAccessPlan;
 use crate::decoder_projection::DecoderProjection;
+use crate::metrics::{ByteProgress, RowFilterSkippedFullyMatchedMetric};
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::push_decoder::{
-    DecoderBuilderConfig, PushDecoderStreamState, RgPlanEntry, RowGroupPruner,
+    DecoderBuilderConfig, InitialDecoderState, PushDecoderStreamState, RgPlanEntry,
+    RowGroupPruner,
 };
-use crate::row_filter::RowFilterGenerator;
-use crate::row_group_filter::RowGroupAccessPlanFilter;
+use crate::row_group_filter::{RowGroupAccessPlanFilter, row_group_in_range};
 use crate::{
     BloomFilterStatistics, Int96Coercer, ParquetAccessPlan, ParquetFileMetrics,
     ParquetFileReaderFactory, ParquetRowSelection, ParquetVirtualColumn,
@@ -57,15 +58,16 @@ use datafusion_common::{
     ColumnStatistics, HashSet, Result, ScalarValue, Statistics, exec_err, internal_err,
 };
 use datafusion_datasource::{PartitionedFile, TableSchema};
-use datafusion_physical_expr::expressions::{Column, DynamicFilterTracking};
+use datafusion_physical_expr::expressions::{Column, DynamicFilterTracking, Literal};
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
+use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
 };
-use datafusion_pruning::{FilePruner, PruningPredicate, build_pruning_predicate};
+use datafusion_pruning::{FilePruner, PruningPredicate, PruningPredicateBuilder};
 
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::config::EncryptionFactoryOptions;
@@ -289,6 +291,10 @@ pub(super) struct ParquetMorselizer {
     /// Maximum size of the predicate cache, in bytes. If none, uses
     /// the arrow-rs default.
     pub max_predicate_cache_size: Option<usize>,
+    /// Maximum `IN (...)` list size eligible for statistics pruning. Longer
+    /// lists skip container-level pruning. Sourced from
+    /// `datafusion.execution.parquet.max_in_list_size`.
+    pub max_in_list_size: usize,
     /// Whether to read row groups in reverse order
     pub reverse_row_groups: bool,
     /// Optional sort order used to reorder row groups by their min/max statistics.
@@ -418,6 +424,16 @@ impl fmt::Debug for ParquetOpenState {
 struct PreparedParquetOpen {
     partition_index: usize,
     partitioned_file: PartitionedFile,
+    /// Tracks how much of this file range the scan has finished with.
+    ///
+    /// Held here, rather than built when the stream is, so that it covers the
+    /// fallible stages of opening a file too: loading metadata, preparing
+    /// filters, loading bloom filters. Any of those failing drops this state,
+    /// and the guard credits the range on the way out — matching
+    /// `files_processed`, which counts a file that failed to open as processed
+    /// (see `FileStreamScanState`). Otherwise a scan that skipped over a bad
+    /// file could never reach 100%.
+    byte_progress: ByteProgress,
     file_range: Option<datafusion_datasource::FileRange>,
     extensions: datafusion_datasource::FileExtensions,
     file_name: String,
@@ -445,12 +461,34 @@ struct PreparedParquetOpen {
     enable_page_index: bool,
     enable_bloom_filter: bool,
     enable_row_group_stats_pruning: bool,
+    /// True when substituting the columns `constant_columns_from_stats`
+    /// proved constant for this file is on its own enough to collapse the
+    /// predicate to a constant no row can satisfy — see `prune_row_groups`.
+    ///
+    /// Provisional until `prepare_filters` has the physical file schema: see
+    /// `stats_constant_columns_in_predicate`.
+    stats_prove_unsatisfiable: bool,
+    /// The stats-derived constant columns the predicate actually references,
+    /// recorded only when `stats_prove_unsatisfiable` is set.
+    ///
+    /// Collected file statistics cannot distinguish a column that is
+    /// physically absent from the Parquet file from one that is present and
+    /// all NULL: `statistics_from_parquet_metadata` documents that a column
+    /// in the Arrow schema but not the Parquet schema gets
+    /// `Precision::Exact(null)` min/max and an `Exact(num_rows)` null count —
+    /// exactly what a present all-NULL column produces. So an absent column
+    /// can enter the constants as a NULL and collapse the predicate, which
+    /// would prune the very missing-column case this flag exists to leave
+    /// alone. `prepare_filters` clears the flag once the physical schema
+    /// shows whether these columns are really in the file.
+    stats_constant_columns_in_predicate: Vec<String>,
     limit: Option<usize>,
     coerce_int96: Option<TimeUnit>,
     coerce_int96_tz: Option<Arc<str>>,
     expr_adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
     predicate_creation_errors: Count,
     max_predicate_cache_size: Option<usize>,
+    max_in_list_size: usize,
     reverse_row_groups: bool,
     sort_order_for_reorder: Option<LexOrdering>,
     preserve_order: bool,
@@ -550,10 +588,7 @@ impl ParquetOpenState {
             }
             ParquetOpenState::PruneWithStatistics(prepared) => {
                 let prepared_row_groups = (*prepared).prune_row_groups()?;
-                if should_load_page_index(
-                    prepared_row_groups.prepared.page_pruning_predicate.as_ref(),
-                    &prepared_row_groups.row_groups,
-                ) {
+                if prepared_row_groups.should_load_page_index() {
                     Ok(ParquetOpenState::LoadPageIndex(
                         prepared_row_groups.load_page_index().boxed(),
                     ))
@@ -673,7 +708,7 @@ impl ParquetMorselPlanner {
 
 impl MorselPlanner for ParquetMorselPlanner {
     fn plan(self: Box<Self>) -> Result<Option<MorselPlan>> {
-        if let ParquetOpenState::Done = self.state {
+        if matches!(self.state, ParquetOpenState::Done) {
             return Ok(None);
         }
 
@@ -781,10 +816,42 @@ impl ParquetMorselizer {
         // Note that if there are statistics for partition columns there will be overlap,
         // but since we use a HashMap, we'll just overwrite the partition values with the
         // constant values from statistics (which should be the same).
-        literal_columns.extend(constant_columns_from_stats(
+        let stats_constants = constant_columns_from_stats(
             partitioned_file.statistics.as_deref(),
             &logical_file_schema,
-        ));
+        );
+        // Whether the statistics substitution *itself* proves the predicate
+        // unsatisfiable has to be decided here, before the partition-value
+        // and missing-column rewriting below: a predicate can collapse to a
+        // constant through either of those too, and only a collapse the
+        // file's own statistics produced is proof for `prune_row_groups`.
+        // The referenced columns are recorded alongside the flag because this
+        // is also too early to know whether they exist in the file at all —
+        // `prepare_filters` re-checks them against the physical file schema.
+        let stats_referenced: Vec<String> =
+            match (&self.predicate, stats_constants.is_empty()) {
+                (Some(predicate), false) => collect_columns(predicate)
+                    .iter()
+                    .filter(|c| stats_constants.contains_key(c.name()))
+                    .map(|c| c.name().to_string())
+                    .collect(),
+                _ => Vec::new(),
+            };
+        // `stats_referenced` is the cheap short-circuit so the simplifier only
+        // runs when a stats-derived constant is actually referenced.
+        let stats_prove_unsatisfiable = !stats_referenced.is_empty()
+            && self.predicate.as_ref().is_some_and(|p| {
+                stats_alone_unsatisfiable(
+                    p,
+                    &stats_constants,
+                    self.table_schema.table_schema(),
+                )
+            });
+        let stats_constant_columns_in_predicate = match stats_prove_unsatisfiable {
+            true => stats_referenced,
+            false => Vec::new(),
+        };
+        literal_columns.extend(stats_constants);
 
         let mut projection = self.projection.clone();
         let mut predicate = self.predicate.clone();
@@ -818,8 +885,18 @@ impl ParquetMorselizer {
             )
         });
 
+        let byte_progress = ByteProgress::new(
+            partitioned_file.effective_size(),
+            ParquetFileMetrics::bytes_processed_counter(
+                &self.metrics,
+                self.partition_index,
+                &file_name,
+            ),
+        );
+
         Ok(PreparedParquetOpen {
             partition_index: self.partition_index,
+            byte_progress,
             partitioned_file,
             file_range,
             extensions,
@@ -844,12 +921,15 @@ impl ParquetMorselizer {
             enable_page_index: self.enable_page_index,
             enable_bloom_filter: self.enable_bloom_filter,
             enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
+            stats_prove_unsatisfiable,
+            stats_constant_columns_in_predicate,
             limit: self.limit,
             coerce_int96: self.coerce_int96,
             coerce_int96_tz: self.coerce_int96_tz.clone(),
             expr_adapter_factory: Arc::clone(&self.expr_adapter_factory),
             predicate_creation_errors,
             max_predicate_cache_size: self.max_predicate_cache_size,
+            max_in_list_size: self.max_in_list_size,
             reverse_row_groups: self.reverse_row_groups,
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             preserve_order: self.preserve_order,
@@ -886,6 +966,8 @@ impl PreparedParquetOpen {
             self.file_metrics
                 .files_ranges_pruned_statistics
                 .add_pruned(1);
+            // Dropping `self` here credits the whole range: the scan is done
+            // with every byte of it without having read any.
             return Ok(None);
         }
 
@@ -1047,17 +1129,40 @@ impl MetadataLoadedParquetOpen {
         }
         prepared.physical_file_schema = Arc::clone(&physical_file_schema);
 
+        // The physical schema is only known here, so this is the first point
+        // that can tell a stats-derived NULL constant for a column genuinely
+        // present in the file from one synthesized for a column the file does
+        // not have (see `stats_constant_columns_in_predicate`). Withdraw the
+        // proof if any referenced column turns out to be absent: pruning on a
+        // synthesized NULL would skip the missing-column case this flag is
+        // meant to leave alone, and a custom `PhysicalExprAdapter` may fill a
+        // missing column with a non-NULL default, so the skip could drop rows
+        // that default would have matched.
+        if prepared.stats_prove_unsatisfiable
+            && prepared
+                .stats_constant_columns_in_predicate
+                .iter()
+                .any(|name| physical_file_schema.field_with_name(name).is_err())
+        {
+            prepared.stats_prove_unsatisfiable = false;
+        }
+
         // Build predicates for this specific file
         let pruning_predicate = build_pruning_predicates(
             prepared.predicate.as_ref(),
             &physical_file_schema,
             &prepared.predicate_creation_errors,
+            prepared.max_in_list_size,
         );
 
         // Only build page pruning predicate if page index is enabled
         let page_pruning_predicate = if prepared.enable_page_index {
             prepared.predicate.as_ref().and_then(|predicate| {
-                let p = build_page_pruning_predicate(predicate, &physical_file_schema);
+                let p = build_page_pruning_predicate(
+                    predicate,
+                    &physical_file_schema,
+                    prepared.max_in_list_size,
+                );
                 (p.filter_number() > 0).then_some(p)
             })
         } else {
@@ -1097,13 +1202,43 @@ impl FiltersPreparedParquetOpen {
             row_groups.prune_by_range(rg_metadata, range);
         }
 
+        // Substituting the columns file statistics proved constant
+        // (`constant_columns_from_stats`) collapsed the predicate to a
+        // constant that can never be true (`false`, or NULL — filters treat
+        // NULL as false), so the file's own statistics have proven that no
+        // row can match: skip every remaining row group, credited to
+        // statistics pruning. Without this, the substitution is strictly
+        // counterproductive for such files: it *removes* the column
+        // references the pruning predicate would need
+        // (`build_pruning_predicates` returns `None` for a bare literal), so
+        // a file that was previously pruned via its `null_count` statistics
+        // is instead scanned in full.
+        //
+        // The flag is deliberately computed from the statistics substitution
+        // alone (see `ParquetMorselizer::prepare`). A predicate can also
+        // collapse via the missing-column adapter or partition-value
+        // folding, and those paths keep their existing behaviour (files
+        // pruned by partition values are `FilePruner`'s job); a mixed
+        // predicate that only collapses once one of them has run is not
+        // treated as proof here.
+        if prepared.enable_row_group_stats_pruning && prepared.stats_prove_unsatisfiable {
+            prepared
+                .file_metrics
+                .row_groups_pruned_statistics
+                .add_pruned(row_groups.remaining_row_group_count());
+            row_groups.skip_all();
+            return Ok(RowGroupsPrunedParquetOpen {
+                prepared: self,
+                row_groups,
+            });
+        }
+
         // If there is a predicate that can be evaluated against the metadata
         if let Some(predicate) = self.pruning_predicate.as_ref().map(|p| p.as_ref()) {
             if prepared.enable_row_group_stats_pruning {
-                row_groups.prune_by_statistics(
+                row_groups.prune_by_statistics_with_metadata(
                     &prepared.physical_file_schema,
-                    loaded.reader_metadata.parquet_schema(),
-                    rg_metadata,
+                    &file_metadata,
                     predicate,
                     &prepared.file_metrics,
                 );
@@ -1145,6 +1280,50 @@ impl FiltersPreparedParquetOpen {
 }
 
 impl RowGroupsPrunedParquetOpen {
+    /// Returns true if the reader would benefit from a page index load, given
+    /// the current pruning predicate and row group access plan.
+    ///
+    /// The page index is used for data page pruning, and it is only useful
+    /// when:
+    ///
+    /// 1. There is at least one row group that may have filtered rows
+    ///    (if it is fully matched we know no rows will be filtered)
+    ///
+    /// 2. There is a page index for at least one predicate column (some
+    ///    parquet writers do not write the page index).
+    fn should_load_page_index(&self) -> bool {
+        let Some(page_pruning_predicate) = self.prepared.page_pruning_predicate.as_ref()
+        else {
+            return false;
+        };
+        let row_groups = &self.row_groups;
+        let fully_matched = row_groups.is_fully_matched();
+        // if all row groups are fully matched, nothing can be pruned
+        if row_groups.row_group_indexes().all(|idx| fully_matched[idx]) {
+            return false;
+        }
+
+        // Check the file's footer metadata to see if a page index was written
+        // for at least one predicate column in a surviving row group.
+        //
+        // Note: offsets are recorded in the footer, so we can determine if a
+        // page index exists before attempting to read it.
+        let parquet_metadata = self.prepared.loaded.reader_metadata.metadata();
+        let arrow_schema = &self.prepared.loaded.prepared.physical_file_schema;
+        let parquet_schema = parquet_metadata.file_metadata().schema_descr();
+        page_pruning_predicate.predicate_column_names().any(|name| {
+            let Some((leaf_idx, _)) = parquet_column(parquet_schema, arrow_schema, name)
+            else {
+                return false;
+            };
+            row_groups.row_group_indexes().any(|rg_idx| {
+                let column = parquet_metadata.row_group(rg_idx).column(leaf_idx);
+                column.column_index_offset().is_some()
+                    && column.offset_index_offset().is_some()
+            })
+        })
+    }
+
     /// Load the page index if pruning requires it and metadata did not include it.
     async fn load_page_index(mut self) -> Result<Self> {
         self.prepared.loaded.reader_metadata = load_page_index(
@@ -1327,6 +1506,11 @@ impl RowGroupsPrunedParquetOpen {
                     reader_metadata.parquet_schema(),
                     file_metadata.as_ref(),
                     &prepared.file_metrics,
+                    if prepared.preserve_order {
+                        None
+                    } else {
+                        prepared.limit
+                    },
                 );
             access_plan = page_pruning_result.access_plan;
             ParquetFileMetrics::add_page_index_pages_skipped_by_fully_matched(
@@ -1334,6 +1518,12 @@ impl RowGroupsPrunedParquetOpen {
                 prepared.partition_index,
                 &prepared.file_name,
                 page_pruning_result.pages_skipped_by_fully_matched,
+            );
+            ParquetFileMetrics::add_limit_pruned_rows(
+                &prepared.metrics,
+                prepared.partition_index,
+                &prepared.file_name,
+                page_pruning_result.limit_pruned_rows,
             );
         }
 
@@ -1386,18 +1576,41 @@ impl RowGroupsPrunedParquetOpen {
             prepared.virtual_state.as_deref(),
         )?;
 
-        let (decoder, rg_plan) = {
+        // Lazily-registered suppression counter shared by the open-time first-RG
+        // skip below and the stream's per-RG toggle (registered on first use so
+        // scans that never suppress don't carry a zero-valued counter).
+        let mut row_filter_skipped_fully_matched =
+            RowFilterSkippedFullyMatchedMetric::new(
+                &prepared.metrics,
+                prepared.partition_index,
+                &prepared.file_name,
+            );
+        let InitialDecoderState {
+            decoder,
+            rg_plan,
+            has_row_selection,
+            filter_installed,
+            row_filter_context,
+        } = {
             let pushdown_predicate = prepared
                 .pushdown_filters
                 .then_some(prepared.predicate.as_ref())
                 .flatten();
-            let mut row_filter_generator = RowFilterGenerator::new(
-                pushdown_predicate,
-                &prepared.physical_file_schema,
-                file_metadata.as_ref(),
-                prepared.reorder_predicates,
-                &prepared.file_metrics,
-            );
+            // Precompute the prebuilt candidate list once per file. Both the
+            // initial `RowFilter` and any per-RG rebuilds (via
+            // `RowFilterContext::build`) reuse it, so tree walks
+            // (`reassign_expr_columns`) and column resolution only run once —
+            // not once per row group.
+            let precomputed_context = pushdown_predicate.and_then(|predicate| {
+                crate::push_decoder::RowFilterContext::try_new(
+                    predicate,
+                    &prepared.physical_file_schema,
+                    &file_metadata,
+                    prepared.reorder_predicates,
+                    prepared.file_metrics.clone(),
+                    prepared.max_predicate_cache_size,
+                )
+            });
 
             // Build the prepared access plan first — `prepare_access_plan` may
             // call `reorder_by_statistics` (for `sort_order_for_reorder`) and
@@ -1415,26 +1628,109 @@ impl RowGroupsPrunedParquetOpen {
             };
 
             let prepared_access_plan = prepare_access_plan(access_plan)?;
+            // #24355: a row selection (from page-index pruning, or an externally
+            // supplied `ParquetRowSelection`) is carried by the decoder as one
+            // flat selection over the concatenation of the remaining row groups.
+            // The runtime pruner's `into_builder().with_row_groups(...)` rebuild
+            // drops row groups without slicing that selection to match, so record
+            // whether a selection is present and disable runtime pruning below
+            // when it is (mirroring `reorder_by_statistics`, which also bails when
+            // a row selection is present). The proper fix that keeps pruning
+            // under a live selection is tracked in
+            // https://github.com/apache/arrow-rs/issues/10624 /
+            // https://github.com/apache/datafusion/issues/24358.
+            let has_row_selection = prepared_access_plan.row_selection.is_some();
+            // Build `rg_plan` parallel to the decoder's view: the
+            // `prepared_access_plan` has already had its empty-selection
+            // row groups stripped, so 1:1 correspondence with the readers
+            // arrow-rs will hand back is restored. We zip with the
+            // `fully_matched` flag so the stream can toggle the per-row
+            // `RowFilter` per RG.
             let rg_plan: VecDeque<RgPlanEntry> = prepared_access_plan
                 .row_group_indexes
                 .iter()
                 .copied()
-                .map(|rg_index| RgPlanEntry { rg_index })
+                .zip(prepared_access_plan.fully_matched.iter().copied())
+                .map(|(rg_index, fully_matched)| RgPlanEntry {
+                    rg_index,
+                    fully_matched,
+                    bytes: row_group_bytes(&rg_metadata[rg_index]),
+                })
                 .collect();
+
+            // Decide the initial row filter state based on the first RG to
+            // read. If that RG is `fully_matched` the per-row predicate is
+            // a no-op for every row, so we install an empty `RowFilter`
+            // (arrow-rs's `has_predicates` check then short-circuits the
+            // per-row eval) and the stream toggles back to the real filter
+            // at the first non-fully-matched RG boundary.
+            //
+            // `RowFilterContext` carries everything `build_row_filter`
+            // needs so the stream can regenerate the filter later — the
+            // installed filter is owned by the decoder and is not
+            // recoverable once replaced.
+            let first_rg_fully_matched = rg_plan.front().is_some_and(|e| e.fully_matched);
+            let row_filter_context = precomputed_context;
 
             let mut builder =
                 decoder_config.build(prepared_access_plan, reader_metadata.clone());
-            if let Some(row_filter) = row_filter_generator.next_filter() {
-                builder = builder.with_row_filter(row_filter);
-                if let Some(max_predicate_cache_size) = prepared.max_predicate_cache_size
-                {
-                    builder =
-                        builder.with_max_predicate_cache_size(max_predicate_cache_size);
+            let mut filter_installed = false;
+            if let Some(ctx) = row_filter_context.as_ref() {
+                if first_rg_fully_matched {
+                    // The first RG is fully matched: install an empty filter
+                    // and count the suppression, exactly as the per-RG toggle
+                    // does mid-scan, so the metric is consistent whether the
+                    // skip happens at open time or at a later boundary. The
+                    // real filter is only built (lazily, from the prebuilt
+                    // candidates) at the first non-fully-matched boundary.
+                    builder = builder.with_row_filter(
+                        parquet::arrow::arrow_reader::RowFilter::new(vec![]),
+                    );
+                    row_filter_skipped_fully_matched.add_one();
+                } else {
+                    builder = builder.with_row_filter(ctx.build_row_filter());
+                    filter_installed = true;
+                    if let Some(max_predicate_cache_size) =
+                        prepared.max_predicate_cache_size
+                    {
+                        builder = builder
+                            .with_max_predicate_cache_size(max_predicate_cache_size);
+                    }
                 }
             }
 
-            (builder.build()?, rg_plan)
+            InitialDecoderState {
+                decoder: builder.build()?,
+                rg_plan,
+                has_row_selection,
+                filter_installed,
+                row_filter_context,
+            }
         };
+
+        // Track how much of this file range the scan has finished with. Credit
+        // up front every row group it will not read: those pruning removed, and
+        // — for a file split into ranges for parallelism — those belonging to
+        // another range. Without this the metric would sit at zero until the
+        // first row group finishes decoding, reporting no progress for a scan
+        // that may have just proved most of its work unnecessary.
+        let mut byte_progress = prepared.byte_progress;
+        // Every row group still in `rg_plan` is one this range owns, since the
+        // plan it was built from had `prune_by_range` applied. The planned row
+        // groups are therefore a subset of the in-range ones, and subtracting
+        // leaves exactly those the scan will skip.
+        let in_range_bytes: u64 = rg_metadata
+            .iter()
+            .filter(|rg_meta| {
+                prepared
+                    .file_range
+                    .as_ref()
+                    .is_none_or(|range| row_group_in_range(rg_meta, range))
+            })
+            .map(row_group_bytes)
+            .sum();
+        let planned_bytes: u64 = rg_plan.iter().map(|entry| entry.bytes).sum();
+        byte_progress.credit(in_range_bytes.saturating_sub(planned_bytes));
 
         let predicate_cache_inner_records =
             prepared.file_metrics.predicate_cache_inner_records.clone();
@@ -1455,28 +1751,34 @@ impl RowGroupsPrunedParquetOpen {
         // via the `DynamicFilterTracker` watch channel (#22460), so detecting
         // a threshold change is a single atomic load — not a tree walk per
         // RG check.
-        let row_group_pruner = match (&prepared.predicate, rg_plan.len() > 1) {
-            (Some(predicate), true)
-                if matches!(
-                    DynamicFilterTracking::classify(predicate),
-                    DynamicFilterTracking::Watching(_)
-                ) =>
-            {
-                Some(RowGroupPruner::new(
-                    Arc::clone(predicate),
-                    Arc::clone(&prepared.physical_file_schema),
-                    Arc::clone(reader_metadata.metadata()),
-                    prepared.predicate_creation_errors.clone(),
-                    prepared.file_metrics.predicate_evaluation_errors.clone(),
-                ))
-            }
-            _ => None,
-        };
+        // Also disabled when a row selection is live (#24355) — page-index
+        // pruning is the common source: the pruner rebuilds the decoder via
+        // `with_row_groups(...)`, which drops row groups without slicing the
+        // carried selection to match, so pruning under a live selection returns
+        // wrong results. Decline to prune in that case.
+        let row_group_pruner =
+            match (&prepared.predicate, rg_plan.len() > 1, has_row_selection) {
+                (Some(predicate), true, false)
+                    if matches!(
+                        DynamicFilterTracking::classify(predicate),
+                        DynamicFilterTracking::Watching(_)
+                    ) =>
+                {
+                    Some(RowGroupPruner::new(
+                        Arc::clone(predicate),
+                        Arc::clone(&prepared.physical_file_schema),
+                        Arc::clone(reader_metadata.metadata()),
+                        prepared.predicate_creation_errors.clone(),
+                        prepared.file_metrics.predicate_evaluation_errors.clone(),
+                        prepared.max_in_list_size,
+                    ))
+                }
+                _ => None,
+            };
         let row_groups_pruned_dynamic = prepared
             .file_metrics
             .row_groups_pruned_dynamic_filter
             .clone();
-
         let stream = PushDecoderStreamState {
             decoder: Some(decoder),
             active_reader: None,
@@ -1489,6 +1791,10 @@ impl RowGroupsPrunedParquetOpen {
             baseline_metrics: prepared.baseline_metrics,
             row_group_pruner,
             row_groups_pruned_dynamic,
+            row_filter_context,
+            filter_installed,
+            row_filter_skipped_fully_matched,
+            byte_progress,
         }
         .into_stream();
 
@@ -1511,7 +1817,45 @@ impl RowGroupsPrunedParquetOpen {
     }
 }
 
+/// The on-disk size of a row group, as credited to the `bytes_processed` metric documented on
+/// [`ParquetFileMetrics`].
+fn row_group_bytes(rg_meta: &RowGroupMetaData) -> u64 {
+    u64::try_from(rg_meta.compressed_size()).unwrap_or(0)
+}
+
 type ConstantColumns = HashMap<String, ScalarValue>;
+
+/// True when substituting `stats_constants` — the columns this file's
+/// statistics prove constant — is on its own enough to collapse `predicate`
+/// to a constant no row can satisfy (`false`, or NULL, which filters treat
+/// as false).
+///
+/// Only the statistics substitution is applied, so a predicate that needs
+/// the missing-column adapter or partition-value folding to collapse does
+/// not qualify: those are separate proofs with their own pruning paths.
+///
+/// `schema` must resolve every column the predicate can reference — pass the
+/// full table schema, since the simplifier types each node as it walks and
+/// the substitution leaves non-constant columns in place. Substitution or
+/// simplification failing is not proof, so both answer `false` and leave the
+/// caller's normal pruning paths untouched.
+fn stats_alone_unsatisfiable(
+    predicate: &Arc<dyn PhysicalExpr>,
+    stats_constants: &ConstantColumns,
+    schema: &Schema,
+) -> bool {
+    let Ok(substituted) =
+        replace_columns_with_literals(Arc::clone(predicate), stats_constants)
+    else {
+        return false;
+    };
+    let Ok(simplified) = PhysicalExprSimplifier::new(schema).simplify(substituted) else {
+        return false;
+    };
+    simplified.downcast_ref::<Literal>().is_some_and(|l| {
+        l.value().is_null() || l.value() == &ScalarValue::Boolean(Some(false))
+    })
+}
 
 /// Extract constant column values from statistics, keyed by column name in the logical file schema.
 fn constant_columns_from_stats(
@@ -1621,10 +1965,12 @@ fn create_initial_plan(
 pub(crate) fn build_page_pruning_predicate(
     predicate: &Arc<dyn PhysicalExpr>,
     file_schema: &SchemaRef,
+    max_in_list_size: usize,
 ) -> Arc<PagePruningAccessPlanFilter> {
-    Arc::new(PagePruningAccessPlanFilter::new(
+    Arc::new(PagePruningAccessPlanFilter::new_with_max_in_list_size(
         predicate,
-        Arc::clone(file_schema),
+        file_schema,
+        max_in_list_size,
     ))
 }
 
@@ -1632,29 +1978,14 @@ pub(crate) fn build_pruning_predicates(
     predicate: Option<&Arc<dyn PhysicalExpr>>,
     file_schema: &SchemaRef,
     predicate_creation_errors: &Count,
+    max_in_list_size: usize,
 ) -> Option<Arc<PruningPredicate>> {
     let predicate = predicate.as_ref()?;
-    build_pruning_predicate(
-        Arc::clone(predicate),
-        file_schema,
-        predicate_creation_errors,
-    )
-}
-
-/// Returns true if the page index must be loaded for page-level pruning.
-///
-/// The page index can only prune when at least one surviving row group is not
-/// fully matched by row-group statistics alone.
-fn should_load_page_index(
-    page_pruning_predicate: Option<&Arc<PagePruningAccessPlanFilter>>,
-    row_groups: &RowGroupAccessPlanFilter,
-) -> bool {
-    page_pruning_predicate.is_some_and(|_| {
-        let fully_matched = row_groups.is_fully_matched();
-        row_groups
-            .row_group_indexes()
-            .any(|idx| !fully_matched[idx])
-    })
+    PruningPredicateBuilder::new()
+        .with_file_schema(Arc::clone(file_schema))
+        .with_error_counter(predicate_creation_errors)
+        .with_max_in_list_size(max_in_list_size)
+        .build(Arc::clone(predicate))
 }
 
 /// Returns a `ArrowReaderMetadata` with the page index loaded, loading
@@ -1692,16 +2023,17 @@ async fn load_page_index<T: AsyncFileReader>(
 mod test {
     use super::*;
     use super::{ConstantColumns, ParquetMorselizer, constant_columns_from_stats};
+    use crate::metadata::DFParquetMetadata;
     use crate::{
         CachedParquetFileReaderFactory, DefaultParquetFileReaderFactory,
         ParquetFileReaderFactory, ParquetRowSelection, RowGroupAccess,
     };
-    use arrow::array::RecordBatch;
+    use arrow::array::{RecordBatch, record_batch};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{
         ColumnStatistics, ScalarValue, Statistics, assert_contains, internal_err,
-        record_batch, stats::Precision,
+        stats::Precision,
     };
     use datafusion_datasource::morsel::{Morsel, Morselizer};
     use datafusion_datasource::{PartitionedFile, TableSchema, TableSchemaBuilder};
@@ -1709,7 +2041,7 @@ mod test {
         CachedFileMetadataEntry, FileMetadataCache,
     };
     use datafusion_execution::cache::default_cache::DefaultCache;
-    use datafusion_expr::{col, lit};
+    use datafusion_expr::{Expr, col, lit};
     use datafusion_physical_expr::{
         PhysicalExpr,
         expressions::{Column, DynamicFilterPhysicalExpr, Literal},
@@ -1720,13 +2052,14 @@ mod test {
         DefaultPhysicalExprAdapterFactory, replace_columns_with_literals,
     };
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+    use datafusion_pruning::MAX_IN_LIST_SIZE;
     use futures::StreamExt;
     use futures::stream::BoxStream;
     use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory, path::Path};
-    use parquet::arrow::ArrowWriter;
-    use parquet::file::metadata::ColumnChunkMetaData;
-    use parquet::file::properties::WriterProperties;
-    use parquet::schema::types::{SchemaDescPtr, SchemaDescriptor};
+    use parquet::arrow::{ArrowSchemaConverter, ArrowWriter};
+    use parquet::file::metadata::{ColumnChunkMetaData, FileMetaData, ParquetMetaData};
+    use parquet::file::properties::{EnabledStatistics, WriterProperties};
+    use parquet::schema::types::SchemaDescPtr;
     use std::collections::VecDeque;
     use std::sync::Arc;
 
@@ -1752,6 +2085,7 @@ mod test {
         enable_row_group_stats_pruning: bool,
         coerce_int96: Option<TimeUnit>,
         max_predicate_cache_size: Option<usize>,
+        max_in_list_size: usize,
         reverse_row_groups: bool,
         preserve_order: bool,
     }
@@ -1822,19 +2156,121 @@ mod test {
             .collect()
     }
 
-    fn test_schema_descr() -> SchemaDescPtr {
-        use parquet::basic::{LogicalType, Type as PhysicalType};
-        use parquet::schema::types::Type as SchemaType;
+    #[test]
+    fn should_load_page_index_checks_predicate_columns() {
+        // "a" has page index offsets recorded in the footer, "b" does not
+        let metadata = page_index_metadata(&[("a", true), ("b", false)], 1);
 
-        let field = SchemaType::primitive_type_builder("a", PhysicalType::BYTE_ARRAY)
-            .with_logical_type(Some(LogicalType::String))
-            .build()
-            .unwrap();
-        let schema = SchemaType::group_type_builder("schema")
-            .with_fields(vec![Arc::new(field)])
-            .build()
-            .unwrap();
-        Arc::new(SchemaDescriptor::new(Arc::new(schema)))
+        // predicate on "a": the file has a page index for it, so load it
+        assert!(should_load_page_index(
+            metadata.clone(),
+            Some(col("a").gt(lit(50i32))),
+            ParquetAccessPlan::new_all(1),
+        ));
+
+        // predicate on "b": no page index for that column, so skip the load
+        assert!(!should_load_page_index(
+            metadata,
+            Some(col("b").gt(lit(50i32))),
+            ParquetAccessPlan::new_all(1),
+        ));
+    }
+
+    fn test_schema_descr() -> SchemaDescPtr {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
+        Arc::new(ArrowSchemaConverter::new().convert(&schema).unwrap())
+    }
+
+    /// Metadata for a file of Int32 `columns`, where each `(name,
+    /// has_page_index)` entry controls whether the footer records page index
+    /// offsets for that column.
+    fn page_index_metadata(
+        columns: &[(&str, bool)],
+        num_row_groups: usize,
+    ) -> ParquetMetaData {
+        let arrow_schema = Schema::new(
+            columns
+                .iter()
+                .map(|(name, _)| Field::new(*name, DataType::Int32, false))
+                .collect::<Vec<_>>(),
+        );
+        let schema_descr =
+            Arc::new(ArrowSchemaConverter::new().convert(&arrow_schema).unwrap());
+
+        let row_groups = (0..num_row_groups)
+            .map(|_| {
+                let columns = columns
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, (_, has_page_index))| {
+                        let mut builder =
+                            ColumnChunkMetaData::builder(schema_descr.column(idx))
+                                .set_num_values(10);
+                        if *has_page_index {
+                            builder = builder
+                                .set_column_index_offset(Some(100))
+                                .set_column_index_length(Some(10))
+                                .set_offset_index_offset(Some(110))
+                                .set_offset_index_length(Some(10));
+                        }
+                        builder.build().unwrap()
+                    })
+                    .collect();
+                RowGroupMetaData::builder(Arc::clone(&schema_descr))
+                    .set_num_rows(10)
+                    .set_column_metadata(columns)
+                    .build()
+                    .unwrap()
+            })
+            .collect();
+        let file_metadata =
+            FileMetaData::new(1, 10, None, None, Arc::clone(&schema_descr), None);
+        ParquetMetaData::new(file_metadata, row_groups)
+    }
+
+    /// Reports [`RowGroupsPrunedParquetOpen::should_load_page_index`] for
+    /// hand-built parquet `metadata` (no I/O), an optional predicate, and a
+    /// row group access plan.
+    fn should_load_page_index(
+        metadata: ParquetMetaData,
+        predicate: Option<Expr>,
+        plan: ParquetAccessPlan,
+    ) -> bool {
+        use crate::RowGroupAccessPlanFilter;
+        use parquet::arrow::parquet_to_arrow_schema;
+
+        let arrow_schema: SchemaRef = Arc::new(
+            parquet_to_arrow_schema(metadata.file_metadata().schema_descr(), None)
+                .unwrap(),
+        );
+        let page_pruning_predicate = predicate.map(|expr| {
+            let predicate = logical2physical(&expr, &arrow_schema);
+            build_page_pruning_predicate(&predicate, &arrow_schema, MAX_IN_LIST_SIZE)
+        });
+
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let morselizer = ParquetMorselizerBuilder::new()
+            .with_store(store)
+            .with_schema(Arc::clone(&arrow_schema))
+            .build();
+        let file = PartitionedFile::new("test.parquet".to_string(), 100);
+        let prepared = morselizer.prepare_open_file(file).unwrap();
+        let options = ArrowReaderOptions::new();
+        let reader_metadata =
+            ArrowReaderMetadata::try_new(Arc::new(metadata), options.clone()).unwrap();
+        let open = RowGroupsPrunedParquetOpen {
+            prepared: FiltersPreparedParquetOpen {
+                loaded: MetadataLoadedParquetOpen {
+                    prepared,
+                    reader_metadata,
+                    options,
+                },
+                pruning_predicate: None,
+                page_pruning_predicate,
+            },
+            row_groups: RowGroupAccessPlanFilter::new(plan),
+        };
+        open.should_load_page_index()
     }
 
     impl ParquetMorselizerBuilder {
@@ -1860,6 +2296,7 @@ mod test {
                 enable_row_group_stats_pruning: false,
                 coerce_int96: None,
                 max_predicate_cache_size: None,
+                max_in_list_size: MAX_IN_LIST_SIZE,
                 reverse_row_groups: false,
                 preserve_order: false,
             }
@@ -1960,6 +2397,12 @@ mod test {
             self
         }
 
+        /// Set whether the scan must preserve file order.
+        fn with_preserve_order(mut self, enable: bool) -> Self {
+            self.preserve_order = enable;
+            self
+        }
+
         /// Build the ParquetMorselizer instance, unwrapping validation errors.
         ///
         /// # Panics
@@ -2037,6 +2480,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: self.max_predicate_cache_size,
+                max_in_list_size: self.max_in_list_size,
                 reverse_row_groups: self.reverse_row_groups,
                 sort_order_for_reorder: None,
                 virtual_state,
@@ -2206,6 +2650,43 @@ mod test {
         write_parquet_batches(store, filename, vec![batch], None).await
     }
 
+    /// Write `batch` and return the statistics a collecting `ListingTable`
+    /// would attach for `logical_file_schema`, produced by the same
+    /// `statistics_from_parquet_metadata` the read path uses.
+    ///
+    /// Tests about schema evolution have to go through this rather than
+    /// hand-build `Statistics`: the shape that function synthesizes for a
+    /// logical column the file does not physically contain is the whole
+    /// subject, so a hand-built approximation can silently stop matching it.
+    async fn write_parquet_with_collected_statistics(
+        store: Arc<dyn ObjectStore>,
+        filename: &str,
+        batch: RecordBatch,
+        logical_file_schema: &SchemaRef,
+    ) -> (usize, Statistics) {
+        use parquet::file::metadata::ParquetMetaDataReader;
+
+        let mut out = BytesMut::new().writer();
+        {
+            let mut writer =
+                ArrowWriter::try_new(&mut out, batch.schema(), None).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+        let data = out.into_inner().freeze();
+        let data_len = data.len();
+        let metadata = ParquetMetaDataReader::new()
+            .parse_and_finish(&data)
+            .unwrap();
+        let statistics = DFParquetMetadata::statistics_from_parquet_metadata(
+            &metadata,
+            logical_file_schema,
+        )
+        .unwrap();
+        store.put(&Path::from(filename), data.into()).await.unwrap();
+        (data_len, statistics)
+    }
+
     /// Write multiple batches to a parquet file with optional writer properties
     async fn write_parquet_batches(
         store: Arc<dyn ObjectStore>,
@@ -2245,6 +2726,289 @@ mod test {
             expr.children().into_iter().map(Arc::clone).collect(),
             expr,
         ))
+    }
+
+    /// `bytes_processed` reports how much of a file range a scan has finished
+    /// with, so every one of these asserts the same invariant: by the time the
+    /// stream is dropped it has advanced by exactly the size of the range,
+    /// however the scan got there.
+    mod bytes_processed {
+        use super::*;
+
+        /// Three batches of three rows, each forced into its own row group.
+        async fn write_three_row_groups(store: Arc<dyn ObjectStore>) -> (SchemaRef, u64) {
+            let batches = vec![
+                record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap(),
+                record_batch!(("a", Int32, vec![Some(4), Some(5), Some(6)])).unwrap(),
+                record_batch!(("a", Int32, vec![Some(7), Some(8), Some(9)])).unwrap(),
+            ];
+            let schema = batches[0].schema();
+            let props = WriterProperties::builder()
+                .set_max_row_group_row_count(Some(3))
+                .build();
+            let data_len =
+                write_parquet_batches(store, "test.parquet", batches, Some(props)).await;
+            (schema, u64::try_from(data_len).unwrap())
+        }
+
+        fn bytes_processed(metrics: &ExecutionPlanMetricsSet) -> u64 {
+            u64::try_from(counter_metric_value(metrics, "bytes_processed")).unwrap()
+        }
+
+        #[tokio::test]
+        async fn scanning_a_whole_file_credits_all_of_it() {
+            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+            let (schema, data_len) = write_three_row_groups(Arc::clone(&store)).await;
+            let file = PartitionedFile::new("test.parquet".to_string(), data_len);
+            let metrics = ExecutionPlanMetricsSet::new();
+
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_projection_indices(&[0])
+                .with_metrics(metrics.clone())
+                .build();
+
+            let (_, rows) =
+                count_batches_and_rows(open_file(&morselizer, file).await.unwrap()).await;
+
+            assert_eq!(rows, 9);
+            assert_eq!(bytes_processed(&metrics), data_len);
+        }
+
+        /// Credit lands a row group at a time while the scan runs, rather than
+        /// all at once when the file closes — which is what makes this finer
+        /// grained than `files_processed`.
+        #[tokio::test]
+        async fn credit_advances_while_the_scan_runs() {
+            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+            let (schema, data_len) = write_three_row_groups(Arc::clone(&store)).await;
+            let file = PartitionedFile::new("test.parquet".to_string(), data_len);
+            let metrics = ExecutionPlanMetricsSet::new();
+
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_projection_indices(&[0])
+                .with_metrics(metrics.clone())
+                .build();
+
+            let mut stream = open_file(&morselizer, file).await.unwrap();
+            assert_eq!(
+                bytes_processed(&metrics),
+                0,
+                "nothing is pruned here, so nothing is credited before decoding",
+            );
+
+            let mut seen = 0;
+            let mut batches = 0;
+            while let Some(batch) = stream.next().await {
+                batch.unwrap();
+                batches += 1;
+                let processed = bytes_processed(&metrics);
+                assert!(
+                    processed > seen,
+                    "batch {batches} must have advanced the credit past {seen}, \
+                     got {processed}",
+                );
+                assert!(
+                    processed < data_len,
+                    "the whole file must not be credited while row groups remain",
+                );
+                seen = processed;
+            }
+
+            assert_eq!(batches, 3, "one batch per row group");
+            drop(stream);
+            assert_eq!(bytes_processed(&metrics), data_len);
+        }
+
+        /// The point of the metric: bytes pruning saved are credited when the
+        /// file is opened, not withheld until something is decoded.
+        #[tokio::test]
+        async fn row_group_pruning_is_credited_before_any_batch_is_read() {
+            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+            let (schema, data_len) = write_three_row_groups(Arc::clone(&store)).await;
+            let file = PartitionedFile::new("test.parquet".to_string(), data_len);
+            let metrics = ExecutionPlanMetricsSet::new();
+
+            // Only the first row group holds values below 4.
+            let predicate = logical2physical(&col("a").lt(lit(4)), &schema);
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_projection_indices(&[0])
+                .with_predicate(predicate)
+                .with_row_group_stats_pruning(true)
+                .with_metrics(metrics.clone())
+                .build();
+
+            let stream = open_file(&morselizer, file).await.unwrap();
+            let pruned_at_open = bytes_processed(&metrics);
+            assert!(
+                pruned_at_open > 0,
+                "the two pruned row groups must be credited at open, before any \
+                 batch is decoded, since that is the progress `files_processed` misses",
+            );
+
+            let (_, rows) = count_batches_and_rows(stream).await;
+            assert_eq!(rows, 3);
+            assert_eq!(bytes_processed(&metrics), data_len);
+        }
+
+        /// A file pruned by a dynamic filter never loads its footer, so its
+        /// whole size is credited from the plan-time file size.
+        #[tokio::test]
+        async fn a_file_pruned_before_open_credits_its_whole_size() {
+            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+            let (schema, data_len) = write_three_row_groups(Arc::clone(&store)).await;
+            let file = PartitionedFile::new("test.parquet".to_string(), data_len)
+                .with_statistics(Arc::new(
+                    Statistics::new_unknown(&schema).add_column_statistics(
+                        ColumnStatistics::new_unknown()
+                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(1))))
+                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(9))))
+                            .with_null_count(Precision::Exact(0)),
+                    ),
+                ));
+            let metrics = ExecutionPlanMetricsSet::new();
+
+            // No row in the file can match, so file-level pruning skips it
+            // without reading anything.
+            let predicate =
+                make_dynamic_expr(logical2physical(&col("a").gt(lit(100)), &schema));
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_projection_indices(&[0])
+                .with_predicate(predicate)
+                .with_metrics(metrics.clone())
+                .build();
+
+            let (_, rows) =
+                count_batches_and_rows(open_file(&morselizer, file).await.unwrap()).await;
+
+            assert_eq!(rows, 0);
+            assert_eq!(
+                counter_metric_value(&metrics, "bytes_scanned"),
+                0,
+                "the file must have been pruned without being read",
+            );
+            assert_eq!(bytes_processed(&metrics), data_len);
+        }
+
+        /// A file split into byte ranges for parallelism: each range credits its
+        /// own size and no more, so the ranges add up to the file exactly rather
+        /// than each claiming all of it.
+        #[tokio::test]
+        async fn each_range_of_a_split_file_credits_only_its_own_bytes() {
+            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+            let (schema, data_len) = write_three_row_groups(Arc::clone(&store)).await;
+
+            let split = i64::try_from(data_len).unwrap() / 2;
+            let ranges = [(0, split), (split, i64::try_from(data_len).unwrap())];
+
+            let mut total_processed = 0;
+            let mut total_rows = 0;
+            for (start, end) in ranges {
+                let file = PartitionedFile::new_with_range(
+                    "test.parquet".to_string(),
+                    data_len,
+                    start,
+                    end,
+                );
+                let expected = file.effective_size();
+                let metrics = ExecutionPlanMetricsSet::new();
+
+                let morselizer = ParquetMorselizerBuilder::new()
+                    .with_store(Arc::clone(&store))
+                    .with_schema(Arc::clone(&schema))
+                    .with_projection_indices(&[0])
+                    .with_metrics(metrics.clone())
+                    .build();
+
+                let stream = open_file(&morselizer, file).await.unwrap();
+                assert_eq!(
+                    bytes_processed(&metrics),
+                    0,
+                    "nothing is pruned here, so range [{start}, {end}) must credit \
+                     nothing at open: every row group it owns is one it will read, \
+                     and the row groups it does not own belong to the other range",
+                );
+
+                let (_, rows) = count_batches_and_rows(stream).await;
+
+                assert_eq!(
+                    bytes_processed(&metrics),
+                    expected,
+                    "range [{start}, {end}) must credit exactly its own length",
+                );
+                total_processed += expected;
+                total_rows += rows;
+            }
+
+            assert_eq!(total_rows, 9, "the ranges together must scan every row");
+            assert_eq!(total_processed, data_len);
+        }
+
+        /// A file that cannot be opened at all is still a file the scan is done
+        /// with. `files_processed` counts one under `OnError::Skip`, so its
+        /// byte-granular counterpart has to agree — otherwise a scan that
+        /// skipped a corrupt file could never reach 100%.
+        #[tokio::test]
+        async fn a_file_that_fails_to_open_still_credits_its_range() {
+            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+            let (schema, _) = write_three_row_groups(Arc::clone(&store)).await;
+
+            // Not a parquet file at all, so reading the footer fails long
+            // before a stream — and so before a `ByteProgress` would exist if
+            // one were only built alongside the decoder.
+            let garbage = vec![b'x'; 512];
+            let data_len = u64::try_from(garbage.len()).unwrap();
+            store
+                .put(&Path::from("corrupt.parquet"), garbage.into())
+                .await
+                .unwrap();
+
+            let file = PartitionedFile::new("corrupt.parquet".to_string(), data_len);
+            let metrics = ExecutionPlanMetricsSet::new();
+
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(schema)
+                .with_projection_indices(&[0])
+                .with_metrics(metrics.clone())
+                .build();
+
+            let opened = open_file(&morselizer, file).await;
+            assert!(opened.is_err(), "a non-parquet file must fail to open");
+            assert_eq!(bytes_processed(&metrics), data_len);
+        }
+
+        /// A scan that stops early still ends up crediting the whole range, so a
+        /// consumer dividing by the plan's byte total is not left permanently
+        /// short of 100%.
+        #[tokio::test]
+        async fn a_limit_that_ends_the_scan_early_still_credits_the_range() {
+            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+            let (schema, data_len) = write_three_row_groups(Arc::clone(&store)).await;
+            let file = PartitionedFile::new("test.parquet".to_string(), data_len);
+            let metrics = ExecutionPlanMetricsSet::new();
+
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_projection_indices(&[0])
+                .with_limit(2)
+                .with_metrics(metrics.clone())
+                .build();
+
+            let (_, rows) =
+                count_batches_and_rows(open_file(&morselizer, file).await.unwrap()).await;
+
+            assert_eq!(rows, 2);
+            assert_eq!(bytes_processed(&metrics), data_len);
+        }
     }
 
     #[tokio::test]
@@ -2449,6 +3213,302 @@ mod test {
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
+    }
+
+    /// Row groups this scan skipped through statistics pruning.
+    ///
+    /// The row count alone cannot tell "pruned" from "scanned, then
+    /// row-filtered" — both yield zero rows — so the tests around
+    /// constant-column substitution assert on this metric instead.
+    fn pruned_row_groups_statistics(metrics: &ExecutionPlanMetricsSet) -> usize {
+        use datafusion_physical_plan::metrics::MetricValue;
+        metrics
+            .clone_inner()
+            .iter()
+            .find_map(|m| match m.value() {
+                MetricValue::PruningMetrics {
+                    name,
+                    pruning_metrics,
+                } if name == "row_groups_pruned_statistics" => {
+                    Some(pruning_metrics.pruned())
+                }
+                _ => None,
+            })
+            .expect("row_groups_pruned_statistics metric is emitted")
+    }
+
+    #[tokio::test]
+    async fn test_prune_all_null_column_equality_from_file_statistics() {
+        // Regression: a column whose file statistics say every value is
+        // NULL cannot satisfy `col = <literal>`, so the file's row groups
+        // must be pruned. Constant-column substitution folds the all-NULL
+        // column to a NULL literal, collapsing the predicate to a
+        // constant; the opener has to recognise that and skip the row
+        // groups, rather than lose the pruning because the substituted
+        // predicate no longer references any column.
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let batch = record_batch!(
+            ("a", Int32, vec![Some(1), Some(2), Some(3)]),
+            ("b", Utf8, vec![None::<&str>, None, None])
+        )
+        .unwrap();
+        let data_size =
+            write_parquet(Arc::clone(&store), "file.parquet", batch.clone()).await;
+        let file_schema = batch.schema();
+        let mut file = PartitionedFile::new(
+            "file.parquet".to_string(),
+            u64::try_from(data_size).unwrap(),
+        );
+        // Statistics as a collecting `ListingTable` would supply them: the
+        // `b` column's null count equals the row count, i.e. every value is
+        // NULL. (`new_unknown` pre-fills one entry per field, so overwrite
+        // rather than append.)
+        let mut statistics = Statistics::new_unknown(&file_schema);
+        statistics.num_rows = Precision::Exact(3);
+        statistics.column_statistics[1].null_count = Precision::Exact(3);
+        file.statistics = Some(Arc::new(statistics));
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, true),
+        ]));
+        let table_schema_for_opener = TableSchemaBuilder::from(&file_schema).build();
+        let make_opener = |predicate, metrics: ExecutionPlanMetricsSet| {
+            ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_table_schema(table_schema_for_opener.clone())
+                .with_projection_indices(&[0])
+                .with_predicate(predicate)
+                .with_row_group_stats_pruning(true)
+                .with_metrics(metrics)
+                .build()
+        };
+
+        // `b = 'x'` cannot match: every `b` is NULL, so the file's one row
+        // group is pruned from statistics rather than read and filtered.
+        let metrics = ExecutionPlanMetricsSet::new();
+        let expr = col("b").eq(lit("x"));
+        let predicate = logical2physical(&expr, &table_schema);
+        let opener = make_opener(predicate, metrics.clone());
+        let stream = open_file(&opener, file.clone()).await.unwrap();
+        let (_, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(num_rows, 0);
+        assert_eq!(
+            pruned_row_groups_statistics(&metrics),
+            1,
+            "an all-NULL column cannot satisfy equality: the row group must be pruned"
+        );
+
+        // A predicate the statistics cannot disprove still reads the file,
+        // so the skip above is not simply "prune everything".
+        let metrics = ExecutionPlanMetricsSet::new();
+        let expr = col("a").eq(lit(2));
+        let predicate = logical2physical(&expr, &table_schema);
+        let opener = make_opener(predicate, metrics.clone());
+        let stream = open_file(&opener, file).await.unwrap();
+        let (num_batches, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(num_batches, 1);
+        assert_eq!(num_rows, 3);
+        assert_eq!(pruned_row_groups_statistics(&metrics), 0);
+    }
+
+    #[tokio::test]
+    async fn test_prune_exact_constant_column_false_predicate_from_file_statistics() {
+        // The `false` half of the branch above, which the all-NULL case
+        // only covers for NULL: exact min == max statistics prove `a`
+        // constant, so `a = <other literal>` folds to `false` and the row
+        // group is pruned on that proof.
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let batch = record_batch!(("a", Int32, vec![Some(7), Some(7), Some(7)])).unwrap();
+        let data_size =
+            write_parquet(Arc::clone(&store), "file.parquet", batch.clone()).await;
+        let file_schema = batch.schema();
+        let mut file = PartitionedFile::new(
+            "file.parquet".to_string(),
+            u64::try_from(data_size).unwrap(),
+        );
+        let mut statistics = Statistics::new_unknown(&file_schema);
+        statistics.num_rows = Precision::Exact(3);
+        statistics.column_statistics[0].null_count = Precision::Exact(0);
+        statistics.column_statistics[0].min_value =
+            Precision::Exact(ScalarValue::Int32(Some(7)));
+        statistics.column_statistics[0].max_value =
+            Precision::Exact(ScalarValue::Int32(Some(7)));
+        file.statistics = Some(Arc::new(statistics));
+        let table_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let table_schema_for_opener = TableSchemaBuilder::from(&file_schema).build();
+
+        let metrics = ExecutionPlanMetricsSet::new();
+        let expr = col("a").eq(lit(8));
+        let predicate = logical2physical(&expr, &table_schema);
+        let opener = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_table_schema(table_schema_for_opener)
+            .with_projection_indices(&[0])
+            .with_predicate(predicate)
+            .with_row_group_stats_pruning(true)
+            .with_metrics(metrics.clone())
+            .build();
+        let stream = open_file(&opener, file).await.unwrap();
+        let (_, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(num_rows, 0);
+        assert_eq!(
+            pruned_row_groups_statistics(&metrics),
+            1,
+            "a column statistics prove constant cannot equal a different literal: \
+             the row group must be pruned"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_no_prune_when_missing_column_collapses_mixed_predicate() {
+        // A stats-derived constant appearing in the predicate is not proof
+        // that the statistics are what made it unsatisfiable. Here `a = 1`
+        // is proven true by statistics and folds away, and the collapse to
+        // NULL comes from `b = 2` — a column this file does not have. That
+        // is the schema-evolution path, which deliberately scans and
+        // row-filters rather than pruning, so the statistics branch must not
+        // fire.
+        //
+        // The statistics come from `statistics_from_parquet_metadata` rather
+        // than being hand-built, because the shape that matters is the one it
+        // synthesizes for a missing column: `Exact(null)` min/max and an
+        // `Exact(num_rows)` null count, indistinguishable from a present
+        // all-NULL column. Hand-building anything weaker (leaving `b`
+        // unknown, say) stops `b` from ever becoming a constant, and the test
+        // then passes without exercising this path at all.
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        // The file has only `a`; `b` is in the table schema but missing
+        // from this file.
+        let batch = record_batch!(("a", Int32, vec![Some(1), Some(1), Some(1)])).unwrap();
+        let physical_schema = batch.schema();
+        let logical_file_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, true),
+        ]));
+        let (data_size, statistics) = write_parquet_with_collected_statistics(
+            Arc::clone(&store),
+            "file.parquet",
+            batch,
+            &logical_file_schema,
+        )
+        .await;
+        let mut file = PartitionedFile::new(
+            "file.parquet".to_string(),
+            u64::try_from(data_size).unwrap(),
+        );
+        // Assert the premise instead of trusting it: if collection ever stops
+        // representing the absent `b` as an all-NULL column, this test is no
+        // longer covering the case it is named for and should say so loudly.
+        assert_eq!(
+            statistics.column_statistics[1].null_count,
+            Precision::Exact(3),
+            "collection must still report the absent column as all NULL for \
+             this test to exercise the missing-column path"
+        );
+        file.statistics = Some(Arc::new(statistics));
+        let table_schema_for_opener =
+            TableSchemaBuilder::from(&logical_file_schema).build();
+
+        let metrics = ExecutionPlanMetricsSet::new();
+        let expr = col("a").eq(lit(1)).and(col("b").eq(lit(2)));
+        let predicate = logical2physical(&expr, &logical_file_schema);
+        let opener = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_table_schema(table_schema_for_opener)
+            .with_projection_indices(&[0])
+            .with_predicate(predicate)
+            .with_row_group_stats_pruning(true)
+            .with_metrics(metrics.clone())
+            .build();
+        let stream = open_file(&opener, file).await.unwrap();
+        let (_, num_rows) = count_batches_and_rows(stream).await;
+        // The row group is read and its rows handed up for the filter above
+        // to apply, which is the missing-column path this test protects.
+        assert_eq!(
+            num_rows, 3,
+            "the file must be scanned, not pruned, on the missing-column path"
+        );
+        assert_eq!(
+            pruned_row_groups_statistics(&metrics),
+            0,
+            "the collapse came from the missing column, not from file \
+             statistics: the statistics branch must not claim the prune"
+        );
+        // Guard against the file schema drifting: `b` really is absent.
+        assert!(physical_schema.field_with_name("b").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_prune_when_present_all_null_column_collapses_mixed_predicate() {
+        // The mirror of the test above, and the reason its fix cannot simply
+        // be "never trust a NULL constant". Identical predicate, identical
+        // statistics source, one difference: `b` is physically in the file
+        // and genuinely all NULL. The collapse is then real proof about this
+        // file's contents, so the row group must still be pruned.
+        //
+        // Collected statistics describe these two files identically — an
+        // `Exact(null)` min/max and an `Exact(num_rows)` null count for `b`
+        // either way — which is exactly why the decision has to wait for the
+        // physical file schema.
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let batch = record_batch!(
+            ("a", Int32, vec![Some(1), Some(1), Some(1)]),
+            ("b", Int32, vec![None::<i32>, None, None])
+        )
+        .unwrap();
+        let physical_schema = batch.schema();
+        let logical_file_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, true),
+        ]));
+        let (data_size, statistics) = write_parquet_with_collected_statistics(
+            Arc::clone(&store),
+            "file.parquet",
+            batch,
+            &logical_file_schema,
+        )
+        .await;
+        let mut file = PartitionedFile::new(
+            "file.parquet".to_string(),
+            u64::try_from(data_size).unwrap(),
+        );
+        assert_eq!(
+            statistics.column_statistics[1].null_count,
+            Precision::Exact(3),
+            "the present `b` must collect as all NULL, so that it is \
+             indistinguishable from the absent `b` in the test above"
+        );
+        file.statistics = Some(Arc::new(statistics));
+        let table_schema_for_opener =
+            TableSchemaBuilder::from(&logical_file_schema).build();
+
+        let metrics = ExecutionPlanMetricsSet::new();
+        let expr = col("a").eq(lit(1)).and(col("b").eq(lit(2)));
+        let predicate = logical2physical(&expr, &logical_file_schema);
+        let opener = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_table_schema(table_schema_for_opener)
+            .with_projection_indices(&[0])
+            .with_predicate(predicate)
+            .with_row_group_stats_pruning(true)
+            .with_metrics(metrics.clone())
+            .build();
+        let stream = open_file(&opener, file).await.unwrap();
+        let (_, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(num_rows, 0);
+        assert_eq!(
+            pruned_row_groups_statistics(&metrics),
+            1,
+            "the all-NULL column is really in the file: the statistics do \
+             prove the predicate unsatisfiable and must prune"
+        );
+        // Guard against the file schema drifting: `b` really is present.
+        assert!(physical_schema.field_with_name("b").is_ok());
     }
 
     #[tokio::test]
@@ -3020,31 +4080,31 @@ mod test {
 
     #[test]
     fn should_load_page_index_without_predicate() {
-        use crate::RowGroupAccessPlanFilter;
-        let row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(2));
-        assert!(!should_load_page_index(None, &row_groups));
+        assert!(!should_load_page_index(
+            page_index_metadata(&[("a", true)], 2),
+            None,
+            ParquetAccessPlan::new_all(2),
+        ));
     }
 
     #[test]
     fn should_load_page_index_when_surviving_row_groups_not_fully_matched() {
-        use crate::RowGroupAccessPlanFilter;
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-        let predicate = logical2physical(&col("a").gt(lit(50i32)), &schema);
-        let page_predicate = build_page_pruning_predicate(&predicate, &schema);
-        let row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(2));
-        assert!(should_load_page_index(Some(&page_predicate), &row_groups));
+        assert!(should_load_page_index(
+            page_index_metadata(&[("a", true)], 2),
+            Some(col("a").gt(lit(50i32))),
+            ParquetAccessPlan::new_all(2),
+        ));
     }
 
     #[test]
     fn should_load_page_index_when_all_surviving_row_groups_fully_matched() {
-        use crate::RowGroupAccessPlanFilter;
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-        let predicate = logical2physical(&col("a").is_not_null(), &schema);
-        let page_predicate = build_page_pruning_predicate(&predicate, &schema);
         let mut plan = ParquetAccessPlan::new_all(1);
         plan.mark_fully_matched(0);
-        let row_groups = RowGroupAccessPlanFilter::new(plan);
-        assert!(!should_load_page_index(Some(&page_predicate), &row_groups));
+        assert!(!should_load_page_index(
+            page_index_metadata(&[("a", true)], 1),
+            Some(col("a").is_not_null()),
+            plan,
+        ));
     }
 
     #[tokio::test]
@@ -3259,6 +4319,46 @@ mod test {
 
         let values = collect_int32_values(open_file(&opener, file).await.unwrap()).await;
         assert_eq!(values, vec![3, 4, 5, 6]);
+    }
+
+    #[tokio::test]
+    async fn test_page_limit_pruning_preserves_order() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let batch =
+            record_batch!(("a", Int32, vec![0, 10, 0, 5, 6, 7, 0, 8, 0])).unwrap();
+        let schema = batch.schema();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(9))
+            .set_data_page_row_count_limit(3)
+            .set_write_batch_size(3)
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .build();
+        let data_len = write_parquet_batches(
+            Arc::clone(&store),
+            "test.parquet",
+            vec![batch],
+            Some(props),
+        )
+        .await;
+        let file = PartitionedFile::new(
+            "test.parquet".to_string(),
+            u64::try_from(data_len).unwrap(),
+        );
+        let predicate = logical2physical(&col("a").gt_eq(lit(5)), &schema);
+
+        let opener = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(schema)
+            .with_predicate(predicate)
+            .with_pushdown_filters(true)
+            .with_row_group_stats_pruning(true)
+            .with_enable_page_index(true)
+            .with_preserve_order(true)
+            .with_limit(3)
+            .build();
+
+        let values = collect_int32_values(open_file(&opener, file).await.unwrap()).await;
+        assert_eq!(values, vec![10, 5, 6]);
     }
 
     #[tokio::test]
@@ -3678,7 +4778,7 @@ mod test {
         async fn build_pushdown_morselizer(
             store: &Arc<dyn ObjectStore>,
             path: &str,
-            predicate_expr: datafusion_expr::Expr,
+            predicate_expr: Expr,
             pushdown_filters: bool,
         ) -> Result<(ParquetMorselizer, PartitionedFile)> {
             let (file_schema, data_size) = write_grouped_file(store, path, 1, 5).await;

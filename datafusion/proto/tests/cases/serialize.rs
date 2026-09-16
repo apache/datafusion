@@ -25,14 +25,18 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{HigherOrderFunction, LambdaVariable, Placeholder};
 use datafusion_expr::{ColumnarValue, HigherOrderUDF, col, create_udf, lambda, lit};
-use datafusion_expr::{Expr, Volatility};
+use datafusion_expr::{Expr, ScalarUDF, Volatility};
 use datafusion_functions::string;
-use datafusion_proto::bytes::Serializeable;
+use datafusion_proto::bytes::{
+    Serializeable, logical_exprs_from_bytes_with_extension_codec,
+    logical_exprs_to_bytes_with_extension_codec,
+};
 use datafusion_proto::logical_plan::DefaultLogicalExtensionCodec;
 use datafusion_proto::logical_plan::from_proto::parse_expr;
 use datafusion_proto::logical_plan::to_proto::serialize_expr;
 
-use crate::cases::MyHigherOrderUDF;
+use crate::cases::roundtrip_logical_plan::UDFExtensionCodec;
+use crate::cases::{MyHigherOrderUDF, MyRegexUdf};
 
 #[test]
 #[should_panic(
@@ -40,6 +44,57 @@ use crate::cases::MyHigherOrderUDF;
 )]
 fn bad_decode() {
     Expr::from_bytes(b"Leet").unwrap();
+}
+
+#[test]
+fn logical_exprs_roundtrip() {
+    let ctx = SessionContext::new();
+    let codec = DefaultLogicalExtensionCodec {};
+    let exprs = vec![col("a").gt(lit(10_i32)), col("b").lt(lit(2.5_f64))];
+
+    let bytes = logical_exprs_to_bytes_with_extension_codec(&exprs, &codec).unwrap();
+
+    let decoded = logical_exprs_from_bytes_with_extension_codec(
+        &bytes,
+        ctx.task_ctx().as_ref(),
+        &codec,
+    )
+    .unwrap();
+
+    assert_eq!(decoded, exprs);
+
+    let bytes =
+        logical_exprs_to_bytes_with_extension_codec(std::iter::empty::<&Expr>(), &codec)
+            .unwrap();
+
+    assert!(bytes.is_empty());
+
+    let decoded = logical_exprs_from_bytes_with_extension_codec(
+        &bytes,
+        ctx.task_ctx().as_ref(),
+        &codec,
+    )
+    .unwrap();
+
+    assert!(decoded.is_empty());
+}
+
+#[test]
+fn logical_exprs_roundtrip_with_extension_codec() {
+    let ctx = SessionContext::new();
+    let codec = UDFExtensionCodec;
+    let udf = ScalarUDF::from(MyRegexUdf::new(".*".to_owned()));
+    let exprs = vec![udf.call(vec![lit("foo")])];
+
+    let bytes = logical_exprs_to_bytes_with_extension_codec(&exprs, &codec).unwrap();
+
+    let decoded = logical_exprs_from_bytes_with_extension_codec(
+        &bytes,
+        ctx.task_ctx().as_ref(),
+        &codec,
+    )
+    .unwrap();
+    assert_eq!(format!("{exprs:?}"), format!("{decoded:?}"));
 }
 
 #[test]
@@ -230,13 +285,10 @@ fn roundtrip_deeply_nested() {
                 let expr = (0..n).fold(expr_base.clone(), |expr, n| if n % 2 == 0 { expr.and(expr_base.clone()) } else { expr.or(expr_base.clone()) });
 
                 // Convert it to an opaque form
-                let bytes = match expr.to_bytes() {
-                    Ok(bytes) => bytes,
-                    Err(_) => {
+                let Ok(bytes) = expr.to_bytes() else {
                         // found expression that is too deeply nested
                         return;
-                    }
-                };
+                    };
 
                 // Decode bytes from somewhere (over network, etc.
                 let decoded_expr = Expr::from_bytes(&bytes).expect("serialization worked, so deserialization should work as well");

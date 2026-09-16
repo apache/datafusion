@@ -18,13 +18,13 @@
 use arrow::compute::kernels::length::bit_length;
 use arrow::datatypes::DataType;
 
-use crate::utils::utf8_to_int_type;
+use crate::utils::{transform_leaf_type_preserving_encoding, utf8_to_int_type};
 use datafusion_common::types::logical_string;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, Documentation, EncodingPreservation, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -59,9 +59,10 @@ impl BitLengthFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::coercible(
-                vec![Coercion::new_exact(TypeSignatureClass::Native(
-                    logical_string(),
-                ))],
+                vec![
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string()))
+                        .with_encoding_preservation(EncodingPreservation::dictionary()),
+                ],
                 Volatility::Immutable,
             ),
         }
@@ -78,7 +79,9 @@ impl ScalarUDFImpl for BitLengthFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_to_int_type(&arg_types[0], "bit_length")
+        transform_leaf_type_preserving_encoding(&arg_types[0], &|data_type| {
+            utf8_to_int_type(data_type, "bit_length")
+        })
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -86,22 +89,29 @@ impl ScalarUDFImpl for BitLengthFunc {
 
         match array {
             ColumnarValue::Array(v) => Ok(ColumnarValue::Array(bit_length(v.as_ref())?)),
-            ColumnarValue::Scalar(v) => match v {
-                ScalarValue::Utf8(v) => Ok(ColumnarValue::Scalar(ScalarValue::Int32(
-                    v.as_ref().map(|x| (x.len() * 8) as i32),
-                ))),
-                ScalarValue::LargeUtf8(v) => Ok(ColumnarValue::Scalar(
-                    ScalarValue::Int64(v.as_ref().map(|x| (x.len() * 8) as i64)),
-                )),
-                ScalarValue::Utf8View(v) => Ok(ColumnarValue::Scalar(
-                    ScalarValue::Int32(v.as_ref().map(|x| (x.len() * 8) as i32)),
-                )),
-                _ => unreachable!("bit length"),
-            },
+            ColumnarValue::Scalar(v) => Ok(ColumnarValue::Scalar(bit_length_scalar(v))),
         }
     }
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+fn bit_length_scalar(value: &ScalarValue) -> ScalarValue {
+    match value {
+        ScalarValue::Utf8(v) => {
+            ScalarValue::Int32(v.as_ref().map(|x| (x.len() * 8) as i32))
+        }
+        ScalarValue::LargeUtf8(v) => {
+            ScalarValue::Int64(v.as_ref().map(|x| (x.len() * 8) as i64))
+        }
+        ScalarValue::Utf8View(v) => {
+            ScalarValue::Int32(v.as_ref().map(|x| (x.len() * 8) as i32))
+        }
+        ScalarValue::Dictionary(key_type, value) => {
+            ScalarValue::Dictionary(key_type.clone(), Box::new(bit_length_scalar(value)))
+        }
+        _ => unreachable!("bit length"),
     }
 }

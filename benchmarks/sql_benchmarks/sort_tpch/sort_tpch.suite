@@ -1,0 +1,28 @@
+description = "Sorting benchmarks over the TPC-H lineitem table"
+
+query_pattern = "q{QUERY_ID_PADDED}.benchmark"
+
+[path_replacements]
+DATA_DIR = "../../data"
+
+[[options]]
+name = "scale-factor"
+env = "BENCH_SIZE"
+default = "1"
+values = ["1", "10", "..."]
+help = "Selects the TPC-H scale factor."
+
+[[options]]
+name = "sorted"
+env = "BENCH_SORTED"
+default = "false"
+values = ["false", "true"]
+help = "Controls whether the lineitem table is loaded in l_orderkey order."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- sort_tpch"
+description = "Run all TPC-H sorting queries at scale factor 1."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- sort_tpch --query 4 --sorted true"
+description = "Run sorting query 4 over pre-sorted lineitem data."

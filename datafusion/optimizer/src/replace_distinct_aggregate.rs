@@ -22,7 +22,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 use std::sync::Arc;
 
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::{Column, Result};
+use datafusion_common::{Column, Dependency, Result};
 use datafusion_expr::expr_rewriter::normalize_cols;
 use datafusion_expr::utils::expand_wildcard;
 use datafusion_expr::{Aggregate, Distinct, DistinctOn, Expr, LogicalPlan};
@@ -101,9 +101,14 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
 
                 let field_count = input.schema().fields().len();
                 for dep in input.schema().functional_dependencies().iter() {
-                    // If distinct is exactly the same with a previous GROUP BY, we can
-                    // simply remove it:
-                    if dep.source_indices.len() >= field_count
+                    // If the input is already unique on all of its columns (e.g.
+                    // it is a GROUP BY over exactly these columns), the DISTINCT
+                    // is a no-op and we can simply remove it. The dependency mode
+                    // must be `Single`: a `Multi` dependence (e.g. a former key
+                    // downgraded by a join) means equal rows may occur multiple
+                    // times, so the DISTINCT still has work to do.
+                    if dep.mode == Dependency::Single
+                        && dep.source_indices.len() >= field_count
                         && dep.source_indices[..field_count]
                             .iter()
                             .enumerate()

@@ -908,6 +908,60 @@ fn test_type_union_coercion_prefers_finer_timestamp_unit() {
     );
 }
 
+/// Tests that `type_union_resolution` unifies Map types by recursing into the
+/// key/value types, so a Map whose value type is Null (e.g. `MAP {'k': NULL}`)
+/// unifies with a concretely-typed Map in a VALUES list.
+/// See <https://github.com/apache/datafusion/issues/23474>.
+#[test]
+fn test_type_union_resolution_map() {
+    fn map_type(value_type: DataType) -> DataType {
+        DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", value_type, true),
+                ])),
+                false,
+            )),
+            false,
+        )
+    }
+
+    // Null value type unifies with a concrete value type, in both orders
+    assert_eq!(
+        type_union_resolution(&[map_type(DataType::Int64), map_type(DataType::Null)]),
+        Some(map_type(DataType::Int64))
+    );
+    assert_eq!(
+        type_union_resolution(&[map_type(DataType::Null), map_type(DataType::Int64)]),
+        Some(map_type(DataType::Int64))
+    );
+
+    // Numeric value types widen following the scalar rules
+    assert_eq!(
+        type_union_resolution(&[
+            map_type(DataType::Int64),
+            map_type(DataType::Null),
+            map_type(DataType::Float64),
+        ]),
+        Some(map_type(DataType::Float64))
+    );
+
+    // Map cannot unify with a non-Map composite type
+    assert_eq!(
+        type_union_resolution(&[
+            map_type(DataType::Int64),
+            DataType::Struct(Fields::from(vec![Field::new(
+                "key",
+                DataType::Utf8,
+                false
+            )])),
+        ]),
+        None
+    );
+}
+
 /// Tests that comparison operators coerce to numeric when comparing
 /// numeric and string types.
 #[test]
@@ -1035,6 +1089,37 @@ fn test_string_concat_coercion() -> Result<()> {
         DataType::Timestamp(Second, None),
         Operator::StringConcat,
         DataType::Utf8
+    );
+
+    Ok(())
+}
+
+/// `Decimal256` allows a precision and a scale of up to 76, so the required
+/// precision `max(s1, s2) + max(p1 - s1, p2 - s2)` can reach 228 and the
+/// intermediate `p - s` can reach 152. Neither fits in the `i8` used for
+/// decimal scales, which used to panic with "attempt to add with overflow"
+/// (or "attempt to subtract with overflow") in debug builds.
+#[test]
+fn test_decimal256_comparison_coercion_precision_overflow() -> Result<()> {
+    // required precision = max(0, 52) + max(76 - 0, 76 - 52) = 128
+    assert_eq!(
+        comparison_coercion(&DataType::Decimal256(76, 0), &DataType::Decimal256(76, 52)),
+        Some(DataType::Decimal256(76, 52))
+    );
+
+    // required precision = max(0, 76) + max(76 - 0, 76 - 76) = 152
+    assert_eq!(
+        comparison_coercion(&DataType::Decimal256(76, 0), &DataType::Decimal256(76, 76)),
+        Some(DataType::Decimal256(76, 76))
+    );
+
+    // `p1 - s1` alone is 76 - (-76) = 152 before the sum is even computed
+    assert_eq!(
+        comparison_coercion(
+            &DataType::Decimal256(76, -76),
+            &DataType::Decimal256(76, 76)
+        ),
+        Some(DataType::Decimal256(76, 76))
     );
 
     Ok(())

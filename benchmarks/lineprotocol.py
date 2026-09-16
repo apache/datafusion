@@ -16,7 +16,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-
 """ 
 Converts a given json to LineProtocol format that can be 
 visualised by grafana/other systems that support LineProtocol. 
