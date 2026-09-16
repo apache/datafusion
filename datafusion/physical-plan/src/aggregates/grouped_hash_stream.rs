@@ -1367,6 +1367,7 @@ impl GroupedHashAggregateStream {
                 .with_metrics(self.baseline_metrics.clone())
                 .with_batch_size(self.batch_size)
                 .with_reservation(self.reservation.new_empty())
+                .with_replay_headroom()
                 .build()?;
             self.input_done = false;
 
@@ -1394,6 +1395,9 @@ impl GroupedHashAggregateStream {
             // to ensure we don't spill the spilled data to disk again.
             self.oom_mode = OutOfMemoryMode::ReportError;
 
+            // Release unused initial capacity from recreated group values so it
+            // does not consume the memory available for spill replay.
+            self.group_values.clear_shrink(0);
             self.update_memory_reservation()?;
 
             ExecutionState::ReadingInput
