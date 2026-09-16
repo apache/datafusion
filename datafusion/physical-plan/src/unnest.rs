@@ -767,7 +767,22 @@ fn flatten_struct_cols(
                 DataType::Struct(_) => {
                     let struct_arr =
                         column_data.as_any().downcast_ref::<StructArray>().unwrap();
-                    Ok(struct_arr.columns().to_vec())
+                    if struct_arr.null_count() == 0 {
+                        Ok(struct_arr.columns().to_vec())
+                    } else {
+                        let validity = is_not_null(struct_arr)?;
+                        struct_arr
+                            .columns()
+                            .iter()
+                            .map(|column| {
+                                Ok(zip(
+                                    &validity,
+                                    column,
+                                    &Scalar::new(new_null_array(column.data_type(), 1)),
+                                )?)
+                            })
+                            .collect()
+                    }
                 }
                 data_type => internal_err!(
                     "expecting column {idx} from input plan to be a struct, got {data_type}"
@@ -1435,14 +1450,71 @@ fn repeat_arrs_from_indices(
 mod tests {
     use super::*;
     use arrow::array::{
-        GenericListArray, Int32Array, NullBufferBuilder, OffsetSizeTrait, StringArray,
+        GenericListArray, Int32Array, NullArray, NullBufferBuilder, OffsetSizeTrait,
+        RunArray, StringArray, UnionArray,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer};
-    use arrow::datatypes::{Field, Int32Type};
+    use arrow::datatypes::{Field, Int32Type, UnionFields};
     use datafusion_common::NullHandling;
     use datafusion_common::test_util::batches_to_string;
     use datafusion_physical_expr_common::metrics::MetricValue;
     use insta::assert_snapshot;
+
+    #[test]
+    fn test_flatten_struct_parent_nulls() -> Result<()> {
+        let values = Int32Array::from(vec![Some(1), Some(2), None]);
+        let mut children: Vec<ArrayRef> = vec![
+            Arc::new(values.clone()),
+            Arc::new(StringArray::from(vec![Some("x"), Some("y"), None])),
+            Arc::new(NullArray::new(3)),
+            Arc::new(RunArray::<Int32Type>::try_new(
+                &Int32Array::from(vec![2, 3]),
+                &Int32Array::from(vec![Some(1), None]),
+            )?),
+        ];
+        for offsets in [None, Some(vec![0, 1, 2].into())] {
+            children.push(Arc::new(UnionArray::try_new(
+                UnionFields::try_new([0], [Field::new("v", DataType::Int32, true)])?,
+                vec![0, 0, 0].into(),
+                offsets,
+                vec![Arc::new(values.clone())],
+            )?));
+        }
+
+        for child in children {
+            let fields = vec![Field::new("v", child.data_type().clone(), true)];
+            let schema = Arc::new(Schema::new(vec![fields[0].clone().with_name("s.v")]));
+            for nulls in [None, Some(NullBuffer::from(vec![true, false, true]))] {
+                let parent = StructArray::new(
+                    fields.clone().into(),
+                    vec![Arc::clone(&child)],
+                    nulls.clone(),
+                );
+                let output = flatten_struct_cols(
+                    &[Arc::new(parent)],
+                    &schema,
+                    &HashSet::from_iter([0]),
+                )?;
+                let result = output.column(0);
+                result.to_data().validate_full()?;
+                assert_eq!(result.data_type(), child.data_type());
+                if nulls.is_none() {
+                    assert!(Arc::ptr_eq(result, &child));
+                } else {
+                    assert_eq!(
+                        result.logical_nulls(),
+                        Some(NullBuffer::from(vec![
+                            !child.data_type().is_null(),
+                            false,
+                            false,
+                        ]))
+                    );
+                    assert_eq!(result.slice(0, 1).as_ref(), child.slice(0, 1).as_ref());
+                }
+            }
+        }
+        Ok(())
+    }
 
     // Create a GenericListArray with the following list values:
     //  [A, B, C], [], NULL, [D], NULL, [NULL, F]

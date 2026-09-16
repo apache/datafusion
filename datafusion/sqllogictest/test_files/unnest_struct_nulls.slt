@@ -1,0 +1,92 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+statement ok
+SET datafusion.catalog.information_schema = true;
+
+statement ok
+CREATE TABLE struct_values AS SELECT named_struct('a', 1, 'b', 'x') AS s;
+
+statement ok
+CREATE TABLE null_struct AS SELECT nullif(s, s) AS s FROM struct_values;
+
+query B
+SELECT s IS NULL FROM null_struct;
+----
+true
+
+query IT
+SELECT unnest(s) FROM null_struct;
+----
+NULL NULL
+
+query I
+SELECT unnest(arrow_cast(NULL, 'Struct("a": non-null Int32)'));
+----
+NULL
+
+statement ok
+CREATE VIEW required_fields AS
+SELECT unnest(arrow_cast(named_struct('a', 1), 'Struct("a": non-null Int32)'));
+
+query T
+SELECT is_nullable FROM information_schema.columns WHERE table_name = 'required_fields';
+----
+NO
+
+statement ok
+CREATE VIEW nullable_fields AS
+SELECT unnest(arrow_cast(NULL, 'Struct("a": non-null Int32)'));
+
+query T
+SELECT is_nullable FROM information_schema.columns WHERE table_name = 'nullable_fields';
+----
+YES
+
+statement ok
+CREATE TABLE mixed_structs AS
+SELECT column1 AS id, named_struct('a', column2, 'b', column3) AS s
+FROM (VALUES (1, 10, 'x'), (2, 20, 'y'), (3, NULL, 'z'));
+
+query IIT
+SELECT id, unnest(nullif(s, named_struct('a', 20, 'b', 'y')))
+FROM mixed_structs ORDER BY id;
+----
+1 10 x
+2 NULL NULL
+3 NULL z
+
+statement ok
+CREATE TABLE nested_struct AS
+SELECT named_struct('items', [1, 2], 'inner', named_struct('v', 3)) AS s;
+
+query ??
+SELECT unnest(nullif(s, s)) FROM nested_struct;
+----
+NULL NULL
+
+query ?
+SELECT unnest(arrow_cast(NULL, 'Struct("a": Null)'));
+----
+NULL
+
+query IT
+SELECT unnest(s) FROM struct_values WHERE false;
+----
+
+statement ok
+SET datafusion.catalog.information_schema = false;
