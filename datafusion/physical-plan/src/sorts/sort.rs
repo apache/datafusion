@@ -721,6 +721,8 @@ impl ExternalSorter {
         let elapsed_compute = self.metrics.baseline.elapsed_compute().clone();
         let mut timer = elapsed_compute.timer();
 
+        let staged = is_output_stream && self.use_staged_sort();
+
         // Sorting can resize reservations and borrow spill workspace.
         // Prepared output stays reserved until each batch is read from its run stream.
         // The consumer of the merged stream reserves its final output.
@@ -728,7 +730,7 @@ impl ExternalSorter {
         if self.in_mem_batches.len() == 1 {
             let batch = self.in_mem_batches.swap_remove(0);
             let reservation = self.reservation.take();
-            let sorted_stream = self.sort_batch_stream(batch, reservation, None, is_output_stream && self.use_staged_sort())?;
+            let sorted_stream = self.sort_batch_stream(batch, reservation, None, staged)?;
             return Ok(self.observe_if_output(sorted_stream, is_output_stream));
         }
 
@@ -745,7 +747,7 @@ impl ExternalSorter {
                 .try_resize(get_reserved_bytes_for_record_batch(&batch)?)
                 .map_err(Self::err_with_oom_context)?;
             let reservation = self.reservation.take();
-            let sorted_stream = self.sort_batch_stream(batch, reservation, None, is_output_stream && self.use_staged_sort())?;
+            let sorted_stream = self.sort_batch_stream(batch, reservation, None, staged)?;
             return Ok(self.observe_if_output(sorted_stream, is_output_stream));
         }
 
@@ -766,14 +768,14 @@ impl ExternalSorter {
             // Time this task's setup and collection work, excluding waits for jobs.
             timer.stop();
             let streams = self
-                .prepare_sort_runs(runs, &concurrency)
+                .prepare_sort_runs(runs, &concurrency, staged)
                 .with_elapsed_compute(elapsed_compute.clone())
                 .await?;
             timer.restart();
             streams
         } else {
             // Outside a multithreaded runtime, sort each run when the merge polls it.
-            self.sort_run_streams(runs)?
+            self.sort_run_streams(runs, staged)?
         };
 
         StreamingMergeBuilder::new()
@@ -796,6 +798,7 @@ impl ExternalSorter {
         &mut self,
         runs: Vec<RecordBatch>,
         concurrency: &SortConcurrency,
+        staged: bool,
     ) -> Result<Vec<SendableRecordBatchStream>> {
         let run_count = runs.len();
         let (sizes, shared_input_size) = self.sort_run_sizes(&runs)?;
@@ -807,7 +810,7 @@ impl ExternalSorter {
                 .enumerate()
                 .map(move |(index, (batch, size))| {
                     let reservation = self.reservation.split(size);
-                    let sort = self.sort_run(batch, reservation, shared_input.clone(), false)?;
+                    let sort = self.sort_run(batch, reservation, shared_input.clone(), staged)?;
                     let permits = Arc::clone(&concurrency.permits);
                     Ok::<_, DataFusionError>(async move {
                         let stream = Self::prepare_sort_run(sort, permits).await?;
@@ -985,6 +988,7 @@ impl ExternalSorter {
     fn sort_run_streams(
         &self,
         runs: Vec<RecordBatch>,
+        staged: bool,
     ) -> Result<Vec<SendableRecordBatchStream>> {
         let (sizes, shared_input_size) = self.sort_run_sizes(&runs)?;
         let shared_input =
@@ -993,7 +997,7 @@ impl ExternalSorter {
             .zip(sizes)
             .map(|(run, size)| {
                 let reservation = self.reservation.split(size);
-                self.sort_batch_stream(run, reservation, shared_input.clone(), false)
+                self.sort_batch_stream(run, reservation, shared_input.clone(), staged)
             })
             .collect()
     }
