@@ -97,6 +97,20 @@ pub trait PhysicalOptimizerRule: Debug + std::any::Any {
     /// counters, randomness — since the same input would no longer imply the
     /// same output. Debug builds verify the claim: when a skip would fire,
     /// the rule is run anyway and the result is asserted to be unchanged.
+    ///
+    /// The optimizer reads this from the rule it holds, so a rule that runs
+    /// *other* rules inside its own [`optimize`] must forward their answer —
+    /// in practice `all()` over the rules it wraps, since the wrapper is only
+    /// skippable if every rule it would have run is. A wrapper that leaves
+    /// this at the default silently opts its inner rules out:
+    ///
+    /// ```text
+    /// fn skip_if_unchanged(&self) -> bool {
+    ///     self.wrapped.iter().all(|rule| rule.skip_if_unchanged())
+    /// }
+    /// ```
+    ///
+    /// [`optimize`]: PhysicalOptimizerRule::optimize
     fn skip_if_unchanged(&self) -> bool {
         false
     }
