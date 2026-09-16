@@ -178,7 +178,7 @@ use crate::{
 };
 use datafusion_common::config::ConfigOptions;
 use parking_lot::Mutex;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use arrow::array::{ArrayRef, UInt8Array, UInt16Array, UInt32Array, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -1219,9 +1219,26 @@ impl AggregateExec {
             )?));
         }
 
-        // grouping by an expression that has a sort/limit upstream
+        // Grouping by an expression that has a sort/limit upstream.
+        //
+        // `GroupedTopKAggregateStream` keeps a priority queue, so it only works
+        // when an ordering direction is available: either this is a MIN/MAX
+        // aggregate, whose direction is implied by the accumulator, or the
+        // optimizer pushed a direction down next to the limit.
+        //
+        // A direction-less limit is a soft hint pushed by
+        // `LimitedDistinctAggregation`, which only pushes it while
+        // `is_unordered_unfiltered_group_by_distinct()` holds. That predicate is
+        // not stable: a later rule such as `EnsureRequirements` can insert the
+        // sort a window function requires below this aggregate, which gives the
+        // rebuilt aggregate an output ordering and makes the predicate false
+        // without ever supplying a direction. Falling back to the regular
+        // grouped streams is correct in that case, because they treat the limit
+        // as a soft limit and the `LIMIT` above this aggregate still truncates
+        // the result.
         if let Some(config) = self.limit_options
             && !self.is_unordered_unfiltered_group_by_distinct()
+            && (config.descending.is_some() || self.get_minmax_desc().is_some())
         {
             return Ok(StreamType::GroupedPriorityQueue(
                 GroupedTopKAggregateStream::new(self, context, partition, config.limit)?,
@@ -2205,13 +2222,27 @@ impl ExecutionPlan for AggregateExec {
         // the result of SUM or COUNT), as those require computing all groups first.
 
         // Grouping columns are output before aggregate columns, in the same order
-        // as the grouping expressions. A grouping-set null mask marks grouping
-        // columns that are not available in that set.
-        let mut allowed_indices: HashSet<usize> =
-            (0..self.group_by.expr().len()).collect();
-        for null_mask in self.group_by.groups() {
-            allowed_indices.retain(|idx| null_mask.get(*idx) != Some(&true));
-        }
+        // as the grouping expressions. Map each grouping output position to the
+        // input column it reads, by position rather than by name, so that
+        // same-named grouping columns stay distinct. Only grouping expressions
+        // that are plain input columns can be mapped; a grouping-set null mask
+        // marks grouping columns that are not available in that set.
+        let column_mapping: HashMap<usize, usize> = self
+            .group_by
+            .expr()
+            .iter()
+            .enumerate()
+            .filter(|(idx, _)| {
+                self.group_by
+                    .groups()
+                    .iter()
+                    .all(|null_mask| null_mask.get(*idx) != Some(&true))
+            })
+            .filter_map(|(idx, (expr, _))| {
+                expr.downcast_ref::<Column>()
+                    .map(|column| (idx, column.index()))
+            })
+            .collect();
 
         let child = self.children()[0];
         // Global aggregates and grouping sets containing an empty grouping set
@@ -2227,9 +2258,9 @@ impl ExecutionPlan for AggregateExec {
         let mut child_desc = if may_emit_on_empty_input {
             ChildFilterDescription::all_unsupported(&parent_filters)
         } else {
-            ChildFilterDescription::from_child_with_allowed_indices(
+            ChildFilterDescription::from_child_with_column_mapping(
                 &parent_filters,
-                allowed_indices,
+                column_mapping,
                 child,
             )?
         };
@@ -3175,6 +3206,7 @@ pub fn evaluate_group_by(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::task::{Context, Poll};
 
     use super::*;

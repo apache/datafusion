@@ -7522,6 +7522,35 @@ set datafusion.optimizer.enable_distinct_aggregation_soft_limit = true;
 statement ok
 set datafusion.optimizer.repartition_aggregations = true;
 
+# A window function in the projection makes `EnsureRequirements` add a sort below
+# the distinct aggregation, so the aggregation ends up with an output ordering after
+# `LimitedDistinctAggregation` pushed a direction-less limit into it. The query
+# must still execute and return the distinct rows.
+statement ok
+CREATE TABLE distinct_limit_window_table(env VARCHAR, region VARCHAR, deployment VARCHAR) AS VALUES
+  ('prod', 'a', 'x'),
+  ('prod', 'a', 'y'),
+  ('staging', 'b', 'x');
+
+query TTI rowsort
+SELECT DISTINCT env, region, count(*) OVER (PARTITION BY env, deployment) AS n
+FROM distinct_limit_window_table
+LIMIT 30;
+----
+prod a 1
+staging b 1
+
+query TI rowsort
+SELECT DISTINCT env, count(*) OVER (PARTITION BY env) AS n
+FROM distinct_limit_window_table
+LIMIT 30;
+----
+prod 2
+staging 1
+
+statement ok
+DROP TABLE distinct_limit_window_table;
+
 #
 # regr_*() tests
 #
