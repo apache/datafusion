@@ -5164,11 +5164,17 @@ impl serde::Serialize for JsonWriterOptions {
         if self.compression != 0 {
             len += 1;
         }
+        if self.compression_level.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.JsonWriterOptions", len)?;
         if self.compression != 0 {
             let v = CompressionTypeVariant::try_from(self.compression)
                 .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.compression)))?;
             struct_ser.serialize_field("compression", &v)?;
+        }
+        if let Some(v) = self.compression_level.as_ref() {
+            struct_ser.serialize_field("compressionLevel", v)?;
         }
         struct_ser.end()
     }
@@ -5181,11 +5187,14 @@ impl<'de> serde::Deserialize<'de> for JsonWriterOptions {
     {
         const FIELDS: &[&str] = &[
             "compression",
+            "compression_level",
+            "compressionLevel",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Compression,
+            CompressionLevel,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -5208,6 +5217,7 @@ impl<'de> serde::Deserialize<'de> for JsonWriterOptions {
                     {
                         match value {
                             "compression" => Ok(GeneratedField::Compression),
+                            "compressionLevel" | "compression_level" => Ok(GeneratedField::CompressionLevel),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -5228,6 +5238,7 @@ impl<'de> serde::Deserialize<'de> for JsonWriterOptions {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut compression__ = None;
+                let mut compression_level__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Compression => {
@@ -5236,10 +5247,19 @@ impl<'de> serde::Deserialize<'de> for JsonWriterOptions {
                             }
                             compression__ = Some(map_.next_value::<CompressionTypeVariant>()? as i32);
                         }
+                        GeneratedField::CompressionLevel => {
+                            if compression_level__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("compressionLevel"));
+                            }
+                            compression_level__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
                     }
                 }
                 Ok(JsonWriterOptions {
                     compression: compression__.unwrap_or_default(),
+                    compression_level: compression_level__,
                 })
             }
         }
