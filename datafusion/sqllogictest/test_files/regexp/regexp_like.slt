@@ -148,7 +148,7 @@ SELECT regexp_like('bb-1', '.*-(\d)', 'g');
 query error Error during planning: regexp_like\(\) does not support the "global" option
 SELECT regexp_like('bb-1', '.*-(\d)', 'g');
 
-query error Arrow error: Compute error: Regular expression did not compile: CompiledTooBig\(10485760\)
+query error DataFusion error: Execution error: Regular expression did not compile: Compiled regex exceeds size limit of 10485760 bytes
 SELECT regexp_like('aaaaa', 'a{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}');
 
 # look-around is not supported and will just return false
@@ -401,3 +401,55 @@ true true
 
 statement ok
 DROP TABLE regexp_empty_flags;
+
+# A literal pattern without flags, like every `~` operator, is simplified at
+# planning time, so a pattern that does not compile is reported there.
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Invalid regex
+SELECT regexp_like('abc', 'a(b');
+
+statement ok
+CREATE TABLE t_invalid_pattern(str varchar, pattern varchar) AS VALUES ('abc', 'a(b'), ('abc', NULL);
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Invalid regex
+SELECT regexp_like(str, 'a(b') FROM t_invalid_pattern;
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Invalid regex
+SELECT str ~ 'a(b' FROM t_invalid_pattern;
+
+# Flags that have no operator equivalent keep the call as a function, which
+# gives the same diagnosis at execution time.
+query error DataFusion error: Execution error: Regular expression did not compile: regex parse error
+SELECT regexp_like('abc', 'a(b', 'm');
+
+# An unknown flag makes the pattern fail to compile in the same way.
+query error DataFusion error: Execution error: Regular expression did not compile: regex parse error
+SELECT regexp_like('abc', 'a', 'z');
+
+query error DataFusion error: Execution error: Regular expression did not compile: regex parse error
+SELECT regexp_like(str, 'a', 'z') FROM t_invalid_pattern;
+
+# A pattern that varies per row is simplified to the `~` operator, which
+# compiles each row's pattern inside the arrow kernel. The kernel failure is
+# explained in the same way.
+query error DataFusion error: Execution error: Regular expression did not compile: regex parse error
+SELECT regexp_like(str, pattern) FROM t_invalid_pattern;
+
+query error DataFusion error: Execution error: Regular expression did not compile: regex parse error
+SELECT str ~ pattern FROM t_invalid_pattern;
+
+query error DataFusion error: Execution error: Regular expression did not compile: regex parse error
+SELECT str ~* pattern FROM t_invalid_pattern;
+
+# A NULL value or a NULL pattern gives NULL, and compiles nothing.
+query B
+SELECT regexp_like(NULL, 'a(b');
+----
+NULL
+
+query B
+SELECT regexp_like('abc', NULL);
+----
+NULL
+
+statement ok
+DROP TABLE t_invalid_pattern;

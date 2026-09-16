@@ -22,6 +22,7 @@ use arrow::compute::kernels::{cmp::eq, nullif::nullif};
 use datafusion_common::{Result, ScalarValue};
 use std::sync::Arc;
 
+pub(crate) use datafusion_physical_expr_common::regex::explain_regexp_kernel_error;
 // The compilation of a regular expression is shared with the physical
 // expressions, so that every caller reports a failure in the same way. These
 // re-exports keep the paths that callers of this crate already use.

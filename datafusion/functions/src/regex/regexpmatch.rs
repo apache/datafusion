@@ -23,7 +23,7 @@ use arrow::datatypes::Field;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_common::exec_err;
-use datafusion_common::{arrow_datafusion_err, plan_err};
+use datafusion_common::plan_err;
 use datafusion_expr::{ColumnarValue, Documentation, ScalarFunctionArgs, TypeSignature};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
@@ -185,7 +185,11 @@ fn regexp_match_scalar_pattern(args: &[ColumnarValue]) -> Result<Option<ArrayRef
     if !matches!(pattern.try_as_str(), Some(Some(_)))
         || &pattern.data_type() != value_type
         || flags.is_some_and(|flags| {
-            flags.try_as_str() == Some(Some("g")) || &flags.data_type() != value_type
+            flags
+                .try_as_str()
+                .flatten()
+                .is_some_and(|flags| flags.contains('g'))
+                || &flags.data_type() != value_type
         })
     {
         return Ok(None);
@@ -203,31 +207,58 @@ fn regexp_match_scalar_pattern(args: &[ColumnarValue]) -> Result<Option<ArrayRef
         flags.as_ref().map(|flags| flags as &dyn Datum),
     )
     .map(Some)
-    .map_err(|e| arrow_datafusion_err!(e))
+    // The kernel compiles the pattern. A scalar argument reaches it as an
+    // array of one value.
+    .map_err(|error| {
+        super::explain_regexp_kernel_error(
+            "regexp_match",
+            error,
+            pattern.get().0,
+            flags.as_ref().map(|flags| flags.get().0),
+        )
+    })
 }
 
 pub fn regexp_match(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args.len() {
-        2 => regexp::regexp_match(&args[0], &args[1], None)
-            .map_err(|e| arrow_datafusion_err!(e)),
+        2 => regexp::regexp_match(&args[0], &args[1], None).map_err(|error| {
+            super::explain_regexp_kernel_error(
+                "regexp_match",
+                error,
+                args[1].as_ref(),
+                None,
+            )
+        }),
         3 => {
             match args[2].data_type() {
                 DataType::Utf8View => {
-                    if args[2].as_string_view().iter().any(|s| s == Some("g")) {
+                    if args[2]
+                        .as_string_view()
+                        .iter()
+                        .any(|s| s.is_some_and(|s| s.contains('g')))
+                    {
                         return plan_err!(
                             "regexp_match() does not support the \"global\" option"
                         );
                     }
                 }
                 DataType::Utf8 => {
-                    if args[2].as_string::<i32>().iter().any(|s| s == Some("g")) {
+                    if args[2]
+                        .as_string::<i32>()
+                        .iter()
+                        .any(|s| s.is_some_and(|s| s.contains('g')))
+                    {
                         return plan_err!(
                             "regexp_match() does not support the \"global\" option"
                         );
                     }
                 }
                 DataType::LargeUtf8 => {
-                    if args[2].as_string::<i64>().iter().any(|s| s == Some("g")) {
+                    if args[2]
+                        .as_string::<i64>()
+                        .iter()
+                        .any(|s| s.is_some_and(|s| s.contains('g')))
+                    {
                         return plan_err!(
                             "regexp_match() does not support the \"global\" option"
                         );
@@ -241,8 +272,14 @@ pub fn regexp_match(args: &[ArrayRef]) -> Result<ArrayRef> {
             }
 
             let flags = super::normalize_empty_flags(&args[2])?;
-            regexp::regexp_match(&args[0], &args[1], Some(&flags))
-                .map_err(|e| arrow_datafusion_err!(e))
+            regexp::regexp_match(&args[0], &args[1], Some(&flags)).map_err(|error| {
+                super::explain_regexp_kernel_error(
+                    "regexp_match",
+                    error,
+                    args[1].as_ref(),
+                    Some(flags.as_ref()),
+                )
+            })
         }
         other => exec_err!(
             "regexp_match was called with {other} arguments. It requires at least 2 and at most 3."

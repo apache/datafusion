@@ -28,6 +28,7 @@ use arrow::compute::kernels::comparison::{regexp_is_match, regexp_is_match_scala
 use arrow::datatypes::DataType;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_common::{exec_err, internal_err, plan_err};
+use datafusion_physical_expr_common::regex::explain_regexp_kernel_error;
 
 use std::sync::Arc;
 
@@ -159,6 +160,16 @@ create_left_integral_dyn_scalar_kernel!(
     bitwise_shift_left_scalar
 );
 
+/// The SQL spelling of the operator, for error messages.
+fn operator_name(not_match: bool, case_insensitive: bool) -> &'static str {
+    match (not_match, case_insensitive) {
+        (false, false) => "~",
+        (false, true) => "~*",
+        (true, false) => "!~",
+        (true, true) => "!~*",
+    }
+}
+
 /// Invoke a compute kernel on a pair of binary data arrays with flags
 macro_rules! regexp_is_match_flag {
     ($LEFT:expr, $RIGHT:expr, $ARRAYTYPE:ident, $NOT:expr, $FLAG:expr) => {{
@@ -183,7 +194,16 @@ macro_rules! regexp_is_match_flag {
         } else {
             None
         };
-        let mut array = regexp_is_match(ll, rr, flag.as_ref())?;
+        // The kernel compiles the pattern of each row. A pattern that does
+        // not compile is explained only after the kernel has failed.
+        let mut array = regexp_is_match(ll, rr, flag.as_ref()).map_err(|error| {
+            explain_regexp_kernel_error(
+                operator_name($NOT, $FLAG),
+                error,
+                rr,
+                flag.as_ref().map(|flag| flag as &dyn Array),
+            )
+        })?;
         if $NOT {
             array = not(&array).unwrap();
         }
@@ -233,7 +253,19 @@ macro_rules! regexp_is_match_flag_scalar {
                     }
                     Ok(Arc::new(array))
                 }
-                Err(e) => internal_err!("failed to call 'regex_match_dyn_scalar' {}", e),
+                Err(error) => {
+                    // Describe the scalar pattern and flags as arrays of one
+                    // value, so that the failure is explained the same way as
+                    // on the paths that pass arrays.
+                    let patterns = StringArray::from(vec![string_value]);
+                    let flags = flag.map(|flag| StringArray::from(vec![flag]));
+                    Err(explain_regexp_kernel_error(
+                        operator_name($NOT, $FLAG),
+                        error,
+                        &patterns,
+                        flags.as_ref().map(|flags| flags as &dyn Array),
+                    ))
+                }
             }
         } else {
             internal_err!(
