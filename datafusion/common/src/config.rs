@@ -1598,25 +1598,31 @@ config_namespace! {
         pub enable_round_robin_repartition: bool, default = true
 
         /// Comma separated names of physical optimizer rules that may be
-        /// skipped when the plan handed to them is the very plan they returned
-        /// last time. Empty, the default, disables the optimization.
+        /// skipped when handed a plan they have already been seen to leave
+        /// untouched. Empty, the default, disables the optimization.
         ///
         /// Physical rules run as a fixed sequence with no fixpoint loop, so a
-        /// list holding the same rule twice runs it again on a plan nothing
-        /// has touched since it produced it. Naming that rule lets the repeat
-        /// be skipped. "Nothing changed" is tested by pointer identity, which
-        /// is exact and costs nothing.
+        /// list holding the same rule several times runs it again on plans it
+        /// has already settled. Naming that rule lets those repeats be
+        /// answered from what was observed rather than re-derived.
         ///
-        /// Only name idempotent rules, meaning ones that run on their own
-        /// output arrive at the same plan again. Debug builds verify that
-        /// rather than trusting it. Names are matched against what a rule
-        /// reports as its name, which is what `EXPLAIN VERBOSE` shows; a name
-        /// matching no rule is ignored.
+        /// A plan is remembered only after the rule has run on it and returned
+        /// the same plan, so a skip replays an outcome already seen rather
+        /// than predicting one. A rule that has not yet reached its fixpoint
+        /// records nothing and keeps running, which matters because rules are
+        /// not required to settle in a single pass.
         ///
-        /// A name has to identify a behaviour, because every rule answering to
-        /// it is treated as the same rule. The built-in `OutputRequirements`
-        /// reports one name for two instances that do opposite things, so it
-        /// must not be named here.
+        /// What is remembered is scoped to one planning run, and plans are
+        /// compared by their rendered form, since a rule that changes nothing
+        /// still commonly rebuilds the tree. Debug builds re-run a skipped
+        /// rule and check it still leaves the plan alone.
+        ///
+        /// Names are matched against what a rule reports as its name, which is
+        /// what `EXPLAIN VERBOSE` shows; a name matching no rule is ignored. A
+        /// name has to identify a behaviour, because every rule answering to it
+        /// shares one record. The built-in `OutputRequirements` reports one
+        /// name for two instances that do opposite things, so it must not be
+        /// named here.
         pub skip_unchanged_physical_rules: String, default = "".to_string()
 
         /// When set to true, the optimizer will attempt to perform limit operations

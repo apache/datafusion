@@ -2965,64 +2965,82 @@ impl DefaultPhysicalPlanner {
         let optimizer_context = SessionOptimizerContext {
             session: session_state,
         };
-        // The rules `skip_unchanged_physical_rules` names, paired with the plan
-        // each of them last returned, so a named rule can be skipped when
-        // handed back that exact object.
+        // For each rule `skip_unchanged_physical_rules` names, the plans that
+        // rule has been *observed* to leave untouched, so a later pass handed
+        // one of them can return it instead of re-deriving it.
         //
-        // The memo is keyed by rule name rather than by position, because a
-        // repeated rule is normally a second instance rather than the same
-        // one, and it is the rule's identity that makes re-running it
-        // pointless. Both halves are built only when the config names
-        // something, and both are scoped to this call: rule instances are
-        // shared between queries, so neither may live on the rule itself.
+        // A plan is recorded only after the rule has actually run on it and
+        // produced the same plan back, so nothing here is an assumption: a
+        // skip replays an outcome already seen. That matters because a rule
+        // is not required to reach its fixpoint in one pass, and the plan it
+        // returns is frequently not yet one. Keying on the plan the rule was
+        // *given* rather than on the plan it last *returned* is what keeps
+        // those two cases apart.
+        //
+        // Plans are keyed by rendered form rather than by pointer, because a
+        // rule that changes nothing still commonly rebuilds the tree and
+        // returns a fresh object. `HashSet<String>` compares on collision, so
+        // two plans that hash alike are not confused for one another.
+        //
+        // Scoped to this call, which keeps the config out of the key: it
+        // cannot change midway through one optimization run. Rule instances
+        // are shared between queries, so this must not live on the rule.
         let configured = &session_state
             .config_options()
             .optimizer
             .skip_unchanged_physical_rules;
-        let mut skippable = (!configured.is_empty()).then(|| {
+        let mut fixpoints = (!configured.is_empty()).then(|| {
             let names: HashSet<&str> = configured
                 .split(',')
                 .map(str::trim)
                 .filter(|name| !name.is_empty())
                 .collect();
-            (names, HashMap::<&str, Arc<dyn ExecutionPlan>>::new())
+            (names, HashMap::<&str, HashSet<String>>::new())
         });
 
         for optimizer in optimizers {
-            if let Some((_, last_outputs)) = skippable.as_ref()
-                && let Some(last) = last_outputs.get(optimizer.name())
-                && Arc::ptr_eq(last, &new_plan)
+            // Rendered once per pass when the rule is named, and reused to
+            // record the outcome below.
+            let mut rendered_input = None;
+            if let Some((names, seen)) = fixpoints.as_ref()
+                && names.contains(optimizer.name())
             {
-                // The rule produced this exact plan and nothing since has
-                // replaced it, so running it again cannot change anything.
-                // Debug builds verify that claim rather than trusting it.
-                #[cfg(debug_assertions)]
+                let before = displayable(new_plan.as_ref()).indent(true).to_string();
+                if seen
+                    .get(optimizer.name())
+                    .is_some_and(|plans| plans.contains(&before))
                 {
-                    let rerun = optimizer
-                        .optimize_with_context(Arc::clone(&new_plan), &optimizer_context)
-                        .map_err(|e| {
-                            DataFusionError::Context(
-                                optimizer.name().to_string(),
-                                Box::new(e),
+                    // This rule has already run on this exact plan and left it
+                    // alone, so running it again yields the same plan. Debug
+                    // builds check that rather than trusting it.
+                    #[cfg(debug_assertions)]
+                    {
+                        let rerun = optimizer
+                            .optimize_with_context(
+                                Arc::clone(&new_plan),
+                                &optimizer_context,
                             )
-                        })?;
-                    // Rules routinely rebuild the tree even where they
-                    // change nothing, so a re-run legitimately hands back a
-                    // fresh object. What has to hold is that it describes the
-                    // same plan.
-                    debug_assert_eq!(
-                        displayable(rerun.as_ref()).indent(true).to_string(),
-                        displayable(new_plan.as_ref()).indent(true).to_string(),
-                        "PhysicalOptimizer rule '{}' is named in \
-                         datafusion.optimizer.skip_unchanged_physical_rules but \
-                         running it on a plan it had already produced changed that \
-                         plan, so the rule is not idempotent and must not be named \
-                         there",
-                        optimizer.name(),
-                    );
+                            .map_err(|e| {
+                                DataFusionError::Context(
+                                    optimizer.name().to_string(),
+                                    Box::new(e),
+                                )
+                            })?;
+                        debug_assert_eq!(
+                            displayable(rerun.as_ref()).indent(true).to_string(),
+                            before,
+                            "PhysicalOptimizer rule '{}' is named in \
+                             datafusion.optimizer.skip_unchanged_physical_rules \
+                             but stopped leaving a plan it had left alone before \
+                             untouched, so it does not depend only on the plan \
+                             and the config",
+                            optimizer.name(),
+                        );
+                    }
+                    observer(new_plan.as_ref(), optimizer.as_ref());
+                    continue;
                 }
-                observer(new_plan.as_ref(), optimizer.as_ref());
-                continue;
+                rendered_input = Some(before);
             }
 
             let before_schema = new_plan.schema();
@@ -3031,10 +3049,14 @@ impl DefaultPhysicalPlanner {
                 .map_err(|e| {
                     DataFusionError::Context(optimizer.name().to_string(), Box::new(e))
                 })?;
-            if let Some((names, last_outputs)) = skippable.as_mut()
-                && names.contains(optimizer.name())
+            // Record a fixpoint only where the rule demonstrably produced
+            // the plan it was given. A rule still working towards its
+            // fixpoint records nothing, so its next pass is not skipped.
+            if let Some(before) = rendered_input
+                && let Some((_, seen)) = fixpoints.as_mut()
+                && displayable(new_plan.as_ref()).indent(true).to_string() == before
             {
-                last_outputs.insert(optimizer.name(), Arc::clone(&new_plan));
+                seen.entry(optimizer.name()).or_default().insert(before);
             }
 
             // This only checks the schema in release build, and performs additional checks in debug mode.
@@ -3474,6 +3496,7 @@ mod tests {
     use datafusion_physical_expr::EquivalenceProperties;
     use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
     use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
+    use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
     use datafusion_physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
     use datafusion_session::QueryPlanner;
@@ -4024,6 +4047,79 @@ mod tests {
         );
         assert_eq!(wrapped_calls(false, "counting_noop_rule").await?, 2);
         assert_eq!(wrapped_calls(false, "wrapping_rule").await?, SKIPPED_CALLS);
+        Ok(())
+    }
+
+    /// Changes the plan a fixed number of times and is a no-op after that,
+    /// standing in for a rule that needs several passes to converge.
+    /// `EnsureRequirements` is one: on real plans its distribution and sorting
+    /// phases can each still find work on a plan it produced itself.
+    #[derive(Debug)]
+    struct ConvergesAfter {
+        remaining: AtomicUsize,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl PhysicalOptimizerRule for ConvergesAfter {
+        fn optimize(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+            _config: &ConfigOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.calls.fetch_add(1, AtomicOrdering::Relaxed);
+            if self.remaining.load(AtomicOrdering::Relaxed) == 0 {
+                return Ok(plan);
+            }
+            self.remaining.fetch_sub(1, AtomicOrdering::Relaxed);
+            Ok(Arc::new(CoalescePartitionsExec::new(plan)))
+        }
+
+        fn name(&self) -> &str {
+            "counting_noop_rule"
+        }
+
+        fn schema_check(&self) -> bool {
+            true
+        }
+    }
+
+    /// The case that makes "skip what the rule last returned" wrong and this
+    /// design right: a rule still working towards its fixpoint must keep
+    /// running. Only a plan the rule has been seen to leave alone is recorded,
+    /// so the passes that still have work to do are never skipped, and the
+    /// plan comes out exactly as it does with the optimization off.
+    #[tokio::test]
+    async fn skip_unchanged_does_not_skip_a_rule_that_has_not_converged() -> Result<()> {
+        async fn run(skip_config: &str) -> Result<(usize, String)> {
+            let calls = Arc::new(AtomicUsize::new(0));
+            // Shared across the five entries, as one rule instance repeated in
+            // a chain would be: it converges after two rewrites.
+            let rule = Arc::new(ConvergesAfter {
+                remaining: AtomicUsize::new(2),
+                calls: Arc::clone(&calls),
+            }) as Arc<dyn PhysicalOptimizerRule + Send + Sync>;
+            let ctx = session_with_rules(
+                skip_config,
+                (0..5).map(|_| Arc::clone(&rule)).collect(),
+            );
+            let logical_plan = LogicalPlanBuilder::empty(false).build()?;
+            let plan = ctx.state().create_physical_plan(&logical_plan).await?;
+            Ok((
+                calls.load(AtomicOrdering::Relaxed),
+                displayable(plan.as_ref()).indent(true).to_string(),
+            ))
+        }
+
+        let (off_calls, off_plan) = run("").await?;
+        let (on_calls, on_plan) = run("counting_noop_rule").await?;
+
+        // Five entries, all of which run with the optimization off.
+        assert_eq!(off_calls, 5);
+        // With it on, the two rewriting passes and the one that proves the
+        // fixpoint still run; only the last two are skipped.
+        assert_eq!(on_calls, 3 + 2 * (SKIPPED_CALLS - 1));
+        // And the plan is unaffected, which is the point.
+        assert_eq!(on_plan, off_plan);
         Ok(())
     }
 
