@@ -265,7 +265,6 @@ struct ExternalSorter {
     /// the data will be concatenated and sorted in place rather than
     /// sort/merged.
     sort_in_place_threshold_bytes: usize,
-    /// Staged evaluation is restricted to final, single-run in-memory sorts.
     enable_staged_sort: bool,
     sort_key_group_size: usize,
 
@@ -1363,7 +1362,7 @@ fn refine_tied_groups(
         .collect::<Result<Vec<_>>>()?;
 
     // Key arrays are already evaluated above. This comparator finds ties that
-    // need the next stage; the final stage does not need it.
+    // need the next stage.
     let comparator = find_ties
         .then(|| LexicographicalComparator::try_new(&sort_columns))
         .transpose()?;
@@ -1410,8 +1409,6 @@ fn refine_tied_groups(
 
 /// Find consecutive equal keys in a sorted group; only these rows need later keys.
 /// For sorted keys `[a, a, b]` at output offset 5, append the range `5..7`.
-/// `selected_offset` locates this group's key values in the gathered batch;
-/// `output_offset` locates its positions in the complete output permutation.
 fn append_tied_ranges(
     comparator: &LexicographicalComparator,
     order: &UInt32Array,
