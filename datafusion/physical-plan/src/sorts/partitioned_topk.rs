@@ -78,6 +78,140 @@ pub enum WindowFnKind {
     DenseRank,
 }
 
+/// Shared configuration for the two per-partition top-K operators —
+/// [`PartitionedTopKExec`] (heap-based, unsorted input) and
+/// [`StreamingPartitionedTopKExec`](crate::sorts::streaming_partitioned_topk::StreamingPartitionedTopKExec)
+/// (streaming, pre-sorted input).
+///
+/// Both optimize the same `WHERE rank <= K` window pattern and take the same
+/// parameters; only their execution strategy and resulting [`PlanProperties`]
+/// differ. This struct holds the common fields and the logic shared between
+/// them (partition/order expression extraction and `DisplayAs` formatting).
+#[derive(Debug, Clone)]
+pub(crate) struct PartitionedTopKConfig {
+    /// Input execution plan.
+    input: Arc<dyn ExecutionPlan>,
+    /// Full sort expressions: `[partition_keys..., order_keys...]`.
+    ///
+    /// For `PARTITION BY store ORDER BY revenue DESC` with sort
+    /// `[store ASC, revenue DESC]`, the first `partition_prefix_len`
+    /// expressions are the partition keys (`[store ASC]`) and the
+    /// remaining are the order-by keys (`[revenue DESC]`).
+    expr: LexOrdering,
+    /// Number of leading expressions in `expr` that define the partition
+    /// key. For example, `PARTITION BY a, b` → `partition_prefix_len = 2`.
+    partition_prefix_len: usize,
+    /// Maximum number of rows to keep per partition (the K in "top-K").
+    /// Derived from the filter predicate: `rn <= 3` → `fetch = 3`,
+    /// `rn < 3` → `fetch = 2`.
+    fetch: usize,
+    /// Which window function this operator is optimizing. Selects the
+    /// per-partition retention policy (see [`WindowFnKind`]).
+    fn_kind: WindowFnKind,
+}
+
+impl PartitionedTopKConfig {
+    pub(crate) fn new(
+        input: Arc<dyn ExecutionPlan>,
+        expr: LexOrdering,
+        partition_prefix_len: usize,
+        fetch: usize,
+        fn_kind: WindowFnKind,
+    ) -> Self {
+        Self {
+            input,
+            expr,
+            partition_prefix_len,
+            fetch,
+            fn_kind,
+        }
+    }
+
+    /// The child execution plan.
+    pub(crate) fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.input
+    }
+
+    /// The full sort ordering `[partition_keys..., order_keys...]`.
+    pub(crate) fn expr(&self) -> &LexOrdering {
+        &self.expr
+    }
+
+    /// Number of leading [`Self::expr`] entries that define the partition key.
+    pub(crate) fn partition_prefix_len(&self) -> usize {
+        self.partition_prefix_len
+    }
+
+    /// Maximum rows retained per partition.
+    pub(crate) fn fetch(&self) -> usize {
+        self.fetch
+    }
+
+    /// Which ranking window function is being optimized.
+    pub(crate) fn fn_kind(&self) -> WindowFnKind {
+        self.fn_kind
+    }
+
+    /// Partition-key expressions (the leading `partition_prefix_len` of `expr`).
+    pub(crate) fn partition_exprs(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        self.expr[..self.partition_prefix_len]
+            .iter()
+            .map(|e| Arc::clone(&e.expr))
+            .collect()
+    }
+
+    /// Order-by expressions (the suffix of `expr` after the partition keys).
+    pub(crate) fn order_exprs(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        self.expr[self.partition_prefix_len..]
+            .iter()
+            .map(|e| Arc::clone(&e.expr))
+            .collect()
+    }
+
+    /// The ranking function's display label.
+    fn fn_label(&self) -> &'static str {
+        match self.fn_kind {
+            WindowFnKind::RowNumber => "row_number",
+            WindowFnKind::Rank => "rank",
+            WindowFnKind::DenseRank => "dense_rank",
+        }
+    }
+
+    /// Shared [`DisplayAs`] formatting. `op_name` is the concrete operator's
+    /// display name (e.g. `"PartitionedTopKExec"`).
+    pub(crate) fn fmt_as(
+        &self,
+        op_name: &str,
+        t: DisplayFormatType,
+        f: &mut Formatter,
+    ) -> fmt::Result {
+        let partition_exprs: Vec<String> = self.expr[..self.partition_prefix_len]
+            .iter()
+            .map(|e| format!("{}", e.expr))
+            .collect();
+        let order_exprs: Vec<String> = self.expr[self.partition_prefix_len..]
+            .iter()
+            .map(|e| format!("{e}"))
+            .collect();
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => write!(
+                f,
+                "{op_name}: fn={}, fetch={}, partition=[{}], order=[{}]",
+                self.fn_label(),
+                self.fetch,
+                partition_exprs.join(", "),
+                order_exprs.join(", "),
+            ),
+            DisplayFormatType::TreeRender => {
+                writeln!(f, "fn={}", self.fn_label())?;
+                writeln!(f, "fetch={}", self.fetch)?;
+                writeln!(f, "partition=[{}]", partition_exprs.join(", "))?;
+                writeln!(f, "order=[{}]", order_exprs.join(", "))
+            }
+        }
+    }
+}
+
 /// Per-partition Top-K operator for window function queries.
 ///
 /// # Background
@@ -186,25 +320,8 @@ pub enum WindowFnKind {
 ///   is currently controlled by a configuration flag.
 #[derive(Debug, Clone)]
 pub struct PartitionedTopKExec {
-    /// Input execution plan (reads unsorted data)
-    input: Arc<dyn ExecutionPlan>,
-    /// Full sort expressions: `[partition_keys..., order_keys...]`.
-    ///
-    /// For `PARTITION BY store ORDER BY revenue DESC` with sort
-    /// `[store ASC, revenue DESC]`, the first `partition_prefix_len`
-    /// expressions are the partition keys (`[store ASC]`) and the
-    /// remaining are the order-by keys (`[revenue DESC]`).
-    expr: LexOrdering,
-    /// Number of leading expressions in `expr` that define the partition
-    /// key. For example, `PARTITION BY a, b` → `partition_prefix_len = 2`.
-    partition_prefix_len: usize,
-    /// Maximum number of rows to keep per partition (the K in "top-K").
-    /// Derived from the filter predicate: `rn <= 3` → `fetch = 3`,
-    /// `rn < 3` → `fetch = 2`.
-    fetch: usize,
-    /// Which window function this operator is optimizing. Selects the
-    /// per-partition retention policy (see [`WindowFnKind`]).
-    fn_kind: WindowFnKind,
+    /// Shared top-K configuration (input, ordering, partition prefix, fetch, fn).
+    config: PartitionedTopKConfig,
     /// Execution metrics
     metrics_set: ExecutionPlanMetricsSet,
     /// Cached plan properties (output ordering, partitioning, etc.)
@@ -247,11 +364,13 @@ impl PartitionedTopKExec {
     ) -> Result<Self> {
         let cache = Self::compute_properties(&input, expr.clone())?;
         Ok(Self {
-            input,
-            expr,
-            partition_prefix_len,
-            fetch,
-            fn_kind,
+            config: PartitionedTopKConfig::new(
+                input,
+                expr,
+                partition_prefix_len,
+                fetch,
+                fn_kind,
+            ),
             metrics_set: ExecutionPlanMetricsSet::new(),
             cache: Arc::new(cache),
         })
@@ -259,28 +378,28 @@ impl PartitionedTopKExec {
 
     /// Returns the child execution plan.
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
-        &self.input
+        self.config.input()
     }
 
     /// Returns the full sort ordering `[partition_keys..., order_keys...]`.
     pub fn expr(&self) -> &LexOrdering {
-        &self.expr
+        self.config.expr()
     }
 
     /// Returns the number of leading expressions in [`Self::expr`] that
     /// define the partition key.
     pub fn partition_prefix_len(&self) -> usize {
-        self.partition_prefix_len
+        self.config.partition_prefix_len()
     }
 
     /// Returns the maximum number of rows retained per partition.
     pub fn fetch(&self) -> usize {
-        self.fetch
+        self.config.fetch()
     }
 
     /// Returns which window function this operator is optimizing.
     pub fn fn_kind(&self) -> WindowFnKind {
-        self.fn_kind
+        self.config.fn_kind
     }
 
     /// Compute [`PlanProperties`] for this operator.
@@ -306,45 +425,7 @@ impl PartitionedTopKExec {
 
 impl DisplayAs for PartitionedTopKExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
-        let fn_label = match self.fn_kind {
-            WindowFnKind::RowNumber => "row_number",
-            WindowFnKind::Rank => "rank",
-            WindowFnKind::DenseRank => "dense_rank",
-        };
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let partition_exprs: Vec<String> = self.expr[..self.partition_prefix_len]
-                    .iter()
-                    .map(|e| format!("{}", e.expr))
-                    .collect();
-                let order_exprs: Vec<String> = self.expr[self.partition_prefix_len..]
-                    .iter()
-                    .map(|e| format!("{e}"))
-                    .collect();
-                write!(
-                    f,
-                    "PartitionedTopKExec: fn={}, fetch={}, partition=[{}], order=[{}]",
-                    fn_label,
-                    self.fetch,
-                    partition_exprs.join(", "),
-                    order_exprs.join(", "),
-                )
-            }
-            DisplayFormatType::TreeRender => {
-                let partition_exprs: Vec<String> = self.expr[..self.partition_prefix_len]
-                    .iter()
-                    .map(|e| format!("{}", e.expr))
-                    .collect();
-                let order_exprs: Vec<String> = self.expr[self.partition_prefix_len..]
-                    .iter()
-                    .map(|e| format!("{e}"))
-                    .collect();
-                writeln!(f, "fn={fn_label}")?;
-                writeln!(f, "fetch={}", self.fetch)?;
-                writeln!(f, "partition=[{}]", partition_exprs.join(", "))?;
-                writeln!(f, "order=[{}]", order_exprs.join(", "))
-            }
-        }
+        self.config.fmt_as("PartitionedTopKExec", t, f)
     }
 }
 
@@ -362,13 +443,8 @@ impl ExecutionPlan for PartitionedTopKExec {
     }
 
     fn input_distribution_requirements(&self) -> crate::InputDistributionRequirements {
-        let partition_exprs: Vec<Arc<dyn PhysicalExpr>> = self.expr
-            [..self.partition_prefix_len]
-            .iter()
-            .map(|e| Arc::clone(&e.expr))
-            .collect();
         crate::InputDistributionRequirements::new(vec![Distribution::KeyPartitioned(
-            partition_exprs,
+            self.config.partition_exprs(),
         )])
     }
 
@@ -377,7 +453,7 @@ impl ExecutionPlan for PartitionedTopKExec {
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![&self.input]
+        vec![self.config.input()]
     }
 
     fn replace_children(
@@ -388,10 +464,10 @@ impl ExecutionPlan for PartitionedTopKExec {
         assert_eq!(children.len(), 1);
         Ok(Arc::new(PartitionedTopKExec::try_new(
             Arc::clone(&children[0]),
-            self.expr.clone(),
-            self.partition_prefix_len,
-            self.fetch,
-            self.fn_kind,
+            self.config.expr().clone(),
+            self.config.partition_prefix_len(),
+            self.config.fetch(),
+            self.config.fn_kind(),
         )?))
     }
 
@@ -400,7 +476,7 @@ impl ExecutionPlan for PartitionedTopKExec {
         f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         crate::apply_expression_roots(
-            self.expr.iter().map(|sort_expr| &sort_expr.expr),
+            self.config.expr().iter().map(|sort_expr| &sort_expr.expr),
             f,
         )
     }
@@ -420,22 +496,23 @@ impl ExecutionPlan for PartitionedTopKExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let input = self.input.execute(partition, Arc::clone(&context))?;
+        let input = self
+            .config
+            .input()
+            .execute(partition, Arc::clone(&context))?;
         let schema = input.schema();
 
+        let expr = self.config.expr();
+        let partition_prefix_len = self.config.partition_prefix_len();
         let partition_sort_fields =
-            build_sort_fields(&self.expr[..self.partition_prefix_len], &schema)?;
+            build_sort_fields(&expr[..partition_prefix_len], &schema)?;
 
-        let partition_exprs: Vec<Arc<dyn PhysicalExpr>> = self.expr
-            [..self.partition_prefix_len]
-            .iter()
-            .map(|e| Arc::clone(&e.expr))
-            .collect();
+        let partition_exprs = self.config.partition_exprs();
         let order_expr: LexOrdering =
-            LexOrdering::new(self.expr[self.partition_prefix_len..].iter().cloned())
+            LexOrdering::new(expr[partition_prefix_len..].iter().cloned())
                 .expect("PartitionedTopKExec requires at least one order-by expression");
-        let fetch = self.fetch;
-        let fn_kind = self.fn_kind;
+        let fetch = self.config.fetch();
+        let fn_kind = self.config.fn_kind();
         let batch_size = context.session_config().batch_size();
         let runtime = Arc::clone(&context.runtime_env());
         let metrics_set = self.metrics_set.clone();
@@ -459,7 +536,7 @@ impl ExecutionPlan for PartitionedTopKExec {
         .try_flatten();
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
-            self.input.schema(),
+            self.config.input().schema(),
             stream,
         )))
     }
