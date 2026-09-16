@@ -751,10 +751,10 @@ fn build_extraction_projection_impl(
             Ok(extended_projection)
         } else {
             let mut proj_exprs = Vec::new();
+            proj_exprs.extend(deferred_extractions);
             for (qualifier, field) in extended_projection.schema.as_ref().iter() {
                 proj_exprs.push(Expr::from((qualifier, field)));
             }
-            proj_exprs.extend(deferred_extractions);
             Projection::try_new(
                 proj_exprs,
                 Arc::new(LogicalPlan::Projection(extended_projection)),
@@ -762,11 +762,11 @@ fn build_extraction_projection_impl(
         }
     } else {
         let mut proj_exprs = Vec::new();
-        for (qualifier, field) in target_schema.iter() {
-            proj_exprs.push(Expr::from((qualifier, field)));
-        }
         for (expr, alias) in extracted_exprs {
             proj_exprs.push(expr.clone().alias(alias));
+        }
+        for (qualifier, field) in target_schema.iter() {
+            proj_exprs.push(Expr::from((qualifier, field)));
         }
         Projection::try_new(proj_exprs, Arc::clone(target))
     }
