@@ -2965,23 +2965,32 @@ impl DefaultPhysicalPlanner {
         let optimizer_context = SessionOptimizerContext {
             session: session_state,
         };
-        // Remembers the plan each opted-in rule last returned, so the rule can
-        // be skipped when handed back that exact object. Keyed by rule name
-        // rather than position, because a repeated rule is normally a second
-        // instance rather than the same one, and it is the rule's identity
-        // that makes re-running it pointless. Scoped to this call: rule
-        // instances are shared between queries, so this must not live on the
-        // rule itself.
-        let mut last_outputs = session_state
+        // The rules `skip_unchanged_physical_rules` names, paired with the plan
+        // each of them last returned, so a named rule can be skipped when
+        // handed back that exact object.
+        //
+        // The memo is keyed by rule name rather than by position, because a
+        // repeated rule is normally a second instance rather than the same
+        // one, and it is the rule's identity that makes re-running it
+        // pointless. Both halves are built only when the config names
+        // something, and both are scoped to this call: rule instances are
+        // shared between queries, so neither may live on the rule itself.
+        let configured = &session_state
             .config_options()
             .optimizer
-            .skip_unchanged_physical_rules
-            .then(HashMap::<&str, Arc<dyn ExecutionPlan>>::new);
+            .skip_unchanged_physical_rules;
+        let mut skippable = (!configured.is_empty()).then(|| {
+            let names: HashSet<&str> = configured
+                .split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .collect();
+            (names, HashMap::<&str, Arc<dyn ExecutionPlan>>::new())
+        });
 
         for optimizer in optimizers {
-            if let Some(memo) = last_outputs.as_ref()
-                && optimizer.skip_if_unchanged()
-                && let Some(last) = memo.get(optimizer.name())
+            if let Some((_, last_outputs)) = skippable.as_ref()
+                && let Some(last) = last_outputs.get(optimizer.name())
                 && Arc::ptr_eq(last, &new_plan)
             {
                 // The rule produced this exact plan and nothing since has
@@ -3004,9 +3013,11 @@ impl DefaultPhysicalPlanner {
                     debug_assert_eq!(
                         displayable(rerun.as_ref()).indent(true).to_string(),
                         displayable(new_plan.as_ref()).indent(true).to_string(),
-                        "PhysicalOptimizer rule '{}' declares skip_if_unchanged() \
-                         but running it on a plan it had already produced changed \
-                         that plan, so the rule is not idempotent",
+                        "PhysicalOptimizer rule '{}' is named in \
+                         datafusion.optimizer.skip_unchanged_physical_rules but \
+                         running it on a plan it had already produced changed that \
+                         plan, so the rule is not idempotent and must not be named \
+                         there",
                         optimizer.name(),
                     );
                 }
@@ -3020,10 +3031,10 @@ impl DefaultPhysicalPlanner {
                 .map_err(|e| {
                     DataFusionError::Context(optimizer.name().to_string(), Box::new(e))
                 })?;
-            if let Some(memo) = last_outputs.as_mut()
-                && optimizer.skip_if_unchanged()
+            if let Some((names, last_outputs)) = skippable.as_mut()
+                && names.contains(optimizer.name())
             {
-                memo.insert(optimizer.name(), Arc::clone(&new_plan));
+                last_outputs.insert(optimizer.name(), Arc::clone(&new_plan));
             }
 
             // This only checks the schema in release build, and performs additional checks in debug mode.
@@ -3754,7 +3765,6 @@ mod tests {
     #[derive(Debug)]
     struct CountingNoopRule {
         calls: Arc<AtomicUsize>,
-        skip_if_unchanged: bool,
     }
 
     impl PhysicalOptimizerRule for CountingNoopRule {
@@ -3771,23 +3781,19 @@ mod tests {
             "counting_noop_rule"
         }
 
-        fn skip_if_unchanged(&self) -> bool {
-            self.skip_if_unchanged
-        }
-
         fn schema_check(&self) -> bool {
             true
         }
     }
 
     /// Stands in for the instrumentation wrappers downstream projects put
-    /// around every rule to time or trace it. The optimizer only ever asks the
-    /// outermost rule, so a wrapper has to pass the answer through; one that
-    /// does not silently opts the rule it wraps back out.
+    /// around every rule to time or trace it. Naming rules by name is what
+    /// lets such a wrapper keep working, since it already has to report the
+    /// name it wraps for `EXPLAIN VERBOSE` to stay readable.
     #[derive(Debug)]
     struct WrappingRule {
         inner: Arc<dyn PhysicalOptimizerRule + Send + Sync>,
-        forwards_skip_if_unchanged: bool,
+        reports_inner_name: bool,
     }
 
     impl PhysicalOptimizerRule for WrappingRule {
@@ -3808,11 +3814,11 @@ mod tests {
         }
 
         fn name(&self) -> &str {
-            self.inner.name()
-        }
-
-        fn skip_if_unchanged(&self) -> bool {
-            self.forwards_skip_if_unchanged && self.inner.skip_if_unchanged()
+            if self.reports_inner_name {
+                self.inner.name()
+            } else {
+                "wrapping_rule"
+            }
         }
 
         fn schema_check(&self) -> bool {
@@ -3820,20 +3826,22 @@ mod tests {
         }
     }
 
-    /// Expected invocations of a rule listed twice. Debug builds verify the
-    /// idempotence claim by running a skipped rule anyway and asserting it
-    /// changed nothing, so the call still happens there — what the skip saves
-    /// in debug is nothing, and in release it is the whole second pass.
+    /// Expected invocations of a rule listed twice and named in the config.
+    /// Debug builds verify the idempotence claim by running a skipped rule
+    /// anyway and asserting it changed nothing, so the call still happens
+    /// there: what the skip saves in debug is nothing, and in release it is
+    /// the whole second pass.
     const SKIPPED_CALLS: usize = if cfg!(debug_assertions) { 2 } else { 1 };
 
-    /// A context whose physical rule list is exactly `rules`, with the skip
-    /// optimization on or off.
+    /// A context whose physical rule list is exactly `rules`, with the given
+    /// value for `skip_unchanged_physical_rules`.
     fn session_with_rules(
-        skip_enabled: bool,
+        skip_config: &str,
         rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
     ) -> SessionContext {
         let mut config = SessionConfig::new();
-        config.options_mut().optimizer.skip_unchanged_physical_rules = skip_enabled;
+        config.options_mut().optimizer.skip_unchanged_physical_rules =
+            skip_config.to_string();
         let state = SessionStateBuilder::new()
             .with_config(config)
             .with_default_features()
@@ -3845,38 +3853,52 @@ mod tests {
     /// Plans the same rule twice, which is the shape a custom rule list takes
     /// when a rewrite between the two passes may or may not fire, and reports
     /// how many times the rule was actually asked to optimize.
-    async fn run_repeated_rule(
-        skip_if_unchanged: bool,
-        skip_enabled: bool,
-    ) -> Result<usize> {
+    async fn run_repeated_rule(skip_config: &str) -> Result<usize> {
         let calls = Arc::new(AtomicUsize::new(0));
         let rule = || {
             Arc::new(CountingNoopRule {
                 calls: Arc::clone(&calls),
-                skip_if_unchanged,
             }) as Arc<dyn PhysicalOptimizerRule + Send + Sync>
         };
-        let ctx = session_with_rules(skip_enabled, vec![rule(), rule()]);
+        let ctx = session_with_rules(skip_config, vec![rule(), rule()]);
         let logical_plan = LogicalPlanBuilder::empty(false).build()?;
         ctx.state().create_physical_plan(&logical_plan).await?;
         Ok(calls.load(AtomicOrdering::Relaxed))
     }
 
-    /// A rule that opted in is called once instead of twice: the second entry
-    /// receives the exact plan the first returned.
+    /// A named rule is called once instead of twice: the second entry receives
+    /// the exact plan the first returned.
     #[tokio::test]
     async fn skip_unchanged_skips_the_repeated_pass() -> Result<()> {
-        assert_eq!(run_repeated_rule(true, true).await?, SKIPPED_CALLS);
+        assert_eq!(
+            run_repeated_rule("counting_noop_rule").await?,
+            SKIPPED_CALLS
+        );
         Ok(())
     }
 
-    /// Off by default, and opting in without the config flag changes nothing:
-    /// both entries run, exactly as before this feature existed.
+    /// Off unless the rule is named, so an empty config behaves exactly as
+    /// before this feature existed, and a name that matches nothing, whether a
+    /// typo or a rule that is not in this list, is simply inert.
     #[tokio::test]
-    async fn skip_unchanged_is_inert_unless_both_sides_agree() -> Result<()> {
-        assert_eq!(run_repeated_rule(false, true).await?, 2);
-        assert_eq!(run_repeated_rule(true, false).await?, 2);
-        assert_eq!(run_repeated_rule(false, false).await?, 2);
+    async fn skip_unchanged_is_inert_unless_the_rule_is_named() -> Result<()> {
+        assert_eq!(run_repeated_rule("").await?, 2);
+        assert_eq!(run_repeated_rule("some_other_rule").await?, 2);
+        assert_eq!(run_repeated_rule("counting_noop_rul").await?, 2);
+        Ok(())
+    }
+
+    /// The config is a list, and reading it tolerates the spacing people
+    /// actually write.
+    #[tokio::test]
+    async fn skip_unchanged_reads_a_list_of_names() -> Result<()> {
+        for config in [
+            "counting_noop_rule,some_other_rule",
+            "some_other_rule, counting_noop_rule",
+            "  counting_noop_rule ,, ",
+        ] {
+            assert_eq!(run_repeated_rule(config).await?, SKIPPED_CALLS, "{config}");
+        }
         Ok(())
     }
 
@@ -3923,7 +3945,6 @@ mod tests {
         let enforce = || {
             Arc::new(CountingNoopRule {
                 calls: Arc::clone(&calls),
-                skip_if_unchanged: true,
             }) as Arc<dyn PhysicalOptimizerRule + Send + Sync>
         };
         let rewrite = |name, rewrite| {
@@ -3932,7 +3953,7 @@ mod tests {
         };
 
         let ctx = session_with_rules(
-            true,
+            "counting_noop_rule",
             vec![
                 enforce(), // runs: nothing memoized yet
                 rewrite("rewrite_that_fires", true),
@@ -3957,10 +3978,9 @@ mod tests {
     async fn skip_unchanged_does_not_leak_between_plans() -> Result<()> {
         let calls = Arc::new(AtomicUsize::new(0));
         let ctx = session_with_rules(
-            true,
+            "counting_noop_rule",
             vec![Arc::new(CountingNoopRule {
                 calls: Arc::clone(&calls),
-                skip_if_unchanged: true,
             })],
         );
         let logical_plan = LogicalPlanBuilder::empty(false).build()?;
@@ -3972,59 +3992,122 @@ mod tests {
         Ok(())
     }
 
-    /// The optimizer only consults the rule it holds, so a rule wrapped for
-    /// timing or tracing decides for the rule inside it. Forwarding the answer
-    /// keeps the skip working; leaving the trait default in place turns it off
-    /// without any other visible effect, which is the trap this documents.
+    /// Rules are matched by the name they report, so a rule wrapped for timing
+    /// or tracing is reached through the name the wrapper passes through, with
+    /// no cooperation needed from the wrapper beyond what `EXPLAIN VERBOSE`
+    /// already requires of it. A wrapper that renames what it wraps is
+    /// addressed by its own name instead.
     #[tokio::test]
-    async fn skip_unchanged_follows_what_a_wrapper_reports() -> Result<()> {
-        async fn wrapped_calls(forwards: bool) -> Result<usize> {
+    async fn skip_unchanged_follows_the_name_a_wrapper_reports() -> Result<()> {
+        async fn wrapped_calls(
+            reports_inner_name: bool,
+            skip_config: &str,
+        ) -> Result<usize> {
             let calls = Arc::new(AtomicUsize::new(0));
             let rule = || {
                 Arc::new(WrappingRule {
                     inner: Arc::new(CountingNoopRule {
                         calls: Arc::clone(&calls),
-                        skip_if_unchanged: true,
                     }),
-                    forwards_skip_if_unchanged: forwards,
+                    reports_inner_name,
                 }) as Arc<dyn PhysicalOptimizerRule + Send + Sync>
             };
-            let ctx = session_with_rules(true, vec![rule(), rule()]);
+            let ctx = session_with_rules(skip_config, vec![rule(), rule()]);
             let logical_plan = LogicalPlanBuilder::empty(false).build()?;
             ctx.state().create_physical_plan(&logical_plan).await?;
             Ok(calls.load(AtomicOrdering::Relaxed))
         }
 
-        assert_eq!(wrapped_calls(true).await?, SKIPPED_CALLS);
-        assert_eq!(wrapped_calls(false).await?, 2);
+        assert_eq!(
+            wrapped_calls(true, "counting_noop_rule").await?,
+            SKIPPED_CALLS
+        );
+        assert_eq!(wrapped_calls(false, "counting_noop_rule").await?, 2);
+        assert_eq!(wrapped_calls(false, "wrapping_rule").await?, SKIPPED_CALLS);
         Ok(())
     }
 
-    /// Plans a query through the built-in rule list with two further
-    /// enforcement passes appended, the shape that motivates this feature, and
-    /// checks that turning the optimization on changes how often a rule runs
-    /// and nothing else: the plan itself must come out identical.
+    /// Queries chosen to reach the operators the built-in rules act on.
+    const PLAN_CORPUS: &[&str] = &[
+        "SELECT a, sum(b) FROM t GROUP BY a ORDER BY a",
+        "SELECT count(*) FROM t",
+        "SELECT DISTINCT a FROM t",
+        "SELECT * FROM t ORDER BY b LIMIT 5",
+        "SELECT a FROM t WHERE b > 10 ORDER BY a LIMIT 3",
+        "SELECT t.a, u.d FROM t JOIN u ON t.a = u.c",
+        "SELECT a, row_number() OVER (PARTITION BY a ORDER BY b) FROM t",
+        "SELECT a, b FROM t UNION ALL SELECT c, d FROM u",
+        "SELECT a, sum(b) FROM t GROUP BY a HAVING sum(b) > 5 ORDER BY a LIMIT 2",
+    ];
+
+    /// Plans every query in [`PLAN_CORPUS`] through `rules`.
+    async fn corpus_plans(
+        skip_config: &str,
+        rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
+    ) -> Result<Vec<String>> {
+        let ctx = session_with_rules(skip_config, rules);
+        ctx.sql("CREATE TABLE t(a INT, b INT) AS VALUES (1,10),(2,20),(1,30)")
+            .await?
+            .collect()
+            .await?;
+        ctx.sql("CREATE TABLE u(c INT, d INT) AS VALUES (1,100),(3,300)")
+            .await?
+            .collect()
+            .await?;
+        let mut plans = Vec::with_capacity(PLAN_CORPUS.len());
+        for query in PLAN_CORPUS {
+            let plan = ctx.sql(query).await?.create_physical_plan().await?;
+            plans.push(displayable(plan.as_ref()).indent(true).to_string());
+        }
+        Ok(plans)
+    }
+
+    /// The built-in list with two further enforcement passes appended, as a
+    /// downstream list has after inserting rewrites of its own behind the
+    /// built-in enforcement. This is the shape that motivates the feature.
+    fn rules_with_trailing_enforcement()
+    -> Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> {
+        let mut rules = PhysicalOptimizer::default().rules;
+        rules.push(Arc::new(EnsureRequirements::new()));
+        rules.push(Arc::new(EnsureRequirements::new()));
+        rules
+    }
+
+    /// Turning the optimization on must change how often a rule runs and
+    /// nothing else, so every plan in the corpus has to come out identical.
     #[tokio::test]
     async fn skip_unchanged_leaves_the_plan_alone() -> Result<()> {
-        async fn plan_with(skip_enabled: bool) -> Result<String> {
-            let mut rules = PhysicalOptimizer::default().rules;
-            // Two trailing passes, as a downstream list has after inserting
-            // rewrites of its own behind the built-in enforcement.
-            rules.push(Arc::new(EnsureRequirements::new()));
-            rules.push(Arc::new(EnsureRequirements::new()));
-            let ctx = session_with_rules(skip_enabled, rules);
-            ctx.sql("CREATE TABLE t(a INT, b INT) AS VALUES (1, 10), (2, 20), (1, 30)")
-                .await?
-                .collect()
-                .await?;
-            let df = ctx
-                .sql("SELECT a, sum(b) FROM t GROUP BY a ORDER BY a")
-                .await?;
-            let plan = df.create_physical_plan().await?;
-            Ok(displayable(plan.as_ref()).indent(true).to_string())
-        }
+        let skipped =
+            corpus_plans("EnsureRequirements", rules_with_trailing_enforcement()).await?;
+        let stock = corpus_plans("", rules_with_trailing_enforcement()).await?;
+        assert_eq!(skipped, stock);
+        Ok(())
+    }
 
-        assert_eq!(plan_with(true).await?, plan_with(false).await?);
+    /// Naming a rule in the config asserts that running it on its own output
+    /// arrives at the same plan. This checks that claim for every built-in
+    /// rule by running each one twice in place and requiring the corpus to
+    /// plan identically, and so records which of them may be named.
+    ///
+    /// All of them can, today. A rule that stops being idempotent breaks the
+    /// promise for anyone who named it, which is what this guards.
+    #[tokio::test]
+    async fn builtin_rules_are_idempotent() -> Result<()> {
+        let stock = PhysicalOptimizer::default().rules;
+        let baseline = corpus_plans("", stock.clone()).await?;
+
+        for (position, rule) in stock.iter().enumerate() {
+            let mut doubled = stock.clone();
+            doubled.insert(position + 1, Arc::clone(rule));
+            assert_eq!(
+                corpus_plans("", doubled).await?,
+                baseline,
+                "running '{}' (position {position}) twice changed the plan, so it \
+                 is not idempotent and must not be named in \
+                 datafusion.optimizer.skip_unchanged_physical_rules",
+                rule.name(),
+            );
+        }
         Ok(())
     }
 
@@ -4034,20 +4117,19 @@ mod tests {
     /// the explain output.
     #[tokio::test]
     async fn skip_unchanged_still_reports_every_rule_to_the_observer() -> Result<()> {
-        async fn explain_with(skip_enabled: bool) -> Result<String> {
+        async fn explain_with(skip_config: &str) -> Result<String> {
             let rule = || {
                 Arc::new(CountingNoopRule {
                     calls: Arc::new(AtomicUsize::new(0)),
-                    skip_if_unchanged: true,
                 }) as Arc<dyn PhysicalOptimizerRule + Send + Sync>
             };
-            let ctx = session_with_rules(skip_enabled, vec![rule(), rule()]);
+            let ctx = session_with_rules(skip_config, vec![rule(), rule()]);
             let batches = ctx.sql("EXPLAIN VERBOSE SELECT 1").await?.collect().await?;
             Ok(arrow::util::pretty::pretty_format_batches(&batches)?.to_string())
         }
 
-        let skipped = explain_with(true).await?;
-        assert_eq!(skipped, explain_with(false).await?);
+        let skipped = explain_with("counting_noop_rule").await?;
+        assert_eq!(skipped, explain_with("").await?);
         // Both passes are reported, including the one that did not run.
         assert_eq!(skipped.matches("counting_noop_rule").count(), 2);
         Ok(())
