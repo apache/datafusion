@@ -26,10 +26,6 @@
 # tool that has a pinned version in `ci/scripts/utils/tool_versions.sh`, it
 # installs that pinned version. An already installed tool is used as is.
 #
-# The ASF status-check validator runs with `python3` from PATH and needs the
-# PyYAML package. This script checks both but does not install Python packages;
-# `uv run ./dev/rust_lint.sh` provides them from the uv workspace.
-#
 #
 #
 # For each lint scripts:
