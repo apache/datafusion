@@ -112,6 +112,32 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
     roundtrip_test(DataSourceExec::from_data_source(scan_config))
 }
 
+#[tokio::test]
+async fn roundtrip_parquet_exec_with_sort_pushdown() -> Result<()> {
+    let ctx = all_types_context().await?;
+    let plan = ctx
+        .sql("SELECT id FROM alltypes_plain ORDER BY id DESC NULLS LAST LIMIT 5")
+        .await?
+        .create_physical_plan()
+        .await?;
+    let before = displayable(plan.as_ref()).indent(true).to_string();
+    assert!(
+        before.contains("sort_order_for_reorder=[id@0 DESC NULLS LAST]")
+            && before.contains("reverse_row_groups=true"),
+        "expected sort pushdown in plan:\n{before}"
+    );
+
+    let roundtripped = roundtrip_test_and_return(
+        plan,
+        &ctx,
+        &DefaultPhysicalExtensionCodec {},
+        &DefaultPhysicalProtoConverter {},
+    )?;
+    let after = displayable(roundtripped.as_ref()).indent(true).to_string();
+    pretty_assertions::assert_eq!(before, after);
+    Ok(())
+}
+
 #[test]
 fn file_scan_rejects_zero_batch_size() -> Result<()> {
     let schema = Arc::new(Schema::empty());
@@ -882,7 +908,7 @@ async fn roundtrip_memory_source() -> Result<()> {
 }
 
 #[tokio::test]
-async fn roundtrip_memory_source_sort_information_and_fetch() -> Result<()> {
+async fn roundtrip_memory_source_projected_sort_information_and_fetch() -> Result<()> {
     use datafusion::datasource::memory::MemorySourceConfig;
     use datafusion::datasource::source::DataSource as _;
 
@@ -905,10 +931,11 @@ async fn roundtrip_memory_source_sort_information_and_fetch() -> Result<()> {
         },
     )])
     .unwrap();
-    let source = MemorySourceConfig::try_new(&[vec![batch]], Arc::clone(&schema), None)?
-        .with_limit(Some(1))
-        .with_show_sizes(false)
-        .try_with_sort_information(vec![ordering])?;
+    let source =
+        MemorySourceConfig::try_new(&[vec![batch]], Arc::clone(&schema), Some(vec![1]))?
+            .with_limit(Some(1))
+            .with_show_sizes(false)
+            .try_with_sort_information(vec![ordering])?;
     let exec_plan = DataSourceExec::from_data_source(source.clone());
 
     let ctx = SessionContext::new();

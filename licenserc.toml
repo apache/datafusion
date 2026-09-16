@@ -23,6 +23,7 @@ includes = [
     "*.rs",
     "*.py",
     "*.ts",
+    "*.slt",
 ]
 
 excludes = [
@@ -31,3 +32,7 @@ excludes = [
     "datafusion/proto-common/src/generated/**",
     "datafusion/proto-models/src/generated/**",
 ]
+
+[[rules]]
+extensions = ["slt"]
+style_out = "script"

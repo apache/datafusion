@@ -48,7 +48,7 @@ use datafusion_expr::logical_plan::DdlStatement;
 use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
-    Analyze, CreateCatalog, CreateCatalogSchema,
+    Analyze, Cast, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateFunction, CreateFunctionBody,
     CreateIndex as PlanCreateIndex, CreateMemoryTable, CreateView, Deallocate,
     DescribeTable, DmlStatement, DropCatalogSchema, DropFunction, DropTable, DropView,
@@ -227,23 +227,22 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
 impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Generate a logical plan from an DataFusion SQL statement
     pub fn statement_to_plan(&self, statement: DFStatement) -> Result<LogicalPlan> {
-        match statement {
-            DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s),
-            DFStatement::Statement(s) => self.sql_statement_to_plan(*s),
-            DFStatement::CopyTo(s) => self.copy_to_plan(s),
+        let plan = match statement {
+            DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s)?,
+            DFStatement::Statement(s) => self.sql_statement_to_plan(*s)?,
+            DFStatement::CopyTo(s) => self.copy_to_plan(s)?,
             DFStatement::Explain(ExplainStatement { options, statement }) => {
-                self.explain_to_plan(options, *statement)
+                self.explain_to_plan(options, *statement)?
             }
-            DFStatement::Reset(statement) => self.reset_statement_to_plan(statement),
-        }
+            DFStatement::Reset(statement) => self.reset_statement_to_plan(statement)?,
+        };
+        check_plan(&plan)?;
+        Ok(plan)
     }
 
     /// Generate a logical plan from an SQL statement
     pub fn sql_statement_to_plan(&self, statement: Statement) -> Result<LogicalPlan> {
-        self.sql_statement_to_plan_with_context_impl(
-            statement,
-            &mut PlannerContext::new(),
-        )
+        self.sql_statement_to_plan_with_context(statement, &mut PlannerContext::new())
     }
 
     /// Generate a logical plan from an SQL statement
@@ -252,7 +251,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         statement: Statement,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        self.sql_statement_to_plan_with_context_impl(statement, planner_context)
+        let plan =
+            self.sql_statement_to_plan_with_context_impl(statement, planner_context)?;
+        check_plan(&plan)?;
+        Ok(plan)
     }
 
     fn sql_statement_to_plan_with_context_impl(
@@ -2953,6 +2955,25 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         })
                         .cast_to(target_field.data_type(), &DFSchema::empty())?,
                 };
+                let (_, expr_field) = expr.to_field(source.schema())?;
+                // A storage-type cast alone does not apply extension metadata from the
+                // table schema when the source and target storage types are identical.
+                let expr = if target_field.extension_type_name().is_none()
+                    || expr_field.metadata() == target_field.metadata()
+                {
+                    expr
+                } else {
+                    match expr {
+                        Expr::Cast(cast) => Expr::Cast(Cast::new_from_field(
+                            cast.expr,
+                            Arc::clone(target_field),
+                        )),
+                        expr => Expr::Cast(Cast::new_from_field(
+                            Box::new(expr),
+                            Arc::clone(target_field),
+                        )),
+                    }
+                };
                 Ok(expr.alias(target_field.name()))
             })
             .collect::<Result<Vec<Expr>>>()?;
@@ -3185,4 +3206,21 @@ FROM (
             }
         }
     }
+}
+
+fn check_plan(plan: &LogicalPlan) -> Result<()> {
+    use datafusion_common::plan_err;
+    use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+    plan.apply(|node| {
+        for field in node.schema().fields() {
+            if field.name().starts_with("__common_expr") {
+                return plan_err!(
+                    "{} is a reserved DataFusion column name, please use another name",
+                    field.name()
+                );
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .map(|_| ())
 }
