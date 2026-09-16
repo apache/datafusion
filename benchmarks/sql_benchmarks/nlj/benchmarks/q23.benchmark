@@ -1,0 +1,32 @@
+name Q23
+group nlj
+
+expect_plan NestedLoopJoinExec
+expect_plan join_type: RightAnti
+
+init
+CREATE TABLE nlj_final_left AS
+SELECT arrow_cast('m', 'Utf8') AS threshold;
+
+# Materialize 32 MiB of Utf8 strings outside the measured query. Compaction
+# would copy these strings; different first bytes keep comparison cheap.
+init
+CREATE TABLE nlj_final_right AS
+SELECT value AS id,
+       arrow_cast((CASE WHEN value < 4096 THEN 'a' ELSE 'z' END)
+                  || repeat('x', 4095), 'Utf8') AS payload
+FROM range(8192);
+
+run
+-- With one partition and batch_size=8192, half the batch survives the only
+-- left row. Compacting after that final probe would needlessly copy 16 MiB.
+-- Return IDs only to exclude string copying from output materialization.
+SELECT r.id
+FROM nlj_final_left l
+RIGHT ANTI JOIN nlj_final_right r ON l.threshold > r.payload;
+
+cleanup
+DROP TABLE nlj_final_left;
+
+cleanup
+DROP TABLE nlj_final_right;

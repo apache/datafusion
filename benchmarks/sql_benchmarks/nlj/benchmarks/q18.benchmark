@@ -1,0 +1,12 @@
+name Q18
+group nlj
+
+expect_plan NestedLoopJoinExec
+expect_plan join_type: RightSemi
+
+run
+-- Q18: RIGHT SEMI 4K x 4K | no matches; the maximum sum is 4096 * 4096 - 1
+SELECT r.value
+FROM range(4096) AS l
+RIGHT SEMI JOIN range(4096) AS r
+ON l.value * 4096 + r.value >= 4096 * 4096;
