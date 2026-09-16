@@ -27,18 +27,6 @@ use datafusion_expr::ColumnarValue;
 use std::hash::Hash;
 use std::sync::Arc;
 
-#[cfg(feature = "proto")]
-use datafusion_physical_expr_common::{
-    expect_expr_variant,
-    physical_expr::{
-        proto_decode::PhysicalExprDecodeCtx, proto_encode::PhysicalExprEncodeCtx,
-    },
-};
-#[cfg(feature = "proto")]
-use datafusion_proto_models::protobuf::{
-    PhysicalExprNode, PhysicalIsNull, physical_expr_node::ExprType,
-};
-
 /// IS NULL expression
 #[derive(Debug, Eq)]
 pub struct IsNullExpr {
@@ -117,14 +105,18 @@ impl PhysicalExpr for IsNullExpr {
     #[cfg(feature = "proto")]
     fn try_to_proto(
         &self,
-        ctx: &PhysicalExprEncodeCtx<'_>,
-    ) -> Result<Option<PhysicalExprNode>> {
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        use datafusion_proto_models::protobuf;
+
         let Self { arg } = self;
-        Ok(Some(PhysicalExprNode {
+        Ok(Some(protobuf::PhysicalExprNode {
             expr_id: None,
-            expr_type: Some(ExprType::IsNullExpr(Box::new(PhysicalIsNull {
-                expr: Some(Box::new(ctx.encode_child(arg)?)),
-            }))),
+            expr_type: Some(protobuf::physical_expr_node::ExprType::IsNullExpr(
+                Box::new(protobuf::PhysicalIsNull {
+                    expr: Some(Box::new(ctx.encode_child(arg)?)),
+                }),
+            )),
         }))
     }
 }
@@ -133,11 +125,18 @@ impl PhysicalExpr for IsNullExpr {
 impl IsNullExpr {
     /// Reconstruct an [`IsNullExpr`] from its protobuf representation.
     pub fn try_from_proto(
-        node: &PhysicalExprNode,
-        ctx: &PhysicalExprDecodeCtx<'_>,
+        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        let node = expect_expr_variant!(node, ExprType::IsNullExpr, "IsNullExpr");
-        let PhysicalIsNull { expr } = node.as_ref();
+        use datafusion_physical_expr_common::expect_expr_variant;
+        use datafusion_proto_models::protobuf;
+
+        let node = expect_expr_variant!(
+            node,
+            protobuf::physical_expr_node::ExprType::IsNullExpr,
+            "IsNullExpr",
+        );
+        let protobuf::PhysicalIsNull { expr } = node.as_ref();
         let expr =
             ctx.decode_required_expression(expr.as_deref(), "IsNullExpr", "expr")?;
 
@@ -275,11 +274,18 @@ mod proto_tests {
     };
     use arrow::datatypes::Field;
     use datafusion_common::DataFusionError;
+    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+    use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
+    use datafusion_proto_models::protobuf::{
+        PhysicalExprNode, PhysicalIsNull, physical_expr_node,
+    };
 
     fn is_null_node(expr: Option<Box<PhysicalExprNode>>) -> PhysicalExprNode {
         PhysicalExprNode {
             expr_id: None,
-            expr_type: Some(ExprType::IsNullExpr(Box::new(PhysicalIsNull { expr }))),
+            expr_type: Some(physical_expr_node::ExprType::IsNullExpr(Box::new(
+                PhysicalIsNull { expr },
+            ))),
         }
     }
 
@@ -301,7 +307,7 @@ mod proto_tests {
 
         assert!(node.expr_id.is_none());
         let is_null_node = match node.expr_type {
-            Some(ExprType::IsNullExpr(boxed)) => *boxed,
+            Some(physical_expr_node::ExprType::IsNullExpr(boxed)) => *boxed,
             other => panic!("expected an IsNullExpr node, got {other:?}"),
         };
         assert!(is_null_node.expr.is_some());
