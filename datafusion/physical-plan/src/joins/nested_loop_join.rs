@@ -32,8 +32,8 @@ use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::joins::SharedBitmapBuilder;
 use crate::joins::utils::{
     BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceAsync, OnceFut,
-    build_join_schema, check_join_is_valid, estimate_join_statistics,
-    need_produce_right_in_final,
+    boolean_mask_from_filter, build_join_schema, check_join_is_valid,
+    estimate_join_statistics, need_produce_right_in_final,
 };
 use crate::metrics::{
     Count, ExecutionPlanMetricsSet, MetricBuilder, MetricType, MetricsSet, RatioMetrics,
@@ -390,28 +390,31 @@ impl NestedLoopJoinExec {
         let mut output_partitioning =
             asymmetric_join_output_partitioning(left, right, &join_type)?;
 
-        let emission_type = if left.boundedness().is_unbounded() {
-            EmissionType::Final
-        } else if right.pipeline_behavior() == EmissionType::Incremental {
-            match join_type {
-                // If we only need to generate matched rows from the probe side,
-                // we can emit rows incrementally.
-                JoinType::Inner
-                | JoinType::LeftSemi
-                | JoinType::RightSemi
-                | JoinType::Right
-                | JoinType::RightAnti
-                | JoinType::RightMark => EmissionType::Incremental,
-                // If we need to generate unmatched rows from the *build side*,
-                // we need to emit them at the end.
-                JoinType::Left
-                | JoinType::LeftAnti
-                | JoinType::LeftMark
-                | JoinType::Full => EmissionType::Both,
-            }
-        } else {
-            right.pipeline_behavior()
-        };
+        let emission_type =
+            // LeftSemi does not emit rows during probing. It records matching build-side
+            // rows in a bitmap and can only emit them after the probe side is exhausted.
+            if left.boundedness().is_unbounded() || join_type == JoinType::LeftSemi {
+                EmissionType::Final
+            } else if right.pipeline_behavior() == EmissionType::Incremental {
+                match join_type {
+                    // If we only need to generate matched rows from the probe side,
+                    // we can emit rows incrementally.
+                    JoinType::Inner
+                    | JoinType::LeftSemi
+                    | JoinType::RightSemi
+                    | JoinType::Right
+                    | JoinType::RightAnti
+                    | JoinType::RightMark => EmissionType::Incremental,
+                    // If we need to generate unmatched rows from the *build side*,
+                    // we need to emit them at the end.
+                    JoinType::Left
+                    | JoinType::LeftAnti
+                    | JoinType::LeftMark
+                    | JoinType::Full => EmissionType::Both,
+                }
+            } else {
+                right.pipeline_behavior()
+            };
 
         if let Some(projection) = projection {
             // construct a map from the input expressions to the output expression of the Projection
@@ -3795,20 +3798,6 @@ fn apply_filter_to_row_join_batch(
     Ok(bitmap_combined)
 }
 
-/// Convert a boolean filter array into a unified mask bitmap.
-///
-/// Caution: The filter result is NOT a bitmap; it contains true/false/null values.
-/// For example, `1 < NULL` evaluates to NULL. Therefore, we must combine (AND)
-/// the boolean array with its null bitmap to construct a unified bitmap.
-#[inline]
-fn boolean_mask_from_filter(filter_arr: &BooleanArray) -> BooleanArray {
-    let (values, nulls) = filter_arr.clone().into_parts();
-    match nulls {
-        Some(nulls) => BooleanArray::new(nulls.inner() & &values, None),
-        None => BooleanArray::new(values, None),
-    }
-}
-
 /// This function performs the following steps:
 /// 1. Apply filter to probe-side batch
 /// 2. Broadcast the left row (build_side_batch\[build_side_index\]) to the
@@ -4950,6 +4939,18 @@ pub(crate) mod tests {
         "));
 
         assert_join_metrics!(metrics, 5);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_left_semi_join_reports_final_emission() -> Result<()> {
+        let left = build_left_table();
+        let right = build_right_table();
+        let join =
+            NestedLoopJoinExec::try_new(left, right, None, &JoinType::LeftSemi, None)?;
+
+        assert_eq!(join.properties().emission_type, EmissionType::Final);
 
         Ok(())
     }

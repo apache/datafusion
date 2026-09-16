@@ -253,6 +253,16 @@ impl AggregateUDF {
         self.inner.groups_accumulator_supported(args)
     }
 
+    /// See [`AggregateUDFImpl::groups_accumulator_supported_for_types`] for more details.
+    pub fn groups_accumulator_supported_for_types(
+        &self,
+        arg_types: &[DataType],
+        is_distinct: bool,
+    ) -> Option<bool> {
+        self.inner
+            .groups_accumulator_supported_for_types(arg_types, is_distinct)
+    }
+
     /// See [`AggregateUDFImpl::create_groups_accumulator`] for more details.
     pub fn create_groups_accumulator(
         &self,
@@ -615,6 +625,32 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// query.
     fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
         false
+    }
+
+    /// The same question as [`Self::groups_accumulator_supported`], asked with
+    /// only the information a logical plan carries.
+    ///
+    /// Physical planning has an [`AccumulatorArgs`] to ask with; an optimizer
+    /// rule does not. This is how a logical caller learns whether a call would
+    /// get a specialized [`GroupsAccumulator`] or fall back to one boxed
+    /// [`Accumulator`] per group in `GroupsAccumulatorAdapter`, whose per-group
+    /// state can be orders of magnitude larger.
+    ///
+    /// An implementation whose answer is decided by the argument types and
+    /// `DISTINCT` alone should override this and have
+    /// [`Self::groups_accumulator_supported`] call it, so the two cannot
+    /// disagree. One whose answer needs more than that should leave the `None`
+    /// default.
+    ///
+    /// `None` means unanswered, not "no": a caller must not read it as either
+    /// `Some(true)` or `Some(false)`, since both readings are wrong for some
+    /// implementation that returns it.
+    fn groups_accumulator_supported_for_types(
+        &self,
+        _arg_types: &[DataType],
+        _is_distinct: bool,
+    ) -> Option<bool> {
+        None
     }
 
     /// Return a specialized [`GroupsAccumulator`] that manages state
@@ -1550,6 +1586,15 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         self.inner.groups_accumulator_supported(args)
+    }
+
+    fn groups_accumulator_supported_for_types(
+        &self,
+        arg_types: &[DataType],
+        is_distinct: bool,
+    ) -> Option<bool> {
+        self.inner
+            .groups_accumulator_supported_for_types(arg_types, is_distinct)
     }
 
     fn create_groups_accumulator(
