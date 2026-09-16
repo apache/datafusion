@@ -668,6 +668,8 @@ impl ExternalSorter {
         let elapsed_compute = self.metrics.baseline.elapsed_compute().clone();
         let _timer = elapsed_compute.timer();
 
+        let staged = is_output_stream && self.use_staged_sort();
+
         // Please pay attention that any operation inside of `in_mem_sort_stream` will
         // not perform any memory reservation. This is for avoiding the need of handling
         // reservation failure and spilling in the middle of the sort/merge. The memory
@@ -677,11 +679,7 @@ impl ExternalSorter {
         if self.in_mem_batches.len() == 1 {
             let batch = self.in_mem_batches.swap_remove(0);
             let reservation = self.reservation.take();
-            let sorted_stream = self.sort_batch_stream(
-                batch,
-                reservation,
-                is_output_stream && self.use_staged_sort(),
-            )?;
+            let sorted_stream = self.sort_batch_stream(batch, reservation, staged)?;
             return Ok(self.observe_if_output(sorted_stream, is_output_stream));
         }
 
@@ -698,11 +696,7 @@ impl ExternalSorter {
                 .try_resize(get_reserved_bytes_for_record_batch(&batch)?)
                 .map_err(Self::err_with_oom_context)?;
             let reservation = self.reservation.take();
-            let sorted_stream = self.sort_batch_stream(
-                batch,
-                reservation,
-                is_output_stream && self.use_staged_sort(),
-            )?;
+            let sorted_stream = self.sort_batch_stream(batch, reservation, staged)?;
             return Ok(self.observe_if_output(sorted_stream, is_output_stream));
         }
 
@@ -724,7 +718,7 @@ impl ExternalSorter {
                 let reservation = self
                     .reservation
                     .split(get_reserved_bytes_for_record_batch(&batch)?);
-                let input = self.sort_batch_stream(batch, reservation, false)?;
+                let input = self.sort_batch_stream(batch, reservation, staged)?;
                 Ok(spawn_buffered(input, 1))
             })
             .collect::<Result<_>>()?;
