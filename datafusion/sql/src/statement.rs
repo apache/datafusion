@@ -2855,7 +2855,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
             ast::MergeAction::Delete { .. } => MergeIntoAction::Delete,
             ast::MergeAction::DoNothing { .. } => {
-                return not_impl_err!("MERGE DO NOTHING is not supported");
+                return not_impl_err!(
+                    "MERGE WHEN ... THEN DO NOTHING action is not supported"
+                );
             }
         };
 
