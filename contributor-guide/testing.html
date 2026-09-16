@@ -607,6 +607,17 @@ runs it and needs <code class="docutils literal notranslate"><span class="pre">p
 </pre></div>
 </div>
 </section>
+<section id="security-audit">
+<h2>Security Audit<a class="headerlink" href="#security-audit" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">ci/scripts/security_audit.sh</span></code> runs <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">audit</span></code> on the root <code class="docutils literal notranslate"><span class="pre">Cargo.lock</span></code> with
+the advisory exceptions that CI uses. <code class="docutils literal notranslate"><span class="pre">./dev/rust_lint.sh</span></code> runs it and installs
+<a class="reference external" href="https://github.com/rustsec/rustsec/blob/main/cargo-audit/README.md">cargo-audit</a> if it is missing. To run the audit on its own:</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>./ci/scripts/security_audit.sh
+</pre></div>
+</div>
+<p>The audit fetches the RustSec advisory database. A new advisory or a different
+<code class="docutils literal notranslate"><span class="pre">cargo-audit</span></code> version can change the result without any change to the repository.</p>
+</section>
 <section id="benchmarks">
 <h2>Benchmarks<a class="headerlink" href="#benchmarks" title="Link to this heading">#</a></h2>
 <section id="criterion-benchmarks">
@@ -714,6 +725,7 @@ runs it and needs <code class="docutils literal notranslate"><span class="pre">p
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#documentation-link-checks">Documentation Link Checks</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#asf-status-check-validation">ASF Status Check Validation</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#security-audit">Security Audit</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#benchmarks">Benchmarks</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#criterion-benchmarks">Criterion Benchmarks</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parquet-sql-benchmarks">Parquet SQL Benchmarks</a></li>
