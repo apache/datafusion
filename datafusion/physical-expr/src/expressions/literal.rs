@@ -35,6 +35,18 @@ use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::placement::ExpressionPlacement;
 use datafusion_expr_common::sort_properties::{ExprProperties, SortProperties};
 
+#[cfg(feature = "proto")]
+use datafusion_common::{internal_datafusion_err, internal_err};
+#[cfg(feature = "proto")]
+use datafusion_physical_expr_common::physical_expr::{
+    proto_decode::PhysicalExprDecodeCtx, proto_encode::PhysicalExprEncodeCtx,
+};
+#[cfg(feature = "proto")]
+use datafusion_proto_models::{
+    datafusion_common::ScalarValue as ProtoScalarValue,
+    protobuf::{PhysicalExprNode, PhysicalLiteralNode, physical_expr_node::ExprType},
+};
+
 /// Represents a literal value
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Literal {
@@ -139,23 +151,19 @@ impl PhysicalExpr for Literal {
     #[cfg(feature = "proto")]
     fn try_to_proto(
         &self,
-        _ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
-    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
-        use datafusion_proto_models::protobuf;
-
+        _ctx: &PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<PhysicalExprNode>> {
         let Self { value, field } = self;
         // The field name, type, and nullability are reconstructed by new_with_metadata.
         let expr_type = if field.metadata().is_empty() {
-            protobuf::physical_expr_node::ExprType::Literal(value.try_into()?)
+            ExprType::Literal(value.try_into()?)
         } else {
-            protobuf::physical_expr_node::ExprType::LiteralWithMetadata(
-                protobuf::PhysicalLiteralNode {
-                    value: Some(value.try_into()?),
-                    metadata: field.metadata().clone(),
-                },
-            )
+            ExprType::LiteralWithMetadata(PhysicalLiteralNode {
+                value: Some(value.try_into()?),
+                metadata: field.metadata().clone(),
+            })
         };
-        Ok(Some(protobuf::PhysicalExprNode {
+        Ok(Some(PhysicalExprNode {
             expr_id: None,
             expr_type: Some(expr_type),
         }))
@@ -166,27 +174,23 @@ impl PhysicalExpr for Literal {
 impl Literal {
     /// Reconstruct a [`Literal`] from its protobuf representation.
     pub fn try_from_proto(
-        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
-        _ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+        node: &PhysicalExprNode,
+        _ctx: &PhysicalExprDecodeCtx<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        use datafusion_common::{internal_datafusion_err, internal_err};
-        use datafusion_proto_models::protobuf;
-        use protobuf::physical_expr_node::ExprType;
-
-        let protobuf::PhysicalExprNode {
+        let PhysicalExprNode {
             expr_type,
             // Expression IDs are handled by the enclosing proto converter.
             expr_id: _,
         } = node;
         let (value, metadata) = match expr_type {
             Some(ExprType::Literal(scalar)) => {
-                let datafusion_proto_models::datafusion_common::ScalarValue {
+                let ProtoScalarValue {
                     // The scalar payload is decoded by ScalarValue::try_from.
                     value: _,
                 } = scalar;
                 (ScalarValue::try_from(scalar)?, None)
             }
-            Some(ExprType::LiteralWithMetadata(protobuf::PhysicalLiteralNode {
+            Some(ExprType::LiteralWithMetadata(PhysicalLiteralNode {
                 value,
                 metadata,
             })) => {
@@ -266,9 +270,6 @@ mod proto_tests {
     use super::*;
     use crate::proto_test_util::{StubEncoder, UnreachableDecoder, column_node};
     use datafusion_common::DataFusionError;
-    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
-    use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
-    use datafusion_proto_models::protobuf::physical_expr_node;
 
     fn i32_literal() -> Literal {
         Literal::new(ScalarValue::Int32(Some(42)))
@@ -290,10 +291,7 @@ mod proto_tests {
         // Literal nodes never set expr_id.
         assert!(node.expr_id.is_none());
         // Variant must be Literal, not any other expr type.
-        assert!(matches!(
-            node.expr_type,
-            Some(physical_expr_node::ExprType::Literal(_))
-        ));
+        assert!(matches!(node.expr_type, Some(ExprType::Literal(_))));
     }
 
     #[test]
@@ -307,10 +305,7 @@ mod proto_tests {
             .unwrap()
             .expect("null Literal should encode to Some(node)");
 
-        assert!(matches!(
-            node.expr_type,
-            Some(physical_expr_node::ExprType::Literal(_))
-        ));
+        assert!(matches!(node.expr_type, Some(ExprType::Literal(_))));
 
         // Decode and verify the null payload round-trips correctly.
         let schema = Schema::empty();
@@ -349,14 +344,12 @@ mod proto_tests {
 
     #[test]
     fn try_from_proto_rejects_missing_value() {
-        let node = datafusion_proto_models::protobuf::PhysicalExprNode {
+        let node = PhysicalExprNode {
             expr_id: None,
-            expr_type: Some(physical_expr_node::ExprType::LiteralWithMetadata(
-                datafusion_proto_models::protobuf::PhysicalLiteralNode {
-                    value: None,
-                    metadata: Default::default(),
-                },
-            )),
+            expr_type: Some(ExprType::LiteralWithMetadata(PhysicalLiteralNode {
+                value: None,
+                metadata: Default::default(),
+            })),
         };
         let schema = Schema::empty();
         let decoder = UnreachableDecoder;

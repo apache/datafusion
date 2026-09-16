@@ -31,6 +31,18 @@ use datafusion_expr::interval_arithmetic::Interval;
 #[expect(deprecated)]
 use datafusion_expr::statistics::Distribution::{self, Bernoulli};
 
+#[cfg(feature = "proto")]
+use datafusion_physical_expr_common::{
+    expect_expr_variant,
+    physical_expr::{
+        proto_decode::PhysicalExprDecodeCtx, proto_encode::PhysicalExprEncodeCtx,
+    },
+};
+#[cfg(feature = "proto")]
+use datafusion_proto_models::protobuf::{
+    PhysicalExprNode, PhysicalNot, physical_expr_node::ExprType,
+};
+
 /// Not expression
 #[derive(Debug, Eq)]
 pub struct NotExpr {
@@ -185,18 +197,14 @@ impl PhysicalExpr for NotExpr {
     #[cfg(feature = "proto")]
     fn try_to_proto(
         &self,
-        ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
-    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
-        use datafusion_proto_models::protobuf;
-
+        ctx: &PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<PhysicalExprNode>> {
         let Self { arg } = self;
-        Ok(Some(protobuf::PhysicalExprNode {
+        Ok(Some(PhysicalExprNode {
             expr_id: None,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::NotExpr(Box::new(
-                protobuf::PhysicalNot {
-                    expr: Some(Box::new(ctx.encode_child(arg)?)),
-                },
-            ))),
+            expr_type: Some(ExprType::NotExpr(Box::new(PhysicalNot {
+                expr: Some(Box::new(ctx.encode_child(arg)?)),
+            }))),
         }))
     }
 }
@@ -205,18 +213,11 @@ impl PhysicalExpr for NotExpr {
 impl NotExpr {
     /// Reconstruct a [`NotExpr`] from its protobuf representation.
     pub fn try_from_proto(
-        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
-        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+        node: &PhysicalExprNode,
+        ctx: &PhysicalExprDecodeCtx<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        use datafusion_physical_expr_common::expect_expr_variant;
-        use datafusion_proto_models::protobuf;
-
-        let not_expr = expect_expr_variant!(
-            node,
-            protobuf::physical_expr_node::ExprType::NotExpr,
-            "NotExpr",
-        );
-        let protobuf::PhysicalNot { expr } = not_expr.as_ref();
+        let not_expr = expect_expr_variant!(node, ExprType::NotExpr, "NotExpr");
+        let PhysicalNot { expr } = not_expr.as_ref();
         let expr = ctx.decode_required_expression(expr.as_deref(), "NotExpr", "expr")?;
 
         Ok(Arc::new(NotExpr::new(expr)))
@@ -408,19 +409,12 @@ mod proto_tests {
     };
     use arrow::datatypes::Field;
     use datafusion_common::DataFusionError;
-    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
-    use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
-    use datafusion_proto_models::protobuf::{
-        PhysicalExprNode, PhysicalNot, physical_expr_node,
-    };
 
     /// Build a `NotExpr` proto node with the given child.
     fn not_node(expr: Option<Box<PhysicalExprNode>>) -> PhysicalExprNode {
         PhysicalExprNode {
             expr_id: None,
-            expr_type: Some(physical_expr_node::ExprType::NotExpr(Box::new(
-                PhysicalNot { expr },
-            ))),
+            expr_type: Some(ExprType::NotExpr(Box::new(PhysicalNot { expr }))),
         }
     }
 
@@ -443,7 +437,7 @@ mod proto_tests {
 
         assert!(node.expr_id.is_none());
         let not_node = match node.expr_type {
-            Some(physical_expr_node::ExprType::NotExpr(boxed)) => *boxed,
+            Some(ExprType::NotExpr(boxed)) => *boxed,
             other => panic!("expected a NotExpr node, got {other:?}"),
         };
         assert!(not_node.expr.is_some());

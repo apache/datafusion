@@ -40,6 +40,18 @@ use datafusion_expr::{
     type_coercion::{is_interval, is_signed_numeric, is_timestamp},
 };
 
+#[cfg(feature = "proto")]
+use datafusion_physical_expr_common::{
+    expect_expr_variant,
+    physical_expr::{
+        proto_decode::PhysicalExprDecodeCtx, proto_encode::PhysicalExprEncodeCtx,
+    },
+};
+#[cfg(feature = "proto")]
+use datafusion_proto_models::protobuf::{
+    PhysicalExprNode, PhysicalNegativeNode, physical_expr_node::ExprType,
+};
+
 /// Negative expression
 #[derive(Debug, Eq)]
 pub struct NegativeExpr {
@@ -180,18 +192,14 @@ impl PhysicalExpr for NegativeExpr {
     #[cfg(feature = "proto")]
     fn try_to_proto(
         &self,
-        ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
-    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
-        use datafusion_proto_models::protobuf;
-
+        ctx: &PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<PhysicalExprNode>> {
         let Self { arg } = self;
-        Ok(Some(protobuf::PhysicalExprNode {
+        Ok(Some(PhysicalExprNode {
             expr_id: None,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::Negative(Box::new(
-                protobuf::PhysicalNegativeNode {
-                    expr: Some(Box::new(ctx.encode_child(arg)?)),
-                },
-            ))),
+            expr_type: Some(ExprType::Negative(Box::new(PhysicalNegativeNode {
+                expr: Some(Box::new(ctx.encode_child(arg)?)),
+            }))),
         }))
     }
 }
@@ -200,18 +208,11 @@ impl PhysicalExpr for NegativeExpr {
 impl NegativeExpr {
     /// Reconstruct a [`NegativeExpr`] from its protobuf representation.
     pub fn try_from_proto(
-        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
-        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+        node: &PhysicalExprNode,
+        ctx: &PhysicalExprDecodeCtx<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        use datafusion_physical_expr_common::expect_expr_variant;
-        use datafusion_proto_models::protobuf;
-
-        let n = expect_expr_variant!(
-            node,
-            protobuf::physical_expr_node::ExprType::Negative,
-            "Negative",
-        );
-        let protobuf::PhysicalNegativeNode { expr } = n.as_ref();
+        let n = expect_expr_variant!(node, ExprType::Negative, "Negative");
+        let PhysicalNegativeNode { expr } = n.as_ref();
         let expr =
             ctx.decode_required_expression(expr.as_deref(), "NegativeExpr", "expr")?;
 
@@ -455,19 +456,12 @@ mod proto_tests {
     };
     use arrow::datatypes::Field;
     use datafusion_common::DataFusionError;
-    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
-    use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
-    use datafusion_proto_models::protobuf::{
-        PhysicalExprNode, PhysicalNegativeNode, physical_expr_node,
-    };
 
     /// Build a `NegativeExpr` proto node with the given children.
     fn negative_node(expr: Option<Box<PhysicalExprNode>>) -> PhysicalExprNode {
         PhysicalExprNode {
             expr_id: None,
-            expr_type: Some(physical_expr_node::ExprType::Negative(Box::new(
-                PhysicalNegativeNode { expr },
-            ))),
+            expr_type: Some(ExprType::Negative(Box::new(PhysicalNegativeNode { expr }))),
         }
     }
 
@@ -490,7 +484,7 @@ mod proto_tests {
 
         assert!(node.expr_id.is_none());
         let negative_node = match node.expr_type {
-            Some(physical_expr_node::ExprType::Negative(boxed)) => *boxed,
+            Some(ExprType::Negative(boxed)) => *boxed,
             other => panic!("expected a NegativeExpr node, got {other:?}"),
         };
         assert!(negative_node.expr.is_some());

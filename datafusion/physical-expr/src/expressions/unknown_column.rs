@@ -30,6 +30,18 @@ use datafusion_common::{Result, internal_err};
 
 use datafusion_expr::ColumnarValue;
 
+#[cfg(feature = "proto")]
+use datafusion_physical_expr_common::{
+    expect_expr_variant,
+    physical_expr::{
+        proto_decode::PhysicalExprDecodeCtx, proto_encode::PhysicalExprEncodeCtx,
+    },
+};
+#[cfg(feature = "proto")]
+use datafusion_proto_models::protobuf::{
+    PhysicalExprNode, UnknownColumn, physical_expr_node::ExprType,
+};
+
 #[derive(Debug, Clone, Eq)]
 pub struct UnKnownColumn {
     name: String,
@@ -89,16 +101,14 @@ impl PhysicalExpr for UnKnownColumn {
     #[cfg(feature = "proto")]
     fn try_to_proto(
         &self,
-        _ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
-    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
-        use datafusion_proto_models::protobuf;
-
+        _ctx: &PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<PhysicalExprNode>> {
         let Self { name } = self;
-        Ok(Some(protobuf::PhysicalExprNode {
+        Ok(Some(PhysicalExprNode {
             expr_id: None,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::UnknownColumn(
-                protobuf::UnknownColumn { name: name.clone() },
-            )),
+            expr_type: Some(ExprType::UnknownColumn(UnknownColumn {
+                name: name.clone(),
+            })),
         }))
     }
 }
@@ -107,17 +117,11 @@ impl PhysicalExpr for UnKnownColumn {
 impl UnKnownColumn {
     /// Reconstruct an [`UnKnownColumn`] from its protobuf representation.
     pub fn try_from_proto(
-        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
-        _ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+        node: &PhysicalExprNode,
+        _ctx: &PhysicalExprDecodeCtx<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        use datafusion_physical_expr_common::expect_expr_variant;
-        use datafusion_proto_models::protobuf;
-
-        let protobuf::UnknownColumn { name } = expect_expr_variant!(
-            node,
-            protobuf::physical_expr_node::ExprType::UnknownColumn,
-            "UnKnownColumn",
-        );
+        let UnknownColumn { name } =
+            expect_expr_variant!(node, ExprType::UnknownColumn, "UnKnownColumn");
         Ok(Arc::new(UnKnownColumn::new(name)))
     }
 }
@@ -143,9 +147,6 @@ mod proto_tests {
     use crate::proto_test_util::{StubEncoder, UnreachableDecoder, column_node};
     use arrow::datatypes::Schema;
     use datafusion_common::DataFusionError;
-    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
-    use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
-    use datafusion_proto_models::protobuf::{self, physical_expr_node};
 
     // ── try_to_proto ─────────────────────────────────────────────────────────
 
@@ -164,8 +165,8 @@ mod proto_tests {
         assert!(node.expr_id.is_none());
 
         // Verify the encoded name matches the original.
-        let protobuf::UnknownColumn { name } = match node.expr_type {
-            Some(physical_expr_node::ExprType::UnknownColumn(c)) => c,
+        let UnknownColumn { name } = match node.expr_type {
+            Some(ExprType::UnknownColumn(c)) => c,
             other => panic!("expected UnknownColumn proto node, got {other:?}"),
         };
         assert_eq!(name, "my_col");
@@ -175,13 +176,11 @@ mod proto_tests {
 
     #[test]
     fn try_from_proto_decodes_name() {
-        let node = protobuf::PhysicalExprNode {
+        let node = PhysicalExprNode {
             expr_id: None,
-            expr_type: Some(physical_expr_node::ExprType::UnknownColumn(
-                protobuf::UnknownColumn {
-                    name: "my_col".to_string(),
-                },
-            )),
+            expr_type: Some(ExprType::UnknownColumn(UnknownColumn {
+                name: "my_col".to_string(),
+            })),
         };
         let schema = Schema::empty();
         // UnKnownColumn has no child exprs so the decoder is never called.

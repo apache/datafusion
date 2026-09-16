@@ -31,6 +31,18 @@ use datafusion_common::{Result, internal_err, plan_err};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr_common::placement::ExpressionPlacement;
 
+#[cfg(feature = "proto")]
+use datafusion_physical_expr_common::{
+    expect_expr_variant,
+    physical_expr::{
+        proto_decode::PhysicalExprDecodeCtx, proto_encode::PhysicalExprEncodeCtx,
+    },
+};
+#[cfg(feature = "proto")]
+use datafusion_proto_models::protobuf::{
+    PhysicalColumn, PhysicalExprNode, physical_expr_node::ExprType,
+};
+
 /// Represents the column at a given index in a RecordBatch
 ///
 /// This is a physical expression that represents a column at a given index in an
@@ -150,32 +162,29 @@ impl PhysicalExpr for Column {
     #[cfg(feature = "proto")]
     fn try_to_proto(
         &self,
-        _ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
-    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
-        use datafusion_proto_models::protobuf;
+        _ctx: &PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<PhysicalExprNode>> {
         let Self { name, index } = self;
-        Ok(Some(protobuf::PhysicalExprNode {
+        Ok(Some(PhysicalExprNode {
             expr_id: None,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::Column(
-                protobuf::PhysicalColumn {
-                    name: name.clone(),
-                    index: *index as u32,
-                },
-            )),
+            expr_type: Some(ExprType::Column(PhysicalColumn {
+                name: name.clone(),
+                index: *index as u32,
+            })),
         }))
     }
 }
 
 #[cfg(feature = "proto")]
-impl From<&datafusion_proto_models::protobuf::PhysicalColumn> for Column {
-    fn from(c: &datafusion_proto_models::protobuf::PhysicalColumn) -> Self {
-        let datafusion_proto_models::protobuf::PhysicalColumn { name, index } = c;
+impl From<&PhysicalColumn> for Column {
+    fn from(c: &PhysicalColumn) -> Self {
+        let PhysicalColumn { name, index } = c;
         Column::new(name, *index as usize)
     }
 }
 
 #[cfg(feature = "proto")]
-impl From<&Column> for datafusion_proto_models::protobuf::PhysicalColumn {
+impl From<&Column> for PhysicalColumn {
     fn from(c: &Column) -> Self {
         let Column { name, index } = c;
         Self {
@@ -199,16 +208,11 @@ impl Column {
     /// [`PhysicalExpr::try_to_proto`]: datafusion_physical_expr_common::physical_expr::PhysicalExpr::try_to_proto
     /// [`PhysicalExprDecodeCtx::decode`]: datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx::decode
     pub fn try_from_proto(
-        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
-        _ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+        node: &PhysicalExprNode,
+        _ctx: &PhysicalExprDecodeCtx<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        use datafusion_physical_expr_common::expect_expr_variant;
-        use datafusion_proto_models::protobuf;
-        let protobuf::PhysicalColumn { name, index } = expect_expr_variant!(
-            node,
-            protobuf::physical_expr_node::ExprType::Column,
-            "Column",
-        );
+        let PhysicalColumn { name, index } =
+            expect_expr_variant!(node, ExprType::Column, "Column");
         Ok(Arc::new(Column::new(name, *index as usize)))
     }
 }
