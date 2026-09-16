@@ -655,39 +655,22 @@ impl PartitionEvaluator for WindowShiftEvaluator {
             // Stores the necessary non-null entry number further than the current row.
             let non_null_row_count = offset_magnitude(self.shift_offset);
 
-            if self.non_null_offsets.is_empty() {
-                // When empty, fill non_null offsets with the data further than the current row.
-                let mut offset_val = 1;
-                for idx in range.start + 1..range.end {
-                    if array.is_valid(idx) {
-                        self.non_null_offsets.push_back(offset_val);
-                        offset_val = 1;
-                    } else {
-                        offset_val += 1;
-                    }
-                    // It is enough to keep track of `non_null_row_count + 1` non-null offset.
-                    // further data is unnecessary for the result.
-                    if self.non_null_offsets.len() == non_null_row_count.saturating_add(1)
-                    {
-                        break;
-                    }
+            // Resume after the last cached non-null row, even when the cache is
+            // non-empty but does not yet contain enough rows for this offset.
+            let mut total_offset: usize = self.non_null_offsets.iter().sum();
+            for next_idx in range.start + total_offset + 1..range.end {
+                if self.non_null_offsets.len() == non_null_row_count {
+                    break;
                 }
-            } else if range.end < len && array.is_valid(range.end) {
-                // Update `non_null_offsets` with the new end data.
-                if array.is_valid(range.end) {
-                    // When non-null, append a new offset.
-                    self.non_null_offsets.push_back(1);
-                } else {
-                    // When null, increment offset count of the last entry
-                    let last_idx = self.non_null_offsets.len() - 1;
-                    self.non_null_offsets[last_idx] += 1;
+                if array.is_valid(next_idx) {
+                    let next_offset = next_idx - range.start;
+                    self.non_null_offsets.push_back(next_offset - total_offset);
+                    total_offset = next_offset;
                 }
             }
 
             // Find the nonNULL row index that shifted by offset comparing to current row index
             idx = if self.non_null_offsets.len() >= non_null_row_count {
-                let total_offset: usize =
-                    self.non_null_offsets.iter().take(non_null_row_count).sum();
                 Some(range.start + total_offset)
             } else {
                 None
