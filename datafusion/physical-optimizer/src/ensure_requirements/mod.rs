@@ -261,10 +261,14 @@ impl PhysicalOptimizerRule for EnsureRequirements {
     }
 
     /// This rule derives everything it does from the plan and the config, and
-    /// the config is fixed for an optimization run, so re-running it on a plan
-    /// it just produced cannot change anything. Rule lists that enforce
-    /// requirements again after their own rewrites can therefore skip the
-    /// passes whose input nothing has touched.
+    /// the config is fixed for an optimization run, so run again on a plan it
+    /// just produced it can only arrive at that same plan. Rule lists that
+    /// enforce requirements again after their own rewrites can therefore skip
+    /// the passes whose input nothing has touched.
+    ///
+    /// Note the rule rebuilds the tree rather than returning its input, so the
+    /// repeated pass it saves is a full reconstruction of the plan, not just
+    /// the analysis that decides nothing needs to change.
     fn skip_if_unchanged(&self) -> bool {
         true
     }

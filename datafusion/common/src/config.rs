@@ -1598,15 +1598,22 @@ config_namespace! {
         pub enable_round_robin_repartition: bool, default = true
 
         /// When set to true, a physical optimizer rule that opts in via
-        /// [`PhysicalOptimizerRule::skip_if_unchanged`] is skipped when its
-        /// input is the very plan it returned last time, since re-running a
-        /// pure rule on its own output cannot change anything.
+        /// [`PhysicalOptimizerRule::skip_if_unchanged`](https://docs.rs/datafusion/latest/datafusion/physical_optimizer/trait.PhysicalOptimizerRule.html#method.skip_if_unchanged)
+        /// is skipped when the plan handed to it is the very plan it returned
+        /// last time, since an idempotent rule run on its own output only
+        /// arrives at that same plan again. "Nothing changed" is tested by
+        /// pointer identity, which is exact and free: plans are reference
+        /// counted, and a rule that finds nothing to do returns its input
+        /// untouched, so an undisturbed stretch of the rule list carries the
+        /// same object through to the next pass.
         ///
-        /// The default rule list has no repeated rules, so this matters for
-        /// custom rule lists (`with_physical_optimizer_rules`) that enforce
-        /// requirements again after their own rewrites.
-        ///
-        /// [`PhysicalOptimizerRule::skip_if_unchanged`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/trait.PhysicalOptimizerRule.html#method.skip_if_unchanged
+        /// Physical rules run as a fixed sequence with no fixpoint loop, so
+        /// this matters for rule lists that hold the same rule more than once.
+        /// The built-in list holds none twice, which is why this is off by
+        /// default; it is aimed at lists installed through
+        /// `SessionStateBuilder::with_physical_optimizer_rules`, where custom
+        /// rewrites are inserted after the built-in requirement enforcement
+        /// and each of them needs requirements enforced again.
         pub skip_unchanged_physical_rules: bool, default = false
 
         /// When set to true, the optimizer will attempt to perform limit operations

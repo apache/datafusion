@@ -76,15 +76,22 @@ pub trait PhysicalOptimizerRule: Debug + std::any::Any {
     /// A human readable name for this optimizer rule
     fn name(&self) -> &str;
 
-    /// Whether this rule is a pure function of the plan it is given, so that
-    /// running it again on a plan object it previously returned cannot change
-    /// anything.
+    /// Whether running this rule again on a plan it produced itself is
+    /// guaranteed to describe the same plan.
     ///
     /// When a rule opts in, the optimizer remembers the plan the rule last
-    /// returned and skips the call when handed back that exact object. Plans
-    /// are reference counted and a rule returns its input untouched when it
-    /// has nothing to do, so this is an exact, allocation-free signal — no
-    /// hashing or structural comparison is involved.
+    /// returned and skips the call when handed back that exact object. The
+    /// test is pointer identity, which is exact and costs nothing: plans are
+    /// reference counted, and a rule that finds nothing to do returns its
+    /// input untouched, so an undisturbed stretch of the rule list carries the
+    /// same object through to the next pass.
+    ///
+    /// What is being claimed is idempotence, not identity. A rule may rebuild
+    /// the tree and hand back a fresh object every time — `EnsureRequirements`
+    /// does exactly that — and still qualify, because all the skip relies on
+    /// is that the second pass would arrive at the same plan as the first.
+    /// That is also what makes the skip worth having: the pass it removes
+    /// would have rebuilt the entire tree to end up back where it started.
     ///
     /// This is off by default and only consulted when
     /// `datafusion.optimizer.skip_unchanged_physical_rules` is enabled. It
@@ -95,8 +102,9 @@ pub trait PhysicalOptimizerRule: Debug + std::any::Any {
     /// Leave this `false` for any rule whose output depends on state outside
     /// the plan — session state that can change between invocations,
     /// counters, randomness — since the same input would no longer imply the
-    /// same output. Debug builds verify the claim: when a skip would fire,
-    /// the rule is run anyway and the result is asserted to be unchanged.
+    /// same output. Debug builds verify the claim: where a skip would fire the
+    /// rule is run anyway, and the plan it returns is asserted to match the
+    /// one that was kept.
     ///
     /// The optimizer reads this from the rule it holds, so a rule that runs
     /// *other* rules inside its own [`optimize`] must forward their answer —
