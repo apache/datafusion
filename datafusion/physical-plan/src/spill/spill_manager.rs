@@ -504,7 +504,7 @@ mod tests {
             half_batch.get_sliced_size().unwrap()
                 < get_record_batch_memory_size(&half_batch)
         );
-        // Since arrow 60, `get_slice_memory_size` accounts for the retained
+        // `get_slice_memory_size` accounts for the retained
         // variadic data buffers as well, so it matches `get_sliced_size`
         let data = arrow::array::Array::to_data(&half_batch.column(0));
         let views_sliced_size = data.get_slice_memory_size()?;
