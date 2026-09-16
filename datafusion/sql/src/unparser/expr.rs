@@ -371,22 +371,26 @@ impl Unparser<'_> {
                 escape_char,
                 case_insensitive,
             }) => {
+                let negated = *negated;
+                let expr = Box::new(self.expr_to_sql_inner(expr)?);
+                let pattern = Box::new(self.expr_to_sql_inner(pattern)?);
+                let escape_char =
+                    escape_char.map(|c| SingleQuotedString(c.to_string()).into());
+
                 if *case_insensitive {
                     Ok(ast::Expr::ILike {
-                        negated: *negated,
-                        expr: Box::new(self.expr_to_sql_inner(expr)?),
-                        pattern: Box::new(self.expr_to_sql_inner(pattern)?),
-                        escape_char: escape_char
-                            .map(|c| SingleQuotedString(c.to_string()).into()),
+                        negated,
+                        expr,
+                        pattern,
+                        escape_char,
                         any: false,
                     })
                 } else {
                     Ok(ast::Expr::Like {
-                        negated: *negated,
-                        expr: Box::new(self.expr_to_sql_inner(expr)?),
-                        pattern: Box::new(self.expr_to_sql_inner(pattern)?),
-                        escape_char: escape_char
-                            .map(|c| SingleQuotedString(c.to_string()).into()),
+                        negated,
+                        expr,
+                        pattern,
+                        escape_char,
                         any: false,
                     })
                 }
@@ -402,20 +406,18 @@ impl Unparser<'_> {
                     ..
                 } = &agg.params;
 
-                let args_to_use;
-                let within_group;
-
                 // if this is a WITHIN GROUP aggregate, skip the prepended arg
-                if agg.func.supports_within_group_clause() && !order_by.is_empty() {
-                    args_to_use = self.function_args_to_sql(&args[1..])?;
-                    within_group = order_by
-                        .iter()
-                        .map(|sort_expr| self.sort_to_sql(sort_expr))
-                        .collect::<Result<Vec<ast::OrderByExpr>>>()?;
-                } else {
-                    args_to_use = self.function_args_to_sql(args)?;
-                    within_group = Vec::new();
-                }
+                let (args_to_use, within_group) =
+                    if agg.func.supports_within_group_clause() && !order_by.is_empty() {
+                        let args_to_use = self.function_args_to_sql(&args[1..])?;
+                        let within_group = order_by
+                            .iter()
+                            .map(|sort_expr| self.sort_to_sql(sort_expr))
+                            .collect::<Result<Vec<ast::OrderByExpr>>>()?;
+                        (args_to_use, within_group)
+                    } else {
+                        (self.function_args_to_sql(args)?, Vec::new())
+                    };
 
                 let filter = match filter {
                     Some(filter) => Some(Box::new(self.expr_to_sql_inner(filter)?)),
@@ -738,16 +740,18 @@ impl Unparser<'_> {
         );
 
         let args = args
-            .chunks_exact(2)
-            .map(|chunk| {
-                let key = match &chunk[0] {
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|[name, value]| {
+                let key = match name {
                     Expr::Literal(ScalarValue::Utf8(Some(s)), _) => self.new_ident_quoted_if_needs(s.to_string()),
-                    _ => return internal_err!("named_struct expects even arguments to be strings, but received: {:?}", &chunk[0])
+                    _ => return internal_err!("named_struct expects even arguments to be strings, but received: {name:?}")
                 };
 
                 Ok(ast::DictionaryField {
                     key,
-                    value: Box::new(self.expr_to_sql_with_nesting(&chunk[1])?),
+                    value: Box::new(self.expr_to_sql_with_nesting(value)?),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -3476,7 +3480,7 @@ mod tests {
         ] {
             let unparser = Unparser::new(dialect.as_ref());
             let expr = Expr::ScalarFunction(ScalarFunction {
-                func: Arc::new(ScalarUDF::from(FromUnixtimeFunc::new())),
+                func: Arc::new(ScalarUDF::from(FromUnixtimeFunc::default())),
                 args: vec![col("date_col")],
             });
 

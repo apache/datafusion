@@ -19,20 +19,23 @@ use std::collections::HashSet;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
+use crate::expr::{QUALIFY_HELP, reject_window_functions};
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::query::to_order_by_exprs_with_select;
 use crate::utils::{
     CheckColumnsMustReferenceAggregatePurpose, CheckColumnsSatisfyExprsPurpose,
-    check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
-    resolve_columns, resolve_positions_to_exprs, rewrite_recursive_unnest_bottom_up,
-    rewrite_recursive_unnests_bottom_up, substitute_top_level_alias,
-    substitute_top_level_aliases_in_sorts,
+    DedupedProjection, check_columns_satisfy_exprs, extract_aliases, rebase_expr,
+    resolve_aliases_to_exprs, resolve_columns, resolve_positions_to_exprs,
+    rewrite_recursive_unnest_bottom_up, rewrite_recursive_unnests_bottom_up,
+    substitute_top_level_alias, substitute_top_level_aliases_in_sorts,
 };
 
 use arrow::datatypes::DataType;
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, not_impl_err, plan_err};
+use datafusion_common::{
+    Column, DFSchema, DFSchemaRef, HashMap, Result, not_impl_err, plan_err,
+};
 use datafusion_common::{NullHandling, RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::ExprSchemable;
 use datafusion_expr::builder::get_struct_unnested_columns;
@@ -202,6 +205,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .having
             .map::<Result<Expr>, _>(|having_expr| {
                 self.warn_on_null_equality_predicate(&having_expr);
+                let window_span = self.window_function_span(&having_expr, &alias_map);
                 let having_expr = self.sql_expr_to_logical_expr(
                     having_expr,
                     &combined_schema,
@@ -221,6 +225,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 //   SELECT c1, MAX(c2) AS m FROM t GROUP BY c1 HAVING MAX(c2) > 10;
                 //
                 let having_expr = resolve_aliases_to_exprs(having_expr, &alias_map)?;
+                // HAVING is evaluated before window functions are computed, so
+                // they may not appear there (checked after alias resolution so
+                // that an alias of a window function is rejected too)
+                reject_window_functions(
+                    &having_expr,
+                    "HAVING",
+                    QUALIFY_HELP,
+                    window_span,
+                )?;
                 let having_expr = normalize_col(having_expr, &projected_plan)?;
                 let (having_expr, _) =
                     having_expr.infer_placeholder_types(&combined_schema)?;
@@ -233,21 +246,31 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             exprs
                 .into_iter()
                 .map(|e| {
-                    let group_by_expr = self.sql_expr_to_logical_expr(
-                        e,
-                        &combined_schema,
-                        planner_context,
-                    )?;
-
                     // Aliases from the projection can conflict with same-named expressions in the input
                     let mut alias_map = alias_map.clone();
                     for f in base_plan.schema().fields() {
                         alias_map.remove(f.name());
                     }
+                    let window_span = self.window_function_span(&e, &alias_map);
+
+                    let group_by_expr = self.sql_expr_to_logical_expr(
+                        e,
+                        &combined_schema,
+                        planner_context,
+                    )?;
                     let group_by_expr =
                         resolve_aliases_to_exprs(group_by_expr, &alias_map)?;
                     let group_by_expr =
                         resolve_positions_to_exprs(group_by_expr, &select_exprs)?;
+                    // Window functions are computed after grouping, so they may
+                    // not be grouped on (checked after aliases and positions are
+                    // resolved so `GROUP BY rn` / `GROUP BY 1` are rejected too)
+                    reject_window_functions(
+                        &group_by_expr,
+                        "GROUP BY",
+                        "Compute the window function in a subquery and group by its result",
+                        window_span,
+                    )?;
                     let group_by_expr = normalize_col(group_by_expr, &projected_plan)?;
                     self.validate_schema_satisfies_exprs(
                         base_plan.schema(),
@@ -639,7 +662,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             let mut unnest_columns = IndexMap::new();
             // from which columns used for projection, before the unnest happen
             // including non unnest columns and unnest columns
-            let mut inner_projection_exprs = vec![];
+            let mut inner_projection_exprs = DedupedProjection::default();
             let mut outer_expr_groups =
                 Vec::with_capacity(intermediate_expr_groups.len());
 
@@ -704,7 +727,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
 
             intermediate_plan = LogicalPlanBuilder::from(intermediate_plan)
-                .project(inner_projection_exprs)?
+                .project(inner_projection_exprs.into_exprs())?
                 .unnest_columns_with_options(unnest_col_vec, unnest_options)?
                 .build()?;
             intermediate_expr_groups = outer_expr_groups;
@@ -807,7 +830,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         loop {
             let mut unnest_columns = IndexMap::new();
-            let mut inner_projection_exprs = vec![];
+            let mut inner_projection_exprs = DedupedProjection::default();
 
             let outer_projection_exprs = rewrite_recursive_unnests_bottom_up(
                 &intermediate_plan,
@@ -842,7 +865,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         columns
                     }
                 };
-                projection_exprs.extend(inner_projection_exprs);
+                projection_exprs.extend(inner_projection_exprs.into_exprs());
 
                 let mut unnest_col_vec = vec![];
 
@@ -885,6 +908,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let fallback_schemas = plan.fallback_normalize_schemas();
 
                 self.warn_on_null_equality_predicate(&predicate_expr);
+                let window_span =
+                    self.window_function_span(&predicate_expr, &HashMap::new());
                 let filter_expr =
                     self.sql_to_expr(predicate_expr, plan.schema(), planner_context)?;
 
@@ -896,6 +921,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         "Aggregate functions are not allowed in the WHERE clause. Consider using HAVING instead"
                     );
                 }
+                // WHERE is evaluated before window functions are computed, so
+                // they may not appear there either
+                reject_window_functions(
+                    &filter_expr,
+                    "WHERE",
+                    QUALIFY_HELP,
+                    window_span,
+                )?;
 
                 let mut using_columns = HashSet::new();
                 expr_to_columns(&filter_expr, &mut using_columns)?;
