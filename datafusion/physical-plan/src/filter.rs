@@ -642,8 +642,12 @@ impl ExecutionPlan for FilterExec {
         )
     }
 
-    /// Fresh adaptive-reordering state and metrics for a re-execution; the
-    /// predicate, input and cached properties are still valid and kept.
+    /// Fresh adaptive-reordering state and metrics; the predicate, input and
+    /// cached properties are still valid and kept.
+    ///
+    /// Callers wanting a query to learn from scratch must call this: plain
+    /// [`execute`](ExecutionPlan::execute) reuses whatever the node has
+    /// already measured.
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
         let mut new = (*self).clone();
         new.adaptive_stats = Arc::new(AdaptiveFilterShared::default());
@@ -955,7 +959,7 @@ impl ExecutionPlan for FilterExec {
             projection,
             batch_size,
             fetch,
-            // Per-execution adaptive measurements, not part of the plan shape.
+            // Adaptive measurements: node state, not part of the plan shape.
             adaptive_stats: _,
         } = self;
         let input_node = ctx.encode_child(input)?;
@@ -2514,8 +2518,9 @@ mod tests {
         Ok(())
     }
 
+    /// `reset_state()` discards what the node learned; nothing else does.
     #[tokio::test]
-    async fn test_reset_state_gives_fresh_adaptive_stats() -> Result<()> {
+    async fn test_reset_state_resets_adaptive_learning() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let input = Arc::new(StatisticsExec::new(
             Statistics::new_unknown(&schema),
@@ -2528,6 +2533,12 @@ mod tests {
         ));
         let filter = Arc::new(FilterExec::try_new(predicate, input)?);
 
+        assert!(filter.adaptive_stats.is_pristine());
+        filter
+            .adaptive_stats
+            .seed_one_batch_short_of_warmup(&[(100, 50, 100)]);
+        assert!(!filter.adaptive_stats.is_pristine(), "the node has learned");
+
         let reset = Arc::clone(&filter).reset_state()?;
         let reset = reset
             .as_ref()
@@ -2535,6 +2546,14 @@ mod tests {
             .expect("reset_state returns a FilterExec");
 
         assert!(!Arc::ptr_eq(&filter.adaptive_stats, &reset.adaptive_stats));
+        assert!(
+            reset.adaptive_stats.is_pristine(),
+            "the reset node learns from scratch"
+        );
+        assert!(
+            !filter.adaptive_stats.is_pristine(),
+            "and the node it came from is left as it was"
+        );
         assert!(Arc::ptr_eq(&filter.predicate, &reset.predicate));
         Ok(())
     }
@@ -2666,6 +2685,10 @@ mod tests {
 
         // Re-executing the same node keeps the learned state; same rows.
         assert_eq!(run(&filter, true).await?, flag_off, "state persists");
+        assert!(
+            !filter.adaptive_stats.is_pristine(),
+            "a second execute() reuses the settled decision, it does not reset it"
+        );
 
         // A reset node learns from scratch; same rows.
         let reset = Arc::clone(&filter).reset_state()?;

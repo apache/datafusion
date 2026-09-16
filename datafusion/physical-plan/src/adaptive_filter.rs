@@ -122,6 +122,13 @@
 //!   did in its own position, not measured.
 //! - The decision is one-shot: a misjudged reorder, or drifting data, is kept
 //!   for the rest of the query.
+//! - The pooled state lives on the `FilterExec` node, not on one execution of
+//!   it. Executing the same plan again, or concurrently, reuses the earlier
+//!   measurements and the settled decision; only
+//!   [`reset_state`](crate::ExecutionPlan::reset_state) — which the execution
+//!   API does not promise to call — starts over. Results are unaffected, but a
+//!   second run can differ from the first in speed, in `adaptive_reorders`,
+//!   and in the side effects of a fallible conjunct.
 //!
 //! See <https://github.com/apache/datafusion/pull/22698>.
 
@@ -287,6 +294,13 @@ impl AdaptiveFilterShared {
     #[cfg(test)]
     fn settled(&self) -> Option<Settled> {
         self.inner.lock().expect("poisoned").settled.clone()
+    }
+
+    /// Whether nothing has been measured or settled yet.
+    #[cfg(test)]
+    pub(crate) fn is_pristine(&self) -> bool {
+        let inner = self.inner.lock().expect("poisoned");
+        inner.stats.is_empty() && inner.measured_batches == 0 && inner.settled.is_none()
     }
 
     /// Seed `(rows, matched, nanos)` per conjunct one batch short of the
