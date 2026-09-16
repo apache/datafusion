@@ -483,11 +483,15 @@ pub trait GroupsAccumulator: Send + std::any::Any {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, PartialOrd, Ord)]
 pub struct FixedBlocksIndex(usize);
 
+/// Two `u32`s (8 bytes) rather than two `usize`s: an index is stored per group in every blocked
+/// hash table entry, so its size decides the size of the tables. Both halves fit `u32` by a wide
+/// margin, `index_in_block < block_size` (the batch size) and the number of blocks is
+/// `groups / block_size`. The API keeps taking and returning `usize`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub struct BlocksIndex {
     // flat_index: usize,
-    block_index: usize,
-    index_in_block: usize,
+    block_index: u32,
+    index_in_block: u32,
 }
 
 impl BlocksIndex {
@@ -498,15 +502,21 @@ impl BlocksIndex {
     };
     pub const MAX: Self = Self {
         // flat_index: usize::MAX,
-        block_index: usize::MAX,
-        index_in_block: usize::MAX,
+        block_index: u32::MAX,
+        index_in_block: u32::MAX,
     };
 
     pub fn new(block_index: usize, index_in_block: usize) -> Self {
       Self {
-        block_index,
-        index_in_block,
+        block_index: Self::narrow(block_index),
+        index_in_block: Self::narrow(index_in_block),
       }
+    }
+
+    #[inline(always)]
+    fn narrow(value: usize) -> u32 {
+        debug_assert!(value <= u32::MAX as usize, "block index part {value} does not fit in u32");
+        value as u32
     }
 
     #[inline(always)]
@@ -529,7 +539,7 @@ impl BlocksIndex {
     #[inline(always)]
     pub fn into_index_in_fixed_block_size(&self, block_size: usize) -> usize {
         // self.flat_index
-        self.block_index * block_size + self.index_in_block
+        self.block_index as usize * block_size + self.index_in_block as usize
     }
 
     /// Flat position given the absolute start of every block, `head` is the absolute
@@ -540,7 +550,7 @@ impl BlocksIndex {
         block_starts: &[usize],
         head: usize,
     ) -> usize {
-        block_starts[self.block_index] - head + self.index_in_block
+        block_starts[self.block_index as usize] - head + self.index_in_block as usize
         // self.flat_index
     }
 
@@ -576,7 +586,7 @@ impl BlocksIndex {
 
     #[inline(always)]
     pub fn block_index(&self, block_size: usize) -> usize {
-        self.block_index
+        self.block_index as usize
         // // Block sizes are batch sizes, almost always a power of two, and this runs per
         // // row in every accumulator and group values loop: a shift beats a division
         // if block_size.is_power_of_two() {
@@ -588,7 +598,7 @@ impl BlocksIndex {
 
     #[inline(always)]
     pub fn index_in_block(&self, block_size: usize) -> usize {
-        self.index_in_block
+        self.index_in_block as usize
         // if block_size.is_power_of_two() {
         //     self.flat_index & (block_size - 1)
         // } else {
@@ -603,7 +613,7 @@ impl BlocksIndex {
 
     #[inline(always)]
     pub fn add_index_in_block(mut self, n: usize) -> Self {
-        self.index_in_block += n;
+        self.index_in_block = Self::narrow(self.index_in_block as usize + n);
         // self.flat_index += n;
 
         self
@@ -611,8 +621,9 @@ impl BlocksIndex {
 
     #[inline(always)]
     pub fn add_fixed(mut self, n: usize, block_size: usize) -> Self {
-        self.block_index += (self.index_in_block + n) / block_size;
-        self.index_in_block = (self.index_in_block + n) % block_size;
+        let index_in_block = self.index_in_block as usize + n;
+        self.block_index += Self::narrow(index_in_block / block_size);
+        self.index_in_block = Self::narrow(index_in_block % block_size);
         // self.flat_index += n;
 
         self
@@ -620,15 +631,17 @@ impl BlocksIndex {
 
     #[inline(always)]
     pub fn add_mut_fixed(&mut self, n: usize, block_size: usize) {
-        self.block_index += (self.index_in_block + n) / block_size;
-        self.index_in_block = (self.index_in_block + n) % block_size;
+        let index_in_block = self.index_in_block as usize + n;
+        self.block_index += Self::narrow(index_in_block / block_size);
+        self.index_in_block = Self::narrow(index_in_block % block_size);
         // self.flat_index += n;
     }
 
     #[inline(always)]
     pub fn next_fixed(mut self, block_size: usize) -> Self {
-        self.block_index += ((self.index_in_block + 1) == block_size) as usize;
-        self.index_in_block = (self.index_in_block + 1) % block_size;
+        let next = self.index_in_block as usize + 1;
+        self.block_index += (next == block_size) as u32;
+        self.index_in_block = Self::narrow(next % block_size);
         // self.flat_index += 1;
 
         self
@@ -636,15 +649,17 @@ impl BlocksIndex {
 
     #[inline(always)]
     pub fn next_mut_fixed(&mut self, block_size: usize) {
-        self.block_index += ((self.index_in_block + 1) == block_size) as usize;
-        self.index_in_block = (self.index_in_block + 1) % block_size;
+        let next = self.index_in_block as usize + 1;
+        self.block_index += (next == block_size) as u32;
+        self.index_in_block = Self::narrow(next % block_size);
         // self.flat_index += 1;
     }
 
     #[inline(always)]
     pub fn prev_fixed(mut self, block_size: usize) -> Self {
-        self.block_index -= (self.index_in_block == 0) as usize;
-        self.index_in_block = self.index_in_block.wrapping_sub(1).min(block_size - 1);
+        self.block_index -= (self.index_in_block == 0) as u32;
+        self.index_in_block =
+            Self::narrow((self.index_in_block as usize).wrapping_sub(1).min(block_size - 1));
         // self.flat_index -= 1;
 
         self
@@ -652,8 +667,9 @@ impl BlocksIndex {
 
     #[inline(always)]
     pub fn prev_mut_fixed(&mut self, block_size: usize) {
-        self.block_index -= (self.index_in_block == 0) as usize;
-        self.index_in_block = self.index_in_block.wrapping_sub(1).min(block_size - 1);
+        self.block_index -= (self.index_in_block == 0) as u32;
+        self.index_in_block =
+            Self::narrow((self.index_in_block as usize).wrapping_sub(1).min(block_size - 1));
         // self.flat_index -= 1;
     }
 
@@ -688,10 +704,16 @@ impl BlocksIndex {
 
     #[inline(always)]
     pub fn sub(mut self, rhs: Self, batch_size: usize) -> Self {
-        if self.index_in_block >= rhs.index_in_block {
-            BlocksIndex::new(self.block_index - rhs.block_index, self.index_in_block - rhs.index_in_block)
+        let (block_index, index_in_block, rhs_block_index, rhs_index_in_block) = (
+            self.block_index as usize,
+            self.index_in_block as usize,
+            rhs.block_index as usize,
+            rhs.index_in_block as usize,
+        );
+        if index_in_block >= rhs_index_in_block {
+            BlocksIndex::new(block_index - rhs_block_index, index_in_block - rhs_index_in_block)
         } else {
-            BlocksIndex::new(self.block_index - rhs.block_index - 1, batch_size - (rhs.index_in_block - self.index_in_block))
+            BlocksIndex::new(block_index - rhs_block_index - 1, batch_size - (rhs_index_in_block - index_in_block))
         }
         // self.flat_index -= rhs.flat_index;
         // self
@@ -726,7 +748,8 @@ impl BlocksIndex {
             self.index_in_block -= rhs.index_in_block;
         } else {
             self.block_index = self.block_index - rhs.block_index - 1;
-            self.index_in_block = batch_size - (rhs.index_in_block - self.index_in_block);
+            self.index_in_block =
+                Self::narrow(batch_size - (rhs.index_in_block - self.index_in_block) as usize);
         }
         // self.flat_index -= rhs.flat_index;
     }
@@ -1011,5 +1034,46 @@ mod tests {
 
         let error = GroupSelection::try_from_indices(&[4], values.len()).unwrap_err();
         assert!(error.to_string().contains("out of bounds"));
+    }
+}
+
+#[cfg(test)]
+mod blocks_index_tests {
+    use super::BlocksIndex;
+
+    #[test]
+    fn blocks_index_is_two_u32() {
+        assert_eq!(size_of::<BlocksIndex>(), 8);
+    }
+
+    #[test]
+    fn blocks_index_arithmetic_round_trips() {
+        let block_size = 3;
+        for flat in 0..20usize {
+            let index = BlocksIndex::from_index_in_fixed_block_size(flat, block_size);
+            assert_eq!(index.into_index_in_fixed_block_size(block_size), flat);
+            assert_eq!(index.block_index(block_size), flat / block_size);
+            assert_eq!(index.index_in_block(block_size), flat % block_size);
+            assert_eq!(
+                index.next_fixed(block_size).into_index_in_fixed_block_size(block_size),
+                flat + 1
+            );
+            assert_eq!(
+                index.add_fixed(7, block_size).into_index_in_fixed_block_size(block_size),
+                flat + 7
+            );
+            if flat > 0 {
+                assert_eq!(
+                    index.prev_fixed(block_size).into_index_in_fixed_block_size(block_size),
+                    flat - 1
+                );
+            }
+            let rhs = BlocksIndex::from_index_in_fixed_block_size(flat / 2, block_size);
+            assert_eq!(
+                index.sub(rhs, block_size).into_index_in_fixed_block_size(block_size),
+                flat - flat / 2
+            );
+            assert_eq!(index.sub_flat(flat / 2, block_size), index.sub(rhs, block_size));
+        }
     }
 }
