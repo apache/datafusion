@@ -123,8 +123,8 @@ impl AggregateUDFImpl for AnyValue {
         self.doc()
     }
 
-    // TODO: this is arguably `DistinctHandling::Ignored` — the accumulator
+    // TODO: this is arguably `DistinctHandling::Insensitive` — the accumulator
     // ignores `is_distinct` and returns an unspecified input value either
     // way. Grouped with `first_value`/`last_value` and left at the default
-    // `Honored` until that family is settled together.
+    // `Sensitive` until that family is settled together.
 }

@@ -947,7 +947,7 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
 
     /// How this function treats the `DISTINCT` modifier.
     ///
-    /// Return [`DistinctHandling::Ignored`] for duplicate-insensitive
+    /// Return [`DistinctHandling::Insensitive`] for duplicate-insensitive
     /// functions so that `f(DISTINCT x)` is planned as `f(x)`.
     ///
     /// Return [`DistinctHandling::Unsupported`] if the accumulator does not
@@ -956,7 +956,7 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// the input or reject the query. Nothing reads this variant yet:
     /// rejecting such queries at planning time is a follow-up change.
     fn distinct_handling(&self) -> DistinctHandling {
-        DistinctHandling::Honored
+        DistinctHandling::Sensitive
     }
 
     /// Returns the documentation for this Aggregate UDF.
@@ -1738,7 +1738,7 @@ pub enum SetMonotonicity {
 
 /// How an aggregate function treats the `DISTINCT` modifier.
 ///
-/// Mathematically, `Ignored` means the function's merge operation is
+/// Mathematically, `Insensitive` means the function's merge operation is
 /// idempotent (its state forms a semilattice): f(S ⊎ S) = f(S), so
 /// removing duplicates from the input cannot change the result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1746,11 +1746,11 @@ pub enum SetMonotonicity {
 pub enum DistinctHandling {
     /// The result is the same with or without `DISTINCT`, so the planner
     /// is free to drop it. `min`, `max`, `bool_and`, `bit_or`, ...
-    Ignored,
+    Insensitive,
     /// The accumulator reads `AccumulatorArgs::is_distinct` and deduplicates
     /// its input, so the planner must leave the flag alone. `count`, `sum`,
     /// `avg`, `var_samp`, `array_agg`, ... This is the default.
-    Honored,
+    Sensitive,
     /// The accumulator does not implement `DISTINCT`: it does not read
     /// `is_distinct`, or it rejects `DISTINCT` with an error. The planner has
     /// to deduplicate the input first (today `SingleDistinctToGroupBy` does

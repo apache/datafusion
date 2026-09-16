@@ -874,7 +874,7 @@ impl AggregateUDFImpl for ApproxDistinct {
 
     fn distinct_handling(&self) -> DistinctHandling {
         // Updating an HLL register with a value already seen is a no-op.
-        DistinctHandling::Ignored
+        DistinctHandling::Insensitive
     }
 }
 

@@ -381,10 +381,10 @@ impl AggregateUDFImpl for FirstValue {
         self.doc()
     }
 
-    // TODO: whether this is `DistinctHandling::Ignored` depends on `ORDER BY`.
+    // TODO: whether this is `DistinctHandling::Insensitive` depends on `ORDER BY`.
     // `first_value(DISTINCT x ORDER BY y)` deduplicates `x` and leaves the `y`
     // ordering meaningless, while `first_value(DISTINCT x ORDER BY x)` is just
-    // `min(x)`. Left at the default `Honored` until that is settled, even
+    // `min(x)`. Left at the default `Sensitive` until that is settled, even
     // though the accumulator ignores `is_distinct` today.
 }
 
@@ -1301,10 +1301,10 @@ impl AggregateUDFImpl for LastValue {
         create_groups_accumulator(&args, false, self.is_input_pre_ordered, self.name())
     }
 
-    // TODO: whether this is `DistinctHandling::Ignored` depends on `ORDER BY`.
+    // TODO: whether this is `DistinctHandling::Insensitive` depends on `ORDER BY`.
     // `last_value(DISTINCT x ORDER BY y)` deduplicates `x` and leaves the `y`
     // ordering meaningless, while `last_value(DISTINCT x ORDER BY x)` is
-    // `max(x)` when `x` has no NULL. Left at the default `Honored` until that is settled, even
+    // `max(x)` when `x` has no NULL. Left at the default `Sensitive` until that is settled, even
     // though the accumulator ignores `is_distinct` today.
 }
 

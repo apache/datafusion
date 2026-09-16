@@ -403,7 +403,7 @@ impl AggregateUDFImpl for Max {
 
     fn distinct_handling(&self) -> DistinctHandling {
         // `MAX` is idempotent: duplicates cannot change the maximum.
-        DistinctHandling::Ignored
+        DistinctHandling::Insensitive
     }
 }
 
@@ -703,7 +703,7 @@ impl AggregateUDFImpl for Min {
 
     fn distinct_handling(&self) -> DistinctHandling {
         // `MIN` is idempotent: duplicates cannot change the minimum.
-        DistinctHandling::Ignored
+        DistinctHandling::Insensitive
     }
 }
 

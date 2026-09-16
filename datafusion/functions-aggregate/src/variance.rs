@@ -151,7 +151,7 @@ impl AggregateUDFImpl for VarianceSample {
         self.doc()
     }
 
-    // Left at the default `Honored`: `DistinctVarianceAccumulator`
+    // Left at the default `Sensitive`: `DistinctVarianceAccumulator`
     // deduplicates the input when `is_distinct` is set.
 }
 
@@ -256,7 +256,7 @@ impl AggregateUDFImpl for VariancePopulation {
         self.doc()
     }
 
-    // Left at the default `Honored`: `DistinctVarianceAccumulator`
+    // Left at the default `Sensitive`: `DistinctVarianceAccumulator`
     // deduplicates the input when `is_distinct` is set.
 }
 

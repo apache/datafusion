@@ -187,7 +187,7 @@ impl AggregateUDFImpl for BoolAnd {
 
     fn distinct_handling(&self) -> DistinctHandling {
         // Boolean AND/OR are idempotent: duplicates cannot change the result.
-        DistinctHandling::Ignored
+        DistinctHandling::Insensitive
     }
 }
 
@@ -322,7 +322,7 @@ impl AggregateUDFImpl for BoolOr {
 
     fn distinct_handling(&self) -> DistinctHandling {
         // Boolean AND/OR are idempotent: duplicates cannot change the result.
-        DistinctHandling::Ignored
+        DistinctHandling::Insensitive
     }
 }
 

@@ -16,7 +16,7 @@
 // under the License.
 
 //! [`EliminateAggregateDistinct`] drops the `DISTINCT` modifier from aggregate
-//! functions that report [`DistinctHandling::Ignored`]
+//! functions that report [`DistinctHandling::Insensitive`]
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
@@ -94,44 +94,45 @@ impl OptimizerRule for EliminateAggregateDistinct {
         let name_preserver = NamePreserver::new(&plan);
         plan.map_expressions(|expr| {
             let saved_name = name_preserver.save(&expr);
-            expr.transform_down(strip_ignored_distinct)
+            expr.transform_down(strip_insensitive_distinct)
                 .map(|t| t.update_data(|e| saved_name.restore(e)))
         })
     }
 }
 
-/// Whether the node has at least one `DISTINCT` and every one is `Ignored`.
+/// Whether the node has at least one `DISTINCT` and every one is
+/// `Insensitive`.
 ///
-/// If only some of them were stripped, an `Honored` `DISTINCT` could stay
+/// If only some of them were stripped, a `Sensitive` `DISTINCT` could stay
 /// beside a stripped aggregate. A stripped aggregate carries an alias, and
 /// [`crate::single_distinct_to_groupby::SingleDistinctToGroupBy`] does not
 /// rewrite a node whose `aggr_expr` contains an alias. So `min(DISTINCT x),
 /// count(DISTINCT x)` would lose the rewrite that `count` needs. When every
-/// `DISTINCT` is `Ignored`, none is left after stripping, so that rule has
+/// `DISTINCT` is `Insensitive`, none is left after stripping, so that rule has
 /// nothing to rewrite. This is conservative: `min(DISTINCT x),
 /// count(DISTINCT y)` keeps the `min` flag. That flag costs nothing at run
 /// time, because `min` ignores `is_distinct` when it selects its accumulator.
 fn can_strip_every_distinct(aggr_expr: &[Expr]) -> Result<bool> {
     let mut found_distinct = false;
-    let mut all_ignored = true;
+    let mut all_insensitive = true;
     for expr in aggr_expr {
         expr.apply(|e| {
             if let Expr::AggregateFunction(AggregateFunction { func, params }) = e
                 && params.distinct
             {
                 found_distinct = true;
-                if func.distinct_handling() != DistinctHandling::Ignored {
-                    all_ignored = false;
+                if func.distinct_handling() != DistinctHandling::Insensitive {
+                    all_insensitive = false;
                     return Ok(TreeNodeRecursion::Stop);
                 }
             }
             Ok(TreeNodeRecursion::Continue)
         })?;
-        if !all_ignored {
+        if !all_insensitive {
             break;
         }
     }
-    Ok(found_distinct && all_ignored)
+    Ok(found_distinct && all_insensitive)
 }
 
 /// Drops `DISTINCT` from `expr` if it is an aggregate that ignores duplicates.
@@ -142,15 +143,15 @@ fn can_strip_every_distinct(aggr_expr: &[Expr]) -> Result<bool> {
 ///
 /// An idempotent merge is not always commutative: `first_value` is
 /// idempotent but order-sensitive. The rule does not need commutativity.
-/// `Ignored` means that the result does not change when duplicates are
+/// `Insensitive` means that the result does not change when duplicates are
 /// removed, and stripping `DISTINCT` only stops that removal. `order_by` and
 /// `filter` are carried over untouched, so the function sees the same rows in
 /// the same order, plus the duplicates that it ignores.
-fn strip_ignored_distinct(expr: Expr) -> Result<Transformed<Expr>> {
+fn strip_insensitive_distinct(expr: Expr) -> Result<Transformed<Expr>> {
     Ok(match expr {
         Expr::AggregateFunction(mut agg)
             if agg.params.distinct
-                && agg.func.distinct_handling() == DistinctHandling::Ignored =>
+                && agg.func.distinct_handling() == DistinctHandling::Insensitive =>
         {
             agg.params.distinct = false;
             Transformed::yes(Expr::AggregateFunction(agg))
@@ -322,7 +323,7 @@ mod tests {
 
     /// Several duplicate-insensitive aggregates all lose the flag together.
     #[test]
-    fn eliminate_distinct_from_every_ignored_aggregate() -> Result<()> {
+    fn eliminate_distinct_from_every_insensitive_aggregate() -> Result<()> {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(
@@ -357,10 +358,10 @@ mod tests {
         ")
     }
 
-    /// The gate only inspects `aggr_expr`, so a distinct aggregate that honors
-    /// the flag in the group expressions must keep it.
+    /// The gate only inspects `aggr_expr`, so a `Sensitive` distinct aggregate
+    /// in the group expressions must keep its flag.
     #[test]
-    fn keep_honored_distinct_in_group_expr() -> Result<()> {
+    fn keep_sensitive_distinct_in_group_expr() -> Result<()> {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(
@@ -430,16 +431,16 @@ mod tests {
         )
     }
 
-    /// A user defined `Ignored` aggregate loses the flag, keeps its output
+    /// A user defined `Insensitive` aggregate loses the flag, keeps its output
     /// name, and carries `FILTER` and `ORDER BY` over untouched.
     #[test]
-    fn eliminate_distinct_from_ignored_udaf() -> Result<()> {
+    fn eliminate_distinct_from_insensitive_udaf() -> Result<()> {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(
                 vec![col("a")],
                 vec![
-                    tagged("first_seen", DistinctHandling::Ignored)
+                    tagged("first_seen", DistinctHandling::Insensitive)
                         .call(vec![col("b")])
                         .distinct()
                         .filter(col("c").gt(lit(0u32)))
@@ -457,13 +458,13 @@ mod tests {
 
     /// A user defined aggregate that deduplicates for real keeps the flag.
     #[test]
-    fn keep_distinct_on_honored_udaf() -> Result<()> {
+    fn keep_distinct_on_sensitive_udaf() -> Result<()> {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(
                 vec![col("a")],
                 vec![
-                    tagged("counts_uniques", DistinctHandling::Honored)
+                    tagged("counts_uniques", DistinctHandling::Sensitive)
                         .call(vec![col("b")])
                         .distinct()
                         .build()?,
@@ -501,7 +502,7 @@ mod tests {
     }
 
     /// The conservative gate covers user defined functions as well: an
-    /// `Ignored` one beside an `Honored` one keeps both flags.
+    /// `Insensitive` one beside a `Sensitive` one keeps both flags.
     #[test]
     fn mixed_udaf_node_is_left_alone() -> Result<()> {
         let table_scan = test_table_scan()?;
@@ -509,11 +510,11 @@ mod tests {
             .aggregate(
                 vec![col("a")],
                 vec![
-                    tagged("first_seen", DistinctHandling::Ignored)
+                    tagged("first_seen", DistinctHandling::Insensitive)
                         .call(vec![col("b")])
                         .distinct()
                         .build()?,
-                    tagged("counts_uniques", DistinctHandling::Honored)
+                    tagged("counts_uniques", DistinctHandling::Sensitive)
                         .call(vec![col("c")])
                         .distinct()
                         .build()?,
@@ -536,7 +537,7 @@ mod tests {
             .aggregate(
                 vec![col("a")],
                 vec![
-                    tagged("first_seen", DistinctHandling::Ignored)
+                    tagged("first_seen", DistinctHandling::Insensitive)
                         .call(vec![col("b")])
                         .distinct()
                         .build()?
@@ -555,9 +556,9 @@ mod tests {
     /// `AggregateUDFImpl`, which has to pass the tag through.
     #[test]
     fn with_aliases_delegates_distinct_handling() -> Result<()> {
-        let aliased =
-            tagged("first_seen", DistinctHandling::Ignored).with_aliases(["first_hit"]);
-        assert_eq!(aliased.distinct_handling(), DistinctHandling::Ignored);
+        let aliased = tagged("first_seen", DistinctHandling::Insensitive)
+            .with_aliases(["first_hit"]);
+        assert_eq!(aliased.distinct_handling(), DistinctHandling::Insensitive);
 
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)

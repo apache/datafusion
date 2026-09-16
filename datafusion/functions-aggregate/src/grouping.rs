@@ -118,6 +118,6 @@ impl AggregateUDFImpl for Grouping {
         // `ResolveGroupingFunction` replaces the call before the optimizer
         // runs, so this tag is not reachable from SQL and the accumulator
         // above is never built.
-        DistinctHandling::Ignored
+        DistinctHandling::Insensitive
     }
 }

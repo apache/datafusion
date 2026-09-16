@@ -325,10 +325,10 @@ impl AggregateUDFImpl for BitwiseOperation {
             // Bitwise AND/OR are idempotent: duplicates cannot change the
             // result. Only XOR has a distinct accumulator.
             BitwiseOperationType::And | BitwiseOperationType::Or => {
-                DistinctHandling::Ignored
+                DistinctHandling::Insensitive
             }
             // XOR cancels duplicate pairs, so `DISTINCT` is meaningful.
-            BitwiseOperationType::Xor => DistinctHandling::Honored,
+            BitwiseOperationType::Xor => DistinctHandling::Sensitive,
         }
     }
 }
