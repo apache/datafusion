@@ -19253,6 +19253,9 @@ impl serde::Serialize for PhysicalExprNode {
                 physical_expr_node::ExprType::SqlSimilarToPattern(v) => {
                     struct_ser.serialize_field("sqlSimilarToPattern", v)?;
                 }
+                physical_expr_node::ExprType::LiteralWithMetadata(v) => {
+                    struct_ser.serialize_field("literalWithMetadata", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -19312,6 +19315,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
             "rangeExpr",
             "sql_similar_to_pattern",
             "sqlSimilarToPattern",
+            "literal_with_metadata",
+            "literalWithMetadata",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -19343,6 +19348,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
             LambdaVariable,
             RangeExpr,
             SqlSimilarToPattern,
+            LiteralWithMetadata,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -19391,6 +19397,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                             "lambdaVariable" | "lambda_variable" => Ok(GeneratedField::LambdaVariable),
                             "rangeExpr" | "range_expr" => Ok(GeneratedField::RangeExpr),
                             "sqlSimilarToPattern" | "sql_similar_to_pattern" => Ok(GeneratedField::SqlSimilarToPattern),
+                            "literalWithMetadata" | "literal_with_metadata" => Ok(GeneratedField::LiteralWithMetadata),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -19602,6 +19609,13 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                                 return Err(serde::de::Error::duplicate_field("sqlSimilarToPattern"));
                             }
                             expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_expr_node::ExprType::SqlSimilarToPattern)
+;
+                        }
+                        GeneratedField::LiteralWithMetadata => {
+                            if expr_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("literalWithMetadata"));
+                            }
+                            expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_expr_node::ExprType::LiteralWithMetadata)
 ;
                         }
                     }
@@ -20879,6 +20893,116 @@ impl<'de> serde::Deserialize<'de> for PhysicalLikeExprNode {
             }
         }
         deserializer.deserialize_struct("datafusion.PhysicalLikeExprNode", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for PhysicalLiteralNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.value.is_some() {
+            len += 1;
+        }
+        if !self.metadata.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalLiteralNode", len)?;
+        if let Some(v) = self.value.as_ref() {
+            struct_ser.serialize_field("value", v)?;
+        }
+        if !self.metadata.is_empty() {
+            struct_ser.serialize_field("metadata", &self.metadata)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for PhysicalLiteralNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "value",
+            "metadata",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Value,
+            Metadata,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "value" => Ok(GeneratedField::Value),
+                            "metadata" => Ok(GeneratedField::Metadata),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = PhysicalLiteralNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.PhysicalLiteralNode")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<PhysicalLiteralNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut value__ = None;
+                let mut metadata__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Value => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("value"));
+                            }
+                            value__ = map_.next_value()?;
+                        }
+                        GeneratedField::Metadata => {
+                            if metadata__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("metadata"));
+                            }
+                            metadata__ = Some(
+                                map_.next_value::<std::collections::HashMap<_, _>>()?
+                            );
+                        }
+                    }
+                }
+                Ok(PhysicalLiteralNode {
+                    value: value__,
+                    metadata: metadata__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.PhysicalLiteralNode", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for PhysicalNegativeNode {
