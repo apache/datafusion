@@ -1,0 +1,15 @@
+name Q03
+group null_aware_join
+
+load sql_benchmarks/null_aware_join/init/load.sql
+
+expect_plan HashJoinExec
+
+run
+-- Q3: uncorrelated NOT IN, 50% NULL on the outer side.
+-- Every NULL outer row is UNKNOWN on its own. Linear in the table sizes.
+SELECT count(*)
+FROM large_outer o
+WHERE o.id_n50 NOT IN (SELECT i.id FROM large_inner i);
+
+cleanup sql_benchmarks/null_aware_join/init/cleanup.sql

@@ -1,0 +1,19 @@
+name Q06
+group null_aware_join
+
+load sql_benchmarks/null_aware_join/init/load.sql
+
+expect_plan HashJoinExec
+
+run
+-- Q6: non-equality-correlated NOT IN, 50% NULL on the outer side.
+-- Worst case for the pairing that has no correlation scope keys: half the
+-- outer rows are NULL, and the join filter is evaluated for each of them
+-- against every subquery row, including for outer rows already known to be
+-- UNKNOWN. Compare against Q05 (same query, 1% NULL) to see how the cost
+-- tracks the NULL fraction.
+SELECT count(*)
+FROM small_outer o
+WHERE o.id_n50 NOT IN (SELECT i.id_n0 FROM small_inner i WHERE i.z < o.z);
+
+cleanup sql_benchmarks/null_aware_join/init/cleanup.sql

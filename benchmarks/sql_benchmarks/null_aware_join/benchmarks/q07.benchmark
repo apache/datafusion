@@ -1,0 +1,17 @@
+name Q07
+group null_aware_join
+
+load sql_benchmarks/null_aware_join/init/load.sql
+
+expect_plan HashJoinExec
+
+run
+-- Q7: non-equality-correlated NOT IN, 50% NULL on the subquery side.
+-- The mirror of Q06: a NULL subquery row makes every outer row in its
+-- correlation scope UNKNOWN, so the filter is evaluated over every
+-- (outer row x NULL probe row) pair.
+SELECT count(*)
+FROM small_outer o
+WHERE o.id_n0 NOT IN (SELECT i.id_n50 FROM small_inner i WHERE i.z < o.z);
+
+cleanup sql_benchmarks/null_aware_join/init/cleanup.sql
