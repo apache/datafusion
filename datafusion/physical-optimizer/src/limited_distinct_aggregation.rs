@@ -20,13 +20,18 @@
 
 use std::sync::Arc;
 
-use datafusion_physical_plan::aggregates::{AggregateExec, LimitOptions};
+use datafusion_physical_plan::aggregates::{AggregateExec, AggregateMode, LimitOptions};
+use datafusion_physical_plan::execution_plan::replace_children_if_necessary;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
-use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::Operator;
+use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
 
 use crate::PhysicalOptimizerRule;
 use itertools::Itertools;
@@ -136,6 +141,96 @@ impl LimitedDistinctAggregation {
         }
         Some(Arc::new(LocalLimitExec::new(child, limit)))
     }
+
+    /// Returns the group cap for a `count <op> n` comparison: `n + 1` groups
+    /// settle the comparison, plus one slot for a possible NULL group.
+    fn count_comparison_cap(expr: &Arc<dyn PhysicalExpr>) -> Option<usize> {
+        let binary = expr.downcast_ref::<BinaryExpr>()?;
+        use Operator::*;
+        if !matches!(binary.op(), Eq | NotEq | Lt | LtEq | Gt | GtEq) {
+            return None;
+        }
+        let (column, literal) = if binary.left().downcast_ref::<Column>().is_some() {
+            (binary.left(), binary.right())
+        } else {
+            (binary.right(), binary.left())
+        };
+
+        column.downcast_ref::<Column>().filter(|c| c.index() == 0)?;
+        match literal.downcast_ref::<Literal>()?.value() {
+            ScalarValue::Int64(Some(n)) => usize::try_from(*n).ok()?.checked_add(2),
+            _ => None,
+        }
+    }
+
+    /// Returns `true` for a global, unfiltered `count` of a plain column or
+    /// literal — the shape `SingleDistinctToGroupBy` produces.
+    fn is_global_count(aggr: &AggregateExec) -> bool {
+        let [count] = aggr.aggr_expr() else {
+            return false;
+        };
+        aggr.group_expr().is_empty()
+            && count.fun().name() == "count"
+            && aggr.filter_expr().iter().all(Option::is_none)
+            && matches!(count.expressions().as_slice(), [arg] if arg.downcast_ref::<Column>().is_some() || arg.downcast_ref::<Literal>().is_some())
+    }
+
+    /// Matches `count <op> literal` projected over a global count of a
+    /// group-by-only aggregation and caps that aggregation's groups: `cap`
+    /// groups decide the comparison, so input reading can stop early.
+    fn transform_count_comparison(
+        plan: &Arc<dyn ExecutionPlan>,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        let projection = plan.downcast_ref::<ProjectionExec>()?;
+        // one output expression: the capped, inexact count cannot escape
+        let [proj_expr] = projection.expr() else {
+            return None;
+        };
+        let cap = Self::count_comparison_cap(&proj_expr.expr)?;
+
+        let top = projection.input().downcast_ref::<AggregateExec>()?;
+        if !matches!(top.mode(), AggregateMode::Final | AggregateMode::Single)
+            || !Self::is_global_count(top)
+        {
+            return None;
+        }
+
+        // pre-EnsureRequirements the stages are directly stacked, no exchanges
+        let mut chain = vec![Arc::clone(plan), Arc::clone(projection.input())];
+        let mut node = Arc::clone(top.input());
+        if let Some(partial) = node.downcast_ref::<AggregateExec>()
+            && matches!(partial.mode(), AggregateMode::Partial)
+            && Self::is_global_count(partial)
+        {
+            let next = Arc::clone(partial.input());
+            chain.push(node);
+            node = next;
+        }
+
+        let group = node.downcast_ref::<AggregateExec>()?;
+        // one group column: at most one NULL group, which `cap` reserves for
+        if group.group_expr().expr().len() != 1 {
+            return None;
+        }
+        let capped = Self::transform_agg(group, cap)?;
+
+        let capped = match group.input().downcast_ref::<AggregateExec>() {
+            Some(partner)
+                if matches!(partner.mode(), AggregateMode::Partial)
+                    && partner.group_expr().expr().len() == 1
+                    && partner.group_expr().expr()[0].1
+                        == group.group_expr().expr()[0].1 =>
+            {
+                let capped_partner = Self::transform_agg(partner, cap)?;
+                replace_children_if_necessary(capped, vec![capped_partner]).ok()?
+            }
+            _ => capped,
+        };
+
+        chain.into_iter().rev().try_fold(capped, |child, parent| {
+            replace_children_if_necessary(parent, vec![child]).ok()
+        })
+    }
 }
 
 impl Default for LimitedDistinctAggregation {
@@ -155,6 +250,10 @@ impl PhysicalOptimizerRule for LimitedDistinctAggregation {
                 Ok(
                     if let Some(plan) =
                         LimitedDistinctAggregation::transform_limit(plan.to_owned())
+                    {
+                        Transformed::yes(plan)
+                    } else if let Some(plan) =
+                        LimitedDistinctAggregation::transform_count_comparison(&plan)
                     {
                         Transformed::yes(plan)
                     } else {
