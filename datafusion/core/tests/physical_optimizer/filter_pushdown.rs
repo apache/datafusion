@@ -3060,6 +3060,108 @@ fn test_hashjoin_dynamic_filter_requires_probe_consumer() {
 }
 
 #[tokio::test]
+async fn test_nlj_dynamic_filter_pushdown_preserves_unmatched_rows() {
+    use datafusion_common::JoinSide;
+    use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
+
+    for enabled in [false, true] {
+        let scan = |batch: RecordBatch| {
+            TestScanBuilder::new(batch.schema())
+                .with_support(true)
+                .with_batches(vec![batch])
+                .build()
+        };
+        // The hash join keeps keys 1 and 3. In the NLJ, 1 matches 2 and 3
+        // is unmatched. Pushing the filter to the right input would remove 2
+        // and incorrectly turn the matching row into an unmatched row.
+        let left = scan(record_batch!(("key", Int32, [1, 2, 3])).unwrap());
+        let right = scan(record_batch!(("key", Int32, [2])).unwrap());
+        let filter = JoinFilter::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("left", 0)),
+                Operator::Lt,
+                Arc::new(Column::new("right", 1)),
+            )),
+            vec![
+                ColumnIndex {
+                    index: 0,
+                    side: JoinSide::Left,
+                },
+                ColumnIndex {
+                    index: 0,
+                    side: JoinSide::Right,
+                },
+            ],
+            Arc::new(Schema::new(vec![
+                Field::new("left", DataType::Int32, false),
+                Field::new("right", DataType::Int32, false),
+            ])),
+        );
+        let probe = Arc::new(
+            NestedLoopJoinExec::try_new(left, right, Some(filter), &JoinType::Left, None)
+                .unwrap(),
+        );
+        let build = scan(record_batch!(("key", Int32, [1, 3])).unwrap());
+        let plan = Arc::new(
+            HashJoinExec::try_new(
+                build,
+                probe,
+                vec![(
+                    Arc::new(Column::new("key", 0)),
+                    Arc::new(Column::new("key", 0)),
+                )],
+                None,
+                &JoinType::Inner,
+                None,
+                PartitionMode::CollectLeft,
+                datafusion_common::NullEquality::NullEqualsNothing,
+                false,
+            )
+            .unwrap(),
+        ) as Arc<dyn ExecutionPlan>;
+        let mut config = ConfigOptions::default();
+        config.execution.parquet.pushdown_filters = true;
+        config.optimizer.enable_join_dynamic_filter_pushdown = enabled;
+        let plan = FilterPushdown::new_post_optimization()
+            .optimize(plan, &config)
+            .unwrap();
+        assert_eq!(
+            plan.dynamic_expressions_produced().len(),
+            usize::from(enabled)
+        );
+        if enabled {
+            let id = plan.dynamic_expressions_produced()[0]
+                .expression_id()
+                .unwrap();
+            let hash_join = plan.downcast_ref::<HashJoinExec>().unwrap();
+            let nlj = hash_join
+                .right()
+                .downcast_ref::<NestedLoopJoinExec>()
+                .unwrap();
+            assert!(plan_contains_expression_id(nlj.left(), id).unwrap());
+            assert!(!plan_contains_expression_id(nlj.right(), id).unwrap());
+        }
+        let ctx = SessionContext::new_with_config(SessionConfig::from(config));
+        ctx.register_object_store(
+            ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+            Arc::new(InMemory::new()),
+        );
+        let batches = collect(plan, ctx.task_ctx()).await.unwrap();
+        assert_batches_eq!(
+            [
+                "+-----+-----+-----+",
+                "| key | key | key |",
+                "+-----+-----+-----+",
+                "| 1   | 1   | 2   |",
+                "| 3   | 3   |     |",
+                "+-----+-----+-----+",
+            ],
+            &batches
+        );
+    }
+}
+
+#[tokio::test]
 async fn test_nlj_dynamic_filter_pushdown_from_hashjoin() {
     for filtered_side in [0, 1] {
         let mut results = Vec::new();
