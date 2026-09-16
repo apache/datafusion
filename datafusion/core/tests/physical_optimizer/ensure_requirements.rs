@@ -1536,15 +1536,10 @@ fn test_collect_left_join_keeps_hash_partitioned_build_side_coalesce() -> Result
 // Limits with a `skip`
 // ========================================================================
 
-/// A sort pushed below `GlobalLimitExec` with a non-zero `skip` must ask its
-/// input for `skip + fetch` rows; asking for only `fetch` rows used to leave
-/// `LIMIT 10 OFFSET 5` with 5 result rows.
-///
-/// This checks a single pass only: the sort is inserted by `pushdown_sorts`,
-/// which runs after `parallelize_sorts`, so a second pass would additionally
-/// parallelize it into `SortPreservingMergeExec` + partitioned `SortExec`.
+/// Keep sorting above an unordered limit so its input can stop early and only
+/// the rows retained after the offset need sorting.
 #[test]
-fn test_sort_pushed_below_limit_with_skip_keeps_skip_rows() -> Result<()> {
+fn test_keep_sort_above_unordered_limit_with_skip() -> Result<()> {
     let source = Arc::new(MockMultiPartitionExec::new(4));
     let coalesce = Arc::new(CoalescePartitionsExec::new(source));
     let limit = Arc::new(GlobalLimitExec::new(coalesce, 5, Some(10)));
@@ -1553,10 +1548,36 @@ fn test_sort_pushed_below_limit_with_skip_keeps_skip_rows() -> Result<()> {
 
     let optimized = optimize_and_sanity_check(sort)?;
     assert_snapshot!(plan_string(&optimized), @r"
-    GlobalLimitExec: skip=5, fetch=10
-      SortExec: TopK(fetch=15), expr=[a@0 DESC], preserve_partitioning=[false]
+    SortExec: expr=[a@0 DESC], preserve_partitioning=[false]
+      GlobalLimitExec: skip=5, fetch=10
         CoalescePartitionsExec
           MockMultiPartitionExec
+    ");
+    Ok(())
+}
+
+/// Refining an existing ordering can still push a TopK below the limit. It must
+/// retain `skip + fetch` rows so the offset does not reduce the result count.
+#[test]
+fn test_sort_pushed_below_ordered_limit_with_skip_keeps_skip_rows() -> Result<()> {
+    let source = Arc::new(MockMultiPartitionExec::new(4));
+    let mut ordering = sort_expr_on("a", 0, false, false);
+    let ordered_input = Arc::new(MockReqExec::new(
+        source,
+        Distribution::SinglePartition,
+        Some(ordering.clone()),
+    ));
+    let limit = Arc::new(GlobalLimitExec::new(ordered_input, 5, Some(10)));
+    ordering.extend(sort_expr_on("b", 1, false, false));
+    let sort: Arc<dyn ExecutionPlan> = Arc::new(SortExec::new(ordering, limit));
+
+    let optimized = optimize_and_sanity_check(sort)?;
+    assert_snapshot!(plan_string(&optimized), @r"
+    GlobalLimitExec: skip=5, fetch=10
+      SortExec: TopK(fetch=15), expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], preserve_partitioning=[false], sort_prefix=[a@0 ASC NULLS LAST]
+        MockReqExec
+          SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+            MockMultiPartitionExec
     ");
     Ok(())
 }

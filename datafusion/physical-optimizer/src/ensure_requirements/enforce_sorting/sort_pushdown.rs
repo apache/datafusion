@@ -566,8 +566,10 @@ fn pushdown_requirement_to_children(
             } else {
                 parent_required.clone()
             };
+
+        // Keep sorting above an unordered limit so the input can stop early.
         let Some(ordering) = plan.properties().output_ordering() else {
-            return Ok(Some(vec![Some(child_required)]));
+            return Ok(None);
         };
         if plan.properties().eq_properties.requirements_compatible(
             parent_required.first().clone(),

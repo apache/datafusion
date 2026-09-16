@@ -339,9 +339,8 @@ SELECT COUNT(*) FROM (SELECT a FROM t1 LIMIT 3 OFFSET 8);
 ----
 2
 
-# A sort above LIMIT ... OFFSET is pushed below the limit as a TopK. The TopK
-# has to keep `skip + fetch` rows (3 + 4 = 7) so that the limit can still skip
-# 3 rows and return 4; keeping only `fetch` rows returned a single row.
+# Keep the sort above an unordered LIMIT ... OFFSET so the scan can stop
+# after `skip + fetch` rows (3 + 4 = 7), and only the 4 selected rows are sorted.
 query TT
 EXPLAIN SELECT * FROM (SELECT a FROM t1 LIMIT 4 OFFSET 3) ORDER BY a;
 ----
@@ -350,9 +349,9 @@ logical_plan
 02)--Limit: skip=3, fetch=4
 03)----TableScan: t1 projection=[a], fetch=7
 physical_plan
-01)GlobalLimitExec: skip=3, fetch=4
-02)--SortExec: TopK(fetch=7), expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--GlobalLimitExec: skip=3, fetch=4
+03)----DataSourceExec: partitions=1, partition_sizes=[1], fetch=7
 
 query I
 SELECT * FROM (SELECT a FROM t1 LIMIT 4 OFFSET 3) ORDER BY a;
