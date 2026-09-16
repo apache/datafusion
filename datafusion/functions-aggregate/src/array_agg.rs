@@ -1246,6 +1246,10 @@ struct OrderedArrayAggEntry {
     row_idx: usize,
 }
 
+/// Coalesce consecutive small payload batches up to this row count to reduce
+/// per-array memory overhead while limiting repeated concatenation costs.
+const ORDERED_ARRAY_AGG_COALESCE_ROWS: usize = 64;
+
 #[derive(Debug)]
 pub(crate) struct OrderSensitiveArrayAggAccumulator {
     /// Arrow payload arrays. Entries refer to rows in these batches.
@@ -1531,11 +1535,34 @@ impl OrderSensitiveArrayAggAccumulator {
         }
 
         let start = self.entries.len();
-        let batch_idx = self.batches.len();
-        self.batches.push(values);
-        self.entries.extend(
-            (0..row_count).map(|row_idx| OrderedArrayAggEntry { batch_idx, row_idx }),
-        );
+        let (batch_idx, row_offset) = match self.batches.last() {
+            Some(last_batch)
+                if last_batch.len() + row_count <= ORDERED_ARRAY_AGG_COALESCE_ROWS =>
+            {
+                let merged =
+                    arrow::compute::concat(&[last_batch.as_ref(), values.as_ref()])?;
+
+                // Concatenation preserves the existing row offsets, while new rows
+                // start at the previous length of the tail batch.
+                let batch_idx = self.batches.len() - 1;
+                let row_offset = last_batch.len();
+
+                self.batches[batch_idx] = merged;
+                (batch_idx, row_offset)
+            }
+            _ => {
+                let batch_idx = self.batches.len();
+                self.batches.push(values);
+                (batch_idx, 0)
+            }
+        };
+
+        self.entries
+            .extend((0..row_count).map(|row_idx| OrderedArrayAggEntry {
+                batch_idx,
+                row_idx: row_offset + row_idx,
+            }));
+
         self.sorted_entry_indices = None;
 
         debug_assert_eq!(self.entries.len(), self.ordering_rows.num_rows());
@@ -2513,6 +2540,10 @@ mod tests {
         final_acc.merge_batch(&state_a)?;
         final_acc.merge_batch(&state_b)?;
 
+        // Small partial-state batches are coalesced into one payload batch.
+        assert_eq!(final_acc.batches.len(), 1);
+        assert_eq!(final_acc.batches[0].len(), 4);
+
         let result = print_nulls(str_arr(final_acc.evaluate()?)?);
         assert_eq!(result, vec!["a1", "a2", "b1", "b2"]);
         Ok(())
@@ -2905,6 +2936,91 @@ mod tests {
             .merge_batch(&[payload_states, ordering_states])
             .unwrap_err();
         assert!(err.to_string().contains("state lengths differ"));
+        Ok(())
+    }
+
+    #[test]
+    fn ordered_array_agg_coalesces_small_batches_up_to_threshold() -> Result<()> {
+        use arrow::array::Int64Array;
+
+        let mut acc = ordered_accumulator(
+            DataType::Int64,
+            DataType::Int64,
+            SortOptions::new(false, false),
+            false,
+            false,
+        )?;
+
+        let threshold = ORDERED_ARRAY_AGG_COALESCE_ROWS;
+        let threshold_i64 = i64::try_from(threshold).unwrap();
+
+        for values in [
+            (0..(threshold_i64 - 1)).collect::<Vec<_>>(),
+            vec![threshold_i64 - 1],
+            vec![threshold_i64],
+            ((threshold_i64 + 1)..(threshold_i64 * 2)).collect::<Vec<i64>>(),
+            vec![threshold_i64 * 2],
+        ] {
+            let values = Arc::new(Int64Array::from(values)) as ArrayRef;
+
+            acc.update_batch(&[Arc::clone(&values), values])?;
+        }
+
+        assert_eq!(
+            acc.batches
+                .iter()
+                .map(|batch| batch.len())
+                .collect::<Vec<usize>>(),
+            vec![threshold, threshold, 1],
+        );
+
+        assert_eq!(acc.entries.len(), threshold * 2 + 1);
+        assert_eq!(acc.ordering_rows.num_rows(), threshold * 2 + 1);
+
+        assert_eq!(acc.entries[threshold - 1].batch_idx, 0);
+        assert_eq!(acc.entries[threshold - 1].row_idx, threshold - 1);
+
+        assert_eq!(acc.entries[threshold].batch_idx, 1);
+        assert_eq!(acc.entries[threshold].row_idx, 0);
+
+        assert_eq!(acc.entries[threshold * 2 - 1].batch_idx, 1);
+        assert_eq!(acc.entries[threshold * 2 - 1].row_idx, threshold - 1);
+
+        assert_eq!(acc.entries[threshold * 2].batch_idx, 2);
+        assert_eq!(acc.entries[threshold * 2].row_idx, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn ordered_array_agg_sorts_across_coalesced_batches() -> Result<()> {
+        use arrow::array::Int64Array;
+
+        let mut acc = ordered_accumulator(
+            DataType::Int64,
+            DataType::Int64,
+            SortOptions::new(false, false),
+            false,
+            false,
+        )?;
+
+        for value in (0_i64..128).rev() {
+            let payload = Arc::new(Int64Array::from(vec![value])) as ArrayRef;
+            let ordering = Arc::new(Int64Array::from(vec![value + 1000])) as ArrayRef;
+            acc.update_batch(&[payload, ordering])?;
+        }
+
+        let ScalarValue::List(result) = acc.evaluate()? else {
+            return internal_err!("expect list");
+        };
+
+        assert_eq!(
+            result
+                .values()
+                .as_primitive::<arrow::datatypes::Int64Type>()
+                .values(),
+            &(0..128).collect::<Vec<i64>>()
+        );
+
         Ok(())
     }
 
