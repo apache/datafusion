@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, ArrayRef, Int32Array, MapArray, StringViewArray, StructArray};
+use arrow::array::{
+    Array, ArrayRef, Int32Array, MapArray, StringArray, StringViewArray, StructArray,
+};
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use criterion::{Bencher, BenchmarkId, Criterion, criterion_group};
@@ -26,13 +28,15 @@ use datafusion_functions::core::get_field;
 use std::hint::black_box;
 use std::sync::Arc;
 
-const ROWS: usize = 1024;
+// DataFusion's default execution batch size.
+const ROWS: usize = 8192;
 
 /// Map key types covered by the benchmarks. Struct keys are nested, so their
 /// lookups can never switch from the comparator to the vectorized `eq`.
 #[derive(Clone, Copy)]
 enum KeyType {
     Int32,
+    Utf8,
     Utf8View,
     Struct,
 }
@@ -41,6 +45,7 @@ impl KeyType {
     fn name(self) -> &'static str {
         match self {
             KeyType::Int32 => "int32",
+            KeyType::Utf8 => "utf8",
             KeyType::Utf8View => "utf8_view",
             KeyType::Struct => "struct",
         }
@@ -50,6 +55,9 @@ impl KeyType {
     fn make_keys(self, keys: &[i32]) -> ArrayRef {
         match self {
             KeyType::Int32 => Arc::new(Int32Array::from(keys.to_vec())),
+            KeyType::Utf8 => Arc::new(StringArray::from_iter_values(
+                keys.iter().map(|key| format!("key_{key:016}")),
+            )),
             KeyType::Utf8View => Arc::new(StringViewArray::from_iter_values(
                 keys.iter().map(|key| format!("key_{key:016}")),
             )),
@@ -151,7 +159,12 @@ fn criterion_benchmark(c: &mut Criterion) {
         (4, &["last", "shuffled", "missing"]),
         (32, &["first", "last", "shuffled", "missing"]),
     ];
-    for key_type in [KeyType::Int32, KeyType::Utf8View, KeyType::Struct] {
+    for key_type in [
+        KeyType::Int32,
+        KeyType::Utf8,
+        KeyType::Utf8View,
+        KeyType::Struct,
+    ] {
         for &(entries, lookups) in shapes {
             for &lookup in lookups {
                 group.bench_function(

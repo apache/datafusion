@@ -185,7 +185,7 @@ fn map_extract_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Float64Array, Int32Array, StructArray};
+    use arrow::array::{Float64Array, Int32Array, NullArray, StructArray};
     use arrow::buffer::NullBuffer;
     use arrow::datatypes::Int32Type;
 
@@ -254,6 +254,24 @@ mod tests {
         let expected =
             ListArray::from_iter_primitive::<Int32Type, _, _>([Some(vec![]), None]);
         assert_eq!(result.as_ref(), &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn map_extract_untyped_null_keys() -> Result<()> {
+        let map = make_map(
+            Arc::new(Int32Array::from(vec![1, 2])),
+            vec![10, 20],
+            vec![0, 1, 2],
+            Some(NullBuffer::from(vec![true, false])),
+        );
+        let expected =
+            ListArray::from_iter_primitive::<Int32Type, _, _>([Some(vec![]), None]);
+        // Direct callers can pass untyped NULLs without SQL's key coercion.
+        for len in [1, map.len()] {
+            let result = general_map_extract_inner(&map, &NullArray::new(len))?;
+            assert_eq!(result.as_ref(), &expected);
+        }
         Ok(())
     }
 

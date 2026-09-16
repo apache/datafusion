@@ -210,34 +210,28 @@ fn criterion_benchmark(c: &mut Criterion) {
 }
 
 fn bench_map_extract(c: &mut Criterion) {
+    // DataFusion's default execution batch size.
+    const ROWS: usize = 8192;
+
     let udf = map_extract_udf();
     let config_options = Arc::new(ConfigOptions::default());
     let mut group = c.benchmark_group("map_extract");
 
-    // Cases are named `{key type}/{lookup}/{rows}x{entries}`. The single-row
-    // shapes measure per-batch fixed cost. `shuffled` looks up a key that
-    // every row holds at a different position, and `varying` looks up a
-    // different key per row, mixing matches and misses.
-    let shapes: &[(usize, usize, &[&str])] = &[
-        (1, 0, &["last"]),
-        (1, 1, &["last"]),
-        (1024, 4, &["last", "shuffled", "missing", "varying"]),
-        (
-            1024,
-            32,
-            &["first", "last", "shuffled", "missing", "varying"],
-        ),
+    // Cases are named `{key type}/{lookup}/{rows}x{entries}`. `shuffled` looks
+    // up a key that every row holds at a different position, and `varying`
+    // looks up a different key per row, mixing matches and misses.
+    let shapes: &[(usize, &[&str])] = &[
+        (4, &["last", "shuffled", "missing", "varying"]),
+        (32, &["first", "last", "shuffled", "missing", "varying"]),
     ];
-    for &(rows, width, lookups) in shapes {
-        let key_types: &[&str] = if rows == 1 {
-            &["int32"]
-        } else {
-            &["int32", "utf8_view", "struct"]
-        };
-        for &key_type in key_types {
+    for &(width, lookups) in shapes {
+        for key_type in ["int32", "utf8", "utf8_view", "struct"] {
             let make_keys = |keys: Vec<i32>| -> ArrayRef {
                 match key_type {
                     "int32" => Arc::new(Int32Array::from(keys)),
+                    "utf8" => Arc::new(StringArray::from_iter_values(
+                        keys.iter().map(|key| format!("key_{key:016}")),
+                    )),
                     "utf8_view" => Arc::new(StringViewArray::from_iter_values(
                         keys.iter().map(|key| format!("key_{key:016}")),
                     )),
@@ -251,7 +245,7 @@ fn bench_map_extract(c: &mut Criterion) {
             // Every row holds the keys `0..width`. With `shuffled`, each
             // row's entries are rotated by the row number.
             let make_map = |shuffled: bool| -> ArrayRef {
-                let keys = (0..rows)
+                let keys = (0..ROWS)
                     .flat_map(|row| {
                         (0..width).map(move |position| {
                             if shuffled {
@@ -270,13 +264,13 @@ fn bench_map_extract(c: &mut Criterion) {
                     ),
                     (
                         Arc::new(Field::new("value", DataType::Int32, false)),
-                        Arc::new(Int32Array::from_iter_values(0..(rows * width) as i32))
+                        Arc::new(Int32Array::from_iter_values(0..(ROWS * width) as i32))
                             as ArrayRef,
                     ),
                 ]);
                 Arc::new(MapArray::new(
                     Arc::new(Field::new("entries", entries.data_type().clone(), false)),
-                    OffsetBuffer::from_lengths(std::iter::repeat_n(width, rows)),
+                    OffsetBuffer::from_lengths(std::iter::repeat_n(width, ROWS)),
                     entries,
                     None,
                     false,
@@ -292,7 +286,7 @@ fn bench_map_extract(c: &mut Criterion) {
                     "missing" => (&map, vec![width as i32]),
                     "varying" => (
                         &map,
-                        (0..rows).map(|row| (row % (width + 1)) as i32).collect(),
+                        (0..ROWS).map(|row| (row % (width + 1)) as i32).collect(),
                     ),
                     _ => unreachable!(),
                 };
@@ -321,7 +315,7 @@ fn bench_map_extract(c: &mut Criterion) {
                 group.bench_function(
                     BenchmarkId::new(
                         format!("{key_type}/{lookup}"),
-                        format!("{rows}x{width}"),
+                        format!("{ROWS}x{width}"),
                     ),
                     |b| {
                         b.iter(|| {
@@ -329,7 +323,7 @@ fn bench_map_extract(c: &mut Criterion) {
                                 udf.invoke_with_args(ScalarFunctionArgs {
                                     args: args.clone(),
                                     arg_fields: arg_fields.clone(),
-                                    number_rows: rows,
+                                    number_rows: ROWS,
                                     return_field: Arc::clone(&return_field),
                                     config_options: Arc::clone(&config_options),
                                 })
