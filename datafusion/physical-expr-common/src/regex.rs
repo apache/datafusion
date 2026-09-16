@@ -97,6 +97,10 @@ pub fn compile_regex(
 /// that was a scalar is held as an array of one value, which applies to every
 /// row. If every pattern compiles, the failure has a different cause and the
 /// original error is kept.
+///
+/// This is `pub` only so that the crates that call the kernels can reach it.
+// Not public API.
+#[doc(hidden)]
 pub fn explain_regexp_kernel_error(
     function_name: &str,
     error: ArrowError,
