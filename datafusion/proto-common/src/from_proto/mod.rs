@@ -1058,21 +1058,22 @@ impl TryFrom<&protobuf::CsvWriterOptions> for CsvWriterOptions {
             .with_quote_style(quote_style)
             .with_ignore_leading_whitespace(*ignore_leading_whitespace)
             .with_ignore_trailing_whitespace(*ignore_trailing_whitespace);
-        if !date_format.is_empty() {
+        // Presence-aware: `Some("")` is a valid format distinct from `None`.
+        if let Some(date_format) = date_format {
             writer_options = writer_options.with_date_format(date_format.clone());
         }
-        if !datetime_format.is_empty() {
+        if let Some(datetime_format) = datetime_format {
             writer_options = writer_options.with_datetime_format(datetime_format.clone());
         }
-        if !timestamp_format.is_empty() {
+        if let Some(timestamp_format) = timestamp_format {
             writer_options =
                 writer_options.with_timestamp_format(timestamp_format.clone());
         }
-        if !timestamp_tz_format.is_empty() {
+        if let Some(timestamp_tz_format) = timestamp_tz_format {
             writer_options =
                 writer_options.with_timestamp_tz_format(timestamp_tz_format.clone());
         }
-        if !time_format.is_empty() {
+        if let Some(time_format) = time_format {
             writer_options = writer_options.with_time_format(time_format.clone());
         }
         writer_options = match terminator.as_slice() {

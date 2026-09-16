@@ -386,6 +386,24 @@ fn roundtrip_csv_sink() -> Result<()> {
     assert_eq!(unset.writer_options.timestamp_tz_format(), None);
     assert_eq!(unset.writer_options.time_format(), None);
 
+    // An explicit empty format is distinct from an unset one: Arrow writes an
+    // empty value for it, so it must not collapse to `None` on the wire.
+    let empty = CsvWriterOptions::new(
+        WriterBuilder::default()
+            .with_date_format(String::new())
+            .with_datetime_format(String::new())
+            .with_timestamp_format(String::new())
+            .with_timestamp_tz_format(String::new())
+            .with_time_format(String::new()),
+        CompressionTypeVariant::UNCOMPRESSED,
+    );
+    let empty = CsvWriterOptions::try_from(&ProtoCsvWriterOptions::try_from(&empty)?)?;
+    assert_eq!(empty.writer_options.date_format(), Some(""));
+    assert_eq!(empty.writer_options.datetime_format(), Some(""));
+    assert_eq!(empty.writer_options.timestamp_format(), Some(""));
+    assert_eq!(empty.writer_options.timestamp_tz_format(), Some(""));
+    assert_eq!(empty.writer_options.time_format(), Some(""));
+
     let defaults = CsvWriterOptions::try_from(&ProtoCsvWriterOptions::default())?;
     assert_eq!(defaults.compression_level, None);
     assert!(matches!(

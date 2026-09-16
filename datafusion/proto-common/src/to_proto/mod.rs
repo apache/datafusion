@@ -889,16 +889,10 @@ impl TryFrom<&CsvWriterOptions> for protobuf::CsvWriterOptions {
             compression: compression.into(),
             delimiter: (writer_options.delimiter() as char).to_string(),
             has_header: writer_options.header(),
-            date_format: writer_options.date_format().unwrap_or_default().to_owned(),
-            datetime_format: writer_options
-                .datetime_format()
-                .unwrap_or_default()
-                .to_owned(),
-            timestamp_format: writer_options
-                .timestamp_format()
-                .unwrap_or_default()
-                .to_owned(),
-            time_format: writer_options.time_format().unwrap_or_default().to_owned(),
+            date_format: writer_options.date_format().map(str::to_owned),
+            datetime_format: writer_options.datetime_format().map(str::to_owned),
+            timestamp_format: writer_options.timestamp_format().map(str::to_owned),
+            time_format: writer_options.time_format().map(str::to_owned),
             null_value: writer_options.null().to_owned(),
             quote: (writer_options.quote() as char).to_string(),
             escape: (writer_options.escape() as char).to_string(),
@@ -907,10 +901,7 @@ impl TryFrom<&CsvWriterOptions> for protobuf::CsvWriterOptions {
             ignore_leading_whitespace: writer_options.ignore_leading_whitespace(),
             ignore_trailing_whitespace: writer_options.ignore_trailing_whitespace(),
             compression_level: *compression_level,
-            timestamp_tz_format: writer_options
-                .timestamp_tz_format()
-                .unwrap_or_default()
-                .to_owned(),
+            timestamp_tz_format: writer_options.timestamp_tz_format().map(str::to_owned),
             terminator,
         })
     }
