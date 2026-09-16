@@ -23,12 +23,22 @@ mod tests {
     use datafusion_substrait::logical_plan::producer::to_substrait_plan;
     use datafusion_substrait::serializer;
 
+    use datafusion::arrow::array::Int64Array;
+    use datafusion::arrow::datatypes::DataType;
+    use datafusion::common::ScalarValue;
     use datafusion::error::Result;
+    use datafusion::logical_expr::{
+        ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+        Volatility,
+    };
     use datafusion::prelude::*;
 
     use insta::assert_snapshot;
+    use std::hash::{Hash, Hasher};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::{fs, sync::Arc};
     use substrait::proto::expression::field_reference::{ReferenceType, RootType};
+    use substrait::proto::expression::literal::LiteralType;
     use substrait::proto::expression::reference_segment;
     use substrait::proto::expression::{IfThen, ReferenceSegment, RexType};
     use substrait::proto::extensions::simple_extension_declaration::MappingType;
@@ -377,18 +387,158 @@ mod tests {
                 .unwrap_or_else(|| panic!("clause {i} has no condition"));
             assert!(clause.then.is_some(), "clause {i} has no `then`");
 
-            match condition.rex_type.as_ref().unwrap() {
-                RexType::ScalarFunction(f) => assert!(
-                    equal_anchors.contains(&f.function_reference),
-                    "clause {i} condition is not an `equal` call"
-                ),
-                other => {
-                    panic!("clause {i} condition is not a scalar function: {other:?}")
-                }
-            }
+            let RexType::ScalarFunction(f) = condition.rex_type.as_ref().unwrap() else {
+                panic!("clause {i} condition is not a scalar function: {condition:?}")
+            };
+            assert!(
+                equal_anchors.contains(&f.function_reference),
+                "clause {i} condition is not an `equal` call"
+            );
+            assert_eq!(f.arguments.len(), 2, "clause {i} condition arity");
+
+            // The condition must be `<base> = <when>`, in that order: the base
+            // field reference on the left, the WHEN literal on the right.
+            let args: Vec<&Expression> = f
+                .arguments
+                .iter()
+                .map(|arg| match arg.arg_type.as_ref().unwrap() {
+                    ArgType::Value(value) => value,
+                    other => panic!("clause {i} argument is not a value: {other:?}"),
+                })
+                .collect();
+
+            let Some(RexType::Selection(field)) = args[0].rex_type.as_ref() else {
+                panic!(
+                    "clause {i} left operand is not a field reference: {:?}",
+                    args[0]
+                )
+            };
+            assert!(
+                matches!(field.root_type, Some(RootType::RootReference(_))),
+                "clause {i} left operand is not rooted at the input"
+            );
+            let Some(ReferenceType::DirectReference(ReferenceSegment {
+                reference_type:
+                    Some(reference_segment::ReferenceType::StructField(struct_field)),
+            })) = field.reference_type.as_ref()
+            else {
+                panic!("clause {i} left operand is not a direct struct reference")
+            };
+            // `data.a` is the first field of the scan.
+            assert_eq!(struct_field.field, 0, "clause {i} left operand field index");
+
+            let Some(RexType::Literal(literal)) = args[1].rex_type.as_ref() else {
+                panic!("clause {i} right operand is not a literal: {:?}", args[1])
+            };
+            assert_eq!(
+                literal.literal_type,
+                Some(LiteralType::I64(i as i64 + 1)),
+                "clause {i} right operand literal"
+            );
         }
 
         Ok(())
+    }
+
+    /// A nullary volatile function returning 1 on its first call, 2 on its
+    /// second, and so on, so that a repeated evaluation is visible in the
+    /// result rather than being random.
+    #[derive(Debug)]
+    struct CallCounter {
+        signature: Signature,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl CallCounter {
+        fn new(calls: Arc<AtomicUsize>) -> Self {
+            Self {
+                signature: Signature::nullary(Volatility::Volatile),
+                calls,
+            }
+        }
+    }
+
+    impl PartialEq for CallCounter {
+        fn eq(&self, other: &Self) -> bool {
+            self.signature == other.signature
+        }
+    }
+
+    impl Eq for CallCounter {}
+
+    impl Hash for CallCounter {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.signature.hash(state);
+        }
+    }
+
+    impl ScalarUDFImpl for CallCounter {
+        fn name(&self) -> &str {
+            "call_counter"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int64)
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst) as i64 + 1;
+            Ok(ColumnarValue::Scalar(ScalarValue::Int64(Some(call))))
+        }
+    }
+
+    /// `CaseExpr` evaluates a base expression once and compares every WHEN
+    /// against that one value, so a volatile base cannot be emitted as
+    /// `<base> = <value>` conditions: each condition would evaluate it again.
+    /// The producer rejects such a plan instead of changing its meaning.
+    #[tokio::test]
+    async fn case_with_volatile_base_expression_is_rejected() -> Result<()> {
+        let ctx = create_context().await?;
+        let calls = Arc::new(AtomicUsize::new(0));
+        ctx.register_udf(ScalarUDF::from(CallCounter::new(Arc::clone(&calls))));
+
+        // One row, so the difference below is only in how often the base runs.
+        let base_sql = "SELECT CASE call_counter() WHEN 2 THEN 20 WHEN 1 THEN 10 ELSE 99 END FROM data WHERE a = 1";
+        // The same CASE after the desugaring this file applies to a base CASE.
+        let desugared_sql = "SELECT CASE WHEN call_counter() = 2 THEN 20 WHEN call_counter() = 1 THEN 10 ELSE 99 END FROM data WHERE a = 1";
+
+        // The base is evaluated once, returns 1, and matches the second WHEN.
+        assert_eq!(single_i64(&ctx, base_sql).await?, 10);
+        assert_eq!(calls.swap(0, Ordering::SeqCst), 1);
+
+        // Desugared, it is evaluated once per condition: 1 does not equal 2,
+        // then 2 does not equal 1, so the row falls through to ELSE.
+        assert_eq!(single_i64(&ctx, desugared_sql).await?, 99);
+        assert_eq!(calls.swap(0, Ordering::SeqCst), 2);
+
+        let plan = ctx.sql(base_sql).await?.into_optimized_plan()?;
+        let err = to_substrait_plan(&plan, &ctx.state())
+            .expect_err("a volatile CASE base expression must be rejected")
+            .to_string();
+        assert!(
+            err.contains("volatile CASE base expression"),
+            "unexpected error: {err}"
+        );
+
+        Ok(())
+    }
+
+    /// Runs `sql` and returns the single `Int64` value it produces.
+    async fn single_i64(ctx: &SessionContext, sql: &str) -> Result<i64> {
+        let batches = ctx.sql(sql).await?.collect().await?;
+        let rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+        assert_eq!(rows, 1, "expected one row from `{sql}`");
+        let batch = batches.iter().find(|batch| batch.num_rows() == 1).unwrap();
+        let values = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("expected an Int64 column");
+        Ok(values.value(0))
     }
 
     fn assert_emit(rel_common: Option<&RelCommon>, output_mapping: Vec<i32>) {

@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::logical_plan::producer::SubstraitProducer;
-use datafusion::common::DFSchemaRef;
+use datafusion::common::{DFSchemaRef, not_impl_err};
 use datafusion::logical_expr::{Case, Expr};
 use substrait::proto::Expression;
 use substrait::proto::expression::if_then::IfClause;
@@ -39,6 +39,17 @@ pub fn from_case(
     // desugaring `from_between` applies to `BETWEEN`. DataFusion matches a base
     // expression with `=` semantics, so this preserves the plan's meaning,
     // including a `NULL` `<value>` never matching.
+    //
+    // The base is written once per WHEN, which a volatile base would then
+    // evaluate once per arm. `CaseExpr` evaluates it once and compares every
+    // WHEN against that one value, so such a plan has no faithful `IfThen`
+    // encoding and is rejected instead.
+    if let Some(base) = expr.as_ref().filter(|base| base.is_volatile()) {
+        return not_impl_err!(
+            "Substrait does not support a volatile CASE base expression: {base}"
+        );
+    }
+
     let mut ifs: Vec<IfClause> = Vec::with_capacity(when_then_expr.len());
     for (when, then) in when_then_expr {
         let condition = match expr {
