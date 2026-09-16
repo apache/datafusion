@@ -60,14 +60,20 @@
 //! ```
 //!
 //! This module contains no evaluation logic of its own. While the order is
-//! being learned, the written order is handed to [`BinaryExpr`] with every
-//! conjunct wrapped in a [`MeasuredConjunct`]; `BinaryExpr` evaluates and
-//! pre-selects as it would for the plain predicate, so each conjunct is
-//! measured on the population it would really see in that position.
+//! being learned, the written predicate is handed to [`BinaryExpr`] with every
+//! conjunct *leaf* wrapped in a [`MeasuredConjunct`] and the `AND` tree left
+//! exactly as written; `BinaryExpr` evaluates and pre-selects as it would for
+//! the plain predicate, so each conjunct is measured on the population it
+//! would really see in that position.
 //!
-//! Once the order settles the wrappers are gone: the settled order — the
-//! written one if the warm-up found nothing materially better, otherwise the
-//! learned one — is materialised once as a right-nested `AND` chain,
+//! If the warm-up finds nothing materially better, the written predicate is
+//! handed back as written — the same `Arc`, not an equivalent rebuilt from its
+//! conjuncts. Reassociating an `AND` tree changes where pre-selection fires
+//! even when the conjunct sequence is unchanged, so rebuilding it would let
+//! the flag alter evaluation, and the side effects of fallible conjuncts with
+//! it, without any reorder having been adopted.
+//!
+//! An adopted reorder *is* materialised, as a right-nested `AND` chain,
 //! `(c_first AND (c_second AND (... AND c_last)))`. Right-nesting is what makes
 //! it pay: pre-selection filters the batch an `AND` is handed before evaluating
 //! its right-hand side, so the survivors of the first conjunct stay compacted
@@ -80,6 +86,18 @@
 //! adopted only if it is materially cheaper than the written order
 //! ([`TIE_COST_FRACTION`]), so a conjunction that does not benefit carries none
 //! of this machinery past the warm-up. The decision then stays fixed.
+//!
+//! Cost is counted the way `AND` actually behaves rather than by pass rate
+//! alone: a conjunct shortens the work after it only on a batch where
+//! `BinaryExpr` pre-selects, which it does only when the conjunct produced no
+//! nulls and kept at most
+//! [`PRE_SELECTION_THRESHOLD`](datafusion_physical_expr::expressions::PRE_SELECTION_THRESHOLD)
+//! of the rows. Conjuncts keeping 30% and 90% therefore both leave the next
+//! one facing the whole batch and are credited alike, and a conjunct that
+//! looks selective only because it produced nulls is credited with nothing.
+//! Which of these happened is recorded per batch through
+//! [`and_rhs_evaluation`], the same function `BinaryExpr` decides by, so the
+//! model cannot drift away from the behaviour it models.
 //!
 //! A `FilterExec` is split across many partition streams, each seeing only a
 //! slice of the data, so measurements are pooled into a shared
@@ -99,6 +117,9 @@
 //!   pre-selection, taken on small batches whose per-row cost is inflated by
 //!   fixed overheads. Correlated conjuncts can be misjudged; the material-win
 //!   guard only makes adoption conservative.
+//! - A conjunct is only ever observed where it was written, so whether it
+//!   would pre-select somewhere else in the order is projected from what it
+//!   did in its own position, not measured.
 //! - The decision is one-shot: a misjudged reorder, or drifting data, is kept
 //!   for the rest of the query.
 //!
@@ -111,7 +132,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
 use crate::metrics::Count;
-use arrow::array::ArrayRef;
+use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
@@ -119,7 +140,9 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::instant::Instant;
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr::expressions::BinaryExpr;
+use datafusion_physical_expr::expressions::{
+    AndRhsEvaluation, BinaryExpr, and_rhs_evaluation,
+};
 use datafusion_physical_expr::utils::split_conjunction;
 use datafusion_physical_expr_common::physical_expr::is_volatile;
 
@@ -131,6 +154,12 @@ const WARMUP_BATCHES: u64 = 8;
 const TIE_COST_FRACTION: f64 = 0.05;
 
 /// Per-conjunct counts over the warm-up, on exactly the rows that reached it.
+///
+/// Besides the totals, the counts are split by what [`BinaryExpr`]'s `AND`
+/// actually did with the conjuncts *after* this one on each batch
+/// ([`and_rhs_evaluation`]), because that — not the raw pass rate — is what
+/// decides how much work this conjunct saves them. See
+/// [`downstream_weight`](Self::downstream_weight).
 #[derive(Debug, Default, Clone)]
 struct ConjunctStats {
     /// Total rows the conjunct was evaluated on.
@@ -139,25 +168,81 @@ struct ConjunctStats {
     matched: u64,
     /// Total evaluation time, nanoseconds.
     nanos: u64,
+    /// Of `rows`, those in batches where the result let `AND` pre-select: the
+    /// conjuncts after this one saw only the matching rows.
+    gated_rows: u64,
+    /// Of `gated_rows`, the rows that passed — what the conjuncts after this
+    /// one were actually handed.
+    gated_matched: u64,
+    /// Of `rows`, those in batches where the result was all `false`: the
+    /// conjuncts after this one were not evaluated at all.
+    skipped_rows: u64,
 }
 
 impl ConjunctStats {
+    /// Counts for a conjunct that saw `rows` rows across null-free batches
+    /// that all had the same shape, keeping `matched` of them in `nanos`
+    /// nanoseconds. Used by tests and by seeding; real measurements come from
+    /// [`MeasuredConjunct`] batch by batch.
+    #[cfg(test)]
+    fn from_null_free_batches(rows: u64, matched: u64, nanos: u64) -> Self {
+        let mut stats = Self {
+            rows,
+            matched,
+            nanos,
+            ..Default::default()
+        };
+        match and_rhs_evaluation(matched as usize, 0, rows as usize) {
+            AndRhsEvaluation::Skipped => stats.skipped_rows = rows,
+            AndRhsEvaluation::PreSelected => {
+                stats.gated_rows = rows;
+                stats.gated_matched = matched;
+            }
+            AndRhsEvaluation::FullBatch => {}
+        }
+        stats
+    }
+
     /// Pool another stream's counts into this one.
     fn merge(&mut self, other: &Self) {
         self.rows += other.rows;
         self.matched += other.matched;
         self.nanos += other.nanos;
-    }
-
-    /// Fraction of rows that pass, or `None` if never evaluated on any row.
-    fn pass_rate(&self) -> Option<f64> {
-        (self.rows > 0).then(|| self.matched as f64 / self.rows as f64)
+        self.gated_rows += other.gated_rows;
+        self.gated_matched += other.gated_matched;
+        self.skipped_rows += other.skipped_rows;
     }
 
     /// Per-row cost in nanoseconds, or `None` if never evaluated. Time is
     /// clamped to 1ns so "too cheap to measure" ranks as very cheap.
     fn cost_per_row(&self) -> Option<f64> {
         (self.rows > 0).then(|| self.nanos.max(1) as f64 / self.rows as f64)
+    }
+
+    /// Rows the conjuncts after this one were handed, per row this one saw.
+    ///
+    /// This is *not* the pass rate. `AND` only narrows what follows when it
+    /// pre-selects, which it does on a null-free batch keeping at most
+    /// [`PRE_SELECTION_THRESHOLD`] of the rows; otherwise the conjuncts after
+    /// it see the whole batch however many rows this one rejected. So a
+    /// conjunct keeping 30% and one keeping 90% both leave a weight of 1, and
+    /// a conjunct that looks selective only because it produced nulls also
+    /// leaves 1, since nulls disable pre-selection entirely.
+    ///
+    /// Unmeasured conjuncts weigh 1: they are assumed to narrow nothing.
+    ///
+    /// [`PRE_SELECTION_THRESHOLD`]: datafusion_physical_expr::expressions::PRE_SELECTION_THRESHOLD
+    fn downstream_weight(&self) -> f64 {
+        if self.rows == 0 {
+            return 1.0;
+        }
+        // Batches that pre-selected pass on their matching rows; batches that
+        // skipped pass on nothing; the rest pass on everything they saw.
+        let full_batch_rows = self
+            .rows
+            .saturating_sub(self.gated_rows)
+            .saturating_sub(self.skipped_rows);
+        (self.gated_matched + full_batch_rows) as f64 / self.rows as f64
     }
 
     /// Ranking key: rows discarded per nanosecond, `(1 + rows_in - rows_out) /
@@ -215,19 +300,18 @@ impl AdaptiveFilterShared {
         let mut inner = self.inner.lock().expect("poisoned");
         inner.stats = per_conjunct
             .iter()
-            .map(|&(rows, matched, nanos)| ConjunctStats {
-                rows,
-                matched,
-                nanos,
+            .map(|&(rows, matched, nanos)| {
+                ConjunctStats::from_null_free_batches(rows, matched, nanos)
             })
             .collect();
         inner.measured_batches = WARMUP_BATCHES - 1;
     }
 }
 
-/// A conjunct that records the rows it was handed, the rows it kept and the
-/// time it took, returning its result unchanged (nulls included). Everything
-/// else delegates to the wrapped conjunct.
+/// A conjunct that records the rows it was handed, the rows it kept, the time
+/// it took and what `AND` then did with the conjuncts after it, returning its
+/// result unchanged (nulls included). Everything else delegates to the wrapped
+/// conjunct.
 #[derive(Debug)]
 struct MeasuredConjunct {
     inner: Arc<dyn PhysicalExpr>,
@@ -237,6 +321,12 @@ struct MeasuredConjunct {
     matched: AtomicU64,
     /// Time spent inside the conjunct over those rows, in nanoseconds.
     nanos: AtomicU64,
+    /// Rows in batches whose result let `AND` pre-select.
+    gated_rows: AtomicU64,
+    /// Of `gated_rows`, the rows that passed.
+    gated_matched: AtomicU64,
+    /// Rows in batches whose result was all `false`.
+    skipped_rows: AtomicU64,
 }
 
 impl MeasuredConjunct {
@@ -246,6 +336,9 @@ impl MeasuredConjunct {
             rows: AtomicU64::new(0),
             matched: AtomicU64::new(0),
             nanos: AtomicU64::new(0),
+            gated_rows: AtomicU64::new(0),
+            gated_matched: AtomicU64::new(0),
+            skipped_rows: AtomicU64::new(0),
         }
     }
 
@@ -255,6 +348,9 @@ impl MeasuredConjunct {
             rows: self.rows.swap(0, Relaxed),
             matched: self.matched.swap(0, Relaxed),
             nanos: self.nanos.swap(0, Relaxed),
+            gated_rows: self.gated_rows.swap(0, Relaxed),
+            gated_matched: self.gated_matched.swap(0, Relaxed),
+            skipped_rows: self.skipped_rows.swap(0, Relaxed),
         }
     }
 }
@@ -293,11 +389,26 @@ impl PhysicalExpr for MeasuredConjunct {
         let timer = Instant::now();
         let array = self.inner.evaluate(batch)?.into_array(rows)?;
         let nanos = timer.elapsed().as_nanos() as u64;
-        let matched = as_boolean_array(&array)?.true_count() as u64;
+        let bools = as_boolean_array(&array)?;
+        let matched = bools.true_count() as u64;
 
         self.rows.fetch_add(rows as u64, Relaxed);
         self.matched.fetch_add(matched, Relaxed);
         self.nanos.fetch_add(nanos, Relaxed);
+
+        // Record what this result lets `AND` do with the conjuncts after it,
+        // by the same rule evaluation uses, rather than inferring it from the
+        // pass rate afterwards.
+        match and_rhs_evaluation(matched as usize, bools.null_count(), rows) {
+            AndRhsEvaluation::Skipped => {
+                self.skipped_rows.fetch_add(rows as u64, Relaxed);
+            }
+            AndRhsEvaluation::PreSelected => {
+                self.gated_rows.fetch_add(rows as u64, Relaxed);
+                self.gated_matched.fetch_add(matched, Relaxed);
+            }
+            AndRhsEvaluation::FullBatch => {}
+        }
 
         Ok(ColumnarValue::Array(array))
     }
@@ -323,11 +434,15 @@ impl PhysicalExpr for MeasuredConjunct {
 /// the per-stream state is just the chain this stream currently evaluates.
 #[derive(Debug)]
 pub(crate) struct AdaptiveConjunction {
+    /// The predicate exactly as written, kept so that a warm-up that finds
+    /// nothing better hands back the very tree `FilterExec` would have run.
+    written: Arc<dyn PhysicalExpr>,
     /// The split conjuncts, in written order.
     conjuncts: Vec<Arc<dyn PhysicalExpr>>,
     /// Measurements and the settled decision, shared by every partition stream.
     shared: Arc<AdaptiveFilterShared>,
-    /// The written order as a right-nested `AND` chain over the wrappers.
+    /// The written tree with every conjunct leaf wrapped in a
+    /// [`MeasuredConjunct`] — same shape, same evaluation, plus counters.
     warmup_predicate: Arc<dyn PhysicalExpr>,
     /// The wrappers inside `warmup_predicate`, in written order.
     measured: Vec<Arc<MeasuredConjunct>>,
@@ -363,17 +478,11 @@ impl AdaptiveConjunction {
             .into_iter()
             .map(Arc::clone)
             .collect();
-        let order: Vec<usize> = (0..conjuncts.len()).collect();
-        let measured: Vec<Arc<MeasuredConjunct>> = conjuncts
-            .iter()
-            .map(|c| Arc::new(MeasuredConjunct::new(Arc::clone(c))))
-            .collect();
-        let wrapped: Vec<Arc<dyn PhysicalExpr>> = measured
-            .iter()
-            .map(|m| Arc::clone(m) as Arc<dyn PhysicalExpr>)
-            .collect();
-        let warmup_predicate = right_nested_conjunction(&wrapped, &order);
+        let mut measured = Vec::with_capacity(conjuncts.len());
+        let warmup_predicate = wrap_conjuncts_in_place(predicate, &mut measured);
+        debug_assert_eq!(measured.len(), conjuncts.len());
         Some(Self {
+            written: Arc::clone(predicate),
             conjuncts,
             shared,
             settled_predicate: Arc::clone(&warmup_predicate),
@@ -458,17 +567,23 @@ impl AdaptiveConjunction {
         if inner.measured_batches < WARMUP_BATCHES {
             return;
         }
-        let decision = settle(&inner.stats, &self.conjuncts);
+        let decision = settle(&inner.stats, &self.conjuncts, &self.written);
         inner.settled = Some(decision.clone());
         drop(inner);
         self.adopt(decision);
     }
 }
 
-/// Rank by effectiveness and adopt the ranking only if it is materially
-/// cheaper than the written order; either way, build the result as a
-/// right-nested `AND` chain.
-fn settle(stats: &[ConjunctStats], conjuncts: &[Arc<dyn PhysicalExpr>]) -> Settled {
+/// Rank by effectiveness and adopt the ranking as a right-nested `AND` chain,
+/// but only if it is materially cheaper than the written order. Otherwise hand
+/// back `written` untouched: rebuilding it would reassociate the `AND` tree,
+/// which changes where pre-selection fires and so what a fallible conjunct
+/// sees, even though the conjunct sequence is unchanged.
+fn settle(
+    stats: &[ConjunctStats],
+    conjuncts: &[Arc<dyn PhysicalExpr>],
+    written: &Arc<dyn PhysicalExpr>,
+) -> Settled {
     let identity: Vec<usize> = (0..stats.len()).collect();
     let candidate = rank_by_effectiveness(stats);
     if candidate != identity
@@ -481,10 +596,34 @@ fn settle(stats: &[ConjunctStats], conjuncts: &[Arc<dyn PhysicalExpr>]) -> Settl
         }
     } else {
         Settled {
-            predicate: right_nested_conjunction(conjuncts, &identity),
+            predicate: Arc::clone(written),
             reordered: false,
         }
     }
+}
+
+/// The `AND` tree of `predicate` with every conjunct leaf replaced by a
+/// [`MeasuredConjunct`] around it, collected into `measured`.
+///
+/// The tree keeps its shape, so the warm-up evaluates exactly what the written
+/// predicate would — same nesting, same pre-selection points — and only adds
+/// the counters. Leaves are collected left to right, the order
+/// [`split_conjunction`] yields them in, so `measured[i]` is the wrapper for
+/// conjunct `i`.
+fn wrap_conjuncts_in_place(
+    predicate: &Arc<dyn PhysicalExpr>,
+    measured: &mut Vec<Arc<MeasuredConjunct>>,
+) -> Arc<dyn PhysicalExpr> {
+    if let Some(binary) = predicate.downcast_ref::<BinaryExpr>()
+        && *binary.op() == Operator::And
+    {
+        let left = wrap_conjuncts_in_place(binary.left(), measured);
+        let right = wrap_conjuncts_in_place(binary.right(), measured);
+        return Arc::new(BinaryExpr::new(left, Operator::And, right)) as _;
+    }
+    let wrapper = Arc::new(MeasuredConjunct::new(Arc::clone(predicate)));
+    measured.push(Arc::clone(&wrapper));
+    wrapper as _
 }
 
 /// `conjuncts` in `order` as `(c_first AND (c_second AND (... AND c_last)))`.
@@ -522,18 +661,23 @@ fn rank_by_effectiveness(stats: &[ConjunctStats]) -> Vec<usize> {
 }
 
 /// Expected nanoseconds per input row for `order`: each conjunct's per-row
-/// cost weighted by the product of the pass rates before it (assumed
-/// independent). Unmeasured conjuncts contribute nothing.
+/// cost weighted by the product of the
+/// [`downstream_weight`](ConjunctStats::downstream_weight)s of the conjuncts
+/// before it (assumed independent). Unmeasured conjuncts contribute no cost
+/// and narrow nothing.
+///
+/// The weights are what `AND` really hands on — a conjunct only shrinks the
+/// work after it when it pre-selects — so an order is credited for a discard
+/// only where evaluation would act on it.
 fn expected_cost_per_row(stats: &[ConjunctStats], order: &[usize]) -> f64 {
     let mut weight = 1.0_f64;
     let mut total = 0.0_f64;
     for &id in order {
-        let (Some(cost), Some(pass)) = (stats[id].cost_per_row(), stats[id].pass_rate())
-        else {
+        let Some(cost) = stats[id].cost_per_row() else {
             continue;
         };
         total += weight * cost;
-        weight *= pass;
+        weight *= stats[id].downstream_weight();
     }
     total
 }
@@ -607,12 +751,9 @@ mod tests {
             .collect()
     }
 
+    /// Counts as if measured over null-free batches of a uniform shape.
     fn stats(rows: u64, matched: u64, nanos: u64) -> ConjunctStats {
-        ConjunctStats {
-            rows,
-            matched,
-            nanos,
-        }
+        ConjunctStats::from_null_free_batches(rows, matched, nanos)
     }
 
     /// `try_new` with a fresh, unshared registry and no metric.
@@ -735,14 +876,112 @@ mod tests {
         assert_eq!(adaptive.shared.inner.lock().unwrap().measured_batches, 0);
     }
 
+    fn close(got: f64, want: f64) -> bool {
+        (got - want).abs() < 1e-9
+    }
+
+    /// A conjunct narrows the work after it only where `AND` pre-selects.
+    /// Below the threshold the weight is the pass rate; above it, and for an
+    /// all-`true` conjunct, the conjuncts after it still see every row.
     #[test]
-    fn expected_cost_weights_by_upstream_pass_rate() {
-        // a: cost 1, pass 0.5 ; b: cost 10, pass 0.5
+    fn downstream_weight_follows_the_pre_selection_threshold() {
+        // Just below the 20% threshold: pre-selects, so the weight is the
+        // pass rate.
+        assert!(close(stats(1000, 190, 1000).downstream_weight(), 0.19));
+        // Exactly at it: `check_short_circuit` uses `<=`, so it pre-selects.
+        assert!(close(stats(1000, 200, 1000).downstream_weight(), 0.20));
+        // Just above it: no pre-selection, so the full batch carries on.
+        assert!(close(stats(1000, 210, 1000).downstream_weight(), 1.0));
+        // Well above it, and all rows passing: likewise the full batch.
+        assert!(close(stats(1000, 900, 1000).downstream_weight(), 1.0));
+        assert!(close(stats(1000, 1000, 1000).downstream_weight(), 1.0));
+        // All rows rejected: nothing after it is evaluated at all.
+        assert!(close(stats(1000, 0, 1000).downstream_weight(), 0.0));
+        // Never evaluated: assumed to narrow nothing.
+        assert!(close(stats(0, 0, 0).downstream_weight(), 1.0));
+    }
+
+    /// The cost model charges a conjunct's followers for the rows `AND` really
+    /// hands them, not for its pass rate.
+    #[test]
+    fn expected_cost_weights_by_what_and_hands_on() {
+        // Both keep half the rows, so neither pre-selects and the second
+        // conjunct is charged for the whole batch either way.
         let s = vec![stats(1000, 500, 1000), stats(1000, 500, 10_000)];
-        // order [0,1]: 1 + 0.5*10 = 6
-        assert!((expected_cost_per_row(&s, &[0, 1]) - 6.0).abs() < 1e-9);
-        // order [1,0]: 10 + 0.5*1 = 10.5
-        assert!((expected_cost_per_row(&s, &[1, 0]) - 10.5).abs() < 1e-9);
+        assert!(close(expected_cost_per_row(&s, &[0, 1]), 11.0));
+        assert!(close(expected_cost_per_row(&s, &[1, 0]), 11.0));
+
+        // Below the threshold conjunct 0 does narrow the batch, and running it
+        // first pays: 1 + 0.1 * 10, against 10 + 1 the other way round.
+        let s = vec![stats(1000, 100, 1000), stats(1000, 500, 10_000)];
+        assert!(close(expected_cost_per_row(&s, &[0, 1]), 2.0));
+        assert!(close(expected_cost_per_row(&s, &[1, 0]), 11.0));
+    }
+
+    /// The reviewed case: a cheap conjunct keeping 30% ranks ahead of an
+    /// expensive one keeping 90%, but neither can pre-select, so promoting it
+    /// saves nothing and the reorder must not be adopted.
+    #[test]
+    fn no_reorder_when_the_better_ranked_conjunct_cannot_pre_select() {
+        let schema = schema();
+        let p = predicate(&schema);
+        let cs = split(&p);
+        // id 0: 10ns/row, keeps 90% ; id 1: 1ns/row, keeps 30%.
+        let s = vec![stats(1000, 900, 10_000), stats(1000, 300, 1000)];
+        assert_eq!(rank_by_effectiveness(&s), vec![1, 0], "id 1 ranks first");
+        // Both orders cost 10 + 1: neither conjunct narrows the other.
+        assert!(close(expected_cost_per_row(&s, &[0, 1]), 11.0));
+        assert!(close(expected_cost_per_row(&s, &[1, 0]), 11.0));
+
+        let d = settle(&s, &cs, &p);
+        assert!(!d.reordered, "a reorder that cannot pay must be rejected");
+        assert!(Arc::ptr_eq(&d.predicate, &p));
+    }
+
+    /// Nulls disable pre-selection entirely, so a conjunct that looks
+    /// selective only because it produced them narrows nothing. Measured
+    /// through the wrapper, against the same conjunct on a null-free batch.
+    #[test]
+    fn nulls_disable_the_downstream_discount() {
+        let nullable =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let inner = binary(
+            col("a", &nullable).unwrap(),
+            Operator::Gt,
+            lit(8i32),
+            &nullable,
+        )
+        .unwrap();
+
+        // 1 true, 1 null, 8 false: a 10% pass rate that cannot pre-select.
+        let measured = Arc::new(MeasuredConjunct::new(Arc::clone(&inner)));
+        let mut with_null: Vec<Option<i32>> = (0..10).map(Some).collect();
+        with_null[0] = None;
+        let rb = RecordBatch::try_new(
+            Arc::clone(&nullable),
+            vec![Arc::new(Int32Array::from(with_null))],
+        )
+        .unwrap();
+        measured.evaluate(&rb).unwrap();
+        let s = measured.take();
+        assert_eq!((s.rows, s.matched), (10, 1));
+        assert_eq!(s.gated_rows, 0, "a null batch never pre-selects");
+        assert!(close(s.downstream_weight(), 1.0));
+
+        // The same conjunct and the same pass rate without the null does.
+        let measured = Arc::new(MeasuredConjunct::new(inner));
+        let rb = RecordBatch::try_new(
+            Arc::clone(&nullable),
+            vec![Arc::new(Int32Array::from((0..10).collect::<Vec<i32>>()))],
+        )
+        .unwrap();
+        measured.evaluate(&rb).unwrap();
+        let s = measured.take();
+        assert_eq!(
+            (s.rows, s.matched, s.gated_rows, s.gated_matched),
+            (10, 1, 10, 1)
+        );
+        assert!(close(s.downstream_weight(), 0.1));
     }
 
     /// The mask equals the written predicate's before and after settling.
@@ -804,17 +1043,21 @@ mod tests {
         assert!(adaptive.settled);
     }
 
-    /// An already-good order is kept, as a right-nested chain.
+    /// An already-good order is kept as the written expression itself, not
+    /// rebuilt: reassociating it would change where pre-selection fires.
     #[test]
-    fn settle_keeps_order_when_not_materially_better() {
+    fn settle_keeps_the_written_expression_when_not_materially_better() {
         let schema = schema();
         let p = predicate(&schema);
         // Equally cheap and selective: swapping cannot help.
         let s = vec![stats(1000, 500, 1000), stats(1000, 500, 1000)];
         let cs = split(&p);
-        let d = settle(&s, &cs);
+        let d = settle(&s, &cs, &p);
         assert!(!d.reordered);
-        assert_chain(&d.predicate, &cs, &[0, 1]);
+        assert!(
+            Arc::ptr_eq(&d.predicate, &p),
+            "the written predicate is handed back untouched"
+        );
     }
 
     #[test]
@@ -824,7 +1067,7 @@ mod tests {
         let cs = split(&p);
         // id 1 is far more selective at equal cost: it moves first.
         let s = vec![stats(1000, 900, 1000), stats(1000, 10, 1000)];
-        let d = settle(&s, &cs);
+        let d = settle(&s, &cs, &p);
         assert!(d.reordered);
         assert_chain(&d.predicate, &cs, &[1, 0]);
     }
@@ -856,7 +1099,7 @@ mod tests {
             stats(1000, 500, 1000),
             stats(1000, 10, 1000),
         ];
-        let d = settle(&s, &cs);
+        let d = settle(&s, &cs, &p);
         assert!(d.reordered);
 
         // `(cs[2] AND (cs[1] AND cs[0]))`.
@@ -875,9 +1118,9 @@ mod tests {
         assert!(Arc::ptr_eq(inner.right(), &cs[0]));
     }
 
-    /// A kept written order runs as a right-nested chain. Real timings are
-    /// used on purpose: with both pass rates above `1 - TIE_COST_FRACTION` the
-    /// guard `c1 + p*c0 < 0.95 * (c0 + p*c1)` cannot hold for any costs.
+    /// A kept written order runs the written expression itself. Real timings
+    /// are used on purpose: neither conjunct pre-selects, so both downstream
+    /// weights are 1 and no order can be cheaper than another.
     #[test]
     fn no_reorder_evaluates_plain_predicate() {
         let schema = schema();
@@ -902,7 +1145,153 @@ mod tests {
             !adaptive.reordered,
             "interchangeable conjuncts keep the written order"
         );
-        assert_chain(&adaptive.settled_predicate, &split(&p), &[0, 1]);
+        assert!(
+            Arc::ptr_eq(&adaptive.settled_predicate, &p),
+            "and run the written expression itself"
+        );
+    }
+
+    /// A left-nested three-conjunct predicate, `((a > 2 AND b < 5) AND a < 90)`.
+    fn left_nested_predicate(schema: &Arc<Schema>) -> Arc<dyn PhysicalExpr> {
+        let third =
+            binary(col("a", schema).unwrap(), Operator::Lt, lit(90i32), schema).unwrap();
+        binary(predicate(schema), Operator::And, third, schema).unwrap()
+    }
+
+    /// The warm-up wraps the conjunct leaves without reshaping the `AND` tree,
+    /// so it evaluates exactly what the written predicate would — same
+    /// nesting, so the same pre-selection points.
+    #[test]
+    fn warmup_preserves_the_written_tree_shape() {
+        let schema = schema();
+        let p = left_nested_predicate(&schema);
+        let cs = split(&p);
+        assert_eq!(cs.len(), 3);
+
+        let adaptive = try_new(&p).unwrap();
+
+        // `((M(cs[0]) AND M(cs[1])) AND M(cs[2]))`: left-nested, as written.
+        let outer = adaptive
+            .warmup_predicate
+            .downcast_ref::<BinaryExpr>()
+            .expect("an AND");
+        assert_eq!(*outer.op(), Operator::And);
+        let inner = outer
+            .left()
+            .downcast_ref::<BinaryExpr>()
+            .expect("the written tree nests to the left");
+        assert_eq!(*inner.op(), Operator::And);
+
+        // Every leaf is the wrapper for the conjunct written in that position.
+        for (leaf, id) in [(inner.left(), 0), (inner.right(), 1), (outer.right(), 2)] {
+            let wrapper = leaf
+                .downcast_ref::<MeasuredConjunct>()
+                .unwrap_or_else(|| panic!("conjunct {id} is wrapped"));
+            assert!(Arc::ptr_eq(&wrapper.inner, &cs[id]), "conjunct {id}");
+            assert!(
+                Arc::ptr_eq(&adaptive.measured[id].inner, &cs[id]),
+                "measured[{id}] is the wrapper in written position {id}"
+            );
+        }
+    }
+
+    /// Until a reorder is adopted the flag must be inert, side effects
+    /// included.
+    ///
+    /// `((a < 50 AND b < 3) AND 1 / z > 2)` over 100 rows: `a < 50` keeps 50%
+    /// and `b < 3` keeps 30%, so neither pre-selects on its own, but their
+    /// conjunction keeps 15% and the outer `AND` does — which is the only
+    /// reason `1 / z` never meets the zeros. Rebuilding the same conjuncts
+    /// right-nested would gate `1 / z` on `b < 3` alone, at 30%, and divide by
+    /// zero.
+    #[test]
+    fn keeping_the_written_order_keeps_its_side_effects() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+            Field::new("z", DataType::Int64, false),
+        ]));
+        let lt = |name: &str, v: i64| {
+            binary(col(name, &schema).unwrap(), Operator::Lt, lit(v), &schema).unwrap()
+        };
+        let divide = || {
+            binary(
+                binary(
+                    lit(1i64),
+                    Operator::Divide,
+                    col("z", &schema).unwrap(),
+                    &schema,
+                )
+                .unwrap(),
+                Operator::Gt,
+                lit(2i64),
+                &schema,
+            )
+            .unwrap()
+        };
+        // Written left-nested, as `conjunction` and the parser build it.
+        let p = binary(
+            binary(lt("a", 50), Operator::And, lt("b", 3), &schema).unwrap(),
+            Operator::And,
+            divide(),
+            &schema,
+        )
+        .unwrap();
+
+        // `a < 50` on 50 rows, `b < 3` on 30 spread across them: 15 together.
+        let a: Vec<i64> = (0..100).collect();
+        let b: Vec<i64> = (0..100).map(|i| i % 10).collect();
+        let z: Vec<i64> = (0..100).map(|i| i64::from(i < 50 && i % 10 < 3)).collect();
+        let rb = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int64Array::from(a)),
+                Arc::new(Int64Array::from(b)),
+                Arc::new(Int64Array::from(z)),
+            ],
+        )
+        .unwrap();
+
+        // Flag off: pre-selection keeps `1 / z` away from the zeros.
+        let want = p.evaluate(&rb).unwrap().into_array(rb.num_rows()).unwrap();
+        assert_eq!(passing_rows(&want).len(), 0, "1 / 1 > 2 is false");
+
+        // The same conjuncts in the same order, but right-nested, gate
+        // `1 / z` on `b < 3` alone and raise. This is what settling on the
+        // written order must not do.
+        let right_nested = binary(
+            lt("a", 50),
+            Operator::And,
+            binary(lt("b", 3), Operator::And, divide(), &schema).unwrap(),
+            &schema,
+        )
+        .unwrap();
+        let err = right_nested.evaluate(&rb).unwrap_err().to_string();
+        assert!(err.contains("Divide by zero"), "unexpected error: {err}");
+
+        // Flag on, settling on the written order: identical counts rank as a
+        // tie, so no candidate can be materially cheaper.
+        let shared = Arc::new(AdaptiveFilterShared::default());
+        shared.seed_one_batch_short_of_warmup(&[
+            (70_000_000, 35_000_000, 70_000_000),
+            (70_000_000, 35_000_000, 70_000_000),
+            (70_000_000, 35_000_000, 70_000_000),
+        ]);
+        let mut adaptive =
+            AdaptiveConjunction::try_new(&p, Arc::clone(&shared), None).unwrap();
+
+        // The settling batch runs through the wrappers ...
+        let got = adaptive.evaluate(&rb).unwrap();
+        assert_eq!(passing_rows(&got), passing_rows(&want));
+        assert!(adaptive.settled && !adaptive.reordered);
+        assert!(
+            Arc::ptr_eq(&adaptive.settled_predicate, &p),
+            "the written expression is run, not a rebuilt one"
+        );
+
+        // ... and every batch after it runs the written expression.
+        let got = adaptive.evaluate(&rb).unwrap();
+        assert_eq!(passing_rows(&got), passing_rows(&want));
     }
 
     /// Two streams share one pool: the warm-up is pooled across both, and the
@@ -1046,7 +1435,6 @@ mod tests {
     fn scenario_measure_batches_then_settle_on_written_order() {
         let schema = schema();
         let p = predicate(&schema);
-        let cs = split(&p);
         let shared = Arc::new(AdaptiveFilterShared::default());
         // Identical cost and selectivity: no order can be materially cheaper.
         shared.seed_one_batch_short_of_warmup(&[
@@ -1067,7 +1455,7 @@ mod tests {
             assert_eq!(passing_rows(&got), passing_rows(&want), "round {round}");
             assert!(adaptive.settled, "settled after round {round}");
             assert!(!adaptive.reordered, "not reordered after round {round}");
-            assert_chain(&adaptive.settled_predicate, &cs, &[0, 1]);
+            assert!(Arc::ptr_eq(&adaptive.settled_predicate, &p));
         }
     }
 

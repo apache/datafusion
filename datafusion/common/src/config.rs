@@ -1145,8 +1145,11 @@ config_namespace! {
         /// the observable side effects of a fallible predicate can, in either
         /// direction: reordering `b <> 0 AND 1/b > 2` can make a
         /// divide-by-zero error appear or disappear, since each conjunct is
-        /// evaluated only on the rows the conjuncts before it kept. Predicates
-        /// containing volatile expressions are never reordered.
+        /// evaluated only on the rows the conjuncts before it kept. A
+        /// predicate whose written order is kept is evaluated exactly as
+        /// written, so enabling this has no observable effect until a reorder
+        /// is actually adopted (reported by the `adaptive_reorders` metric).
+        /// Predicates containing volatile expressions are never reordered.
         pub adaptive_filter_reordering: bool, default = false
 
         /// Size (bytes) of data buffer DataFusion uses when writing output files.
