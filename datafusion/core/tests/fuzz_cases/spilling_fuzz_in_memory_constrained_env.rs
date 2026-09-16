@@ -26,7 +26,7 @@ use arrow::array::UInt64Array;
 use arrow::row::{RowConverter, SortField};
 use arrow::{array::StringArray, compute::SortOptions, record_batch::RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
-use datafusion::common::Result;
+use datafusion::common::{DataFusionError, Result};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
@@ -624,7 +624,7 @@ async fn run_sort_test_with_limited_memory(
     let assert_output_batch_size =
         args.assert_all_output_batches_roughly_match_batch_size_conf;
 
-    let metrics = run_test(args, sort_exec, result).await?;
+    let metrics = run_test(args, sort_exec, result, false).await?;
 
     assert_baseline_metrics_for_non_empty_output(
         &metrics,
@@ -764,15 +764,19 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory_and_different_
 #[tokio::test]
 async fn test_aggregate_with_high_cardinality_with_limited_memory_and_different_sizes_of_record_batch_and_take_all_memory()
 -> Result<()> {
+    // Permanent non-spillable pressure must fail within the pool limit instead
+    // of letting replay overcommit memory after it has produced output.
     let record_batch_size = 8192;
     let pool_size = 2 * MB as usize;
+    let memory_pool = Arc::new(PeakRecordingPool::new(Arc::new(FairSpillPool::new(
+        pool_size,
+    ))));
     let task_ctx = {
-        let memory_pool = Arc::new(FairSpillPool::new(pool_size));
         TaskContext::default()
             .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
             .with_runtime(Arc::new(
                 RuntimeEnvBuilder::new()
-                    .with_memory_pool(memory_pool)
+                    .with_memory_pool(Arc::clone(&memory_pool) as Arc<dyn MemoryPool>)
                     .build()?,
             ))
     };
@@ -793,6 +797,8 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory_and_different_
     })
     .await?;
 
+    assert!(memory_pool.peak_reserved() <= pool_size);
+    assert_eq!(memory_pool.reserved(), 0);
     Ok(())
 }
 
@@ -910,18 +916,29 @@ async fn run_test_aggregate_with_high_cardinality(
 
     let result = aggregate_final.execute(0, Arc::clone(&args.task_ctx))?;
 
-    run_test(args, aggregate_final, result).await
+    // A non-spilling competitor that permanently consumes every free byte can
+    // prevent later replay growth. Require a bounded error, not overcommit.
+    let expect_memory_exhaustion = matches!(
+        &args.memory_behavior,
+        MemoryBehavior::TakeAllMemoryAtTheBeginning
+    );
+    run_test(args, aggregate_final, result, expect_memory_exhaustion).await
 }
 
 async fn run_test(
     args: RunTestWithLimitedMemoryArgs,
     plan: Arc<dyn ExecutionPlan>,
     result_stream: SendableRecordBatchStream,
+    expect_memory_exhaustion: bool,
 ) -> Result<MetricsSet> {
     let number_of_record_batches = args.number_of_record_batches;
 
-    consume_stream_and_simulate_other_running_memory_consumers(args, result_stream)
-        .await?;
+    consume_stream_and_simulate_other_running_memory_consumers(
+        args,
+        result_stream,
+        expect_memory_exhaustion,
+    )
+    .await?;
 
     let metrics = plan.metrics().expect("must have metrics");
     let spill_count = assert_spill_count_metric(true, plan);
@@ -938,6 +955,7 @@ async fn run_test(
 async fn consume_stream_and_simulate_other_running_memory_consumers(
     args: RunTestWithLimitedMemoryArgs,
     mut result_stream: SendableRecordBatchStream,
+    expect_memory_exhaustion: bool,
 ) -> Result<()> {
     let mut number_of_rows = 0;
     let record_batch_size = args.task_ctx.session_config().batch_size() as u64;
@@ -950,6 +968,25 @@ async fn consume_stream_and_simulate_other_running_memory_consumers(
     let mut memory_took = false;
 
     while let Some(batch) = result_stream.next().await {
+        let batch = match batch {
+            Ok(batch) => batch,
+            Err(DataFusionError::ResourcesExhausted(_)) if expect_memory_exhaustion => {
+                // Do not accept an early replay error before the mock actually
+                // takes memory away from an operator that has produced rows.
+                assert!(number_of_rows > 0);
+                assert!(memory_took && memory_reservation.size() > 0);
+                assert!(memory_pool.reserved() <= args.pool_size);
+                drop(result_stream);
+                drop(memory_reservation);
+                assert_eq!(memory_pool.reserved(), 0);
+                let progress =
+                    args.task_ctx.runtime_env().disk_manager.spilling_progress();
+                assert_eq!(progress.current_bytes, 0);
+                assert_eq!(progress.active_files_count, 0);
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
         match args.memory_behavior {
             MemoryBehavior::AsIs => {
                 // Do nothing
@@ -958,6 +995,11 @@ async fn consume_stream_and_simulate_other_running_memory_consumers(
                 if !memory_took {
                     memory_took = true;
                     grow_memory_as_much_as_possible(10, &mut memory_reservation)?;
+                    if expect_memory_exhaustion {
+                        assert!(memory_reservation.size() > 0);
+                        assert!(memory_pool.reserved() <= args.pool_size);
+                        assert!(args.pool_size - memory_pool.reserved() < 10);
+                    }
                 }
             }
             MemoryBehavior::TakeAllMemoryAndReleaseEveryNthBatch(n) => {
@@ -974,12 +1016,15 @@ async fn consume_stream_and_simulate_other_running_memory_consumers(
             }
         }
 
-        let batch = batch?;
         number_of_rows += batch.num_rows();
 
         index += 1;
     }
 
+    assert!(
+        !expect_memory_exhaustion,
+        "expected memory exhaustion after external pressure"
+    );
     assert_eq!(
         number_of_rows,
         args.number_of_record_batches * record_batch_size as usize
