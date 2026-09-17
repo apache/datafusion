@@ -353,28 +353,8 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedNullsBuilder<FIXED_BLOCK_SIZING> {
 
     #[inline]
     pub fn is_null(&self, blocked_index: BlocksIndex) -> bool {
-        let (block, index_in_block) = self.locate(blocked_index);
+        let (block, index_in_block) = (blocked_index.block_index(), blocked_index.index_in_block());
         !self.blocks[block].is_valid(index_in_block)
-    }
-
-    /// `(block, index in block)` of `blocked_index`
-    #[inline]
-    pub fn locate(&self, blocked_index: BlocksIndex) -> (usize, usize) {
-        if FIXED_BLOCK_SIZING {
-            return (
-                blocked_index.block_index(),
-                blocked_index.index_in_block(),
-            );
-        }
-        // TODO - optimize this loop
-        let mut remaining = blocked_index.into_index_in_fixed_block_size(self.block_size);
-        for (block, nulls) in self.blocks.iter().enumerate() {
-            if remaining < nulls.len() {
-                return (block, remaining);
-            }
-            remaining -= nulls.len();
-        }
-        panic!("index {blocked_index:?} is out of bounds");
     }
 
     /// Extends iterator of validity within current block
@@ -646,7 +626,7 @@ impl<const FIXED_BLOCK_SIZING: bool> Index<BlocksIndex>
     type Output = bool;
 
     fn index(&self, blocked_index: BlocksIndex) -> &Self::Output {
-        let (block, index_in_block) = self.locate(blocked_index);
+        let (block, index_in_block) = (blocked_index.block_index(), blocked_index.index_in_block());
         if self.blocks[block].is_valid(index_in_block) {
             &true
         } else {

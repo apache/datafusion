@@ -117,7 +117,7 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteViewType>
     /// The bytes block referenced by `view`, which belongs to the value at `index`
     #[inline]
     fn bytes_block_of(&self, index: BlocksIndex, view: &ByteView) -> usize {
-        let views_block = self.nulls.locate(index).0;
+        let views_block = index.block_index();
         self.block_starts[views_block] + view.buffer_index as usize
     }
 
@@ -950,9 +950,9 @@ mod tests {
         builder.vectorized_append(&input, &[4, 5, 6, 7, 8]).unwrap();
         assert_eq!(builder.views.num_blocks(), 2);
 
-        // manual sizing: the index is flat over the items, block 0 holds 4
-        assert!(builder.equal_to(BlocksIndex::new_in_first_block(5), &input, 5));
-        assert!(builder.equal_to(BlocksIndex::new_in_first_block(8), &input, 1));
+        // manual sizing addresses the block directly: block 0 holds items 0..4
+        assert!(builder.equal_to(BlocksIndex::new(1, 1), &input, 5));
+        assert!(builder.equal_to(BlocksIndex::new(1, 4), &input, 1));
         assert_eq!(
             String::from_utf8(builder.value(BlocksIndex::new_in_first_block(1)).to_vec()).unwrap(),
             LONG_A

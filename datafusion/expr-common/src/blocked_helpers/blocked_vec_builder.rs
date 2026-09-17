@@ -293,30 +293,6 @@ impl<const FIXED_BLOCK_SIZING: bool, T: Copy>
         block.data.reserve(extra);
     }
 
-    /// `(block, index in block)` of `index`. Fixed sizing addresses blocks directly.
-    /// Manual sizing callers address items flat, counting from the block they name (the
-    /// mmap implementation kept items contiguous so this was a plain offset), which
-    /// here walks the blocks
-    /// TODO: O(blocks) walk, manual sizing is the rare path and its blocks are few
-    #[inline]
-    fn locate(&self, index: BlocksIndex) -> (usize, usize) {
-        let mut block = index.block_index();
-        let mut offset = index.index_in_block();
-        if FIXED_BLOCK_SIZING {
-            return (block, offset);
-        }
-        let last = self.0.num_blocks() - 1;
-        while block < last {
-            let len = self.0.block(block).len();
-            if offset < len {
-                break;
-            }
-            offset -= len;
-            block += 1;
-        }
-        (block, offset)
-    }
-
     pub fn reserve_blocks(&mut self, n: usize) {
         self.0.reserve_blocks(n);
     }
@@ -332,7 +308,7 @@ impl<const FIXED_BLOCK_SIZING: bool, T: Copy>
     /// `index` must point at an existing item
     #[inline]
     pub unsafe fn get_unchecked(&self, index: BlocksIndex) -> &T {
-        let (block, offset) = self.locate(index);
+        let (block, offset) = (index.block_index(), index.index_in_block());
         unsafe { self.0.block_unchecked(block).data.get_unchecked(offset) }
     }
 
@@ -342,7 +318,7 @@ impl<const FIXED_BLOCK_SIZING: bool, T: Copy>
     /// `index` must point at an existing item
     #[inline]
     pub unsafe fn get_unchecked_mut(&mut self, index: BlocksIndex) -> &mut T {
-        let (block, offset) = self.locate(index);
+        let (block, offset) = (index.block_index(), index.index_in_block());
         unsafe { self.0.block_unchecked_mut(block).data.get_unchecked_mut(offset) }
     }
 }
@@ -354,7 +330,7 @@ impl<const FIXED_BLOCK_SIZING: bool, T: Copy> Index<BlocksIndex>
 
     #[inline]
     fn index(&self, index: BlocksIndex) -> &T {
-        let (block, offset) = self.locate(index);
+        let (block, offset) = (index.block_index(), index.index_in_block());
         &self.0.block(block).data[offset]
     }
 }
@@ -364,7 +340,7 @@ impl<const FIXED_BLOCK_SIZING: bool, T: Copy> IndexMut<BlocksIndex>
 {
     #[inline]
     fn index_mut(&mut self, index: BlocksIndex) -> &mut T {
-        let (block, offset) = self.locate(index);
+        let (block, offset) = (index.block_index(), index.index_in_block());
         &mut self.0.current_or_block_mut(block).data[offset]
     }
 }
