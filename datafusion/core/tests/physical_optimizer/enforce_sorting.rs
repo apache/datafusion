@@ -3497,22 +3497,55 @@ async fn test_passthrough_wrapper_projection_keeps_ordering() -> Result<()> {
 
 #[tokio::test]
 async fn test_unique_build_hash_join_unbounded_limit() -> Result<()> {
-    check_unique_build_join_unbounded_limit(JoinType::Inner, false).await
+    check_unique_build_join_unbounded_limit(
+        JoinType::Inner,
+        false,
+        NullEquality::NullEqualsNothing,
+    )
+    .await
 }
 
 #[tokio::test]
 async fn test_unique_build_right_join_unbounded_limit() -> Result<()> {
-    check_unique_build_join_unbounded_limit(JoinType::Right, false).await
+    check_unique_build_join_unbounded_limit(
+        JoinType::Right,
+        false,
+        NullEquality::NullEqualsNothing,
+    )
+    .await
 }
 
 #[tokio::test]
 async fn test_unique_build_left_sort_merge_join_unbounded_limit() -> Result<()> {
-    check_unique_build_join_unbounded_limit(JoinType::Left, false).await
+    check_unique_build_join_unbounded_limit(
+        JoinType::Left,
+        false,
+        NullEquality::NullEqualsNothing,
+    )
+    .await
 }
 
 #[tokio::test]
 async fn test_unique_build_computed_key_join_unbounded_limit() -> Result<()> {
-    check_unique_build_join_unbounded_limit(JoinType::Inner, true).await
+    check_unique_build_join_unbounded_limit(
+        JoinType::Inner,
+        true,
+        NullEquality::NullEqualsNothing,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn test_nullable_unique_build_nonnullable_probe_unbounded_limit() -> Result<()> {
+    for join_type in [JoinType::Inner, JoinType::Right, JoinType::Left] {
+        check_unique_build_join_unbounded_limit(
+            join_type,
+            false,
+            NullEquality::NullEqualsNull,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 fn unique_join_build() -> Result<Arc<DataSourceExec>> {
@@ -3541,6 +3574,7 @@ fn unique_join_build() -> Result<Arc<DataSourceExec>> {
 async fn check_unique_build_join_unbounded_limit(
     join_type: JoinType,
     computed_key: bool,
+    null_equality: NullEquality,
 ) -> Result<()> {
     #[derive(Debug)]
     struct PendingPartition(RecordBatch);
@@ -3558,9 +3592,25 @@ async fn check_unique_build_join_unbounded_limit(
     }
 
     let build = unique_join_build()?;
+    let build =
+        if null_equality == NullEquality::NullEqualsNull {
+            assert!(build.schema().field(0).is_nullable());
+            Arc::new(build.as_ref().clone().with_constraints(
+                Constraints::new_unverified(vec![Constraint::Unique(vec![0])]),
+            ))
+        } else {
+            build
+        };
 
-    let probe_batch = record_batch!(("probe_k", Int32, [1, 1]))?;
-    let probe_schema = probe_batch.schema();
+    let probe_schema = Arc::new(Schema::new(vec![Field::new(
+        "probe_k",
+        DataType::Int32,
+        false,
+    )]));
+    let probe_batch = RecordBatch::try_new(
+        Arc::clone(&probe_schema),
+        vec![Arc::new(Int32Array::from(vec![1, 1]))],
+    )?;
     let probe_ordering = LexOrdering::new([sort_expr("probe_k", &probe_schema)]).unwrap();
     let probe = Arc::new(StreamingTableExec::try_new(
         probe_schema,
@@ -3589,7 +3639,7 @@ async fn check_unique_build_join_unbounded_limit(
             None,
             join_type,
             vec![SortOptions::default()],
-            NullEquality::NullEqualsNothing,
+            null_equality,
         )?)
     } else {
         Arc::new(
@@ -3599,6 +3649,7 @@ async fn check_unique_build_join_unbounded_limit(
                 vec![(Arc::new(Column::new("build_k", 0)), probe_key)],
                 join_type,
             )
+            .with_null_equality(null_equality)
             .with_partition_mode(PartitionMode::CollectLeft)
             .build()?,
         )
@@ -3891,6 +3942,201 @@ async fn test_nullable_unique_build_null_equals_null_requires_sort() -> Result<(
             "+---------+---------+---------+",
             "|         | 10      |         |",
             "|         | 10      |         |",
+            "+---------+---------+---------+",
+        ],
+        &batches
+    );
+    Ok(())
+}
+
+/// A filter can equate a volatile expression with a column for its own output,
+/// but evaluating the expression again as a join key can produce different values.
+#[tokio::test]
+async fn test_unique_build_volatile_key_equivalence_limit() -> Result<()> {
+    use datafusion_expr::{Volatility, create_udf};
+    use datafusion_physical_expr::ScalarFunctionExpr;
+    use datafusion_physical_plan::filter::FilterExec;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    for original_key_is_volatile in [true, false] {
+        let calls = AtomicUsize::new(0);
+        let flip = create_udf(
+            "volatile_flip",
+            vec![DataType::Int32],
+            DataType::Int32,
+            Volatility::Volatile,
+            Arc::new(move |args| {
+                // The filter keeps every row. On reevaluation in the join, equal
+                // probe keys alternate between two different unique build rows.
+                if original_key_is_volatile && calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return Ok(args[0].clone());
+                }
+                let values = if original_key_is_volatile {
+                    [0, 1, 0, 0]
+                } else {
+                    [1, 2, 1, 2]
+                };
+                let len = match &args[0] {
+                    ColumnarValue::Array(array) => array.len(),
+                    ColumnarValue::Scalar(_) => 1,
+                };
+                Ok(ColumnarValue::Array(Arc::new(
+                    Int32Array::from_iter_values(values.into_iter().cycle().take(len)),
+                )))
+            }),
+        );
+        let probe_batch = record_batch!(
+            ("probe_k", Int32, [1, 1, 1, 2]),
+            ("probe_q", Int32, [1, 2, 1, 2])
+        )?;
+        let probe_schema = probe_batch.schema();
+        let probe_key = col("probe_k", &probe_schema)?;
+        let flip: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
+            Arc::new(flip),
+            vec![Arc::clone(&probe_key)],
+            &probe_schema,
+            Arc::new(ConfigOptions::default()),
+        )?);
+        let probe = DataSourceExec::from_data_source(
+            MemorySourceConfig::try_new(
+                &[vec![probe_batch]],
+                Arc::clone(&probe_schema),
+                None,
+            )?
+            .try_with_sort_information(vec![
+                LexOrdering::new([sort_expr("probe_k", &probe_schema)]).unwrap(),
+            ])?,
+        );
+        let (predicate, join_key): (_, Arc<dyn PhysicalExpr>) =
+            if original_key_is_volatile {
+                (
+                    BinaryExpr::new(
+                        Arc::clone(&probe_key),
+                        Operator::Eq,
+                        Arc::clone(&flip),
+                    ),
+                    Arc::new(BinaryExpr::new(probe_key, Operator::Plus, flip)),
+                )
+            } else {
+                let q = col("probe_q", &probe_schema)?;
+                (BinaryExpr::new(flip, Operator::Eq, Arc::clone(&q)), q)
+            };
+        let probe = Arc::new(FilterExec::try_new(Arc::new(predicate), probe)?);
+        // Equivalence can either hide a volatile child or introduce one through an alias.
+        let normalized = probe
+            .properties()
+            .equivalence_properties()
+            .eq_group()
+            .normalize_expr(Arc::clone(&join_key));
+        assert_eq!(
+            datafusion_physical_expr_common::physical_expr::is_volatile(&normalized),
+            !original_key_is_volatile,
+        );
+        let join = HashJoinExecBuilder::new(
+            unique_join_build()?,
+            probe,
+            vec![(Arc::new(Column::new("build_k", 0)), join_key)],
+            JoinType::Inner,
+        )
+        .with_partition_mode(PartitionMode::CollectLeft)
+        .build()?;
+        let required = LexOrdering::new([
+            sort_expr("probe_k", &join.schema()),
+            sort_expr("build_k", &join.schema()),
+            sort_expr("build_v", &join.schema()),
+        ])
+        .unwrap();
+        let plan = Arc::new(SortExec::new(required, Arc::new(join)).with_fetch(Some(2)));
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_target_partitions(1),
+        );
+        let batches = datafusion_physical_plan::collect(plan, ctx.task_ctx()).await?;
+        assert_batches_eq!(
+            [
+                "+---------+---------+---------+---------+",
+                "| build_k | build_v | probe_k | probe_q |",
+                "+---------+---------+---------+---------+",
+                "| 1       | 100     | 1       | 1       |",
+                "| 1       | 100     | 1       | 1       |",
+                "+---------+---------+---------+---------+",
+            ],
+            &batches
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_unique_build_volatile_build_key_equivalence_limit() -> Result<()> {
+    use datafusion_expr::{Volatility, create_udf};
+    use datafusion_physical_expr::ScalarFunctionExpr;
+    use datafusion_physical_plan::filter::FilterExec;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let calls = AtomicUsize::new(0);
+    let flip = create_udf(
+        "volatile_build_key",
+        vec![DataType::Int32],
+        DataType::Int32,
+        Volatility::Volatile,
+        Arc::new(move |args| {
+            // The filter sees the unique keys [1, 2], but the join sees [1, 1].
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                Ok(args[0].clone())
+            } else {
+                Ok(ColumnarValue::Scalar(1_i32.into()))
+            }
+        }),
+    );
+    let build = unique_join_build()?;
+    let build_key = col("build_k", &build.schema())?;
+    let flip: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
+        Arc::new(flip),
+        vec![Arc::clone(&build_key)],
+        &build.schema(),
+        Arc::new(ConfigOptions::default()),
+    )?);
+    let build = Arc::new(FilterExec::try_new(
+        Arc::new(BinaryExpr::new(build_key, Operator::Eq, Arc::clone(&flip))),
+        build,
+    )?);
+    let probe_batch = record_batch!(("probe_k", Int32, [1, 1]))?;
+    let probe_schema = probe_batch.schema();
+    let probe = DataSourceExec::from_data_source(
+        MemorySourceConfig::try_new(
+            &[vec![probe_batch]],
+            Arc::clone(&probe_schema),
+            None,
+        )?
+        .try_with_sort_information(vec![
+            LexOrdering::new([sort_expr("probe_k", &probe_schema)]).unwrap(),
+        ])?,
+    );
+    let join = HashJoinExecBuilder::new(
+        build,
+        probe,
+        vec![(flip, col("probe_k", &probe_schema)?)],
+        JoinType::Inner,
+    )
+    .with_partition_mode(PartitionMode::CollectLeft)
+    .build()?;
+    let required = LexOrdering::new([
+        sort_expr("probe_k", &join.schema()),
+        sort_expr("build_k", &join.schema()),
+        sort_expr("build_v", &join.schema()),
+    ])
+    .unwrap();
+    let plan = Arc::new(SortExec::new(required, Arc::new(join)).with_fetch(Some(2)));
+    let batches =
+        datafusion_physical_plan::collect(plan, SessionContext::new().task_ctx()).await?;
+    assert_batches_eq!(
+        [
+            "+---------+---------+---------+",
+            "| build_k | build_v | probe_k |",
+            "+---------+---------+---------+",
+            "| 1       | 100     | 1       |",
+            "| 1       | 100     | 1       |",
             "+---------+---------+---------+",
         ],
         &batches

@@ -21,7 +21,7 @@ use super::EquivalenceProperties;
 use crate::expressions::Column;
 use crate::{ConstExpr, PhysicalExprRef, equivalence::OrderingEquivalenceClass};
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::{Constraint, JoinSide, JoinType, NullEquality, Result};
 use datafusion_physical_expr_common::physical_expr::is_volatile;
 
@@ -119,10 +119,7 @@ fn unique_build_join_orderings(
                 JoinSide::Right => (right, left),
                 JoinSide::None => unreachable!(),
             };
-            (
-                probe.eq_group().normalize_expr(Arc::clone(probe_key)),
-                build.eq_group().normalize_expr(Arc::clone(build_key)),
-            )
+            (Arc::clone(probe_key), Arc::clone(build_key))
         })
         .collect::<Vec<_>>();
     let mut valid_orderings = Vec::new();
@@ -135,7 +132,13 @@ fn unique_build_join_orderings(
             group.add_constant(ConstExpr::from(expr));
         }
         let probe_key_is_fixed = |key: &PhysicalExprRef| {
-            !is_volatile(key) && group.is_expr_constant(key).is_some()
+            // Normalization can hide a volatile function behind an equivalent
+            // column. Check the original expression before using equivalences.
+            if is_volatile(key) {
+                return false;
+            }
+            let key = probe.eq_group().normalize_expr(Arc::clone(key));
+            !is_volatile(&key) && group.is_expr_constant(&key).is_some()
         };
 
         // Outer joins must have the same match status throughout the group.
@@ -147,6 +150,7 @@ fn unique_build_join_orderings(
             continue;
         }
         if !ordering_covers_unique_build_key(
+            &probe.schema,
             build,
             &on,
             probe_key_is_fixed,
@@ -170,8 +174,9 @@ fn unique_build_join_orderings(
 }
 
 /// Check whether the probe ordering determines a unique build key.
-/// Join keys must already be normalized against their input equivalence groups.
+/// Join keys retain their original volatility and nullability.
 fn ordering_covers_unique_build_key(
+    probe_schema: &Schema,
     build: &EquivalenceProperties,
     on: &[(PhysicalExprRef, PhysicalExprRef)],
     probe_key_is_fixed: impl Fn(&PhysicalExprRef) -> bool,
@@ -184,18 +189,25 @@ fn ordering_covers_unique_build_key(
                 let Some(field) = build.schema.fields().get(index) else {
                     return false;
                 };
-                // UNIQUE permits repeated NULLs, which only invalidate the
-                // uniqueness proof when NULL join keys can match each other.
-                if matches!(constraint, Constraint::Unique(_))
+                // Repeated NULLs in a UNIQUE key are safe only if they cannot
+                // match the probe key.
+                let requires_non_null_probe = matches!(constraint, Constraint::Unique(_))
                     && field.is_nullable()
-                    && null_equality == NullEquality::NullEqualsNull
-                {
-                    return false;
-                }
+                    && null_equality == NullEquality::NullEqualsNull;
                 let column: PhysicalExprRef = Arc::new(Column::new(field.name(), index));
                 let column = build.eq_group().normalize_expr(column);
                 on.iter().any(|(probe_key, build_key)| {
-                    build_key.eq(&column) && probe_key_is_fixed(probe_key)
+                    // Re-evaluating a volatile key need not preserve uniqueness,
+                    // even if a filter equated it with the constrained column.
+                    if is_volatile(build_key) {
+                        return false;
+                    }
+                    let build_key =
+                        build.eq_group().normalize_expr(Arc::clone(build_key));
+                    build_key.eq(&column)
+                        && probe_key_is_fixed(probe_key)
+                        && (!requires_non_null_probe
+                            || !probe_key.nullable(probe_schema).unwrap_or(true))
                 })
             })
     })
