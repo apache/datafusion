@@ -30,7 +30,7 @@ use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, GroupSelection, GroupsAccumulator,
     Signature, Volatility,
     function::{AccumulatorArgs, StateFieldsArgs},
-    utils::format_state_name,
+    utils::{AggregateOrderSensitivity, format_state_name},
 };
 use datafusion_functions_aggregate_common::utils::GenericDistinctBuffer;
 use datafusion_functions_aggregate_common::{
@@ -94,6 +94,10 @@ impl AggregateUDFImpl for VarianceSample {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Float64)
+    }
+
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        AggregateOrderSensitivity::Insensitive
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
@@ -193,6 +197,10 @@ impl AggregateUDFImpl for VariancePopulation {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Float64)
+    }
+
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        AggregateOrderSensitivity::Insensitive
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
