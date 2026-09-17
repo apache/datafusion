@@ -74,7 +74,7 @@ use crate::joins::utils::JoinFilter;
 use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, Count, ExecutionPlanMetricsSet, SpillMetrics};
 use crate::sorts::sort::ExternalSorter;
-use crate::stream::RecordBatchStreamAdapter;
+use crate::stream::{EmptyRecordBatchStream, RecordBatchStreamAdapter};
 
 use arrow::array::Array;
 use arrow::compute::SortOptions;
@@ -85,7 +85,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
-use futures::StreamExt;
+use futures::{Stream, StreamExt, TryStreamExt, stream};
 use parking_lot::Mutex;
 
 /// Everything the fallback needs from the join, captured once per partition
@@ -121,6 +121,9 @@ pub(super) struct SortMergeFallbackContext {
     /// back even though the memory pool would allow more; `None` for no limit
     /// (`datafusion.execution.hash_join_max_build_size`)
     pub(super) max_build_size: Option<usize>,
+    /// Whether a dynamic filter is pushed down to the probe side, so that a
+    /// sorted build side must report its join key bounds.
+    pub(super) compute_bounds: bool,
 }
 
 impl SortMergeFallbackContext {
@@ -169,15 +172,12 @@ pub(super) fn is_resources_exhausted(error: &DataFusionError) -> bool {
     matches!(error.find_root(), DataFusionError::ResourcesExhausted(_))
 }
 
-/// Sorts `buffered` followed by the rest of `input` on `ordering` with an
-/// external sort, calling `observe` for every batch on its way in.
+/// Sorts `input` on `ordering` with an external sort.
 async fn sort_batches(
     ctx: &SortMergeFallbackContext,
     schema: SchemaRef,
     ordering: LexOrdering,
-    buffered: Vec<RecordBatch>,
-    mut input: Option<SendableRecordBatchStream>,
-    mut observe: impl FnMut(&RecordBatch) -> Result<()>,
+    input: impl Stream<Item = Result<RecordBatch>> + Unpin,
 ) -> Result<SendableRecordBatchStream> {
     let session_config = ctx.context.session_config();
     let execution_options = &session_config.options().execution;
@@ -197,23 +197,10 @@ async fn sort_batches(
         ctx.context.runtime_env(),
     )?;
 
-    for batch in buffered {
-        insert_batch(&mut sorter, batch, &mut observe).await?;
+    if let Err(error) = insert_all(&mut sorter, input).await {
+        sorter.abort_in_progress_spill().await;
+        return Err(error);
     }
-    if let Some(input) = input.as_mut() {
-        while let Some(batch) = input.next().await {
-            let batch = match batch {
-                Ok(batch) => batch,
-                Err(error) => {
-                    sorter.abort_in_progress_spill().await;
-                    return Err(error);
-                }
-            };
-            insert_batch(&mut sorter, batch, &mut observe).await?;
-        }
-    }
-    drop(input);
-
     let sorted = sorter.sort().await?;
 
     let spills = sorter.spill_metrics();
@@ -230,16 +217,13 @@ async fn sort_batches(
     Ok(sorted)
 }
 
-/// Feeds one batch to `sorter`, abandoning its in-progress spill on error.
-async fn insert_batch(
+/// Feeds every batch of `input` to `sorter`.
+async fn insert_all(
     sorter: &mut ExternalSorter,
-    batch: RecordBatch,
-    observe: &mut impl FnMut(&RecordBatch) -> Result<()>,
+    mut input: impl Stream<Item = Result<RecordBatch>> + Unpin,
 ) -> Result<()> {
-    observe(&batch)?;
-    if let Err(error) = sorter.insert_batch(batch).await {
-        sorter.abort_in_progress_spill().await;
-        return Err(error);
+    while let Some(batch) = input.next().await {
+        sorter.insert_batch(batch?).await?;
     }
     Ok(())
 }
@@ -247,64 +231,69 @@ async fn insert_batch(
 /// Sorts the build side of a partition after its in-memory collection ran
 /// out of memory.
 ///
-/// `batches` are the build batches collected so far, `pending` the batch whose
-/// reservation failed and `rest` the not yet consumed remainder of the build
-/// input (both `None` when the input was fully consumed and the hash table
-/// itself did not fit). The caller has already released the reservation held
-/// for `batches`; the external sort reserves what it keeps in memory itself.
+/// `batches` are the build batches collected so far and `rest` the not yet
+/// consumed remainder of the build input (`None` when the input was fully
+/// consumed and the hash table itself did not fit). The caller has already
+/// released the reservation held for `batches`; the external sort reserves
+/// what it keeps in memory itself.
 ///
-/// The join key bounds needed by a pushed-down dynamic filter are computed
-/// with `bounds_accumulators` over every batch (min/max are idempotent, so
-/// re-feeding the already accumulated `batches` is harmless), unless the
-/// caller already has the final `bounds`.
+/// When a dynamic filter is pushed down, the join key bounds it needs are
+/// computed over every batch on its way into the sort.
 pub(super) async fn sort_build_side(
     ctx: SortMergeFallbackContext,
     schema: SchemaRef,
     batches: Vec<RecordBatch>,
-    pending: Option<RecordBatch>,
     rest: Option<SendableRecordBatchStream>,
-    mut bounds_accumulators: Option<Vec<CollectLeftAccumulator>>,
-    bounds: Option<PartitionBounds>,
 ) -> Result<SortedBuildSide> {
     ctx.fallback_count.add(1);
 
     let ordering = ctx.sort_ordering(&ctx.on_left)?;
-    let mut buffered = batches;
-    buffered.extend(pending);
-
-    let on_left = ctx.on_left.clone();
+    let mut accumulators = ctx
+        .compute_bounds
+        .then(|| {
+            ctx.on_left
+                .iter()
+                .map(|expr| CollectLeftAccumulator::try_new(Arc::clone(expr), &schema))
+                .collect::<Result<Vec<_>>>()
+        })
+        .transpose()?;
     let mut keys_have_null = false;
     let mut num_rows = 0;
-    let observe = |batch: &RecordBatch| -> Result<()> {
-        num_rows += batch.num_rows();
-        if let Some(accumulators) = bounds_accumulators.as_mut() {
-            for accumulator in accumulators {
-                accumulator.update_batch(batch)?;
-            }
-        }
-        if !keys_have_null {
-            keys_have_null = evaluate_expressions_to_arrays(&on_left, batch)?
-                .iter()
-                .any(|array| array.logical_null_count() > 0);
-        }
-        Ok(())
-    };
 
-    let stream = sort_batches(&ctx, schema, ordering, buffered, rest, observe)
+    let rest = rest
+        .unwrap_or_else(|| Box::pin(EmptyRecordBatchStream::new(Arc::clone(&schema))));
+    let input = stream::iter(batches.into_iter().map(Ok)).chain(rest).map(
+        |batch| -> Result<RecordBatch> {
+            let batch = batch?;
+            num_rows += batch.num_rows();
+            if let Some(accumulators) = accumulators.as_mut() {
+                for accumulator in accumulators {
+                    accumulator.update_batch(&batch)?;
+                }
+            }
+            if !keys_have_null {
+                keys_have_null = evaluate_expressions_to_arrays(&ctx.on_left, &batch)?
+                    .iter()
+                    .any(|array| array.logical_null_count() > 0);
+            }
+            Ok(batch)
+        },
+    );
+
+    let stream = sort_batches(&ctx, schema, ordering, input)
         .await
         .map_err(|e| {
             e.context("HashJoinExec sort-merge fallback: sorting the build side")
         })?;
 
-    let bounds = match bounds_accumulators {
+    let bounds = match accumulators {
         Some(accumulators) if num_rows > 0 => Some(PartitionBounds::new(
             accumulators
                 .into_iter()
                 .map(CollectLeftAccumulator::evaluate)
                 .collect::<Result<Vec<_>>>()?,
         )),
-        Some(_) => None,
-        None => bounds,
+        _ => None,
     };
 
     Ok(SortedBuildSide {
@@ -314,56 +303,80 @@ pub(super) async fn sort_build_side(
     })
 }
 
-/// Sorts the probe side and joins it with the sorted build side as a
-/// sort-merge join, returning the join's output stream (projected and limited
-/// like the hash join's own output would be).
-pub(super) async fn run_sort_merge_fallback(
+/// Joins the sorted build side with the probe side as a sort-merge join,
+/// returning the join's output stream (projected and limited like the hash
+/// join's own output would be). The probe side is sorted on first poll.
+pub(super) fn run_sort_merge_fallback(
+    ctx: SortMergeFallbackContext,
+    build: SendableRecordBatchStream,
+    probe: SendableRecordBatchStream,
+) -> SendableRecordBatchStream {
+    let schema = Arc::clone(&ctx.output_schema);
+    let output = stream::once(sort_probe_and_join(ctx, build, probe)).try_flatten();
+    Box::pin(RecordBatchStreamAdapter::new(schema, output))
+}
+
+async fn sort_probe_and_join(
     ctx: SortMergeFallbackContext,
     build: SendableRecordBatchStream,
     probe: SendableRecordBatchStream,
 ) -> Result<SendableRecordBatchStream> {
     let ordering = ctx.sort_ordering(&ctx.on_right)?;
-    let probe = sort_batches(&ctx, probe.schema(), ordering, vec![], Some(probe), |_| {
-        Ok(())
-    })
-    .await
-    .map_err(|e| e.context("HashJoinExec sort-merge fallback: sorting the probe side"))?;
+    let probe = sort_batches(&ctx, probe.schema(), ordering, probe)
+        .await
+        .map_err(|e| {
+            e.context("HashJoinExec sort-merge fallback: sorting the probe side")
+        })?;
 
+    let SortMergeFallbackContext {
+        context,
+        partition,
+        metrics,
+        on_left,
+        on_right,
+        sort_options,
+        join_type,
+        filter,
+        null_equality,
+        join_schema,
+        output_schema,
+        projection,
+        fetch,
+        ..
+    } = ctx;
     let joined = sort_merge_join_stream(
         SortMergeJoinInputs {
-            schema: Arc::clone(&ctx.join_schema),
-            sort_options: ctx.sort_options.clone(),
-            null_equality: ctx.null_equality,
+            schema: join_schema,
+            sort_options,
+            null_equality,
             left: build,
             right: probe,
-            on_left: ctx.on_left.clone(),
-            on_right: ctx.on_right.clone(),
-            filter: ctx.filter.clone(),
-            join_type: ctx.join_type,
-            partition: ctx.partition,
+            on_left,
+            on_right,
+            filter,
+            join_type,
+            partition,
         },
-        &ctx.metrics,
-        &ctx.context,
+        &metrics,
+        &context,
     )?;
 
-    let output: SendableRecordBatchStream = match ctx.projection.clone() {
+    let output: SendableRecordBatchStream = match projection {
         Some(projection) => Box::pin(RecordBatchStreamAdapter::new(
-            Arc::clone(&ctx.output_schema),
+            output_schema,
             joined.map(move |batch| Ok(batch?.project(&projection)?)),
         )),
         None => joined,
     };
 
     // The limit's own baseline metrics would count the output a second time.
-    let output = match ctx.fetch {
+    Ok(match fetch {
         Some(_) => Box::pin(LimitStream::new(
             output,
             0,
-            ctx.fetch,
-            BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), ctx.partition),
+            fetch,
+            BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), partition),
         )),
         None => output,
-    };
-
-    Ok(output)
+    })
 }

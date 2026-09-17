@@ -60,8 +60,7 @@ use datafusion_physical_expr::PhysicalExprRef;
 
 use datafusion_common::hash_utils::RandomState;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
-use futures::future::BoxFuture;
-use futures::{FutureExt, Stream, StreamExt, ready};
+use futures::{Stream, StreamExt, ready};
 
 /// Represents build-side of hash join.
 pub(super) enum BuildSide {
@@ -70,22 +69,15 @@ pub(super) enum BuildSide {
     /// Indicates that build-side data has been collected
     Ready(BuildSideReadyState),
     /// Indicates that the build side did not fit in memory and the partition
-    /// is finishing as a sort-merge join (see the `sort_merge_fallback` module)
-    SortMergeFallback(SortMergeFallbackState),
+    /// is finishing as a sort-merge join whose output this stream forwards
+    /// (see the `sort_merge_fallback` module)
+    SortMergeFallback(SendableRecordBatchStream),
 }
 
 /// Container for BuildSide::Initial related data
 pub(super) struct BuildSideInitialState {
     /// Future for building hash table from build-side input
     pub(super) left_fut: OnceFut<BuildSideOutcome>,
-}
-
-/// Progress of the sort-merge fallback of one partition
-pub(super) enum SortMergeFallbackState {
-    /// Sorting the probe side and setting up the sort-merge join
-    Preparing(BoxFuture<'static, Result<SendableRecordBatchStream>>),
-    /// Forwarding the sort-merge join's output
-    Running(SendableRecordBatchStream),
 }
 
 /// Container for BuildSide::Ready related data
@@ -662,11 +654,6 @@ impl HashJoinStream {
             return Self::state_after_build_ready(self.join_type, left_data.as_ref());
         }
 
-        let pushdown = left_data.membership().clone();
-        let bounds = left_data
-            .bounds
-            .clone()
-            .unwrap_or_else(|| PartitionBounds::new(vec![]));
         // Use the logical null count: a dictionary key whose entry points at a
         // NULL dictionary value is a NULL key even though the key bitmap has no
         // physical nulls (`null_count() == 0` but `logical_null_count() > 0`).
@@ -675,6 +662,22 @@ impl HashJoinStream {
             .iter()
             .any(|array| array.logical_null_count() > 0);
 
+        self.schedule_build_report(
+            left_data.membership().clone(),
+            left_data.bounds.clone(),
+            keys_have_null,
+        )
+    }
+
+    /// Reports this partition's build side to the shared accumulator and
+    /// waits for the dynamic filter built from every partition's report.
+    fn schedule_build_report(
+        &mut self,
+        pushdown: PushdownStrategy,
+        bounds: Option<PartitionBounds>,
+        keys_have_null: bool,
+    ) -> HashJoinStreamState {
+        let bounds = bounds.unwrap_or_else(|| PartitionBounds::new(vec![]));
         let build_data = match self.mode {
             PartitionMode::Partitioned => PartitionBuildData::Partitioned {
                 partition_id: self.partition,
@@ -807,7 +810,7 @@ impl HashJoinStream {
                 self.build_side = BuildSide::Ready(BuildSideReadyState { left_data });
             }
             BuildSideOutcome::SortMerge(sorted_build) => {
-                let Some(fallback) = self.sort_merge_fallback.clone() else {
+                let Some(fallback) = self.sort_merge_fallback.take() else {
                     return Poll::Ready(internal_err!(
                         "build side fell back to a sort-merge join, but the stream cannot"
                     ));
@@ -823,50 +826,31 @@ impl HashJoinStream {
                     sorted_build.bounds.clone(),
                     sorted_build.keys_have_null,
                 );
-                self.build_side =
-                    BuildSide::SortMergeFallback(SortMergeFallbackState::Preparing(
-                        run_sort_merge_fallback(fallback, build, probe).boxed(),
-                    ));
+                self.build_side = BuildSide::SortMergeFallback(run_sort_merge_fallback(
+                    fallback, build, probe,
+                ));
             }
         }
         Poll::Ready(Ok(StatefulStreamResult::Continue))
     }
 
-    /// Forwards the output of the sort-merge join this partition fell back to,
-    /// first waiting for the probe side to be sorted.
+    /// Forwards the output of the sort-merge join this partition fell back to.
     fn poll_sort_merge_fallback(
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Result<RecordBatch>>> {
-        let BuildSide::SortMergeFallback(fallback) = &mut self.build_side else {
+        let BuildSide::SortMergeFallback(stream) = &mut self.build_side else {
             return Poll::Ready(Some(internal_err!(
                 "Expected build side in sort-merge fallback state"
             )));
         };
-        loop {
-            match fallback {
-                SortMergeFallbackState::Preparing(preparing) => {
-                    match ready!(preparing.poll_unpin(cx)) {
-                        Ok(stream) => {
-                            *fallback = SortMergeFallbackState::Running(stream);
-                        }
-                        Err(e) => {
-                            self.state = HashJoinStreamState::Completed;
-                            return Poll::Ready(Some(Err(e)));
-                        }
-                    }
-                }
-                SortMergeFallbackState::Running(stream) => {
-                    // The sort-merge join stream records its output in the
-                    // join's metrics itself.
-                    let poll = stream.poll_next_unpin(cx);
-                    if matches!(poll, Poll::Ready(None)) {
-                        self.state = HashJoinStreamState::Completed;
-                    }
-                    return poll;
-                }
-            }
+        // The sort-merge join stream records its output in the join's metrics
+        // itself.
+        let poll = stream.poll_next_unpin(cx);
+        if matches!(poll, Poll::Ready(None | Some(Err(_)))) {
+            self.state = HashJoinStreamState::Completed;
         }
+        poll
     }
 
     /// Transitions state after the build side was sorted instead of hashed,
@@ -883,27 +867,7 @@ impl HashJoinStream {
 
         // No hash table exists to push down; the bounds still narrow the
         // probe-side scan.
-        let pushdown = PushdownStrategy::Unknown;
-        let bounds = bounds.unwrap_or_else(|| PartitionBounds::new(vec![]));
-        let build_data = match self.mode {
-            PartitionMode::Partitioned => PartitionBuildData::Partitioned {
-                partition_id: self.partition,
-                pushdown,
-                bounds,
-                keys_have_null,
-            },
-            PartitionMode::CollectLeft => PartitionBuildData::CollectLeft {
-                pushdown,
-                bounds,
-                keys_have_null,
-            },
-            PartitionMode::Auto => unreachable!(
-                "PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"
-            ),
-        };
-
-        self.build_report.schedule(build_data);
-        HashJoinStreamState::WaitPartitionBoundsReport
+        self.schedule_build_report(PushdownStrategy::Unknown, bounds, keys_have_null)
     }
 
     /// Fetches next batch from probe-side

@@ -979,11 +979,14 @@ impl HashJoinExec {
 
     /// Returns what a partition needs to fall back to a sort-merge join when
     /// its build side does not fit in memory, or `None` when this join cannot
-    /// fall back (see the `sort_merge_fallback` module).
+    /// fall back (see the `sort_merge_fallback` module). `compute_bounds`
+    /// says whether a dynamic filter is pushed down, in which case a sorted
+    /// build side must report its join key bounds.
     fn sort_merge_fallback_context(
         &self,
         partition: usize,
         context: &Arc<TaskContext>,
+        compute_bounds: bool,
     ) -> Result<Option<SortMergeFallbackContext>> {
         let options = context.session_config().options();
         if !context.runtime_env().disk_manager.tmp_files_enabled()
@@ -1011,11 +1014,7 @@ impl HashJoinExec {
             }
         }
 
-        let (on_left, on_right) = self
-            .on
-            .iter()
-            .map(|(l, r)| (Arc::clone(l), Arc::clone(r)))
-            .unzip::<_, _, Vec<_>, Vec<_>>();
+        let (on_left, on_right): (Vec<_>, Vec<_>) = self.on.iter().cloned().unzip();
         Ok(Some(SortMergeFallbackContext {
             context: Arc::clone(context),
             partition,
@@ -1034,6 +1033,7 @@ impl HashJoinExec {
             projection: self.projection.as_deref().map(|p| p.to_vec()),
             fetch: self.fetch,
             max_build_size: options.execution.hash_join_max_build_size,
+            compute_bounds,
         }))
     }
 
@@ -1751,8 +1751,11 @@ impl ExecutionPlan for HashJoinExec {
             .flatten();
 
         let null_aware = self.null_aware_mode()?;
-        let sort_merge_fallback =
-            self.sort_merge_fallback_context(partition, &context)?;
+        let sort_merge_fallback = self.sort_merge_fallback_context(
+            partition,
+            &context,
+            enable_dynamic_filter_pushdown,
+        )?;
 
         let left_fut = match self.mode {
             PartitionMode::CollectLeft => self.left_fut.try_once(|| {
@@ -2746,7 +2749,10 @@ impl CollectLeftAccumulator {
     ///
     /// # Returns
     /// A new `CollectLeftAccumulator` instance configured for the expression's data type
-    fn try_new(expr: Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> Result<Self> {
+    pub(super) fn try_new(
+        expr: Arc<dyn PhysicalExpr>,
+        schema: &SchemaRef,
+    ) -> Result<Self> {
         /// Recursively unwraps dictionary types to get the underlying value type.
         fn dictionary_value_type(data_type: &DataType) -> DataType {
             match data_type {
@@ -2913,7 +2919,7 @@ fn new_join_hashmap(
 #[expect(clippy::too_many_arguments)]
 async fn collect_left_input(
     random_state: RandomState,
-    left_stream: SendableRecordBatchStream,
+    mut left_stream: SendableRecordBatchStream,
     on_left: Vec<PhysicalExprRef>,
     metrics: BuildProbeJoinMetrics,
     reservation: MemoryReservation,
@@ -2924,7 +2930,7 @@ async fn collect_left_input(
     null_equality: NullEquality,
     null_aware: Option<NullAwareMode>,
     array_map_created_count: Count,
-    sort_merge_fallback: Option<SortMergeFallbackContext>,
+    mut sort_merge_fallback: Option<SortMergeFallbackContext>,
 ) -> Result<BuildSideOutcome> {
     let schema = left_stream.schema();
 
@@ -2945,8 +2951,6 @@ async fn collect_left_input(
         should_compute_dynamic_filters || is_phj_candidate,
     )?;
 
-    let mut left_stream = left_stream;
-    let mut sort_merge_fallback = sort_merge_fallback;
     while let Some(batch) = left_stream.next().await {
         let batch = batch?;
         // Update accumulators if computing bounds
@@ -2958,10 +2962,11 @@ async fn collect_left_input(
 
         // Decide if we spill or not
         let batch_size = state.memory_counter.count_batch(&batch);
-        // Reserve memory for incoming batch
-        let fall_back = match state.reservation.try_grow(batch_size) {
+        // Reserve memory for incoming batch, taking the fallback instead when
+        // the build side should be sorted from here on
+        let fallback = match state.reservation.try_grow(batch_size) {
             // The build side grew past the configured size
-            Ok(()) => sort_merge_fallback.as_ref().is_some_and(|fallback| {
+            Ok(()) => sort_merge_fallback.take_if(|fallback| {
                 fallback
                     .max_build_size
                     .is_some_and(|max| state.reservation.size() > max)
@@ -2972,30 +2977,22 @@ async fn collect_left_input(
             Err(error)
                 if sort_merge_fallback.is_some() && is_resources_exhausted(&error) =>
             {
-                true
+                sort_merge_fallback.take()
             }
             Err(error) => return Err(error),
         };
-        if let Some(fallback) = sort_merge_fallback.take_if(|_| fall_back) {
+        if let Some(fallback) = fallback {
             let BuildSideState {
-                batches,
+                mut batches,
                 reservation,
-                bounds_accumulators,
                 ..
             } = state;
+            batches.push(batch);
             // Release what the collected batches reserved: the external sort
             // accounts for what it keeps in memory itself.
             drop(reservation);
-            let sorted = sort_build_side(
-                fallback,
-                schema,
-                batches,
-                Some(batch),
-                Some(left_stream),
-                bounds_accumulators.filter(|_| should_compute_dynamic_filters),
-                None,
-            )
-            .await?;
+            let sorted =
+                sort_build_side(fallback, schema, batches, Some(left_stream)).await?;
             return Ok(BuildSideOutcome::SortMerge(sorted));
         }
         // Update metrics
@@ -3059,16 +3056,7 @@ async fn collect_left_input(
             else {
                 return Err(error);
             };
-            let sorted = sort_build_side(
-                fallback,
-                schema,
-                batches,
-                None,
-                None,
-                None,
-                bounds.filter(|_| should_compute_dynamic_filters),
-            )
-            .await?;
+            let sorted = sort_build_side(fallback, schema, batches, None).await?;
             Ok(BuildSideOutcome::SortMerge(sorted))
         }
     }
@@ -9961,13 +9949,15 @@ mod tests {
         );
         assert!(!batches.is_empty(), "the join should have produced rows");
 
-        // Every probe row must survive the filter the fallback reported.
+        // Every probe row within the build side's key range (0..47) must
+        // survive the filter the fallback reported; the bounds it reported
+        // still prune a key outside that range.
         let probe = RecordBatch::try_new(
             Arc::clone(&probe_schema),
             vec![
-                Arc::new(Int32Array::from(vec![0, 1, 2, 3])),
-                Arc::new(Int32Array::from(vec![5, 6, 7, 8])),
-                Arc::new(Int32Array::from(vec![0, 1, 2, 3])),
+                Arc::new(Int32Array::from(vec![0, 1, 2, 3, 4])),
+                Arc::new(Int32Array::from(vec![5, 6, 7, 8, 100])),
+                Arc::new(Int32Array::from(vec![0, 1, 2, 3, 4])),
             ],
         )?;
         let filter = dynamic_filter.current()?;
@@ -9976,10 +9966,11 @@ mod tests {
             .as_any()
             .downcast_ref::<BooleanArray>()
             .expect("a filter evaluates to a BooleanArray");
+        let kept: Vec<bool> = (0..kept.len()).map(|i| kept.value(i)).collect();
         assert_eq!(
-            (0..kept.len()).filter(|i| kept.value(*i)).count(),
-            probe.num_rows(),
-            "a fallen-back partition must not prune probe rows, filter was {filter}"
+            kept,
+            [true, true, true, true, false],
+            "a fallen-back partition prunes by bounds only, filter was {filter}"
         );
 
         Ok(())
