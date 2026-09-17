@@ -833,6 +833,11 @@ fn general_date_trunc(
         tz,
     )?;
 
+    let truncate_to = |value: i64, unit: i64| {
+        value
+            .checked_sub(value.rem_euclid(unit))
+            .ok_or_else(|| exec_datafusion_err!("Timestamp {value} out of range"))
+    };
     let result = match tu {
         Second => match granularity {
             DatePart::Minute => nano / 1_000_000_000 / 60 * 60,
@@ -846,14 +851,14 @@ fn general_date_trunc(
         Microsecond => match granularity {
             DatePart::Minute => nano / 1_000 / 1_000_000 / 60 * 60 * 1_000_000,
             DatePart::Second => nano / 1_000 / 1_000_000 * 1_000_000,
-            DatePart::Millisecond => nano / 1_000 / 1_000 * 1_000,
+            DatePart::Millisecond => truncate_to(nano / 1_000, 1_000)?,
             _ => nano / 1_000,
         },
         _ => match granularity {
             DatePart::Minute => nano / 1_000_000_000 / 60 * 1_000_000_000 * 60,
             DatePart::Second => nano / 1_000_000_000 * 1_000_000_000,
-            DatePart::Millisecond => nano / 1_000_000 * 1_000_000,
-            DatePart::Microsecond => nano / 1_000 * 1_000,
+            DatePart::Millisecond => truncate_to(nano, 1_000_000)?,
+            DatePart::Microsecond => truncate_to(nano, 1_000)?,
             _ => nano,
         },
     };
@@ -873,7 +878,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::datetime::date_trunc::{
-        DateTruncFunc, NANOS_PER_MICROSECOND, date_trunc_coarse,
+        DateTruncFunc, NANOS_PER_MICROSECOND, date_trunc_coarse, general_date_trunc,
         general_date_trunc_array_fine_granularity, parse_granularity,
     };
 
@@ -1358,6 +1363,35 @@ mod tests {
             } else {
                 panic!("unexpected column type");
             }
+        }
+    }
+
+    #[test]
+    fn scalar_fine_granularity_floors_negative_timestamps() {
+        for (unit, value, granularity, expected) in [
+            (TimeUnit::Microsecond, -999, DatePart::Millisecond, -1_000),
+            (TimeUnit::Nanosecond, -999, DatePart::Microsecond, -1_000),
+            (
+                TimeUnit::Nanosecond,
+                -999_999,
+                DatePart::Millisecond,
+                -1_000_000,
+            ),
+        ] {
+            assert_eq!(
+                general_date_trunc(unit, value, None, granularity).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn scalar_fine_granularity_rejects_underflow() {
+        for granularity in [DatePart::Microsecond, DatePart::Millisecond] {
+            assert!(
+                general_date_trunc(TimeUnit::Nanosecond, i64::MIN, None, granularity,)
+                    .is_err()
+            );
         }
     }
 
