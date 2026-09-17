@@ -366,19 +366,17 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
     // Normalize -0.0 → +0.0 so RowConverter (which uses IEEE 754 totalOrder
     // and treats ±0 as distinct) groups them together. Use the normalized
     // arrays for both row conversion and the final output values.
-    let l_first = l.offsets()[0].as_usize();
-    let l_len = l.offsets()[l.len()].as_usize() - l_first;
     let l_values_norm = normalize_visible_values(l);
-    let rows_l = converter.convert_columns(&[Arc::clone(&l_values_norm)])?;
-
     let r_values_norm = normalize_visible_values(r);
+
+    let rows_l = converter.convert_columns(&[Arc::clone(&l_values_norm)])?;
     let rows_r = converter.convert_columns(&[Arc::clone(&r_values_norm)])?;
 
     // Indices from the row converter are 0-based in the per-side slice;
     // concatenating those same slices lets indices map directly into the
     // combined values array.
     let combined_values = concat(&[l_values_norm.as_ref(), r_values_norm.as_ref()])?;
-    let r_offset = l_len;
+    let r_offset = l_values_norm.len();
 
     match set_op {
         SetOp::Union => generic_set_loop::<OffsetSize, true>(
