@@ -920,6 +920,7 @@ impl fmt::Debug for HashJoinExec {
             .field("left_fut", &self.left_fut)
             .field("random_state", &self.random_state)
             .field("mode", &self.mode)
+            .field("null_aware", &self.null_aware)
             .field("metrics", &self.metrics)
             .field("projection", &self.projection)
             .field("column_indices", &self.column_indices)
