@@ -187,8 +187,8 @@ use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
-    ColumnStatistics, Constraint, Constraints, Result, ScalarValue,
-    assert_eq_or_internal_err, internal_err, not_impl_err,
+    ColumnStatistics, Constraint, Constraints, Result, ScalarValue, internal_err,
+    not_impl_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate, AggregateMetrics};
@@ -200,7 +200,7 @@ use datafusion_physical_expr::{
 };
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, fmt_sql};
 use datafusion_physical_expr_common::sort_expr::{
-    LexOrdering, LexRequirement, OrderingRequirements, PhysicalSortRequirement,
+    LexOrdering, OrderingRequirements, PhysicalSortRequirement,
 };
 
 use datafusion_expr::utils::AggregateOrderSensitivity;
@@ -211,6 +211,7 @@ use topk::heap::is_supported_heap_type;
 
 mod aggregate_hash_table;
 mod aggregate_stream;
+mod builder;
 pub mod group_values;
 mod grouped_hash_stream;
 mod grouped_topk_stream;
@@ -223,6 +224,9 @@ mod partial_reduce_stream;
 mod single_stream;
 mod skip_partial;
 mod topk;
+
+#[doc(hidden)]
+pub use builder::AggregateExecBuilder;
 
 /// Returns true if TopK aggregation data structures support the provided key and value types.
 ///
@@ -905,9 +909,39 @@ pub struct AggregateExec {
 }
 
 impl AggregateExec {
+    /// Create a builder for a new [`AggregateExec`] over `input`, see
+    /// [`AggregateExecBuilder`].
+    ///
+    /// Public for internal use only and not part of the public API.
+    #[doc(hidden)]
+    pub fn builder(
+        mode: AggregateMode,
+        input: Arc<dyn ExecutionPlan>,
+    ) -> AggregateExecBuilder {
+        AggregateExecBuilder::new(mode, input)
+    }
+
+    /// Create a builder pre-populated with the fields of this
+    /// [`AggregateExec`], to derive a new node from it.
+    ///
+    /// This is the supported way to rewrite an existing aggregate: the derived
+    /// output schema and plan properties are carried over, so a rewrite cannot
+    /// rename output fields. See [`AggregateExecBuilder`].
+    ///
+    /// Public for internal use only and not part of the public API.
+    #[doc(hidden)]
+    pub fn to_builder(&self) -> AggregateExecBuilder {
+        AggregateExecBuilder::from_exec(self)
+    }
+
     /// Function used in `OptimizeAggregateOrder` optimizer rule,
     /// where we need parts of the new value, others cloned from the old one
     /// Rewrites aggregate exec with new aggregate expressions.
+    #[doc(hidden)]
+    #[deprecated(
+        since = "56.0.0",
+        note = "use `AggregateExec::to_builder().with_aggr_exprs(..).build()` instead"
+    )]
     pub fn with_new_aggr_exprs(
         &self,
         aggr_expr: impl Into<Arc<[Arc<AggregateFunctionExpr>]>>,
@@ -931,6 +965,11 @@ impl AggregateExec {
     }
 
     /// Clone this exec, overriding only the limit hint.
+    #[doc(hidden)]
+    #[deprecated(
+        since = "56.0.0",
+        note = "use `AggregateExec::to_builder().with_limit_options(..).build()` instead"
+    )]
     pub fn with_new_limit_options(&self, limit_options: Option<LimitOptions>) -> Self {
         Self {
             limit_options,
@@ -955,6 +994,10 @@ impl AggregateExec {
     }
 
     /// Create a new hash aggregate execution plan
+    ///
+    /// Delegates to [`AggregateExecBuilder`], which is where an
+    /// `AggregateExec` is built. DataFusion's own optimizer rules use that
+    /// builder directly, so each argument is named.
     pub fn try_new(
         mode: AggregateMode,
         group_by: impl Into<Arc<PhysicalGroupBy>>,
@@ -963,19 +1006,12 @@ impl AggregateExec {
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
     ) -> Result<Self> {
-        let group_by = group_by.into();
-        let schema = create_schema(&input.schema(), &group_by, &aggr_expr, mode)?;
-
-        let schema = Arc::new(schema);
-        AggregateExec::try_new_with_schema(
-            mode,
-            group_by,
-            aggr_expr,
-            filter_expr,
-            input,
-            input_schema,
-            schema,
-        )
+        Self::builder(mode, input)
+            .with_group_by(group_by)
+            .with_aggr_exprs(aggr_expr)
+            .with_filter_exprs(filter_expr)
+            .with_input_schema(input_schema)
+            .build()
     }
 
     /// Create a new hash aggregate execution plan with the given schema.
@@ -989,125 +1025,19 @@ impl AggregateExec {
     fn try_new_with_schema(
         mode: AggregateMode,
         group_by: impl Into<Arc<PhysicalGroupBy>>,
-        mut aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
+        aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
         filter_expr: impl Into<Arc<[Option<Arc<dyn PhysicalExpr>>]>>,
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
         schema: SchemaRef,
     ) -> Result<Self> {
-        let group_by = group_by.into();
-        let filter_expr = filter_expr.into();
-
-        // Make sure arguments are consistent in size
-        assert_eq_or_internal_err!(
-            aggr_expr.len(),
-            filter_expr.len(),
-            "Inconsistent aggregate expr: {:?} and filter expr: {:?} for AggregateExec, their size should match",
-            aggr_expr,
-            filter_expr
-        );
-
-        let input_eq_properties = input.equivalence_properties();
-        // Get GROUP BY expressions:
-        let groupby_exprs = group_by.input_exprs();
-        // If existing ordering satisfies a prefix of the GROUP BY expressions,
-        // prefix requirements with this section. In this case, aggregation will
-        // work more efficiently.
-        // Copy the `PhysicalSortExpr`s to retain the sort options.
-        let (new_sort_exprs, indices) =
-            input_eq_properties.find_longest_permutation(&groupby_exprs)?;
-
-        let mut new_requirements = new_sort_exprs
-            .into_iter()
-            .map(PhysicalSortRequirement::from)
-            .collect::<Vec<_>>();
-
-        let req = get_finer_aggregate_exprs_requirement(
-            &mut aggr_expr,
-            &group_by,
-            input_eq_properties,
-            &mode,
-        )?;
-        new_requirements.extend(req);
-
-        let required_input_ordering =
-            LexRequirement::new(new_requirements).map(OrderingRequirements::new_soft);
-
-        // Constant expressions never change, so they cannot mark a completed group.
-        // Exclude them from both the ordering indices and the group expression count.
-        // If our aggregation has grouping sets then our base grouping exprs will
-        // be expanded based on the flags in `group_by.groups` where for each
-        // group we swap the grouping expr for `null` if the flag is `true`
-        // That means that each index in `indices` is valid if and only if
-        // it is not null in every group
-        let indices: Vec<usize> = indices
-            .into_iter()
-            .filter(|idx| group_by.groups.iter().all(|group| !group[*idx]))
-            .filter(|idx| {
-                input_eq_properties
-                    .is_expr_constant(&groupby_exprs[*idx])
-                    .is_none()
-            })
-            .collect();
-
-        let num_non_constant_groupby_exprs = groupby_exprs
-            .iter()
-            .filter(|expr| input_eq_properties.is_expr_constant(expr).is_none())
-            .count();
-        let mut input_order_mode = if indices.len() == num_non_constant_groupby_exprs
-            && !indices.is_empty()
-            && group_by.groups.len() == 1
-        {
-            InputOrderMode::Sorted
-        } else if !indices.is_empty() {
-            InputOrderMode::PartiallySorted(indices)
-        } else {
-            InputOrderMode::Linear
-        };
-
-        // Input order mode is also used to advertise plan output ordering, grouping
-        // sets handling, and partial reduce aggregation can't promise that.
-        if group_by.has_grouping_set() || mode == AggregateMode::PartialReduce {
-            input_order_mode = InputOrderMode::Linear;
-        }
-
-        // construct a map from the input expression to the output expression of the Aggregation group by
-        let group_expr_mapping =
-            ProjectionMapping::try_new(group_by.expr.clone(), &input.schema())?;
-
-        let cache = if group_by.has_grouping_set() {
-            Self::compute_grouping_set_properties(&input, Arc::clone(&schema))
-        } else {
-            Self::compute_properties(
-                &input,
-                Arc::clone(&schema),
-                &group_expr_mapping,
-                group_by.is_true_no_grouping(),
-                &mode,
-                &input_order_mode,
-                aggr_expr.as_ref(),
-            )?
-        };
-
-        let mut exec = AggregateExec {
-            mode,
-            group_by,
-            aggr_expr: aggr_expr.into(),
-            filter_expr,
-            input,
-            schema,
-            input_schema,
-            metrics: ExecutionPlanMetricsSet::new(),
-            required_input_ordering,
-            limit_options: None,
-            input_order_mode,
-            cache: Arc::new(cache),
-            dynamic_filter: None,
-        };
-
-        exec.init_dynamic_filter();
-
-        Ok(exec)
+        Self::builder(mode, input)
+            .with_group_by(group_by)
+            .with_aggr_exprs(aggr_expr)
+            .with_filter_exprs(filter_expr)
+            .with_input_schema(input_schema)
+            .with_output_schema(schema)
+            .build()
     }
 
     /// Aggregation mode (full, partial)
@@ -1116,12 +1046,25 @@ impl AggregateExec {
     }
 
     /// Set the limit options for this AggExec
+    #[doc(hidden)]
+    #[deprecated(
+        since = "56.0.0",
+        note = "use `AggregateExec::to_builder().with_limit_options(..).build()` instead"
+    )]
     pub fn with_limit_options(mut self, limit_options: Option<LimitOptions>) -> Self {
         self.limit_options = limit_options;
         self
     }
 
     /// Get the limit options (if set)
+    ///
+    /// Set them with
+    /// [`to_builder().with_limit_options(..)`](AggregateExec::to_builder).
+    ///
+    /// This is public for internal use only and is not part of the public API.
+    /// Unlike the setters it is not deprecated: it has no replacement, and
+    /// reading the limit of an aggregate is safe.
+    #[doc(hidden)]
     pub fn limit_options(&self) -> Option<LimitOptions> {
         self.limit_options
     }
@@ -2677,37 +2620,26 @@ impl AggregateExec {
             .collect::<Result<Vec<_>>>()?;
         let group_by =
             PhysicalGroupBy::new(group_expr, null_expr, groups, *has_grouping_set);
-        let aggregate = if let Some(schema) = schema {
-            let schema = SchemaRef::new(schema.try_into()?);
-            AggregateExec::try_new_with_schema(
-                mode,
-                group_by,
-                aggr_expr,
-                filter_expr,
-                input,
-                Arc::clone(&input_schema),
-                schema,
-            )
-        } else {
-            AggregateExec::try_new(
-                mode,
-                group_by,
-                aggr_expr,
-                filter_expr,
-                input,
-                Arc::clone(&input_schema),
-            )
-        }?;
-        let aggregate = if let Some(limit) = limit {
-            let fetch = usize_from_wire(limit.limit, "AggregateExec", "limit")?;
-            let options = match limit.descending {
-                Some(descending) => LimitOptions::new_with_order(fetch, descending),
-                None => LimitOptions::new(fetch),
-            };
-            aggregate.with_limit_options(Some(options))
-        } else {
-            aggregate
+        let limit_options = match limit {
+            Some(limit) => {
+                let fetch = usize_from_wire(limit.limit, "AggregateExec", "limit")?;
+                Some(match limit.descending {
+                    Some(descending) => LimitOptions::new_with_order(fetch, descending),
+                    None => LimitOptions::new(fetch),
+                })
+            }
+            None => None,
         };
+        let mut builder = AggregateExec::builder(mode, input)
+            .with_group_by(group_by)
+            .with_aggr_exprs(aggr_expr)
+            .with_filter_exprs(filter_expr)
+            .with_input_schema(Arc::clone(&input_schema))
+            .with_limit_options(limit_options);
+        if let Some(schema) = schema {
+            builder = builder.with_output_schema(SchemaRef::new(schema.try_into()?));
+        }
+        let aggregate = builder.build()?;
         let aggregate = if let Some(dynamic_filter) = dynamic_filter {
             let dynamic_filter =
                 ctx.decode_expr(dynamic_filter, input_schema.as_ref())?;
@@ -4445,15 +4377,11 @@ mod tests {
             None,
         )?;
         let partial_aggregate = Arc::new(
-            AggregateExec::try_new(
-                AggregateMode::Partial,
-                group_by.clone(),
-                vec![],
-                vec![],
-                partial_input,
-                Arc::clone(&schema),
-            )?
-            .with_limit_options(Some(LimitOptions::new(2))),
+            AggregateExec::builder(AggregateMode::Partial, partial_input)
+                .with_group_by(group_by.clone())
+                .with_input_schema(Arc::clone(&schema))
+                .with_limit_options(LimitOptions::new(2))
+                .build()?,
         );
 
         let partial_stream = partial_aggregate.execute_typed(0, &task_ctx)?;
@@ -4486,15 +4414,11 @@ mod tests {
         let final_input =
             TestMemoryExec::try_new_exec(&[input_batches], Arc::clone(&schema), None)?;
         let final_aggregate = Arc::new(
-            AggregateExec::try_new(
-                AggregateMode::Final,
-                group_by.as_final(),
-                vec![],
-                vec![],
-                final_input,
-                Arc::clone(&schema),
-            )?
-            .with_limit_options(Some(LimitOptions::new(2))),
+            AggregateExec::builder(AggregateMode::Final, final_input)
+                .with_group_by(group_by.as_final())
+                .with_input_schema(Arc::clone(&schema))
+                .with_limit_options(LimitOptions::new(2))
+                .build()?,
         );
 
         let final_stream = final_aggregate.execute_typed(0, &task_ctx)?;
@@ -6953,20 +6877,21 @@ mod tests {
         let input = Arc::new(StatisticsExec::new(stats, (**schema).clone()))
             as Arc<dyn ExecutionPlan>;
 
-        let mut agg = AggregateExec::try_new(
-            mode,
-            group_by,
-            vec![count_a_aggregate(schema)?],
-            vec![None],
-            input,
-            Arc::clone(schema),
-        )?;
+        // A limit is only ever pushed into an aggregate that can execute it.
+        // Without a MIN/MAX aggregate to order by, that means a `SELECT
+        // DISTINCT`-style aggregate with no aggregate expressions.
+        let aggr_exprs = if limit.is_some() {
+            vec![]
+        } else {
+            vec![count_a_aggregate(schema)?]
+        };
 
-        if let Some(limit) = limit {
-            agg = agg.with_limit_options(Some(limit));
-        }
-
-        Ok(agg)
+        AggregateExec::builder(mode, input)
+            .with_group_by(group_by)
+            .with_aggr_exprs(aggr_exprs)
+            .with_input_schema(Arc::clone(schema))
+            .with_limit_options(limit)
+            .build()
     }
 
     fn simple_group_by(schema: &SchemaRef, cols: &[&str]) -> PhysicalGroupBy {

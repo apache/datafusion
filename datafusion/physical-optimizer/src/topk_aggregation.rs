@@ -106,10 +106,12 @@ impl TopKAggregation {
         }
 
         // We found what we want: clone, copy the limit down, and return modified node
-        let new_aggr = AggregateExec::with_new_limit_options(
-            aggr,
-            Some(LimitOptions::new_with_order(limit, order_desc)),
-        );
+        let new_aggr = aggr
+            .to_builder()
+            .with_limit_options(LimitOptions::new_with_order(limit, order_desc))
+            .build()
+            // the aggregate cannot execute the limit: leave the plan alone
+            .ok()?;
         Some(Arc::new(new_aggr))
     }
 
