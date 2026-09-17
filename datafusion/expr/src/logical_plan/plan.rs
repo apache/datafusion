@@ -2109,6 +2109,7 @@ impl LogicalPlan {
                         projection,
                         filters,
                         fetch,
+                        offset,
                         ..
                     }) => {
                         let projected_fields = match projection {
@@ -2174,6 +2175,10 @@ impl LogicalPlan {
 
                         if let Some(n) = fetch {
                             write!(f, ", fetch={n}")?;
+                        }
+
+                        if let Some(n) = offset {
+                            write!(f, ", offset={n}")?;
                         }
 
                         Ok(())
@@ -3136,7 +3141,11 @@ pub struct TableScan {
     /// surrounding plan (e.g. Min/Max for sort keys).
     ///
     /// A [`BTreeSet`], not a `Vec` to keep the resulting plan deterministic.
-    pub statistics_requests: BTreeSet<StatisticsRequest>,
+    ///
+    /// Boxed to keep this rarely-populated field from growing every
+    /// `TableScan` (and thus `LogicalPlan`) by its own size; see
+    /// `test_size_of_logical_plan`.
+    pub statistics_requests: Box<BTreeSet<StatisticsRequest>>,
 }
 
 impl Debug for TableScan {
@@ -3241,7 +3250,8 @@ pub struct TableScanBuilder {
     filters: Vec<Expr>,
     fetch: Option<usize>,
     offset: Option<usize>,
-    statistics_requests: BTreeSet<StatisticsRequest>,
+    #[expect(clippy::box_collection)]
+    statistics_requests: Box<BTreeSet<StatisticsRequest>>,
 }
 
 impl TableScanBuilder {
@@ -3257,7 +3267,7 @@ impl TableScanBuilder {
             filters: vec![],
             fetch: None,
             offset: None,
-            statistics_requests: BTreeSet::new(),
+            statistics_requests: Box::default(),
         }
     }
 
@@ -3291,7 +3301,7 @@ impl TableScanBuilder {
         mut self,
         statistics_requests: BTreeSet<StatisticsRequest>,
     ) -> Self {
-        self.statistics_requests = statistics_requests;
+        self.statistics_requests = Box::new(statistics_requests);
         self
     }
 
@@ -6424,7 +6434,7 @@ mod tests {
             filters: vec![],
             fetch: None,
             offset: None,
-            statistics_requests: BTreeSet::new(),
+            statistics_requests: Box::default(),
         }));
         let col = schema.field_names()[0].clone();
 
@@ -6456,7 +6466,7 @@ mod tests {
             filters: vec![],
             fetch: None,
             offset: None,
-            statistics_requests: BTreeSet::new(),
+            statistics_requests: Box::default(),
         }));
         let col = schema.field_names()[0].clone();
 

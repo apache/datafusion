@@ -158,7 +158,7 @@ mod tests {
     };
     use arrow::{compute::SortOptions, record_batch::RecordBatch};
     use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
-    use datafusion_catalog::TableProvider;
+    use datafusion_catalog::{ScanArgs, TableProvider};
     use datafusion_catalog_listing::{
         ListingOptions, ListingTable, ListingTableConfig, SchemaSource,
     };
@@ -291,9 +291,13 @@ mod tests {
         let table = load_table(&ctx, "alltypes_plain.parquet").await?;
         let projection = None;
         let exec = table
-            .scan(&ctx.state(), projection, &[], None)
+            .scan_with_args(
+                &ctx.state(),
+                ScanArgs::default().with_projection(projection),
+            )
             .await
-            .expect("Scan table");
+            .expect("Scan table")
+            .into_inner();
 
         assert_eq!(exec.children().len(), 0);
         assert_eq!(exec.output_partitioning().partition_count(), 1);
@@ -311,6 +315,47 @@ mod tests {
                 .total_byte_size,
             Precision::Absent,
         );
+
+        Ok(())
+    }
+
+    #[cfg(feature = "parquet")]
+    #[tokio::test]
+    async fn scan_with_args_offset_skips_correct_rows() -> Result<()> {
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new()
+                .with_collect_statistics(true)
+                .with_target_partitions(1),
+        );
+
+        let table = load_table(&ctx, "alltypes_plain.parquet").await?;
+
+        // Full scan (no offset) establishes the expected row order.
+        let full_exec = table
+            .scan_with_args(&ctx.state(), ScanArgs::default())
+            .await?
+            .into_inner();
+        let full_batches = collect(full_exec, ctx.task_ctx()).await?;
+        let full =
+            arrow::compute::concat_batches(&full_batches[0].schema(), &full_batches)?;
+        assert_eq!(full.num_rows(), 8);
+        let expected = full.slice(2, 3);
+
+        // `LIMIT 3 OFFSET 2` should return exactly rows [2, 5), in order —
+        // not just the first 3 rows.
+        let offset_exec = table
+            .scan_with_args(
+                &ctx.state(),
+                ScanArgs::default().with_limit(Some(3)).with_offset(Some(2)),
+            )
+            .await?
+            .into_inner();
+        let offset_batches = collect(offset_exec, ctx.task_ctx()).await?;
+        let actual =
+            arrow::compute::concat_batches(&offset_batches[0].schema(), &offset_batches)?;
+
+        assert_eq!(actual.num_rows(), 3);
+        assert_eq!(batches_to_string(&[expected]), batches_to_string(&[actual]));
 
         Ok(())
     }
@@ -459,9 +504,13 @@ mod tests {
         let filter = Expr::not_eq(col("p1"), lit("v1"));
 
         let scan = table
-            .scan(&ctx.state(), None, &[filter], None)
+            .scan_with_args(
+                &ctx.state(),
+                ScanArgs::default().with_filters(Some(&[filter])),
+            )
             .await
-            .expect("Empty execution plan");
+            .expect("Empty execution plan")
+            .into_inner();
 
         assert!(scan.is::<EmptyExec>());
         assert_eq!(
@@ -1427,7 +1476,10 @@ mod tests {
             )]),
         )?;
 
-        let scan = table.scan(&ctx.state(), None, &[], None).await?;
+        let scan = table
+            .scan_with_args(&ctx.state(), ScanArgs::default())
+            .await?
+            .into_inner();
         assert_eq!(scan.output_partitioning(), &expected_output_partitioning);
 
         Ok(())
@@ -1458,7 +1510,10 @@ mod tests {
             Schema::new(vec![Field::new("a", DataType::Int32, false)]),
         )?;
 
-        let err = table.scan(&ctx.state(), None, &[], None).await.unwrap_err();
+        let err = table
+            .scan_with_args(&ctx.state(), ScanArgs::default())
+            .await
+            .unwrap_err();
         assert_contains!(
             err.to_string(),
             "Range output partitioning split point 0 value 0 with type Utf8 cannot be represented exactly as ordering expression type Int32"
@@ -1497,7 +1552,10 @@ mod tests {
             )]),
         )?;
 
-        let err = table.scan(&ctx.state(), None, &[], None).await.unwrap_err();
+        let err = table
+            .scan_with_args(&ctx.state(), ScanArgs::default())
+            .await
+            .unwrap_err();
         assert_contains!(
             err.to_string(),
             "Range output partitioning split point 0 value 0 with type Timestamp(ns) cannot be represented exactly as ordering expression type Timestamp(s)"
@@ -1540,7 +1598,10 @@ mod tests {
             Schema::new(vec![Field::new("a", DataType::Boolean, false)]),
         )?;
 
-        let unfiltered = table.scan(&ctx.state(), None, &[], None).await?;
+        let unfiltered = table
+            .scan_with_args(&ctx.state(), ScanArgs::default())
+            .await?
+            .into_inner();
         assert_eq!(
             unfiltered.output_partitioning(),
             &expected_output_partitioning
@@ -1568,7 +1629,13 @@ mod tests {
             ]
         );
 
-        let filtered = table.scan(&ctx.state(), None, &[filter], None).await?;
+        let filtered = table
+            .scan_with_args(
+                &ctx.state(),
+                ScanArgs::default().with_filters(Some(&[filter])),
+            )
+            .await?
+            .into_inner();
         assert_eq!(
             filtered.output_partitioning(),
             &expected_output_partitioning
@@ -1648,7 +1715,10 @@ mod tests {
 
         let table_default = ListingTable::try_new(config_default)?;
 
-        let exec_default = table_default.scan(&state, None, &[], None).await?;
+        let exec_default = table_default
+            .scan_with_args(&state, ScanArgs::default())
+            .await?
+            .into_inner();
         assert_eq!(
             StatisticsContext::new()
                 .compute(exec_default.as_ref(), &StatisticsArgs::new())?
@@ -1674,7 +1744,10 @@ mod tests {
             .with_schema(schema_disabled);
         let table_disabled = ListingTable::try_new(config_disabled)?;
 
-        let exec_disabled = table_disabled.scan(&state, None, &[], None).await?;
+        let exec_disabled = table_disabled
+            .scan_with_args(&state, ScanArgs::default())
+            .await?
+            .into_inner();
         assert_eq!(
             StatisticsContext::new()
                 .compute(exec_disabled.as_ref(), &StatisticsArgs::new())?
@@ -1698,7 +1771,10 @@ mod tests {
             .with_schema(schema_enabled);
         let table_enabled = ListingTable::try_new(config_enabled)?;
 
-        let exec_enabled = table_enabled.scan(&state, None, &[], None).await?;
+        let exec_enabled = table_enabled
+            .scan_with_args(&state, ScanArgs::default())
+            .await?
+            .into_inner();
         assert_eq!(
             StatisticsContext::new()
                 .compute(exec_enabled.as_ref(), &StatisticsArgs::new())?
@@ -1785,7 +1861,9 @@ mod tests {
         let table = ListingTable::try_new(config)?;
 
         // The scan should work correctly
-        let scan_result = table.scan(&ctx.state(), None, &[], None).await;
+        let scan_result = table
+            .scan_with_args(&ctx.state(), ScanArgs::default())
+            .await;
         assert!(scan_result.is_ok(), "Scan should succeed");
 
         // Verify file listing works

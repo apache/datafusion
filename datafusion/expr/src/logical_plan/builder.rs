@@ -491,7 +491,14 @@ impl LogicalPlanBuilder {
         projection: Option<Vec<usize>>,
         filters: Vec<Expr>,
     ) -> Result<Self> {
-        Self::scan_with_filters_inner(table_name, table_source, projection, filters, None, None)
+        Self::scan_with_filters_inner(
+            table_name,
+            table_source,
+            projection,
+            filters,
+            None,
+            None,
+        )
     }
 
     /// Convert a table provider into a builder with a TableScan with filter and fetch

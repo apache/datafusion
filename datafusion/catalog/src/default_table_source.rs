@@ -70,6 +70,10 @@ impl TableSource for DefaultTableSource {
         self.table_provider.supports_filters_pushdown(filter)
     }
 
+    fn supports_offset_pushdown(&self) -> bool {
+        self.table_provider.supports_offset_pushdown()
+    }
+
     fn get_logical_plan(&'_ self) -> Option<Cow<'_, datafusion_expr::LogicalPlan>> {
         self.table_provider.get_logical_plan()
     }

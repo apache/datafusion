@@ -27,7 +27,7 @@ mod tests {
     use arrow::error::ArrowError;
     use arrow::record_batch::RecordBatch;
     use arrow_schema::SchemaRef;
-    use datafusion_catalog::TableProvider;
+    use datafusion_catalog::{ScanArgs, TableProvider};
     use datafusion_common::{Constraint, Constraints, DataFusionError, Result};
     use datafusion_expr::LogicalPlanBuilder;
     use datafusion_expr::dml::InsertOp;
@@ -60,8 +60,12 @@ mod tests {
 
         // scan with projection
         let exec = provider
-            .scan(&session_ctx.state(), Some(&[2, 1]), &[], None)
-            .await?;
+            .scan_with_args(
+                &session_ctx.state(),
+                ScanArgs::default().with_projection(Some(&[2, 1])),
+            )
+            .await?
+            .into_inner();
 
         let mut it = exec.execute(0, task_ctx)?;
         let batch2 = it.next().await.unwrap()?;
@@ -94,7 +98,10 @@ mod tests {
 
         let provider = MemTable::try_new(schema, vec![vec![batch]])?;
 
-        let exec = provider.scan(&session_ctx.state(), None, &[], None).await?;
+        let exec = provider
+            .scan_with_args(&session_ctx.state(), ScanArgs::default())
+            .await?
+            .into_inner();
         let mut it = exec.execute(0, task_ctx)?;
         let batch1 = it.next().await.unwrap()?;
         assert_eq!(3, batch1.schema().fields().len());
@@ -178,7 +185,10 @@ mod tests {
         let projection: Vec<usize> = vec![0, 4];
 
         match provider
-            .scan(&session_ctx.state(), Some(&projection), &[], None)
+            .scan_with_args(
+                &session_ctx.state(),
+                ScanArgs::default().with_projection(Some(&projection)),
+            )
             .await
         {
             Err(DataFusionError::ArrowError(err, _)) => match err.as_ref() {
@@ -305,7 +315,10 @@ mod tests {
         let provider =
             MemTable::try_new(Arc::new(merged_schema), vec![vec![batch1, batch2]])?;
 
-        let exec = provider.scan(&session_ctx.state(), None, &[], None).await?;
+        let exec = provider
+            .scan_with_args(&session_ctx.state(), ScanArgs::default())
+            .await?
+            .into_inner();
         let mut it = exec.execute(0, task_ctx)?;
         let batch1 = it.next().await.unwrap()?;
         assert_eq!(3, batch1.schema().fields().len());

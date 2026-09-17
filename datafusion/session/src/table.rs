@@ -185,11 +185,10 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     /// As noted above, columns referenced only by pushed-down filters may be
     /// absent from `projection`.
     ///
-    /// # Deprecation
+    /// # Note
     ///
-    /// Deprecated in favour of [`TableProvider::scan_with_args`] that brings more arguments,
+    /// Overriding [`TableProvider::scan_with_args`] will give you access to more arguments,
     /// e.g. [`ScanArgs::offset`]
-    #[deprecated(since = "56.0.0", note = "Please use [`TableProvider::scan_with_args`] instead")]
     async fn scan(
         &self,
         state: &dyn Session,
@@ -228,6 +227,10 @@ pub trait TableProvider: Any + Debug + Sync + Send {
         'life1: 'async_trait,
         Self: 'async_trait,
     {
+        // Note: this bridge cannot honor `args.offset()`, since `scan` has no
+        // offset parameter. This is exactly why `supports_offset_pushdown`
+        // defaults to `false`: only providers that override `scan_with_args`
+        // directly can honor an offset.
         let plan = self.scan(
             state,
             args.projection(),
@@ -235,6 +238,19 @@ pub trait TableProvider: Any + Debug + Sync + Send {
             args.limit(),
         );
         Box::pin(async move { Ok(plan.await?.into()) })
+    }
+
+    /// Tests whether this table provider can guarantee that a scan built via
+    /// [`Self::scan_with_args`] omits *exactly* the first [`ScanArgs::offset`]
+    /// rows it would otherwise have produced.
+    ///
+    /// Returning `true` is a firm guarantee, not a hint: a caller that
+    /// pushes a skip into `ScanArgs::offset` may rely on it to avoid
+    /// re-applying the same skip above the scan. Returning `false` (the
+    /// default) means `ScanArgs::offset` is ignored or only partially
+    /// honored, so callers must not assume rows were skipped.
+    fn supports_offset_pushdown(&self) -> bool {
+        false
     }
 
     /// Specify if DataFusion should provide filter expressions to the
