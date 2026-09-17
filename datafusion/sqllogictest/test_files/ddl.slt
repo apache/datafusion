@@ -377,6 +377,10 @@ SELECT * FROM new_table
 statement ok
 DROP TABLE new_table;
 
+# Select into only supports a single table name target
+statement error DataFusion error: This feature is not implemented: SELECT INTO only supports a single table name target
+SELECT * INTO new_table, other_table FROM test_table
+
 # Create table as without alias names of window aggregates
 statement ok
 CREATE TABLE new_table AS SELECT SUM(c1) OVER(ORDER BY c2), c2, c3 FROM test_table
@@ -845,6 +849,18 @@ CREATE EXTERNAL TEMPORARY TABLE tty STORED as ARROW LOCATION '../datasource-arro
 
 statement error DataFusion error: This feature is not implemented: Temporary views not supported
 CREATE TEMPORARY VIEW y AS VALUES (1,2,3);
+
+statement error DataFusion error: This feature is not implemented: UNLOGGED tables not supported
+CREATE UNLOGGED TABLE foo (x int);
+
+statement error DataFusion error: This feature is not implemented: MULTISET tables not supported
+CREATE MULTISET TABLE foo (x int);
+
+statement error DataFusion error: This feature is not implemented: WITH \[NO\] DATA not supported
+CREATE TABLE foo AS SELECT 1 WITH NO DATA;
+
+statement error DataFusion error: Error during planning: Exclude constraints are not currently supported
+CREATE TABLE foo (x int, EXCLUDE USING gist (x WITH =));
 
 query error DataFusion error: Schema error: No field named a\.
 EXPLAIN CREATE TABLE t(a int) AS VALUES (a + a);

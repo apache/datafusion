@@ -17,9 +17,23 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This file defines centralized tool versions used by CI and development scripts.
-# It is intended to be sourced by other scripts and should not be executed directly.
+# Detects unused dependencies with `cargo machete`, the same way the
+# "Detect Unused Dependencies" job does.
 
-PRETTIER_VERSION="2.7.1"
-LYCHEE_VERSION="0.23.0"
-CARGO_MACHETE_VERSION="0.9"
+set -euo pipefail
+
+SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+
+source "${SCRIPT_DIR}/utils/tool_versions.sh"
+
+if ! command -v cargo-machete &> /dev/null; then
+  echo "[${SCRIPT_NAME}] cargo-machete is required. Install it with: cargo install cargo-machete --locked --version ^${CARGO_MACHETE_VERSION}" >&2
+  exit 1
+fi
+
+cd "${ROOT_DIR}"
+
+echo "[${SCRIPT_NAME}] \`cargo machete --with-metadata\`"
+cargo machete --with-metadata

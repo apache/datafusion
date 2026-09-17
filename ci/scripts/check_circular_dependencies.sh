@@ -17,9 +17,18 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This file defines centralized tool versions used by CI and development scripts.
-# It is intended to be sourced by other scripts and should not be executed directly.
+# Checks for circular dependencies between DataFusion crates with
+# `dev/depcheck`, the same way the "Circular Dependency Check" job does.
 
-PRETTIER_VERSION="2.7.1"
-LYCHEE_VERSION="0.23.0"
-CARGO_MACHETE_VERSION="0.9"
+set -euo pipefail
+
+SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+
+# depcheck is outside the root workspace and finds the root manifest from its
+# own directory, so run Cargo from there.
+cd "${ROOT_DIR}/dev/depcheck"
+
+echo "[${SCRIPT_NAME}] \`cargo run --locked\` in dev/depcheck"
+cargo run --locked
