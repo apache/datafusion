@@ -19,11 +19,12 @@
 //! and assert identical results.
 //!
 //! One test per operator [`Chain`], each running the chain over the cross
-//! product of the other axes: the group [`Keys`] (one per `GroupValues`
-//! implementation), the [`Aggregates`], the source [`Order`], the group
-//! [`Cardinality`], the [`Memory`] budget and whether the skip-partial probe
-//! may fire. Only the combinations that cannot be planned are left out, see
-//! [`shapes`].
+//! product of the other axes:
+//! - The group [`Keys`] (single column with specific types, multiple columns, or fallback implementation)
+//! - The [`Aggregates`] can be no aggregates or multiple aggregates that both need to track uniqueness and not (so more memory will be used),
+//! - The source whether it is ordered by all keys, subset, or none [`Order`].
+//! - The group [`Cardinality`] too test different memory and spill behavior
+//! - The [`Memory`] budget - whether it is limited or not
 
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
@@ -81,61 +82,20 @@ use context::*;
 use data::*;
 use plan::*;
 
-// What is tested
-// ==============
-//
 // Every test below is one physical plan shape, an `AggregateExec` chain, run
-// over every combination of the axes listed in its `ChainTest`. Each run must
-// return the same rows as the plain single-stage aggregate `SINGLE`. To test
-// one case, narrow the lists in place. `chain` lists the operators bottom-up,
-// source first; the doc comment shows the same plan as DataFusion prints it.
+// over the same table for every combination of the axes in its `ChainTest`:
+// which `GROUP BY` (one per `GroupValues` implementation), which aggregates,
+// how the source is ordered and how many groups it has, how much memory the
+// pool allows, and whether the skip-partial probe may fire. Every run must
+// return the same rows as the plain single-stage aggregate `SINGLE`, and
+// `assertions.rs` checks along the way that the plan was built as intended,
+// that nothing runs out of memory or hangs, and that spilling and the
+// skip-partial probe happen exactly where they may.
 //
-// The table (`data.rs`), 32K rows, generated from a fixed seed:
-//
-//   k1 Int64, k2 Int64        two-column key, k1 alone has fewer distinct
-//                             values than (k1, k2)
-//   v  Int64                  the aggregated value, -1000..1000
-//   b  Boolean                one column per `GroupValues` implementation,
-//   s  Utf8                   each with one distinct value per (k1, k2)
-//   sv Utf8View               group (Boolean: two)
-//   p  Int64
-//   st Struct<list: List<Int64>, num: Int64>
-//
-// Every key column has about 3% nulls. `cardinalities` is the number of
-// groups: 32K (one row per group), 1K, 16 or 2.
-//
-// `group_by` picks the query, one per `GroupValues` implementation:
-//
-//   Keys::None       SELECT <aggs> FROM t
-//   Keys::TwoInts    SELECT k1, k2, <aggs> FROM t GROUP BY k1, k2   -- Column
-//   Keys::Boolean    SELECT b,  <aggs> FROM t GROUP BY b            -- Boolean
-//   Keys::Bytes      SELECT s,  <aggs> FROM t GROUP BY s            -- Bytes
-//   Keys::BytesView  SELECT sv, <aggs> FROM t GROUP BY sv           -- BytesView
-//   Keys::Primitive  SELECT p,  <aggs> FROM t GROUP BY p            -- Primitive
-//   Keys::Mixed      SELECT b, s, sv, p, <aggs> FROM t GROUP BY b, s, sv, p
-//   Keys::Struct     SELECT st, <aggs> FROM t GROUP BY st           -- row fallback
-//
-// `aggregates` picks <aggs>:
-//
-//   Aggregates::All   count(v), count(DISTINCT v), sum(v), avg(v), min(v), max(v)
-//   Aggregates::None  nothing, as in SELECT DISTINCT keys
-//   Aggregates::Max   max(v) alone, the one aggregate the TopK stream supports
-//
-// TopK chains add LIMIT 64K, above any group count, so all groups survive.
-//
-// `orders` arranges the source: shuffled and round-robin over the partitions,
-// or sorted by the first key or by all keys with each partition sorted.
-// `memory` is an unlimited pool or a 4 MB one too small for a 32K-group
-// table. Combinations a key set cannot take, such as sorting struct keys,
-// are skipped in `ChainTest::cases`; combinations a chain cannot run panic
-// there.
-//
-// Per case, besides the rows matching `SINGLE`, the test asserts
-// (`assertions.rs`) that the plan was built as intended (modes, input order
-// modes, partition counts), that nothing fails or hangs, in particular not
-// with out of memory, that only spill-capable stages spill, and that the
-// skip-partial probe fires exactly when it may. Per test, at least one case
-// must spill when the axes allow it, see `ChainTest::expects_spill`.
+// `chain` lists the operators bottom-up, source first; the doc comment shows
+// the same plan as DataFusion prints it. To run one case, narrow the lists
+// in place. The axes and their values are documented in `case_space.rs`, the
+// table in `data.rs`.
 
 /// The reference chain every other chain is compared against.
 const SINGLE: Chain = chain("single", &[Aggregate(Single)], 1);
