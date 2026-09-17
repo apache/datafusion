@@ -237,7 +237,7 @@ SELECT a FROM division_test WHERE a / 2::INT = 1::INT ORDER BY a DESC;
 3
 2
 
-# Widening Int32 to Int64 preserves the source type's upper bound.
+# Widening integer casts leave unbounded endpoints unbounded.
 statement ok
 SET datafusion.explain.physical_plan_only = true;
 
@@ -245,14 +245,15 @@ statement ok
 CREATE TABLE widening_input (a INT) AS
 VALUES (2147483647), (1), (2147483646), (2147483647);
 
-# The predicate implies a = Int32::MAX, so ORDER BY a needs no sort.
+# Without source-type bounds, interval inference conservatively retains the sort.
 query TT
 EXPLAIN SELECT a FROM widening_input
 WHERE CAST(a AS BIGINT) + 1 > 2147483647 ORDER BY a;
 ----
 physical_plan
-01)FilterExec: CAST(a@0 AS Int64) + 1 > 2147483647
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--FilterExec: CAST(a@0 AS Int64) + 1 > 2147483647
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 query I
 SELECT a FROM widening_input
