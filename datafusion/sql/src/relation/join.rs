@@ -15,13 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::expr::reject_window_functions;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{Column, Result, not_impl_err, plan_datafusion_err, plan_err};
+use datafusion_common::{
+    Column, HashMap, Result, not_impl_err, plan_datafusion_err, plan_err,
+};
 use datafusion_expr::{JoinType, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{
     Join, JoinConstraint, JoinOperator, ObjectName, TableFactor, TableWithJoins,
 };
 use std::collections::HashSet;
+
+const JOIN_ON_HELP: &str =
+    "Compute the window function in a subquery and join on its result";
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(crate) fn plan_table_with_joins(
@@ -126,7 +132,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         match constraint {
             JoinConstraint::On(sql_on) => {
+                let window_span = self.window_function_span(&sql_on, &HashMap::new());
                 let on = self.sql_to_expr(sql_on, &join_schema, planner_context)?;
+                reject_window_functions(&on, "JOIN ON", JOIN_ON_HELP, window_span)?;
                 LogicalPlanBuilder::from(left)
                     .asof_join_on(right, Some(on), match_condition)?
                     .build()
@@ -188,7 +196,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let join_schema = left.schema().join(right.schema())?;
                 // parse ON expression
                 self.warn_on_null_equality_predicate(&sql_expr);
+                let window_span = self.window_function_span(&sql_expr, &HashMap::new());
                 let expr = self.sql_to_expr(sql_expr, &join_schema, planner_context)?;
+                // A join condition is evaluated before window functions are
+                // computed, so they may not appear in it
+                reject_window_functions(&expr, "JOIN ON", JOIN_ON_HELP, window_span)?;
                 LogicalPlanBuilder::from(left)
                     .join_on(right, join_type, Some(expr))?
                     .build()

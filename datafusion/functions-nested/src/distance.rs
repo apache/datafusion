@@ -17,7 +17,7 @@
 
 //! [ScalarUDFImpl] definitions for array_distance function.
 
-use crate::utils::make_scalar_function;
+use crate::utils::{make_scalar_function, needs_norm_scale, norm_scale};
 use arrow::array::{Array, ArrayRef, Float64Array, OffsetSizeTrait};
 use arrow::datatypes::{
     DataType,
@@ -189,16 +189,33 @@ fn compute_array_distance(
         return exec_err!("Both arrays must have the same length");
     }
 
-    let sum_squares: f64 = values1
-        .iter()
-        .zip(values2.iter())
-        .map(|(v1, v2)| {
-            let diff = v1.unwrap_or(0.0) - v2.unwrap_or(0.0);
-            diff * diff
-        })
-        .sum();
+    let diffs = || {
+        values1
+            .values()
+            .iter()
+            .zip(values2.values().iter())
+            .map(|(v1, v2)| v1 - v2)
+    };
 
-    Ok(Some(sum_squares.sqrt()))
+    let sum_squares: f64 = diffs().map(|diff| diff * diff).sum();
+    if !needs_norm_scale(sum_squares, values1.len()) {
+        return Ok(Some(sum_squares.sqrt()));
+    }
+
+    let distance = match norm_scale(diffs()) {
+        Some(scale) => {
+            let scaled_sum_squares: f64 = diffs()
+                .map(|diff| {
+                    let scaled = diff * scale;
+                    scaled * scaled
+                })
+                .sum();
+            scaled_sum_squares.sqrt() / scale
+        }
+        None => sum_squares.sqrt(),
+    };
+
+    Ok(Some(distance))
 }
 
 /// Converts an array of any numeric type to a Float64Array.
