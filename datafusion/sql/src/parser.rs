@@ -381,8 +381,12 @@ pub struct DFParser<'a> {
     supports_explain_with_utility_options: bool,
 }
 
-/// Same as `sqlparser`
-const DEFAULT_RECURSION_LIMIT: usize = 50;
+/// Default recursion limit for SQL parsing. Higher than the `sqlparser` default
+/// (50) for backwards compatibility with older versions.
+///
+/// Newer `sqlparser` versions added recursion guards to more parse functions, so
+/// the same query consumes more depth than it used to.
+const DEFAULT_RECURSION_LIMIT: usize = 51;
 const DEFAULT_DIALECT: GenericDialect = GenericDialect {};
 
 /// Builder for [`DFParser`]
@@ -464,7 +468,7 @@ impl<'a, 'b> DFParserBuilder<'a, 'b> {
         self
     }
 
-    /// Adjust the recursion limit of sql parsing.  Defaults to 50
+    /// Adjust the recursion limit of sql parsing.  Defaults to 51
     pub fn with_recursion_limit(mut self, recursion_limit: usize) -> Self {
         self.recursion_limit = recursion_limit;
         self
