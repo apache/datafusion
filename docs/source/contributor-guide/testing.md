@@ -239,6 +239,21 @@ uv run python3 ci/scripts/check_asf_yaml_status_checks.py
 [pyyaml]: https://pypi.org/project/PyYAML/
 [uv]: https://docs.astral.sh/uv/
 
+## Security Audit
+
+`ci/scripts/security_audit.sh` runs `cargo audit` on the root `Cargo.lock` with
+the advisory exceptions that CI uses. `./dev/rust_lint.sh` runs it and installs
+[cargo-audit] if it is missing. To run the audit on its own:
+
+```shell
+./ci/scripts/security_audit.sh
+```
+
+The audit fetches the RustSec advisory database. A new advisory or a different
+`cargo-audit` version can change the result without any change to the repository.
+
+[cargo-audit]: https://github.com/rustsec/rustsec/blob/main/cargo-audit/README.md
+
 ## Benchmarks
 
 ### Criterion Benchmarks
