@@ -551,6 +551,10 @@ impl<'a> DFParquetMetadata<'a> {
                         file_metadata.schema_descr(),
                     ) {
                         Ok(stats_converter) => {
+                            // An omitted count must not become an exact zero in
+                            // file statistics used for pruning and aggregates.
+                            let stats_converter =
+                                stats_converter.with_missing_null_counts_as_zero(false);
                             let parquet_index = stats_converter.parquet_column_index();
                             if parquet_index.is_some_and(|index| {
                                 has_untrusted_min_max_order(
@@ -739,9 +743,9 @@ fn summarize_column_statistics(
 ) -> Result<()> {
     let parquet_index = stats_converter.parquet_column_index();
 
-    if let Some(max_acc) = &mut accumulators.max_accs[logical_schema_index] {
+    if accumulators.max_accs[logical_schema_index].is_some() {
         accumulators.is_max_value_exact[logical_schema_index] = summarize_bound(
-            max_acc,
+            &mut accumulators.max_accs[logical_schema_index],
             &stats_converter.row_group_maxes(row_groups_metadata)?,
             parquet_index,
             row_groups_metadata,
@@ -750,9 +754,9 @@ fn summarize_column_statistics(
         )?;
     }
 
-    if let Some(min_acc) = &mut accumulators.min_accs[logical_schema_index] {
+    if accumulators.min_accs[logical_schema_index].is_some() {
         accumulators.is_min_value_exact[logical_schema_index] = summarize_bound(
-            min_acc,
+            &mut accumulators.min_accs[logical_schema_index],
             &stats_converter.row_group_mins(row_groups_metadata)?,
             parquet_index,
             row_groups_metadata,
@@ -785,13 +789,41 @@ fn summarize_column_statistics(
 /// parquet statistics. `row_group_exactness` rebuilds the exactness as a Boolean
 /// array and is only called for the rare case where row groups disagree.
 fn summarize_bound<A: Accumulator>(
-    acc: &mut A,
+    acc: &mut Option<A>,
     values: &ArrayRef,
     parquet_index: Option<usize>,
     row_groups_metadata: &[RowGroupMetaData],
     is_exact: impl Fn(&ParquetStatistics) -> bool,
     row_group_exactness: impl FnOnce() -> Result<BooleanArray>,
 ) -> Result<Option<bool>> {
+    // A NULL converted bound can mean missing statistics, not just all-NULL
+    // data. Ignoring it in MIN/MAX would let another row group's exact endpoint
+    // incorrectly establish an exact bound for the whole file. Drop this bound
+    // unless the row group is empty or is proven to contain only NULLs.
+    if values.null_count() > 0
+        && parquet_index.is_some_and(|column_index| {
+            row_groups_metadata
+                .iter()
+                .enumerate()
+                .any(|(index, group)| {
+                    if values.is_valid(index) || group.num_rows() == 0 {
+                        return false;
+                    }
+                    let column = group.column(column_index);
+                    let all_null = column
+                        .statistics()
+                        .and_then(|stats| stats.null_count_opt())
+                        .is_some_and(|nulls| nulls == column.num_values() as u64);
+                    !all_null
+                })
+        })
+    {
+        *acc = None;
+        return Ok(None);
+    }
+    let Some(acc) = acc.as_mut() else {
+        return Ok(None);
+    };
     acc.update_batch(&[Arc::clone(values)])?;
 
     Ok(
@@ -1281,7 +1313,7 @@ mod tests {
         );
     }
 
-    mod ndv_tests {
+    mod statistics_tests {
         use super::*;
         use arrow::datatypes::Field;
         use parquet::basic::Type as PhysicalType;
@@ -1364,6 +1396,43 @@ mod tests {
             );
 
             ParquetMetaData::new(file_meta, row_groups)
+        }
+
+        #[test]
+        fn test_statistics_preserve_missing_null_counts() {
+            let schema_descr = create_schema_descr(1);
+            let arrow_schema = create_arrow_schema(1);
+            for (null_counts, expected) in [
+                (vec![None], Precision::Absent),
+                (vec![Some(0), None], Precision::Inexact(0)),
+                (vec![Some(2), None], Precision::Inexact(2)),
+                (vec![Some(0), Some(0)], Precision::Exact(0)),
+            ] {
+                let row_groups = null_counts
+                    .into_iter()
+                    .map(|null_count| {
+                        create_row_group_with_stats(
+                            &schema_descr,
+                            vec![Some(ParquetStatistics::int32(
+                                Some(1),
+                                Some(10),
+                                None,
+                                null_count,
+                                false,
+                            ))],
+                            10,
+                        )
+                    })
+                    .collect();
+                let metadata =
+                    create_parquet_metadata(Arc::clone(&schema_descr), row_groups);
+                let statistics = DFParquetMetadata::statistics_from_parquet_metadata(
+                    &metadata,
+                    &arrow_schema,
+                )
+                .unwrap();
+                assert_eq!(statistics.column_statistics[0].null_count, expected);
+            }
         }
 
         #[test]
@@ -1676,6 +1745,108 @@ mod tests {
                 result.column_statistics[2].distinct_count,
                 Precision::Exact(100)
             );
+        }
+
+        #[test]
+        fn test_min_max_require_complete_row_group_bounds() {
+            let known =
+                || ParquetStatistics::int32(Some(1), Some(3), None, Some(0), false);
+            let exact = |v| Precision::Exact(ScalarValue::Int32(Some(v)));
+            let cases = [
+                (None, 3, Precision::Absent, Precision::Absent),
+                (
+                    Some(ParquetStatistics::int32(
+                        None,
+                        Some(6),
+                        None,
+                        Some(0),
+                        false,
+                    )),
+                    3,
+                    Precision::Absent,
+                    exact(6),
+                ),
+                (
+                    Some(ParquetStatistics::int32(
+                        Some(4),
+                        None,
+                        None,
+                        Some(0),
+                        false,
+                    )),
+                    3,
+                    exact(1),
+                    Precision::Absent,
+                ),
+                (
+                    Some(ParquetStatistics::int32(None, None, None, None, false)),
+                    3,
+                    Precision::Absent,
+                    Precision::Absent,
+                ),
+                (
+                    Some(ParquetStatistics::int32(None, None, None, Some(2), false)),
+                    3,
+                    Precision::Absent,
+                    Precision::Absent,
+                ),
+                // Empty and proven all-NULL row groups do not contribute extrema.
+                (None, 0, exact(1), exact(3)),
+                (
+                    Some(ParquetStatistics::int32(None, None, None, Some(3), false)),
+                    3,
+                    exact(1),
+                    exact(3),
+                ),
+                (
+                    Some(ParquetStatistics::int32(
+                        Some(4),
+                        Some(6),
+                        None,
+                        Some(0),
+                        false,
+                    )),
+                    3,
+                    exact(1),
+                    exact(6),
+                ),
+            ];
+            for (other, rows, expected_min, expected_max) in cases {
+                for reverse in [false, true] {
+                    let schema_descr = create_schema_descr(1);
+                    let arrow_schema = create_arrow_schema(1);
+                    let mut groups = vec![
+                        create_row_group_with_stats(
+                            &schema_descr,
+                            vec![Some(known())],
+                            3,
+                        ),
+                        create_row_group_with_stats(
+                            &schema_descr,
+                            vec![other.clone()],
+                            rows,
+                        ),
+                    ];
+                    if reverse {
+                        groups.reverse();
+                    }
+                    let metadata = create_parquet_metadata(schema_descr, groups);
+                    let stats = DFParquetMetadata::statistics_from_parquet_metadata(
+                        &metadata,
+                        &arrow_schema,
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        stats.column_statistics[0].min_value, expected_min,
+                        "other={other:?}, rows={rows}, reverse={reverse}"
+                    );
+                    assert_eq!(
+                        stats.column_statistics[0].max_value, expected_max,
+                        "other={other:?}, rows={rows}, reverse={reverse}"
+                    );
+                    assert_eq!(stats.num_rows, Precision::Exact((3 + rows) as usize));
+                }
+            }
         }
 
         #[test]
