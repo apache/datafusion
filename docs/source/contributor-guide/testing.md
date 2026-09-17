@@ -223,8 +223,9 @@ bash ci/scripts/rust_docs.sh
 ## ASF Status Check Validation
 
 `ci/scripts/check_asf_yaml_status_checks.py` checks that every required status
-check in `.asf.yaml` matches a job in `.github/workflows`. `./dev/rust_lint.sh`
-runs it and needs `python3` with [PyYAML]. The [uv] workspace provides both:
+check in `.asf.yaml` matches a job in `.github/workflows`, and that `rust.yml`
+skips only its listed jobs on pushes to `main`. `./dev/rust_lint.sh` runs it
+and needs `python3` with [PyYAML]. The [uv] workspace provides both:
 
 ```shell
 uv run ./dev/rust_lint.sh
