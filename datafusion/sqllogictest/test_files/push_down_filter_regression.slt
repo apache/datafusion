@@ -644,7 +644,7 @@ drop table t2;
 # A filter on a volatile group key must stay above the aggregate. Below the
 # aggregate, the filter evaluates the key again and sees a different value.
 query TT
-EXPLAIN SELECT k, c FROM (SELECT random() < 0.5 AS k, count(*) AS c FROM generate_series(1, 10000) GROUP BY random() < 0.5) WHERE k;
+EXPLAIN SELECT k, c FROM (SELECT random() < 0.5 AS k, count(*) AS c FROM generate_series(1, 10000) GROUP BY 1) WHERE k;
 ----
 logical_plan
 01)Projection: random() < Float64(0.5) AS k, count(Int64(1)) AS c
