@@ -805,6 +805,21 @@ filter on <code class="docutils literal notranslate"><span class="pre">a&#64;0</
 </pre></div>
 </div>
 </section>
+<section id="default-datafusion-sql-parser-recursion-limit-raised-from-50-to-51">
+<h3>Default <code class="docutils literal notranslate"><span class="pre">datafusion.sql_parser.recursion_limit</span></code> raised from 50 to 51<a class="headerlink" href="#default-datafusion-sql-parser-recursion-limit-raised-from-50-to-51" title="Link to this heading">#</a></h3>
+<p>DataFusion now uses <code class="docutils literal notranslate"><span class="pre">sqlparser</span></code> 0.63.0, which adds recursion guards to more
+parse functions (for example, data type and <code class="docutils literal notranslate"><span class="pre">INTERVAL</span></code> parsing). As a result,
+the same SQL statement consumes slightly more of the parser recursion budget
+than it did with previous <code class="docutils literal notranslate"><span class="pre">sqlparser</span></code> versions. In particular, every expression
+now needs one additional level of depth.</p>
+<p>To avoid rejecting queries that previously parsed successfully, the default
+value of the <code class="docutils literal notranslate"><span class="pre">datafusion.sql_parser.recursion_limit</span></code> configuration option, and
+of <code class="docutils literal notranslate"><span class="pre">DFParserBuilder::with_recursion_limit</span></code>, has been raised from <code class="docutils literal notranslate"><span class="pre">50</span></code> to <code class="docutils literal notranslate"><span class="pre">51</span></code>.</p>
+<p>If you set <code class="docutils literal notranslate"><span class="pre">datafusion.sql_parser.recursion_limit</span></code> explicitly to a value close
+to the depth of your queries, you may see <code class="docutils literal notranslate"><span class="pre">RecursionLimitExceeded</span></code> errors after
+upgrading and should raise the limit accordingly.</p>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/25278">PR #25278</a> for details.</p>
+</section>
 <section id="ensure-distribution-is-deprecated-in-favour-of-ensure-distribution-with-stats">
 <h3><code class="docutils literal notranslate"><span class="pre">ensure_distribution</span></code> is deprecated in favour of <code class="docutils literal notranslate"><span class="pre">ensure_distribution_with_stats</span></code><a class="headerlink" href="#ensure-distribution-is-deprecated-in-favour-of-ensure-distribution-with-stats" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">datafusion_physical_optimizer::enforce_distribution::ensure_distribution</span></code> now
@@ -902,6 +917,7 @@ form, or pass a freshly constructed <code class="docutils literal notranslate"><
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#map-extract-element-at-return-an-empty-list-for-absent-keys"><code class="docutils literal notranslate"><span class="pre">map_extract</span></code> / <code class="docutils literal notranslate"><span class="pre">element_at</span></code> return an empty list for absent keys</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dataframe-from-columns-accepts-intoiterator"><code class="docutils literal notranslate"><span class="pre">DataFrame::from_columns</span></code> accepts <code class="docutils literal notranslate"><span class="pre">IntoIterator</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#physical-filter-pushdown-resolves-columns-by-position">Physical filter pushdown resolves columns by position</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#default-datafusion-sql-parser-recursion-limit-raised-from-50-to-51">Default <code class="docutils literal notranslate"><span class="pre">datafusion.sql_parser.recursion_limit</span></code> raised from 50 to 51</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ensure-distribution-is-deprecated-in-favour-of-ensure-distribution-with-stats"><code class="docutils literal notranslate"><span class="pre">ensure_distribution</span></code> is deprecated in favour of <code class="docutils literal notranslate"><span class="pre">ensure_distribution_with_stats</span></code></a></li>
 </ul>
 </li>
