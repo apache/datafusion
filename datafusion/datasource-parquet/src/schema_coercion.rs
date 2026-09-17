@@ -22,6 +22,16 @@
 //! These helpers are independent of the [`ParquetFormat`](crate::file_format::ParquetFormat)
 //! type and several have been re-exported at the crate root for use by
 //! callers outside the format implementation.
+//!
+//! # Binary to string coercion
+//!
+//! Coercing a binary file column to a string type makes the Parquet reader
+//! build the string array itself. It only validates UTF-8 for columns carrying
+//! the `UTF8` logical annotation, which such a column by definition does not,
+//! so invalid bytes surface as an invalid string array rather than an error.
+//! That is long-standing behaviour for top-level and struct fields; it is not
+//! extended to map children, whose positional matching is newer, so binary map
+//! values keep going through the validating cast instead.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -66,7 +76,8 @@ pub fn apply_file_schema_type_coercions(
     table_schema: &Schema,
     file_schema: &Schema,
 ) -> Option<Schema> {
-    let fields = coerce_fields_by_name(table_schema.fields(), file_schema.fields())?;
+    let fields =
+        coerce_fields_by_name(table_schema.fields(), file_schema.fields(), true)?;
     Some(Schema::new_with_metadata(
         fields,
         file_schema.metadata.clone(),
@@ -78,7 +89,11 @@ pub fn apply_file_schema_type_coercions(
 /// File fields with no counterpart in `table_fields` are kept unchanged and
 /// table fields missing from the file are ignored. Returns `None` if no field
 /// changed.
-fn coerce_fields_by_name(table_fields: &Fields, file_fields: &Fields) -> Option<Fields> {
+fn coerce_fields_by_name(
+    table_fields: &Fields,
+    file_fields: &Fields,
+    binary_to_string: bool,
+) -> Option<Fields> {
     // Create a mapping of table field names to their data types for fast lookup
     let table_types: HashMap<_, _> = table_fields
         .iter()
@@ -87,7 +102,7 @@ fn coerce_fields_by_name(table_fields: &Fields, file_fields: &Fields) -> Option<
 
     coerce_fields(file_fields, |_, field| {
         let table_type = table_types.get(field.name())?;
-        coerce_data_type(table_type, field.data_type())
+        coerce_data_type(table_type, field.data_type(), binary_to_string)
             .map(|new_type| field_with_new_type(field, new_type))
     })
 }
@@ -127,40 +142,53 @@ fn coerce_fields(
 
 /// Coerce `file_type` towards `table_type`, recursing into nested types.
 ///
+/// `binary_to_string` allows binary file types to be read as string types.
+/// Parquet only validates UTF-8 when the column carries the `UTF8` logical
+/// annotation, which a binary column by definition does not, so such a
+/// conversion hands back an unvalidated string array; see the module docs.
+///
 /// Returns the new type for the file field, or `None` if no transformation
 /// is needed (including when the two types are unrelated).
-fn coerce_data_type(table_type: &DataType, file_type: &DataType) -> Option<DataType> {
+fn coerce_data_type(
+    table_type: &DataType,
+    file_type: &DataType,
+    binary_to_string: bool,
+) -> Option<DataType> {
     use DataType::*;
     match (table_type, file_type) {
         // table schema uses string type, coerce the file schema to use string type
-        (Utf8, Binary | LargeBinary | BinaryView) => Some(Utf8),
+        (Utf8, Binary | LargeBinary | BinaryView) if binary_to_string => Some(Utf8),
         // table schema uses large string type, coerce the file schema to use large string type
-        (LargeUtf8, Binary | LargeBinary | BinaryView) => Some(LargeUtf8),
+        (LargeUtf8, Binary | LargeBinary | BinaryView) if binary_to_string => {
+            Some(LargeUtf8)
+        }
         // table schema uses string view type, coerce the file schema to use view type
-        (Utf8View, Binary | LargeBinary | BinaryView | Utf8 | LargeUtf8) => {
+        (Utf8View, Binary | LargeBinary | BinaryView) if binary_to_string => {
             Some(Utf8View)
         }
+        (Utf8View, Utf8 | LargeUtf8) => Some(Utf8View),
         (BinaryView, Binary | LargeBinary) => Some(BinaryView),
         // Struct children match by name
         (Struct(table_fields), Struct(file_fields)) => {
-            coerce_fields_by_name(table_fields, file_fields).map(Struct)
+            coerce_fields_by_name(table_fields, file_fields, binary_to_string).map(Struct)
         }
         // List-like children match by position, regardless of their names.
         // The container kind and FixedSizeList width always come from the file.
         (List(table_child), List(file_child)) => {
-            coerce_child(table_child, file_child).map(List)
+            coerce_child(table_child, file_child, binary_to_string).map(List)
         }
         (LargeList(table_child), LargeList(file_child)) => {
-            coerce_child(table_child, file_child).map(LargeList)
+            coerce_child(table_child, file_child, binary_to_string).map(LargeList)
         }
         (ListView(table_child), ListView(file_child)) => {
-            coerce_child(table_child, file_child).map(ListView)
+            coerce_child(table_child, file_child, binary_to_string).map(ListView)
         }
         (LargeListView(table_child), LargeListView(file_child)) => {
-            coerce_child(table_child, file_child).map(LargeListView)
+            coerce_child(table_child, file_child, binary_to_string).map(LargeListView)
         }
         (FixedSizeList(table_child, _), FixedSizeList(file_child, size)) => {
-            coerce_child(table_child, file_child).map(|child| FixedSizeList(child, *size))
+            coerce_child(table_child, file_child, binary_to_string)
+                .map(|child| FixedSizeList(child, *size))
         }
         // Map keys and values match by position: Parquet always names them
         // `key`/`value` while Arrow producers commonly use `keys`/`values`.
@@ -174,13 +202,26 @@ fn coerce_data_type(table_type: &DataType, file_type: &DataType) -> Option<DataT
 
 /// Coerce a single nested child field, keeping everything but its data type
 /// from `file_child`.
-fn coerce_child(table_child: &FieldRef, file_child: &FieldRef) -> Option<FieldRef> {
-    coerce_data_type(table_child.data_type(), file_child.data_type())
-        .map(|new_type| field_with_new_type(file_child, new_type))
+fn coerce_child(
+    table_child: &FieldRef,
+    file_child: &FieldRef,
+    binary_to_string: bool,
+) -> Option<FieldRef> {
+    coerce_data_type(
+        table_child.data_type(),
+        file_child.data_type(),
+        binary_to_string,
+    )
+    .map(|new_type| field_with_new_type(file_child, new_type))
 }
 
 /// Coerce the `entries` struct of a [`DataType::Map`], matching the key and
 /// value children by position.
+///
+/// Binary children are never read as strings here: matching by position newly
+/// reaches map children whose names differ, and turning those into unvalidated
+/// string arrays would be a regression over leaving them to the (validating)
+/// cast. See the module docs.
 fn coerce_map_entries(
     table_entries: &FieldRef,
     file_entries: &FieldRef,
@@ -195,7 +236,7 @@ fn coerce_map_entries(
     }
 
     let fields = coerce_fields(file_fields, |idx, file_child| {
-        coerce_child(&table_fields[idx], file_child)
+        coerce_child(&table_fields[idx], file_child, false)
     })?;
 
     Some(field_with_new_type(file_entries, DataType::Struct(fields)))
@@ -629,7 +670,7 @@ mod tests {
                     "key_value",
                     vec![
                         Field::new("key", DataType::Utf8, false),
-                        Field::new("value", DataType::Binary, true),
+                        Field::new("value", DataType::Utf8, true),
                     ],
                     false,
                 )
@@ -684,15 +725,18 @@ mod tests {
             "m",
             "entries",
             Field::new("keys", DataType::Utf8View, false),
-            Field::new("values", DataType::Utf8, true),
+            Field::new("values", DataType::Utf8View, true),
             false,
             true,
         )]);
+        // The key is matched by position and coerced to a view, while the
+        // binary value is left to the validating cast (see
+        // `coerce_map_entries`)
         let expected = Schema::new(vec![Field::new_map(
             "m",
             "key_value",
             Field::new("key", DataType::Utf8View, false),
-            Field::new("value", DataType::Utf8, true),
+            Field::new("value", DataType::Binary, true),
             false,
             true,
         )]);
@@ -717,6 +761,104 @@ mod tests {
         assert_eq!(
             apply_file_schema_type_coercions(&odd_table_schema, &file_schema),
             None
+        );
+    }
+
+    #[test]
+    fn nested_coercion_leaves_binary_map_children_to_the_validating_cast() {
+        use arrow::array::{
+            Array, ArrayRef, AsArray, BinaryBuilder, MapBuilder, MapFieldNames,
+            StringBuilder,
+        };
+        use arrow::record_batch::RecordBatch;
+        use bytes::Bytes;
+        use parquet::arrow::ArrowWriter;
+        use parquet::arrow::arrow_reader::{
+            ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
+        };
+        use parquet::arrow::arrow_writer::ArrowWriterOptions;
+
+        // A binary map value holding bytes that are not valid UTF-8. Reading it
+        // as a string would produce an invalid array, since the Parquet reader
+        // only validates columns annotated `UTF8`, so the value must be left
+        // binary for the (validating) cast to reject.
+        let parquet_names = MapFieldNames {
+            entry: "key_value".to_string(),
+            key: "key".to_string(),
+            value: "value".to_string(),
+        };
+        let mut builder = MapBuilder::new(
+            Some(parquet_names),
+            StringBuilder::new(),
+            BinaryBuilder::new(),
+        );
+        builder.keys().append_value("k1");
+        builder.values().append_value([0xff]);
+        builder.append(true).unwrap();
+        let batch =
+            RecordBatch::try_from_iter([("m", Arc::new(builder.finish()) as ArrayRef)])
+                .unwrap();
+
+        let mut bytes = Vec::new();
+        let mut writer = ArrowWriter::try_new_with_options(
+            &mut bytes,
+            batch.schema(),
+            ArrowWriterOptions::new().with_skip_arrow_metadata(true),
+        )
+        .unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let bytes = Bytes::from(bytes);
+
+        let file_schema = ParquetRecordBatchReaderBuilder::try_new(bytes.clone())
+            .unwrap()
+            .schema()
+            .clone();
+        let table_schema = Schema::new(vec![Field::new_map(
+            "m",
+            "entries",
+            Field::new("keys", DataType::Utf8View, false),
+            Field::new("values", DataType::Utf8View, true),
+            false,
+            true,
+        )]);
+
+        // The key is still coerced by position, the binary value is not
+        let coerced =
+            apply_file_schema_type_coercions(&table_schema, &file_schema).unwrap();
+        assert_eq!(
+            coerced.field(0).data_type(),
+            &DataType::Map(
+                Arc::new(Field::new_struct(
+                    "key_value",
+                    vec![
+                        Field::new("key", DataType::Utf8View, false),
+                        Field::new("value", DataType::Binary, true),
+                    ],
+                    false,
+                )),
+                false,
+            )
+        );
+
+        let mut reader = ParquetRecordBatchReaderBuilder::try_new_with_options(
+            bytes,
+            ArrowReaderOptions::new().with_schema(Arc::new(coerced)),
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+        let decoded = reader.next().unwrap().unwrap();
+        // The decoded batch is valid: the invalid bytes are still binary
+        decoded.column(0).to_data().validate_full().unwrap();
+        assert_eq!(
+            decoded
+                .column(0)
+                .as_map()
+                .values()
+                .as_binary::<i32>()
+                .value(0),
+            [0xff]
         );
     }
 
@@ -760,8 +902,7 @@ mod tests {
     #[test]
     fn nested_coercion_map_reader_produces_string_views() {
         use arrow::array::{
-            Array, ArrayRef, AsArray, BinaryBuilder, MapBuilder, MapFieldNames,
-            StringBuilder,
+            Array, ArrayRef, AsArray, MapBuilder, MapFieldNames, StringBuilder,
         };
         use arrow::record_batch::RecordBatch;
         use bytes::Bytes;
@@ -782,10 +923,10 @@ mod tests {
         let mut builder = MapBuilder::new(
             Some(parquet_names),
             StringBuilder::new(),
-            BinaryBuilder::new(),
+            StringBuilder::new(),
         );
         builder.keys().append_value("k1");
-        builder.values().append_value(b"v1");
+        builder.values().append_value("v1");
         builder.append(true).unwrap();
         builder.append(false).unwrap();
         let map = builder.finish();
@@ -823,7 +964,7 @@ mod tests {
                     "key_value",
                     vec![
                         Field::new("key", DataType::Utf8, false),
-                        Field::new("value", DataType::Binary, true),
+                        Field::new("value", DataType::Utf8, true),
                     ],
                     false,
                 )),
