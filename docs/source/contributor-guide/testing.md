@@ -255,6 +255,21 @@ The audit fetches the RustSec advisory database. A new advisory or a different
 
 [cargo-audit]: https://github.com/rustsec/rustsec/blob/main/cargo-audit/README.md
 
+## Large File Check
+
+`ci/scripts/check_large_files.sh` fails if any file committed between a base
+ref and a head ref is larger than 1.5 MB, the same check the "Large files PR
+check" workflow runs on pull requests. `./dev/rust_lint.sh` runs it against
+the merge base of `HEAD` and `origin/main`. To run the check on its own, or
+against a different range:
+
+```shell
+./ci/scripts/check_large_files.sh
+./ci/scripts/check_large_files.sh --base upstream/main --head my-branch
+```
+
+Only committed files are checked. Commit a change before running it.
+
 ## Dependency Checks
 
 CI runs two dependency checks, and `./dev/rust_lint.sh` runs both:
