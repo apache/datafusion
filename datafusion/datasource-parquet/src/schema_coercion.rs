@@ -765,6 +765,81 @@ mod tests {
     }
 
     #[test]
+    fn nested_coercion_map_entry_struct_children_match_by_name() {
+        // A map whose key and value are both structs: the two entry children
+        // are matched by position (the file's `key`/`value` take the types of
+        // the table's first/second entry child, whatever they are named),
+        // while the fields inside those structs go back to matching by name.
+        //
+        // Both structs put `shared` in a different position on each side, so a
+        // positional match inside them would coerce `file_only` instead, and a
+        // by-name match on the entries themselves would coerce nothing at all.
+        let struct_field =
+            |name: &str, first: (&str, DataType), second: (&str, DataType)| {
+                Field::new_struct(
+                    name,
+                    vec![
+                        Field::new(first.0, first.1, true),
+                        Field::new(second.0, second.1, true),
+                    ],
+                    true,
+                )
+            };
+        let file_schema = Schema::new(vec![Field::new_map(
+            "m",
+            "key_value",
+            struct_field(
+                "key",
+                ("file_only", DataType::Utf8),
+                ("shared", DataType::Utf8),
+            ),
+            struct_field(
+                "value",
+                ("file_only", DataType::Utf8),
+                ("shared", DataType::Utf8),
+            ),
+            false,
+            true,
+        )]);
+        let table_schema = Schema::new(vec![Field::new_map(
+            "m",
+            "entries",
+            struct_field(
+                "keys",
+                ("shared", DataType::Utf8View),
+                ("table_only", DataType::Utf8View),
+            ),
+            struct_field(
+                "values",
+                ("shared", DataType::Utf8View),
+                ("table_only", DataType::Utf8View),
+            ),
+            false,
+            true,
+        )]);
+        let expected = Schema::new(vec![Field::new_map(
+            "m",
+            "key_value",
+            struct_field(
+                "key",
+                ("file_only", DataType::Utf8),
+                ("shared", DataType::Utf8View),
+            ),
+            struct_field(
+                "value",
+                ("file_only", DataType::Utf8),
+                ("shared", DataType::Utf8View),
+            ),
+            false,
+            true,
+        )]);
+        assert_eq!(
+            apply_file_schema_type_coercions(&table_schema, &file_schema),
+            Some(expected)
+        );
+    }
+
+    #[test]
     fn nested_coercion_leaves_binary_map_children_to_the_validating_cast() {
         use arrow::array::{
             Array, ArrayRef, AsArray, BinaryBuilder, MapBuilder, MapFieldNames,
