@@ -463,7 +463,14 @@ fn build_join(
         &alias,
     )?;
 
-    let join_filter = match (join_filter_opt, in_predicate_opt.cloned()) {
+    // The outer value expression of an `IN`/`NOT IN` predicate whose join filter
+    // is nothing but that predicate, recorded together with the subquery column
+    // it is compared against and a name for the column it can be projected as.
+    // Correlated subqueries are excluded on purpose: their correlation predicate
+    // is a second join key, and null-aware hash joins accept only a single key.
+    let mut in_value_expr = None;
+
+    let mut join_filter = match (join_filter_opt, in_predicate_opt.cloned()) {
         (
             Some(join_filter),
             Some(Expr::BinaryExpr(BinaryExpr {
@@ -485,13 +492,55 @@ fn build_join(
                 right,
             })),
         ) => {
+            let value_name = format!("{alias}_value");
             let right_col = create_col_from_scalar_expr(&right, alias)?;
+            let value = left.deref().clone();
+            in_value_expr = Some((value.clone(), right_col.clone(), value_name));
 
-            Expr::eq(left.deref().clone(), Expr::Column(right_col))
+            Expr::eq(value, Expr::Column(right_col))
         }
         (None, None) => lit(true),
         _ => return Ok(None),
     };
+
+    // `<constant> IN/NOT IN (<subquery>)`: the outer value expression holds no
+    // column reference, so `<constant> = __correlated_sq.col` is not a valid
+    // equi-join key (see `find_valid_equijoin_key_pair`) and stays in the join
+    // filter. Two things then go wrong for a null-aware join: the filter is
+    // right-only, so `push_down_filter` moves it into the subquery and drops the
+    // very NULLs that make `NOT IN` UNKNOWN, and a join without equi-join keys
+    // is planned as a nested loop join, which has no null-aware implementation.
+    // Projecting the constant as a column of the outer side turns the predicate
+    // into a real equi-join key so the null-aware hash join handles it.
+    let mut projected_left = None;
+    if let Some((value, right_col, mut value_name)) = in_value_expr
+        && value.column_refs().is_empty()
+        && matches!(join_type, JoinType::LeftAnti | JoinType::LeftMark)
+        && join_keys_may_be_null(&join_filter, left.schema(), sub_query_alias.schema())?
+    {
+        // The projected column is unqualified, so a left field that already has
+        // this name — however unlikely — would make the reference ambiguous.
+        let left_schema = left.schema();
+        while left_schema.fields().iter().any(|f| f.name() == &value_name) {
+            value_name.push('_');
+        }
+        let value_col = Column::new_unqualified(value_name);
+        let projections = left_schema
+            .columns()
+            .into_iter()
+            .map(Expr::from)
+            .chain(std::iter::once(value.alias(value_col.name())))
+            .collect::<Vec<_>>();
+        projected_left = Some(
+            LogicalPlanBuilder::from(left.clone())
+                .project(projections)?
+                .build()?,
+        );
+        // `in_value_expr` is only set when the `IN` equality is the whole join
+        // filter, so it can simply be rebuilt against the projected column.
+        join_filter = Expr::eq(Expr::Column(value_col), Expr::Column(right_col));
+    }
+    let left = projected_left.as_ref().unwrap_or(left);
 
     if matches!(join_type, JoinType::LeftMark | JoinType::RightMark) {
         let right_schema = sub_query_alias.schema();
@@ -1401,6 +1450,72 @@ mod tests {
             SubqueryAlias: __correlated_sq_1 [c:UInt32]
               Projection: sq.c [c:UInt32]
                 TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    /// A constant value expression has no column, so `Int32(3) = inner_t.id`
+    /// cannot be an equi-join key on its own. The rule projects the constant as
+    /// a column of the outer side; `ExtractEquijoinPredicate` (not run here)
+    /// then turns the filter into a real key for the null-aware hash join.
+    #[test]
+    fn constant_not_in_subquery_projects_value_as_join_key() -> Result<()> {
+        let outer_scan = nullable_scalar_mark_scan("outer_t")?;
+        let inner_scan = nullable_scalar_mark_scan("inner_t")?;
+
+        let subquery = Arc::new(
+            LogicalPlanBuilder::from(inner_scan)
+                .project(vec![col("inner_t.id")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(outer_scan)
+            .filter(not_in_subquery(lit(3i32), subquery))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: outer_t.id, outer_t.grp [id:Int32;N, grp:Int32;N]
+          LeftAnti Join:  Filter: __correlated_sq_1_value = __correlated_sq_1.id null_aware [id:Int32;N, grp:Int32;N, __correlated_sq_1_value:Int32]
+            Projection: outer_t.id, outer_t.grp, Int32(3) AS __correlated_sq_1_value [id:Int32;N, grp:Int32;N, __correlated_sq_1_value:Int32]
+              TableScan: outer_t [id:Int32;N, grp:Int32;N]
+            SubqueryAlias: __correlated_sq_1 [id:Int32;N]
+              Projection: inner_t.id [id:Int32;N]
+                TableScan: inner_t [id:Int32;N, grp:Int32;N]
+        "
+        )
+    }
+
+    /// The same rewrite must not fire for a correlated subquery: the
+    /// correlation predicate is a second equi-join key, and null-aware hash
+    /// joins accept only one.
+    #[test]
+    fn constant_not_in_correlated_subquery_is_not_rewritten() -> Result<()> {
+        let outer_scan = nullable_scalar_mark_scan("outer_t")?;
+        let inner_scan = nullable_scalar_mark_scan("inner_t")?;
+
+        let subquery = Arc::new(
+            LogicalPlanBuilder::from(inner_scan)
+                .filter(
+                    out_ref_col(DataType::Int32, "outer_t.grp").eq(col("inner_t.grp")),
+                )?
+                .project(vec![col("inner_t.id")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(outer_scan)
+            .filter(not_in_subquery(lit(3i32), subquery))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        LeftAnti Join:  Filter: Int32(3) = __correlated_sq_1.id AND outer_t.grp = __correlated_sq_1.grp null_aware [id:Int32;N, grp:Int32;N]
+          TableScan: outer_t [id:Int32;N, grp:Int32;N]
+          SubqueryAlias: __correlated_sq_1 [id:Int32;N, grp:Int32;N]
+            Projection: inner_t.id, inner_t.grp [id:Int32;N, grp:Int32;N]
+              TableScan: inner_t [id:Int32;N, grp:Int32;N]
         "
         )
     }
