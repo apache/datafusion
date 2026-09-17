@@ -746,8 +746,9 @@ mod tests {
     use crate::source::ParquetSource;
 
     use arrow::array::{Int64Array, RecordBatch};
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::{DataType, Field, SchemaRef};
     use bytes::{BufMut, BytesMut};
+    use datafusion_datasource::{FileRange, TableSchemaBuilder};
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_expr::{Expr, col, lit};
     use datafusion_physical_expr::planner::logical2physical;
@@ -755,59 +756,107 @@ mod tests {
     use object_store::path::Path;
     use object_store::{ObjectStore, ObjectStoreExt};
     use parquet::arrow::ArrowWriter;
+    use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
     use parquet::file::properties::WriterProperties;
 
-    /// Prunes a file whose column `a` holds `0..400` in 4 row groups of 100
-    /// rows, using `predicate`
+    /// A parquet file whose column `a` holds `0..400` in 4 row groups of 100
+    /// rows, in an in memory object store
+    struct TestFile {
+        store: Arc<dyn ObjectStore>,
+        schema: SchemaRef,
+        size: u64,
+    }
+
+    impl TestFile {
+        async fn new() -> Self {
+            let schema =
+                Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int64Array::from_iter_values(0..400))],
+            )
+            .unwrap();
+            let props = WriterProperties::builder()
+                .set_max_row_group_row_count(Some(100))
+                .build();
+            let mut out = BytesMut::new().writer();
+            {
+                let mut writer =
+                    ArrowWriter::try_new(&mut out, Arc::clone(&schema), Some(props))
+                        .unwrap();
+                writer.write(&batch).unwrap();
+                writer.finish().unwrap();
+            }
+            let data = out.into_inner().freeze();
+            let size = data.len() as u64;
+            let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+            store
+                .put(&Path::from("test.parquet"), data.into())
+                .await
+                .unwrap();
+            Self {
+                store,
+                schema,
+                size,
+            }
+        }
+
+        fn file(&self) -> PartitionedFile {
+            PartitionedFile::new("test.parquet", self.size)
+        }
+
+        fn table_schema(&self) -> TableSchema {
+            TableSchema::from(&self.schema)
+        }
+
+        /// Prunes `files` as a single file group
+        async fn prune_files(
+            &self,
+            options: &TableParquetOptions,
+            table_schema: &TableSchema,
+            predicate: Expr,
+            files: Vec<PartitionedFile>,
+        ) -> (FileScanConfig, EagerPruningSummary) {
+            let conf = FileScanConfigBuilder::new(
+                ObjectStoreUrl::local_filesystem(),
+                Arc::new(ParquetSource::new(table_schema.clone())),
+            )
+            .with_file_group(FileGroup::new(files))
+            .build();
+
+            let filters = [logical2physical(&predicate, &self.schema)];
+            let pruner = EagerPruner::try_new(
+                options,
+                &filters,
+                Arc::new(DefaultParquetFileReaderFactory::new(Arc::clone(
+                    &self.store,
+                ))),
+                4,
+            )
+            .unwrap();
+            pruner.prune(table_schema, conf).await.unwrap()
+        }
+    }
+
+    fn eager_options(level: EagerParquetPruning) -> TableParquetOptions {
+        let mut options = TableParquetOptions::default();
+        options.global.eager_pruning = level;
+        options
+    }
+
+    /// Prunes the test file using `predicate`
     async fn prune(
         level: EagerParquetPruning,
         file_limit: usize,
         predicate: Expr,
     ) -> (FileScanConfig, EagerPruningSummary) {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(Int64Array::from_iter_values(0..400))],
-        )
-        .unwrap();
-        let props = WriterProperties::builder()
-            .set_max_row_group_row_count(Some(100))
-            .build();
-        let mut out = BytesMut::new().writer();
-        {
-            let mut writer =
-                ArrowWriter::try_new(&mut out, Arc::clone(&schema), Some(props)).unwrap();
-            writer.write(&batch).unwrap();
-            writer.finish().unwrap();
-        }
-        let data = out.into_inner().freeze();
-        let size = data.len() as u64;
-        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        store
-            .put(&Path::from("test.parquet"), data.into())
-            .await
-            .unwrap();
-
-        let table_schema = TableSchema::from(&schema);
-        let conf = FileScanConfigBuilder::new(
-            ObjectStoreUrl::local_filesystem(),
-            Arc::new(ParquetSource::new(table_schema.clone())),
-        )
-        .with_file(PartitionedFile::new("test.parquet", size))
-        .build();
-
-        let mut options = TableParquetOptions::default();
-        options.global.eager_pruning = level;
+        let test_file = TestFile::new().await;
+        let mut options = eager_options(level);
         options.global.eager_pruning_file_limit = file_limit;
-        let filters = [logical2physical(&predicate, &schema)];
-        let pruner = EagerPruner::try_new(
-            &options,
-            &filters,
-            Arc::new(DefaultParquetFileReaderFactory::new(store)),
-            4,
-        )
-        .unwrap();
-        pruner.prune(&table_schema, conf).await.unwrap()
+        let files = vec![test_file.file()];
+        test_file
+            .prune_files(&options, &test_file.table_schema(), predicate, files)
+            .await
     }
 
     #[tokio::test]
@@ -888,6 +937,188 @@ mod tests {
         );
         let file = &conf.file_groups[0].files()[0];
         assert!(!file.extensions.contains::<ParquetAccessPlan>());
+    }
+
+    #[tokio::test]
+    async fn skips_encrypted_files() {
+        let test_file = TestFile::new().await;
+        let mut options = eager_options(EagerParquetPruning::RowGroups);
+        options.crypto.factory_id = Some("test_factory".to_string());
+        let files = vec![test_file.file()];
+
+        let (conf, summary) = test_file
+            .prune_files(
+                &options,
+                &test_file.table_schema(),
+                col("a").lt(lit(250i64)),
+                files,
+            )
+            .await;
+
+        assert_eq!(
+            summary,
+            EagerPruningSummary::Skipped {
+                level: EagerParquetPruning::RowGroups,
+                reason: "encrypted files are not supported".to_string(),
+            }
+        );
+        assert!(
+            !conf.file_groups[0].files()[0]
+                .extensions
+                .contains::<ParquetAccessPlan>()
+        );
+    }
+
+    #[tokio::test]
+    async fn skips_scans_with_virtual_columns() {
+        let test_file = TestFile::new().await;
+        let table_schema = TableSchemaBuilder::new(Arc::clone(&test_file.schema))
+            .with_virtual_columns(vec![Arc::new(Field::new(
+                "row_number",
+                DataType::Int64,
+                true,
+            ))])
+            .build();
+        let files = vec![test_file.file()];
+
+        let (_, summary) = test_file
+            .prune_files(
+                &eager_options(EagerParquetPruning::RowGroups),
+                &table_schema,
+                col("a").lt(lit(250i64)),
+                files,
+            )
+            .await;
+
+        assert_eq!(
+            summary,
+            EagerPruningSummary::Skipped {
+                level: EagerParquetPruning::RowGroups,
+                reason: "virtual columns are not supported".to_string(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn keeps_files_that_cannot_be_read() {
+        let test_file = TestFile::new().await;
+        // The first file does not exist, so its metadata cannot be read
+        let files = vec![
+            PartitionedFile::new("missing.parquet", 1024),
+            test_file.file(),
+        ];
+
+        let (conf, summary) = test_file
+            .prune_files(
+                &eager_options(EagerParquetPruning::RowGroups),
+                &test_file.table_schema(),
+                col("a").lt(lit(250i64)),
+                files,
+            )
+            .await;
+
+        let EagerPruningSummary::Pruned(stats) = summary else {
+            panic!("expected eager pruning");
+        };
+        assert_eq!(stats.files, 2);
+        assert_eq!(stats.files_not_evaluated, 1);
+        assert_eq!(stats.rows_pruned, 100);
+
+        // Both files are kept, the one that could not be read unchanged
+        let files = conf.file_groups[0].files();
+        assert_eq!(files.len(), 2);
+        assert!(!files[0].extensions.contains::<ParquetAccessPlan>());
+        assert!(files[0].statistics.is_none());
+        assert!(files[1].extensions.contains::<ParquetAccessPlan>());
+        // The row count of one file is unknown, so it is unknown for the scan
+        assert_eq!(conf.statistics().num_rows, Precision::Absent);
+    }
+
+    #[tokio::test]
+    async fn skips_files_with_a_row_selection() {
+        let test_file = TestFile::new().await;
+        let selection = ParquetRowSelection::new(RowSelection::from(vec![
+            RowSelector::select(200),
+            RowSelector::skip(200),
+        ]));
+        let files = vec![test_file.file().with_extension(selection)];
+
+        let (conf, summary) = test_file
+            .prune_files(
+                &eager_options(EagerParquetPruning::RowGroups),
+                &test_file.table_schema(),
+                col("a").lt(lit(250i64)),
+                files,
+            )
+            .await;
+
+        let EagerPruningSummary::Pruned(stats) = summary else {
+            panic!("expected eager pruning");
+        };
+        assert_eq!(stats.files_not_evaluated, 1);
+        assert_eq!(stats.rows_pruned, 0);
+        let file = &conf.file_groups[0].files()[0];
+        assert!(!file.extensions.contains::<ParquetAccessPlan>());
+        assert!(file.extensions.contains::<ParquetRowSelection>());
+    }
+
+    #[tokio::test]
+    async fn prunes_row_groups_within_a_file_range() {
+        let test_file = TestFile::new().await;
+        // A range that covers the first part of the file only
+        let mut file = test_file.file();
+        file.range = Some(FileRange {
+            start: 0,
+            end: (test_file.size / 2) as i64,
+        });
+        let files = vec![file];
+
+        let (conf, summary) = test_file
+            .prune_files(
+                &eager_options(EagerParquetPruning::RowGroups),
+                &test_file.table_schema(),
+                col("a").lt(lit(150i64)),
+                files,
+            )
+            .await;
+
+        let EagerPruningSummary::Pruned(stats) = summary else {
+            panic!("expected eager pruning");
+        };
+        // Row groups outside the range are not part of the evaluated rows
+        assert!(stats.rows < 400, "{stats:?}");
+        assert_eq!(stats.rows_pruned, stats.rows - 200);
+        let access_plan = conf.file_groups[0].files()[0]
+            .extensions
+            .get::<ParquetAccessPlan>()
+            .unwrap();
+        assert_eq!(access_plan.row_group_indexes(), vec![0, 1]);
+    }
+
+    #[tokio::test]
+    async fn with_int96_coercion_and_file_arrow_schema() {
+        let test_file = TestFile::new().await;
+        let mut options = eager_options(EagerParquetPruning::RowGroups);
+        options.global.coerce_int96 = Some("ms".to_string());
+        options.global.coerce_int96_tz = Some("UTC".to_string());
+        let mut file = test_file.file();
+        file.arrow_schema = Some(Arc::clone(&test_file.schema));
+        let files = vec![file];
+
+        let (conf, summary) = test_file
+            .prune_files(
+                &options,
+                &test_file.table_schema(),
+                col("a").lt(lit(250i64)),
+                files,
+            )
+            .await;
+
+        let EagerPruningSummary::Pruned(stats) = summary else {
+            panic!("expected eager pruning");
+        };
+        assert_eq!(stats.rows_pruned, 100);
+        assert_eq!(conf.statistics().num_rows, Precision::Inexact(300));
     }
 
     #[test]

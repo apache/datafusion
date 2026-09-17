@@ -1155,6 +1155,8 @@ impl FileSource for ParquetSource {
                 encryption_factory: _,
             reverse_row_groups,
             sort_order_for_reorder,
+            // Only used to display the outcome of eager pruning in `EXPLAIN`.
+            eager_pruning_summary: _,
         } = self;
 
         if schema_provider.is_some() {

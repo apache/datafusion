@@ -578,6 +578,7 @@ impl TryFrom<&TableParquetOptionsProto> for TableParquetOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion_common::config::EagerParquetPruning;
 
     #[test]
     fn rejects_invalid_parquet_statistics() {
@@ -595,5 +596,39 @@ mod tests {
             err.to_string()
                 .contains("Invalid parquet statistics setting: invalid")
         );
+    }
+
+    #[test]
+    fn eager_pruning_defaults_when_unset() {
+        // Messages without the eager pruning fields (e.g. written before they
+        // existed) decode to the config defaults, not to 0 / empty values
+        let proto = ParquetOptionsProto {
+            writer_version: "1.0".to_string(),
+            ..Default::default()
+        };
+
+        let options = ParquetOptions::try_from(&proto).unwrap();
+        let defaults = ParquetOptions::default();
+        assert_eq!(options.eager_pruning, defaults.eager_pruning);
+        assert_eq!(
+            options.eager_pruning_file_limit,
+            defaults.eager_pruning_file_limit
+        );
+    }
+
+    #[test]
+    fn eager_pruning_from_proto() {
+        let proto = ParquetOptionsProto {
+            writer_version: "1.0".to_string(),
+            eager_pruning: "page_index".to_string(),
+            eager_pruning_file_limit_opt: Some(
+                parquet_options::EagerPruningFileLimitOpt::EagerPruningFileLimit(7),
+            ),
+            ..Default::default()
+        };
+
+        let options = ParquetOptions::try_from(&proto).unwrap();
+        assert_eq!(options.eager_pruning, EagerParquetPruning::PageIndex);
+        assert_eq!(options.eager_pruning_file_limit, 7);
     }
 }
