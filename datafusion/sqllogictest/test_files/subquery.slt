@@ -2782,25 +2782,19 @@ WHERE salary > ANY (SELECT salary FROM emp WHERE id <= 3);
 ----
 logical_plan
 01)Projection: emp.id
-02)--LeftMark Join:  Filter: emp.salary > __correlated_sq_3.salary IS TRUE
+02)--LeftMark Join:  Filter: emp.salary > __correlated_sq_2.salary IS NULL
 03)----Projection: emp.id, emp.salary
-04)------LeftMark Join:  Filter: emp.salary > __correlated_sq_2.salary IS NULL
-05)--------Projection: emp.id, emp.salary
-06)----------Filter: __correlated_sq_1.mark
-07)------------LeftMark Join:  Filter: emp.salary > __correlated_sq_1.salary IS TRUE
-08)--------------TableScan: emp projection=[id, salary]
-09)--------------SubqueryAlias: __correlated_sq_1
-10)----------------Projection: emp.salary
-11)------------------Filter: emp.id <= Int32(3)
-12)--------------------TableScan: emp projection=[id, salary]
-13)--------SubqueryAlias: __correlated_sq_2
-14)----------Projection: emp.salary
-15)------------Filter: emp.id <= Int32(3)
-16)--------------TableScan: emp projection=[id, salary]
-17)----SubqueryAlias: __correlated_sq_3
-18)------Projection: emp.salary
-19)--------Filter: emp.id <= Int32(3)
-20)----------TableScan: emp projection=[id, salary]
+04)------Filter: __correlated_sq_1.mark IS NOT DISTINCT FROM Boolean(true)
+05)--------LeftMark Join:  Filter: emp.salary > __correlated_sq_1.salary IS TRUE
+06)----------TableScan: emp projection=[id, salary]
+07)----------SubqueryAlias: __correlated_sq_1
+08)------------Projection: emp.salary
+09)--------------Filter: emp.id <= Int32(3)
+10)----------------TableScan: emp projection=[id, salary]
+11)----SubqueryAlias: __correlated_sq_2
+12)------Projection: emp.salary
+13)--------Filter: emp.id <= Int32(3)
+14)----------TableScan: emp projection=[id, salary]
 
 query I
 SELECT id
@@ -2819,25 +2813,21 @@ WHERE salary > ALL (SELECT salary FROM emp WHERE id <= 2);
 ----
 logical_plan
 01)Projection: emp.id
-02)--Filter: NOT __correlated_sq_3.mark
-03)----Projection: emp.id, __correlated_sq_3.mark
-04)------LeftMark Join:  Filter: emp.salary > __correlated_sq_3.salary IS NULL
+02)--Filter: __correlated_sq_2.mark IS DISTINCT FROM Boolean(true)
+03)----Projection: emp.id, __correlated_sq_2.mark
+04)------LeftMark Join:  Filter: emp.salary > __correlated_sq_2.salary IS NULL
 05)--------Projection: emp.id, emp.salary
-06)----------LeftMark Join:  Filter: emp.salary > __correlated_sq_2.salary IS NULL
-07)------------LeftAnti Join:  Filter: emp.salary > __correlated_sq_1.salary IS FALSE
+06)----------Filter: __correlated_sq_1.mark IS DISTINCT FROM Boolean(true)
+07)------------LeftMark Join:  Filter: emp.salary > __correlated_sq_1.salary IS FALSE
 08)--------------TableScan: emp projection=[id, salary]
 09)--------------SubqueryAlias: __correlated_sq_1
 10)----------------Projection: emp.salary
 11)------------------Filter: emp.id <= Int32(2)
 12)--------------------TableScan: emp projection=[id, salary]
-13)------------SubqueryAlias: __correlated_sq_2
-14)--------------Projection: emp.salary
-15)----------------Filter: emp.id <= Int32(2)
-16)------------------TableScan: emp projection=[id, salary]
-17)--------SubqueryAlias: __correlated_sq_3
-18)----------Projection: emp.salary
-19)------------Filter: emp.id <= Int32(2)
-20)--------------TableScan: emp projection=[id, salary]
+13)--------SubqueryAlias: __correlated_sq_2
+14)----------Projection: emp.salary
+15)------------Filter: emp.id <= Int32(2)
+16)--------------TableScan: emp projection=[id, salary]
 
 query I
 SELECT id
@@ -2854,25 +2844,19 @@ WHERE salary = ANY (SELECT salary FROM emp WHERE id <= 2);
 ----
 logical_plan
 01)Projection: emp.id
-02)--LeftMark Join:  Filter: emp.salary = __correlated_sq_3.salary IS TRUE
+02)--LeftMark Join:  Filter: emp.salary = __correlated_sq_2.salary IS NULL
 03)----Projection: emp.id, emp.salary
-04)------LeftMark Join:  Filter: emp.salary = __correlated_sq_2.salary IS NULL
-05)--------Projection: emp.id, emp.salary
-06)----------Filter: __correlated_sq_1.mark
-07)------------LeftMark Join:  Filter: emp.salary = __correlated_sq_1.salary IS TRUE
-08)--------------TableScan: emp projection=[id, salary]
-09)--------------SubqueryAlias: __correlated_sq_1
-10)----------------Projection: emp.salary
-11)------------------Filter: emp.id <= Int32(2)
-12)--------------------TableScan: emp projection=[id, salary]
-13)--------SubqueryAlias: __correlated_sq_2
-14)----------Projection: emp.salary
-15)------------Filter: emp.id <= Int32(2)
-16)--------------TableScan: emp projection=[id, salary]
-17)----SubqueryAlias: __correlated_sq_3
-18)------Projection: emp.salary
-19)--------Filter: emp.id <= Int32(2)
-20)----------TableScan: emp projection=[id, salary]
+04)------Filter: __correlated_sq_1.mark IS NOT DISTINCT FROM Boolean(true)
+05)--------LeftMark Join:  Filter: emp.salary = __correlated_sq_1.salary IS TRUE
+06)----------TableScan: emp projection=[id, salary]
+07)----------SubqueryAlias: __correlated_sq_1
+08)------------Projection: emp.salary
+09)--------------Filter: emp.id <= Int32(2)
+10)----------------TableScan: emp projection=[id, salary]
+11)----SubqueryAlias: __correlated_sq_2
+12)------Projection: emp.salary
+13)--------Filter: emp.id <= Int32(2)
+14)----------TableScan: emp projection=[id, salary]
 
 statement ok
 DROP TABLE emp;
