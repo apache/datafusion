@@ -26,6 +26,7 @@ use arrow::{array::ArrayRef, datatypes::DataType};
 use datafusion_common::ScalarValue;
 use datafusion_common::types::{NativeType, logical_float64};
 use datafusion_common::{Result, not_impl_err, plan_err};
+use datafusion_expr::DistinctHandling;
 use datafusion_expr::expr::{AggregateFunction, Sort};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::{
@@ -280,6 +281,11 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // The accumulator rejects `DISTINCT` with `not_impl_err!`.
+        DistinctHandling::Unsupported
     }
 }
 

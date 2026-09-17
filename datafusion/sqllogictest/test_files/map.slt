@@ -87,10 +87,11 @@ GET 27
 PUT 25
 DELETE 24
 
-query T
-SELECT strings['not_found'] FROM data LIMIT 1;
+# A missing key makes the result nullable even when the map and its values are not.
+query TBB
+SELECT strings['not_found'], arrow_field(strings)['nullable'], arrow_field(strings['not_found'])['nullable'] FROM data LIMIT 1;
 ----
-NULL
+NULL false true
 
 # Select non existent key, expect NULL for each row
 query I
@@ -554,8 +555,10 @@ SELECT MAP {'a': MAP {1:'a', 2:'b', 3:'c'}, 'b': MAP {2:'c', 4:'d'} }['c'];
 NULL
 
 # access map with null key
-query error
+query ?
 SELECT MAP {'a': MAP {1:'a', 2:'b', 3:'c'}, 'b': MAP {2:'c', 4:'d'} }[NULL];
+----
+NULL
 
 query ?
 SELECT MAP { 'a': 1, 'b': 3 };
@@ -626,6 +629,34 @@ NULL NULL
 
 statement ok
 DROP TABLE map_list_keys;
+
+# a typed NULL key matches nothing
+query T
+SELECT MAP {1:'a', 2:'b'}[arrow_cast(NULL, 'Int64')];
+----
+NULL
+
+# dictionary-encoded map keys are looked up by value
+query I
+SELECT MAP {arrow_cast('a', 'Dictionary(Int32, Utf8)'):1, arrow_cast('b', 'Dictionary(Int32, Utf8)'):2}['b'];
+----
+2
+
+# NULLIF turns a map row NULL without clearing its entries; the lookups must
+# report NULL rather than read those entries
+statement ok
+CREATE TABLE map_nullif AS
+SELECT MAP {'a': 1, 'b': 2} AS m, MAP {'a': 1, 'b': 2} AS n
+UNION ALL SELECT MAP {'a': 3, 'b': 4}, MAP {'x': 9};
+
+query ?I? rowsort
+SELECT NULLIF(m, n), NULLIF(m, n)['b'], map_extract(NULLIF(m, n), 'b') FROM map_nullif;
+----
+NULL NULL NULL
+{a: 3, b: 4} 4 [4]
+
+statement ok
+DROP TABLE map_nullif;
 
 # accessing map with non-string key
 query I
@@ -754,8 +785,13 @@ NULL
 NULL
 
 
-query error DataFusion error: Arrow error: Invalid argument error
+query ?
 SELECT column1[NULL] FROM map_array_table_1;
+----
+NULL
+NULL
+NULL
+NULL
 
 query ???
 select map_extract(column1, column2), map_extract(column1, column3), map_extract(column1, column4) from map_array_table_1;
