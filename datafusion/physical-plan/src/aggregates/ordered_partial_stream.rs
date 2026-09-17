@@ -139,10 +139,10 @@ impl OrderedPartialAggregateStream {
         )?;
         let reservation =
             MemoryConsumer::new(format!("OrderedPartialAggregateStream[{partition}]"))
-                .with_can_spill(matches!(
-                    table.group_ordering(),
-                    GroupOrdering::Partial(_)
-                ))
+                // We interpret 'can spill' as 'can handle memory back pressure'.
+                // This value needs to be set to true and for every ordering except full, which fail on OOM we early emit.
+                // to ensure fair application of back pressure amongst the memory consumers.
+                .with_can_spill(!matches!(table.group_ordering(), GroupOrdering::Full(_)))
                 .register(context.memory_pool());
 
         Ok(Self {
