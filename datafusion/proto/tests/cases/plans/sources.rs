@@ -75,6 +75,37 @@ use std::sync::Arc;
 use std::vec;
 
 #[test]
+fn parquet_schema_provider_requires_extension_codec() -> Result<()> {
+    use datafusion::parquet;
+
+    #[derive(Debug)]
+    struct PhysicalSchema;
+    impl datafusion_datasource_parquet::ParquetFileSchemaProvider for PhysicalSchema {
+        fn schema(
+            &self,
+            schema: &parquet::schema::types::SchemaDescriptor,
+        ) -> Result<Arc<Schema>> {
+            Ok(Arc::new(parquet::arrow::parquet_to_arrow_schema(
+                schema, None,
+            )?))
+        }
+    }
+
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+    let source =
+        ParquetSource::new(schema).with_schema_provider(Arc::new(PhysicalSchema));
+    let config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), Arc::new(source))
+            .build();
+    let plan = DataSourceExec::from_data_source(config);
+    let error =
+        PhysicalPlanNode::try_from_physical_plan(plan, &DefaultPhysicalExtensionCodec {})
+            .unwrap_err();
+    datafusion_common::assert_contains!(error.to_string(), "extension codec failed");
+    Ok(())
+}
+
+#[test]
 fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
     let file_schema =
         Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
