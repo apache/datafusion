@@ -209,8 +209,8 @@ impl MultiLevelMergeBuilder {
         self
     }
 
-    /// Leave replay headroom while selecting merge buffers. Temporary splitting
-    /// workspace can still use the full pool because replay has not started.
+    /// Leave replay headroom for the final merge. Intermediate merges and
+    /// splitting can use the full pool because replay has not started.
     pub(super) fn with_replay_headroom(mut self, reserve: bool) -> Self {
         self.reserve_replay_headroom = reserve;
         self
@@ -373,14 +373,46 @@ impl MultiLevelMergeBuilder {
                 let minimum_number_of_required_streams =
                     2_usize.saturating_sub(self.sorted_streams.len());
 
-                let (sorted_spill_files, buffer_size) = match self
-                    .get_sorted_spill_files_to_merge(
+                let total_spill_files = self.sorted_spill_files.len();
+                let mut selection = self.get_sorted_spill_files_to_merge(
+                    2,
+                    // we must have at least 2 streams to merge
+                    minimum_number_of_required_streams,
+                    &mut memory_reservation,
+                    allow_minimum_without_headroom,
+                    self.reserve_replay_headroom,
+                    usize::MAX,
+                )?;
+
+                // Prefer a final merge with replay headroom. Otherwise an
+                // intermediate merge writes back to disk and can use the full
+                // pool. Preserve split requests: splitting also caps the merge
+                // output size when input batches are shorter than batch_size.
+                // Hold one run back so this larger merge cannot feed replay,
+                // but only if enough inputs remain to make progress.
+                let is_intermediate = matches!(
+                    &selection,
+                    SpillFilesToMerge::Ready(spills, _) if spills.len() < total_spill_files
+                );
+                if self.reserve_replay_headroom
+                    && is_intermediate
+                    && total_spill_files > minimum_number_of_required_streams
+                {
+                    if let SpillFilesToMerge::Ready(spills, _) = selection {
+                        self.sorted_spill_files.splice(0..0, spills);
+                    }
+                    memory_reservation.free();
+                    selection = self.get_sorted_spill_files_to_merge(
                         2,
-                        // we must have at least 2 streams to merge
                         minimum_number_of_required_streams,
                         &mut memory_reservation,
-                        allow_minimum_without_headroom,
-                    )? {
+                        false,
+                        false,
+                        total_spill_files - 1,
+                    )?;
+                }
+
+                let (sorted_spill_files, buffer_size) = match selection {
                     SpillFilesToMerge::Ready(sorted_spill_files, buffer_size) => {
                         (sorted_spill_files, buffer_size)
                     }
@@ -512,6 +544,8 @@ impl MultiLevelMergeBuilder {
         minimum_number_of_required_streams: usize,
         reservation: &mut MemoryReservation,
         allow_minimum_without_headroom: bool,
+        reserve_replay_headroom: bool,
+        max_files: usize,
     ) -> Result<SpillFilesToMerge> {
         assert_ne!(buffer_len, 0, "Buffer length must be greater than 0");
         let mut number_of_spills_to_read_for_current_phase = 0;
@@ -520,7 +554,8 @@ impl MultiLevelMergeBuilder {
             .env()
             .disk_manager
             .max_spill_merge_fan_in();
-        let max_spill_files = effective_spill_merge_fan_in(configured_fan_in);
+        let max_spill_files =
+            effective_spill_merge_fan_in(configured_fan_in).min(max_files);
         // Track total memory needed for spill file buffers. When the
         // reservation has pre-reserved bytes (from sort_spill_reservation_bytes),
         // those bytes cover the first N spill files without additional pool
@@ -551,7 +586,7 @@ impl MultiLevelMergeBuilder {
                 && buffer_len == 1
                 && number_of_spills_to_read_for_current_phase
                     < minimum_number_of_required_streams;
-            let check_headroom = self.reserve_replay_headroom && !skip_headroom;
+            let check_headroom = reserve_replay_headroom && !skip_headroom;
             let admission = if check_headroom {
                 // Ask the pool for merge buffers plus equal replay space, then
                 // return the spare bytes before exposing the merge stream.
@@ -585,6 +620,8 @@ impl MultiLevelMergeBuilder {
                                 minimum_number_of_required_streams,
                                 reservation,
                                 allow_minimum_without_headroom,
+                                reserve_replay_headroom,
+                                max_files,
                             );
                         }
 
@@ -620,7 +657,7 @@ impl MultiLevelMergeBuilder {
             }
         }
 
-        if self.reserve_replay_headroom {
+        if reserve_replay_headroom {
             // `total_needed` may include a rejected candidate. Keep only the
             // buffers that were admitted, releasing temporary replay headroom.
             reservation.shrink(reservation.size() - accepted_memory);
@@ -905,6 +942,9 @@ impl RecordBatchStream for StreamAttachedReservation {
         self.stream.schema()
     }
 }
+
+#[cfg(test)]
+mod replay_headroom_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1203,8 +1243,15 @@ mod tests {
         // Actual batches contain one row even though the nominal size is 8192.
         assert_eq!(builder.sorted_spill_files[0].1, 1);
         let mut reservation = builder.reservation.new_empty();
-        let SpillFilesToMerge::Ready(spills, buffer_len) =
-            builder.get_sorted_spill_files_to_merge(2, 2, &mut reservation, true)?
+        let SpillFilesToMerge::Ready(spills, buffer_len) = builder
+            .get_sorted_spill_files_to_merge(
+                2,
+                2,
+                &mut reservation,
+                true,
+                true,
+                usize::MAX,
+            )?
         else {
             panic!("minimum merge should fit the pool");
         };
@@ -1244,8 +1291,15 @@ mod tests {
         let mut builder = build_merge_builder(spill_manager, schema, spills, &pool, 1)
             .with_replay_headroom(true);
         let mut reservation = builder.reservation.new_empty();
-        let SpillFilesToMerge::Ready(spills, buffer_len) =
-            builder.get_sorted_spill_files_to_merge(1, 2, &mut reservation, false)?
+        let SpillFilesToMerge::Ready(spills, buffer_len) = builder
+            .get_sorted_spill_files_to_merge(
+                1,
+                2,
+                &mut reservation,
+                false,
+                true,
+                usize::MAX,
+            )?
         else {
             panic!("two streams and replay headroom should fit the pool");
         };
@@ -1670,6 +1724,8 @@ mod tests {
             2,
             &mut merge_reservation,
             false,
+            false,
+            usize::MAX,
         )? {
             SpillFilesToMerge::Ready(spills, buffer_len) => (spills, buffer_len),
             SpillFilesToMerge::SplitThenRetry(index) => {
