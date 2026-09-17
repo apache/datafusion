@@ -720,11 +720,16 @@ jobs:
             substrait:
               - 'datafusion/substrait/**'
               - '.github/workflows/rust.yml'
+      # `setup-builder` assumes the amd64/rust container this job does not use,
+      # so the two things the Substrait build needs are installed directly.
+      - name: Install protobuf compiler
+        if: steps.filter.outputs.substrait == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
       - name: Setup Rust toolchain
         if: steps.filter.outputs.substrait == 'true'
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
+        run: rustup component add rustfmt
       - name: Setup Java
         if: steps.filter.outputs.substrait == 'true'
         uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6  # v6
