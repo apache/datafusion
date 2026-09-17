@@ -1376,6 +1376,11 @@ fn null_aware_left_mark_column(
 /// all build rows with the NULL-valued probe rows. Scope keys narrow these
 /// pairs through a hash lookup; without scope keys every pair is a candidate.
 /// The join filter, if any, then decides which candidates count.
+///
+/// A build row stays UNKNOWN once it is marked, so candidates whose build row
+/// is already marked are skipped, and the join filter is not evaluated for
+/// them. Without scope keys this also ends the pairing as soon as no unmarked
+/// build row is left.
 #[expect(clippy::too_many_arguments)]
 fn mark_null_candidates_for_probe_batch(
     build_side: &BuildSideReadyState,
@@ -1407,6 +1412,11 @@ fn mark_null_candidates_for_probe_batch(
     // Keeps the candidate pairs that pass the join filter and marks their
     // build rows as UNKNOWN.
     let mut mark = |build_indices: UInt64Array, probe_indices: UInt32Array| {
+        let (build_indices, probe_indices) =
+            retain_unmarked(left_data, build_indices, probe_indices);
+        if build_indices.is_empty() {
+            return Ok(());
+        }
         let build_indices = match filter {
             Some(filter) => {
                 apply_join_filter_to_indices(
@@ -1463,11 +1473,10 @@ fn mark_null_candidates_for_probe_batch(
                 )?;
             }
             None => {
-                let probe_rows =
-                    UInt32Array::from_iter_values(0..state.batch.num_rows() as u32);
-                for_each_cross_product(
-                    &null_rows.build_indices,
-                    &probe_rows,
+                for_each_unmarked_cross_product(
+                    left_data,
+                    null_rows.build_indices.values().iter().copied(),
+                    0..state.batch.num_rows() as u32,
                     batch_size,
                     &mut mark,
                 )?;
@@ -1518,11 +1527,10 @@ fn mark_null_candidates_for_probe_batch(
                 )?;
             }
             None => {
-                let build_rows =
-                    UInt64Array::from_iter_values(0..left_data.batch().num_rows() as u64);
-                for_each_cross_product(
-                    &build_rows,
-                    &null_probe_rows,
+                for_each_unmarked_cross_product(
+                    left_data,
+                    0..left_data.batch().num_rows() as u64,
+                    null_probe_rows.values().iter().copied(),
                     batch_size,
                     &mut mark,
                 )?;
@@ -1575,30 +1583,71 @@ fn for_each_scope_match(
     Ok(())
 }
 
-/// Calls `f` with every pair of `build_rows` x `probe_rows`, as chunks of at
-/// most `batch_size` pairs.
-fn for_each_cross_product(
-    build_rows: &UInt64Array,
-    probe_rows: &UInt32Array,
+/// Removes the candidate pairs whose build row is already marked UNKNOWN.
+fn retain_unmarked(
+    left_data: &JoinLeftData,
+    build_indices: UInt64Array,
+    probe_indices: UInt32Array,
+) -> (UInt64Array, UInt32Array) {
+    let bitmap = left_data.null_indices_bitmap().lock();
+    let is_unmarked = |build_idx: &u64| !bitmap.get_bit(*build_idx as usize);
+    if build_indices.values().iter().all(is_unmarked) {
+        return (build_indices, probe_indices);
+    }
+    let (build, probe): (Vec<u64>, Vec<u32>) = build_indices
+        .values()
+        .iter()
+        .zip(probe_indices.values().iter())
+        .filter(|(build_idx, _)| is_unmarked(build_idx))
+        .unzip();
+    (build.into(), probe.into())
+}
+
+/// Calls `f` with the pairs of `build_rows` x `probe_rows` whose build row is
+/// not marked UNKNOWN, as chunks of at most `batch_size` pairs.
+///
+/// `f` marks build rows, so the unmarked build rows are found again after each
+/// chunk. The pairing stops when no unmarked build row is left.
+fn for_each_unmarked_cross_product(
+    left_data: &JoinLeftData,
+    build_rows: impl Iterator<Item = u64>,
+    probe_rows: impl Iterator<Item = u32>,
     batch_size: usize,
     mut f: impl FnMut(UInt64Array, UInt32Array) -> Result<()>,
 ) -> Result<()> {
-    let chunk_size = batch_size
-        .max(1)
-        .min(build_rows.len().saturating_mul(probe_rows.len()));
-    let mut build_chunk = Vec::with_capacity(chunk_size);
-    let mut probe_chunk = Vec::with_capacity(chunk_size);
-    for probe_row in probe_rows.values() {
-        for build_row in build_rows.values() {
+    let retain_unmarked_rows = |rows: &mut Vec<u64>| {
+        let bitmap = left_data.null_indices_bitmap().lock();
+        rows.retain(|idx| !bitmap.get_bit(*idx as usize));
+    };
+
+    let mut build_rows: Vec<u64> = build_rows.collect();
+    retain_unmarked_rows(&mut build_rows);
+
+    let batch_size = batch_size.max(1);
+    let mut build_chunk = Vec::with_capacity(batch_size);
+    let mut probe_chunk = Vec::with_capacity(batch_size);
+    let mut marks_since_refresh = false;
+    for probe_row in probe_rows {
+        // Refresh only after a chunk was sent, so the cost of the refresh
+        // stays proportional to the pairs already evaluated.
+        if marks_since_refresh {
+            retain_unmarked_rows(&mut build_rows);
+            marks_since_refresh = false;
+        }
+        if build_rows.is_empty() {
+            break;
+        }
+        for build_row in &build_rows {
             build_chunk.push(*build_row);
-            probe_chunk.push(*probe_row);
-            if build_chunk.len() == chunk_size {
+            probe_chunk.push(probe_row);
+            if build_chunk.len() == batch_size {
                 f(
-                    std::mem::replace(&mut build_chunk, Vec::with_capacity(chunk_size))
+                    std::mem::replace(&mut build_chunk, Vec::with_capacity(batch_size))
                         .into(),
-                    std::mem::replace(&mut probe_chunk, Vec::with_capacity(chunk_size))
+                    std::mem::replace(&mut probe_chunk, Vec::with_capacity(batch_size))
                         .into(),
                 )?;
+                marks_since_refresh = true;
             }
         }
     }
