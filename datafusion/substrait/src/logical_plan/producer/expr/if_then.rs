@@ -16,8 +16,10 @@
 // under the License.
 
 use crate::logical_plan::producer::SubstraitProducer;
+use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{DFSchemaRef, not_impl_err};
-use datafusion::logical_expr::{Case, Expr};
+use datafusion::logical_expr::expr::{Exists, InSubquery, SetComparison};
+use datafusion::logical_expr::{Case, Expr, LogicalPlan};
 use substrait::proto::Expression;
 use substrait::proto::expression::if_then::IfClause;
 use substrait::proto::expression::{IfThen, RexType};
@@ -44,7 +46,9 @@ pub fn from_case(
     // evaluate once per arm. `CaseExpr` evaluates it once and compares every
     // WHEN against that one value, so such a plan has no faithful `IfThen`
     // encoding and is rejected instead.
-    if let Some(base) = expr.as_ref().filter(|base| base.is_volatile()) {
+    if let Some(base) = expr
+        && is_volatile_including_subqueries(base)?
+    {
         return not_impl_err!(
             "Substrait does not support a volatile CASE base expression: {base}"
         );
@@ -73,5 +77,40 @@ pub fn from_case(
 
     Ok(Expression {
         rex_type: Some(RexType::IfThen(Box::new(IfThen { ifs, r#else }))),
+    })
+}
+
+/// Whether evaluating `expr` twice can give two different values.
+///
+/// [`Expr::is_volatile`] walks the expression tree, where a subquery is a leaf,
+/// so it reports `(SELECT random())` as not volatile. The plan inside one has to
+/// be walked as well, or a base holding it would be duplicated by the
+/// desugaring above.
+fn is_volatile_including_subqueries(expr: &Expr) -> datafusion::common::Result<bool> {
+    expr.exists(|expr| match expr {
+        Expr::ScalarSubquery(subquery)
+        | Expr::Exists(Exists { subquery, .. })
+        | Expr::InSubquery(InSubquery { subquery, .. })
+        | Expr::SetComparison(SetComparison { subquery, .. }) => {
+            plan_is_volatile(&subquery.subquery)
+        }
+        expr => Ok(expr.is_volatile_node()),
+    })
+}
+
+/// Whether any expression in `plan`, or in a plan nested in one of them, is
+/// volatile.
+fn plan_is_volatile(plan: &LogicalPlan) -> datafusion::common::Result<bool> {
+    plan.exists(|plan| {
+        let mut volatile = false;
+        plan.apply_expressions(|expr| {
+            volatile = is_volatile_including_subqueries(expr)?;
+            Ok(if volatile {
+                TreeNodeRecursion::Stop
+            } else {
+                TreeNodeRecursion::Continue
+            })
+        })?;
+        Ok(volatile)
     })
 }

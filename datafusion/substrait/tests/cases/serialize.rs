@@ -524,6 +524,23 @@ mod tests {
             "unexpected error: {err}"
         );
 
+        // `Expr::is_volatile` does not look inside a subquery's plan, but the
+        // desugaring duplicates the base all the same, so this is rejected too.
+        let subquery_sql = "SELECT CASE (SELECT call_counter()) WHEN 2 THEN 20 WHEN 1 THEN 10 ELSE 99 END FROM data WHERE a = 1";
+        let plan = ctx.sql(subquery_sql).await?.into_optimized_plan()?;
+        let err = to_substrait_plan(&plan, &ctx.state())
+            .expect_err("a volatile scalar subquery base must be rejected")
+            .to_string();
+        assert!(
+            err.contains("volatile CASE base expression"),
+            "unexpected error: {err}"
+        );
+
+        // A subquery base with nothing volatile in it is still emitted.
+        let pure_sql = "SELECT CASE (SELECT max(a) FROM data) WHEN 2 THEN 20 ELSE 99 END FROM data WHERE a = 1";
+        let plan = ctx.sql(pure_sql).await?.into_optimized_plan()?;
+        to_substrait_plan(&plan, &ctx.state())?;
+
         Ok(())
     }
 
