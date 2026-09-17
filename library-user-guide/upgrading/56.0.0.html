@@ -638,6 +638,23 @@ struct literal.</p></li>
 <p>The protobuf wire format remains backward compatible.</p>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/24945">PR #24945</a> for details.</p>
 </section>
+<section id="generated-protobuf-parquet-structs-gained-state-fields">
+<h3>Generated protobuf Parquet structs gained state fields<a class="headerlink" href="#generated-protobuf-parquet-structs-gained-state-fields" title="Link to this heading">#</a></h3>
+<p>The generated public protobuf <code class="docutils literal notranslate"><span class="pre">ParquetScanExecNode</span></code> struct now carries an
+optional <code class="docutils literal notranslate"><span class="pre">metadata_size_hint</span></code>, and <code class="docutils literal notranslate"><span class="pre">ParquetSink</span></code> now carries optional
+<code class="docutils literal notranslate"><span class="pre">sorting_columns</span></code>. These fields preserve the corresponding Parquet source and
+sink settings across physical-plan serialization.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users constructing either generated struct with an exhaustive struct literal.</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>Add <code class="docutils literal notranslate"><span class="pre">metadata_size_hint:</span> <span class="pre">None</span></code> to <code class="docutils literal notranslate"><span class="pre">ParquetScanExecNode</span></code> literals and
+<code class="docutils literal notranslate"><span class="pre">sorting_columns:</span> <span class="pre">None</span></code> to <code class="docutils literal notranslate"><span class="pre">ParquetSink</span></code> literals to retain the previous
+behavior, or use <code class="docutils literal notranslate"><span class="pre">..Default::default()</span></code> for unspecified fields.</p>
+<p>The protobuf wire format remains backward compatible.</p>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/25057">PR #25057</a> for details.</p>
+</section>
 <section id="generated-protobuf-csvwriteroptions-changed">
 <h3>Generated protobuf <code class="docutils literal notranslate"><span class="pre">CsvWriterOptions</span></code> changed<a class="headerlink" href="#generated-protobuf-csvwriteroptions-changed" title="Link to this heading">#</a></h3>
 <p>The generated <code class="docutils literal notranslate"><span class="pre">CsvWriterOptions</span></code> now includes <code class="docutils literal notranslate"><span class="pre">compression_level</span></code>,
@@ -877,6 +894,7 @@ form, or pass a freshly constructed <code class="docutils literal notranslate"><
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionoptions-has-a-new-enable-nlj-coordinated-fallback-field"><code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> has a new <code class="docutils literal notranslate"><span class="pre">enable_nlj_coordinated_fallback</span></code> field</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-optimizer-use-statistics-registry-is-deprecated-and-ignored"><code class="docutils literal notranslate"><span class="pre">datafusion.optimizer.use_statistics_registry</span></code> is deprecated and ignored</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#generated-protobuf-jsonwriteroptions-gained-a-compression-level-field">Generated protobuf <code class="docutils literal notranslate"><span class="pre">JsonWriterOptions</span></code> gained a <code class="docutils literal notranslate"><span class="pre">compression_level</span></code> field</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#generated-protobuf-parquet-structs-gained-state-fields">Generated protobuf Parquet structs gained state fields</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#generated-protobuf-csvwriteroptions-changed">Generated protobuf <code class="docutils literal notranslate"><span class="pre">CsvWriterOptions</span></code> changed</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#defaultstatisticsprovider-is-deprecated"><code class="docutils literal notranslate"><span class="pre">DefaultStatisticsProvider</span></code> is deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#statisticsregistry-compute-and-compute-base-are-deprecated"><code class="docutils literal notranslate"><span class="pre">StatisticsRegistry::compute</span></code> and <code class="docutils literal notranslate"><span class="pre">compute_base</span></code> are deprecated</a></li>
